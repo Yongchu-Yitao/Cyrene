@@ -16,6 +16,11 @@ def is_compacted_block(message: dict[str, Any]) -> bool:
     return isinstance(message, dict) and bool(message.get("compacted_block"))
 
 
+def _is_append_only_context_event(message: dict[str, Any]) -> bool:
+    """Return context records whose exact payload must survive compaction."""
+    return isinstance(message, dict) and bool(message.get("chat_group_context_event"))
+
+
 def _strip_tool_episode_text(messages: list[dict[str, Any]]) -> list[str]:
     """Render messages compactly while omitting bulky tool results."""
     lines: list[str] = []
@@ -109,10 +114,15 @@ def compact_messages_for_storage(
     if not to_compact:
         return messages
 
-    block_lines = _strip_tool_episode_text(to_compact)
+    # Membership records are an append-only authorization/context audit.  Keep
+    # their exact JSON rather than folding it into prose (which would truncate
+    # peer ids and paths and make a later revocation ambiguous).
+    pinned_events = [message for message in to_compact if _is_append_only_context_event(message)]
+    compactable = [message for message in to_compact if not _is_append_only_context_event(message)]
+    block_lines = _strip_tool_episode_text(compactable)
     if not block_lines:
         if not force:
-            return [*head_blocks, *recent]
+            return [*head_blocks, *pinned_events, *recent]
         block_lines = [
             "Earlier context contained only tool results and was omitted."
         ]
@@ -122,4 +132,4 @@ def compact_messages_for_storage(
         "compacted_block": True,
     }
     ensure_message_identity([block])
-    return [*head_blocks, block, *recent]
+    return [*head_blocks, block, *pinned_events, *recent]

@@ -68,6 +68,7 @@ CAPABILITY_BINDINGS: dict[str, tuple[tuple[str, str], ...]] = {
         ("memory.list", "ListMemories"),
         ("memory.recall", "RecallMemory"),
         ("memory.recall_conversation", "RecallConversation"),
+        ("memory.group_sessions.read", "ReadChatGroupSessions"),
         ("memory.short_term.retire", "retire_short_term_memory"),
         ("memory.project.search", "search_project_memory"),
         ("memory.project.save", "save_project_memory"),

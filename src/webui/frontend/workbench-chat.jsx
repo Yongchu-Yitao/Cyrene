@@ -230,6 +230,45 @@ var WorkbenchChatModel = (function () {
     }).then(function (payload) { return payload.chat; });
   }
 
+  function generateChatGroupMetadata(input) {
+    return apiJson("/api/workbench/chat-groups/metadata", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(input || {}),
+      timeout: 120000,
+      toast: false,
+    }).then(function (payload) {
+      return {
+        metadata: payload.metadata || {},
+        group: payload.group || null,
+      };
+    });
+  }
+
+  function listChatGroups(projectId) {
+    return apiJson("/api/workbench/chat-groups?project=" + encodeURIComponent(projectId || ""), {
+      toast: false,
+    });
+  }
+
+  function replaceChatGroups(input) {
+    return apiJson("/api/workbench/chat-groups", {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(input || {}),
+      toast: false,
+    });
+  }
+
+  function migrateChatGroups(input) {
+    return apiJson("/api/workbench/chat-groups/migrate", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(input || {}),
+      toast: false,
+    });
+  }
+
   function deleteChat(chatId) {
     return apiJson("/api/workbench/chats/" + encodeURIComponent(chatId), { method: "DELETE" });
   }
@@ -416,6 +455,10 @@ var WorkbenchChatModel = (function () {
     getChangeDiff: getChangeDiff,
     getInbox: getInbox,
     renameChat: renameChat,
+    generateChatGroupMetadata: generateChatGroupMetadata,
+    listChatGroups: listChatGroups,
+    replaceChatGroups: replaceChatGroups,
+    migrateChatGroups: migrateChatGroups,
     deleteChat: deleteChat,
     toTask: toTask,
     compactChat: compactChat,
@@ -3590,7 +3633,7 @@ function WorkbenchChatPage({ active, project, newChatRequestId, onOpenTask, onAc
 // Conversation rail (column 2)
 // ---------------------------------------------------------------------------
 
-function WbcRenameDialog({ chat, onClose, onRename }) {
+function WbcRenameDialog({ chat, onClose, onRename, entity }) {
   var [draft, setDraft] = useWbcState(chat ? chat.title || "" : "");
   var [saving, setSaving] = useWbcState(false);
   var [error, setError] = useWbcState("");
@@ -3598,6 +3641,7 @@ function WbcRenameDialog({ chat, onClose, onRename }) {
   var originalTitle = String((chat && chat.title) || "");
   var nextTitle = String(draft || "").trim();
   var canSave = !!nextTitle && nextTitle !== originalTitle && !saving;
+  var isGroup = entity === "group";
 
   useWbcEffect(function () {
     setDraft(originalTitle);
@@ -3622,7 +3666,9 @@ function WbcRenameDialog({ chat, onClose, onRename }) {
     setError("");
     onRename(chat.id, nextTitle).then(function () {
       window.CyreneUI.require("feedback").showToast(
-        wbcT("workbenchChat.renameSuccess", "Chat renamed"),
+        isGroup
+          ? wbcT("workbenchChat.groupRenameSuccess", "Chat group renamed")
+          : wbcT("workbenchChat.renameSuccess", "Chat renamed"),
         "success"
       );
       if (onClose) onClose();
@@ -3647,7 +3693,9 @@ function WbcRenameDialog({ chat, onClose, onRename }) {
         onSubmit={submit}
       >
         <div className="wbc-rename-head">
-          <strong id="wbc-rename-title">{wbcT("workbenchChat.rename", "Rename chat")}</strong>
+          <strong id="wbc-rename-title">{isGroup
+            ? wbcT("workbenchChat.groupRename", "Rename group")
+            : wbcT("workbenchChat.rename", "Rename chat")}</strong>
           <button
             type="button"
             className="wbc-rename-close"
@@ -3657,7 +3705,9 @@ function WbcRenameDialog({ chat, onClose, onRename }) {
           >{WBC_ICONS.x}</button>
         </div>
         <div className="wbc-rename-body">
-          <label htmlFor="wbc-rename-input">{wbcT("workbenchChat.titleLabel", "Chat title")}</label>
+          <label htmlFor="wbc-rename-input">{isGroup
+            ? wbcT("workbenchChat.groupTitleLabel", "Group title")
+            : wbcT("workbenchChat.titleLabel", "Chat title")}</label>
           <input
             id="wbc-rename-input"
             ref={inputRef}
@@ -3668,7 +3718,9 @@ function WbcRenameDialog({ chat, onClose, onRename }) {
               setDraft(e.target.value);
               if (error) setError("");
             }}
-            placeholder={wbcT("workbenchChat.renamePlaceholder", "Enter a chat title")}
+            placeholder={isGroup
+              ? wbcT("workbenchChat.groupRenamePlaceholder", "Enter a group title")
+              : wbcT("workbenchChat.renamePlaceholder", "Enter a chat title")}
           />
           <div className="wbc-rename-meta">
             <span className={error ? "is-error" : ""} role={error ? "alert" : undefined}>
@@ -3713,7 +3765,62 @@ function wbcOrderChatsByPinned(chats, pinnedChatIds) {
   });
 }
 
+function WbcHoverMarquee({ text, className }) {
+  var viewportRef = useWbcRef(null);
+  var trackRef = useWbcRef(null);
+  var [metrics, setMetrics] = useWbcState({ overflow: false, distance: 0, duration: 7 });
+  var value = String(text || "");
+
+  useWbcEffect(function () {
+    function measure() {
+      var viewport = viewportRef.current;
+      var track = trackRef.current;
+      if (!viewport || !track) return;
+      var distance = Math.max(0, Math.ceil(track.scrollWidth - viewport.clientWidth));
+      var next = {
+        overflow: distance > 1,
+        distance: distance,
+        duration: Math.max(7, Math.min(18, 5.5 + (distance / 45))),
+      };
+      setMetrics(function (current) {
+        return current.overflow === next.overflow
+          && current.distance === next.distance
+          && current.duration === next.duration
+          ? current
+          : next;
+      });
+    }
+    measure();
+    var observer = typeof ResizeObserver === "function" ? new ResizeObserver(measure) : null;
+    if (observer && viewportRef.current) observer.observe(viewportRef.current);
+    if (observer && trackRef.current) observer.observe(trackRef.current);
+    window.addEventListener("resize", measure);
+    return function () {
+      if (observer) observer.disconnect();
+      window.removeEventListener("resize", measure);
+    };
+  }, [value]);
+
+  return (
+    <span
+      ref={viewportRef}
+      className={"wbc-hover-marquee" + (metrics.overflow ? " overflow" : "") + (className ? (" " + className) : "")}
+      title={metrics.overflow ? value : undefined}
+    >
+      <span
+        ref={trackRef}
+        className="wbc-hover-marquee-track"
+        style={{
+          "--wbc-marquee-distance": metrics.distance + "px",
+          "--wbc-marquee-duration": metrics.duration + "s",
+        }}
+      >{value}</span>
+    </span>
+  );
+}
+
 var WBC_CHAT_ORDER_PREFIX = "cyrene-workbench-chat-order-v1:";
+var WBC_CHAT_GROUPS_PREFIX = "cyrene-workbench-chat-groups-v1:";
 
 function wbcNormalizeChatOrder(defaultOrder, savedOrder) {
   var valid = Array.isArray(defaultOrder) ? defaultOrder.map(String) : [];
@@ -3752,10 +3859,122 @@ function wbcMoveChatOrder(order, movingId, targetId, edge) {
   return next;
 }
 
+function wbcNormalizeChatGroups(groups, validChatIds) {
+  var allowed = new Set((Array.isArray(validChatIds) ? validChatIds : []).map(String));
+  var claimed = new Set();
+  return (Array.isArray(groups) ? groups : []).map(function (raw, index) {
+    var chatIds = [];
+    var localSeen = new Set();
+    (raw && Array.isArray(raw.chatIds) ? raw.chatIds : []).forEach(function (id) {
+      id = String(id || "");
+      if (!allowed.has(id) || claimed.has(id) || localSeen.has(id)) return;
+      localSeen.add(id);
+      chatIds.push(id);
+    });
+    if (chatIds.length >= 2) chatIds.forEach(function (id) { claimed.add(id); });
+    return {
+      id: String(raw && raw.id || ("group_" + index)),
+      title: String(raw && raw.title || wbcT("workbenchChat.newGroup", "New chat group")).trim().slice(0, 60)
+        || wbcT("workbenchChat.newGroup", "New chat group"),
+      summary: String(raw && raw.summary || "").trim().slice(0, 160),
+      titleLocked: !!(raw && raw.titleLocked),
+      metadataLang: String(raw && raw.metadataLang || ""),
+      metadataChatIds: String(raw && raw.metadataChatIds || ""),
+      chatIds: chatIds,
+    };
+  }).filter(function (group) { return group.chatIds.length >= 2; });
+}
+
+function wbcLoadChatGroups(projectId, validChatIds) {
+  try {
+    var saved = JSON.parse(localStorage.getItem(WBC_CHAT_GROUPS_PREFIX + String(projectId || "")) || "null");
+    return wbcNormalizeChatGroups(saved, validChatIds);
+  } catch (e) {
+    return [];
+  }
+}
+
+function wbcFindChatGroup(groups, chatId) {
+  chatId = String(chatId || "");
+  return (Array.isArray(groups) ? groups : []).find(function (group) {
+    return Array.isArray(group.chatIds) && group.chatIds.indexOf(chatId) >= 0;
+  }) || null;
+}
+
+function wbcRemoveChatFromGroups(groups, chatId) {
+  chatId = String(chatId || "");
+  return (Array.isArray(groups) ? groups : []).map(function (group) {
+    return {
+      ...group,
+      chatIds: (Array.isArray(group.chatIds) ? group.chatIds : []).filter(function (id) {
+        return String(id) !== chatId;
+      }),
+    };
+  }).filter(function (group) { return group.chatIds.length >= 2; });
+}
+
+function wbcCreateChatGroup(groups, movingId, targetId, nextGroupId) {
+  movingId = String(movingId || "");
+  targetId = String(targetId || "");
+  var current = (Array.isArray(groups) ? groups : []).map(function (group) {
+    return { ...group, chatIds: Array.isArray(group.chatIds) ? group.chatIds.slice() : [] };
+  });
+  if (!movingId || !targetId || movingId === targetId) return current;
+  var existingTargetGroup = wbcFindChatGroup(current, targetId);
+  if (existingTargetGroup && existingTargetGroup.chatIds.indexOf(movingId) >= 0) return current;
+
+  current.forEach(function (group) {
+    group.chatIds = group.chatIds.filter(function (id) { return String(id) !== movingId; });
+  });
+  current = current.filter(function (group) { return group.chatIds.length >= 2; });
+  existingTargetGroup = wbcFindChatGroup(current, targetId);
+  if (existingTargetGroup) {
+    existingTargetGroup.chatIds.push(movingId);
+    return current;
+  }
+  current.push({
+    id: String(nextGroupId || ("group_" + Date.now().toString(36))),
+    title: wbcT("workbenchChat.newGroup", "New chat group"),
+    summary: "",
+    titleLocked: false,
+    metadataLang: "",
+    metadataChatIds: "",
+    chatIds: [targetId, movingId],
+  });
+  return current;
+}
+
+function wbcBuildChatRailItems(chats, groups) {
+  var list = Array.isArray(chats) ? chats : [];
+  var renderedGroups = new Set();
+  var visibleIds = new Set(list.map(function (chat) { return String(chat && chat.id || ""); }));
+  var items = [];
+  list.forEach(function (chat) {
+    var group = wbcFindChatGroup(groups, chat && chat.id);
+    if (!group) {
+      items.push({ kind: "chat", chat: chat });
+      return;
+    }
+    if (renderedGroups.has(group.id)) return;
+    renderedGroups.add(group.id);
+    items.push({
+      kind: "group",
+      group: group,
+      chats: list.filter(function (candidate) {
+        return visibleIds.has(String(candidate && candidate.id || ""))
+          && group.chatIds.indexOf(String(candidate && candidate.id || "")) >= 0;
+      }),
+    });
+  });
+  return items;
+}
+
 function WbcRail({ projectId, chats, pinnedChatIds, activeChatId, loading, runningChatIds, onSelect, onCreate, onRename, onDelete, onToTask, toTaskBusy, onTogglePinned }) {
   var [query, setQuery] = useWbcState("");
   var [menuId, setMenuId] = useWbcState("");
   var [renameChat, setRenameChat] = useWbcState(null);
+  var [renameGroup, setRenameGroup] = useWbcState(null);
+  var [collapsedGroups, setCollapsedGroups] = useWbcState({});
   var defaultChats = useWbcMemo(function () {
     return wbcOrderChatsByPinned(chats, pinnedChatIds);
   }, [chats, pinnedChatIds]);
@@ -3764,19 +3983,65 @@ function WbcRail({ projectId, chats, pinnedChatIds, activeChatId, loading, runni
   var [order, setOrder] = useWbcState(function () {
     return wbcLoadChatOrder(projectId, defaultOrder);
   });
+  var [groups, setGroups] = useWbcState(function () {
+    return wbcLoadChatGroups(projectId, defaultOrder);
+  });
+  var [groupBackendReady, setGroupBackendReady] = useWbcState(false);
+  var [groupMetadataPending, setGroupMetadataPending] = useWbcState({});
   var [dragState, setDragState] = useWbcState(null);
   var [announcement, setAnnouncement] = useWbcState("");
   var dragOriginOrderRef = useWbcRef([]);
   var dropCommittedRef = useWbcRef(false);
   var suppressClickRef = useWbcRef("");
+  var groupMetadataRequestRef = useWbcRef({ sequence: 0, active: {} });
+  var groupBackendLoadRef = useWbcRef(0);
+  var groupBackendWriteRef = useWbcRef({ projectId: String(projectId || ""), sequence: 0, chain: Promise.resolve(), baseGroups: [] });
+  var groupMetadataLang = window.CyreneUI.require("i18n").getLang();
   var chatMap = new Map((Array.isArray(chats) ? chats : []).map(function (chat) {
     return [String(chat.id), chat];
   }));
 
   useWbcEffect(function () {
     setOrder(wbcLoadChatOrder(projectId, defaultOrder));
+    var legacyGroups = wbcLoadChatGroups(projectId, defaultOrder);
+    setGroups(legacyGroups);
+    setGroupBackendReady(false);
+    setCollapsedGroups({});
+    setGroupMetadataPending({});
+    groupMetadataRequestRef.current.active = {};
     setDragState(null);
-  }, [projectId, defaultOrderKey]);
+    if (loading) return;
+    groupBackendLoadRef.current += 1;
+    var loadToken = groupBackendLoadRef.current;
+    var backendRef = groupBackendWriteRef.current;
+    backendRef.projectId = String(projectId || "");
+    backendRef.sequence = 0;
+    backendRef.chain = Promise.resolve();
+    backendRef.baseGroups = [];
+    var loadPromise = WorkbenchChatModel.listChatGroups(projectId).then(function (payload) {
+      if (groupBackendLoadRef.current !== loadToken) return null;
+      if (payload && payload.migrationRequired) {
+        return WorkbenchChatModel.migrateChatGroups({
+          projectId: projectId,
+          groups: legacyGroups,
+        });
+      }
+      return payload;
+    }).then(function (payload) {
+      if (!payload || groupBackendLoadRef.current !== loadToken) return;
+      var authoritative = storeNormalizedGroups(payload.groups || []);
+      backendRef.baseGroups = authoritative;
+      setGroups(authoritative);
+      setGroupBackendReady(true);
+    }).catch(function () {
+      // Keep the legacy/last-known browser cache for offline startup. The next
+      // project load or mutation retries against the authoritative backend.
+    });
+    backendRef.chain = loadPromise;
+    return function () {
+      if (groupBackendLoadRef.current === loadToken) groupBackendLoadRef.current += 1;
+    };
+  }, [projectId, defaultOrderKey, loading]);
 
   var orderedChats = wbcNormalizeChatOrder(defaultOrder, order).map(function (id) {
     return chatMap.get(id);
@@ -3784,10 +4049,244 @@ function WbcRail({ projectId, chats, pinnedChatIds, activeChatId, loading, runni
   var filtered = useWbcMemo(function () {
     var q = query.trim().toLowerCase();
     return !q ? orderedChats : orderedChats.filter(function (chat) {
+      var group = wbcFindChatGroup(groups, chat.id);
       return String(chat.title || "").toLowerCase().indexOf(q) !== -1
-        || String(chat.preview || "").toLowerCase().indexOf(q) !== -1;
+        || String(chat.preview || "").toLowerCase().indexOf(q) !== -1
+        || String(group && group.title || "").toLowerCase().indexOf(q) !== -1
+        || String(group && group.summary || "").toLowerCase().indexOf(q) !== -1;
     });
-  }, [orderedChats, query]);
+  }, [orderedChats, query, groups]);
+  var railItems = useWbcMemo(function () {
+    return wbcBuildChatRailItems(filtered, groups);
+  }, [filtered, groups]);
+  var groupMetadataRefreshKey = groups.map(function (group) {
+    return [
+      group.id,
+      group.chatIds.join(","),
+      group.metadataLang || "",
+      group.metadataChatIds || "",
+      group.summary ? "ready" : "empty",
+    ].join(":");
+  }).join("|");
+
+  useWbcEffect(function () {
+    if (!groupBackendReady) return;
+    groups.forEach(function (group) {
+      if (
+        !group.summary
+        || group.metadataLang !== groupMetadataLang
+        || group.metadataChatIds !== group.chatIds.map(String).join("|")
+      ) {
+        refreshChatGroupMetadata(group);
+      }
+    });
+  }, [projectId, groupBackendReady, groupMetadataLang, groupMetadataRefreshKey]);
+
+  function storeNormalizedGroups(nextGroups) {
+    var normalized = wbcNormalizeChatGroups(nextGroups, defaultOrder);
+    try {
+      localStorage.setItem(
+        WBC_CHAT_GROUPS_PREFIX + String(projectId || ""),
+        JSON.stringify(normalized)
+      );
+    } catch (e) {}
+    return normalized;
+  }
+
+  function commitGroups(nextGroups, intent) {
+    var normalized = storeNormalizedGroups(nextGroups);
+    setGroups(normalized);
+    persistGroups(normalized, intent);
+    return normalized;
+  }
+
+  function persistGroups(normalized, intent) {
+    var state = groupBackendWriteRef.current;
+    var currentProjectId = String(projectId || "");
+    if (state.projectId !== currentProjectId) {
+      state.projectId = currentProjectId;
+      state.sequence = 0;
+      state.chain = Promise.resolve();
+      state.baseGroups = [];
+    }
+    state.sequence += 1;
+    var sequence = state.sequence;
+    var desired = wbcNormalizeChatGroups(normalized, defaultOrder);
+    var write = state.chain.catch(function () {}).then(function () {
+      return WorkbenchChatModel.replaceChatGroups({
+        projectId: currentProjectId,
+        groups: desired,
+        baseGroups: state.baseGroups || [],
+        intent: intent || undefined,
+      });
+    });
+    state.chain = write;
+    return write.then(function (payload) {
+      var live = groupBackendWriteRef.current;
+      var serverGroups = wbcNormalizeChatGroups(payload.groups || [], defaultOrder);
+      if (live.projectId === currentProjectId) live.baseGroups = serverGroups;
+      if (
+        live.projectId === currentProjectId
+        && live.sequence === sequence
+        && String(projectId || "") === currentProjectId
+      ) {
+        var authoritative = storeNormalizedGroups(serverGroups);
+        setGroups(authoritative);
+      }
+      return payload;
+    });
+  }
+
+  function refreshChatGroupMetadata(group) {
+    if (!group || !Array.isArray(group.chatIds) || group.chatIds.length < 2) {
+      return Promise.resolve(null);
+    }
+    var members = group.chatIds.map(function (chatId) {
+      var chat = chatMap.get(String(chatId));
+      return chat ? {
+        id: String(chat.id || ""),
+        title: String(chat.title || ""),
+        preview: String(chat.preview || ""),
+      } : null;
+    }).filter(Boolean);
+    if (members.length < 2) return Promise.resolve(null);
+    var signature = group.chatIds.map(String).join("|");
+    var requestState = groupMetadataRequestRef.current;
+    requestState.sequence += 1;
+    var token = requestState.sequence;
+    requestState.active[group.id] = token;
+    setGroupMetadataPending(function (current) { return { ...current, [group.id]: true }; });
+    return groupBackendWriteRef.current.chain.catch(function () {}).then(function () {
+      if (groupMetadataRequestRef.current.active[group.id] !== token) return null;
+      return WorkbenchChatModel.generateChatGroupMetadata({
+        projectId: projectId,
+        groupId: group.id,
+        signature: signature,
+        members: members,
+        currentTitle: group.title || "",
+        titleLocked: !!group.titleLocked,
+        lang: groupMetadataLang,
+      });
+    }).then(function (result) {
+      if (!result) return null;
+      var metadata = result.metadata || {};
+      var persistedGroup = result.group;
+      if (groupMetadataRequestRef.current.active[group.id] !== token) return null;
+      setGroups(function (current) {
+        var live = current.find(function (candidate) { return candidate.id === group.id; });
+        if (!live || live.chatIds.map(String).join("|") !== signature) return current;
+        var next = current.map(function (candidate) {
+          if (candidate.id !== group.id) return candidate;
+          if (
+            persistedGroup
+            && String(persistedGroup.id || "") === group.id
+            && Array.isArray(persistedGroup.chatIds)
+            && persistedGroup.chatIds.map(String).join("|") === signature
+          ) {
+            return {
+              ...candidate,
+              title: String(persistedGroup.title || candidate.title),
+              summary: String(persistedGroup.summary || candidate.summary),
+              titleLocked: !!persistedGroup.titleLocked,
+              metadataLang: String(persistedGroup.metadataLang || metadata.lang || groupMetadataLang),
+              metadataChatIds: String(persistedGroup.metadataChatIds || signature),
+            };
+          }
+          return {
+            ...candidate,
+            title: candidate.titleLocked
+              ? candidate.title
+              : (String(metadata.title || "").trim().slice(0, 60) || candidate.title),
+            summary: String(metadata.summary || "").trim().slice(0, 160) || candidate.summary,
+            metadataLang: String(metadata.lang || groupMetadataLang),
+            metadataChatIds: signature,
+          };
+        });
+        var normalized = storeNormalizedGroups(next);
+        if (groupBackendWriteRef.current.projectId === String(projectId || "")) {
+          groupBackendWriteRef.current.baseGroups = normalized;
+        }
+        return normalized;
+      });
+      return result;
+    }).catch(function () {
+      return null;
+    }).finally(function () {
+      if (groupMetadataRequestRef.current.active[group.id] !== token) return;
+      delete groupMetadataRequestRef.current.active[group.id];
+      setGroupMetadataPending(function (current) {
+        if (!current[group.id]) return current;
+        var next = { ...current };
+        delete next[group.id];
+        return next;
+      });
+    });
+  }
+
+  function commitGroupDrop(movingId, targetId) {
+    var nextOrder = wbcMoveChatOrder(dragOriginOrderRef.current, movingId, targetId, "after");
+    commitOrder(nextOrder, movingId);
+    var desiredGroups = wbcCreateChatGroup(
+      groups,
+      movingId,
+      targetId,
+      "group_" + Date.now().toString(36)
+    );
+    var created = wbcFindChatGroup(desiredGroups, targetId);
+    commitGroups(desiredGroups, {
+      type: "move",
+      sessionId: String(movingId || ""),
+      targetGroupId: created ? created.id : "",
+    });
+    if (created) {
+      setCollapsedGroups(function (current) { return { ...current, [created.id]: false }; });
+      setAnnouncement(wbcT("workbenchChat.groupCreated", "Created {title} with {count} chats.", {
+        title: created.title,
+        count: created.chatIds.length,
+      }));
+    }
+  }
+
+  function commitUngroupDrop(chatId) {
+    var sourceGroup = wbcFindChatGroup(groups, chatId);
+    if (!sourceGroup) return;
+    commitGroups(wbcRemoveChatFromGroups(groups, chatId), {
+      type: "remove_member",
+      sessionId: String(chatId || ""),
+    });
+    setAnnouncement(wbcT("workbenchChat.removedFromGroup", "Removed {title} from {group}.", {
+      title: (chatMap.get(String(chatId)) || {}).title || wbcT("workbenchChat.newChat", "New chat"),
+      group: sourceGroup.title,
+    }));
+  }
+
+  function renameChatGroup(groupId, title) {
+    var next = groups.map(function (group) {
+      return group.id === groupId ? {
+        ...group,
+        title: String(title || "").trim().slice(0, 60),
+        titleLocked: true,
+      } : group;
+    });
+    commitGroups(next, {
+      type: "rename",
+      groupId: groupId,
+      title: String(title || "").trim().slice(0, 60),
+    });
+    return groupBackendWriteRef.current.chain;
+  }
+
+  function dissolveChatGroup(groupId) {
+    var group = groups.find(function (candidate) { return candidate.id === groupId; });
+    commitGroups(groups.filter(function (candidate) { return candidate.id !== groupId; }), {
+      type: "dissolve",
+      groupId: groupId,
+    });
+    setMenuId("");
+    if (group) {
+      setAnnouncement(wbcT("workbenchChat.groupDissolved", "Dissolved {title}.", { title: group.title }));
+    }
+  }
 
   function commitOrder(nextOrder, movedId) {
     var normalized = wbcNormalizeChatOrder(defaultOrder, nextOrder);
@@ -3827,6 +4326,396 @@ function WbcRail({ projectId, chats, pinnedChatIds, activeChatId, loading, runni
     return true;
   }
 
+  function updateDragState(next) {
+    setDragState(function (current) {
+      if (!current || !next) return next;
+      var resolved = {
+        ...next,
+        sourceGroupId: next.sourceGroupId === undefined ? current.sourceGroupId : next.sourceGroupId,
+      };
+      if (
+        current.movingId === resolved.movingId
+        && current.targetId === resolved.targetId
+        && current.targetGroupId === resolved.targetGroupId
+        && current.sourceGroupId === resolved.sourceGroupId
+        && current.edge === resolved.edge
+        && current.mode === resolved.mode
+      ) return current;
+      return resolved;
+    });
+  }
+
+  function chatCanGroupWith(movingId, targetId) {
+    var movingGroup = wbcFindChatGroup(groups, movingId);
+    var targetGroup = wbcFindChatGroup(groups, targetId);
+    return !(movingGroup && targetGroup && movingGroup.id === targetGroup.id);
+  }
+
+  function chatDropMode(event, movingId, targetId) {
+    if (!chatCanGroupWith(movingId, targetId)) return "reorder";
+    if (
+      dragState
+      && dragState.mode === "group"
+      && dragState.movingId === String(movingId)
+      && dragState.targetId === String(targetId)
+    ) return "group";
+    var rect = event.currentTarget.getBoundingClientRect();
+    var ratio = rect.height ? (event.clientY - rect.top) / rect.height : 0;
+    return ratio >= 0.22 && ratio <= 0.78 ? "group" : "reorder";
+  }
+
+  function renderDropClone(chat) {
+    if (!chat) return null;
+    var chatRunning = !!(runningChatIds && runningChatIds[chat.id]) || chat.status === "running";
+    return (
+      <div className="wbc-chat-card wbc-chat-group-drop-clone" aria-hidden="true">
+        <span className="wbc-chat-card-top">
+          <span className="wbc-chat-card-title">
+            <b><WbcHoverMarquee text={chat.title || wbcT("workbenchChat.newChat", "New chat")} /></b>
+          </span>
+          <time className="wbc-chat-card-time">{wbcFormatTime(chat.updatedAt || chat.createdAt)}</time>
+        </span>
+        <span className="wbc-chat-card-preview">
+          {chatRunning ? <i className="wbc-running-dot" /> : null}
+          <WbcHoverMarquee text={chat.preview || wbcT("workbenchChat.noMessages", "No messages yet")} />
+        </span>
+      </div>
+    );
+  }
+
+  function renderChatCard(chat, options) {
+    options = options || {};
+    var active = chat.id === activeChatId;
+    var chatRunning = !!(runningChatIds && runningChatIds[chat.id]) || chat.status === "running";
+    var isMenuOpen = menuId === chat.id;
+    var isPinned = (Array.isArray(pinnedChatIds) ? pinnedChatIds : []).some(function (id) {
+      return String(id || "") === String(chat.id || "");
+    });
+    var isDragging = dragState && dragState.movingId === String(chat.id);
+    var isGroupTarget = dragState && dragState.mode === "group" && dragState.targetId === String(chat.id);
+    return (
+      <div
+        key={chat.id}
+        role="button"
+        tabIndex={0}
+        draggable="true"
+        className={"wbc-chat-card"
+          + (options.insideGroup ? " wbc-chat-group-child" : "")
+          + (active ? " active" : "")
+          + (isMenuOpen ? " menu-open" : "")
+          + (isDragging ? " dragging" : "")
+          + (isGroupTarget ? " group-drop-target" : "")}
+        title={wbcT("workbenchChat.dragChat", "Drag to reorder, overlap another chat to group, or drop in the conversation area to open {title}.", {
+          title: chat.title || wbcT("workbenchChat.newChat", "New chat"),
+        })}
+        onClick={function () {
+          if (suppressClickRef.current === String(chat.id)) return;
+          setMenuId("");
+          onSelect(chat.id);
+        }}
+        onContextMenu={function (event) {
+          event.preventDefault();
+          event.stopPropagation();
+          setMenuId(chat.id);
+        }}
+        onKeyDown={function (e) {
+          if (moveChatByKeyboard(e, chat.id)) return;
+          if (e.key === "Enter" || e.key === " ") {
+            e.preventDefault();
+            onSelect(chat.id);
+          }
+        }}
+        onDragStart={function (event) {
+          if (event.target && event.target.closest && event.target.closest("button")) {
+            event.preventDefault();
+            return;
+          }
+          var id = String(chat.id);
+          dragOriginOrderRef.current = order.slice();
+          dropCommittedRef.current = false;
+          suppressClickRef.current = id;
+          setMenuId("");
+          wbcSetChatDrag(event, chat);
+          var cardRect = event.currentTarget.getBoundingClientRect();
+          if (event.dataTransfer) {
+            event.dataTransfer.setDragImage(
+              event.currentTarget,
+              Math.max(0, Math.min(cardRect.width, event.clientX - cardRect.left)),
+              Math.max(0, Math.min(cardRect.height, event.clientY - cardRect.top))
+            );
+          }
+          var sourceGroup = wbcFindChatGroup(groups, id);
+          setDragState({
+            movingId: id,
+            targetId: "",
+            targetGroupId: "",
+            sourceGroupId: sourceGroup ? sourceGroup.id : "",
+            edge: "before",
+            mode: "reorder",
+          });
+        }}
+        onDragOver={function (event) {
+          if (!dragState || dragState.movingId === String(chat.id) || !wbcHasChatDrag(event)) return;
+          event.preventDefault();
+          event.stopPropagation();
+          if (event.dataTransfer) event.dataTransfer.dropEffect = "move";
+          var mode = chatDropMode(event, dragState.movingId, String(chat.id));
+          var targetGroup = wbcFindChatGroup(groups, chat.id);
+          if (mode === "group") {
+            if (order.join("|") !== dragOriginOrderRef.current.join("|")) {
+              setOrder(dragOriginOrderRef.current.slice());
+            }
+            updateDragState({
+              movingId: dragState.movingId,
+              targetId: String(chat.id),
+              targetGroupId: targetGroup ? targetGroup.id : "",
+              edge: "center",
+              mode: "group",
+            });
+            return;
+          }
+          var rect = event.currentTarget.getBoundingClientRect();
+          var edge = event.clientY < rect.top + (rect.height / 2) ? "before" : "after";
+          var nextOrder = wbcMoveChatOrder(order, dragState.movingId, String(chat.id), edge);
+          if (nextOrder.join("|") !== order.join("|")) setOrder(nextOrder);
+          updateDragState({ movingId: dragState.movingId, targetId: String(chat.id), targetGroupId: "", edge: edge, mode: "reorder" });
+        }}
+        onDrop={function (event) {
+          if (!dragState || !wbcHasChatDrag(event)) return;
+          event.preventDefault();
+          event.stopPropagation();
+          var mode = chatDropMode(event, dragState.movingId, String(chat.id));
+          dropCommittedRef.current = true;
+          if (mode === "group") {
+            commitGroupDrop(dragState.movingId, String(chat.id));
+          } else {
+            var nextOrder = dragState.movingId === String(chat.id)
+              ? order
+              : wbcMoveChatOrder(order, dragState.movingId, String(chat.id), dragState.edge);
+            commitOrder(nextOrder, dragState.movingId);
+            var reorderTargetGroup = wbcFindChatGroup(groups, chat.id);
+            if (
+              dragState.sourceGroupId
+              && (!reorderTargetGroup || reorderTargetGroup.id !== dragState.sourceGroupId)
+            ) commitUngroupDrop(dragState.movingId);
+          }
+          setDragState(null);
+        }}
+        onDragEnd={function () {
+          if (!dropCommittedRef.current) setOrder(dragOriginOrderRef.current);
+          dropCommittedRef.current = false;
+          setDragState(null);
+          window.setTimeout(function () {
+            if (suppressClickRef.current === String(chat.id)) suppressClickRef.current = "";
+          }, 0);
+        }}
+      >
+        <span className="wbc-chat-card-top">
+          <span className="wbc-chat-card-title">
+            <b><WbcHoverMarquee text={chat.title || wbcT("workbenchChat.newChat", "New chat")} /></b>
+            {isPinned ? (
+              <span className="wbc-chat-card-pin" title={wbcT("workbenchChat.pinned", "Pinned")} aria-label={wbcT("workbenchChat.pinned", "Pinned")}>
+                {WBC_ICONS.pin}
+              </span>
+            ) : null}
+            {chat.forkedFromChatId && (
+              <span
+                className="wbc-fork-marker"
+                title={wbcT("workbenchChat.forkSource", "Forked from another chat — click to open the original")}
+                onClick={function (e) { e.stopPropagation(); onSelect(chat.forkedFromChatId); }}
+              >
+                {WBC_ICONS.fork}
+                {wbcT("workbenchChat.forked", "Forked")}
+              </span>
+            )}
+          </span>
+          <span className="wbc-chat-card-right">
+            <time className="wbc-chat-card-time">{wbcFormatTime(chat.updatedAt || chat.createdAt)}</time>
+            <span className="wbc-chat-card-actions">
+              <button
+                type="button"
+                className="wb-card-menu-btn"
+                title={wbcT("common.moreActions", "More actions")}
+                onClick={function (e) { e.stopPropagation(); setMenuId(isMenuOpen ? "" : chat.id); }}
+              >
+                {WBC_ICONS.dots}
+              </button>
+              {isMenuOpen && (
+                <div className="wb-card-menu" role="menu">
+                  <button type="button" role="menuitem" className="wbc-chat-pin-action" onClick={function (e) {
+                    e.stopPropagation();
+                    setMenuId("");
+                    if (onTogglePinned) onTogglePinned(chat, !isPinned);
+                  }}>
+                    <span className="wbc-chat-menu-icon" aria-hidden="true">{WBC_ICONS.pin}</span>
+                    <span>{isPinned
+                      ? wbcT("workbenchChat.unpin", "Unpin chat")
+                      : wbcT("workbenchChat.pin", "Pin chat")}</span>
+                  </button>
+                  {!chat.legacy && (
+                    <button type="button" role="menuitem" className="wbc-chat-menu-action" onClick={function (e) {
+                      e.stopPropagation();
+                      setMenuId("");
+                      setRenameChat(chat);
+                    }}>
+                      <span className="wbc-chat-menu-icon" aria-hidden="true">{WBC_ICONS.edit}</span>
+                      <span>{wbcT("workbenchChat.rename", "Rename chat")}</span>
+                    </button>
+                  )}
+                  <button type="button" role="menuitem" className="wbc-chat-menu-action" disabled={toTaskBusy} onClick={function (e) {
+                    e.stopPropagation();
+                    setMenuId("");
+                    if (onToTask) onToTask(chat.id);
+                  }}>
+                    <span className="wbc-chat-menu-icon" aria-hidden="true">{WBC_ICONS.task}</span>
+                    <span>{wbcT(toTaskBusy ? "workbenchChat.toTaskBusy" : "workbenchChat.toTask", toTaskBusy ? "Analyzing chat…" : "Convert to task")}</span>
+                  </button>
+                  <button type="button" role="menuitem" className="wbc-chat-menu-action danger" onClick={function (e) {
+                    e.stopPropagation();
+                    setMenuId("");
+                    onDelete && onDelete(chat.id);
+                  }}>
+                    <span className="wbc-chat-menu-icon" aria-hidden="true">{WBC_ICONS.trash}</span>
+                    <span>{wbcT("workbenchChat.delete", "Delete chat")}</span>
+                  </button>
+                </div>
+              )}
+            </span>
+          </span>
+        </span>
+        <span className="wbc-chat-card-preview">
+          {chatRunning ? <i className="wbc-running-dot" /> : null}
+          <WbcHoverMarquee text={chat.preview || wbcT("workbenchChat.noMessages", "No messages yet")} />
+        </span>
+      </div>
+    );
+  }
+
+  function renderGroupFrame(group, groupChats) {
+    var isCollapsed = !!collapsedGroups[group.id];
+    var groupMenuId = "group:" + group.id;
+    var isMenuOpen = menuId === groupMenuId;
+    function openGroupMenu(event) {
+      event.preventDefault();
+      event.stopPropagation();
+      setMenuId(groupMenuId);
+    }
+    function toggleGroupMenu(event) {
+      event.stopPropagation();
+      setMenuId(isMenuOpen ? "" : groupMenuId);
+    }
+    var movingChat = dragState && chatMap.get(String(dragState.movingId));
+    var groupDropReady = !!(
+      dragState
+      && dragState.mode === "group"
+      && (dragState.targetGroupId === group.id || group.chatIds.indexOf(String(dragState.targetId)) >= 0)
+      && group.chatIds.indexOf(String(dragState.movingId)) < 0
+    );
+    return (
+      <section
+        key={group.id}
+        className={"wbc-chat-group" + (isCollapsed ? " collapsed" : " expanded") + (groupDropReady ? " drop-ready" : "") + (isMenuOpen ? " menu-open" : "")}
+        onContextMenu={openGroupMenu}
+        onDragOver={function (event) {
+          if (!dragState || !wbcHasChatDrag(event) || group.chatIds.indexOf(String(dragState.movingId)) >= 0) return;
+          if (event.target && event.target.closest && event.target.closest(".wbc-chat-card")) return;
+          event.preventDefault();
+          event.stopPropagation();
+          if (event.dataTransfer) event.dataTransfer.dropEffect = "move";
+          if (order.join("|") !== dragOriginOrderRef.current.join("|")) setOrder(dragOriginOrderRef.current.slice());
+          updateDragState({
+            movingId: dragState.movingId,
+            targetId: String(group.chatIds[0] || ""),
+            targetGroupId: group.id,
+            edge: "center",
+            mode: "group",
+          });
+        }}
+        onDrop={function (event) {
+          if (!dragState || !wbcHasChatDrag(event) || group.chatIds.indexOf(String(dragState.movingId)) >= 0) return;
+          event.preventDefault();
+          event.stopPropagation();
+          dropCommittedRef.current = true;
+          commitGroupDrop(dragState.movingId, String(group.chatIds[group.chatIds.length - 1] || group.chatIds[0]));
+          setDragState(null);
+        }}
+      >
+        <header className="wbc-chat-group-head">
+          <button
+            type="button"
+            className="wbc-chat-group-toggle"
+            onClick={function () {
+              setCollapsedGroups(function (current) { return { ...current, [group.id]: !isCollapsed }; });
+            }}
+            aria-expanded={!isCollapsed}
+          >
+            <span className="wbc-chat-group-icon" aria-hidden="true">
+              {group.chatIds.length + (groupDropReady ? 1 : 0)}
+            </span>
+            <b><WbcHoverMarquee text={group.title} /></b>
+          </button>
+          <span className="wbc-chat-group-actions">
+            <button
+              type="button"
+              className="wb-card-menu-btn"
+              title={wbcT("common.moreActions", "More actions")}
+              onClick={toggleGroupMenu}
+            >{WBC_ICONS.dots}</button>
+            {isMenuOpen && (
+              <div className="wb-card-menu" role="menu">
+                <button type="button" role="menuitem" onClick={function (event) {
+                  event.stopPropagation();
+                  setMenuId("");
+                  setRenameGroup(group);
+                }}>
+                  <span className="wbc-chat-menu-icon" aria-hidden="true">{WBC_ICONS.edit}</span>
+                  <span>{wbcT("workbenchChat.groupRename", "Rename group")}</span>
+                </button>
+                <button type="button" role="menuitem" className="danger" onClick={function (event) {
+                  event.stopPropagation();
+                  dissolveChatGroup(group.id);
+                }}>
+                  <span className="wbc-chat-menu-icon" aria-hidden="true">{WBC_ICONS.x}</span>
+                  <span>{wbcT("workbenchChat.groupDissolve", "Dissolve group")}</span>
+                </button>
+              </div>
+            )}
+            <button
+              type="button"
+              className={"wbc-chat-group-chevron" + (!isCollapsed ? " expanded" : "")}
+              aria-label={isCollapsed
+                ? wbcT("workbenchChat.groupExpand", "Expand group")
+                : wbcT("workbenchChat.groupCollapse", "Collapse group")}
+              onClick={function () {
+                setCollapsedGroups(function (current) { return { ...current, [group.id]: !isCollapsed }; });
+              }}
+            >{WBC_ICONS.chevronRight}</button>
+          </span>
+        </header>
+        <div className={"wbc-chat-group-summary" + (groupMetadataPending[group.id] ? " is-updating" : "")}>
+          <WbcHoverMarquee text={group.summary || (groupMetadataPending[group.id]
+            ? wbcT("workbenchChat.groupSummaryGenerating", "Generating summary…")
+            : groupChats.map(function (chat) { return chat.title; }).join(" · "))} />
+        </div>
+        <div
+          className={"wbc-chat-group-content" + (isCollapsed ? " collapsed" : " expanded")}
+          aria-hidden={isCollapsed}
+          inert={isCollapsed ? "" : undefined}
+        >
+          <div className="wbc-chat-group-content-inner">
+            <div className="wbc-chat-group-children">
+              {groupChats.map(function (chat) { return renderChatCard(chat, { insideGroup: true }); })}
+              {groupDropReady ? renderDropClone(movingChat) : null}
+            </div>
+          </div>
+        </div>
+        {groupDropReady && (
+          <span className="wbc-chat-group-drop-hint">{WBC_ICONS.copy}{wbcT("workbenchChat.releaseToExistingGroup", "Release to add to this chat group")}</span>
+        )}
+      </section>
+    );
+  }
+
   return (
     <aside className="wbc-rail">
       <div className="wbc-rail-glass">
@@ -3852,17 +4741,27 @@ function WbcRail({ projectId, chats, pinnedChatIds, activeChatId, loading, runni
       </div>
       {menuId && <div className="wb-card-menu-scrim" onClick={function () { setMenuId(""); }} />}
       <div
-        className={"wbc-chat-list" + (loading ? " is-loading" : "")}
+        className={"wbc-chat-list" + (loading ? " is-loading" : "") + (menuId ? " menu-active" : "")}
         onDragOver={function (event) {
           if (!dragState || !wbcHasChatDrag(event)) return;
           event.preventDefault();
           if (event.dataTransfer) event.dataTransfer.dropEffect = "move";
+          if (event.target === event.currentTarget) {
+            updateDragState({
+              movingId: dragState.movingId,
+              targetId: "",
+              targetGroupId: "",
+              edge: "after",
+              mode: "reorder",
+            });
+          }
         }}
         onDrop={function (event) {
           if (!dragState || !wbcHasChatDrag(event)) return;
           event.preventDefault();
           dropCommittedRef.current = true;
           commitOrder(order, dragState.movingId);
+          if (dragState.sourceGroupId) commitUngroupDrop(dragState.movingId);
           setDragState(null);
         }}
       >
@@ -3874,170 +4773,55 @@ function WbcRail({ projectId, chats, pinnedChatIds, activeChatId, loading, runni
         {!loading && filtered.length === 0 && (
           <div className="workbench-muted">{query ? wbcT("workbenchChat.noMatches", "No matching chats.") : wbcT("workbenchChat.emptyRail", "No chats yet. Create one from the top right.")}</div>
         )}
-        {!loading && filtered.map(function (chat) {
-          var active = chat.id === activeChatId;
-          var chatRunning = !!(runningChatIds && runningChatIds[chat.id]) || chat.status === "running";
-          var isMenuOpen = menuId === chat.id;
-          var isPinned = (Array.isArray(pinnedChatIds) ? pinnedChatIds : []).some(function (id) {
-            return String(id || "") === String(chat.id || "");
-          });
+        {!loading && railItems.map(function (item) {
+          if (item.kind === "group") return renderGroupFrame(item.group, item.chats);
+          var chat = item.chat;
+          var isNewGroupTarget = !!(
+            dragState
+            && dragState.mode === "group"
+            && dragState.targetId === String(chat.id)
+            && !wbcFindChatGroup(groups, chat.id)
+          );
+          if (!isNewGroupTarget) return renderChatCard(chat);
+          var movingChat = chatMap.get(String(dragState.movingId));
           return (
-            <div
-              key={chat.id}
-              role="button"
-              tabIndex={0}
-              draggable="true"
-              className={"wbc-chat-card" + (active ? " active" : "") + (isMenuOpen ? " menu-open" : "") + (dragState && dragState.movingId === String(chat.id) ? " dragging" : "")}
-              title={wbcT("workbenchChat.dragChat", "Drag to reorder or drop in the conversation area to open {title}.", {
-                title: chat.title || wbcT("workbenchChat.newChat", "New chat"),
-              })}
-              onClick={function () {
-                if (suppressClickRef.current === String(chat.id)) return;
-                setMenuId("");
-                onSelect(chat.id);
-              }}
-              onContextMenu={function (event) {
-                event.preventDefault();
-                event.stopPropagation();
-                setMenuId(chat.id);
-              }}
-              onKeyDown={function (e) {
-                if (moveChatByKeyboard(e, chat.id)) return;
-                if (e.key === "Enter" || e.key === " ") {
-                  e.preventDefault();
-                  onSelect(chat.id);
-                }
-              }}
-              onDragStart={function (event) {
-                if (event.target && event.target.closest && event.target.closest("button")) {
-                  event.preventDefault();
-                  return;
-                }
-                var id = String(chat.id);
-                dragOriginOrderRef.current = order.slice();
-                dropCommittedRef.current = false;
-                suppressClickRef.current = id;
-                setMenuId("");
-                wbcSetChatDrag(event, chat);
-                var cardRect = event.currentTarget.getBoundingClientRect();
-                if (event.dataTransfer) {
-                  event.dataTransfer.setDragImage(
-                    event.currentTarget,
-                    Math.max(0, Math.min(cardRect.width, event.clientX - cardRect.left)),
-                    Math.max(0, Math.min(cardRect.height, event.clientY - cardRect.top))
-                  );
-                }
-                setDragState({ movingId: id, targetId: "", edge: "before" });
-              }}
+            <section
+              key={"drop-group:" + chat.id}
+              className="wbc-chat-group wbc-chat-group-preview drop-ready"
               onDragOver={function (event) {
-                if (!dragState || dragState.movingId === String(chat.id) || !wbcHasChatDrag(event)) return;
+                if (!dragState || !wbcHasChatDrag(event)) return;
                 event.preventDefault();
                 event.stopPropagation();
                 if (event.dataTransfer) event.dataTransfer.dropEffect = "move";
-                var rect = event.currentTarget.getBoundingClientRect();
-                var edge = event.clientY < rect.top + (rect.height / 2) ? "before" : "after";
-                var nextOrder = wbcMoveChatOrder(order, dragState.movingId, String(chat.id), edge);
-                if (nextOrder.join("|") !== order.join("|")) setOrder(nextOrder);
-                setDragState({ movingId: dragState.movingId, targetId: String(chat.id), edge: edge });
+                updateDragState({
+                  movingId: dragState.movingId,
+                  targetId: String(chat.id),
+                  targetGroupId: "",
+                  edge: "center",
+                  mode: "group",
+                });
               }}
               onDrop={function (event) {
                 if (!dragState || !wbcHasChatDrag(event)) return;
                 event.preventDefault();
                 event.stopPropagation();
-                var nextOrder = dragState.movingId === String(chat.id)
-                  ? order
-                  : wbcMoveChatOrder(order, dragState.movingId, String(chat.id), dragState.edge);
                 dropCommittedRef.current = true;
-                commitOrder(nextOrder, dragState.movingId);
+                commitGroupDrop(dragState.movingId, String(chat.id));
                 setDragState(null);
-              }}
-              onDragEnd={function () {
-                if (!dropCommittedRef.current) setOrder(dragOriginOrderRef.current);
-                dropCommittedRef.current = false;
-                setDragState(null);
-                window.setTimeout(function () {
-                  if (suppressClickRef.current === String(chat.id)) suppressClickRef.current = "";
-                }, 0);
               }}
             >
-              <span className="wbc-chat-card-top">
-                <span className="wbc-chat-card-title">
-                  <b>{chat.title || wbcT("workbenchChat.newChat", "New chat")}</b>
-                  {isPinned ? (
-                    <span className="wbc-chat-card-pin" title={wbcT("workbenchChat.pinned", "Pinned")} aria-label={wbcT("workbenchChat.pinned", "Pinned")}>
-                      {WBC_ICONS.pin}
-                    </span>
-                  ) : null}
-                  {chat.forkedFromChatId && (
-                    <span
-                      className="wbc-fork-marker"
-                      title={wbcT("workbenchChat.forkSource", "Forked from another chat — click to open the original")}
-                      onClick={function (e) { e.stopPropagation(); onSelect(chat.forkedFromChatId); }}
-                    >
-                      {WBC_ICONS.fork}
-                      {wbcT("workbenchChat.forked", "Forked")}
-                    </span>
-                  )}
+              <header className="wbc-chat-group-head">
+                <span className="wbc-chat-group-toggle">
+                  <span className="wbc-chat-group-icon" aria-hidden="true">2</span>
+                  <b>{wbcT("workbenchChat.newGroup", "New chat group")}</b>
                 </span>
-                <span className="wbc-chat-card-right">
-                  <time className="wbc-chat-card-time">{wbcFormatTime(chat.updatedAt || chat.createdAt)}</time>
-                  <span className="wbc-chat-card-actions">
-                    <button
-                      type="button"
-                      className="wb-card-menu-btn"
-                      title={wbcT("common.moreActions", "More actions")}
-                      onClick={function (e) { e.stopPropagation(); setMenuId(isMenuOpen ? "" : chat.id); }}
-                    >
-                      {WBC_ICONS.dots}
-                    </button>
-                    {isMenuOpen && (
-                      <div className="wb-card-menu" role="menu">
-                        <button type="button" role="menuitem" className="wbc-chat-pin-action" onClick={function (e) {
-                          e.stopPropagation();
-                          setMenuId("");
-                          if (onTogglePinned) onTogglePinned(chat, !isPinned);
-                        }}>
-                          <span className="wbc-chat-menu-icon" aria-hidden="true">{WBC_ICONS.pin}</span>
-                          <span>{isPinned
-                            ? wbcT("workbenchChat.unpin", "Unpin chat")
-                            : wbcT("workbenchChat.pin", "Pin chat")}</span>
-                        </button>
-                        {!chat.legacy && (
-                          <button type="button" role="menuitem" className="wbc-chat-menu-action" onClick={function (e) {
-                            e.stopPropagation();
-                            setMenuId("");
-                            setRenameChat(chat);
-                          }}>
-                            <span className="wbc-chat-menu-icon" aria-hidden="true">{WBC_ICONS.edit}</span>
-                            <span>{wbcT("workbenchChat.rename", "Rename chat")}</span>
-                          </button>
-                        )}
-                        <button type="button" role="menuitem" className="wbc-chat-menu-action" disabled={toTaskBusy} onClick={function (e) {
-                          e.stopPropagation();
-                          setMenuId("");
-                          if (onToTask) onToTask(chat.id);
-                        }}>
-                          <span className="wbc-chat-menu-icon" aria-hidden="true">{WBC_ICONS.task}</span>
-                          <span>{wbcT(toTaskBusy ? "workbenchChat.toTaskBusy" : "workbenchChat.toTask", toTaskBusy ? "Analyzing chat…" : "Convert to task")}</span>
-                        </button>
-                        <button type="button" role="menuitem" className="wbc-chat-menu-action danger" onClick={function (e) {
-                          e.stopPropagation();
-                          setMenuId("");
-                          onDelete && onDelete(chat.id);
-                        }}>
-                          <span className="wbc-chat-menu-icon" aria-hidden="true">{WBC_ICONS.trash}</span>
-                          <span>{wbcT("workbenchChat.delete", "Delete chat")}</span>
-                        </button>
-                      </div>
-                    )}
-                  </span>
-                </span>
-              </span>
-              <span className="wbc-chat-card-preview">
-                {chatRunning ? <i className="wbc-running-dot" /> : null}
-                {chat.preview || wbcT("workbenchChat.noMessages", "No messages yet")}
-              </span>
-            </div>
+              </header>
+              <div className="wbc-chat-group-children">
+                {renderChatCard(chat, { insideGroup: true })}
+                {renderDropClone(movingChat)}
+              </div>
+              <span className="wbc-chat-group-drop-hint">{WBC_ICONS.copy}{wbcT("workbenchChat.releaseToGroup", "Release to create a chat group")}</span>
+            </section>
           );
         })}
         <span className="wbc-sr-only" aria-live="polite">{announcement}</span>
@@ -4046,6 +4830,12 @@ function WbcRail({ projectId, chats, pinnedChatIds, activeChatId, loading, runni
         chat={renameChat}
         onClose={function () { setRenameChat(null); }}
         onRename={onRename}
+      />
+      <WbcRenameDialog
+        chat={renameGroup}
+        entity="group"
+        onClose={function () { setRenameGroup(null); }}
+        onRename={renameChatGroup}
       />
     </aside>
   );

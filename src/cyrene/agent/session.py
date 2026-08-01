@@ -418,8 +418,9 @@ async def compact_session_if_needed(
         _current_session_id.reset(session_token)
 
 
-def _schedule_compaction_distill() -> None:
-    session_id = _current_session_id.get()
+def _schedule_compaction_distill(session_id: str | None = None) -> None:
+    if session_id is None:
+        session_id = _current_session_id.get()
     ctx = _ensure_session(session_id)
     if ctx.pending_distill_task is not None and not ctx.pending_distill_task.done():
         return
@@ -713,7 +714,12 @@ def _schedule_memory_compression(messages: list[dict[str, Any]], session_id: str
     )
 
 
-async def _write_session_messages_locked(state: dict[str, Any], messages: list[dict[str, Any]]) -> None:
+async def _write_session_messages_locked(
+    state: dict[str, Any],
+    messages: list[dict[str, Any]],
+    *,
+    session_id: str | None = None,
+) -> None:
     messages = strip_context_metadata(messages)
     _ensure_archive_session_id(state)
     messages = _compress_report_messages_for_storage(messages)
@@ -723,22 +729,27 @@ async def _write_session_messages_locked(state: dict[str, Any], messages: list[d
     state["messages"] = trimmed
     if not str(state.get("session_title", "")).strip():
         state.pop("session_title", None)
-    _write_session_state(state)
-    await debug.publish_event({
+    target_session_id = _current_session_id.get() if session_id is None else session_id
+    _write_session_state(state, target_session_id)
+    update_event = {
         "type": "session_update",
         "message_count": len(trimmed),
         "last_role": trimmed[-1].get("role") if trimmed else "",
         "round_id": next((str(m.get("round_id", "")).strip() for m in reversed(trimmed) if m.get("round_id")), ""),
-    })
+    }
+    if session_id is None:
+        await debug.publish_event(update_event)
+    else:
+        await debug.publish_event(update_event, session_id=target_session_id)
 
     if len(messages) >= _MEMORY_COMPRESSION_MIN_MESSAGES:
-        _schedule_memory_compression(messages, session_id=_current_session_id.get())
+        _schedule_memory_compression(messages, session_id=target_session_id)
 
     # Distill only when the cheap mechanical fold was not enough on its own:
     # the post-fold context still exceeds the compaction threshold. A fold that
     # already fit within budget keeps its mechanical block and skips the LLM.
     if _has_pending_compacted_block(trimmed) and _exceeds_compact_threshold(trimmed):
-        _schedule_compaction_distill()
+        _schedule_compaction_distill(target_session_id)
 
 
 async def _save_session_messages(
@@ -846,6 +857,47 @@ async def _append_session_message(entry: dict[str, Any]) -> None:
         full_messages.append(entry)
         _ensure_message_identity(full_messages)
         await _write_session_messages_locked(state, full_messages)
+
+
+async def append_message_to_session(
+    session_id: str,
+    entry: dict[str, Any],
+) -> None:
+    """Append a durable message to an arbitrary session without rebinding a run.
+
+    Group-membership events use this boundary while another session may be
+    active.  The target session's own lock and epoch are authoritative, and a
+    stable ``message_id`` makes outbox retries idempotent.
+    """
+    target = str(session_id or "").strip()
+    if not target:
+        raise ValueError("session_id is required")
+    ctx = _ensure_session(target)
+    async with ctx.session_state_lock:
+        state = _load_session_state(target)
+        saved_epoch = state.get("_session_epoch")
+        if saved_epoch is not None and saved_epoch != ctx.session_epoch:
+            logger.warning(
+                "Stale append_message_to_session skipped for %s (session was reset)",
+                target,
+            )
+            return
+        messages = state.get("messages", [])
+        full_messages = list(messages) if isinstance(messages, list) else []
+        message_id = str(entry.get("message_id") or "").strip()
+        if message_id and any(
+            isinstance(message, dict)
+            and str(message.get("message_id") or "").strip() == message_id
+            for message in full_messages
+        ):
+            return
+        full_messages.append(dict(entry))
+        _ensure_message_identity(full_messages)
+        await _write_session_messages_locked(
+            state,
+            full_messages,
+            session_id=target,
+        )
 
 
 async def append_system_message(
@@ -1447,6 +1499,7 @@ async def remove_messages_by_request_id(request_id: str) -> None:
 
 
 __all__ = [
+    "append_message_to_session",
     "append_session_message",
     "clear_pending_question",
     "clear_session_id",

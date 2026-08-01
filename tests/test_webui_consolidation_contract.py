@@ -20,11 +20,11 @@ WEBUI_ROOT = ROOT / "src" / "webui"
 WORKBENCH_ROOT = WEBUI_ROOT / "frontend"
 INDEX = WORKBENCH_ROOT / "index.html"
 
-OPENAPI_OPERATION_COUNT = 305
+OPENAPI_OPERATION_COUNT = 309
 OPENAPI_BASELINE_FASTAPI = "0.136.1"
 OPENAPI_BASELINE_PYDANTIC = "2.13.4"
-OPENAPI_SHA256 = "698d86de0030aa4edd559eba23c267938b073ab44c282a7b6e25582e2f81a066"
-TOOL_REGISTRY_SHA256 = "864e91a255ca645539958e4c7defe3a3f531d54e199c934b357f35023140cc75"
+OPENAPI_SHA256 = "81dae33c774f919bfcf4b4a9b88e6fa66c26bf9641e7ae9af95067a4a10adff2"
+TOOL_REGISTRY_SHA256 = "48032ba1f1237c49e3900777c8dc4d292dabf002178a5f64e158bb99c3466d56"
 MAIN_WIRE_SHA256 = "e748ec66ad5cbd23900f62cd9d444c09b7edf023af2964c53285753e8c0eb443"
 SUBAGENT_WIRE_SHA256 = "4d2f207b6508c148e5756826b435c4ca95830b3b8441198e2066cc7529ae27ad"
 
@@ -57,6 +57,7 @@ BROWSER_AND_VENDOR_GLOBALS = {
     "pdfjsViewer",
     "pip",
     "prompt",
+    "ReactDOM",
     "removeEventListener",
     "setInterval",
     "clearInterval",
@@ -106,9 +107,9 @@ def test_tool_registry_wire_and_actor_policy_contracts_are_unchanged(monkeypatch
         "get_models",
         lambda: [{"provider": "openai_compatible", "model": "custom-model"}],
     )
-    assert len(catalog.TOOL_DEFS) == 100
-    assert len(catalog.TOOL_HANDLERS) == 100
-    assert len(catalog._MAIN_ONLY_TOOLS) == 39
+    assert len(catalog.TOOL_DEFS) == 101
+    assert len(catalog.TOOL_HANDLERS) == 101
+    assert len(catalog._MAIN_ONLY_TOOLS) == 40
     assert _sha256_json(catalog.TOOL_DEFS) == TOOL_REGISTRY_SHA256
 
     assert len(wire.get_main_wire_tool_defs()) == 29

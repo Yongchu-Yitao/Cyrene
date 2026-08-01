@@ -44,7 +44,9 @@ def register_workbench_chat_routes(
     configure_store(db_path)
     _CHAT_RUN_MANAGER.configure(db_path)
     from cyrene.workbench import pinned_resources
+    from cyrene.workbench import chat_groups
     pinned_resources.configure(db_path)
+    chat_groups.configure_store(db_path)
 
     from cyrene.runtime.shell_wake import get_shell_wake_service
 
@@ -795,6 +797,131 @@ def register_workbench_chat_routes(
         await asyncio.to_thread(_write_chats_store, payload)
         return {"ok": True, "chat": _public_chat_full(chat)}
 
+    @router.get("/api/workbench/chat-groups")
+    async def api_workbench_chat_groups(project: str = ""):
+        project_id = str(project or "").strip()
+        if not project_id:
+            return JSONResponse({"error": "project is required"}, status_code=400)
+        if not await asyncio.to_thread(_routes()._workbench_find_project_lightweight, project_id):
+            return JSONResponse({"error": "project not found"}, status_code=404)
+        return await asyncio.to_thread(chat_groups.get_project_groups, project_id)
+
+    async def _replace_chat_groups(body: dict[str, Any]):
+        project_id = str(body.get("projectId") or "").strip()
+        if not await asyncio.to_thread(_routes()._workbench_find_project_lightweight, project_id):
+            return JSONResponse({"error": "project not found"}, status_code=404)
+        try:
+            return await chat_groups.replace_project_groups(
+                project_id,
+                body.get("groups") if isinstance(body.get("groups"), list) else [],
+                base_groups=(
+                    body.get("baseGroups")
+                    if isinstance(body.get("baseGroups"), list)
+                    else None
+                ),
+                mutation_intent=(
+                    body.get("intent") if isinstance(body.get("intent"), dict) else None
+                ),
+                mark_migrated=True,
+            )
+        except ValueError as exc:
+            return JSONResponse({"error": str(exc)}, status_code=400)
+        except Exception:
+            logger.exception("Failed to persist chat groups for project %s", project_id)
+            return JSONResponse({"error": "chat group persistence failed"}, status_code=500)
+
+    @router.put("/api/workbench/chat-groups")
+    async def api_workbench_replace_chat_groups(
+        body_model: api_models.ChatGroupsReplaceBody,
+    ):
+        return await _replace_chat_groups(api_models.body_dict(body_model))
+
+    @router.post("/api/workbench/chat-groups/migrate")
+    async def api_workbench_migrate_chat_groups(
+        body_model: api_models.ChatGroupsReplaceBody,
+    ):
+        """Idempotently import the legacy browser-owned projection."""
+        body = api_models.body_dict(body_model)
+        project_id = str(body.get("projectId") or "").strip()
+        existing = await asyncio.to_thread(chat_groups.get_project_groups, project_id)
+        if not existing.get("migrationRequired"):
+            return existing
+        return await _replace_chat_groups(body)
+
+    @router.post("/api/workbench/chat-groups/metadata")
+    async def api_workbench_chat_group_metadata(
+        body_model: api_models.ChatGroupMetadataBody,
+    ):
+        body = api_models.body_dict(body_model)
+        project_id = str(body.get("projectId") or "").strip()
+        group_id = str(body.get("groupId") or "").strip()
+        signature = str(body.get("signature") or "")
+        metadata_context = None
+        if project_id:
+            try:
+                metadata_context = await asyncio.to_thread(
+                    chat_groups.get_group_metadata_context,
+                    project_id,
+                    group_id,
+                    signature=signature,
+                )
+            except LookupError as exc:
+                return JSONResponse({"error": str(exc)}, status_code=404)
+            except RuntimeError as exc:
+                return JSONResponse({"error": str(exc)}, status_code=409)
+        try:
+            metadata = await _service.generate_chat_group_metadata(
+                (
+                    metadata_context["members"]
+                    if metadata_context
+                    else body.get("members") if isinstance(body.get("members"), list) else []
+                ),
+                lang=str(body.get("lang") or ""),
+                title_locked=(
+                    bool(metadata_context["group"].get("titleLocked"))
+                    if metadata_context
+                    else bool(body.get("titleLocked"))
+                ),
+                current_title=(
+                    str(metadata_context["group"].get("title") or "")
+                    if metadata_context
+                    else str(body.get("currentTitle") or "")
+                ),
+            )
+        except ValueError as exc:
+            return JSONResponse({"error": str(exc)}, status_code=400)
+        except Exception:
+            logger.exception("Failed to generate chat group metadata")
+            return JSONResponse(
+                {"error": "chat group metadata generation failed"},
+                status_code=502,
+            )
+        persisted_group = None
+        if metadata_context:
+            try:
+                persisted = await chat_groups.update_group_metadata(
+                    project_id,
+                    group_id,
+                    signature=metadata_context["signature"],
+                    metadata=metadata,
+                )
+            except (LookupError, RuntimeError) as exc:
+                return JSONResponse({"error": str(exc)}, status_code=409)
+            persisted_group = next(
+                (
+                    item
+                    for item in persisted.get("groups", [])
+                    if str(item.get("id") or "") == group_id
+                ),
+                None,
+            )
+        return {
+            "ok": True,
+            "groupId": group_id,
+            "metadata": metadata,
+            "group": persisted_group,
+        }
+
     @router.delete("/api/workbench/chats/{chat_id}")
     async def api_workbench_delete_chat(chat_id: str):
         from cyrene.agent import clear_session_id, interrupt_active_run
@@ -814,8 +941,13 @@ def register_workbench_chat_routes(
             return {"ok": True}
         payload = await asyncio.to_thread(_read_chats_store)
         chats = payload.get("chats", [])
-        if not any(str(chat.get("id") or "") == chat_id for chat in chats):
+        removed_root = next(
+            (chat for chat in chats if str(chat.get("id") or "") == chat_id),
+            None,
+        )
+        if removed_root is None:
             return JSONResponse({"error": "chat not found"}, status_code=404)
+        removed_project_id = str(removed_root.get("projectId") or "")
         removed_chat_ids = {
             chat_id,
             *[
@@ -833,6 +965,16 @@ def register_workbench_chat_routes(
         for chat in next_chats:
             if str(chat.get("forkedFromChatId") or "") == chat_id:
                 _clear_fork_metadata(chat)
+        try:
+            # Revoke group authority before deleting the chat record. If this
+            # fails, leave the chat intact rather than persisting a stale group.
+            await chat_groups.remove_chat(chat_id, removed_project_id)
+        except Exception:
+            logger.exception("Failed to remove deleted chat %s from chat groups", chat_id)
+            return JSONResponse(
+                {"error": "chat group membership could not be revoked"},
+                status_code=503,
+            )
         payload["chats"] = next_chats
         await asyncio.to_thread(_write_chats_store, payload)
         for removed_chat_id in removed_chat_ids:
@@ -941,7 +1083,6 @@ def register_workbench_chat_routes(
         if not project:
             return JSONResponse({"error": "project not found"}, status_code=404)
         workspace_dir = R._workbench_resolve_workspace_dir(project)
-
         selected_candidate = None
         recovered_stale_selection = False
         selected_key = requested_model or str(chat.get("modelSelectionId") or "").strip()
@@ -1071,6 +1212,23 @@ def register_workbench_chat_routes(
             messages.append(user_entry)
             if is_first_message and chat.get("title") in ("", "新对话", None) and message:
                 chat["title"] = message.replace("\n", " ")[:24]
+        if not is_side_agent:
+            try:
+                # Retry truncation can remove a membership event that followed
+                # the regenerated exchange, so reconcile only after that cut.
+                await chat_groups.reconcile_session(chat_id)
+            except Exception:
+                logger.exception("Failed to reconcile chat-group context for %s", chat_id)
+                if retry_state_backup is not None:
+                    state_path, previous_state = retry_state_backup
+                    if previous_state is None:
+                        await asyncio.to_thread(state_path.unlink, missing_ok=True)
+                    else:
+                        await asyncio.to_thread(state_path.write_bytes, previous_state)
+                return JSONResponse(
+                    {"error": "chat group context could not be prepared"},
+                    status_code=503,
+                )
         chat["status"] = "running"
         if selected_candidate is None:
             chat["model"] = R._get_model()

@@ -4,6 +4,37 @@
 (function (root) {
   "use strict";
 
+  function installCjkAutolinkBoundary() {
+    if (
+      !root.marked
+      || typeof root.marked.use !== "function"
+      || !root.marked.Tokenizer
+      || root.marked.__cyreneCjkAutolinkBoundary
+    ) return;
+
+    var defaultUrlTokenizer = root.marked.Tokenizer.prototype.url;
+    if (typeof defaultUrlTokenizer !== "function") return;
+    // Marked's GFM bare-URL rule stops only at whitespace / `<`. Without this
+    // override, `www.example.com），后文` becomes one link because CJK prose
+    // commonly has no spaces. Keep explicit Markdown links untouched and trim
+    // only auto-detected URLs at full-width / CJK punctuation boundaries.
+    var cjkBoundary = /[，。；：！？、（）［］｛｝《》〈〉「」『』【】〔〕〖〗〘〙〚〛]/u;
+    root.marked.use({
+      tokenizer: {
+        url: function (source) {
+          var token = defaultUrlTokenizer.call(this, source);
+          if (!token || typeof token.raw !== "string") return token || false;
+          var boundaryIndex = token.raw.search(cjkBoundary);
+          if (boundaryIndex <= 0) return token;
+          return defaultUrlTokenizer.call(this, token.raw.slice(0, boundaryIndex) + " ");
+        },
+      },
+    });
+    root.marked.__cyreneCjkAutolinkBoundary = true;
+  }
+
+  installCjkAutolinkBoundary();
+
   function escapeHtml(value) {
     return String(value == null ? "" : value)
       .replace(/&/g, "&amp;")

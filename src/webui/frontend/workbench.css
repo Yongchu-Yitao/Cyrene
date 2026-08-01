@@ -268,6 +268,8 @@ html[data-theme="dark"] .brand-mark {
 }
 
 .workbench-session-tab-title {
+  display: block;
+  flex: 1 1 auto;
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -13053,6 +13055,22 @@ html[data-theme="dark"] .wb-init-progress-dot { border-color: #46586b; }
   justify-content: center;
 }
 
+/* The outside-click scrim sits at z-index 199. Lift the list only while a
+   card menu is open, then let pointer events through solely on the open card.
+   This keeps the menu clickable without making the rest of the rail pierce
+   the scrim's dismiss surface. */
+.wbc-chat-list.menu-active {
+  z-index: 200;
+  pointer-events: none;
+}
+
+.wbc-chat-list.menu-active .wbc-chat-card.menu-open,
+.wbc-chat-list.menu-active .wbc-chat-group.menu-open {
+  position: relative;
+  z-index: 1;
+  pointer-events: auto;
+}
+
 .wbc-rail-loading {
   padding: 0;
   text-align: center;
@@ -13151,6 +13169,7 @@ html[data-theme="dark"] .wb-init-progress-dot { border-color: #46586b; }
 }
 
 .wbc-chat-card-top b {
+  flex: 1 1 auto;
   color: var(--wb-text);
   font-size: calc(13.5px * var(--wb-ui-font-scale, 1));
   font-weight: 680;
@@ -13175,6 +13194,306 @@ html[data-theme="dark"] .wb-init-progress-dot { border-color: #46586b; }
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.wbc-chat-card-preview > .wbc-hover-marquee {
+  flex: 1 1 auto;
+}
+
+.wbc-chat-group {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  width: 100%;
+  padding: 9px;
+  box-sizing: border-box;
+  border: 1px solid color-mix(in srgb, var(--wb-accent) 24%, var(--wb-line));
+  border-radius: 13px;
+  background: color-mix(in srgb, var(--wb-active-bg) 24%, var(--wb-card-bg));
+  transition: border-color .14s ease, background .14s ease, box-shadow .14s ease;
+}
+
+.wbc-chat-group.drop-ready {
+  border-color: color-mix(in srgb, var(--wb-accent) 58%, transparent);
+  background: color-mix(in srgb, var(--wb-active-bg) 46%, var(--wb-card-bg));
+  box-shadow: 0 8px 22px color-mix(in srgb, var(--wb-accent) 9%, transparent);
+}
+
+.wbc-chat-group-head {
+  min-height: 24px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.wbc-chat-group-toggle {
+  min-width: 0;
+  flex: 1 1 auto;
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  padding: 0 2px;
+  border: 0;
+  background: transparent;
+  color: var(--wb-text);
+  text-align: left;
+  cursor: pointer;
+  font: inherit;
+}
+
+span.wbc-chat-group-toggle {
+  cursor: default;
+}
+
+.wbc-chat-group-toggle b {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: calc(13px * var(--wb-ui-font-scale, 1));
+  font-weight: 680;
+}
+
+.wbc-chat-group-icon {
+  width: 22px;
+  height: 22px;
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 7px;
+  background: color-mix(in srgb, var(--wb-accent) 12%, transparent);
+  color: var(--wb-accent);
+  font-size: calc(11px * var(--wb-ui-font-scale, 1));
+  font-weight: 720;
+  font-variant-numeric: tabular-nums;
+  line-height: 1;
+}
+
+.wbc-chat-group-actions {
+  position: relative;
+  display: flex;
+  align-items: center;
+  flex: 0 0 auto;
+}
+
+.wbc-chat-group.menu-open .wbc-chat-group-actions {
+  z-index: 200;
+}
+
+.wbc-chat-group-actions .wb-card-menu {
+  top: 28px;
+  right: 20px;
+  min-width: 160px;
+}
+
+.wbc-chat-group-actions .wb-card-menu button {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.wbc-chat-group-chevron {
+  width: 24px;
+  height: 24px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 0;
+  border-radius: 7px;
+  background: transparent;
+  color: var(--wb-muted);
+  cursor: pointer;
+}
+
+.wbc-chat-group-chevron:hover,
+.wbc-chat-group-toggle:hover {
+  color: var(--wb-text);
+}
+
+.wbc-chat-group-chevron:focus,
+.wbc-chat-group-chevron:focus-visible {
+  outline: none;
+  box-shadow: none;
+  background: color-mix(in srgb, var(--wb-text) 7%, transparent);
+}
+
+.wbc-chat-group-chevron svg {
+  transition: transform .22s cubic-bezier(.2, .75, .25, 1);
+}
+
+.wbc-chat-group-chevron.expanded svg {
+  transform: rotate(90deg);
+}
+
+.wbc-chat-group.collapsed {
+  gap: 4px;
+}
+
+.wbc-chat-group-content {
+  display: grid;
+  grid-template-rows: 1fr;
+  opacity: 1;
+  transition:
+    grid-template-rows .24s cubic-bezier(.2, .75, .25, 1),
+    opacity .16s ease;
+}
+
+.wbc-chat-group-content.collapsed {
+  grid-template-rows: 0fr;
+  opacity: 0;
+  pointer-events: none;
+}
+
+.wbc-chat-group-content-inner {
+  min-height: 0;
+  overflow: hidden;
+}
+
+.wbc-chat-group-children {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.wbc-chat-group-child {
+  box-sizing: border-box;
+  border: 1px solid transparent;
+  border-radius: 10px;
+  background: var(--wb-card-bg);
+  box-shadow: 0 1px 2px rgba(15, 23, 42, .035), 0 4px 12px rgba(15, 23, 42, .018);
+}
+
+.wbc-chat-group .wbc-chat-group-child:hover {
+  background: color-mix(in srgb, var(--wb-row-hover-bg) 56%, var(--wb-card-bg));
+}
+
+.wbc-chat-group .wbc-chat-group-child.active,
+.wbc-chat-group .wbc-chat-group-child.active:focus,
+.wbc-chat-group .wbc-chat-group-child.active:focus-visible {
+  border-color: color-mix(in srgb, var(--wb-accent) 30%, var(--wb-line));
+  background: color-mix(in srgb, var(--wb-accent) 12%, var(--wb-card-bg));
+  box-shadow:
+    0 0 0 1px color-mix(in srgb, var(--wb-accent) 7%, transparent),
+    0 6px 16px color-mix(in srgb, var(--wb-accent) 10%, transparent);
+}
+
+.wbc-chat-card.group-drop-target,
+.wbc-chat-group-drop-clone {
+  background: color-mix(in srgb, var(--wb-accent) 8%, var(--wb-card-bg));
+}
+
+.wbc-chat-group-drop-clone {
+  pointer-events: none;
+  cursor: default;
+  box-shadow: 0 7px 18px rgba(15, 23, 42, .09);
+}
+
+.wbc-chat-group-drop-hint {
+  align-self: center;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 25px;
+  padding: 0 10px;
+  border: 1px solid color-mix(in srgb, var(--wb-accent) 30%, transparent);
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--wb-card-bg) 88%, transparent);
+  color: var(--wb-accent);
+  font-size: calc(10.5px * var(--wb-ui-font-scale, 1));
+  font-weight: 620;
+  box-shadow: 0 2px 8px rgba(15, 23, 42, .035);
+  pointer-events: none;
+}
+
+.wbc-chat-group-drop-hint svg {
+  width: 13px;
+  height: 13px;
+}
+
+.wbc-chat-group-summary {
+  width: 100%;
+  min-width: 0;
+  min-height: 24px;
+  display: flex;
+  align-items: center;
+  justify-content: flex-start;
+  box-sizing: border-box;
+  padding: 2px 3px;
+  border: 0;
+  background: transparent;
+  color: var(--wb-muted);
+  font: inherit;
+  font-size: calc(11px * var(--wb-ui-font-scale, 1));
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  text-align: left;
+  line-height: 1.35;
+  cursor: default;
+}
+
+.wbc-chat-group-summary.is-updating {
+  color: var(--wb-faint);
+}
+
+.wbc-hover-marquee {
+  display: block;
+  width: 100%;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.wbc-hover-marquee-track {
+  display: inline-block;
+  min-width: max-content;
+  will-change: transform;
+}
+
+.wbc-hover-marquee.overflow:hover,
+.wbc-hover-marquee.overflow:focus-within,
+.wbc-chat-card:hover .wbc-hover-marquee.overflow,
+.wbc-chat-card:focus-visible .wbc-hover-marquee.overflow,
+.workbench-session-tab:hover .wbc-hover-marquee.overflow,
+.workbench-session-tab:focus-visible .wbc-hover-marquee.overflow {
+  text-overflow: clip;
+}
+
+.wbc-hover-marquee.overflow:hover .wbc-hover-marquee-track,
+.wbc-hover-marquee.overflow:focus-within .wbc-hover-marquee-track,
+.wbc-chat-card:hover .wbc-hover-marquee.overflow .wbc-hover-marquee-track,
+.wbc-chat-card:focus-visible .wbc-hover-marquee.overflow .wbc-hover-marquee-track,
+.workbench-session-tab:hover .wbc-hover-marquee.overflow .wbc-hover-marquee-track,
+.workbench-session-tab:focus-visible .wbc-hover-marquee.overflow .wbc-hover-marquee-track {
+  animation: wbc-hover-marquee var(--wbc-marquee-duration, 7s) linear infinite;
+}
+
+@keyframes wbc-hover-marquee {
+  0%, 10% { transform: translateX(0); }
+  10% {
+    transform: translateX(0);
+    animation-timing-function: cubic-bezier(.45, 0, 1, 1);
+  }
+  88%, 100% { transform: translateX(calc(var(--wbc-marquee-distance, 0px) * -1)); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .wbc-chat-group-content,
+  .wbc-chat-group-chevron svg,
+  .wbc-hover-marquee.overflow:hover .wbc-hover-marquee-track,
+  .wbc-hover-marquee.overflow:focus-within .wbc-hover-marquee-track,
+  .wbc-chat-card:hover .wbc-hover-marquee.overflow .wbc-hover-marquee-track,
+  .wbc-chat-card:focus-visible .wbc-hover-marquee.overflow .wbc-hover-marquee-track,
+  .workbench-session-tab:hover .wbc-hover-marquee.overflow .wbc-hover-marquee-track,
+  .workbench-session-tab:focus-visible .wbc-hover-marquee.overflow .wbc-hover-marquee-track {
+    transition: none;
+    animation: none;
+  }
 }
 
 .wbc-running-dot {

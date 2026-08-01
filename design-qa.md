@@ -106,3 +106,95 @@ archived result: passed
 - None required for the requested scope.
 
 final result: passed
+
+---
+
+# Design QA — selected conversation without side stripe
+
+## Comparison target
+
+- Source visual truth: `/var/folders/zm/qgh_rgw903j0b9t01yg2l0mc0000gn/T/codex-clipboard-34f0329a-8c8f-4a1c-a2c8-0338fe2aaf15.png`.
+- Browser-rendered implementation: `/Users/syw/Documents/playground/Cyrene/implementation-selected-chat-no-stripe.png`.
+- Focused before/after comparison: `/Users/syw/Documents/playground/Cyrene/design-qa-selected-chat-no-stripe-comparison.png`.
+
+## Viewport and state
+
+- Browser viewport and implementation capture: 1280 × 720 CSS px at device scale factor 1, dark theme, selected conversation visible.
+- Source capture: 410 × 180 px, dark theme, selected conversation inside an expanded group.
+- Focused comparison was normalized to two 416 × 152 px panels. The implementation crop shows the same selected-conversation surface treatment; the grouped child adds the new subtle outline and elevation defined by the same active-state rule.
+
+## Findings
+
+- No remaining P0/P1/P2 findings.
+- The solid left accent stripe is removed.
+- Selection is now communicated across the whole card through a 12% accent-tinted surface, a low-contrast accent border, and soft elevation. This keeps the state legible without pulling the eye to one edge.
+- Fonts and typography are unchanged; title and preview hierarchy remain consistent.
+- Spacing, padding, radius, truncation, icons, copy, and card dimensions remain unchanged because the base child now reserves a transparent 1 px border.
+- Colors continue to use existing Cyrene tokens and remain distinct from the lighter group-frame surface.
+- No raster assets or image quality were affected.
+
+## Interaction and runtime checks
+
+- Verified the selected conversation state in the rendered desktop rail.
+- Browser warning/error log check returned no entries.
+- JSX compilation succeeded.
+- Frontend regression suite: 167 tests passed.
+- `git diff --check` passed.
+
+## Comparison history
+
+- Initial P2: the inset 3 px accent edge read as a heavy vertical stripe and made the selected state visually lopsided.
+- Fix: removed the inset edge and replaced it with a full-card border, tint, and elevation; reserved the border in the base child state to prevent layout movement.
+- Post-fix evidence: `/Users/syw/Documents/playground/Cyrene/design-qa-selected-chat-no-stripe-comparison.png`.
+
+## Focused comparison evidence
+
+- The focused comparison is required because the changed edge treatment is too small to judge reliably in the full 1280 × 720 capture.
+
+final result: passed
+
+---
+
+# Design QA — conversation grouping and card menu
+
+## Comparison target
+
+- Source visual truth: `/var/folders/zm/qgh_rgw903j0b9t01yg2l0mc0000gn/T/codex-clipboard-f9ea455d-ecf1-4c9b-9a6c-9198d1683220.png`.
+- Browser-rendered implementation: `/Users/syw/Documents/playground/Cyrene/implementation-chat-menu.png`.
+- Combined full-view comparison: `/Users/syw/Documents/playground/Cyrene/design-qa-chat-menu-click-comparison.png`.
+
+## Viewport and state
+
+- Browser implementation capture: 676 × 863 px, dark theme, populated conversation list, selected conversation menu open.
+- Source capture: 426 × 414 px, light theme, cropped to the selected conversation and its menu.
+- The comparison evaluates hierarchy, menu placement, spacing, affordances, and click behavior; colors intentionally follow the active application theme.
+
+## Findings
+
+- No remaining P0/P1/P2 findings.
+- The menu preserves the selected card as its visual anchor and presents the same four actions in the same order as the source.
+- The full-screen dismiss scrim no longer intercepts pointer events intended for the open card menu.
+- The group frame now uses a lightly tinted mixed surface, while child cards keep an explicit card surface. Active children add a restrained accent tint, outline, and elevation, preventing the child and group backgrounds from visually merging.
+- Conversation grouping, adding a conversation to an existing group, dragging a child out, and automatic dissolution at one remaining child retain their existing interaction affordances.
+
+## Interaction and runtime checks
+
+- Opened the menu from the card's visible “more actions” button.
+- Clicked `重命名对话`; the rename dialog opened successfully, then was cancelled without changing data.
+- Repeated the menu path from a right-click entry point; the same action remained clickable.
+- Browser warning/error log check returned no entries.
+- JSX compilation succeeded.
+- Frontend regression suite: 167 tests passed.
+- `git diff --check` passed.
+
+## Comparison history
+
+- Initial issue: the full-viewport outside-click scrim rendered above the conversation list's stacking context, so menu items looked visible but received no click.
+- Fix: lift the list only while a menu is open, disable pointer events on the rest of the list, and re-enable them solely on the open card or group.
+- Post-fix evidence: the browser-rendered menu and the successful rename-dialog click path above.
+
+## Focused comparison evidence
+
+- A separate crop was not required: the source itself is a focused menu crop, and the combined comparison keeps both menus large enough to inspect action order, spacing, and anchoring.
+
+final result: passed

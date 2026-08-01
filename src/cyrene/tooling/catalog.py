@@ -39,6 +39,7 @@ _MAIN_ONLY_TOOLS = {
     "update_task_plan",
     "spawn_subagent",
     "query_round",
+    "ReadChatGroupSessions",
     "app_use",
     "browser_navigate",
     "browser_snapshot",
@@ -76,7 +77,7 @@ TOOL_METADATA: dict[str, dict[str, Any]] = {}
 
 _READ_ONLY_TOOLS = {
     "Read", "AnalyzeAttachment", "Glob", "Grep", "ListMemories", "RecallMemory",
-    "RecallConversation", "search_project_memory", "ListKnowledgeDocuments",
+    "RecallConversation", "ReadChatGroupSessions", "search_project_memory", "ListKnowledgeDocuments",
     "SearchKnowledge", "ListLibraryItems", "SearchLibrary", "ListShells", "WebFetch", "WebSearch", "query_round",
     "CheckClaudeCode", "ListSkills", "GetLearnedSkill", "list_tasks",
     "list_entities", "query_entities", "browser_user_events", "GitStatus",
@@ -113,6 +114,7 @@ _RESOURCE_KEY_TEMPLATES: dict[str, tuple[str, ...]] = {
     "ListMemories": ("memory:short-term", "memory:project"),
     "RecallMemory": ("memory:short-term",),
     "RecallConversation": ("memory:conversations",),
+    "ReadChatGroupSessions": ("memory:chat-group-sessions",),
     "search_project_memory": ("memory:project",),
     "ListKnowledgeDocuments": ("knowledge:project",),
     "SearchKnowledge": ("knowledge:project",),

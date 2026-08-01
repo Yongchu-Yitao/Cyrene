@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import importlib
 import json
 import logging
 import re
@@ -51,6 +52,83 @@ _CHATS_STORE = DATA_DIR / "workbench_chats.json"
 _STORE_DB_PATH = ""
 _CONFIGURED_CHATS_STORE = None
 _CHAT_RUN_MANAGER = ChatRunManager()
+
+
+async def generate_chat_group_metadata(
+    members: list[dict[str, Any]],
+    *,
+    lang: str = "zh",
+    title_locked: bool = False,
+    current_title: str = "",
+) -> dict[str, str]:
+    """Generate a concise title and summary for a client-managed chat group."""
+    from cyrene.agent.model_service import call_agent_model
+    from cyrene.model_runtime.messages import assistant_text
+
+    target_lang = "en" if str(lang or "").strip().lower() == "en" else "zh"
+    cleaned: list[dict[str, str]] = []
+    for raw in (members or [])[:50]:
+        if not isinstance(raw, dict):
+            continue
+        title = re.sub(r"\s+", " ", str(raw.get("title") or "")).strip()[:160]
+        preview = re.sub(r"\s+", " ", str(raw.get("preview") or "")).strip()[:800]
+        if title or preview:
+            cleaned.append({"title": title, "preview": preview})
+    if len(cleaned) < 2:
+        raise ValueError("at least two chat members are required")
+
+    if target_lang == "en":
+        language_rule = (
+            "Write both fields in English. Keep title under 48 characters and "
+            "summary under 110 characters."
+        )
+    else:
+        language_rule = "标题和摘要必须使用简体中文。标题不超过 18 个汉字，摘要不超过 45 个汉字。"
+    title_rule = (
+        "The user manually locked the title. Return an empty title and only update the summary."
+        if title_locked
+        else (
+            "Generate a specific shared-topic title; do not return generic placeholders such as "
+            "Chat group, New chat group, 对话组, or 新对话组."
+        )
+    )
+    prompt = (
+        "You maintain metadata for a group of related AI conversations. "
+        "Infer their shared intent from the supplied titles and previews. "
+        "Return one JSON object only with string fields title and summary. "
+        "The summary should describe the group's combined subject, not list every conversation.\n"
+        f"{language_rule}\n{title_rule}\n"
+        "Current title: " + str(current_title or "")[:160] + "\n"
+        "Members JSON:\n" + json.dumps(cleaned, ensure_ascii=False)
+    )
+    response = await call_agent_model(
+        [{"role": "user", "content": prompt}],
+        tools=None,
+        max_tokens=320,
+        caller="workbench_chat_group_metadata",
+        secondary=True,
+        thinking="low",
+        response_format={"type": "json_object"},
+    )
+    raw_text = assistant_text(response).strip()
+    try:
+        parsed = json.loads(raw_text)
+    except json.JSONDecodeError:
+        match = re.search(r"\{[\s\S]*\}", raw_text)
+        parsed = json.loads(match.group(0)) if match else {}
+    if not isinstance(parsed, dict):
+        parsed = {}
+    title = re.sub(r"\s+", " ", str(parsed.get("title") or "")).strip()[:60]
+    summary = re.sub(r"\s+", " ", str(parsed.get("summary") or "")).strip()[:160]
+    if not title_locked and not title:
+        raise RuntimeError("model returned an empty chat group title")
+    if not summary:
+        raise RuntimeError("model returned an empty chat group summary")
+    return {
+        "title": "" if title_locked else title,
+        "summary": summary,
+        "lang": target_lang,
+    }
 
 
 class _WorkspaceChangesLockEntry:
@@ -2252,6 +2330,13 @@ async def dispatch_shell_wake_run(wake: dict[str, Any], *, bot: Any, db_path: st
     if not project:
         return "missing"
     workspace_dir = legacy_routes._workbench_resolve_workspace_dir(project)
+    try:
+        chat_groups = importlib.import_module("cyrene.workbench.chat_groups")
+        chat_groups.configure_store(db_path)
+        await chat_groups.reconcile_session(chat_id)
+    except Exception:
+        logger.exception("Failed to reconcile chat-group context for shell wake %s", chat_id)
+        return "missing"
 
     now = _utc_now_iso()
     user_entry = {
@@ -2514,6 +2599,11 @@ async def remove_project_chats(project_id: str) -> int:
     project_id = str(project_id or "").strip()
     if not project_id:
         return 0
+    try:
+        chat_groups = importlib.import_module("cyrene.workbench.chat_groups")
+        await chat_groups.remove_project(project_id)
+    except Exception:
+        logger.exception("Failed to remove chat groups for project %s", project_id)
     payload = await asyncio.to_thread(_read_chats_store)
     doomed = [chat for chat in payload.get("chats", []) if str(chat.get("projectId") or "") == project_id]
     if doomed:

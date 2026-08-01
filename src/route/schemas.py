@@ -200,6 +200,23 @@ class ChatUpdateBody(APIBody):
     title: str | None = Field(default=None, max_length=160)
 
 
+class ChatGroupMetadataBody(APIBody):
+    projectId: str | None = Field(default=None, max_length=200)
+    groupId: str | None = Field(default=None, max_length=200)
+    signature: str | None = Field(default=None, max_length=20_000)
+    members: list[Any] = Field(default_factory=list, min_length=2, max_length=50)
+    currentTitle: str | None = Field(default=None, max_length=160)
+    titleLocked: bool = False
+    lang: Literal["", "en", "zh"] = ""
+
+
+class ChatGroupsReplaceBody(APIBody):
+    projectId: str = Field(min_length=1, max_length=200)
+    groups: list[Any] = Field(default_factory=list, max_length=1000)
+    baseGroups: list[Any] | None = Field(default=None, max_length=1000)
+    intent: dict[str, Any] | None = None
+
+
 class ChatMessageBody(APIBody):
     message: str | None = Field(default=None, max_length=200_000)
     attachments: list[Any] = Field(default_factory=list, max_length=100)

@@ -96,6 +96,185 @@ process.stdout.write(JSON.stringify(result));
     assert result["unchanged"] == ["new", "alpha", "beta", "gamma"]
 
 
+def test_chat_rail_group_helpers_create_extend_and_normalize_groups():
+    root = Path(__file__).resolve().parent.parent
+    source = (root / "src" / "webui" / "frontend" / "workbench-chat.jsx").read_text(
+        encoding="utf-8"
+    )
+    helper_source = "function wbcNormalizeChatGroups(" + source.split(
+        "function wbcNormalizeChatGroups(", 1
+    )[1].split("function WbcRail", 1)[0]
+    script = f"""
+function wbcT(_key, fallback) {{ return fallback; }}
+eval({json.dumps(helper_source)});
+const created = wbcCreateChatGroup([], "beta", "alpha", "group_one");
+const extended = wbcCreateChatGroup(created, "gamma", "alpha", "unused");
+const moved = wbcCreateChatGroup(
+  [
+    {{ id: "old", title: "Old", chatIds: ["alpha", "beta"] }},
+    {{ id: "target", title: "Target", chatIds: ["gamma", "delta"] }}
+  ],
+  "beta",
+  "gamma",
+  "unused"
+);
+const removedFromThree = wbcRemoveChatFromGroups(
+  [{{ id: "three", title: "Three", chatIds: ["alpha", "beta", "gamma"] }}],
+  "beta"
+);
+const dissolvedAtOne = wbcRemoveChatFromGroups(
+  [{{ id: "two", title: "Two", chatIds: ["alpha", "beta"] }}],
+  "beta"
+);
+const normalized = wbcNormalizeChatGroups(
+  [
+    {{ id: "invalid", title: "Invalid", chatIds: ["alpha", "missing"] }},
+    {{ id: "kept", title: "Kept", summary: "Saved summary", titleLocked: true, metadataLang: "en", metadataChatIds: "alpha|beta", chatIds: ["alpha", "beta", "beta"] }},
+    {{ id: "duplicate", title: "Duplicate", chatIds: ["beta", "gamma"] }}
+  ],
+  ["alpha", "beta", "gamma"]
+);
+process.stdout.write(JSON.stringify({{ created, extended, moved, removedFromThree, dissolvedAtOne, normalized }}));
+"""
+    completed = subprocess.run(["node", "-e", script], check=True, capture_output=True, text=True)
+    result = json.loads(completed.stdout)
+
+    assert result["created"] == [
+        {
+            "id": "group_one",
+            "title": "New chat group",
+            "summary": "",
+            "titleLocked": False,
+            "metadataLang": "",
+            "metadataChatIds": "",
+            "chatIds": ["alpha", "beta"],
+        }
+    ]
+    assert result["extended"][0]["chatIds"] == ["alpha", "beta", "gamma"]
+    assert result["moved"] == [
+        {"id": "target", "title": "Target", "chatIds": ["gamma", "delta", "beta"]}
+    ]
+    assert result["removedFromThree"] == [
+        {"id": "three", "title": "Three", "chatIds": ["alpha", "gamma"]}
+    ]
+    assert result["dissolvedAtOne"] == []
+    assert result["normalized"] == [
+        {
+            "id": "kept",
+            "title": "Kept",
+            "summary": "Saved summary",
+            "titleLocked": True,
+            "metadataLang": "en",
+            "metadataChatIds": "alpha|beta",
+            "chatIds": ["alpha", "beta"],
+        }
+    ]
+
+
+def test_workbench_chat_group_drop_uses_one_enclosing_frame_without_stacking():
+    root = Path(__file__).resolve().parent.parent
+    source = (root / "src" / "webui" / "frontend" / "workbench-chat.jsx").read_text(
+        encoding="utf-8"
+    )
+    styles = (root / "src" / "webui" / "frontend" / "workbench.css").read_text(
+        encoding="utf-8"
+    )
+
+    rail = source.split("function WbcRail(", 1)[1].split(
+        "// Conversation main (column 3)", 1
+    )[0]
+    assert "WBC_CHAT_GROUPS_PREFIX" in source
+    assert "function wbcCreateChatGroup(" in source
+    assert "function wbcRemoveChatFromGroups(" in source
+    assert 'mode: "group"' in rail
+    assert "sourceGroupId" in rail
+    assert "commitUngroupDrop(dragState.movingId)" in rail
+    assert "function updateDragState(next)" in rail
+    assert 'dragState.mode === "group"' in rail
+    assert 'className="wbc-chat-group wbc-chat-group-preview drop-ready"' in rail
+    assert 'wbcT("workbenchChat.releaseToGroup", "Release to create a chat group")' in rail
+    assert 'wbcT("workbenchChat.releaseToExistingGroup", "Release to add to this chat group")' in rail
+    assert 'className={"wbc-chat-group-content" + (isCollapsed ? " collapsed" : " expanded")}' in rail
+    assert 'inert={isCollapsed ? "" : undefined}' in rail
+    assert 'className="wbc-chat-group-content-inner"' in rail
+    assert 'className="wbc-chat-group-children"' in rail
+    assert "function openGroupMenu(event)" in rail
+    assert "function toggleGroupMenu(event)" in rail
+    assert "onContextMenu={openGroupMenu}" in rail
+    assert "onClick={toggleGroupMenu}" in rail
+    assert "setMenuId(groupMenuId)" in rail
+    assert rail.count('wbcT("workbenchChat.groupRename", "Rename group")') == 1
+    assert rail.count('wbcT("workbenchChat.groupDissolve", "Dissolve group")') == 1
+    assert ".wbc-chat-group {" in styles
+    assert ".wbc-chat-group.drop-ready {" in styles
+    assert ".wbc-chat-group-drop-hint {" in styles
+    assert "grid-template-rows: 1fr;" in styles
+    assert "grid-template-rows: 0fr;" in styles
+    assert ".wbc-chat-group-chevron.expanded svg" in styles
+    assert '{group.chatIds.length + (groupDropReady ? 1 : 0)}' in rail
+    assert '<span className="wbc-chat-group-icon" aria-hidden="true">2</span>' in rail
+    assert 'wbcT("workbenchChat.groupCount", "{count} chats"' not in rail
+    assert ".wbc-chat-group-chevron:focus-visible" in styles
+    assert "font-variant-numeric: tabular-nums;" in styles
+    assert "WorkbenchChatModel.generateChatGroupMetadata" in rail
+    assert "if (!groupBackendReady) return;" in rail
+    assert "projectId: projectId" in rail
+    assert "signature: signature" in rail
+    assert "groupBackendWriteRef.current.chain.catch" in rail
+    assert "var persistedGroup = result.group;" in rail
+    assert "title: String(persistedGroup.title || candidate.title)" in rail
+    assert 'type: "metadata"' not in rail.split("function refreshChatGroupMetadata", 1)[1].split("function commitGroupDrop", 1)[0]
+    assert "titleLocked: true" in rail
+    assert "metadataChatIds: signature" in rail
+    assert "group.metadataLang !== groupMetadataLang" in rail
+    assert "<WbcHoverMarquee text={group.title}" in rail
+    assert "group.summary || (groupMetadataPending[group.id]" in rail
+    assert "@keyframes wbc-hover-marquee" in styles
+    summary_css = styles.split(".wbc-chat-group-summary {", 1)[1].split("}", 1)[0]
+    assert "display: flex;" in summary_css
+    assert "align-items: center;" in summary_css
+    assert "justify-content: flex-start;" in summary_css
+    assert "padding: 2px 3px;" in summary_css
+    assert "padding-left: 31px;" not in summary_css
+    assert ".wbc-chat-group:not(.collapsed) .wbc-chat-group-summary" not in styles
+    group_css = styles.split(".wbc-chat-group {", 1)[1].split("}", 1)[0]
+    assert "var(--wb-active-bg) 24%" in group_css
+    child_active_css = styles.split(
+        ".wbc-chat-group .wbc-chat-group-child.active,", 1
+    )[1].split("}", 1)[0]
+    assert "var(--wb-accent) 12%" in child_active_css
+    assert "border-color:" in child_active_css
+    assert "inset 3px 0 0" not in child_active_css
+    assert "stack" not in styles.split(".wbc-chat-group {", 1)[1].split("/* ---- main column ---- */", 1)[0].lower()
+
+
+def test_overflowing_chat_card_and_topbar_tab_text_scrolls_on_hover():
+    root = Path(__file__).resolve().parent.parent
+    chat_source = (
+        root / "src" / "webui" / "frontend" / "workbench-chat.jsx"
+    ).read_text(encoding="utf-8")
+    shell_source = (
+        root / "src" / "webui" / "frontend" / "workbench.jsx"
+    ).read_text(encoding="utf-8")
+    styles = (
+        root / "src" / "webui" / "frontend" / "workbench.css"
+    ).read_text(encoding="utf-8")
+
+    assert "function WbcHoverMarquee(" in chat_source
+    assert '<WbcHoverMarquee text={chat.title || wbcT(' in chat_source
+    assert '<WbcHoverMarquee text={chat.preview || wbcT(' in chat_source
+    assert '<WbcHoverMarquee text={item.title} className="workbench-session-tab-title" />' in shell_source
+    assert 'metrics.overflow ? " overflow" : ""' in chat_source
+    assert ".wbc-hover-marquee.overflow:hover .wbc-hover-marquee-track" in styles
+    assert "animation: wbc-hover-marquee" in styles
+    assert "animation-timing-function: cubic-bezier(.45, 0, 1, 1);" in styles
+    assert "infinite alternate" not in styles.split("@keyframes wbc-hover-marquee", 1)[0].rsplit(".wbc-hover-marquee", 1)[-1]
+    marquee_keyframes = styles.split("@keyframes wbc-hover-marquee", 1)[1].split("@media", 1)[0]
+    assert "88%, 100%" in marquee_keyframes
+    assert "56%" not in marquee_keyframes
+    assert "prefers-reduced-motion: reduce" in styles
+
+
 def test_chat_sidebar_overview_and_context_cards_are_sortable_and_persistent():
     root = Path(__file__).resolve().parent.parent
     source = (root / "src" / "webui" / "frontend" / "workbench-chat.jsx").read_text(
@@ -2079,6 +2258,9 @@ def test_workbench_chat_card_menu_can_rename_the_target_chat():
     source = (root / "src" / "webui" / "frontend" / "workbench-chat.jsx").read_text(
         encoding="utf-8"
     )
+    styles = (root / "src" / "webui" / "frontend" / "workbench.css").read_text(
+        encoding="utf-8"
+    )
     rail = source.split("function WbcRail(", 1)[1].split(
         "// Conversation main (column 3)", 1
     )[0]
@@ -2094,6 +2276,14 @@ def test_workbench_chat_card_menu_can_rename_the_target_chat():
     assert "window.prompt(" not in rail
     assert "onRename(chat.id, nextTitle)" in rename_dialog
     assert "prev && prev.id === chat.id" in source
+    assert '(menuId ? " menu-active" : "")' in rail
+    menu_active_css = styles.split(".wbc-chat-list.menu-active {", 1)[1].split("}", 1)[0]
+    assert "z-index: 200;" in menu_active_css
+    assert "pointer-events: none;" in menu_active_css
+    assert ".wbc-chat-list.menu-active .wbc-chat-card.menu-open" in styles
+    assert "pointer-events: auto;" in styles.split(
+        ".wbc-chat-list.menu-active .wbc-chat-card.menu-open", 1
+    )[1].split("}", 1)[0]
 
 
 def test_workbench_chat_card_menu_can_pin_and_sort_conversations():
@@ -2629,7 +2819,7 @@ def test_workbench_chat_loading_is_centered_in_the_rail():
 
     assert '"wbc-chat-list" + (loading ? " is-loading" : "")' in source
     assert 'className="workbench-muted wbc-rail-loading" role="status"' in source
-    assert "!loading && filtered.map" in source
+    assert "!loading && railItems.map" in source
     loading_styles = styles.split(".wbc-chat-list.is-loading {", 1)[1].split("}", 1)[0]
     assert "align-items: center;" in loading_styles
     assert "justify-content: center;" in loading_styles
@@ -4617,6 +4807,37 @@ def test_workbench_library_content_tab_renders_markdown():
     assert "root.DOMPurify.sanitize" in renderer
     assert "dangerouslySetInnerHTML" in source
     assert "wb-lib-markdown" in source
+
+
+def test_markdown_bare_url_stops_at_cjk_punctuation():
+    root = Path(__file__).resolve().parent.parent
+    renderer_path = root / "src" / "webui" / "frontend" / "shared" / "markdown" / "renderer.jsx"
+    marked_path = root / "src" / "webui" / "static" / "app" / "marked.min.js"
+    script = f"""
+const fs = require("fs");
+const vm = require("vm");
+const marked = require({json.dumps(str(marked_path))});
+const services = {{}};
+const window = {{
+  marked,
+  DOMPurify: {{ sanitize: (html) => html }},
+  CyreneUI: {{
+    register: (name, service) => (services[name] = service),
+  }},
+}};
+vm.runInNewContext(fs.readFileSync({json.dumps(str(renderer_path))}, "utf8"), {{ window }});
+const source = "B 站首页（www.bilibili.com），顶部导航已加载。";
+process.stdout.write(JSON.stringify({{
+  bare: services.markdown.renderRich(source),
+  explicit: services.markdown.renderRich("[示例](https://example.com/a，b)"),
+}}));
+"""
+    completed = subprocess.run(["node", "-e", script], check=True, capture_output=True, text=True)
+    result = json.loads(completed.stdout)
+
+    assert '<a href="http://www.bilibili.com">www.bilibili.com</a>），顶部导航已加载。' in result["bare"]
+    assert "%EF%BC%89" not in result["bare"]
+    assert '<a href="https://example.com/a%EF%BC%8Cb">示例</a>' in result["explicit"]
 
 
 def test_workbench_library_list_uses_explicit_pagination():

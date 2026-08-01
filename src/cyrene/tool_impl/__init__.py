@@ -26,6 +26,7 @@ NATIVE_TOOL_MODULES = (
     "cyrene.tool_impl.memory.list_memories",
     "cyrene.tool_impl.memory.recall_memory",
     "cyrene.tool_impl.memory.recall_conversation",
+    "cyrene.tool_impl.memory.read_group_sessions",
     "cyrene.tool_impl.memory.retire_short_term_memory",
     "cyrene.tool_impl.memory.search_project_memory",
     "cyrene.tool_impl.memory.save_project_memory",

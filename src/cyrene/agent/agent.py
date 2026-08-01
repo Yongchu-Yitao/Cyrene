@@ -336,6 +336,22 @@ def _annotate_history_context(history: list) -> list[dict[str, Any]]:
                 content=content,
                 metadata={"message_id": message.get("message_id", ""), "round_id": message.get("round_id", "")},
             )
+        elif message.get("chat_group_context_event"):
+            event = message.get("chat_group_event") if isinstance(message.get("chat_group_event"), dict) else {}
+            block = context_block(
+                f"history.chat_group.{message.get('message_id') or index}",
+                "chat_group",
+                source="data/sessions/<session_id>/state.json",
+                reason="append-only authoritative chat-group membership event",
+                transforms=["append_only_event"],
+                content=content,
+                metadata={
+                    "project_id": str(event.get("projectId") or ""),
+                    "group_id": str(event.get("groupId") or ""),
+                    "access": str(event.get("access") or ""),
+                    "membership_revision": int(event.get("projectMembershipRevision") or 0),
+                },
+            )
         elif role == "tool":
             block = context_block(
                 f"history.tool_result.{message.get('tool_call_id') or index}",

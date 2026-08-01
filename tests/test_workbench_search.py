@@ -266,6 +266,96 @@ def test_rename_workbench_chat_persists_trimmed_title(client, search_env):
     assert stored["chats"][0]["updatedAt"] != "2026-01-02T00:00:00+00:00"
 
 
+def test_chat_group_metadata_endpoint_forwards_language_and_title_lock(
+    client, search_env, monkeypatch,
+):
+    from route.workbench import chat as chat_routes
+
+    captured = {}
+
+    async def fake_generate(members, **kwargs):
+        captured["members"] = members
+        captured["kwargs"] = kwargs
+        return {"title": "", "summary": "浏览器操作相关对话", "lang": "zh"}
+
+    monkeypatch.setattr(chat_routes._service, "generate_chat_group_metadata", fake_generate)
+    response = client.post(
+        "/api/workbench/chat-groups/metadata",
+        json={
+            "groupId": "group_1",
+            "members": [
+                {"id": "chat_1", "title": "打开 B 站", "preview": "已打开首页"},
+                {"id": "chat_2", "title": "打开 Google", "preview": "已打开搜索页"},
+            ],
+            "currentTitle": "我的浏览器对话",
+            "titleLocked": True,
+            "lang": "zh",
+        },
+    )
+
+    assert response.status_code == 200
+    assert response.json()["metadata"]["summary"] == "浏览器操作相关对话"
+    assert captured["kwargs"] == {
+        "lang": "zh",
+        "title_locked": True,
+        "current_title": "我的浏览器对话",
+    }
+    assert len(captured["members"]) == 2
+
+
+def test_chat_group_metadata_endpoint_persists_before_returning(
+    client, search_env, monkeypatch,
+):
+    from route.workbench import chat as chat_routes
+    from cyrene.workbench import chat_groups as chat_groups_service
+
+    calls = []
+
+    def fake_context(project_id, group_id, *, signature):
+        calls.append(("context", project_id, group_id, signature))
+        return {
+            "group": {"id": group_id, "title": "新对话组", "titleLocked": False},
+            "members": [
+                {"id": "chat_1", "title": "打开 B 站", "preview": "首页已打开"},
+                {"id": "chat_2", "title": "打开 Google", "preview": "搜索页已打开"},
+            ],
+            "signature": "chat_1|chat_2",
+        }
+
+    async def fake_generate(members, **kwargs):
+        calls.append(("generate", members, kwargs))
+        return {"title": "浏览器操作", "summary": "整理网站访问结果。", "lang": "zh"}
+
+    async def fake_update(project_id, group_id, *, signature, metadata):
+        calls.append(("persist", project_id, group_id, signature, metadata))
+        return {"groups": [{
+            "id": group_id,
+            "title": metadata["title"],
+            "summary": metadata["summary"],
+            "chatIds": ["chat_1", "chat_2"],
+        }]}
+
+    monkeypatch.setattr(chat_groups_service, "get_group_metadata_context", fake_context)
+    monkeypatch.setattr(chat_routes._service, "generate_chat_group_metadata", fake_generate)
+    monkeypatch.setattr(chat_groups_service, "update_group_metadata", fake_update)
+    response = client.post(
+        "/api/workbench/chat-groups/metadata",
+        json={
+            "projectId": "project_1",
+            "groupId": "group_1",
+            "signature": "chat_1|chat_2",
+            "members": [{"id": "ignored_1"}, {"id": "ignored_2"}],
+            "lang": "zh",
+        },
+    )
+
+    assert response.status_code == 200
+    assert [call[0] for call in calls] == ["context", "generate", "persist"]
+    assert calls[1][1][0]["id"] == "chat_1"
+    assert calls[1][2]["current_title"] == "新对话组"
+    assert response.json()["group"]["title"] == "浏览器操作"
+
+
 def test_delete_workbench_legacy_chat_uses_session_delete(client, search_env, monkeypatch):
     routes_mod = search_env["routes_mod"]
     deleted = []
