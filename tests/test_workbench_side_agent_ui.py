@@ -27,8 +27,8 @@ def test_selected_text_opens_independent_persistent_side_agent_tabs():
     assert "onDelete(agent.id);" in source
     assert 'className="wbc-side-agent-head"' not in source
     assert "wbc-side-agent-index-title" not in source
-    assert 'className="wbc-side-agent-picker-trigger"' in source
-    assert 'className="wbc-side-agent-picker-menu"' in source
+    assert 'className="wbc-side-agent-split-picker"' in source
+    assert "function WbcSplitPickerMenu" in source
     assert "var hasAsked = messages.some" in source
     assert "<WbcComposer" in source
     assert "compact={true}" in source
@@ -39,7 +39,7 @@ def test_selected_text_opens_independent_persistent_side_agent_tabs():
     assert "wbcSideAgentTabId" not in source
 
     assert ".wbc-selection-menu" in styles
-    assert ".wbc-side-agent-picker-menu" in styles
+    assert ".wbc-side-agent-split-menu" in styles
     assert ".wbc-side-agent-thread" in styles
     assert ".wbc-side-agent-composer-host" in styles
     assert ".wbc-side-agent-index-close" in styles

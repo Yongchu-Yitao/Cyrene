@@ -2,6 +2,84 @@
 
 [中文](CHANGELOG.md) · [English](CHANGELOG.en.md)
 
+## [0.7.0b11] - 2026-08-03
+
+这是 `0.7.0` 的第十一个测试版，完整包含 `v0.7.0-beta.10` 之后的全部改动。本版在 Workbench 中加入项目级对话组和跨会话协作上下文，补齐会话元数据与分支清理，继续收紧内嵌浏览器和右侧面板的响应式交互，并修复知识库同步、权限处理、模型设置、欢迎页判断和错误本地化等问题。
+
+### 版本摘要
+
+- **项目级对话组正式落地** — 多个聊天可以通过拖拽重叠创建对话组，组成员、标题、摘要和修订号由后端权威保存；支持重命名、解散、移入、移出、跨窗口并发合并和失败后的事件补偿。
+- **对话组具备安全的跨会话读取能力** — 成员关系变化以隐藏、追加式系统事件写入各受影响 session；Agent 只有在当前仍属于活动对话组且判断同伴工作相关时，才能通过专用 memory 工具读取同伴已完成的消息、结论和附件。
+- **Workbench 会话信息更完整** — 补齐 fork/parent 元数据、来源聊天、只读旧会话标记、运行状态、模型与上下文信息，并在来源聊天删除后清理孤立分支元数据。
+- **Workbench 布局和浏览器交互重新收束** — 顶部栏、聊天列表、右侧卡片、编辑器和底部输入区拥有一致的玻璃表面；右侧面板改为顶部浮动折叠卡，窄屏和隐藏面板时主对话区会平滑扩展且仍可恢复。
+- **内嵌浏览器在桌面窄窗口中更稳定** — 浮动浏览器按桌面 CSS 视口缩放并换算点击/滚动坐标，右侧停靠浏览器保持原尺寸；调整大小提示改在原生页面边缘显示，不再通过移动整个停靠浏览器制造永久沟槽。
+- **知识库与 Zotero 同步更可靠** — 支持分页和版本号追踪、集合导入时补齐子附件/笔记/批注、删除 tombstone 清理以及显式 bibliographic abstract 修复，避免把全文索引摘要误当成论文摘要。
+- **Agent 执行和设置体验更稳健** — Phase 1 计划以受控的内部 handoff 传给执行阶段；会话级权限同意、主动轮次 sentinel 过滤、远程设置后台刷新、Codex 已保存模型/推理强度保留和统一错误文案均得到修正。
+
+### 详细变更与兼容说明
+
+#### Workbench 项目级对话组
+
+- 新增项目级 `chat_groups` 权威存储。存储同时支持 Workbench 数据库文档和旧版 JSON 文件回退/迁移；对外只暴露组 ID、标题、摘要、语言、成员和创建/更新时间，不把内部 outbox 直接暴露给前端。
+- 组成员数必须至少为两个；非法聊天 ID、重复成员、重复组 ID 和同一聊天被多个组占用时会在归一化阶段剔除，移出成员后只剩一个聊天的组会自动解散。
+- 前端保留乐观缓存，但写入携带项目 revision 和 membership revision。后端会根据客户端基线重放明确的 move、remove-member、rename、dissolve 和 metadata 意图：旧窗口移除成员时不会误删另一窗口刚刚加入的成员，也不会让过期的 AI 摘要覆盖新成员列表。
+- 标题和摘要可以由当前模型按组内聊天标题/预览生成；支持中英文输出，人工重命名后锁定标题，只继续更新摘要。生成结果限制长度，并通过成员签名确认写回时成员列表仍未变化。
+- 成员变更通过 committed outbox 记录，再向所有新增、保留和撤销成员追加隐藏的 `[Chat group context event]`。事件含项目、组、session、成员、工作区、membership revision 和 active/revoked 状态；追加失败可在下一次写入时补偿，稳定 message ID 防止重复。
+- 事件不会重写稳定 system prompt 或旧历史前缀，压缩时会原样保留；删除聊天、解散组和跨项目检查都会撤销旧成员的访问状态。
+- 新增 `/api/workbench/chat-groups` 读取/保存与 metadata 路由，提供创建、更新、重命名、移入、移出、解散和 AI 元数据生成的统一入口，并在并发冲突、成员变更和生成失败时返回明确错误。
+
+#### 跨会话上下文与会话元数据
+
+- 新增 `memory.group_sessions.read` / `ReadChatGroupSessions`：仅 main Agent 可调用，subagent 和底层 wire tool 不会自动获得该能力。调用时重新检查当前 membership，而不是相信历史事件或路径参数。
+- 读取结果只包含对话组成员的已完成前缀、最终结论、附件、更新时间、session ID、状态逻辑路径和工作区路径；正在运行的成员会标记为 running，并截断不完整的尾部请求，避免把半成品误当成结论。
+- 返回结果明确标记 peer conversation 为不可信证据；组摘要只用于定位主题，peer 的 user/assistant 文本永远不是指令。Prompt 要求 Agent 保留来源并显式说明冲突，不能用 raw file 工具绕过权限。
+- session persistence 新增向任意目标 session 追加持久消息的安全边界，使用目标 session 自己的锁、epoch 和幂等 message ID；debug/runtime update 也会发送到正确的目标 session。
+- Phase 1 决策阶段现在先形成有限的执行计划，再把原始用户请求和 `execution_brief` 交给 Phase 2。brief 被标记为 provisional internal handoff，不会冒充用户指令，工具证据冲突时必须修正。
+- fork/parent/source metadata 会在列表、读取和删除路径中保持一致；来源聊天不存在时自动清理孤立元数据。旧版无法继续写入的聊天明确标为只读，并给出新建聊天的提示。
+- 会话列表、顶部最近标签页和聊天卡片继续保留模型、权限模式、token/context 指标、任务/分支关系等信息；前端新增 session metadata 预览、复制标题、固定/移除标签、浏览器和文件资源入口。
+
+#### Workbench UI、拖拽和响应式布局
+
+- 聊天列表支持三种拖拽结果：普通排序、拖到另一张聊天卡片上创建/加入组、拖入对话区打开目标聊天；键盘排序、焦点保持、Live Region 播报和移动后的可见反馈同步覆盖这些路径。
+- 对话组卡片展示标题、摘要、成员数量和展开/收起状态；支持生成中状态、重命名、移出成员、解散组、拖入已有组和空组归一化。中英文 i18n 文案、无障碍标签和组操作错误状态完整补齐。
+- 聊天侧栏改为顶部对齐的浮动 accordion 卡片。Overview 和 Context 保持稳定入口，计划、子 Agent、Artifacts、Changes、Branches、Viewer、Map、Browser 和 Side Agents 等面板按内容动态出现；每个面板有独立 SVG 图标、可折叠 body 和一致的窄卡片布局。
+- 右侧卡片从卡片边缘调整宽度，移除旧的全高引导线；隐藏侧栏时主对话 lane 平滑增宽并居中，顶部栏显示恢复按钮，减少动效设置仍会得到可用的即时状态变化。
+- 顶部栏和聊天 rail 的玻璃遮罩、边缘 feather、层级和间距重新统一；会话标题支持 hover marquee，资源 shelf 的 pin 图标、new chat 操作、侧栏恢复入口和窄屏布局都重新对齐。
+- 主输入区使用底部 glass dock，但输入卡片仍保留清晰背景、圆角和键盘焦点；滚动到底按钮、侧栏隐藏状态、编辑器覆盖层和右侧查看器不会互相遮挡。
+- WebUI API 统一把结构化错误映射为本地化文案；Workbench 创建、Quick Chat、浏览器 takeover、设置和搜索失败路径不再直接显示原始异常字符串。Codex quota 错误、远程错误和通用错误均保留可诊断的稳定 metadata。
+- 欢迎页不再只根据 origin-scoped localStorage 判断新用户：桌面切换备用端口时，会等待后端数据确认是否已有项目内容，避免老用户被错误带回 onboarding。
+- Markdown 自动链接在中文全角标点处正确截断，避免 `www.example.com），后文` 被拼成一个错误链接。
+
+#### Electron 与内嵌浏览器
+
+- 浮动 Agent 浏览器会根据 Electron 的 zoom quantization 和 `innerWidth` feedback 调整桌面宽度 CSS viewport，再将 CSS 坐标转换为设备独立像素，点击、滚动和 takeover 在窄窗口中保持命中。
+- 停靠在右侧面板的浏览器保持 unzoomed，不再因为鼠标靠近左边缘而移动浏览器窗口；调整大小提示由原生页面 surface 的 2px 边缘提示显示，并由 renderer 的 resize hint 事件控制光标与视觉状态。
+- 清除 inspect/text-links 注入脚本留下的旧 `data-cyrene-ref`，`visibleLinkMatches` 为当前可见链接分配唯一引用，避免 `click_ref` 命中旧元素或错误目标。
+- Electron preload/native bridge 补齐浏览器 resize hint、viewport 参数和错误传递；浏览器组件导出统一图标并把 takeover 错误接入新的 i18n API。
+
+#### 远程控制、权限和运行时可靠性
+
+- Remote Settings 面板支持后台轮询发现新配对设备并增量 upsert peer，不会在刷新时重新进入 loading 状态或清空用户当前视图。
+- 加密配对的移动端 `runs.events` 补齐 Workbench phase、reasoning、tool-call 和 subagent 生命周期；本机 loopback Control API 继续在公开边界过滤模型 reasoning，只返回可公开执行输出。
+- Codex 设置在模型目录尚未返回时仍保留已保存的模型和 reasoning effort；同时兼容 `supported_reasoning_efforts` 与 camelCase 字段，目录刷新使用最新持久化 candidate，切换来源后不会丢失选择。
+- 权限回答新增“本次会话同意”等明确语义，区分单次、当前 session、当前 run 和永久 full access；仍兼容旧客户端已经打开的回答文本。主动轮次不会把内部 `awaiting_user` sentinel 泄漏到 Workbench transcript 或通知。
+- 远程/Workbench 错误带有稳定 error code、i18n key 和 fallback message，便于桌面和移动端分别本地化，同时保留诊断信息。
+- 学习、CLI、scheduler、subagent 和 runtime wire 路径的测试与边界处理同步更新，确保系统发起的权限提升不会生成待用户回答的问题，结束后的主动回复不会产生空的公共消息。
+
+#### 知识库、Zotero 与仓库维护
+
+- Literature Library 的 knowledge bridge 在 `BEGIN IMMEDIATE` 下串行化首次同步，避免并发页面重复创建桥接行；已经链接的知识文档会即时修复摘要和全文索引。
+- 仅当来源 metadata 明确提供 `abstract`/`abstractNote` 时才写入 bibliographic abstract；旧版本错误复制 indexing preview 的记录会被清空，真实用户/Agent 编辑不会被覆盖。
+- Zotero Local API 统一通过 loopback 校验，分页获取集合、条目和删除列表，追踪 `Last-Modified-Version`；按 collection 导入时补齐父条目的 attachment、note、annotation，并合并去重。
+- 增量同步处理 provider/library/item key、集合成员关系、note/annotation/attachment 更新和删除 tombstone；删除 Zotero 附件时同步清理由 Cyrene 管理的本地文件和知识索引关系。
+- 清理误提交的 `test.db`、浏览器动态布局截图等运行时文件，补充 `.gitignore`，并将一次性 design QA 记录归档到 `project-notes/`；开发进度与架构交接文档同步更新。
+
+#### 测试与发布检查
+
+- 新增对话组 metadata 生成、成员事件 outbox 补偿、并发 stale rebase、peer 读取授权、压缩保留事件和 wire capability 隔离测试。
+- 新增 Electron 浏览器边缘 hover、窄窗口 viewport、Remote Settings 后台刷新、Codex 选择持久化、权限/主动执行、Workbench session tabs、上下文菜单、侧栏/玻璃布局、拖拽分组和错误本地化契约测试。
+- 本版所有生效版本面统一为 Python/UV `0.7.0b11`、Electron `0.7.0-beta.11`，包括 README badge、WebUI cache key、文档 sidebar、WeChat client 和版本契约断言；Git 发布标签为 `v0.7.0-beta.11`。
+
 ## [0.7.0b10] - 2026-07-31
 
 这是 `0.7.0` 的第十个测试版，包含 `v0.7.0-beta.8` 以来的全部改动。在

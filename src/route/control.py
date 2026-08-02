@@ -271,6 +271,15 @@ def _task_detail(raw: dict[str, Any]) -> ControlTaskDetail:
 
 
 def _public_event(raw: dict[str, Any]) -> ControlRunEvent | None:
+    # The loopback Control API deliberately excludes model reasoning. Paired,
+    # encrypted remote clients use the broader Workbench-equivalent event
+    # contract, but local API consumers receive only public execution output.
+    if str(raw.get("type") or "") in {
+        "reasoning_delta",
+        "reasoning_done",
+        "reasoning_start",
+    }:
+        return None
     public = public_remote_event(raw)
     if public is None:
         return None

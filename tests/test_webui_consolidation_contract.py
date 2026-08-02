@@ -25,7 +25,7 @@ OPENAPI_BASELINE_FASTAPI = "0.136.1"
 OPENAPI_BASELINE_PYDANTIC = "2.13.4"
 OPENAPI_SHA256 = "81dae33c774f919bfcf4b4a9b88e6fa66c26bf9641e7ae9af95067a4a10adff2"
 TOOL_REGISTRY_SHA256 = "48032ba1f1237c49e3900777c8dc4d292dabf002178a5f64e158bb99c3466d56"
-MAIN_WIRE_SHA256 = "e748ec66ad5cbd23900f62cd9d444c09b7edf023af2964c53285753e8c0eb443"
+MAIN_WIRE_SHA256 = "f8fa3f2b0c53ae9059ac763792a9a218fa7c8f30c5c2335a0ab2f332816e4136"
 SUBAGENT_WIRE_SHA256 = "4d2f207b6508c148e5756826b435c4ca95830b3b8441198e2066cc7529ae27ad"
 
 # CyreneUI is the sole application-owned browser global. Every cross-script
@@ -154,44 +154,44 @@ def test_workbench_runtime_dependencies_keep_their_relative_script_order():
         "katex/katex.min.js",
         "purify.min.js",
         "highlight.min.js",
-        "compiled/platform/runtime.js?v=0.7.0b10",
-        "compiled/shared/markdown/math.js?v=0.7.0b10",
-        "compiled/shared/markdown/highlight.js?v=0.7.0b10",
+        "compiled/platform/runtime.js?v=0.7.0b11",
+        "compiled/shared/markdown/math.js?v=0.7.0b11",
+        "compiled/shared/markdown/highlight.js?v=0.7.0b11",
         "leaflet.js",
-        "pdfjs/pdf.min.js?v=0.7.0b10",
-        "pdfjs/pdf_viewer.js?v=0.7.0b10",
-        "compiled/platform/readiness.js?v=0.7.0b10",
-        "compiled/platform/events.js?v=0.7.0b10",
-        "compiled/platform/navigation.js?v=0.7.0b10",
-        "compiled/workbench-i18n.js?v=0.7.0b10",
-        "compiled/shared/i18n/format.js?v=0.7.0b10",
-        "compiled/shared/i18n/translations.js?v=0.7.0b10",
-        "compiled/shared/pdf/bridge.js?v=0.7.0b10",
-        "compiled/shared/feedback/service.js?v=0.7.0b10",
-        "compiled/shared/markdown/renderer.js?v=0.7.0b10",
-        "compiled/platform/data-store.js?v=0.7.0b10",
-        "compiled/shared/browser/viewport.js?v=0.7.0b10",
-        "compiled/shared/search/overlay.js?v=0.7.0b10",
-        "compiled/shared/markdown/actions.js?v=0.7.0b10",
-        "compiled/shared/diff/viewer.js?v=0.7.0b10",
-        "compiled/platform/api.js?v=0.7.0b10",
-        "compiled/workbench-chat.js?v=0.7.0b10",
-        "compiled/workbench-quick-chat.js?v=0.7.0b10",
-        "compiled/workbench.js?v=0.7.0b10",
-        "compiled/settings-overlay.js?v=0.7.0b10",
-        "compiled/entry/bootstrap.js?v=0.7.0b10",
+        "pdfjs/pdf.min.js?v=0.7.0b11",
+        "pdfjs/pdf_viewer.js?v=0.7.0b11",
+        "compiled/platform/readiness.js?v=0.7.0b11",
+        "compiled/platform/events.js?v=0.7.0b11",
+        "compiled/platform/navigation.js?v=0.7.0b11",
+        "compiled/workbench-i18n.js?v=0.7.0b11",
+        "compiled/shared/i18n/format.js?v=0.7.0b11",
+        "compiled/shared/i18n/translations.js?v=0.7.0b11",
+        "compiled/shared/pdf/bridge.js?v=0.7.0b11",
+        "compiled/shared/feedback/service.js?v=0.7.0b11",
+        "compiled/shared/markdown/renderer.js?v=0.7.0b11",
+        "compiled/platform/data-store.js?v=0.7.0b11",
+        "compiled/shared/browser/viewport.js?v=0.7.0b11",
+        "compiled/shared/search/overlay.js?v=0.7.0b11",
+        "compiled/shared/markdown/actions.js?v=0.7.0b11",
+        "compiled/shared/diff/viewer.js?v=0.7.0b11",
+        "compiled/platform/api.js?v=0.7.0b11",
+        "compiled/workbench-chat.js?v=0.7.0b11",
+        "compiled/workbench-quick-chat.js?v=0.7.0b11",
+        "compiled/workbench.js?v=0.7.0b11",
+        "compiled/settings-overlay.js?v=0.7.0b11",
+        "compiled/entry/bootstrap.js?v=0.7.0b11",
     ]
 
     positions = [scripts.index(script) for script in required_in_order]
     assert positions == sorted(positions)
     assert not {
-        "compiled/app.js?v=0.7.0b10",
-        "compiled/chat.js?v=0.7.0b10",
-        "compiled/dashboard.js?v=0.7.0b10",
-        "compiled/knowledge.js?v=0.7.0b10",
-        "compiled/memory.js?v=0.7.0b10",
-        "compiled/tasks.js?v=0.7.0b10",
-        "compiled/settings.js?v=0.7.0b10",
+        "compiled/app.js?v=0.7.0b11",
+        "compiled/chat.js?v=0.7.0b11",
+        "compiled/dashboard.js?v=0.7.0b11",
+        "compiled/knowledge.js?v=0.7.0b11",
+        "compiled/memory.js?v=0.7.0b11",
+        "compiled/tasks.js?v=0.7.0b11",
+        "compiled/settings.js?v=0.7.0b11",
     }.intersection(scripts)
 
 

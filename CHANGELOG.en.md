@@ -5,6 +5,207 @@
 This English edition preserves the release history of the Chinese changelog.
 The Chinese edition remains the most detailed record for older releases.
 
+## [0.7.0b11] - 2026-08-03
+
+This is the eleventh `0.7.0` beta and includes every change after
+`v0.7.0-beta.10`. It adds project-scoped Workbench chat groups and safe
+cross-session context, completes session/fork metadata handling, tightens the
+embedded-browser and right-panel interactions, and fixes knowledge sync,
+permission handling, model settings, welcome-page detection, and localized
+error reporting.
+
+### Release highlights
+
+- **Project-scoped chat groups** — chats can be overlapped to create a group,
+  then moved, removed, renamed, dissolved, or added to an existing group. The
+  backend is authoritative and handles revisions, concurrent windows, and
+  failed membership-event delivery.
+- **Safe cross-session collaboration** — membership changes become hidden,
+  append-only session events. The main Agent can explicitly read relevant peer
+  work through a capability-checked memory tool, with peer text treated as
+  untrusted evidence rather than instructions.
+- **Richer session metadata** — fork/parent/source metadata, read-only legacy
+  state, runtime/model/context details, recent session tabs, and stale branch
+  cleanup now remain consistent across list, read, delete, and Workbench paths.
+- **Workbench layout consolidation** — the top bar, chat rail, side card,
+  composer, responsive lane, and glass surfaces now use one coherent layout;
+  the right panel is a top-aligned floating accordion that can be resized from
+  its card edge and restored after being hidden.
+- **More reliable embedded browsers** — floating browsers use a calibrated
+  desktop CSS viewport with CSS-to-DIP coordinate conversion, while docked
+  browsers stay unzoomed and expose resize feedback without moving the native
+  page.
+- **Knowledge and Zotero sync fixes** — paginated imports, version tracking,
+  child-item completion, deletion tombstones, and bibliographic abstract
+  reconciliation prevent incomplete imports and indexing previews posing as
+  paper abstracts.
+- **More predictable Agent/runtime behavior** — Phase 1 now hands a bounded
+  internal execution brief to Phase 2, session-scoped permission grants are
+  distinct from one-shot and permanent grants, proactive control sentinels are
+  filtered, and settings/errors refresh and localize consistently.
+
+### Detailed changes and compatibility notes
+
+#### Workbench project chat groups
+
+- Added an authoritative project-scoped `chat_groups` store. It supports the
+  Workbench database document and legacy JSON fallback/migration, while the
+  public projection exposes only IDs, title, summary, language, members, and
+  timestamps.
+- Groups require at least two valid chats. Invalid IDs, duplicate members,
+  duplicate group IDs, and chats claimed by multiple groups are normalized
+  away; removing a member that leaves a singleton dissolves the group.
+- The browser keeps an optimistic projection, but writes carry project and
+  membership revisions. The server rebases explicit move, remove-member,
+  rename, dissolve, and metadata intents against the newest state, preserving
+  unrelated changes from another window and preventing stale AI metadata from
+  replacing a newer roster.
+- Group titles and summaries can be generated from member titles/previews in
+  the requested language. A manually renamed title is locked while summaries
+  may continue to refresh; generated values are bounded and written only when
+  the member signature is still current.
+- A committed outbox records membership changes before hidden
+  `[Chat group context event]` messages are appended to added, retained, and
+  revoked sessions. Events carry project/group/session IDs, member paths,
+  workspace path, membership revision, and active/revoked access. Retries are
+  idempotent and repair a failed append on a later write.
+- Events do not rewrite the stable system prompt or cached history prefix and
+  are preserved exactly during compaction. Chat deletion, group dissolution,
+  and project checks revoke old membership access.
+- Added unified Workbench routes for group read/write, move/remove, rename,
+  dissolve, and AI metadata generation, with explicit conflict, membership,
+  and generation errors.
+
+#### Cross-session context and session metadata
+
+- Added `memory.group_sessions.read` / `ReadChatGroupSessions`. It is available
+  only to the main Agent, is absent from subagent and automatic wire schemas,
+  and rechecks membership at invocation time instead of trusting historical
+  events or raw paths.
+- Peer snapshots contain completed message prefixes, final conclusions,
+  attachments, timestamps, session IDs, logical state paths, workspace paths,
+  and a running marker. Incomplete trailing requests are excluded so an active
+  session is not presented as finished evidence.
+- Results explicitly mark peer conversation as untrusted evidence; the group
+  summary is orientation only, and peer user/assistant text is never an
+  instruction. The prompt requires preserving provenance and surfacing
+  conflicts rather than silently selecting a source.
+- Added a safe arbitrary-session append boundary using the target session's
+  lock, epoch, and stable message ID. Runtime/debug update events now target
+  the correct session even when another session is active.
+- Phase 1 now performs a bounded planning pass and hands the exact user request
+  plus an `execution_brief` to Phase 2. The brief is a provisional internal
+  handoff, not a user instruction, and must be revised when tool evidence
+  contradicts it.
+- Fork/parent/source metadata is kept consistent across list, read, and delete
+  paths; orphaned metadata is removed when its source disappears. Legacy
+  sessions that cannot safely continue are explicitly read-only.
+- Session lists, recent top-bar tabs, and chat cards retain model, permission,
+  token/context, task, and branch details, with copy-title, pin/remove,
+  browser-resource, and file-resource actions.
+
+#### Workbench UI, drag-and-drop, and responsive layout
+
+- Chat dragging now supports ordinary reordering, overlap-to-group, and drop
+  into the conversation area to open a target. Keyboard ordering, focus
+  retention, live-region announcements, and visible feedback cover the same
+  paths.
+- Group cards show title, summary, member count, and expanded/collapsed state;
+  they support generation status, rename, remove-member, dissolve, add-to-group,
+  bilingual labels, accessibility attributes, and operation errors.
+- The chat side panel is now a top-aligned floating accordion. Overview and
+  Context remain stable entries; Plan, Subagents, Artifacts, Changes, Branches,
+  Viewer, Map, Browser, and Side Agents appear only when relevant. Each panel
+  has its own SVG icon, collapsible body, and responsive card layout.
+- The right card resizes from its own edge instead of using a full-height guide.
+  Hiding the side panel smoothly widens and centers the conversation lane, and
+  the top bar exposes a restore action. Reduced-motion users still receive
+  immediate usable state changes.
+- Top-bar and rail glass masks, feathering, z-index, and spacing are unified;
+  session titles support hover marquee, and resource pin/new-chat/restore
+  actions align across narrow layouts.
+- The composer uses a bottom glass dock while keeping the input card's clear
+  background, radius, and focus treatment. Scroll-to-bottom, overlays, viewers,
+  and the hidden side panel no longer cover one another.
+- WebUI API errors now map through localized stable metadata. Workbench create,
+  Quick Chat, browser takeover, settings, search, Codex quota, and remote error
+  paths no longer expose raw exception strings as their only user message.
+- Welcome-page detection waits for authoritative backend content instead of
+  relying only on origin-scoped localStorage, avoiding false onboarding after a
+  desktop fallback-port change.
+- Bare Markdown URLs stop at CJK/full-width punctuation, preventing text such
+  as `www.example.com），后文` from becoming one malformed link.
+
+#### Electron and embedded browser behavior
+
+- Floating Agent browsers calibrate a desktop-width CSS viewport against
+  Electron zoom quantization and `innerWidth`, then convert CSS coordinates to
+  device-independent pixels for accurate click, scroll, and takeover behavior.
+- Right-docked browsers remain unzoomed and no longer move when the pointer
+  approaches their left edge. A 2px native-page resize hint and renderer event
+  provide the visual cursor state without a permanent gutter.
+- Inspect/text-links scripts clear stale `data-cyrene-ref` values, and
+  `visibleLinkMatches` assigns unique references to visible links so
+  `click_ref` cannot select stale or duplicate targets.
+- The preload/native bridge carries resize-hint and viewport state consistently;
+  the browser component exports a shared icon and routes takeover failures
+  through the new i18n error API.
+
+#### Remote control, permissions, and runtime reliability
+
+- Remote Settings now polls for newly paired devices in the background and
+  incrementally upserts peers without re-entering loading state or clearing the
+  current view.
+- Encrypted paired-mobile `runs.events` now carries the Workbench phase,
+  reasoning, tool-call, and subagent lifecycle. The loopback Control API keeps
+  filtering model reasoning at its public boundary and returns only public
+  execution output.
+- Codex settings keep a saved model and reasoning effort visible while the
+  catalog loads, accept both snake_case and camelCase effort fields, and use
+  the latest persisted candidate after refresh or source switching.
+- Permission answers distinguish one-shot, session, run, and permanent grants,
+  while retaining compatibility with already-open legacy prompts. Proactive
+  rounds filter the internal `awaiting_user` sentinel before it reaches the
+  transcript or notifications.
+- Remote and Workbench errors carry stable codes, i18n keys, and fallback text
+  so desktop and mobile clients can localize them without losing diagnostics.
+- Learning, CLI, scheduler, subagent, and runtime-wire boundaries received
+  matching tests and safeguards; system-initiated elevation no longer creates
+  a pending user question, and proactive completion cannot publish an empty
+  public message.
+
+#### Knowledge, Zotero, and repository maintenance
+
+- The Literature Library knowledge bridge serializes first synchronization with
+  `BEGIN IMMEDIATE`, avoids duplicate bridge rows, and repairs linked records
+  immediately as knowledge documents change.
+- Only explicit `abstract`/`abstractNote` source metadata is treated as a
+  bibliographic abstract. Older records that copied an indexing preview are
+  cleared, while genuine user/Agent edits are preserved.
+- The Zotero Local API client enforces loopback URLs, paginates collections,
+  items, and deletions, tracks `Last-Modified-Version`, completes collection
+  imports with parent attachments/notes/annotations, and de-duplicates records.
+- Incremental sync now handles provider/library/item keys, collection
+  membership, child updates, and deletion tombstones, including cleanup of
+  Cyrene-managed Zotero files and index relations.
+- Removed accidentally tracked `test.db` and browser QA screenshots, ignored
+  the runtime database, archived one-off design QA records under
+  `project-notes/`, and refreshed the progress and architecture handoff docs.
+
+#### Tests and release checks
+
+- Added coverage for group metadata, membership outbox repair, stale-client
+  rebasing, peer authorization, compaction preservation, and wire capability
+  isolation.
+- Added Electron browser-edge, narrow viewport, Remote Settings refresh,
+  Codex selection persistence, permission/proactive execution, session-tab,
+  context-menu, glass/side-panel, drag-group, and localized-error contract
+  tests.
+- All active version surfaces now use Python/UV `0.7.0b11`, Electron
+  `0.7.0-beta.11`, including README badges, WebUI cache keys, documentation,
+  the WeChat client, and version-contract assertions. The Git release tag is
+  `v0.7.0-beta.11`.
+
 ## [0.7.0b10] - 2026-07-31
 
 This is the tenth `0.7.0` beta and includes every change since

@@ -97,7 +97,7 @@ def test_chat_page_blank_area_context_menu_reuses_quick_actions():
     assert "wbcCanOpenPageContextMenu(event)" in page
     assert "wbcPageContextMenuPlacement(event.clientX, event.clientY, nativeRect)" in page
     assert page.count("<WbcQuickActionItems") >= 1
-    assert overview.count("<WbcQuickActionItems") == 1
+    assert overview.count("<WbcQuickActionItems") == 0
     for action in (
         "workbenchChat.rename",
         "workbenchChat.toTask",

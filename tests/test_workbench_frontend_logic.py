@@ -430,7 +430,7 @@ def test_hidden_chat_sidebar_slightly_widens_and_centers_the_conversation_lane()
     assert "--wbc-reclaimed-side-width: 0px;" in page_css
     assert "--wbc-conversation-shift: 0px;" in page_css
     assert "--wbc-side-track-width: var(--wb-right-w, 350px);" in page_css
-    assert "grid-template-columns: 230px minmax(var(--wbc-main-min-width), 1fr) var(--wbc-side-track-width);" in page_css
+    assert "grid-template-columns: var(--wbc-rail-width) minmax(var(--wbc-main-min-width), 1fr) var(--wbc-side-track-width);" in page_css
     assert "transition: grid-template-columns 500ms cubic-bezier(.22, 1.16, .36, 1);" in page_css
     assert "--wbc-collapsed-lane-growth: clamp(64px, 5vw, 96px);" in page_css
     assert "--wbc-side-track-width: 0px;" in hidden_css
@@ -438,8 +438,10 @@ def test_hidden_chat_sidebar_slightly_widens_and_centers_the_conversation_lane()
     assert "--wbc-conversation-shift: calc(var(--wbc-reclaimed-side-width) / 2);" in hidden_css
     for lane_css in (stage_css, dock_css):
         assert "width: calc(100% - var(--wbc-reclaimed-side-width));" in lane_css
-        assert "transform: translateX(var(--wbc-conversation-shift));" in lane_css
-        assert "transition: width 420ms cubic-bezier(.22, 1.24, .36, 1), transform 420ms cubic-bezier(.22, 1.24, .36, 1);" in lane_css
+    assert "left: var(--wbc-conversation-shift);" in stage_css
+    assert "transition: width 420ms cubic-bezier(.22, 1.24, .36, 1), left 420ms cubic-bezier(.22, 1.24, .36, 1);" in stage_css
+    assert "transform: translateX(var(--wbc-conversation-shift));" in dock_css
+    assert "transition: width 420ms cubic-bezier(.22, 1.24, .36, 1), transform 420ms cubic-bezier(.22, 1.24, .36, 1);" in dock_css
 
     compact_css = styles.split("@media (max-width: 980px) {", 1)[1].split("}", 3)
     assert any("--wbc-reclaimed-side-width: 0px;" in block for block in compact_css)
@@ -534,9 +536,7 @@ def test_workbench_chat_rail_keeps_its_own_fixed_header_surface():
     assert "padding: 0 12px;" in rail_css
     assert "padding: 0 12px 14px;" not in rail_css
     assert "z-index: 21;" in rail_css
-    assert "--wbc-shared-glass-rail-width: 230px;" in page_css
-    assert "--wbc-shared-glass-rail-overhang: 18px;" in page_css
-    assert "--wbc-shared-glass-rail-feather: 36px;" in page_css
+    assert "--wbc-shared-glass-rail-width: calc(var(--wbc-rail-width) + 26px);" in page_css
     assert "--wbc-shared-glass-rail-top-inset:" in page_css
     assert "background: color-mix(in srgb, var(--wb-topbar-bg) 58%, transparent);" in page_glass_css
     assert "backdrop-filter: blur(32px) saturate(170%) contrast(102%);" in page_glass_css
@@ -621,7 +621,7 @@ def test_workbench_chat_sidebar_is_a_top_aligned_floating_accordion():
     assert "padding: 70px 12px 12px;" in side_css
     assert "background: transparent;" in side_css
     assert "border-radius: 18px;" in card_css
-    assert "backdrop-filter: blur(24px) saturate(135%);" in card_css
+    assert "backdrop-filter: blur(18px) saturate(112%);" in card_css
     assert "overflow-y: auto;" in accordion_css
     assert "max-height: min(620px, calc(100vh - 250px));" in side_body_css
     assert "padding: 4px 16px 12px;" in side_body_css
@@ -774,13 +774,13 @@ def test_workbench_side_question_opens_the_existing_conversation_ui_in_a_split()
     assert "setSideAgentSplitByChat" in select_handler
     assert "function WbcSideAgentSplitHost" in source
     assert "function WbcSideAgentSplitResizer" in source
-    assert "setTimeout(function () { setLastAgent(null); }, 540)" in source
+    assert "setTimeout(function () { setLastChildren(null); }, 540)" in source
     assert "requestAnimationFrame(function ()" in source
     assert '(entered ? " open" : "")' in source
     assert '<WbcSideAgentTab agent={agent}' in split_component
     assert '<aside className="wbc-side-agent-split"' in split_component
     assert 'className="wbc-side-agent-split-picker"' in split_component
-    assert 'className="wbc-side-agent-split-menu"' in split_component
+    assert '<WbcSplitPickerMenu open={pickerOpen}' in split_component
     assert "items.map(function (item, index)" in split_component
     assert "if (onSelect) onSelect(item.id);" in split_component
     assert "<WbcSideAgentTab" not in panel
@@ -891,8 +891,8 @@ def test_workbench_resource_tabs_use_lists_and_shared_splits_while_branches_expa
     assert 'activeTab === "viewer" && <WbcViewerList' in side
     assert 'activeTab === "map" && <WbcMapList' in side
     assert '<WbcBrowserList browserState={browserPanelState}' in side
-    assert 'var opensSplit = item.id === "subagents";' in side
-    assert "if (onOpenSubagents) onOpenSubagents();" in side
+    assert 'var opensSplit = item.id === "subagents" || item.id === "browser";' in side
+    assert 'if (item.id === "subagents" && onOpenSubagents) onOpenSubagents();' in side
     assert 'activeTab === "branches" && <WbcBranchTab' in side
     assert "function WbcMapSplitHost" in source
     assert "L.circleMarker(pos" in source
@@ -905,7 +905,7 @@ def test_workbench_resource_tabs_use_lists_and_shared_splits_while_branches_expa
     assert "function WbcBrowserSplitHost" in source
     assert "function WbcSubagentsSplitHost" in source
     assert source.count('className="wbc-resource-split-picker-wrap"') >= 2
-    assert source.count('className="wbc-side-agent-split-menu wbc-resource-picker-menu"') >= 2
+    assert source.count("<WbcSplitPickerMenu open={pickerOpen}") >= 3
     assert 'selectResourceSplit("map", item)' in source
     assert 'selectResourceSplit("browser", tabId)' in source
     assert 'selectResourceSplit("subagents", true)' in source
@@ -1138,7 +1138,7 @@ def test_maximized_browser_has_compact_agent_chat_with_transient_status():
         ".wbc-thread-stage.browser-window-maximized {", 1
     )[1].split("}", 1)[0]
     assert "width: 100%;" in released_stage_css
-    assert "transform: none;" in released_stage_css
+    assert "transition: none;" in released_stage_css
     assert "will-change: auto;" in released_stage_css
     assert 'className="wbc-browser-fullscreen-chat"' in source
     assert "fullscreenStatusRequested" in source
@@ -1814,15 +1814,18 @@ def test_workbench_chat_opens_bounded_browser_window_from_live_browser_events():
     assert '<div className="wbc-browser-movement-region">' in source
     movement_region_styles = styles.split(".wbc-browser-movement-region {", 1)[1].split("}", 1)[0]
     assert "position: absolute;" in movement_region_styles
-    assert "inset: var(--wbc-thread-inset-top) var(--wbc-thread-inset-inline) var(--wbc-thread-inset-bottom);" in movement_region_styles
+    assert "top: var(--wbc-thread-inset-top);" in movement_region_styles
+    assert "right: calc(12px - var(--wbc-side-track-width));" in movement_region_styles
+    assert "bottom: calc(34px * var(--wb-ui-font-scale, 1));" in movement_region_styles
+    assert "left: var(--wbc-thread-inset-inline);" in movement_region_styles
     assert "pointer-events: none;" in movement_region_styles
     thread_styles = styles.split(".wbc-thread {", 1)[1].split("}", 1)[0]
     assert "padding: var(--wbc-thread-inset-top) var(--wbc-thread-inset-inline) var(--wbc-thread-inset-bottom);" in thread_styles
     assert ".wbc-browser-window.maximized" in styles
     assert ".wbc-browser-restore-float" in styles
     pip_styles = styles.split(".wbc-browser-window.pip {", 1)[1].split("}", 1)[0]
-    assert "width: min(280px" in pip_styles
-    assert "height: min(215px" in pip_styles
+    assert "width: min(calc(var(--wbc-side-track-width)" in pip_styles
+    assert "height: min(240px" in pip_styles
     floating_native_styles = styles.split(".wbc-browser-window.pip .browser-view.native,", 1)[1].split("}", 1)[0]
     assert ".wbc-browser-window.maximized .browser-view.native" in floating_native_styles
     assert "--browser-resize-gutter: 0px;" in floating_native_styles
@@ -2018,12 +2021,12 @@ def test_electron_browser_bounds_follow_floating_window_with_frame_coalescing():
     assert "targetImage.getSize()" in prepare_transition_block
     assert "targetPngBase64 = targetImage.toPNG().toString('base64');" in prepare_transition_block
     assert "pngBase64: targetPngBase64" in prepare_transition_block
-    assert "widthTolerance = Math.ceil(PAGE_CSS_TARGET_WIDTH * 0.05)" in main
+    assert "widthTolerance = Math.ceil((PAGE_CSS_MAX_FIT_WIDTH * 1.2) - PAGE_CSS_TARGET_WIDTH);" in main
     assert "this._pageZoomTokenByContents = new Map();" in main
     assert "this._pageZoomTokenByContents.get(contentsId) === zoomToken" in main
     assert "request = request * (PAGE_CSS_TARGET_WIDTH / innerW)" not in main
     assert "await this.settlePageViewport(active.view, targetBounds, true)" in commit_transition_block
-    assert "const prepared = await this.prepareBoundsTransition();" in settle_transition_block
+    assert "prepared = await this.prepareBoundsTransition();" in settle_transition_block
     assert "return this.commitBoundsTransition();" in settle_transition_block
     assert "info.transition === 'prepare'" in set_bounds_block
     assert "info.transition === 'commit'" in set_bounds_block
@@ -2053,9 +2056,9 @@ def test_electron_browser_bounds_follow_floating_window_with_frame_coalescing():
     assert "this.bounds.height - this.bottomCornerInset" not in main
     assert "topCover" not in browser_view
     pip_bar_block = styles.split(".wbc-browser-window.pip .wbc-browser-window-bar {", 1)[1].split("\n}", 1)[0]
-    assert "height: 48px" in pip_bar_block
-    assert "padding: 8px 8px 4px 12px" in pip_bar_block
-    assert "border-bottom: 0" in pip_bar_block
+    assert "height: 46px" in pip_bar_block
+    assert "padding: 0 9px 0 14px" in pip_bar_block
+    assert "border-bottom-color:" in pip_bar_block
     assert ".wbc-browser-window.pip .wbc-browser-window-bar > *" not in styles
     assert ".wbc-browser-window.pip .browser-native-surface" in styles
     assert "className=\"browser-native-surface\"" in browser_view
@@ -2815,8 +2818,8 @@ def test_workbench_chat_switches_stop_to_guidance_while_running():
     assert "输入内容以引导正在运行的 Agent" in (
         root / "src" / "webui" / "frontend" / "workbench-i18n.jsx"
     ).read_text(encoding="utf-8")
-    assert "workbench-chat.js?v=0.7.0b10" in index
-    assert "workbench-i18n.js?v=0.7.0b10" in index
+    assert "workbench-chat.js?v=0.7.0b11" in index
+    assert "workbench-i18n.js?v=0.7.0b11" in index
 
 
 def test_workbench_guidance_is_optimistic_and_completed_tools_do_not_spin():
@@ -3946,7 +3949,7 @@ def test_workbench_right_tabs_do_not_shrink_for_long_run_logs():
     assert "padding-inline: 8px;" in compact_tabs[0]
     assert "padding-inline: 2px;" in compact_tabs[1]
     assert "font-size: calc(12px * var(--wb-ui-font-scale, 1));" in compact_tabs[1]
-    assert "workbench.css?v=0.7.0b10" in index
+    assert "workbench.css?v=0.7.0b11" in index
 
 
 def test_workbench_collapsed_rail_keeps_labels_horizontal_during_expansion():
@@ -3968,7 +3971,7 @@ def test_workbench_collapsed_rail_keeps_labels_horizontal_during_expansion():
     assert "height: 63px;" in account_rule
     assert "grid-template-rows: 36px;" in account_rule
     assert "height: 36px;" in account_meta_rule
-    assert "workbench.css?v=0.7.0b10" in index
+    assert "workbench.css?v=0.7.0b11" in index
 
 
 def test_workbench_collapsed_rail_icons_stay_left_anchored_while_closing():
@@ -4041,7 +4044,7 @@ def test_workbench_wechat_channel_uses_qr_login_instead_of_token_input():
     assert "WECHAT_BOT_TOKEN" not in settings
     assert '"settings.wechatScanConnect": "扫描二维码连接"' in translations
     assert ".wb-wechat-qr-overlay" in styles
-    assert "settings-overlay.js?v=0.7.0b10" in index
+    assert "settings-overlay.js?v=0.7.0b11" in index
 
 
 def test_linux_desktop_uses_native_frame_and_directory_picker():
@@ -4269,7 +4272,7 @@ def test_workbench_context_picker_contains_long_workspace_paths():
     assert "text-overflow: ellipsis;" in text_rule
     assert "white-space: nowrap;" in text_rule
     assert 'className="wbc-popmenu-desc" title={p}' in chat
-    assert "workbench-chat.js?v=0.7.0b10" in index
+    assert "workbench-chat.js?v=0.7.0b11" in index
 
 
 def test_workbench_follow_up_uses_context_endpoint_without_native_prompt():
@@ -4285,8 +4288,8 @@ def test_workbench_follow_up_uses_context_endpoint_without_native_prompt():
     assert '"/api/task-sessions/{session_id}/follow-up"' in routes
     assert 'session["parentSessionId"] = session_id' in routes
     assert "followUpContext" in routes
-    assert "workbench-model.js?v=0.7.0b10" in index
-    assert "workbench.js?v=0.7.0b10" in index
+    assert "workbench-model.js?v=0.7.0b11" in index
+    assert "workbench.js?v=0.7.0b11" in index
 
 
 def test_workbench_regenerate_plan_failure_preserves_current_plan():
@@ -4414,7 +4417,7 @@ def test_workbench_model_settings_preserve_form_on_failed_response():
     assert "}).then(readSettingsResponse).then(function (p)" in save_block
     assert "p.custom_models || norm" in save_block
     assert "p.vision_models || p.vision_candidates || vNorm" in save_block
-    assert "settings-overlay.js?v=0.7.0b10" in index
+    assert "settings-overlay.js?v=0.7.0b11" in index
 
 
 def test_workbench_chat_subagent_page_is_independent_and_localized():
@@ -4493,7 +4496,7 @@ def test_workbench_chat_exposes_browser_live_view_and_takeover():
     assert 'window.CyreneUI.require("browser").ViewportPanel' in source
     assert "function WbcBrowserSplit(" in source
     assert "onTakeoverComplete: onTakeoverComplete" in source
-    assert "desiredTabId: tabId" in source
+    assert "desiredTabId: active.id || tabId" in source
     assert "handleAnswer(pending.id" in source
 
 
@@ -4877,7 +4880,7 @@ def test_workbench_settings_overlay_has_shortcuts_tab_and_panel():
     assert ".wb-shortcut-row" in styles
     assert ".wb-shortcut-capture" in styles
     # The new module is loaded before the panels that consume it
-    assert "compiled/workbench-shortcuts.js?v=0.7.0b10" in index
+    assert "compiled/workbench-shortcuts.js?v=0.7.0b11" in index
 
 
 def test_workbench_about_related_actions_only_click_right_button():

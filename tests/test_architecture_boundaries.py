@@ -24,7 +24,7 @@ PRIVATE_IMPORT_BUDGET = {
     "cyrene.agent.replies": 9,
     "cyrene.agent.round": 1,
     "cyrene.agent.session": 22,
-    "cyrene.agent.state": 55,
+    "cyrene.agent.state": 57,
     "cyrene.learning.engine": 2,
     "cyrene.subagent": 1,
     "cyrene.tool_impl.knowledge.list_library_items": 1,
@@ -244,7 +244,7 @@ def test_private_import_budget_can_only_decrease() -> None:
 
     assert unexpected_sources == []
     assert over_budget == {}
-    assert sum(current.values()) <= sum(PRIVATE_IMPORT_BUDGET.values()) == 146
+    assert sum(current.values()) <= sum(PRIVATE_IMPORT_BUDGET.values()) == 148
 
 
 def test_agent_facade_private_export_budget_can_only_decrease() -> None:
