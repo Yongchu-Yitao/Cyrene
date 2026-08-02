@@ -1085,6 +1085,32 @@ def test_remote_chat_change_refreshes_the_open_transcript_as_well_as_the_rail():
     assert "setLoadRevision(function (value) { return value + 1; });" in event_block
 
 
+def test_remote_chat_refresh_and_notification_navigation_use_the_latest_project():
+    root = Path(__file__).resolve().parent.parent
+    source = (root / "src" / "webui" / "frontend" / "workbench-chat.jsx").read_text(
+        encoding="utf-8"
+    )
+
+    page_setup = source.split("function WorkbenchChatPage", 1)[1].split(
+        "  function refreshChats", 1
+    )[0]
+    refresh = source.split("  function refreshChats(selectId) {", 1)[1].split(
+        "\n  // Initial load + project switch.", 1
+    )[0]
+    navigation = source.split("  function applyPendingChatSelection() {", 1)[1].split(
+        "\n  useWbcEffect(function () {", 1
+    )[0]
+    remote_events = source.split(
+        'if (event.type === "workbench_chat_changed") {', 1
+    )[1].split('if (event.type === "workspace_changes")', 1)[0]
+
+    assert "projectIdRef.current = projectId;" in page_setup
+    assert 'var requestedProjectId = String(projectIdRef.current || "");' in refresh
+    assert "var requestedProjectId = projectId;" not in refresh
+    assert "refreshChats(targetId);" in navigation
+    assert 'refreshChats("");' in remote_events
+
+
 def test_workbench_chat_has_long_conversation_navigation_and_bottom_return():
     root = Path(__file__).resolve().parent.parent
     source = (root / "src" / "webui" / "frontend" / "workbench-chat.jsx").read_text(

@@ -2317,6 +2317,11 @@ function WorkbenchChatPage({ active, project, newChatRequestId, onOpenTask, onAc
   var [chatLoading, setChatLoading] = useWbcState(false);
   var [loadRevision, setLoadRevision] = useWbcState(0);
   var projectIdRef = useWbcRef(projectId);
+  // This page stays mounted while the user switches projects. Event and
+  // navigation listeners are intentionally registered once, so publish the
+  // latest project synchronously on every render instead of leaving those
+  // long-lived callbacks with the project captured on their first render.
+  projectIdRef.current = projectId;
   // POST /chats and /fork already return the complete conversation. Mark the
   // adopted id so the selection effect does not clear it and fetch it again.
   var skipNextHydrationChatIdRef = useWbcRef("");
@@ -2352,9 +2357,6 @@ function WorkbenchChatPage({ active, project, newChatRequestId, onOpenTask, onAc
       wbcLastChatByProject[projectId] = activeChatId;
     }
   }, [activeChatId]);
-  useWbcEffect(function () {
-    projectIdRef.current = projectId;
-  }, [projectId]);
   var [error, setError] = useWbcState("");
   var [errorKind, setErrorKind] = useWbcState("load");
   var [sideTab, setSideTab] = useWbcState("");
@@ -2537,8 +2539,11 @@ function WorkbenchChatPage({ active, project, newChatRequestId, onOpenTask, onAc
   }
 
   function refreshChats(selectId) {
-    if (!projectId) return Promise.resolve([]);
-    var requestedProjectId = projectId;
+    // Callers include one-time SSE and navigation subscriptions. Resolve the
+    // target at invocation time so a mobile update after a project switch does
+    // not refresh the project that happened to be active at mount time.
+    var requestedProjectId = String(projectIdRef.current || "");
+    if (!requestedProjectId) return Promise.resolve([]);
     return model.listChats(requestedProjectId).then(function (list) {
       // A background run may finish after the user has switched projects.
       if (projectIdRef.current !== requestedProjectId) return list;
