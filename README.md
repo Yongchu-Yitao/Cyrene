@@ -1,6 +1,6 @@
 <p align="center">
   <img src="https://img.shields.io/badge/python-3.12+-blue" alt="Python">
-  <img src="https://img.shields.io/badge/version-0.7.0b11-blue" alt="Version">
+  <img src="https://img.shields.io/badge/version-0.7.0b12-blue" alt="Version">
   <img src="https://img.shields.io/badge/license-Apache%202.0-green" alt="License">
   <img src="https://img.shields.io/badge/status-beta-orange" alt="Status">
 </p>

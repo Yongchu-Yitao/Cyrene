@@ -5,6 +5,75 @@
 This English edition preserves the release history of the Chinese changelog.
 The Chinese edition remains the most detailed record for older releases.
 
+## [0.7.0b12] - 2026-08-03
+
+This is the twelfth `0.7.0` beta and includes every change after
+`v0.7.0-beta.11`. It fixes two connected Workbench regressions: conversations
+created or updated from the mobile controller could remain absent from the
+desktop chat list, while the corresponding Agent reply notification was still
+shown but could not navigate to its target conversation.
+
+### Release highlights
+
+- **Mobile conversations reliably sync into the active project** — after a
+  project switch, mobile create/send/reply events now refresh the project that
+  is active when the event arrives instead of the project captured when the
+  Workbench chat page was first mounted.
+- **Agent reply notifications navigate again** — when a notification targets a
+  new or background-updated chat that is not yet in the local list, Workbench
+  refreshes the correct project, retains the pending target, and opens it after
+  the list is loaded.
+- **Long-lived listeners no longer retain stale project state** — the chat
+  surface remains mounted across project changes, so its one-time SSE and
+  navigation listeners now resolve the latest `projectId` through a
+  synchronously maintained ref.
+
+### Detailed changes and compatibility notes
+
+#### Mobile conversation refresh
+
+- Changed `refreshChats()` to resolve its project at invocation time from
+  `projectIdRef.current` rather than using the `projectId` captured when its
+  callback closure was created. Remote events, notification navigation, and
+  other long-lived callers therefore operate on the current project.
+- Updated the project ref synchronously during render instead of waiting for a
+  passive effect, closing the small race between rendering a project switch
+  and receiving a remote event.
+- Preserved the existing response guard: if the user switches projects while a
+  list request is in flight, that response is still ignored and cannot replace
+  the newer project's list.
+- The backend persistence flow for mobile chat creation, message sends, and
+  completed Agent replies is unchanged. This release corrects the desktop
+  consumer that handles `workbench_chat_changed` and chooses which list to
+  refresh.
+
+#### Notification-center navigation
+
+- Kept the shared pending-navigation path, but made its missing-chat refresh
+  resolve the latest Workbench project associated with the pending target.
+- Notification clicks after a project switch no longer invoke the stale
+  first-mount refresh context, allowing the target chat to enter the list and
+  be selected automatically.
+- Existing chats still open immediately without an extra request. Cross-project
+  notifications continue to switch projects first and let the project-loading
+  path consume the pending chat ID.
+
+#### Regression coverage and release checks
+
+- Added a regression contract for the long-lived chat surface requiring the
+  project ref to update synchronously and `refreshChats()` to resolve the
+  project from that ref at call time.
+- Covered both the remote `workbench_chat_changed` list refresh and the
+  `applyPendingChatSelection()` missing-target refresh used by notifications,
+  preventing the stale-closure bug from being reintroduced.
+- The fix passed the Workbench frontend, remote-control, Control API, and
+  notification suites (`242 passed`), and all 31 WebUI JSX entries compiled
+  successfully.
+- All active version surfaces now use Python/UV `0.7.0b12` and Electron
+  `0.7.0-beta.12`, including README badges, WebUI cache keys, the documentation
+  sidebar, the WeChat client, and version-contract assertions. The Git release
+  tag is `v0.7.0-beta.12`.
+
 ## [0.7.0b11] - 2026-08-03
 
 This is the eleventh `0.7.0` beta and includes every change after
