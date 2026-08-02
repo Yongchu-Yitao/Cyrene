@@ -685,7 +685,7 @@ function wbApplyStoredRightWidth(node) {
 // Drag handle pinned to the left edge of the rightmost panel. Shared by the
 // task context panel and the chat side panel (exposed on window for the
 // separately-bundled workbench-chat.js).
-function WbColResizer() {
+function WbColResizer({ cardEdge }) {
   function emitResizePhase(phase) {
     try {
       window.dispatchEvent(new CustomEvent("workbench:right-resize", { detail: { phase: phase } }));
@@ -730,6 +730,9 @@ function WbColResizer() {
     try { localStorage.removeItem(WB_RIGHT_STORE); } catch (err) {}
   }
   function emitResizeHint(active) {
+    // The chat panel embeds the hit target in its floating card. Its own border
+    // is the resize affordance, so do not draw the legacy full-height guide.
+    if (cardEdge) return;
     document.body.classList.toggle("wb-col-resize-hover", active === true);
     try {
       window.dispatchEvent(new CustomEvent("workbench:right-resize-hint", {
@@ -744,7 +747,7 @@ function WbColResizer() {
   );
   return (
     <div
-      className="wb-col-resizer"
+      className={"wb-col-resizer" + (cardEdge ? " card-edge" : "")}
       role="separator"
       aria-orientation="vertical"
       title={title}
@@ -2947,8 +2950,10 @@ function WorkbenchTopbar({ activePage, taskView, activeTaskId, activeChatId, rec
             aria-label={t("workbench.resourceShelf.dropHint", "Drag a file, selected text, browser, or knowledge item here to pin it")}
             title={t("workbench.resourceShelf.dropHint", "Drag a file, selected text, browser, or knowledge item here to pin it")}
           >
-            <svg viewBox="0 0 20 20" width="14" height="14" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
-              <path d="M10 4v12M4 10h12" />
+            <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+              <path d="M12 17v5" />
+              <path d="M5 17h14" />
+              <path d="M17 3a1 1 0 0 1 1 1v4.6a2 2 0 0 0 .6 1.4l1.7 1.7A1 1 0 0 1 19.6 13H4.4a1 1 0 0 1-.7-1.7l1.7-1.7A2 2 0 0 0 6 8.2V4a1 1 0 0 1 1-1Z" />
             </svg>
           </span>
         ) : null}

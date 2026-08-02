@@ -26,6 +26,10 @@ _IGNORED_DIRS = {
     ".git", ".hg", ".svn", ".idea", ".pytest_cache", ".mypy_cache",
     ".ruff_cache", ".tox", ".venv", "__pycache__", "node_modules",
 }
+# Cyrene writes these folders as an implementation detail of a conversation.
+# They are useful memory/plan mirrors, but they are not files the Agent created
+# for the user and must never appear as run-scoped workspace changes.
+_CYRENE_MANAGED_ROOT_DIRS = frozenset({"conversations", "plan"})
 _MAX_TEXT_FILE_BYTES = 1_000_000
 _MAX_CAPTURED_TEXT_BYTES = 32_000_000
 _MAX_CAPTURED_TEXT_FILES = 2_000
@@ -39,6 +43,17 @@ _MAX_STORED_DIFF_CHARS = 25_000_000
 
 def _utc_now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
+
+
+def is_cyrene_managed_workspace_path(path_value: Any) -> bool:
+    """Return whether a workspace-relative path is Cyrene-owned run state."""
+    normalized = str(path_value or "").strip().replace("\\", "/")
+    while normalized.startswith("./"):
+        normalized = normalized[2:]
+    if not normalized or normalized.startswith("/"):
+        return False
+    root_name = normalized.split("/", 1)[0]
+    return root_name in _CYRENE_MANAGED_ROOT_DIRS
 
 
 @dataclass(frozen=True)
@@ -121,6 +136,11 @@ def capture_workspace_snapshot(
         for current, dirnames, filenames in os.walk(root):
             dirnames[:] = [name for name in dirnames if name not in _IGNORED_DIRS]
             current_path = Path(current)
+            if current_path == root:
+                dirnames[:] = [
+                    name for name in dirnames
+                    if name not in _CYRENE_MANAGED_ROOT_DIRS
+                ]
             for filename in filenames:
                 target = current_path / filename
                 try:
@@ -212,6 +232,8 @@ def compare_workspace_snapshots(
         return []
     changes: list[dict[str, Any]] = []
     for path in sorted(set(before.files) | set(after.files)):
+        if is_cyrene_managed_workspace_path(path):
+            continue
         old = before.files.get(path)
         new = after.files.get(path)
         if old is not None and new is not None and _same_file(old, new):
@@ -321,6 +343,28 @@ def save_change_set(db_path: str, change_set: dict[str, Any]) -> dict[str, Any]:
     items = payload.setdefault("changeSets", [])
     change_id = str(change_set.get("id") or "")
     replacement = dict(change_set)
+    replacement["files"] = [
+        dict(item)
+        for item in change_set.get("files") or []
+        if isinstance(item, dict)
+        and not is_cyrene_managed_workspace_path(item.get("path"))
+    ]
+    replacement["fileCount"] = len(replacement["files"])
+    replacement["additions"] = sum(
+        int(item.get("additions") or 0) for item in replacement["files"]
+    )
+    replacement["deletions"] = sum(
+        int(item.get("deletions") or 0) for item in replacement["files"]
+    )
+    if not replacement["files"]:
+        kept = [
+            item for item in items
+            if not isinstance(item, dict) or str(item.get("id") or "") != change_id
+        ]
+        if len(kept) != len(items):
+            payload["changeSets"] = kept
+            _write_store(db_path, payload)
+        return replacement
     for index, item in enumerate(items):
         if isinstance(item, dict) and str(item.get("id") or "") == change_id:
             items[index] = replacement
@@ -365,17 +409,25 @@ def _public_change_set(change_set: dict[str, Any]) -> dict[str, Any]:
         {key: value for key, value in item.items() if key != "diff"}
         for item in change_set.get("files") or []
         if isinstance(item, dict)
+        and not is_cyrene_managed_workspace_path(item.get("path"))
     ]
+    result["fileCount"] = len(result["files"])
+    result["additions"] = sum(int(item.get("additions") or 0) for item in result["files"])
+    result["deletions"] = sum(int(item.get("deletions") or 0) for item in result["files"])
     return result
 
 
 def list_chat_change_sets(db_path: str, chat_id: str) -> list[dict[str, Any]]:
     payload = _read_store(db_path)
-    items = [
-        _public_change_set(item)
-        for item in payload.get("changeSets") or []
-        if isinstance(item, dict) and str(item.get("chatId") or "") == str(chat_id)
-    ]
+    items: list[dict[str, Any]] = []
+    for item in payload.get("changeSets") or []:
+        if not isinstance(item, dict):
+            continue
+        if str(item.get("chatId") or "") != str(chat_id):
+            continue
+        public = _public_change_set(item)
+        if public.get("fileCount"):
+            items.append(public)
     items.sort(key=lambda item: str(item.get("completedAt") or ""), reverse=True)
     return items
 
@@ -386,6 +438,8 @@ def get_chat_file_change(
     change_set_id: str,
     file_path: str,
 ) -> dict[str, Any] | None:
+    if is_cyrene_managed_workspace_path(file_path):
+        return None
     payload = _read_store(db_path)
     for change_set in payload.get("changeSets") or []:
         if not isinstance(change_set, dict):
@@ -421,6 +475,7 @@ __all__ = [
     "compare_workspace_snapshots",
     "delete_chat_change_sets",
     "get_chat_file_change",
+    "is_cyrene_managed_workspace_path",
     "list_chat_change_sets",
     "save_change_set",
 ]

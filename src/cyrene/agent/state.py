@@ -237,6 +237,19 @@ _llm_phase_override: ContextVar[str] = ContextVar("_llm_phase_override", default
 _MAIN_INBOX_AGENT_ID = "main"
 _AWAITING_USER_SENTINEL = "[[cyrene.awaiting_user]]"
 
+
+def _sanitize_public_agent_text(value: object) -> str:
+    """Remove internal control sentinels before text crosses a public boundary.
+
+    Callers must not rely on exact equality here: provider adapters or a model
+    can surround a control value with whitespace, Markdown, or other text.
+    """
+    raw = str(value or "")
+    cleaned = raw.replace(_AWAITING_USER_SENTINEL, "").strip()
+    if _AWAITING_USER_SENTINEL in raw and not cleaned.strip("*_`~[](){}<> "):
+        return ""
+    return cleaned
+
 _REPORT_REF_PREFIX = "[Deep research report]"
 _REPORT_REF_MAX_PREVIEW = 280
 
@@ -245,7 +258,7 @@ _REPORT_REF_MAX_PREVIEW = 280
 # ---------------------------------------------------------------------------
 
 _LIGHT_TOOL_DEFS = [
-    {"type": "function", "function": {"name": "use_tools", "description": "MANDATORY immediate gateway to the execution phase. As soon as you understand a request that needs action, call this without an assistant preamble. Use it for file ops, search, web, code, shell, scheduling, sub-agents, data, browser automation, notifications, etc. The execution phase will first send a brief user-visible progress update and start the first useful tool in the same batch. Skip ONLY for pure conversation (opinions, greetings, conceptual explanations). IMPORTANT: set task to the user's EXACT original message, do not rewrite it.", "parameters": {"type": "object", "properties": {"task": {"type": "string"}}, "required": ["task"]}}},
+    {"type": "function", "function": {"name": "use_tools", "description": "Gateway to the execution phase. For any request that needs action, first perform a bounded planning pass, then call this without an assistant preamble. Set task to the user's EXACT original message and execution_brief to the concise preliminary plan that Phase 2 should use and revise as evidence arrives. Skip ONLY for pure conversation (opinions, greetings, conceptual explanations).", "parameters": {"type": "object", "properties": {"task": {"type": "string", "description": "The user's exact original message, unchanged."}, "execution_brief": {"type": "string", "description": "Concise handoff with objective, acceptance evidence, constraints/assumptions, approach, initial steps/tools, validation, and material risks/fallbacks; no private chain-of-thought."}}, "required": ["task", "execution_brief"], "additionalProperties": False}}},
     {"type": "function", "function": {"name": "ask_user", "description": "Ask the user a clarification question. Use this proactively whenever: the request is ambiguous, a critical detail is missing, multiple approaches exist and the choice matters, or you need confirmation before a destructive/irreversible action. Guessing is worse than asking. If you need to ask the user anything, use this tool instead of writing a question in assistant text. Use freeform text, or add a short options array when structured choices help. Do not combine with other tools in the same turn.", "parameters": {"type": "object", "properties": {"text": {"type": "string"}, "options": {"type": "array", "items": {"type": "string"}}}, "required": ["text"]}}},
     {"type": "function", "function": {"name": "quit", "description": "Terminal control signal. Call this only after writing the complete user-facing answer in normal assistant content. Do not put answer text or tool syntax in the arguments. A quit call ends the current run and never reopens tools.", "parameters": {"type": "object", "properties": {}}}},
 ]
@@ -281,9 +294,12 @@ _init_session_epoch()
 # ---------------------------------------------------------------------------
 
 _PUBLIC_RUN_EVENT_TYPES = frozenset({
+    "auto_review",
     "phase_transition",
     "plan",
     "plan_progress",
+    "permission_decision",
+    "subagent_update",
     "tool_call_started",
     "tool_call_progress",
     "tool_call_finished",

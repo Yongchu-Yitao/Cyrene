@@ -23,6 +23,7 @@ from cyrene.agent.context import (
     grant_destructive_operation,
     grant_external_upload,
     grant_permission_elevation,
+    grant_temporary_full_access,
     permission_elevation_fingerprint,
     publish_runtime_event as _publish_runtime_event,
     session_interrupt_event,
@@ -1087,9 +1088,9 @@ def _permission_answer_granted(text: str) -> bool:
     }:
         return False
     return normalized in {
-        "仅这次允许", "allow once", "仅此次", "这次", "once",
+        "同意一次", "仅这次允许", "allow once", "仅此次", "这次", "once",
         "始终允许", "always allow", "always", "永久允许", "allow",
-        "本次会话内总是允许", "本轮总是允许", "always allow this session",
+        "在本次会话同意", "本次会话内总是允许", "本轮总是允许", "always allow this session",
         "允许这次", "允许这次读取", "允许这次上传", "允许执行", "允许执行这一次",
         "允许调用这一次", "允许删除", "仅此任务允许 full_access",
         "同意", "确认", "好", "好的", "可以", "行", "yes", "y", "ok", "okay",
@@ -1127,15 +1128,28 @@ async def _handle_permission_elevation_answer(
         )
 
     granted = _permission_answer_granted(answer_text)
+    allow_for_session = normalized in {
+        "在本次会话同意",
+        "本次会话内总是允许",
+        "本轮总是允许",
+        "always allow this session",
+    }
     if permission_kind == "write_permission_request":
-        # "仅这次允许" —— 只在此 round 内有效，round 结束时自动清理
-        if normalized in {"仅这次允许", "allow once", "仅此次", "这次", "once"}:
+        # New prompts offer session-scoped, one-shot, or denial. Keep
+        # recognizing legacy permanent-grant answers so an already-open prompt
+        # from an older client can still resume.
+        if allow_for_session:
+            grant_temporary_full_access()
+            system = (
+                "The user granted elevated write/delete permission for the rest of this session. "
+                "Retry the blocked action if it is still required."
+            )
+        elif granted and normalized not in {"始终允许", "always allow", "always", "永久允许", "allow"}:
             grant_permission_elevation(permission_fingerprint)
             system = (
                 "The user granted this exact write/delete permission request once. "
                 "Retry the blocked action if it is still required."
             )
-        # "始终允许" —— 全局永久生效
         elif normalized in {"始终允许", "always allow", "always", "永久允许", "allow"}:
             set_write_permission_mode("full_access")
             system = (
@@ -1149,7 +1163,13 @@ async def _handle_permission_elevation_answer(
                 "Stay within the workspace and choose a safer alternative."
             )
     elif permission_kind == "read_elevation":
-        if granted:
+        if allow_for_session:
+            grant_temporary_full_access()
+            system = (
+                "The user granted elevated read permission for the rest of this session. "
+                "Retry the blocked read action if it is still required."
+            )
+        elif granted:
             grant_permission_elevation(permission_fingerprint)
             system = (
                 "The user granted this exact outside-workspace read once. "
@@ -1173,7 +1193,7 @@ async def _handle_permission_elevation_answer(
             "fingerprint": fingerprint,
         })
         if granted:
-            if normalized in {"本次会话内总是允许", "本轮总是允许", "always allow this session"}:
+            if allow_for_session:
                 allow_all_destructive_operations_for_run()
             else:
                 grant_destructive_operation(fingerprint)
@@ -1209,6 +1229,12 @@ async def _handle_permission_elevation_answer(
                 "The user denied the external browser file upload. Do not retry it or choose another "
                 "file or destination unless the user explicitly asks."
             )
+    elif allow_for_session:
+        grant_temporary_full_access()
+        system = (
+            "The user granted elevated permission for the rest of this session. "
+            "Retry the blocked action if it is still required."
+        )
     elif granted:
         grant_permission_elevation(permission_fingerprint)
         system = (

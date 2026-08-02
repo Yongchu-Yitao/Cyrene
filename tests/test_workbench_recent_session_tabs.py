@@ -330,3 +330,20 @@ def test_topbar_sessions_and_resources_have_keyboard_control():
     assert 'keys: ["ctrl", "Tab"]' in shortcuts
     assert 'keys: ["ctrl", "shift", "Tab"]' in shortcuts
     assert 'keys: ["mod", "W"]' in shortcuts
+
+
+def test_empty_resource_shelf_uses_a_right_aligned_pin_hint():
+    shell = (ROOT / "src/webui/frontend/workbench.jsx").read_text(encoding="utf-8")
+    css = (ROOT / "src/webui/frontend/workbench.css").read_text(encoding="utf-8")
+
+    empty_hint = shell.split('className="workbench-resource-shelf-empty"', 1)[1].split(
+        "</span>", 1
+    )[0]
+    empty_hint_css = css.split(".workbench-resource-shelf-empty {", 1)[1].split(
+        "}", 1
+    )[0]
+
+    assert 'viewBox="0 0 24 24"' in empty_hint
+    assert '<path d="M12 17v5" />' in empty_hint
+    assert '<path d="M5 17h14" />' in empty_hint
+    assert "margin-left: auto" in empty_hint_css

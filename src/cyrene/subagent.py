@@ -137,9 +137,13 @@ async def _publish_registry_event(agent_id: str, *, message: str = "") -> None:
         event["message"] = str(message)[:240]
     session_id = str(entry.get("session_id") or "")
     if session_id:
-        await debug.publish_event(event, session_id=session_id)
-    else:
-        await debug.publish_event(event)
+        event["session_id"] = session_id
+    # Use the run-context publisher so paired controllers receive the same
+    # sub-agent lifecycle that Workbench consumes from SSE. It still publishes
+    # to the ordinary debug event bus when no conversation run is attached.
+    from cyrene.agent.context import publish_runtime_event
+
+    await publish_runtime_event(event)
 
 
 def _normalize_mode(mode: str = "", role: str = "") -> str:

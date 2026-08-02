@@ -111,6 +111,7 @@ from cyrene.runtime.memory.short_term import load_entries
 from cyrene.runtime.memory.soul import get_default_soul_content, read_soul, get_soul_path
 from cyrene.runtime.version import get_version_label
 from cyrene.workbench.store import patch_document_fields, read_document, write_document
+from cyrene.workbench.workspace_changes import is_cyrene_managed_workspace_path
 from cyrene.workbench.session_view import (
     build_pending_question as _ui_pending_question,
     collapse_duplicate_user_messages as _collapse_duplicate_user_messages,
@@ -3977,7 +3978,7 @@ def _workbench_display_path(path_value: Any, workspace_root: Path | None = None)
 
 def _workbench_file_change(path_value: Any, status: str, workspace_root: Path | None = None, source: str = "") -> dict[str, Any] | None:
     path = _workbench_display_path(path_value, workspace_root)
-    if not path:
+    if not path or is_cyrene_managed_workspace_path(path):
         return None
     return {
         "id": _short_id("file"),
@@ -4090,6 +4091,11 @@ def _workbench_workspace_file_snapshot(workspace_root: Path | None) -> dict[str,
                 if name not in _WORKBENCH_SNAPSHOT_IGNORED_DIRS and not name.startswith(".")
             ]
             current_path = Path(current)
+            if current_path == root:
+                dirnames[:] = [
+                    name for name in dirnames
+                    if not is_cyrene_managed_workspace_path(name)
+                ]
             for filename in filenames:
                 if filename.startswith("."):
                     continue
@@ -4126,9 +4132,14 @@ def _workbench_workspace_text_snapshot(workspace_root: Path | None) -> dict[str,
                 name for name in dirnames
                 if name not in _WORKBENCH_SNAPSHOT_IGNORED_DIRS and not name.startswith(".")
             ]
+            current_path = Path(current)
+            if current_path == root:
+                dirnames[:] = [
+                    name for name in dirnames
+                    if not is_cyrene_managed_workspace_path(name)
+                ]
             if len(snapshot) >= _WORKBENCH_TEXT_SNAPSHOT_MAX_FILES:
                 break
-            current_path = Path(current)
             for filename in filenames:
                 if len(snapshot) >= _WORKBENCH_TEXT_SNAPSHOT_MAX_FILES:
                     break
@@ -4308,7 +4319,7 @@ def _workbench_git_status_snapshot(workspace_root: Path | None) -> dict[str, str
         else:
             path = repo_path
         normalized = _workbench_display_path(path, workspace_root)
-        if normalized:
+        if normalized and not is_cyrene_managed_workspace_path(normalized):
             snapshot[normalized] = code
     return snapshot
 
@@ -4422,7 +4433,7 @@ def _workbench_current_file_snapshot_diff(target: Path, rel: str) -> str:
 
 def _workbench_recorded_diff_for_path(session: dict[str, Any], path_value: Any, workspace_root: Path | None = None) -> dict[str, Any] | None:
     rel = _workbench_display_path(path_value, workspace_root) or str(path_value or "").strip()
-    if not rel:
+    if not rel or is_cyrene_managed_workspace_path(rel):
         return None
 
     candidates: list[dict[str, Any]] = []
@@ -4471,6 +4482,13 @@ async def _workbench_git_diff_for_path(workspace_root: Path | None, path_value: 
     target = _workbench_resolve_workspace_file(workspace_root, path_value)
     root = workspace_root.resolve() if workspace_root else None
     rel = target.relative_to(root).as_posix() if root else str(path_value)
+    if is_cyrene_managed_workspace_path(rel):
+        return {
+            "path": rel,
+            "diff": "",
+            "has_changes": False,
+            "source": "cyrene_managed",
+        }
     context = _workbench_git_context(root)
     if context is None:
         diff = _workbench_current_file_snapshot_diff(target, rel)

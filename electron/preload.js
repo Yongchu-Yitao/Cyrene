@@ -38,7 +38,12 @@ contextBridge.exposeInMainWorld('cyrene', {
     navigate: (info) => ipcRenderer.invoke('browser:navigate', info || {}),
     goBack: (sessionId) => ipcRenderer.invoke('browser:go-back', { sessionId: String(sessionId || '') }),
     goForward: (sessionId) => ipcRenderer.invoke('browser:go-forward', { sessionId: String(sessionId || '') }),
-    reload: (sessionId) => ipcRenderer.invoke('browser:reload', { sessionId: String(sessionId || '') }),
+    reload: (sessionOrInfo) => ipcRenderer.invoke(
+      'browser:reload',
+      sessionOrInfo && typeof sessionOrInfo === 'object'
+        ? sessionOrInfo
+        : { sessionId: String(sessionOrInfo || '') }
+    ),
     setMuted: (info) => ipcRenderer.invoke('browser:set-muted', info || {}),
     screenshot: (info) => ipcRenderer.invoke('browser:screenshot', info || {}),
     onState: (callback) => {

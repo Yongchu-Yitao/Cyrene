@@ -68,16 +68,30 @@ _THUMBNAIL_MAX_DIMENSION = 960
 _THUMBNAIL_WEBP_QUALITY = 72
 _REMOTE_PUBLIC_EVENT_TYPES = {
     "ack",
+    "auto_review",
     "awaiting_user",
     "error",
     "guidance_received",
     "intermediate_message",
     "interrupted",
+    "permission_decision",
+    "phase_transition",
+    "plan",
+    "plan_progress",
+    "reasoning_delta",
+    "reasoning_done",
+    "reasoning_start",
     "reply_delta",
     "reply_done",
     "reply_start",
     "run_finalizing",
     "saved",
+    "subagent_update",
+    "tool_call_finished",
+    "tool_call_progress",
+    "tool_call_started",
+    "user_question",
+    "user_question_answered",
 }
 
 _REMOTE_SETTING_SECTIONS = (
@@ -618,9 +632,19 @@ def _public_intermediate_message(value: Any) -> dict[str, Any] | None:
             "kind",
             "status",
             "createdAt",
+            "liveDedupeKey",
+            "opensActivity",
         )
         if key in value
     }
+    if isinstance(value.get("attachments"), list):
+        result["attachments"] = [
+            summary
+            for item in value["attachments"]
+            if (summary := _attachment_summary(item)) is not None
+        ]
+    if isinstance(value.get("trace"), list):
+        result["trace"] = value["trace"]
     return result or None
 
 
@@ -634,11 +658,26 @@ def public_remote_event(event: dict[str, Any]) -> dict[str, Any] | None:
         "cursor": int(event.get("_seq") or 0),
         "run_id": str(event.get("runId") or ""),
     }
-    for key in ("chatId", "status", "code", "delta", "response", "message"):
+    for key in (
+        "chatId", "status", "code", "delta", "response", "message",
+        "phase", "provider", "tool_call_id", "tool", "label", "current",
+        "total", "progress", "failed", "from", "to", "detail",
+        "detail_key", "step", "note", "round_id",
+        "approved", "operation", "path_hint", "rationale", "agent_id",
+        "caller", "task", "mode", "outcome", "stop_reason", "result_preview",
+        "created_at", "updated_at", "message_count",
+    ):
         value = event.get(key)
         if isinstance(value, (str, int, float, bool)) or value is None:
             if key in event:
                 result[key] = value
+    for key in ("args", "detail_params", "plan"):
+        value = event.get(key)
+        if isinstance(value, (dict, list)):
+            # Tool arguments reach this point only after the runtime has
+            # redacted them. Their structure is needed for Workbench-equivalent
+            # labels on a paired controller.
+            result[key] = value
     if event_type == "awaiting_user":
         question = _public_pending_question(
             event.get("pending_question") or event.get("pendingQuestion")
@@ -884,8 +923,7 @@ def _chat_detail(chat: dict[str, Any]) -> dict[str, Any]:
             for item in raw.get("attachments") or []
             if (summary := _attachment_summary(item)) is not None
         ]
-        messages.append(
-            {
+        message = {
                 "id": str(raw.get("id") or ""),
                 "role": str(raw.get("role") or ""),
                 "content": str(raw.get("content") or ""),
@@ -894,7 +932,15 @@ def _chat_detail(chat: dict[str, Any]) -> dict[str, Any]:
                 "question_kind": str(raw.get("questionKind") or ""),
                 "attachments": attachments,
             }
-        )
+        # Preserve the durable Workbench timeline. A paired mobile controller
+        # needs these fields to render saved activity cards and to replace its
+        # live runtime without losing tool history.
+        for key in ("activityCard", "intermediate", "model", "reasoning"):
+            if key in raw:
+                message[key] = raw[key]
+        if isinstance(raw.get("trace"), list):
+            message["trace"] = raw["trace"]
+        messages.append(message)
     return {
         **_chat_summary(chat),
         "messages": messages,
@@ -1362,6 +1408,8 @@ class RemoteCommandExecutor:
             return await self._attachments_read(project_id, payload)
         if command == "settings.read":
             return self._settings_read()
+        if command == "settings.models.copy":
+            return self._settings_models_copy(payload)
         if command == "settings.update":
             return self._settings_update(payload)
         if command == "settings.openai_oauth.read":
@@ -1571,6 +1619,69 @@ class RemoteCommandExecutor:
                 "version": 2,
                 "sections": [dict(section) for section in _REMOTE_SETTING_SECTIONS],
                 "fields": fields,
+            },
+        }
+
+    @staticmethod
+    def _settings_models_copy(payload: dict[str, Any]) -> dict[str, Any]:
+        """Return the complete model configuration over the paired E2EE channel.
+
+        This endpoint exists specifically for a trusted mobile controller that
+        performs Provider calls on-device. It exports API-compatible model
+        credentials, but never exports Codex OAuth tokens or unrelated secrets.
+        Access is gated by the existing ``settings:read`` peer grant.
+        """
+        if payload:
+            raise ValueError("settings.models.copy does not accept fields")
+        from cyrene.runtime.settings_store import (
+            get_codex_model,
+            get_custom_models,
+            get_model_source,
+            get_secondary_model,
+            get_vision_models,
+        )
+
+        def candidate(raw: Any) -> dict[str, Any] | None:
+            if not isinstance(raw, dict):
+                return None
+            model = str(raw.get("model") or raw.get("name") or "").strip()
+            if not model:
+                return None
+            provider = str(raw.get("provider") or "openai_compatible").strip()
+            result = {
+                "id": str(raw.get("id") or "").strip(),
+                "name": str(raw.get("name") or model).strip(),
+                "model": model,
+                "provider": provider,
+                "reasoning_effort": str(raw.get("reasoning_effort") or "").strip(),
+                "base_url": str(raw.get("base_url") or "").strip(),
+                "description": str(raw.get("desc") or raw.get("description") or "").strip(),
+                "context": str(raw.get("ctx") or raw.get("context") or "").strip(),
+                "price": str(raw.get("price") or "").strip(),
+            }
+            # OAuth credentials remain in the desktop provider. Only ordinary
+            # API keys, which the mobile Provider client can actually use, are
+            # copied to the Android Keystore-backed store.
+            if provider != "codex_oauth":
+                result["api_key"] = str(raw.get("api_key") or "").strip()
+            return result
+
+        custom = [item for raw in get_custom_models() or [] if (item := candidate(raw))]
+        vision = [item for raw in get_vision_models() or [] if (item := candidate(raw))]
+        codex = candidate(get_codex_model())
+        secondary = candidate(get_secondary_model())
+        if secondary is not None:
+            raw_secondary = get_secondary_model()
+            secondary["context_limit"] = int(raw_secondary.get("ctx_limit") or 0)
+            secondary["max_concurrency"] = int(raw_secondary.get("max_concurrency") or 0)
+        return {
+            "ok": True,
+            "models": {
+                "source": str(get_model_source() or "custom"),
+                "custom_models": custom,
+                "codex_model": codex,
+                "vision_models": vision,
+                "secondary_model": secondary,
             },
         }
 

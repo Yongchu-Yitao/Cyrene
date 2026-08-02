@@ -151,7 +151,7 @@ async def create_entity(
                 source_round_id,
                 confidence,
                 _serialize_dict(metadata),
-                str(project_id or "default"),
+                "default" if project_id is None else str(project_id),
             ),
         )
         await db.commit()
@@ -344,7 +344,7 @@ async def list_entities(
 
     if project_id is not None:
         query += " AND COALESCE(project_id, 'default') = ?"
-        params.append(project_id or "default")
+        params.append(project_id)
 
     query += " ORDER BY updated_at DESC LIMIT ?"
     params.append(limit)

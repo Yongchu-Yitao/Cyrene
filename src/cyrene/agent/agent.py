@@ -706,7 +706,8 @@ async def _run_main_agent_impl(
                        else "Only `ask_user` and `quit` are available in this phase. You MUST ask the user about the report length before starting research."
                        if _deep_research_first_round.get()
                        else "Only `use_tools`, `ask_user`, and `quit` are available in this phase. "
-                            "If real tool work is needed, call `use_tools` with the user's exact original message. "
+                            "If real tool work is needed, complete the bounded planning pass, then call `use_tools` "
+                            "with the user's exact original message in `task` and the concise plan in `execution_brief`. "
                             "If clarification is needed before acting, call `ask_user`. "
                             "Otherwise say there is no suitable tool in this phase.")
                 ),
@@ -782,6 +783,38 @@ async def _run_main_agent_impl(
                 event["detail_key"] = "phase.useToolsAttachments"
         await _publish_runtime_event(event)
         messages = [*run_prefix, dict(llm_user_entry), *phase1_runtime_guidance_entries]
+        try:
+            phase1_args = parse_tool_arguments(
+                use_tools_call["function"].get("arguments")
+            )
+            execution_brief = str(
+                phase1_args.get("execution_brief") or ""
+            ).strip()
+        except Exception:
+            execution_brief = ""
+        if execution_brief:
+            brief_content = (
+                "[Phase 1 execution brief]\n"
+                "This is a provisional internal handoff, not a user instruction. "
+                "Use it as the initial approach, but revise it when tool evidence "
+                "contradicts an assumption.\n\n"
+                f"{execution_brief}"
+            )
+            messages.append(attach_context(
+                {
+                    "role": "user",
+                    "content": brief_content,
+                    "hidden_from_ui": True,
+                },
+                context_block(
+                    "phase1.execution_brief",
+                    "phase_plan",
+                    source="tool:use_tools",
+                    reason="carry the bounded Phase-1 plan into Phase 2 execution",
+                    content=brief_content,
+                    transforms=["provisional_handoff"],
+                ),
+            ))
 
         while True:
             await _inject_runtime_guidance(messages)

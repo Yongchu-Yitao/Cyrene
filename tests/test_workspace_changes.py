@@ -58,6 +58,33 @@ def test_workspace_snapshot_ignores_git_and_detects_dotfiles(tmp_path):
     assert [item["path"] for item in changes] == [".editorconfig"]
 
 
+def test_workspace_snapshot_ignores_cyrene_managed_run_state(tmp_path):
+    from cyrene.workbench.workspace_changes import (
+        capture_workspace_snapshot,
+        compare_workspace_snapshots,
+        is_cyrene_managed_workspace_path,
+    )
+
+    before = capture_workspace_snapshot(tmp_path)
+    (tmp_path / "conversations").mkdir()
+    (tmp_path / "conversations" / "wbchat_1.md").write_text(
+        "# Conversation\n", encoding="utf-8"
+    )
+    (tmp_path / "plan").mkdir()
+    (tmp_path / "plan" / "plan_1.md").write_text("# Plan\n", encoding="utf-8")
+    user_file = tmp_path / "docs" / "conversations" / "notes.md"
+    user_file.parent.mkdir(parents=True)
+    user_file.write_text("keep tracking this\n", encoding="utf-8")
+    after = capture_workspace_snapshot(tmp_path)
+
+    assert is_cyrene_managed_workspace_path("conversations/wbchat_1.md") is True
+    assert is_cyrene_managed_workspace_path("plan/plan_1.md") is True
+    assert is_cyrene_managed_workspace_path("docs/conversations/notes.md") is False
+    assert [item["path"] for item in compare_workspace_snapshots(before, after)] == [
+        "docs/conversations/notes.md"
+    ]
+
+
 def test_workspace_diff_keeps_rows_separate_without_final_newline(tmp_path):
     from cyrene.workbench.workspace_changes import (
         capture_workspace_snapshot,
@@ -123,6 +150,87 @@ def test_change_store_keeps_diff_private_until_file_fetch(tmp_path):
     fetched = get_chat_file_change(db_path, "chat_1", "run_1", "app.py")
     assert fetched is not None
     assert "+new" in fetched["diff"]
+
+
+def test_change_store_hides_historical_cyrene_managed_records(tmp_path):
+    from cyrene.workbench.workspace_changes import (
+        _write_store,
+        get_chat_file_change,
+        list_chat_change_sets,
+    )
+
+    db_path = str(tmp_path / "cyrene.runtime.database")
+    mixed = {
+        "id": "run_mixed",
+        "chatId": "chat_1",
+        "runId": "run_mixed",
+        "completedAt": "2026-01-02T00:00:00+00:00",
+        "fileCount": 3,
+        "additions": 30,
+        "deletions": 0,
+        "files": [
+            {"path": "conversations/wbchat_1.md", "additions": 13, "deletions": 0, "diff": "+chat\n"},
+            {"path": "plan/plan_1.md", "additions": 7, "deletions": 0, "diff": "+plan\n"},
+            {"path": "src/app.py", "additions": 10, "deletions": 0, "diff": "+code\n"},
+        ],
+    }
+    internal_only = {
+        "id": "run_internal_only",
+        "chatId": "chat_2",
+        "runId": "run_internal_only",
+        "completedAt": "2026-01-02T00:00:00+00:00",
+        "fileCount": 1,
+        "additions": 13,
+        "deletions": 0,
+        "files": [{
+            "path": "conversations/wbchat_2.md",
+            "additions": 13,
+            "deletions": 0,
+            "diff": "+chat\n",
+        }],
+    }
+    _write_store(db_path, {"changeSets": [mixed, internal_only]})
+
+    listed = list_chat_change_sets(db_path, "chat_1")
+    assert len(listed) == 1
+    assert listed[0]["fileCount"] == 1
+    assert listed[0]["additions"] == 10
+    assert [item["path"] for item in listed[0]["files"]] == ["src/app.py"]
+    assert list_chat_change_sets(db_path, "chat_2") == []
+    assert get_chat_file_change(
+        db_path, "chat_1", "run_mixed", "conversations/wbchat_1.md"
+    ) is None
+
+
+def test_change_store_never_persists_new_cyrene_managed_records(tmp_path):
+    from cyrene.workbench.workspace_changes import _read_store, save_change_set
+
+    db_path = str(tmp_path / "cyrene.runtime.database")
+    ignored = save_change_set(db_path, {
+        "id": "run_internal",
+        "chatId": "chat_1",
+        "files": [{
+            "path": "conversations/wbchat_1.md",
+            "additions": 13,
+            "deletions": 0,
+        }],
+    })
+    assert ignored["fileCount"] == 0
+    assert _read_store(db_path)["changeSets"] == []
+
+    save_change_set(db_path, {
+        "id": "run_mixed",
+        "chatId": "chat_1",
+        "files": [
+            {"path": "plan/plan_1.md", "additions": 7, "deletions": 0},
+            {"path": "src/app.py", "additions": 2, "deletions": 1},
+        ],
+    })
+    stored = _read_store(db_path)["changeSets"][0]
+    assert stored["fileCount"] == 1
+    assert stored["additions"] == 2
+    assert stored["deletions"] == 1
+    assert [item["path"] for item in stored["files"]] == ["src/app.py"]
 
 
 def test_workspace_change_baselines_allow_overlapping_runs_in_same_workspace(tmp_path):

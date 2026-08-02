@@ -694,12 +694,18 @@ def _mark_user_activity(chat: dict[str, Any], timestamp: str) -> None:
 
 
 async def append_proactive_message(chat_id: str, text: str) -> dict[str, str] | None:
-    """Persist a proactive assistant reply in a Workbench public transcript."""
+    """Persist a proactive assistant reply in an existing public transcript.
+
+    Kept for compatibility with older callers. New scheduler deliveries use
+    :func:`create_proactive_chat` so autonomous work never lands in a user's
+    existing conversation session.
+    """
     from cyrene.observability import debug
+    from cyrene.agent.state import _sanitize_public_agent_text
 
     payload = _read_chats_store()
     chat = _find_chat(payload, str(chat_id or ""))
-    content = str(text or "").strip()
+    content = _sanitize_public_agent_text(text)
     if not chat or not content:
         return None
     now = _utc_now_iso()
@@ -730,6 +736,72 @@ async def append_proactive_message(chat_id: str, text: str) -> dict[str, str] | 
         "updated_at": now,
         "message": _public_message(message),
     })
+    return result
+
+
+async def create_proactive_chat(
+    project_id: str,
+    text: str,
+    *,
+    chat_id: str = "",
+    model: str = "",
+    source_chat_id: str = "",
+    lang: str = "",
+) -> dict[str, str] | None:
+    """Create a dedicated Workbench chat containing one proactive reply."""
+    from cyrene.agent.state import _sanitize_public_agent_text
+    from cyrene.observability import debug
+
+    content = _sanitize_public_agent_text(text)
+    project_id = str(project_id or "").strip()
+    if not project_id or not content:
+        return None
+
+    title = "Proactive work" if str(lang or "").lower() == "en" else "主动工作"
+    chat = _new_chat(project_id, title, str(model or ""))
+    if chat_id:
+        chat["id"] = str(chat_id)
+    chat["proactive"] = True
+    if source_chat_id:
+        chat["sourceChatId"] = str(source_chat_id)
+
+    now = _utc_now_iso()
+    message = {
+        "id": _short_id("msg"),
+        "role": "assistant",
+        "content": content,
+        "createdAt": now,
+        "model": str(model or ""),
+        "proactive": True,
+        "systemInitiated": True,
+    }
+    chat["messages"] = [message]
+    chat["updatedAt"] = now
+
+    payload = _read_chats_store()
+    payload.setdefault("chats", []).insert(0, chat)
+    _write_chats_store(payload)
+
+    result = {
+        "chat_id": str(chat["id"]),
+        "project_id": project_id,
+        "title": str(chat["title"]),
+    }
+    await debug.publish_event({
+        "type": "workbench_chat_changed",
+        "change": "created",
+        "session_id": result["chat_id"],
+        "chat_id": result["chat_id"],
+        "project_id": project_id,
+    }, session_id=result["chat_id"])
+    await debug.publish_event({
+        "type": "workbench_proactive_message",
+        "session_id": result["chat_id"],
+        "chat_id": result["chat_id"],
+        "project_id": project_id,
+        "updated_at": now,
+        "message": _public_message(message),
+    }, session_id=result["chat_id"])
     return result
 
 

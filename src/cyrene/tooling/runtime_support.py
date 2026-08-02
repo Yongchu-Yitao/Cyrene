@@ -231,7 +231,8 @@ async def _request_scope_elevation(
         operation: Human-readable description of the operation.
         reason: Why the agent needs to access this path.
         permission_kind: Meta field to identify the permission type.
-        options: Custom options for the question UI.
+        options: Compatibility input used only by confirmation prompts that
+            intentionally have stricter semantics than ordinary elevation.
     """
     from cyrene.agent.context import (
         consume_permission_elevation,
@@ -327,7 +328,13 @@ async def _request_scope_elevation(
     labels = get_session_labels(round_id)
     detail = f"\n📂 目标路径：{path_hint}" if path_hint else ""
     why = f"\n💡 原因：{reason}" if reason else ""
-    effective_options = options or ["允许这次", "拒绝"]
+    # Ordinary elevation always exposes the same three scopes. Confirmation
+    # prompts (for example an external upload) may intentionally be stricter.
+    effective_options = (
+        options
+        if requires_human_confirmation and options
+        else ["在本次会话同意", "同意一次", "拒绝"]
+    )
     meta = {
         "kind": permission_kind,
         "fingerprint": permission_fingerprint,
@@ -349,7 +356,7 @@ async def _request_scope_elevation(
         "round_title": labels.get("round_title", ""),
         "client_request_id": run_context.client_request_id.strip(),
         "options": effective_options,
-        "allow_custom": True,
+        "allow_custom": False,
         "meta": meta,
     })
     return _json_result({

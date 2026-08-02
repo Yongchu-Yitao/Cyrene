@@ -57,6 +57,7 @@ AGENTS.md
 .pytest_cache
 /.playwright-cli/
 .codex-audit/
+.codex-qa/
 
 # Tests
 tests*
@@ -89,3 +90,4 @@ gaia_*.json
 # Scripts and tools
 scripts/
 finetune/
+design-qa.md

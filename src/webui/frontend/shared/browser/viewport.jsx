@@ -67,7 +67,7 @@ function BrowserIcon({ name, size }) {
   return null;
 }
 
-function ElectronBrowserViewportPanel({ roundId, browserSessionId, onClose, browserState, zoomEnabled = true }) {
+function ElectronBrowserViewportPanel({ roundId, browserSessionId, onClose, browserState, desiredTabId, zoomEnabled = true, hideTabStrip = false, hideReload = false, hideMute = false, splitChrome = false }) {
   browserState = browserState || window.CyreneUI.require("data").state.browser;
   const bridge = window.cyrene && window.cyrene.browser;
   const electronSessionId = String(browserSessionId || (browserState && browserState.sessionId) || "").trim();
@@ -78,6 +78,9 @@ function ElectronBrowserViewportPanel({ roundId, browserSessionId, onClose, brow
   const lastBoundsRef = React.useRef("");
   const resizeEdgeHintActiveRef = React.useRef(false);
   const overlayObscuredRef = React.useRef(false);
+  const overlayPreviewTokenRef = React.useRef(0);
+  const overlayPreviewRef = React.useRef(null);
+  const splitEntranceTokenRef = React.useRef(0);
   const windowInteractionRef = React.useRef(false);
   const interactionPreviewTokenRef = React.useRef(0);
   const interactionPreviewMountedRef = React.useRef(false);
@@ -92,6 +95,8 @@ function ElectronBrowserViewportPanel({ roundId, browserSessionId, onClose, brow
   const [error, setError] = React.useState("");
   const [interactionPreview, setInteractionPreview] = React.useState(null);
   const [tabMenuPreview, setTabMenuPreview] = React.useState(null);
+  const [overlayPreview, setOverlayPreview] = React.useState(null);
+  const [splitEntrancePreview, setSplitEntrancePreview] = React.useState(null);
   const [tabContextMenu, setTabContextMenu] = React.useState(null);
 
   const active = state.activeTab || null;
@@ -170,6 +175,12 @@ function ElectronBrowserViewportPanel({ roundId, browserSessionId, onClose, brow
       borderRadius: borderRadius,
       pageCornerRadius: pageCornerRadius,
       zoomEnabled: zoomEnabled !== false,
+      // A PiP -> portal/maximized handoff remounts this renderer surface. The
+      // previous owner may have left Electron in a prepared (hidden) bounds
+      // transition after its event listeners unmounted. Every newly measured
+      // visible surface is authoritative, so let it cancel that stale state
+      // and reveal the existing WebContentsView immediately.
+      forceVisible: true,
       resizeEdgeHintColor: getComputedStyle(node).getPropertyValue("--wb-accent").trim() || "#63b38f",
       resizeEdgeHintActive: resizeEdgeHintActiveRef.current,
     };
@@ -198,6 +209,44 @@ function ElectronBrowserViewportPanel({ roundId, browserSessionId, onClose, brow
     boundsRafRef.current = requestAnimationFrame(function () {
       boundsRafRef.current = 0;
       sendBounds(true);
+    });
+  }
+
+  function restoreNativeAfterPreview() {
+    const node = surfaceRef.current;
+    if (!bridge || typeof bridge.setBounds !== "function" || !node) return Promise.resolve(false);
+    const rect = node.getBoundingClientRect();
+    const pipWindow = node.closest(".wbc-browser-window.pip");
+    const payload = {
+      sessionId: electronSessionId,
+      visible: true,
+      x: rect.left,
+      y: rect.top,
+      width: Math.max(0, rect.width),
+      height: Math.max(0, rect.height),
+      borderRadius: 0,
+      pageCornerRadius: pipWindow ? 8 : 0,
+      zoomEnabled: zoomEnabled !== false,
+      resizeEdgeHintColor: getComputedStyle(node).getPropertyValue("--wb-accent").trim() || "#63b38f",
+      resizeEdgeHintActive: resizeEdgeHintActiveRef.current,
+    };
+    lastBoundsRef.current = "";
+    // Warm the compositor at the target size while the renderer snapshot is
+    // still visible. Commit resolves only after Electron has observed a live
+    // frame, so removing the snapshot cannot expose a transient white surface.
+    return bridge.setBounds({ ...payload, transition: "prepare" }).then(function (prepared) {
+      if (prepared && prepared.transitionPrepared) {
+        return bridge.setBounds({ ...payload, transition: "commit" });
+      }
+      return bridge.setBounds({ ...payload, forceVisible: true });
+    }).then(function () {
+      lastBoundsRef.current = "";
+      return true;
+    }).catch(function () {
+      return bridge.setBounds({ ...payload, forceVisible: true }).then(function () {
+        lastBoundsRef.current = "";
+        return true;
+      }).catch(function () { return false; });
     });
   }
 
@@ -446,34 +495,180 @@ function ElectronBrowserViewportPanel({ roundId, browserSessionId, onClose, brow
   }
 
   React.useEffect(function () {
-    scheduleBounds();
     const node = hostRef.current;
+    const rootNode = node && node.closest ? node.closest(".browser-view.native") : null;
+    const splitMotion = node && node.closest ? node.closest(".wbc-side-agent-split-motion") : null;
     const surface = surfaceRef.current;
-    const ro = typeof ResizeObserver !== "undefined" && node ? new ResizeObserver(scheduleBounds) : null;
+    let splitEntranceTimer = 0;
+    let splitEntranceActive = !!splitMotion;
+    const splitEntranceToken = splitEntranceTokenRef.current + 1;
+    splitEntranceTokenRef.current = splitEntranceToken;
+    const ro = typeof ResizeObserver !== "undefined" && node ? new ResizeObserver(function () {
+      if (!splitEntranceActive) scheduleBounds();
+    }) : null;
     if (ro && node) ro.observe(node);
     if (ro && surface) ro.observe(surface);
+
+    // WebContentsView is composed outside the renderer and cannot inherit the
+    // split card's transform. Following that transform with IPC bounds updates
+    // produces a visibly stepped page. Keep one captured frame inside the
+    // animated card, hide the native view during the slide, then attach it once
+    // at the final rectangle.
+    if (splitMotion) {
+      windowInteractionRef.current = true;
+      if (bridge && typeof bridge.screenshot === "function") {
+        bridge.screenshot({
+          sessionId: electronSessionId,
+          highResolution: false,
+          targetWidth: 0,
+          targetHeight: 0,
+        }).then(function (result) {
+          if (splitEntranceTokenRef.current !== splitEntranceToken) return;
+          if (!result || result.ok === false || !result.pngBase64) return;
+          const src = "data:image/png;base64," + result.pngBase64;
+          const decodedImage = new Image();
+          decodedImage.src = src;
+          const decoded = typeof decodedImage.decode === "function"
+            ? decodedImage.decode().catch(function () {})
+            : Promise.resolve();
+          Promise.resolve(decoded).then(function () {
+            if (splitEntranceTokenRef.current !== splitEntranceToken) return;
+            const mountPreview = function () { setSplitEntrancePreview({ token: splitEntranceToken, src: src }); };
+            if (window.ReactDOM && typeof window.ReactDOM.flushSync === "function") {
+              window.ReactDOM.flushSync(mountPreview);
+            } else {
+              mountPreview();
+            }
+            requestAnimationFrame(function () {
+              requestAnimationFrame(function () {
+                if (splitEntranceTokenRef.current !== splitEntranceToken) return;
+                if (bridge && typeof bridge.setBounds === "function") {
+                  bridge.setBounds({ sessionId: electronSessionId, visible: false }).catch(function () {});
+                }
+              });
+            });
+          });
+        }).catch(function () {});
+      }
+      splitEntranceTimer = setTimeout(function () {
+        if (splitEntranceTokenRef.current !== splitEntranceToken) return;
+        splitEntranceActive = false;
+        splitEntranceTokenRef.current += 1;
+        windowInteractionRef.current = false;
+        lastBoundsRef.current = "";
+        Promise.resolve(restoreNativeAfterPreview()).finally(function () {
+          requestAnimationFrame(function () {
+            requestAnimationFrame(function () { setSplitEntrancePreview(null); });
+          });
+        });
+      }, 540);
+    } else {
+      splitEntranceActive = false;
+      scheduleBounds();
+    }
     window.addEventListener("resize", scheduleBounds);
     return function () {
       if (boundsRafRef.current) cancelAnimationFrame(boundsRafRef.current);
+      if (splitEntranceTimer) clearTimeout(splitEntranceTimer);
+      splitEntranceActive = false;
+      if (splitEntranceTokenRef.current === splitEntranceToken) splitEntranceTokenRef.current += 1;
+      windowInteractionRef.current = false;
       if (ro) ro.disconnect();
       window.removeEventListener("resize", scheduleBounds);
-      sendBounds(false);
+      // PiP and split view hand the same native WebContentsView to each other.
+      // Delay hiding by one frame and skip it when the replacement surface is
+      // already mounted, otherwise the old owner can blank the new view.
+      requestAnimationFrame(function () {
+        var replacement = Array.prototype.slice.call(document.querySelectorAll(".browser-view.native[data-browser-session-id]")).some(function (candidate) {
+          return candidate !== rootNode
+            && String(candidate.getAttribute("data-browser-session-id") || "") === electronSessionId;
+        });
+        if (!replacement) sendBounds(false);
+      });
     };
   }, [electronSessionId]);
 
   React.useEffect(function () {
     function onBrowserObscured(event) {
-      const obscured = !!(event && event.detail && event.detail.obscured);
-      overlayObscuredRef.current = obscured;
+      const detail = event && event.detail || {};
+      const targetSessionId = String(detail.sessionId || "");
+      if (targetSessionId && targetSessionId !== electronSessionId) return;
+      const obscured = !!detail.obscured;
+      const previewRequested = obscured && detail.preview === true;
+      const token = overlayPreviewTokenRef.current + 1;
+      overlayPreviewTokenRef.current = token;
       if (obscured) {
         if (boundsRafRef.current) {
           cancelAnimationFrame(boundsRafRef.current);
           boundsRafRef.current = 0;
         }
-        sendBounds(false);
-      } else {
-        scheduleBounds();
+        if (!previewRequested || !bridge || typeof bridge.screenshot !== "function") {
+          overlayObscuredRef.current = true;
+          sendBounds(false).finally(function () {
+            if (typeof detail.onReady === "function") detail.onReady();
+          });
+          return;
+        }
+        // Native WebContentsView is always above renderer DOM. Capture its
+        // current frame, mount that frame in the renderer, and only then hide
+        // the native view. The dropdown can now sit above the page without the
+        // browser body flashing white.
+        bridge.screenshot({
+          sessionId: electronSessionId,
+          highResolution: false,
+          targetWidth: 0,
+          targetHeight: 0,
+        }).then(function (result) {
+          if (overlayPreviewTokenRef.current !== token) return;
+          if (!result || result.ok === false || !result.pngBase64) throw new Error("capture failed");
+          const src = "data:image/png;base64," + result.pngBase64;
+          const decodedImage = new Image();
+          decodedImage.src = src;
+          const decoded = typeof decodedImage.decode === "function"
+            ? decodedImage.decode().catch(function () {})
+            : Promise.resolve();
+          return Promise.resolve(decoded).then(function () {
+            if (overlayPreviewTokenRef.current !== token) return;
+            const mountPreview = function () {
+              const preview = { token: token, src: src };
+              overlayPreviewRef.current = preview;
+              setOverlayPreview(preview);
+            };
+            if (window.ReactDOM && typeof window.ReactDOM.flushSync === "function") {
+              window.ReactDOM.flushSync(mountPreview);
+            } else {
+              mountPreview();
+            }
+            requestAnimationFrame(function () {
+              requestAnimationFrame(function () {
+                if (overlayPreviewTokenRef.current !== token) return;
+                overlayObscuredRef.current = true;
+                sendBounds(false).finally(function () {
+                  if (overlayPreviewTokenRef.current === token && typeof detail.onReady === "function") detail.onReady();
+                });
+              });
+            });
+          });
+        }).catch(function () {
+          if (overlayPreviewTokenRef.current !== token) return;
+          overlayObscuredRef.current = true;
+          sendBounds(false).finally(function () {
+            if (overlayPreviewTokenRef.current === token && typeof detail.onReady === "function") detail.onReady();
+          });
+        });
+        return;
       }
+      overlayObscuredRef.current = false;
+      Promise.resolve(overlayPreviewRef.current ? restoreNativeAfterPreview() : sendBounds(true)).finally(function () {
+        requestAnimationFrame(function () {
+          requestAnimationFrame(function () {
+            if (overlayPreviewTokenRef.current === token) {
+              overlayPreviewRef.current = null;
+              setOverlayPreview(null);
+            }
+          });
+        });
+      });
     }
     window.addEventListener("workbench:browser-obscured", onBrowserObscured);
     return function () {
@@ -571,9 +766,9 @@ function ElectronBrowserViewportPanel({ roundId, browserSessionId, onClose, brow
       }
       bridge.screenshot({
         sessionId: electronSessionId,
-        // The source proxy is only ever shown at its current geometry. The
-        // separately prepared target proxy handles the new geometry, so a
-        // costly full-window high-resolution source capture is unnecessary.
+        // capturePage returns the current WebContentsView surface at its real
+        // compositor size. Supplying CDP target dimensions here produces a
+        // page-sized white canvas with a tiny viewport in the corner.
         highResolution: false,
         targetWidth: 0,
         targetHeight: 0,
@@ -624,6 +819,15 @@ function ElectronBrowserViewportPanel({ roundId, browserSessionId, onClose, brow
   React.useEffect(function () {
     scheduleBounds();
   }, [electronSessionId, state.activeTabId, tabs.length]);
+
+  React.useEffect(function () {
+    var targetId = String(desiredTabId || "");
+    if (!targetId || targetId === String(state.activeTabId || "") || !bridge || typeof bridge.activateTab !== "function") return;
+    if (!tabs.some(function (tab) { return String(tab.id || "") === targetId; })) return;
+    bridge.activateTab({ sessionId: electronSessionId, tabId: targetId }).then(function (next) {
+      if (next && next.ok !== false && Array.isArray(next.tabs)) setState(next);
+    }).catch(function () {});
+  }, [electronSessionId, desiredTabId, state.activeTabId, tabs.length]);
 
   function run(action) {
     setBusy(true);
@@ -702,8 +906,8 @@ function ElectronBrowserViewportPanel({ roundId, browserSessionId, onClose, brow
   }
 
   return (
-    <div className="browser-view native">
-      <div className="browser-tabs-strip">
+    <div className={"browser-view native" + (splitChrome ? " split-chrome" : "")} data-browser-session-id={electronSessionId}>
+      {!hideTabStrip && <div className="browser-tabs-strip">
         {tabs.map(function (tab) {
           return (
             <button key={tab.id} type="button" className={"browser-tab" + (tab.id === state.activeTabId ? " active" : "")} onClick={function () { run(function () { return bridge.activateTab({ sessionId: electronSessionId, tabId: tab.id }); }); }} onContextMenu={function (event) { openTabContextMenu(tab, event); }} title={(tab.title || tab.url || "Browser") + (tab.audible ? " · audible" : "")}>
@@ -721,7 +925,7 @@ function ElectronBrowserViewportPanel({ roundId, browserSessionId, onClose, brow
         })}
         <button type="button" className="browser-icon-btn" onClick={function () { createTab("about:blank"); }} title="New tab"><BrowserIcon name="plus" /></button>
         {onClose && <button type="button" className="browser-icon-btn" onClick={onClose} title="Close panel"><BrowserIcon name="close" /></button>}
-      </div>
+      </div>}
       {tabContextMenu && (
         <div className="wb-item-context-layer">
           <div className="wb-item-context-scrim" onPointerDown={closeTabContextMenu} />
@@ -748,15 +952,15 @@ function ElectronBrowserViewportPanel({ roundId, browserSessionId, onClose, brow
       <div className="browser-nav-bar">
         <button type="button" className="browser-icon-btn" disabled={!active || !active.canGoBack || busy} onClick={function () { run(function () { return bridge.goBack(electronSessionId); }); }} title="Back"><BrowserIcon name="back" /></button>
         <button type="button" className="browser-icon-btn" disabled={!active || !active.canGoForward || busy} onClick={function () { run(function () { return bridge.goForward(electronSessionId); }); }} title="Forward"><BrowserIcon name="forward" /></button>
-        <button type="button" className="browser-icon-btn" disabled={!active || busy} onClick={function () { run(function () { return bridge.reload(electronSessionId); }); }} title="Reload"><BrowserIcon name="reload" /></button>
+        {!hideReload && <button type="button" className="browser-icon-btn" disabled={!active || busy} onClick={function () { run(function () { return bridge.reload(electronSessionId); }); }} title="Reload"><BrowserIcon name="reload" /></button>}
         <input ref={addressRef} className="browser-address" value={address} onChange={function (e) { setAddress(e.target.value); }} onKeyDown={onAddressKeyDown} placeholder="https://example.com" />
         <button type="button" className="browser-icon-btn browser-go-btn" disabled={busy} onClick={navigate} title="Go"><BrowserIcon name="go" /></button>
-        <button type="button" className={"browser-icon-btn" + (active && active.muted ? " muted" : "")} disabled={!active} onClick={function () { run(function () { return bridge.setMuted({ sessionId: electronSessionId, muted: !(active && active.muted) }); }); }} title={active && active.muted ? "Unmute" : "Mute"}>
+        {!hideMute && <button type="button" className={"browser-icon-btn" + (active && active.muted ? " muted" : "")} disabled={!active} onClick={function () { run(function () { return bridge.setMuted({ sessionId: electronSessionId, muted: !(active && active.muted) }); }); }} title={active && active.muted ? "Unmute" : "Mute"}>
           <BrowserIcon name={active && active.muted ? "muted" : "volume"} />
-        </button>
+        </button>}
       </div>
       {error && <div className="browser-error">{error}</div>}
-      <div ref={hostRef} className={"browser-native-host" + (interactionPreview || tabMenuPreview ? " is-previewing" : "")}>
+      <div ref={hostRef} className={"browser-native-host" + (interactionPreview || tabMenuPreview || overlayPreview || splitEntrancePreview ? " is-previewing" : "")}>
         <div ref={surfaceRef} className="browser-native-surface">
           {interactionPreview && (
             <img
@@ -774,6 +978,22 @@ function ElectronBrowserViewportPanel({ roundId, browserSessionId, onClose, brow
               src={tabMenuPreview.src}
               onLoad={onTabMenuPreviewLoad}
               onError={onTabMenuPreviewError}
+              alt=""
+              aria-hidden="true"
+            />
+          )}
+          {overlayPreview && (
+            <img
+              className="browser-native-preview"
+              src={overlayPreview.src}
+              alt=""
+              aria-hidden="true"
+            />
+          )}
+          {splitEntrancePreview && (
+            <img
+              className="browser-native-preview"
+              src={splitEntrancePreview.src}
               alt=""
               aria-hidden="true"
             />
@@ -1215,4 +1435,5 @@ function ScreencastBrowserViewportPanel({ roundId, onClose, onTakeoverComplete, 
 
 window.CyreneUI.browser = window.CyreneUI.register("browser", {
   ViewportPanel: BrowserViewportPanel,
+  Icon: BrowserIcon,
 });

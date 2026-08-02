@@ -1562,6 +1562,33 @@ def test_workbench_file_changes_reject_paths_outside_workspace(tmp_path):
     assert traversal == []
 
 
+def test_workbench_file_changes_reject_cyrene_managed_run_state(tmp_path):
+    from cyrene.workbench.runtime import (
+        _workbench_file_changes_from_tool_event,
+        _workbench_git_status_delta,
+        _workbench_workspace_file_snapshot,
+        _workbench_workspace_text_snapshot,
+    )
+
+    (tmp_path / "conversations").mkdir()
+    (tmp_path / "conversations" / "wbchat_1.md").write_text("chat\n", encoding="utf-8")
+    (tmp_path / "plan").mkdir()
+    (tmp_path / "plan" / "plan_1.md").write_text("plan\n", encoding="utf-8")
+    (tmp_path / "app.py").write_text("print('ok')\n", encoding="utf-8")
+
+    assert _workbench_file_changes_from_tool_event(
+        {"tool": "Write", "args": {"path": "conversations/wbchat_1.md"}, "result": ""},
+        tmp_path,
+    ) == []
+    assert _workbench_git_status_delta(
+        {},
+        {"conversations/wbchat_1.md": "??", "plan/plan_1.md": "??", "app.py": "??"},
+        tmp_path,
+    )[0]["path"] == "app.py"
+    assert set(_workbench_workspace_file_snapshot(tmp_path)) == {"app.py"}
+    assert set(_workbench_workspace_text_snapshot(tmp_path)) == {"app.py"}
+
+
 def test_workbench_git_status_snapshot_is_scoped_to_nested_workspace(tmp_path):
     from cyrene.workbench.runtime import _workbench_git_status_snapshot
 

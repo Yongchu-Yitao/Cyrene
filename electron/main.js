@@ -494,6 +494,7 @@ function browserPageSignal(url, title, text) {
 // Click coordinates are CSS pixels while sendInputEvent uses DIP pixels, so
 // every input event converts them with the current zoom factor.
 const PAGE_CSS_TARGET_WIDTH = 1100;
+const PAGE_CSS_MAX_FIT_WIDTH = 1920;
 const PAGE_MIN_ZOOM = 0.1;
 
 const BROWSER_VISIBLE_ELEMENTS_SCRIPT = `
@@ -1589,27 +1590,67 @@ class BrowserTabManager {
     if (!zoomEnabled || dipWidth <= 0 || dipWidth >= PAGE_CSS_TARGET_WIDTH) {
       if (isCurrent()) {
         try { wc.setZoomFactor(1); } catch (_) {}
+        wc.executeJavaScript(`(() => {
+          document.documentElement.removeAttribute('data-cyrene-pip-fit-width');
+          return true;
+        })()`, true).catch(() => {});
       }
       return 1;
     }
-    // Chromium quantizes zoom requests to discrete levels. Never feed a
-    // transient innerWidth back into another zoom request: during a native
-    // bounds transition that viewport can briefly describe the clipped
-    // staging surface, causing each correction to amplify the previous one
-    // until the page reaches the maximum zoom. One deterministic request is
-    // stable; pageZoomOf derives the actual quantized factor afterwards.
+    // Chromium quantizes zoom requests to discrete levels. Bias the single
+    // request one zoom step below the mathematical fit so quantization can
+    // never choose a larger factor that clips the right edge. Do not perform a
+    // visible second-pass correction: changing zoom twice is perceived as a
+    // flash in PiP, especially immediately after a split/maximized handoff.
     const fast = options && options.fast === true;
     const waitMs = fast ? 40 : 140;
-    const request = dipWidth / PAGE_CSS_TARGET_WIDTH;
+    let pageLayoutWidth = PAGE_CSS_TARGET_WIDTH;
+    try {
+      const measuredLayoutWidth = Number(await wc.executeJavaScript(`(() => {
+        const root = document.documentElement;
+        const body = document.body;
+        return Math.max(
+          window.innerWidth || 0,
+          root ? root.scrollWidth : 0,
+          body ? body.scrollWidth : 0
+        );
+      })()`, true)) || 0;
+      pageLayoutWidth = Math.min(
+        PAGE_CSS_MAX_FIT_WIDTH,
+        Math.max(PAGE_CSS_TARGET_WIDTH, measuredLayoutWidth)
+      );
+    } catch (_) {}
+    if (!isCurrent()) return 1;
+    const request = Math.max(PAGE_MIN_ZOOM, (dipWidth / pageLayoutWidth) / 1.2);
     let actual = request;
     try {
       if (!isCurrent()) return actual;
       wc.setZoomFactor(request);
+      wc.executeJavaScript(`(() => {
+        let style = document.querySelector('style[data-cyrene-pip-fit-width-style]');
+        if (!style) {
+          style = document.createElement('style');
+          style.setAttribute('data-cyrene-pip-fit-width-style', '');
+          style.textContent =
+            'html[data-cyrene-pip-fit-width], ' +
+            'html[data-cyrene-pip-fit-width] body {' +
+            'overflow-x: hidden !important;' +
+            'overscroll-behavior-x: none !important;' +
+            '}';
+          (document.head || document.documentElement).appendChild(style);
+        }
+        document.documentElement.setAttribute('data-cyrene-pip-fit-width', '');
+        const scrolling = document.scrollingElement || document.documentElement;
+        if (scrolling && scrolling.scrollLeft) scrolling.scrollLeft = 0;
+        return true;
+      })()`, true).catch(() => {});
       await new Promise((resolve) => setTimeout(resolve, waitMs));
       if (!isCurrent()) return actual;
       const innerW = Number(await wc.executeJavaScript('window.innerWidth')) || 0;
       if (!isCurrent()) return actual;
-      if (innerW > 0) actual = dipWidth / innerW;
+      if (innerW > 0) {
+        actual = dipWidth / innerW;
+      }
     } catch (_) {}
     return actual;
   }
@@ -1637,12 +1678,15 @@ class BrowserTabManager {
     let expectedWidth = target.width;
     let expectedHeight = target.height;
     let widthTolerance = 2;
+    let fitWidth = false;
     if (zoom < 1) {
       expectedWidth = PAGE_CSS_TARGET_WIDTH;
       // Chromium applies zoom in discrete steps; depending on the exact PiP
-      // width the nearest stable desktop viewport can differ by roughly 4%.
-      // Accept that quantization instead of trying to correct it recursively.
-      widthTolerance = Math.ceil(PAGE_CSS_TARGET_WIDTH * 0.05);
+      // width the next safe zoom step can expose up to ~20% extra CSS width.
+      // That is intentional: a fit-width surface may be wider than the target,
+      // but it must never be narrower and clip the page's right edge.
+      fitWidth = true;
+      widthTolerance = Math.ceil((PAGE_CSS_MAX_FIT_WIDTH * 1.2) - PAGE_CSS_TARGET_WIDTH);
       try {
         const innerW = Number(await view.webContents.executeJavaScript('window.innerWidth')) || 0;
         const applied = innerW > 0 ? target.width / innerW : zoom;
@@ -1659,8 +1703,12 @@ class BrowserTabManager {
         ),
         new Promise((resolve) => setTimeout(() => resolve(null), 80)),
       ]);
+      const viewportWidth = Number(viewport && viewport.width) || 0;
+      const widthMatches = fitWidth
+        ? viewportWidth >= expectedWidth - 2 && viewportWidth <= expectedWidth + widthTolerance
+        : Math.abs(viewportWidth - expectedWidth) <= widthTolerance;
       return !!viewport
-        && Math.abs((Number(viewport.width) || 0) - expectedWidth) <= widthTolerance
+        && widthMatches
         && Math.abs((Number(viewport.height) || 0) - expectedHeight) <= 2;
     } catch (_) {
       return false;
@@ -1985,6 +2033,14 @@ class BrowserTabManager {
     try { active.view.setVisible(false); } catch (_) {}
     try { active.view.setBounds(targetBounds); } catch (_) {}
     if (token !== this._boundsTransitionToken) return { ...this.state(), ok: false, error: 'Browser transition was superseded.' };
+    // A preview is optional polish, not permission to keep the live surface
+    // hidden. If capture fails, immediately recover the native view at the
+    // target bounds so fallback mode changes cannot strand a white panel.
+    if (!targetPngBase64) {
+      this._boundsTransitioning = false;
+      this.syncAttachedView();
+      this.repaintView(active);
+    }
     return {
       ...this.state(),
       ok: !!targetPngBase64,
@@ -2027,8 +2083,19 @@ class BrowserTabManager {
   }
 
   async settleBoundsTransition() {
-    const prepared = await this.prepareBoundsTransition();
-    if (!prepared || prepared.ok === false) return prepared || this.state();
+    let prepared;
+    try {
+      prepared = await this.prepareBoundsTransition();
+    } catch (error) {
+      this._boundsTransitioning = false;
+      this.syncAttachedView();
+      throw error;
+    }
+    if (!prepared || prepared.ok === false) {
+      this._boundsTransitioning = false;
+      this.syncAttachedView();
+      return prepared || this.state();
+    }
     return this.commitBoundsTransition();
   }
 
@@ -2059,6 +2126,12 @@ class BrowserTabManager {
     }
     const active = this.tabs.get(this.activeTabId);
     if (active) this.applyResizeEdgeHint(active.view);
+    // A newly mounted split surface is authoritative. It may arrive after a
+    // cancelled/failed PiP transition whose renderer never reached commit.
+    if (info.forceVisible === true && this._boundsTransitioning) {
+      this._boundsTransitionToken += 1;
+      this._boundsTransitioning = false;
+    }
     this.visible = info.visible === true && width > 8 && height > 8;
     // Preserve the in-app host geometry while a video owns the fullscreen
     // surface, but never let renderer layout churn resize the fullscreen View.
@@ -2073,7 +2146,11 @@ class BrowserTabManager {
       if (this._syncTimer) { clearTimeout(this._syncTimer); this._syncTimer = null; }
       this.syncAttachedView();
     } else if (info.transition === 'prepare') {
-      return this.prepareBoundsTransition();
+      return this.prepareBoundsTransition().catch((error) => {
+        this._boundsTransitioning = false;
+        this.syncAttachedView();
+        throw error;
+      });
     } else if (info.transition === 'commit') {
       return this.commitBoundsTransition();
     } else if (info.transition === true) {
@@ -2804,8 +2881,8 @@ class BrowserTabManager {
     return this.state();
   }
 
-  reload() {
-    const tab = this.tabs.get(this.activeTabId);
+  reload({ tabId = '' } = {}) {
+    const tab = tabId ? this.tabs.get(String(tabId)) : this.tabs.get(this.activeTabId);
     if (tab) tab.view.webContents.reload();
     this.emitState();
     return this.state();
@@ -3188,7 +3265,7 @@ async function handleBrowserRpc(method, args, context = {}) {
     case 'goForward':
       return manager.goForward();
     case 'reload':
-      return manager.reload();
+      return manager.reload(args || {});
     case 'setMuted':
       return manager.setMuted(args || {});
     case 'scroll':
@@ -4521,8 +4598,8 @@ if (!gotSingleInstanceLock) {
       return result;
     });
     ipcMain.handle('browser:reload', async (_event, info) => {
-      const result = await handleBrowserRpc('reload', {}, info || {});
-      getBrowserTabManager(browserRpcSessionId({}, info || {})).recordUserEvent('navigate', { payload: { action: 'reload' } });
+      const result = await handleBrowserRpc('reload', info || {}, info || {});
+      getBrowserTabManager(browserRpcSessionId(info || {}, info || {})).recordUserEvent('navigate', { payload: { action: 'reload', tabId: String(info && info.tabId || '') } });
       return result;
     });
     ipcMain.handle('browser:set-muted', (_event, info) => handleBrowserRpc('setMuted', info || {}, info || {}));

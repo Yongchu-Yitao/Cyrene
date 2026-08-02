@@ -51,14 +51,30 @@ _USE_TOOLS_DEF = {
     "function": {
         "name": "use_tools",
         "description": (
-            "Decision-phase gateway. Call this with the user's exact original "
-            "message when real tool work is required. In the execution phase it "
-            "is a no-op because tools are already enabled."
+            "Decision-phase gateway. Before calling it, perform a bounded "
+            "planning pass. Keep task equal to the user's exact original "
+            "message and provide a concise execution_brief so the execution "
+            "phase can start from the chosen approach. In the execution phase "
+            "this gateway is a no-op because tools are already enabled."
         ),
         "parameters": {
             "type": "object",
-            "properties": {"task": {"type": "string"}},
-            "required": ["task"],
+            "properties": {
+                "task": {
+                    "type": "string",
+                    "description": "The user's exact original message, unchanged.",
+                },
+                "execution_brief": {
+                    "type": "string",
+                    "description": (
+                        "Concise Phase-2 handoff: objective and acceptance "
+                        "evidence, constraints and assumptions, chosen approach, "
+                        "ordered initial steps/tools, validation, and material "
+                        "risks or fallbacks. Do not include private chain-of-thought."
+                    ),
+                },
+            },
+            "required": ["task", "execution_brief"],
             "additionalProperties": False,
         },
     },

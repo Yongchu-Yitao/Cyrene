@@ -175,6 +175,71 @@ async def test_phase2_prefix_matches_phase1():
     print("PASS: test_phase2_prefix_matches_phase1")
 
 
+async def test_phase1_execution_brief_is_handed_to_phase2():
+    """Phase 2 receives the concise plan produced by the decision phase."""
+    from cyrene import agent
+
+    llm_inputs = []
+    brief = (
+        "Objective: update the prompt. Steps: inspect the current contract, "
+        "edit the relevant prompt, then run focused tests. Validation: prompt "
+        "contract assertions and regression tests pass."
+    )
+    responses = iter([
+        {
+            "content": "",
+            "tool_calls": [{
+                "id": "u1",
+                "function": {
+                    "name": "use_tools",
+                    "arguments": json.dumps({
+                        "task": "improve the prompt",
+                        "execution_brief": brief,
+                    }),
+                },
+            }],
+        },
+        {
+            "content": "The prompt was updated and the focused checks passed.",
+            "tool_calls": [{
+                "id": "q1",
+                "function": {"name": "quit", "arguments": "{}"},
+            }],
+        },
+    ])
+
+    async def fake_call_llm(messages, tools=None, max_tokens=32000, **kwargs):
+        llm_inputs.append([dict(message) for message in messages])
+        return next(responses)
+
+    save_mock = AsyncMock()
+    _orig_llm = _patch(_agent_core, "_call_llm", fake_call_llm)
+    _orig_save = _patch(_agent_core, "_save_session_messages", save_mock)
+    try:
+        result = await agent._run_main_agent(
+            "improve the prompt", [], None, 0, "db.sqlite3"
+        )
+    finally:
+        _patch(_agent_core, "_call_llm", _orig_llm)
+        _patch(_agent_core, "_save_session_messages", _orig_save)
+
+    assert result == "The prompt was updated and the focused checks passed."
+    phase2_messages = llm_inputs[1]
+    handoff = next(
+        message
+        for message in phase2_messages
+        if "[Phase 1 execution brief]" in str(message.get("content") or "")
+    )
+    assert handoff["role"] == "user"
+    assert handoff["hidden_from_ui"] is True
+    assert brief in handoff["content"]
+    saved_messages = save_mock.await_args.args[0]
+    assert all(
+        "[Phase 1 execution brief]" not in str(message.get("content") or "")
+        for message in saved_messages
+    )
+
+
 async def test_first_round_phase1_uses_full_wire_tools():
     """First non-deep-research decision call uses the full wire tool set."""
     from cyrene import agent

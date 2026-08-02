@@ -1112,16 +1112,17 @@ async def run_heartbeat_agent(
             # assistant content.  Proactive rounds are forbidden from pausing,
             # but keep this delivery-boundary guard so a future tool regression
             # cannot leak the sentinel into a Workbench transcript or alert.
-            if reply == _state._AWAITING_USER_SENTINEL:
+            public_reply = _state._sanitize_public_agent_text(reply)
+            if reply and not public_reply:
                 logger.warning(
                     "Suppressing unexpected awaiting-user outcome from proactive round"
                 )
                 return ""
-            if reply and on_reply is not None:
-                delivered = await on_reply(reply)
+            if public_reply and on_reply is not None:
+                delivered = await on_reply(public_reply)
                 if delivered is None or delivered is False:
                     return ""
-            return reply
+            return public_reply
     finally:
         _active_workspace_dir.reset(workspace_token)
         _current_session_id.reset(session_token)

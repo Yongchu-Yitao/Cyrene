@@ -39,6 +39,22 @@ def test_main_agent_prompt_proactively_consults_knowledge_base():
     assert "`knowledge.library.search`" in _EXECUTION_SYSTEM_PROMPT
 
 
+def test_phase1_prompt_requires_bounded_plan_before_execution():
+    from cyrene.agent.prompts import _PHASE1_DECISION_PROMPT
+    from cyrene.agent.state import _LIGHT_TOOL_DEFS
+    from cyrene.tooling.wire import _USE_TOOLS_DEF
+
+    assert "bounded execution-planning pass" in _PHASE1_DECISION_PROMPT
+    assert "observable completion evidence" in _PHASE1_DECISION_PROMPT
+    assert "likely failure modes, and fallbacks" in _PHASE1_DECISION_PROMPT
+    assert "ordered initial steps/tools" in _PHASE1_DECISION_PROMPT
+    assert "Do not expose private chain-of-thought" in _PHASE1_DECISION_PROMPT
+    for tool_def in (_LIGHT_TOOL_DEFS[0], _USE_TOOLS_DEF):
+        parameters = tool_def["function"]["parameters"]
+        assert parameters["required"] == ["task", "execution_brief"]
+        assert "execution_brief" in parameters["properties"]
+
+
 def test_browser_prompts_prefer_visible_clicks_over_direct_url_navigation():
     from cyrene.agent.prompts import _EXECUTION_SYSTEM_PROMPT, _MAIN_AGENT_PROMPT
 

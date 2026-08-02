@@ -1839,6 +1839,38 @@ async def test_system_initiated_elevation_never_creates_pending_question(
     assert agent_session.get_pending_question() == {}
 
 
+async def test_permission_elevation_uses_scoped_choices_without_custom_answer(
+    tmp_path, monkeypatch
+):
+    from cyrene.agent import context as agent_context
+    from cyrene.agent import session as agent_session
+    from cyrene.tooling.runtime_support import _request_scope_elevation
+
+    _patch_state_file(monkeypatch, tmp_path / "state.json")
+    _patch_data_dir(monkeypatch, tmp_path)
+
+    with agent_context.bind_run_context(
+        round_id="round_permission_choices",
+        session_id="wbchat_permission_choices",
+        permission_mode="default",
+    ):
+        result = await _request_scope_elevation(
+            tool_name="Bash",
+            path_hint="",
+            operation="执行本地进程或 Shell 命令",
+            permission_kind="process_execution",
+            options=["旧的工具自定义选项", "拒绝"],
+        )
+        pending = agent_session.get_pending_question()
+    assert json.loads(result)["status"] == "awaiting_user"
+    assert [option["label"] for option in pending["options"]] == [
+        "在本次会话同意",
+        "同意一次",
+        "拒绝",
+    ]
+    assert pending["allow_custom"] is False
+
+
 async def test_heartbeat_agent_suppresses_awaiting_user_sentinel(monkeypatch):
     from cyrene.agent import coordinator
 
@@ -1854,6 +1886,28 @@ async def test_heartbeat_agent_suppresses_awaiting_user_sentinel(monkeypatch):
         0,
         "db.sqlite3",
         session_id="wbchat_sentinel_regression",
+        on_reply=on_reply,
+    )
+
+    assert result == ""
+    on_reply.assert_not_awaited()
+
+
+async def test_heartbeat_agent_strips_decorated_awaiting_user_sentinel(monkeypatch):
+    from cyrene.agent import coordinator
+
+    async def fake_run_chat_agent(*args, **kwargs):
+        return "**[[cyrene.awaiting_user]]**"
+
+    on_reply = AsyncMock()
+    monkeypatch.setattr(coordinator, "_run_chat_agent", fake_run_chat_agent)
+
+    result = await coordinator.run_heartbeat_agent(
+        "internal proactive instruction",
+        None,
+        0,
+        "db.sqlite3",
+        session_id="wbchat_decorated_sentinel_regression",
         on_reply=on_reply,
     )
 
@@ -2591,8 +2645,8 @@ async def test_answer_permission_question_is_hidden_from_context(monkeypatch, tm
             "text": "申请写入 workspace 外部路径",
             "round_id": "round_1",
             "client_request_id": "req_perm_1",
-            "allow_custom": True,
-            "options": [{"id": "option_1", "label": "仅这次允许"}, {"id": "option_2", "label": "保持仅限 workspace"}],
+            "allow_custom": False,
+            "options": [{"id": "option_1", "label": "在本次会话同意"}, {"id": "option_2", "label": "同意一次"}, {"id": "option_3", "label": "拒绝"}],
             "asked_at": "2026-05-19T03:00:00+00:00",
             "hidden_from_chat": True,
             "hide_answer_in_chat": True,
@@ -2643,7 +2697,7 @@ async def test_answer_permission_question_is_hidden_from_context(monkeypatch, tm
     try:
         result = await agent.answer_pending_question(
             "question_perm_1",
-            "仅这次允许",
+            "同意一次",
             None,
             0,
             "db.sqlite3",
@@ -2658,7 +2712,7 @@ async def test_answer_permission_question_is_hidden_from_context(monkeypatch, tm
     assert result == "继续完成后的最终答案"
     assert "pending_question" not in state
     assert seen["user_message"] == "[Internal permission decision received. Continue the same round using the system instruction above.]"
-    assert "仅这次允许" not in seen["user_message"]
+    assert "同意一次" not in seen["user_message"]
     assert "granted this exact write/delete permission request once" in seen["ephemeral_system"]
     assert "Permission kind: write_permission_request" in seen["ephemeral_system"]
     assert "Tool: Write" in seen["ephemeral_system"]

@@ -33,7 +33,9 @@ from cyrene.runtime.remote_control import (
 from cyrene.runtime.remote_commands import (
     RemoteCommandExecutor,
     RemoteControlRuntime,
+    _chat_detail,
     _json_response_payload,
+    public_remote_event,
 )
 from cyrene.runtime.remote_relay import CyreneRelayServer
 from cyrene.runtime.remote_pairing import (
@@ -960,6 +962,7 @@ def test_remote_executor_filters_projects_and_public_run_events(
         ]
         assert [event["type"] for event in events["events"]] == [
             "ack",
+            "reasoning_delta",
             "reply_done",
             "awaiting_user",
         ]
@@ -969,9 +972,10 @@ def test_remote_executor_filters_projects_and_public_run_events(
             "run_id": "run_shared",
             "chatId": "chat_shared",
         }
-        assert events["events"][1]["response"] == "public answer"
-        assert "debug" not in events["events"][1]
-        assert events["events"][2]["pending_question"] == {
+        assert events["events"][1]["delta"] == "private chain"
+        assert events["events"][2]["response"] == "public answer"
+        assert "debug" not in events["events"][2]
+        assert events["events"][3]["pending_question"] == {
             "id": "question_1",
             "text": "Allow once?",
             "options": ["Allow", "Deny"],
@@ -2387,3 +2391,89 @@ def test_remote_relay_requires_tls_except_on_localhost():
         WebSocketRemoteRelay("ws://relay.example.test/v1")
     WebSocketRemoteRelay("wss://relay.example.test/v1")
     WebSocketRemoteRelay("ws://127.0.0.1:9876")
+
+
+def test_mobile_model_copy_exports_api_key_but_never_codex_oauth(monkeypatch):
+    monkeypatch.setattr(
+        "cyrene.runtime.settings_store.get_custom_models",
+        lambda: [{
+            "id": "deepseek",
+            "name": "DeepSeek",
+            "model": "deepseek-chat",
+            "provider": "openai_compatible",
+            "base_url": "https://api.deepseek.com",
+            "api_key": "mobile-copy-key",
+        }],
+    )
+    monkeypatch.setattr(
+        "cyrene.runtime.settings_store.get_codex_model",
+        lambda: {
+            "id": "codex",
+            "model": "gpt-codex",
+            "provider": "codex_oauth",
+            "api_key": "must-not-leave-desktop",
+        },
+    )
+    monkeypatch.setattr("cyrene.runtime.settings_store.get_model_source", lambda: "custom")
+    monkeypatch.setattr("cyrene.runtime.settings_store.get_secondary_model", lambda: {})
+    monkeypatch.setattr("cyrene.runtime.settings_store.get_vision_models", lambda: [])
+
+    copied = RemoteCommandExecutor._settings_models_copy({})["models"]
+
+    assert copied["custom_models"][0]["api_key"] == "mobile-copy-key"
+    assert "api_key" not in copied["codex_model"]
+    assert "must-not-leave-desktop" not in str(copied)
+
+    with pytest.raises(ValueError, match="does not accept fields"):
+        RemoteCommandExecutor._settings_models_copy({"unexpected": True})
+
+
+def test_mobile_chat_contract_preserves_workbench_activity_timeline():
+    detail = _chat_detail({
+        "id": "chat_1",
+        "messages": [{
+            "id": "activity_1",
+            "role": "assistant",
+            "content": "",
+            "createdAt": "2026-08-02T08:00:00Z",
+            "activityCard": True,
+            "intermediate": True,
+            "reasoning": "Inspecting the repository",
+            "trace": [{"toolCallId": "call_1", "text": "read_file"}],
+        }],
+    })
+
+    message = detail["messages"][0]
+    assert message["activityCard"] is True
+    assert message["intermediate"] is True
+    assert message["reasoning"] == "Inspecting the repository"
+    assert message["trace"][0]["toolCallId"] == "call_1"
+
+
+def test_mobile_run_contract_exposes_workbench_reasoning_and_tool_lifecycle():
+    reasoning = public_remote_event({
+        "_seq": 3,
+        "type": "reasoning_delta",
+        "delta": "Checking",
+        "phase": "phase2",
+        "provider": "openai",
+    })
+    tool = public_remote_event({
+        "_seq": 4,
+        "type": "tool_call_started",
+        "tool_call_id": "call_1",
+        "tool": "read_file",
+        "args": {"path": "/workspace/app.py"},
+    })
+
+    assert reasoning == {
+        "type": "reasoning_delta",
+        "cursor": 3,
+        "run_id": "",
+        "delta": "Checking",
+        "phase": "phase2",
+        "provider": "openai",
+    }
+    assert tool["tool_call_id"] == "call_1"
+    assert tool["tool"] == "read_file"
+    assert tool["args"] == {"path": "/workspace/app.py"}

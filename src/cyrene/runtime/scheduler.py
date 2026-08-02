@@ -24,6 +24,7 @@ import logging
 import random
 import re as _re
 import time
+import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -327,6 +328,7 @@ def _latest_workbench_user_activity() -> dict[str, object] | None:
                 "chat_id": str(chat.get("id") or ""),
                 "project_id": str(chat.get("projectId") or ""),
                 "title": str(chat.get("title") or ""),
+                "model": str(chat.get("model") or ""),
                 "timestamp": timestamp,
             }
     return latest
@@ -905,9 +907,14 @@ async def _heartbeat_proactive_check(bot, db_path: str) -> None:
         )
         delivered_target = workbench_target
         if target_session_id:
-            append_proactive_message = importlib.import_module(
+            create_proactive_chat = importlib.import_module(
                 "cyrene.workbench.chat"
-            ).append_proactive_message
+            ).create_proactive_chat
+
+            # The latest user chat selects the project and workspace only. The
+            # autonomous run and its visible reply live in a fresh conversation
+            # session so they cannot mutate or pollute an existing transcript.
+            proactive_session_id = f"wbchat_{uuid.uuid4().hex[:10]}"
 
             workspace_dir = _workbench_workspace_dir_for_project(
                 str((workbench_target or {}).get("project_id") or "")
@@ -915,7 +922,14 @@ async def _heartbeat_proactive_check(bot, db_path: str) -> None:
 
             async def _persist_workbench_reply(reply: str) -> dict[str, str] | None:
                 nonlocal delivered_target
-                delivered_target = await append_proactive_message(target_session_id, reply)
+                delivered_target = await create_proactive_chat(
+                    str((workbench_target or {}).get("project_id") or ""),
+                    reply,
+                    chat_id=proactive_session_id,
+                    model=str((workbench_target or {}).get("model") or ""),
+                    source_chat_id=target_session_id,
+                    lang=proactive_lang,
+                )
                 return delivered_target
 
             text = await asyncio.wait_for(
@@ -924,7 +938,7 @@ async def _heartbeat_proactive_check(bot, db_path: str) -> None:
                     bot,
                     owner_id,
                     db_path,
-                    session_id=target_session_id,
+                    session_id=proactive_session_id,
                     on_reply=_persist_workbench_reply,
                     lang=proactive_lang,
                     workspace_dir=workspace_dir,
