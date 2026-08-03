@@ -745,7 +745,7 @@ def test_workbench_side_question_panel_renders_only_the_question_list():
     assert 'className="wbc-side-agent-list"' in panel
     assert "items.map(function (agent, index)" in panel
     assert "<WbcSideAgentTab" not in panel
-    assert 'activeTab === "changes";' in source
+    assert "var flush = false;" in source
     assert 'activeTab === "changes" || activeTab === "side-agents"' not in source
     list_css = styles.split(".wbc-side-agent-list {", 1)[1].split("}", 1)[0]
     assert "flex-direction: column;" in list_css
@@ -863,7 +863,8 @@ def test_workbench_changes_panel_is_list_only_and_opens_shared_diff_split():
         "function WbcSideAgentSplitHost", 1
     )[0]
 
-    assert 'className="wbc-changes-files"' in changes_tab
+    assert 'className="wbc-resource-list wbc-changes-files"' in changes_tab
+    assert 'className={"wbc-resource-list-row wbc-change-file " + item.changeType}' in changes_tab
     assert "if (onSelectChange) onSelectChange({ chatId: chatId" in changes_tab
     assert 'className="wbc-change-diff"' not in changes_tab
     assert "WorkbenchChatModel.getChangeDiff" not in changes_tab
@@ -1109,6 +1110,49 @@ def test_remote_chat_refresh_and_notification_navigation_use_the_latest_project(
     assert "var requestedProjectId = projectId;" not in refresh
     assert "refreshChats(targetId);" in navigation
     assert 'refreshChats("");' in remote_events
+
+
+def test_background_chat_refresh_never_overwrites_a_newer_selection():
+    root = Path(__file__).resolve().parent.parent
+    source = (root / "src" / "webui" / "frontend" / "workbench-chat.jsx").read_text(
+        encoding="utf-8"
+    )
+    helper_source = "function wbcResolveRefreshedChatSelection(" + source.split(
+        "function wbcResolveRefreshedChatSelection(", 1
+    )[1].split("function WorkbenchChatPage", 1)[0]
+    script = f"""
+eval({json.dumps(helper_source)});
+const chats = [{{ id: "old" }}, {{ id: "other" }}];
+const result = {{
+  selectionChangedDuringRequest: wbcResolveRefreshedChatSelection(chats, "", "old", "new"),
+  unchangedSelectionStillPresent: wbcResolveRefreshedChatSelection(chats, "", "old", "old"),
+  unchangedSelectionWasDeleted: wbcResolveRefreshedChatSelection([{{ id: "other" }}], "", "old", "old"),
+  explicitSelection: wbcResolveRefreshedChatSelection(chats, "other", "old", "new"),
+  missingExplicitSelection: wbcResolveRefreshedChatSelection(chats, "missing", "old", "new")
+}};
+process.stdout.write(JSON.stringify(result));
+"""
+    completed = subprocess.run(["node", "-e", script], check=True, capture_output=True, text=True)
+    result = json.loads(completed.stdout)
+
+    assert result == {
+        "selectionChangedDuringRequest": None,
+        "unchangedSelectionStillPresent": None,
+        "unchangedSelectionWasDeleted": "other",
+        "explicitSelection": "other",
+        "missingExplicitSelection": "old",
+    }
+
+    refresh = source.split("  function refreshChats(selectId) {", 1)[1].split(
+        "\n  // Initial load + project switch.", 1
+    )[0]
+    create = source.split("  function handleCreateChat() {", 1)[1].split(
+        "\n  // The shell-level menu/shortcut", 1
+    )[0]
+    assert "var selectionAtRequest = String(activeChatIdRef.current || \"\");" in refresh
+    assert "wbcResolveRefreshedChatSelection(" in refresh
+    assert "if (targetId !== null) selectChat(targetId);" in refresh
+    assert "selectChat(chat.id);" in create
 
 
 def test_workbench_chat_has_long_conversation_navigation_and_bottom_return():

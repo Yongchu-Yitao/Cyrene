@@ -17258,27 +17258,20 @@ body.wb-col-resizing .wbc-side-card > .wb-col-resizer.card-edge::after {
   min-height: 0;
   display: flex;
   flex-direction: column;
-  background: var(--wb-right-bg);
+  background: transparent;
 }
 
-.wbc-changes-toolbar {
+.wbc-changes-run-picker {
   flex: 0 0 auto;
   display: flex;
   align-items: center;
-  gap: 8px;
-  min-height: 48px;
-  padding: 7px 12px;
-  border-bottom: 1px solid var(--wb-line);
-  background: color-mix(in srgb, var(--wb-control-bg) 32%, var(--wb-right-bg));
+  padding: 0 0 6px;
 }
 
-.wbc-changes-toolbar select {
-  flex: 0 1 168px;
-  width: 168px;
-  min-width: 142px;
-  max-width: 52%;
+.wbc-changes-run-picker select {
+  width: 100%;
+  min-width: 0;
   min-height: 30px;
-  margin-left: auto;
   border: 1px solid var(--wb-line);
   border-radius: 7px;
   background: var(--wb-control-bg);
@@ -17289,82 +17282,36 @@ body.wb-col-resizing .wbc-side-card > .wb-col-resizer.card-edge::after {
   transition: background-color 160ms ease, border-color 160ms ease, box-shadow 160ms ease;
 }
 
-.wbc-changes-toolbar select:hover {
+.wbc-changes-run-picker select:hover {
   border-color: color-mix(in srgb, var(--wb-text) 24%, var(--wb-line));
   background-color: var(--wb-control-hover-bg);
 }
 
-.wbc-changes-toolbar select:focus {
+.wbc-changes-run-picker select:focus {
   outline: none !important;
   border-color: color-mix(in srgb, var(--wb-text) 28%, var(--wb-line)) !important;
   box-shadow: none !important;
 }
 
-.wbc-changes-toolbar select:focus-visible {
+.wbc-changes-run-picker select:focus-visible {
   outline: none !important;
   border-color: color-mix(in srgb, var(--wb-text) 34%, var(--wb-line)) !important;
   box-shadow: 0 0 0 2px color-mix(in srgb, var(--wb-text) 12%, transparent) !important;
 }
 
-.wbc-changes-summary {
-  display: flex;
-  align-items: baseline;
-  gap: 5px;
-  color: var(--wb-muted);
-  font-size: calc(11px * var(--wb-ui-font-scale, 1));
-  font-variant-numeric: tabular-nums;
-  white-space: nowrap;
-}
-
-.wbc-changes-summary b {
-  color: var(--wb-text);
-  font-size: calc(14px * var(--wb-ui-font-scale, 1));
-  font-weight: 680;
-}
-.wbc-changes-summary i,
 .wbc-change-file-lines i,
 .wbc-change-file-lines em { font-style: normal; }
-.wbc-changes-summary .add,
 .wbc-change-file-lines i { color: var(--wb-green); }
-.wbc-changes-summary .del,
 .wbc-change-file-lines em { color: var(--wb-red); }
-.wbc-changes-summary .add { margin-left: 3px; }
 
 .wbc-changes-files {
   flex: 0 0 auto;
-  max-height: min(360px, 46vh);
-  overflow: auto;
-  padding: 4px 6px 8px;
-  background: transparent;
-  scrollbar-width: thin;
 }
 
 .wbc-change-file {
-  width: 100%;
-  min-width: 0;
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) auto auto;
-  align-items: center;
-  gap: 8px;
-  min-height: 46px;
-  padding: 7px 8px;
-  border: 0;
-  border-bottom: 1px solid color-mix(in srgb, var(--wb-line) 58%, transparent);
-  border-radius: 8px;
-  background: transparent;
   color: var(--wb-text);
-  text-align: left;
-  cursor: pointer;
-  transition: background-color 160ms ease, box-shadow 160ms ease;
 }
 
-.wbc-change-file:hover { background: var(--wb-control-hover-bg); }
-.wbc-change-file:focus-visible {
-  position: relative;
-  z-index: 1;
-  outline: 2px solid color-mix(in srgb, var(--wb-accent) 52%, transparent);
-  outline-offset: -2px;
-}
 .wbc-change-file-path {
   min-width: 0;
   overflow: hidden;
@@ -17377,8 +17324,8 @@ body.wb-col-resizing .wbc-side-card > .wb-col-resizer.card-edge::after {
 .wbc-change-file-status {
   display: inline-flex;
   align-items: center;
-  min-height: 20px;
-  padding: 1px 6px;
+  min-height: 18px;
+  padding: 1px 5px;
   border-radius: 999px;
   background: color-mix(in srgb, var(--wb-muted) 9%, transparent);
   color: var(--wb-muted);
@@ -17396,8 +17343,9 @@ body.wb-col-resizing .wbc-side-card > .wb-col-resizer.card-edge::after {
   color: color-mix(in srgb, var(--wb-red) 88%, var(--wb-text));
 }
 .wbc-change-file-lines {
-  display: flex;
+  display: inline-flex;
   gap: 5px;
+  margin-left: 7px;
   font-family: var(--wb-mono, ui-monospace, SFMono-Regular, Menlo, monospace);
   font-size: calc(10px * var(--wb-ui-font-scale, 1));
   font-variant-numeric: tabular-nums;

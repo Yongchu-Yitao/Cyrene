@@ -2300,6 +2300,25 @@ var WorkbenchChatRuntimes = (function () {
 // Page
 // ---------------------------------------------------------------------------
 
+function wbcResolveRefreshedChatSelection(list, selectId, selectionAtRequest, liveSelectionId) {
+  var chats = Array.isArray(list) ? list : [];
+  var requestedId = String(selectId || "");
+  var liveId = String(liveSelectionId || "");
+  if (requestedId) {
+    return chats.some(function (chat) { return String(chat.id || "") === requestedId; })
+      ? requestedId
+      : (chats[0] ? String(chats[0].id || "") : "");
+  }
+  // A list request can finish after the user selects or creates another chat.
+  // In that case its snapshot may predate the new chat, so it must not restore
+  // the selection that was current when the request started.
+  if (liveId !== String(selectionAtRequest || "")) return null;
+  if (liveId && chats.some(function (chat) { return String(chat.id || "") === liveId; })) {
+    return null;
+  }
+  return chats[0] ? String(chats[0].id || "") : "";
+}
+
 function WorkbenchChatPage({ active, project, newChatRequestId, onOpenTask, onActiveChatChange, onActiveChatIdChange, onChatsChange, pinnedChatIds, onTogglePinnedChat }) {
   window.CyreneUI.require("i18n").use();
   window.CyreneUI.require("data").useVersion();
@@ -2312,6 +2331,13 @@ function WorkbenchChatPage({ active, project, newChatRequestId, onOpenTask, onAc
   var chatsProjectIdRef = useWbcRef("");
   var [activeChatId, setActiveChatId] = useWbcState("");
   var activeChatIdRef = useWbcRef("");
+  function selectChat(chatId) {
+    var nextId = String(chatId || "");
+    // Publish selection intent immediately. Passive effects run too late to
+    // protect a newly-created chat from an already in-flight list refresh.
+    activeChatIdRef.current = nextId;
+    setActiveChatId(nextId);
+  }
   var [activeChat, setActiveChat] = useWbcState(null);
   var [loading, setLoading] = useWbcState(true);
   var [chatLoading, setChatLoading] = useWbcState(false);
@@ -2544,16 +2570,20 @@ function WorkbenchChatPage({ active, project, newChatRequestId, onOpenTask, onAc
     // not refresh the project that happened to be active at mount time.
     var requestedProjectId = String(projectIdRef.current || "");
     if (!requestedProjectId) return Promise.resolve([]);
+    var selectionAtRequest = String(activeChatIdRef.current || "");
     return model.listChats(requestedProjectId).then(function (list) {
       // A background run may finish after the user has switched projects.
       if (projectIdRef.current !== requestedProjectId) return list;
       chatCache.lists[requestedProjectId] = list;
       chatsProjectIdRef.current = requestedProjectId;
       setChats(list);
-      var targetId = selectId || activeChatIdRef.current;
-      var exists = list.some(function (c) { return c.id === targetId; });
-      if (!exists) targetId = list[0] ? list[0].id : "";
-      setActiveChatId(targetId);
+      var targetId = wbcResolveRefreshedChatSelection(
+        list,
+        selectId,
+        selectionAtRequest,
+        activeChatIdRef.current
+      );
+      if (targetId !== null) selectChat(targetId);
       return list;
     });
   }
@@ -2582,7 +2612,7 @@ function WorkbenchChatPage({ active, project, newChatRequestId, onOpenTask, onAc
           ? remembered
           : (list[0] ? list[0].id : ""));
       if (targetId === pendingChatId) pendingChatIdRef.current = pendingChatId;
-      setActiveChatId(targetId);
+      selectChat(targetId);
       setActiveChat(targetId && chatCache.details[targetId] ? chatCache.details[targetId] : null);
       return targetId;
     }
@@ -2594,7 +2624,7 @@ function WorkbenchChatPage({ active, project, newChatRequestId, onOpenTask, onAc
       chatsProjectIdRef.current = "";
       setChats([]);
       setActiveChat(null);
-      setActiveChatId("");
+      selectChat("");
     }
     model.listChats(requestedProjectId)
       .then(function (list) {
@@ -2617,7 +2647,7 @@ function WorkbenchChatPage({ active, project, newChatRequestId, onOpenTask, onAc
     var targetId = pendingChatIdRef.current;
     if (!targetId) return;
     if (Array.isArray(chats) && chats.some(function (c) { return c.id === targetId; })) {
-      setActiveChatId(targetId);
+      selectChat(targetId);
       pendingChatIdRef.current = "";
       window.CyreneUI.require("navigation").clearPending();
     }
@@ -2756,7 +2786,7 @@ function WorkbenchChatPage({ active, project, newChatRequestId, onOpenTask, onAc
         revealTopbarResource(targetId, topbarResource);
       } else {
         if (topbarResource) pendingTopbarResourceRef.current = { chatId: targetId, resource: topbarResource };
-        setActiveChatId(targetId);
+        selectChat(targetId);
       }
       navigation.clearPending(pending);
     } else {
@@ -2973,7 +3003,7 @@ function WorkbenchChatPage({ active, project, newChatRequestId, onOpenTask, onAc
       } catch (e) {}
       setChats(function (prev) { return [chat].concat(prev); });
       skipNextHydrationChatIdRef.current = chat.id;
-      setActiveChatId(chat.id);
+      selectChat(chat.id);
       setActiveChat(chat);
       return chat.id;
     });
@@ -2992,7 +3022,7 @@ function WorkbenchChatPage({ active, project, newChatRequestId, onOpenTask, onAc
           setChatLoading(false);
           return null;
         }
-        setActiveChatId(chatId);
+        selectChat(chatId);
         setLoadRevision(function (value) { return value + 1; });
         return null;
       })
@@ -3498,7 +3528,7 @@ function WorkbenchChatPage({ active, project, newChatRequestId, onOpenTask, onAc
       newChat = { ...newChat, permissionMode: replayMode };
       setChats(function (prev) { return [newChat].concat(prev); });
       skipNextHydrationChatIdRef.current = newChat.id;
-      setActiveChatId(newChat.id);
+      selectChat(newChat.id);
       setActiveChat(newChat);
       // Replay the edited user message (already the last entry in the forked
       // transcript) through the agent. forkReplay tells the server the state
@@ -3511,7 +3541,7 @@ function WorkbenchChatPage({ active, project, newChatRequestId, onOpenTask, onAc
     return model.createChat(projectId).then(function (chat) {
       setChats(function (prev) { return [chat].concat(prev); });
       skipNextHydrationChatIdRef.current = chat.id;
-      setActiveChatId(chat.id);
+      selectChat(chat.id);
       setActiveChat(chat);
     }).catch(function (err) { setError(wbcErrorText(err)); });
   }
@@ -3642,7 +3672,7 @@ function WorkbenchChatPage({ active, project, newChatRequestId, onOpenTask, onAc
         var next = prev
           .filter(function (item) { return item.id !== chatId; })
           .map(detachDeletedForkSource);
-        if (deletingActiveChat) setActiveChatId(next[0] ? next[0].id : "");
+        if (deletingActiveChat) selectChat(next[0] ? next[0].id : "");
         return next;
       });
       if (deletingActiveChat) setActiveChat(null);
@@ -3669,7 +3699,7 @@ function WorkbenchChatPage({ active, project, newChatRequestId, onOpenTask, onAc
           });
         }
         if (deletingActiveChat) {
-          setActiveChatId(chatId);
+          selectChat(chatId);
           setActiveChat(deletedActiveChat);
         } else if (
           previousActiveChat
@@ -3815,6 +3845,24 @@ function WorkbenchChatPage({ active, project, newChatRequestId, onOpenTask, onAc
   var splitSubagents = !!(splitResource && splitResource.type === "subagents");
   var splitDetailOpen = !!(splitSideAgent || splitArtifact || splitChange || splitViewer || splitMap || splitBrowserTabId || splitSubagents);
 
+  // The browser page is an Electron WebContentsView, so it does not
+  // participate in the renderer's grid layout. ResizeObserver normally keeps
+  // it aligned, but the split track can change both the surface's left edge
+  // and width in one committed grid update without producing a reliable
+  // observation on every macOS/Electron frame. Publish one authoritative
+  // layout pass after React has committed each split-width change. The browser
+  // viewport coalesces these notifications to one bounds IPC per animation
+  // frame, keeping drag resizing live without reintroducing resize flashing.
+  useWbcLayoutEffect(function () {
+    if (!splitDetailOpen) return undefined;
+    var frame = requestAnimationFrame(function () {
+      window.dispatchEvent(new CustomEvent("workbench:browser-layout", {
+        detail: { source: "side-split-resize", width: sideAgentSplitWidth },
+      }));
+    });
+    return function () { cancelAnimationFrame(frame); };
+  }, [splitDetailOpen, sideAgentSplitWidth, activeChatId]);
+
   function setActiveBrowserWindowMode(mode) {
     var chatId = String(activeChatId || "");
     if (!chatId) return;
@@ -3839,7 +3887,7 @@ function WorkbenchChatPage({ active, project, newChatRequestId, onOpenTask, onAc
         activeChatId={activeChatId}
         loading={loading}
         runningChatIds={runtimes}
-        onSelect={function (id) { setActiveChatId(id); }}
+        onSelect={selectChat}
         onCreate={handleCreateChat}
         onRename={handleRenameChat}
         onDelete={handleDeleteChat}
@@ -3874,7 +3922,7 @@ function WorkbenchChatPage({ active, project, newChatRequestId, onOpenTask, onAc
         onOpenDroppedChat={function (chatId) {
           if ((chatsRef.current || []).some(function (item) {
             return String(item && item.id || "") === String(chatId || "");
-          })) setActiveChatId(chatId);
+          })) selectChat(chatId);
         }}
         sideVisible={sideVisible}
         sidePanelTabExpanded={sideVisible && !!sideTab}
@@ -3933,7 +3981,7 @@ function WorkbenchChatPage({ active, project, newChatRequestId, onOpenTask, onAc
         chatDetailed={!!visibleChat}
         chats={chats}
         activeChatId={activeChatId}
-        onSelectChat={function (id) { setActiveChatId(id); }}
+        onSelectChat={selectChat}
         runtime={activeRuntime}
         subagentData={subagentData}
         subagentLoading={subagentLoading}
@@ -10161,7 +10209,7 @@ function WbcSide({
   }
   var activeTab = tabs.some(function (item) { return item.id === tab; }) ? tab : "";
   useWbcLiveChatMetrics(chat, !!runtime);
-  var flush = activeTab === "changes";
+  var flush = false;
   var sideTabMeta = {
     plan: pendingPlan && Array.isArray(pendingPlan.steps) && pendingPlan.steps.length
       ? pendingPlan.steps.filter(function (step) { return step.status === "completed"; }).length + "/" + pendingPlan.steps.length
@@ -10318,25 +10366,17 @@ function WbcChangesTab({ chatId, onSelectChange }) {
   var changeSets = Array.isArray(payload.changeSets) ? payload.changeSets : [];
   var selectedSet = changeSets.find(function (item) { return item.id === selectedSetId; }) || changeSets[0] || null;
   var files = selectedSet && Array.isArray(selectedSet.files) ? selectedSet.files : [];
-  var summary = selectedSet || payload;
-
   return (
     <div className="wbc-changes-tab">
-      <div className="wbc-changes-toolbar">
-        <div className="wbc-changes-summary">
-          <b>{summary.fileCount || 0}</b>
-          <span>{wbcT("workbenchChat.changes.files", "files")}</span>
-          <i className="add">+{summary.additions || 0}</i>
-          <i className="del">−{summary.deletions || 0}</i>
-        </div>
-        {changeSets.length > 1 && (
+      {changeSets.length > 1 && (
+        <div className="wbc-changes-run-picker">
           <select value={selectedSet ? selectedSet.id : ""} onChange={function (event) { setSelectedSetId(event.target.value); }}>
             {changeSets.map(function (item, index) {
               return <option value={item.id} key={item.id}>{index === 0 ? wbcT("workbenchChat.changes.latestRun", "Latest run") : wbcFormatTime(item.completedAt)}</option>;
             })}
           </select>
-        )}
-      </div>
+        </div>
+      )}
       {loading && !changeSets.length ? (
         <p className="workbench-muted wbc-changes-state">{wbcT("workbenchChat.changes.loading", "Loading changes...")}</p>
       ) : error ? (
@@ -10348,20 +10388,23 @@ function WbcChangesTab({ chatId, onSelectChange }) {
         </div>
       ) : (
         <React.Fragment>
-          <div className="wbc-changes-files">
+          <div className="wbc-resource-list wbc-changes-files">
             {files.map(function (item) {
               return (
                 <button
                   type="button"
                   key={item.id || item.path}
-                  className={"wbc-change-file " + item.changeType}
+                  className={"wbc-resource-list-row wbc-change-file " + item.changeType}
                   onClick={function () {
                     if (onSelectChange) onSelectChange({ chatId: chatId, setId: selectedSet.id, path: item.path, file: item, files: files });
                   }}
                 >
-                  <span className="wbc-change-file-path" title={item.path}>{item.path}</span>
-                  <small className="wbc-change-file-status">{wbcChangeTypeLabel(item.changeType)}</small>
-                  <span className="wbc-change-file-lines"><i>+{item.additions || 0}</i><em>−{item.deletions || 0}</em></span>
+                  <span className="wbc-resource-list-icon" aria-hidden="true">{WBC_SIDE_TAB_ICONS.changes}</span>
+                  <span className="wbc-resource-list-copy">
+                    <b className="wbc-change-file-path" title={item.path}>{item.path}</b>
+                    <small><span className="wbc-change-file-status">{wbcChangeTypeLabel(item.changeType)}</span><span className="wbc-change-file-lines"><i>+{item.additions || 0}</i><em>−{item.deletions || 0}</em></span></small>
+                  </span>
+                  <span className="wbc-resource-list-chevron" aria-hidden="true">{WBC_ICONS.chevronRight}</span>
                 </button>
               );
             })}
