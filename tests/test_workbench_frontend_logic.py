@@ -1143,6 +1143,72 @@ process.stdout.write(JSON.stringify(result));
         "missingExplicitSelection": "old",
     }
 
+
+def test_background_chat_completion_updates_detail_cache_before_runtime_is_cleared():
+    root = Path(__file__).resolve().parent.parent
+    source = (root / "src" / "webui" / "frontend" / "workbench-chat.jsx").read_text(
+        encoding="utf-8"
+    )
+
+    saved_hook = source.split(
+        "onAssistantSaved: function (chatId, assistantMessages) {", 1
+    )[1].split("onAwaitingUser:", 1)[0]
+    settled_hook = source.split("onSettled: function (chatId) {", 1)[1].split(
+        "onResync:", 1
+    )[0]
+    resync_hook = source.split("onResync: function (chatId) {", 1)[1].split(
+        "    });", 1
+    )[0]
+
+    assert "chatCache.details[chatId] = wbcMergeSavedAssistantMessages" in saved_hook
+    assert "chatCache.details[chatId] = chat;" in settled_hook
+    assert "chatCache.details[chatId] = chat;" in resync_hook
+
+
+def test_saved_assistant_messages_merge_reasoning_into_stale_background_chat():
+    root = Path(__file__).resolve().parent.parent
+    source = (root / "src" / "webui" / "frontend" / "workbench-chat.jsx").read_text(
+        encoding="utf-8"
+    )
+    merge_source = "function wbcMergeChronologicalMessages(" + source.split(
+        "function wbcMergeChronologicalMessages(", 1
+    )[1].split("function wbcRuntimeSegmentMessages", 1)[0]
+    confirm_source = "function wbcConfirmOptimisticMessage(" + source.split(
+        "function wbcConfirmOptimisticMessage(", 1
+    )[1].split("function wbcPreserveLiveTimelineAnchors", 1)[0]
+    script = f"""
+eval({json.dumps(confirm_source)});
+eval({json.dumps(merge_source)});
+const stale = {{
+  id: "background",
+  status: "running",
+  messages: [{{ id: "user_1", role: "user", content: "question", createdAt: "2026-01-01T00:00:00Z" }}]
+}};
+const saved = [{{
+  id: "assistant_1",
+  role: "assistant",
+  content: "answer",
+  thinking: "reasoning trace",
+  createdAt: "2026-01-01T00:00:01Z"
+}}];
+const first = wbcMergeSavedAssistantMessages(stale, saved);
+const second = wbcMergeSavedAssistantMessages(first, saved);
+process.stdout.write(JSON.stringify({{
+  status: second.status,
+  count: second.messages.length,
+  thinking: second.messages[1].thinking
+}}));
+"""
+    completed = subprocess.run(
+        ["node", "-e", script], check=True, capture_output=True, text=True
+    )
+
+    assert json.loads(completed.stdout) == {
+        "status": "idle",
+        "count": 2,
+        "thinking": "reasoning trace",
+    }
+
     refresh = source.split("  function refreshChats(selectId) {", 1)[1].split(
         "\n  // Initial load + project switch.", 1
     )[0]
@@ -1412,6 +1478,52 @@ def test_workbench_confirmed_user_turn_keeps_live_timeline_anchor():
         "ids": ["saved_user", "runtime_heartbeat_chat_1", "runtime_activity_1"],
         "createdAt": "2026-07-15T09:27:52.100Z",
         "serverCreatedAt": "2026-07-15T09:27:52.180000+00:00",
+    }
+
+
+def test_workbench_hydration_keeps_live_user_turn_before_runtime_placeholder():
+    result = _run_workbench_timeline_js(
+        """
+(() => {
+  const startedAt = Date.parse("2026-07-15T09:27:52.100Z");
+  const previous = {
+    messages: [{
+      id: "pending_user",
+      role: "user",
+      content: "你好",
+      createdAt: new Date(startedAt).toISOString(),
+      optimistic: true,
+      clientRequestId: "send_1"
+    }]
+  };
+  const hydrated = {
+    messages: [{
+      id: "saved_user",
+      role: "user",
+      content: "你好",
+      createdAt: "2026-07-15T09:27:56.000000+00:00",
+      clientRequestId: "send_1"
+    }]
+  };
+  const runtime = { chatId: "chat_1", startedAt, activities: [], clientRequestId: "send_1" };
+  const reconciled = wbcPreserveLiveTimelineAnchors(previous, hydrated, runtime);
+  const merged = wbcMergeChronologicalMessages(
+    reconciled.messages,
+    wbcRuntimeTimelineMessages(runtime)
+  );
+  return {
+    ids: merged.map(item => item.id),
+    createdAt: reconciled.messages[0].createdAt,
+    serverCreatedAt: reconciled.messages[0].serverCreatedAt
+  };
+})()
+"""
+    )
+
+    assert result == {
+        "ids": ["saved_user", "runtime_heartbeat_chat_1", "runtime_activity_1"],
+        "createdAt": "2026-07-15T09:27:52.100Z",
+        "serverCreatedAt": "2026-07-15T09:27:56.000000+00:00",
     }
 
 
@@ -3270,7 +3382,7 @@ def test_workbench_chat_does_not_render_previous_transcript_during_switch():
     assert "Promise.all" not in load_effect
     assert "model.getChat(activeChatId, requestOptions)" in load_effect
     assert 'model.getSubagents(activeChatId, "", requestOptions)' in load_effect
-    assert load_effect.index("setActiveChat(chat)") < load_effect.index("setSubagentData(payload)")
+    assert load_effect.index("wbcPreserveLiveTimelineAnchors(") < load_effect.index("setSubagentData(payload)")
     assert 'String(activeChat.id || "") === String(activeChatId || "")' in source
     assert "chat={visibleChat}" in source
     assert "chat={visibleChat || selectedChatSummary}" in source

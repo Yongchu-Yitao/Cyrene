@@ -14119,6 +14119,12 @@ body.wbc-resizing-side-agent .wbc-page {
   background: transparent;
 }
 
+.wbc-browser-picker-actions > button svg {
+  width: 15px;
+  height: 15px;
+  stroke-width: 1.9;
+}
+
 .wbc-browser-split .browser-view.native.split-chrome .browser-nav-bar {
   min-height: 48px;
   gap: 6px;
@@ -14819,6 +14825,7 @@ html[data-theme="dark"] .wbc-scroll-to-bottom {
   height: auto;
   border: 0;
   border-radius: 0;
+  background: var(--wb-right-bg);
   box-shadow: none;
 }
 
@@ -14860,27 +14867,118 @@ html[data-theme="dark"] .wbc-scroll-to-bottom {
   min-height: 58px;
   flex-basis: 58px;
   box-sizing: border-box;
+  gap: 6px;
+  margin: 0;
+  padding: 6px 12px;
+  border: 0;
+  border-bottom: 1px solid var(--wb-line);
   border-radius: 0;
+  background: var(--wb-card-bg-strong);
+  box-shadow: none;
+  -webkit-backdrop-filter: none;
+  backdrop-filter: none;
   cursor: default;
   -webkit-app-region: drag;
 }
 
+.wbc-browser-maximized-picker-wrap {
+  position: relative;
+  z-index: 1100;
+  flex: 0 0 auto;
+  min-width: 0;
+  margin-bottom: 8px;
+}
+
+.wbc-browser-pip-head-wrap {
+  flex: 0 0 auto;
+}
+
 html[data-platform="darwin"] .wbc-browser-window.maximized .wbc-browser-window-bar {
-  padding-left: 82px;
+  padding-left: 92px;
 }
 
 .wbc-browser-window-bar:active {
   cursor: grabbing;
 }
 
-.wbc-browser-window-bar strong {
+.wbc-browser-window-title {
   flex: 1 1 auto;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.wbc-browser-window-bar strong {
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
   font-size: calc(12.5px * var(--wb-ui-font-scale, 1));
   font-weight: 700;
+}
+
+.wbc-browser-window.maximized .wbc-browser-window-title {
+  height: 34px;
+  align-items: flex-start;
+  flex-direction: column;
+  justify-content: center;
+  gap: 2px;
+}
+
+.wbc-browser-maximized-picker {
+  min-width: 0;
+  height: 46px;
+  min-height: 46px;
+  display: flex;
+  flex: 1 1 auto;
+  align-items: center;
+  gap: 8px;
+  padding: 5px 8px;
+  border: 0;
+  border-radius: 11px;
+  background: transparent;
+  color: inherit;
+  text-align: left;
+  cursor: pointer;
+  -webkit-app-region: no-drag;
+}
+
+.wbc-browser-maximized-picker:hover,
+.wbc-browser-maximized-picker[aria-expanded="true"] {
+  background: transparent;
+}
+
+.wbc-browser-maximized-picker:focus-visible {
+  outline: none;
+}
+
+.wbc-browser-maximized-chevron {
+  width: 18px;
+  height: 18px;
+  flex: 0 0 auto;
+  display: grid;
+  place-items: center;
+  color: var(--wb-faint);
+  transform: rotate(90deg);
+  transition: transform 180ms ease;
+}
+
+.wbc-browser-maximized-picker[aria-expanded="true"] .wbc-browser-maximized-chevron {
+  transform: rotate(-90deg);
+}
+
+.wbc-browser-maximized-chevron svg {
+  width: 16px;
+  height: 16px;
+}
+
+.wbc-browser-window.maximized .wbc-browser-window-bar strong {
+  max-width: min(720px, calc(100vw - 210px));
+  color: var(--wb-text);
+  font-size: calc(12px * var(--wb-ui-font-scale, 1));
+  font-weight: 650;
+  line-height: 1.25;
 }
 
 .wbc-browser-title-pill {
@@ -14908,6 +15006,18 @@ html[data-platform="darwin"] .wbc-browser-window.maximized .wbc-browser-window-b
   color: var(--wb-muted);
   font-size: calc(11px * var(--wb-ui-font-scale, 1));
   font-weight: 560;
+}
+
+.wbc-browser-window.maximized .wbc-browser-title-pill {
+  min-height: 0;
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  color: var(--wb-faint);
+  font-size: calc(9.5px * var(--wb-ui-font-scale, 1));
+  font-weight: 620;
+  letter-spacing: 0;
 }
 
 .wbc-browser-window-actions {
@@ -14940,6 +15050,71 @@ html[data-platform="darwin"] .wbc-browser-window.maximized .wbc-browser-window-b
   border-color: var(--wb-line);
   background: var(--wb-control-hover-bg);
   color: var(--wb-text);
+}
+
+.wbc-browser-window.maximized .wbc-browser-window-actions {
+  height: 46px;
+  gap: 3px;
+}
+
+.wbc-browser-window.maximized .wbc-browser-window-actions button {
+  width: 34px;
+  height: 34px;
+  border-radius: 10px;
+}
+
+.wbc-browser-window.maximized .wbc-browser-window-actions button svg,
+.wbc-browser-split .wbc-side-agent-split-head > .wbc-browser-split-action svg,
+.wbc-browser-split .wbc-side-agent-split-head > .wbc-side-agent-split-close svg {
+  width: 16px;
+  height: 16px;
+  stroke-width: 1.9;
+}
+
+.wbc-browser-window.maximized .wbc-browser-window-actions button:hover {
+  border-color: transparent;
+  background: color-mix(in srgb, var(--wb-control-hover-bg) 30%, transparent);
+}
+
+.wbc-browser-window.maximized .wbc-browser-window-actions button.active {
+  color: var(--wb-text);
+  background: color-mix(in srgb, var(--wb-control-hover-bg) 24%, transparent);
+}
+
+.wbc-browser-maximized-menu {
+  box-sizing: border-box;
+  width: min(560px, calc(100vw - 116px));
+  max-width: min(560px, calc(100vw - 116px));
+  margin-left: auto;
+  margin-right: auto;
+  max-height: min(340px, 44vh);
+  border-color: var(--wb-line-2);
+  background: var(--wb-card-bg-strong);
+  box-shadow: 0 12px 28px rgba(9, 17, 30, 0.14);
+  -webkit-backdrop-filter: none;
+  backdrop-filter: none;
+}
+
+.wbc-browser-maximized-menu .wbc-browser-picker-row {
+  min-height: 48px;
+  color: var(--wb-muted);
+}
+
+.wbc-browser-maximized-menu .wbc-browser-picker-row:hover {
+  background: var(--wb-control-hover-bg);
+  color: var(--wb-text);
+}
+
+.wbc-browser-maximized-menu .wbc-browser-picker-row.active {
+  background: var(--wb-card-bg);
+  color: var(--wb-text);
+  box-shadow: inset 0 0 0 1px var(--wb-line);
+}
+
+.wbc-browser-maximized-menu .wbc-browser-picker-select > b {
+  color: inherit;
+  font-size: calc(12px * var(--wb-ui-font-scale, 1));
+  font-weight: 650;
 }
 
 .wbc-material-icon {
@@ -14977,12 +15152,113 @@ html[data-platform="darwin"] .wbc-browser-window.maximized .wbc-browser-window-b
   background: var(--wb-card-bg);
 }
 
+.wbc-browser-window.maximized .wbc-browser-window-content {
+  background: var(--wb-right-bg);
+}
+
 .wbc-browser-window.pip .wbc-browser-window-content {
   border-radius: 0 0 17px 17px;
 }
 
 .wbc-browser-window-content > .browser-view {
   flex: 1 1 auto;
+}
+
+/* Maximized browser chrome follows the same restrained card hierarchy as the
+   conversation-panel browser split: quiet resource label, softly separated
+   tab list and navigation controls, and no accent-heavy selected state. */
+.wbc-browser-window.maximized .browser-view.native {
+  gap: 0;
+  padding: 0 12px 12px;
+  background: var(--wb-right-bg);
+}
+
+.wbc-browser-window.maximized .browser-tabs-strip,
+.wbc-browser-window.maximized .browser-nav-bar {
+  box-sizing: border-box;
+  border: 1px solid color-mix(in srgb, var(--wb-line-2) 66%, transparent);
+  background: color-mix(in srgb, var(--wb-card-bg) 90%, transparent);
+  box-shadow: 0 3px 12px rgba(9, 17, 30, 0.025);
+}
+
+.wbc-browser-window.maximized .browser-tabs-strip {
+  min-height: 46px;
+  gap: 5px;
+  margin-bottom: 8px;
+  padding: 6px 8px;
+  border-radius: 14px;
+}
+
+.wbc-browser-window.maximized .browser-nav-bar {
+  min-height: 48px;
+  gap: 6px;
+  margin-bottom: 8px;
+  padding: 6px 8px;
+  border-radius: 14px;
+}
+
+.wbc-browser-window.maximized .browser-tab {
+  height: 32px;
+  border-color: transparent;
+  border-radius: 9px;
+  background: transparent;
+  box-shadow: none;
+  color: var(--wb-muted);
+  font-size: calc(11.5px * var(--wb-ui-font-scale, 1));
+  font-weight: 620;
+}
+
+.wbc-browser-window.maximized .browser-tab:hover {
+  border-color: transparent;
+  background: color-mix(in srgb, var(--wb-control-hover-bg) 24%, transparent);
+}
+
+.wbc-browser-window.maximized .browser-tab.active {
+  border-color: transparent;
+  background: color-mix(in srgb, var(--wb-card-bg-strong) 72%, transparent);
+  color: var(--wb-text);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--wb-line) 48%, transparent);
+}
+
+.wbc-browser-window.maximized .browser-icon-btn {
+  width: 32px;
+  height: 32px;
+  border-color: transparent;
+  border-radius: 9px;
+  background: transparent;
+}
+
+.wbc-browser-window.maximized .browser-icon-btn:hover:not(:disabled) {
+  border-color: transparent;
+  background: color-mix(in srgb, var(--wb-control-hover-bg) 28%, transparent);
+}
+
+.wbc-browser-window.maximized .browser-address {
+  height: 34px;
+  border-color: color-mix(in srgb, var(--wb-line) 72%, transparent);
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--wb-card-bg-strong) 88%, transparent);
+  font-size: calc(12.5px * var(--wb-ui-font-scale, 1));
+  font-weight: 590;
+  box-shadow: none;
+}
+
+.wbc-browser-window.maximized .browser-address:focus {
+  border-color: color-mix(in srgb, var(--wb-accent) 38%, var(--wb-line));
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--wb-accent) 8%, transparent);
+}
+
+.wbc-browser-window.maximized .browser-native-host {
+  margin-left: 0;
+  border: 1px solid color-mix(in srgb, var(--wb-line-2) 62%, transparent);
+  border-radius: 14px;
+  background: var(--wb-surface);
+  box-shadow: 0 4px 16px rgba(9, 17, 30, 0.035);
+}
+
+.wbc-browser-window.maximized .browser-native-surface {
+  inset: 1px;
+  border-radius: 12px;
 }
 
 .wbc-browser-fullscreen-chat {
@@ -15039,22 +15315,22 @@ html[data-platform="darwin"] .wbc-browser-window.maximized .wbc-browser-window-b
 
 .wbc-browser-fullscreen-composer {
   width: 100%;
-  height: 40px;
+  height: 44px;
   box-sizing: border-box;
   display: flex;
   align-items: center;
-  gap: 7px;
-  padding: 4px 5px 4px 13px;
+  gap: 8px;
+  padding: 5px 6px 5px 14px;
   border: 1px solid var(--wb-line-2);
-  border-radius: 13px;
-  background: color-mix(in srgb, var(--wb-card-bg-strong) 96%, transparent);
-  box-shadow: none;
-  backdrop-filter: blur(14px);
+  border-radius: 14px;
+  background: var(--wb-card-bg-strong);
+  box-shadow: 0 3px 12px rgba(9, 17, 30, 0.04);
+  backdrop-filter: none;
 }
 
 .wbc-browser-fullscreen-composer:focus-within {
-  border-color: var(--wb-active-border);
-  box-shadow: none;
+  border-color: color-mix(in srgb, var(--wb-accent) 36%, var(--wb-line));
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--wb-accent) 7%, transparent);
 }
 
 .wbc-browser-fullscreen-status.completed .wbc-browser-fullscreen-status-dot {
@@ -15080,26 +15356,29 @@ html[data-platform="darwin"] .wbc-browser-window.maximized .wbc-browser-window-b
 }
 
 .wbc-browser-fullscreen-composer button {
-  width: 31px;
-  height: 31px;
+  width: 32px;
+  height: 32px;
   flex: 0 0 auto;
   display: inline-grid;
   place-items: center;
   padding: 0;
-  border: 0;
-  border-radius: 9px;
+  border: 1px solid color-mix(in srgb, var(--wb-accent) 70%, transparent);
+  border-radius: 10px;
   background: var(--wb-accent);
   color: var(--wb-accent-text);
+  box-shadow: 0 2px 7px color-mix(in srgb, var(--wb-accent) 20%, transparent);
   cursor: pointer;
 }
 
 .wbc-browser-fullscreen-composer button.stop {
-  background: var(--wb-red);
-  color: #fff;
+  border-color: color-mix(in srgb, var(--wb-red) 60%, transparent);
+  background: color-mix(in srgb, var(--wb-red) 14%, var(--wb-card-bg-strong));
+  color: var(--wb-red);
+  box-shadow: 0 2px 7px color-mix(in srgb, var(--wb-red) 16%, transparent);
 }
 
 .wbc-browser-fullscreen-composer button:hover:not(:disabled) {
-  filter: brightness(1.06);
+  background: color-mix(in srgb, var(--wb-accent) 88%, white);
 }
 
 .wbc-browser-fullscreen-composer button:disabled {

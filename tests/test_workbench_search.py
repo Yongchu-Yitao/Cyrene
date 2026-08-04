@@ -703,7 +703,7 @@ def test_workbench_chat_run_uses_project_workspace(client, search_env, monkeypat
 
     response = client.post(
         "/api/workbench/chats/chat_1/messages",
-        json={"message": "inspect the project"},
+        json={"message": "inspect the project", "clientRequestId": "send_test_1"},
     )
 
     assert response.status_code == 200
@@ -711,6 +711,7 @@ def test_workbench_chat_run_uses_project_workspace(client, search_env, monkeypat
     assert assistant_message["content"] == "done"
     assert isinstance(assistant_message["processingDurationMs"], int)
     assert assistant_message["processingDurationMs"] >= 0
+    assert response.json()["userMessage"]["clientRequestId"] == "send_test_1"
     assert captured["workspace_dir"] == str(
         (search_env["data_dir"].parent / "workspace").resolve()
     )
@@ -721,6 +722,7 @@ def test_workbench_chat_run_uses_project_workspace(client, search_env, monkeypat
         chats["chats"][0]["messages"][-1]["processingDurationMs"]
         == assistant_message["processingDurationMs"]
     )
+    assert chats["chats"][0]["messages"][-2]["clientRequestId"] == "send_test_1"
 
 
 def test_workbench_chat_run_persists_non_git_workspace_diff(

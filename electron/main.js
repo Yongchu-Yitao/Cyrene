@@ -382,12 +382,13 @@ const BROWSER_CHAT_OVERLAY_HTML = `<!doctype html>
   body.has-status #status { display: flex; }
   #status-dot { width: 7px; height: 7px; flex: 0 0 auto; border-radius: 50%; background: var(--green, #1f9d57); animation: pulse 1.45s ease-out infinite; }
   #status-text { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  form { width: 100%; height: 40px; display: flex; align-items: center; gap: 7px; padding: 4px 5px 4px 13px; border: 1px solid var(--line, #d8dce4); border-radius: 13px; background: var(--panel, rgba(255,255,255,.96)); box-shadow: none; }
-  form:focus-within { border-color: var(--accent, #6d5dfc); box-shadow: none; }
+  form { width: 100%; height: 44px; display: flex; align-items: center; gap: 8px; padding: 5px 6px 5px 14px; border: 1px solid var(--line, #d8dce4); border-radius: 14px; background: var(--panel, #fff); box-shadow: 0 3px 12px rgba(9,17,30,.04); }
+  form:focus-within { border-color: color-mix(in srgb, var(--accent, #6d5dfc) 36%, var(--line, #d8dce4)); box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent, #6d5dfc) 7%, transparent); }
   input { flex: 1 1 auto; min-width: 0; height: 30px; padding: 0; border: 0; outline: 0; background: transparent; color: var(--text, #17191d); font: inherit; font-size: 13px; }
   input::placeholder { color: var(--faint, #9297a1); }
-  button { width: 31px; height: 31px; flex: 0 0 auto; display: grid; place-items: center; padding: 0; border: 0; border-radius: 9px; background: var(--accent, #6d5dfc); color: var(--accent-text, #fff); cursor: pointer; }
-  button.stop { background: var(--red, #d84848); color: #fff; }
+  button { width: 32px; height: 32px; flex: 0 0 auto; display: grid; place-items: center; padding: 0; border: 1px solid color-mix(in srgb, var(--accent, #6d5dfc) 70%, transparent); border-radius: 10px; background: var(--accent, #6d5dfc); color: var(--accent-text, #fff); box-shadow: 0 2px 7px color-mix(in srgb, var(--accent, #6d5dfc) 20%, transparent); cursor: pointer; }
+  button:hover:not(:disabled) { background: color-mix(in srgb, var(--accent, #6d5dfc) 88%, white); }
+  button.stop { border-color: color-mix(in srgb, var(--red, #d84848) 60%, transparent); background: color-mix(in srgb, var(--red, #d84848) 14%, var(--panel, #fff)); color: var(--red, #d84848); box-shadow: 0 2px 7px color-mix(in srgb, var(--red, #d84848) 16%, transparent); }
   button:disabled { opacity: .42; cursor: default; }
   button svg { width: 15px; height: 15px; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
   @keyframes pulse { 0% { box-shadow: 0 0 0 0 color-mix(in srgb, var(--green, #1f9d57) 34%, transparent); } 70%, 100% { box-shadow: 0 0 0 5px transparent; } }
@@ -1887,7 +1888,10 @@ class BrowserTabManager {
       sessionId: this.sessionId,
       colors,
     };
-    this.syncChatOverlay(this.ownerWindow()?.contentView || null, false);
+    // The page WebContentsView can be reattached or promoted while entering
+    // maximized mode. Re-add the Agent overlay after it so the composer stays
+    // above the live page instead of silently ending up behind it.
+    this.syncChatOverlay(this.ownerWindow()?.contentView || null, true);
     return { ok: true, visible: this.chatOverlayState.visible };
   }
 
@@ -1941,7 +1945,10 @@ class BrowserTabManager {
     this.applyPageZoom(active.view, targetBounds, this.zoomEnabled !== false).catch(() => {});
     this.applyPageFrameStyle(active.view, targetCornerRadius);
     try { active.view.setVisible(true); } catch (_) {}
-    this.syncChatOverlay(win.contentView, !wasAttachedToTargetWindow);
+    // Always keep the native Agent composer as the last child view. Electron
+    // may change the page view's native stacking order during a resize even
+    // when the JS-side attachment did not change.
+    this.syncChatOverlay(win.contentView, true);
     if (!wasAttached || !wasVisible) this.repaintView(active);
   }
 

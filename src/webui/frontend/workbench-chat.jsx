@@ -417,6 +417,7 @@ var WorkbenchChatModel = (function () {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         message: input.message || "",
+        clientRequestId: input.clientRequestId || "",
         attachments: input.attachments || [],
         mode: input.mode || "default",
         command: input.command || "",
@@ -607,6 +608,39 @@ function wbcConfirmOptimisticMessage(previous, confirmed) {
   return next;
 }
 
+function wbcPreserveLiveTimelineAnchors(previousChat, hydratedChat, runtime) {
+  if (!hydratedChat || !runtime) return hydratedChat;
+  var runtimeRequestId = String(runtime.clientRequestId || "");
+  var runtimeMessageId = String(runtime.confirmedUserMessageId || "");
+  if (!runtimeRequestId && !runtimeMessageId) return hydratedChat;
+  var previousMessages = previousChat && Array.isArray(previousChat.messages)
+    ? previousChat.messages
+    : [];
+  if (!previousMessages.length || !Array.isArray(hydratedChat.messages)) return hydratedChat;
+  var anchor = previousMessages.find(function (message) {
+    if (!message || !message.createdAt) return false;
+    return (runtimeRequestId && String(message.clientRequestId || "") === runtimeRequestId)
+      || (runtimeMessageId && String(message.id || "") === runtimeMessageId);
+  });
+  if (!anchor) return hydratedChat;
+  var changed = false;
+  var messages = hydratedChat.messages.map(function (message) {
+    if (!message) return message;
+    var matches = (runtimeRequestId && String(message.clientRequestId || "") === runtimeRequestId)
+      || (runtimeMessageId && String(message.id || "") === runtimeMessageId);
+    if (!matches) return message;
+    var serverCreatedAt = String(message.createdAt || message.created_at || "");
+    if (String(anchor.createdAt) === serverCreatedAt) return message;
+    changed = true;
+    return {
+      ...message,
+      createdAt: anchor.createdAt,
+      serverCreatedAt: serverCreatedAt,
+    };
+  });
+  return changed ? { ...hydratedChat, messages: messages } : hydratedChat;
+}
+
 function wbcMergeChronologicalMessages(messages, additions) {
   // Runtime segments are discovered independently from persisted guidance.
   // Merge them by event time so steering stays where it happened instead of
@@ -646,6 +680,25 @@ function wbcMergeChronologicalMessages(messages, additions) {
     if (id) known.add(id);
   });
   return merged;
+}
+
+function wbcMergeSavedAssistantMessages(chat, assistantMessages) {
+  if (!chat) return chat;
+  var current = Array.isArray(chat.messages) ? chat.messages : [];
+  var knownIds = new Set(current.map(function (message) {
+    return String(message && message.id || "");
+  }));
+  var additions = (Array.isArray(assistantMessages) ? assistantMessages : []).filter(function (message) {
+    var id = String(message && message.id || "");
+    if (!id || knownIds.has(id)) return false;
+    knownIds.add(id);
+    return true;
+  });
+  return {
+    ...chat,
+    status: "idle",
+    messages: wbcMergeChronologicalMessages(current, additions),
+  };
 }
 
 function wbcRuntimeSegmentMessages(runtime) {
@@ -1811,6 +1864,12 @@ var WorkbenchChatRuntimes = (function () {
         if (event.retry) return;
         if (event.userMessage) {
           var runtime = get(chatId);
+          update(chatId, function (current) {
+            return current ? {
+              ...current,
+              confirmedUserMessageId: String(event.userMessage.id || ""),
+            } : null;
+          });
           fire("onUserMessageConfirmed", chatId, {
             optimisticId: String(runtime && runtime.optimisticUserMessageId || ""),
             userMessage: event.userMessage,
@@ -2010,6 +2069,8 @@ var WorkbenchChatRuntimes = (function () {
     var ac = (typeof AbortController !== "undefined") ? new AbortController() : null;
     if (ac) aborts[chatId] = ac;
     var startedAt = Date.now();
+    var clientRequestId = String(input.clientRequestId || ("send_" + startedAt + "_" + Math.random().toString(36).slice(2, 9)));
+    input = { ...input, clientRequestId: clientRequestId };
     var optimisticUserMessage = null;
     if (!input.retry) {
       var optimisticId = "user_pending_" + startedAt + "_" + Math.random().toString(36).slice(2, 9);
@@ -2020,6 +2081,7 @@ var WorkbenchChatRuntimes = (function () {
         attachments: Array.isArray(input.attachments) ? input.attachments.slice() : [],
         createdAt: new Date(startedAt).toISOString(),
         optimistic: true,
+        clientRequestId: clientRequestId,
       };
       // Publish the user's turn before the runtime. React can batch both state
       // changes into one paint, but this ordering guarantees the transcript is
@@ -2037,6 +2099,7 @@ var WorkbenchChatRuntimes = (function () {
       lastEventAt: startedAt,
       replying: false,
       optimisticUserMessageId: optimisticUserMessage ? optimisticUserMessage.id : "",
+      clientRequestId: clientRequestId,
     });
     return ownStream(
       chatId,
@@ -2687,8 +2750,16 @@ function WorkbenchChatPage({ active, project, newChatRequestId, onOpenTask, onAc
     setSubagentLoading(!cachedSubagents);
     model.getChat(activeChatId, requestOptions)
       .then(function (chat) {
-        chatCache.details[activeChatId] = chat;
-        if (activeChatIdRef.current === activeChatId) setActiveChat(chat);
+        if (activeChatIdRef.current !== activeChatId) return;
+        setActiveChat(function (previous) {
+          var reconciled = wbcPreserveLiveTimelineAnchors(
+            previous,
+            chat,
+            runtimeEngine.get(activeChatId)
+          );
+          chatCache.details[activeChatId] = reconciled;
+          return reconciled;
+        });
       })
       .catch(function (err) {
         if (err && err.name === "AbortError") return;
@@ -3089,17 +3160,19 @@ function WorkbenchChatPage({ active, project, newChatRequestId, onOpenTask, onAc
         });
       },
       onAssistantSaved: function (chatId, assistantMessages) {
+        // A background conversation has no active React transcript to patch.
+        // Persist the terminal messages into its detail cache before the
+        // runtime is cleared so switching to it never paints a stale snapshot.
+        var cachedChat = chatCache.details[chatId] || null;
+        if (cachedChat) {
+          chatCache.details[chatId] = wbcMergeSavedAssistantMessages(
+            cachedChat,
+            assistantMessages
+          );
+        }
         setActiveChat(function (prev) {
           if (!prev || prev.id !== chatId) return prev;
-          var current = prev.messages || [];
-          var knownIds = new Set(current.map(function (message) { return String(message.id || ""); }));
-          var additions = (assistantMessages || []).filter(function (message) {
-            var id = String((message && message.id) || "");
-            if (!id || knownIds.has(id)) return false;
-            knownIds.add(id);
-            return true;
-          });
-          return { ...prev, status: "idle", messages: wbcMergeChronologicalMessages(current, additions) };
+          return wbcMergeSavedAssistantMessages(prev, assistantMessages);
         });
       },
       onAwaitingUser: function (chatId, pendingQuestion) {
@@ -3126,6 +3199,7 @@ function WorkbenchChatPage({ active, project, newChatRequestId, onOpenTask, onAc
       },
       onSettled: function (chatId) {
         model.getChat(chatId).then(function (chat) {
+          chatCache.details[chatId] = chat;
           if (activeChatIdRef.current === chatId) setActiveChat(chat);
         }).catch(function () {});
         refreshChats();
@@ -3133,6 +3207,7 @@ function WorkbenchChatPage({ active, project, newChatRequestId, onOpenTask, onAc
       onResync: function (chatId) {
         // Stream ended without a `saved` event (e.g. interrupted) — re-pull.
         model.getChat(chatId).then(function (chat) {
+          chatCache.details[chatId] = chat;
           if (activeChatIdRef.current === chatId) setActiveChat(chat);
         }).catch(function () {});
         refreshChats();
@@ -5506,6 +5581,7 @@ function WbcBrowserFloatingSurface({ browserState, browserSessionId, visible, mo
   var [fullscreenStatusRequested, setFullscreenStatusRequested] = useWbcState(false);
   var [fullscreenSubmitting, setFullscreenSubmitting] = useWbcState(false);
   var [fullscreenFinalReply, setFullscreenFinalReply] = useWbcState("");
+  var [maximizedPickerOpen, setMaximizedPickerOpen] = useWbcState(false);
   var [chatOverlayThemeRevision, setChatOverlayThemeRevision] = useWbcState(0);
   var fullscreenFinalReplyTimerRef = useWbcRef(null);
   var fullscreenReplyBaselineRef = useWbcRef("");
@@ -5518,6 +5594,7 @@ function WbcBrowserFloatingSurface({ browserState, browserSessionId, visible, mo
   var displayBrowserFavicon = String(displayActiveBrowserTab.favicon || "");
   var hasNoBrowserTabs = Array.isArray(displayBrowserState.tabs) && displayBrowserState.tabs.length === 0;
   var browserBridge = window.cyrene && window.cyrene.browser;
+  var FloatingBrowserIcon = window.CyreneUI.require("browser").Icon;
   var hasNativeChatOverlay = !!(browserBridge && typeof browserBridge.setChatOverlay === "function");
   var fullscreenSavedReply = !running && !fullscreenSubmitting
     && String(latestAssistantReplyId || "")
@@ -6265,6 +6342,80 @@ function WbcBrowserFloatingSurface({ browserState, browserSessionId, visible, mo
     });
   }, [visible, browserSessionId]);
 
+  function updateFloatingBrowserState(next) {
+    if (next && next.ok !== false && String(next.sessionId || "") === String(browserSessionId || "")) {
+      setNativeBrowserState(next);
+    }
+    return next;
+  }
+
+  function setMaximizedBrowserPicker(nextOpen) {
+    nextOpen = nextOpen === true;
+    if (nextOpen) {
+      // Mount the menu immediately so the opening animation responds to the
+      // click without waiting for the native page preview capture.
+      setMaximizedPickerOpen(true);
+      window.dispatchEvent(new CustomEvent("workbench:browser-obscured", {
+        detail: {
+          obscured: true,
+          preview: true,
+          sessionId: String(browserSessionId || ""),
+        },
+      }));
+      return;
+    }
+    setMaximizedPickerOpen(false);
+    window.dispatchEvent(new CustomEvent("workbench:browser-obscured", {
+      detail: { obscured: false, sessionId: String(browserSessionId || "") },
+    }));
+  }
+
+  function selectMaximizedBrowserTab(tab) {
+    if (!tab || !tab.id) return;
+    setMaximizedBrowserPicker(false);
+    if (browserBridge && typeof browserBridge.activateTab === "function") {
+      browserBridge.activateTab({ sessionId: browserSessionId, tabId: tab.id }).then(updateFloatingBrowserState).catch(function () {});
+    }
+  }
+
+  function refreshMaximizedBrowserTab(tab, event) {
+    if (event) { event.preventDefault(); event.stopPropagation(); }
+    if (!browserBridge || !tab || !tab.id || typeof browserBridge.reload !== "function") return;
+    browserBridge.reload({ sessionId: browserSessionId, tabId: tab.id }).then(updateFloatingBrowserState).catch(function () {});
+  }
+
+  function toggleMaximizedBrowserMute(tab, event) {
+    if (event) { event.preventDefault(); event.stopPropagation(); }
+    if (!browserBridge || !tab || !tab.id || typeof browserBridge.setMuted !== "function") return;
+    browserBridge.setMuted({ sessionId: browserSessionId, tabId: tab.id, muted: !tab.muted }).then(updateFloatingBrowserState).catch(function () {});
+  }
+
+  function closeMaximizedBrowserTab(tab, event) {
+    if (event) { event.preventDefault(); event.stopPropagation(); }
+    if (!browserBridge || !tab || !tab.id || typeof browserBridge.closeTab !== "function") return;
+    browserBridge.closeTab({ sessionId: browserSessionId, tabId: tab.id }).then(function (next) {
+      updateFloatingBrowserState(next);
+      if (!next || !Array.isArray(next.tabs) || !next.tabs.length) setMaximizedBrowserPicker(false);
+    }).catch(function () {});
+  }
+
+  useWbcEffect(function () {
+    if (effectiveMode === "maximized") return undefined;
+    setMaximizedPickerOpen(false);
+    window.dispatchEvent(new CustomEvent("workbench:browser-obscured", {
+      detail: { obscured: false, sessionId: String(browserSessionId || "") },
+    }));
+    return undefined;
+  }, [effectiveMode, browserSessionId]);
+
+  useWbcEffect(function () {
+    return function () {
+      window.dispatchEvent(new CustomEvent("workbench:browser-obscured", {
+        detail: { obscured: false, sessionId: String(browserSessionId || "") },
+      }));
+    };
+  }, [browserSessionId]);
+
   useWbcEffect(function () {
     var wasVisible = previousVisibleRef.current;
     previousVisibleRef.current = visible;
@@ -6398,24 +6549,47 @@ function WbcBrowserFloatingSurface({ browserState, browserSessionId, visible, mo
       style={inlineStyle}
       aria-label={wbcT("workbenchChat.browserWindowRegion", "Live browser window")}
     >
-      <div
-        className="wbc-browser-window-bar"
-        onPointerDown={function (event) { beginInteraction(event, "drag", ""); }}
-        onDoubleClick={function () { runModeTransition(effectiveMode === "pip" ? onMaximize : onRestore, effectiveMode === "pip" ? "maximized" : "pip"); }}
-      >
-        <span
-          className="wbc-browser-title-pill"
-          title={wbcT("workbenchChat.dragBrowserToTopbar", "Drag to the topbar to pin")}
-        >{wbcT("workbenchChat.browserWindowTitle", "Browser")}</span>
-        {wbcBrowserPageTitle(displayBrowserState) && <strong title={wbcBrowserWindowTitle(displayBrowserState)}>{wbcBrowserPageTitle(displayBrowserState)}</strong>}
-        <div className="wbc-browser-window-actions" onPointerDown={function (event) { event.stopPropagation(); }}>
-          {effectiveMode === "pip" ? (
-            <button type="button" onClick={function () { runModeTransition(onMaximize, "maximized"); }} title={wbcT("workbenchChat.browserMaximize", "Maximize")} aria-label={wbcT("workbenchChat.browserMaximize", "Maximize")}>{WBC_ICONS.windowMaximize}</button>
+      <div className={effectiveMode === "maximized" ? "wbc-resource-split-picker-wrap wbc-browser-maximized-picker-wrap" : "wbc-browser-pip-head-wrap"}>
+        <div
+          className={"wbc-browser-window-bar" + (effectiveMode === "maximized" ? " wbc-browser-maximized-head" : "")}
+          onPointerDown={effectiveMode === "pip" ? function (event) { beginInteraction(event, "drag", ""); } : undefined}
+          onDoubleClick={effectiveMode === "pip" ? function () { runModeTransition(onMaximize, "maximized"); } : undefined}
+        >
+          {effectiveMode === "maximized" ? (
+            <button type="button" className="wbc-browser-maximized-picker" onClick={function () { setMaximizedBrowserPicker(!maximizedPickerOpen); }} aria-expanded={maximizedPickerOpen}>
+              <span className="wbc-browser-window-title">
+                <span className="wbc-browser-title-pill">{wbcT("workbenchChat.browserWindowTitle", "Browser")}</span>
+                <strong title={wbcBrowserWindowTitle(displayBrowserState)}>{wbcBrowserPageTitle(displayBrowserState) || wbcT("workbenchChat.browserWindowTitle", "Browser")}</strong>
+              </span>
+              <span className="wbc-browser-maximized-chevron" aria-hidden="true">{WBC_ICONS.chevronRight}</span>
+            </button>
           ) : (
-            <button type="button" onClick={function () { runModeTransition(onRestore, "pip"); }} title={wbcT("workbenchChat.browserRestoreSize", "Restore")} aria-label={wbcT("workbenchChat.browserRestoreSize", "Restore")}><span className="wbc-material-icon close-fullscreen" aria-hidden="true" /></button>
+            <span className="wbc-browser-window-title">
+              <span className="wbc-browser-title-pill" title={wbcT("workbenchChat.dragBrowserToTopbar", "Drag to the topbar to pin")}>{wbcT("workbenchChat.browserWindowTitle", "Browser")}</span>
+              {wbcBrowserPageTitle(displayBrowserState) && <strong title={wbcBrowserWindowTitle(displayBrowserState)}>{wbcBrowserPageTitle(displayBrowserState)}</strong>}
+            </span>
           )}
-          <button type="button" onClick={onMinimize} title={wbcT("workbenchChat.browserMinimize", "Minimize")} aria-label={wbcT("workbenchChat.browserMinimize", "Minimize")}>{WBC_ICONS.windowMinimize}</button>
+          <div className="wbc-browser-window-actions" onPointerDown={function (event) { event.stopPropagation(); }}>
+            {effectiveMode === "pip" ? (
+              <button type="button" onClick={function () { runModeTransition(onMaximize, "maximized"); }} title={wbcT("workbenchChat.browserMaximize", "Maximize")} aria-label={wbcT("workbenchChat.browserMaximize", "Maximize")}>{WBC_ICONS.windowMaximize}</button>
+            ) : (
+              <React.Fragment>
+                <button type="button" className="wbc-browser-split-action" onClick={function (event) { refreshMaximizedBrowserTab(displayActiveBrowserTab, event); }} title={wbcT("browser.context.reload", "Reload")} aria-label={wbcT("browser.context.reload", "Reload")}>{FloatingBrowserIcon ? <FloatingBrowserIcon name="reload" size={15} /> : WBC_ICONS.retry}</button>
+                <button type="button" className={"wbc-browser-split-action" + (displayActiveBrowserTab.muted ? " active" : "")} onClick={function (event) { toggleMaximizedBrowserMute(displayActiveBrowserTab, event); }} title={displayActiveBrowserTab.muted ? wbcT("browser.context.unmute", "Unmute") : wbcT("browser.context.mute", "Mute")} aria-label={displayActiveBrowserTab.muted ? wbcT("browser.context.unmute", "Unmute") : wbcT("browser.context.mute", "Mute")}>{FloatingBrowserIcon ? <FloatingBrowserIcon name={displayActiveBrowserTab.muted ? "muted" : "volume"} size={15} /> : null}</button>
+                <button type="button" onClick={function () { setMaximizedBrowserPicker(false); runModeTransition(onRestore, "pip"); }} title={wbcT("workbenchChat.browserRestoreSize", "Restore")} aria-label={wbcT("workbenchChat.browserRestoreSize", "Restore")}>{WBC_ICONS.x}</button>
+              </React.Fragment>
+            )}
+            {effectiveMode === "pip" && <button type="button" onClick={onMinimize} title={wbcT("workbenchChat.browserMinimize", "Minimize")} aria-label={wbcT("workbenchChat.browserMinimize", "Minimize")}>{WBC_ICONS.windowMinimize}</button>}
+          </div>
         </div>
+        {effectiveMode === "maximized" && (
+          <WbcSplitPickerMenu open={maximizedPickerOpen} className="wbc-side-agent-split-menu wbc-resource-picker-menu wbc-browser-picker-menu wbc-browser-maximized-menu" role="listbox">
+            {displayBrowserTabs.map(function (tab) {
+              var selected = String(tab.id || "") === String(displayActiveBrowserTab.id || displayBrowserState.activeTabId || "");
+              return <div key={tab.id} className={"wbc-browser-picker-row" + (selected ? " active" : "")} role="option" aria-selected={selected}><button type="button" className="wbc-browser-picker-select" onClick={function () { selectMaximizedBrowserTab(tab); }}><span className="wbc-browser-picker-favicon" aria-hidden="true"><span className="wbc-browser-picker-favicon-fallback">{WBC_SIDE_TAB_ICONS.browser}</span>{tab.favicon ? <img src={tab.favicon} alt="" draggable="false" onError={function (event) { event.currentTarget.hidden = true; }} /> : null}</span><b>{tab.title || tab.url || wbcT("workbenchChat.browserWindowTitle", "Browser")}</b></button><span className="wbc-browser-picker-actions"><button type="button" onClick={function (event) { refreshMaximizedBrowserTab(tab, event); }} aria-label={wbcT("browser.context.reload", "Reload")}>{FloatingBrowserIcon ? <FloatingBrowserIcon name="reload" size={14} /> : WBC_ICONS.retry}</button><button type="button" className={tab.muted ? "active" : ""} onClick={function (event) { toggleMaximizedBrowserMute(tab, event); }} aria-label={tab.muted ? wbcT("browser.context.unmute", "Unmute") : wbcT("browser.context.mute", "Mute")}>{FloatingBrowserIcon ? <FloatingBrowserIcon name={tab.muted ? "muted" : "volume"} size={14} /> : null}</button><button type="button" onClick={function (event) { closeMaximizedBrowserTab(tab, event); }} aria-label={wbcT("browser.context.closeTab", "Close tab")} title={wbcT("browser.context.closeTab", "Close tab")}>{WBC_ICONS.x}</button></span></div>;
+            })}
+          </WbcSplitPickerMenu>
+        )}
       </div>
       <div className="wbc-browser-window-content">
         {window.CyreneUI.require("browser").ViewportPanel
@@ -6424,6 +6598,9 @@ function WbcBrowserFloatingSurface({ browserState, browserSessionId, visible, mo
               browserSessionId: browserSessionId || "",
               roundId: (browserState && browserState.roundId) || "",
               onTakeoverComplete: onTakeoverComplete,
+              hideTabStrip: effectiveMode === "maximized",
+              hideReload: effectiveMode === "maximized",
+              hideMute: effectiveMode === "maximized",
             })
           : <p className="workbench-muted">{wbcT("chat.side.browserUnavailable", "Browser view is unavailable.")}</p>}
         {effectiveMode === "maximized" && !hasNativeChatOverlay && (
@@ -6473,7 +6650,11 @@ function WbcBrowserFloatingSurface({ browserState, browserSessionId, visible, mo
     </section>
   );
   if (effectiveMode === "maximized" && window.ReactDOM && typeof window.ReactDOM.createPortal === "function") {
-    return window.ReactDOM.createPortal(browserWindow, document.body);
+    // Keep the maximized browser inside the Workbench theme scope. Portaling
+    // directly to <body> drops the --wb-* custom properties, which makes the
+    // picker background transparent and lets the address bar show through.
+    var workbenchPortalRoot = document.querySelector(".workbench-shell") || document.body;
+    return window.ReactDOM.createPortal(browserWindow, workbenchPortalRoot);
   }
   return browserWindow;
 }
@@ -9591,12 +9772,12 @@ function WbcBrowserSplit({ active: splitActive = true, tabId, tabs, browserState
       // Electron's WebContentsView always composites above renderer DOM. Ask
       // the viewport to replace it with a same-frame preview before opening
       // the menu, keeping the webpage visible while the dropdown sits above it.
+      setPickerOpen(true);
       window.dispatchEvent(new CustomEvent("workbench:browser-obscured", {
         detail: {
           obscured: true,
           preview: true,
           sessionId: String(browserSessionId || ""),
-          onReady: function () { setPickerOpen(true); },
         },
       }));
       return;
@@ -9636,6 +9817,24 @@ function WbcBrowserSplit({ active: splitActive = true, tabId, tabs, browserState
     bridge.setMuted({ sessionId: browserSessionId, tabId: tab.id, muted: !tab.muted }).then(updateFrom).catch(function () {});
   }
 
+  function closeTab(tab, event) {
+    if (event) { event.preventDefault(); event.stopPropagation(); }
+    if (!bridge || !tab || !tab.id || typeof bridge.closeTab !== "function") return;
+    bridge.closeTab({ sessionId: browserSessionId, tabId: tab.id }).then(function (next) {
+      updateFrom(next);
+      var remaining = next && Array.isArray(next.tabs) ? next.tabs : [];
+      if (!remaining.length) {
+        setBrowserPickerOpen(false);
+        if (onClose) onClose();
+        return;
+      }
+      if (String(tab.id || "") === String(active.id || tabId || "")) {
+        var nextId = String(next.activeTabId || next.activeTab && next.activeTab.id || remaining[0].id || "");
+        if (nextId && onSelect) onSelect(nextId);
+      }
+    }).catch(function () {});
+  }
+
   return (
     <aside className="wbc-side-agent-split wbc-browser-split" aria-label={wbcT("chat.side.browser", "Browser")}>
       <div className="wbc-resource-split-picker-wrap">
@@ -9647,7 +9846,7 @@ function WbcBrowserSplit({ active: splitActive = true, tabId, tabs, browserState
           <button type="button" className={"wbc-browser-split-action" + (active.muted ? " active" : "")} onClick={function (event) { toggleMute(active, event); }} aria-label={active.muted ? wbcT("browser.context.unmute", "Unmute") : wbcT("browser.context.mute", "Mute")} title={active.muted ? wbcT("browser.context.unmute", "Unmute") : wbcT("browser.context.mute", "Mute")}>{BrowserIcon ? <BrowserIcon name={active.muted ? "muted" : "volume"} size={15} /> : null}</button>
           <button type="button" className="wbc-side-agent-split-close" onClick={onClose} aria-label={wbcT("workbenchChat.closeBrowser", "Close browser")}>{WBC_ICONS.x}</button>
         </header>
-        <WbcSplitPickerMenu open={pickerOpen} className="wbc-side-agent-split-menu wbc-resource-picker-menu wbc-browser-picker-menu" role="listbox">{liveTabs.map(function (tab) { var selected = String(tab.id || "") === String(active.id || tabId || ""); return <div key={tab.id} className={"wbc-browser-picker-row" + (selected ? " active" : "")} role="option" aria-selected={selected}><button type="button" className="wbc-browser-picker-select" onClick={function () { selectTab(tab); }}><span className="wbc-browser-picker-favicon" aria-hidden="true"><span className="wbc-browser-picker-favicon-fallback">{WBC_SIDE_TAB_ICONS.browser}</span>{tab.favicon ? <img src={tab.favicon} alt="" draggable="false" onError={function (event) { event.currentTarget.hidden = true; }} /> : null}</span><b>{tab.title || tab.url || wbcT("chat.side.browser", "Browser")}</b></button><span className="wbc-browser-picker-actions"><button type="button" onClick={function (event) { refreshTab(tab, event); }} aria-label={wbcT("browser.context.reload", "Reload")} title={wbcT("browser.context.reload", "Reload")}>{BrowserIcon ? <BrowserIcon name="reload" size={14} /> : WBC_ICONS.retry}</button><button type="button" className={tab.muted ? "active" : ""} onClick={function (event) { toggleMute(tab, event); }} aria-label={tab.muted ? wbcT("browser.context.unmute", "Unmute") : wbcT("browser.context.mute", "Mute")} title={tab.muted ? wbcT("browser.context.unmute", "Unmute") : wbcT("browser.context.mute", "Mute")}>{BrowserIcon ? <BrowserIcon name={tab.muted ? "muted" : "volume"} size={14} /> : null}</button></span></div>; })}</WbcSplitPickerMenu>
+        <WbcSplitPickerMenu open={pickerOpen} className="wbc-side-agent-split-menu wbc-resource-picker-menu wbc-browser-picker-menu" role="listbox">{liveTabs.map(function (tab) { var selected = String(tab.id || "") === String(active.id || tabId || ""); return <div key={tab.id} className={"wbc-browser-picker-row" + (selected ? " active" : "")} role="option" aria-selected={selected}><button type="button" className="wbc-browser-picker-select" onClick={function () { selectTab(tab); }}><span className="wbc-browser-picker-favicon" aria-hidden="true"><span className="wbc-browser-picker-favicon-fallback">{WBC_SIDE_TAB_ICONS.browser}</span>{tab.favicon ? <img src={tab.favicon} alt="" draggable="false" onError={function (event) { event.currentTarget.hidden = true; }} /> : null}</span><b>{tab.title || tab.url || wbcT("chat.side.browser", "Browser")}</b></button><span className="wbc-browser-picker-actions"><button type="button" onClick={function (event) { refreshTab(tab, event); }} aria-label={wbcT("browser.context.reload", "Reload")} title={wbcT("browser.context.reload", "Reload")}>{BrowserIcon ? <BrowserIcon name="reload" size={14} /> : WBC_ICONS.retry}</button><button type="button" className={tab.muted ? "active" : ""} onClick={function (event) { toggleMute(tab, event); }} aria-label={tab.muted ? wbcT("browser.context.unmute", "Unmute") : wbcT("browser.context.mute", "Mute")} title={tab.muted ? wbcT("browser.context.unmute", "Unmute") : wbcT("browser.context.mute", "Mute")}>{BrowserIcon ? <BrowserIcon name={tab.muted ? "muted" : "volume"} size={14} /> : null}</button><button type="button" onClick={function (event) { closeTab(tab, event); }} aria-label={wbcT("browser.context.closeTab", "Close tab")} title={wbcT("browser.context.closeTab", "Close tab")}>{WBC_ICONS.x}</button></span></div>; })}</WbcSplitPickerMenu>
       </div>
       <div className="wbc-resource-split-body wbc-browser-split-body">
         {splitActive && window.CyreneUI.require("browser").ViewportPanel ? React.createElement(window.CyreneUI.require("browser").ViewportPanel, { browserState: liveState, browserSessionId: browserSessionId, roundId: liveState && liveState.roundId || browserState && browserState.roundId || "", desiredTabId: active.id || tabId, onClose: onClose, onTakeoverComplete: onTakeoverComplete, zoomEnabled: false, hideTabStrip: true, hideReload: true, hideMute: true, splitChrome: true }) : null}

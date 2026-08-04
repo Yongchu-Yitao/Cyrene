@@ -162,9 +162,11 @@ function ElectronBrowserViewportPanel({ roundId, browserSessionId, onClose, brow
       });
     }
     const rect = node.getBoundingClientRect();
-    const pipWindow = node.closest(".wbc-browser-window.pip");
+    const browserWindow = node.closest(".wbc-browser-window");
     const borderRadius = 0;
-    const pageCornerRadius = pipWindow ? 8 : 0;
+    const pageCornerRadius = browserWindow && browserWindow.classList.contains("pip")
+      ? 8
+      : (browserWindow && browserWindow.classList.contains("maximized") ? 12 : 0);
     const payload = {
       sessionId: electronSessionId,
       visible: true,
@@ -216,7 +218,10 @@ function ElectronBrowserViewportPanel({ roundId, browserSessionId, onClose, brow
     const node = surfaceRef.current;
     if (!bridge || typeof bridge.setBounds !== "function" || !node) return Promise.resolve(false);
     const rect = node.getBoundingClientRect();
-    const pipWindow = node.closest(".wbc-browser-window.pip");
+    const browserWindow = node.closest(".wbc-browser-window");
+    const pageCornerRadius = browserWindow && browserWindow.classList.contains("pip")
+      ? 8
+      : (browserWindow && browserWindow.classList.contains("maximized") ? 12 : 0);
     const payload = {
       sessionId: electronSessionId,
       visible: true,
@@ -225,7 +230,7 @@ function ElectronBrowserViewportPanel({ roundId, browserSessionId, onClose, brow
       width: Math.max(0, rect.width),
       height: Math.max(0, rect.height),
       borderRadius: 0,
-      pageCornerRadius: pipWindow ? 8 : 0,
+      pageCornerRadius: pageCornerRadius,
       zoomEnabled: zoomEnabled !== false,
       resizeEdgeHintColor: getComputedStyle(node).getPropertyValue("--wb-accent").trim() || "#63b38f",
       resizeEdgeHintActive: resizeEdgeHintActiveRef.current,
@@ -261,9 +266,11 @@ function ElectronBrowserViewportPanel({ roundId, browserSessionId, onClose, brow
       return;
     }
     const rect = node.getBoundingClientRect();
-    const pipWindow = node.closest(".wbc-browser-window.pip");
+    const browserWindow = node.closest(".wbc-browser-window");
     const borderRadius = 0;
-    const pageCornerRadius = pipWindow ? 8 : 0;
+    const pageCornerRadius = browserWindow && browserWindow.classList.contains("pip")
+      ? 8
+      : (browserWindow && browserWindow.classList.contains("maximized") ? 12 : 0);
     const signature = [
       electronSessionId,
       Math.round(rect.left),

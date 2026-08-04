@@ -1023,6 +1023,7 @@ def register_workbench_chat_routes(
         from cyrene.agent.state import PERMISSION_MODES, _attachment_paths_by_name
 
         message = str(body.get("message") or "").strip()
+        client_request_id = str(body.get("clientRequestId") or "").strip()
         attachments = body.get("attachments") if isinstance(body.get("attachments"), list) else []
         if attachments:
             attachments = [
@@ -1203,6 +1204,8 @@ def register_workbench_chat_routes(
                 "content": message,
                 "createdAt": now,
             }
+            if client_request_id:
+                user_entry["clientRequestId"] = client_request_id
             if public_attachments:
                 user_entry["attachments"] = public_attachments
                 # Keep the normalized (path-bearing) attachments privately so a

@@ -219,6 +219,7 @@ class ChatGroupsReplaceBody(APIBody):
 
 class ChatMessageBody(APIBody):
     message: str | None = Field(default=None, max_length=200_000)
+    clientRequestId: str | None = Field(default=None, max_length=200)
     attachments: list[Any] = Field(default_factory=list, max_length=100)
     command: str | None = Field(default=None, max_length=20_000)
     model: str | None = Field(default=None, max_length=500)
