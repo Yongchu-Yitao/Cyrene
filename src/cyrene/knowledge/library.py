@@ -740,6 +740,16 @@ async def delete_items(
     placeholders = ",".join("?" for _ in normalized_ids)
     async with aiosqlite.connect(db_path, timeout=30) as db:
         if permanent:
+            # Remember the corpus rows these items link before the attachment
+            # rows (which hold the link) are removed below.
+            cursor = await db.execute(
+                f"""SELECT DISTINCT kb_document_id FROM library_attachments
+                    WHERE item_id IN ({placeholders})
+                      AND kb_document_id IS NOT NULL AND kb_document_id<>''""",
+                normalized_ids,
+            )
+            linked_doc_ids = [str(row[0]) for row in await cursor.fetchall()]
+            orphan_docs: list[dict[str, Any]] = []
             for table in (
                 "library_creators", "library_collection_items", "library_attachments",
                 "library_notes", "library_annotations",
@@ -758,6 +768,48 @@ async def delete_items(
                 f"DELETE FROM library_items WHERE id IN ({placeholders})",
                 normalized_ids,
             )
+            deleted_count = max(cursor.rowcount, 0)
+            # A permanently deleted item must not resurface through the
+            # knowledge bridge, which re-imports kb_documents that have no
+            # attachment link. Drop corpus rows orphaned by this deletion
+            # (chunks, FTS, relations) plus the managed file, so neither the
+            # bridge nor the catalog rescan can resurrect it.
+            if linked_doc_ids:
+                doc_placeholders = ",".join("?" for _ in linked_doc_ids)
+                cursor = await db.execute(
+                    f"""SELECT DISTINCT kb_document_id FROM library_attachments
+                        WHERE kb_document_id IN ({doc_placeholders})""",
+                    linked_doc_ids,
+                )
+                kept_doc_ids = {str(row[0]) for row in await cursor.fetchall()}
+                orphan_doc_ids = [
+                    value for value in linked_doc_ids if value not in kept_doc_ids
+                ]
+                if orphan_doc_ids:
+                    orphan_placeholders = ",".join("?" for _ in orphan_doc_ids)
+                    await db.execute(
+                        f"DELETE FROM kb_chunks_fts WHERE document_id IN ({orphan_placeholders})",
+                        orphan_doc_ids,
+                    )
+                    await db.execute(
+                        f"DELETE FROM kb_chunks WHERE document_id IN ({orphan_placeholders})",
+                        orphan_doc_ids,
+                    )
+                    await db.execute(
+                        f"""DELETE FROM kb_relations
+                            WHERE src_id IN ({orphan_placeholders})
+                               OR dst_id IN ({orphan_placeholders})""",
+                        orphan_doc_ids + orphan_doc_ids,
+                    )
+                    cursor = await db.execute(
+                        f"SELECT id, path FROM kb_documents WHERE id IN ({orphan_placeholders})",
+                        orphan_doc_ids,
+                    )
+                    orphan_docs = [{"id": row[0], "path": row[1]} for row in await cursor.fetchall()]
+                    await db.execute(
+                        f"DELETE FROM kb_documents WHERE id IN ({orphan_placeholders})",
+                        orphan_doc_ids,
+                    )
         else:
             now = _now()
             cursor = await db.execute(
@@ -770,6 +822,19 @@ async def delete_items(
             normalized_ids,
         )
         await db.commit()
+        if permanent:
+            # Only managed files are removed: a path outside the upload/export
+            # dirs may be the user's own file (e.g. a linked Zotero storage
+            # file) and must not be touched by a library-side delete.
+            from cyrene.runtime.attachments import resolve_managed_attachment_path
+            for doc in orphan_docs:
+                file_path = resolve_managed_attachment_path(str(doc.get("path") or ""))
+                if file_path is not None:
+                    try:
+                        file_path.unlink(missing_ok=True)
+                    except OSError:
+                        pass
+            return deleted_count
         return max(cursor.rowcount, 0)
 
 

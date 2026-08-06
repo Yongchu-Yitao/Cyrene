@@ -125,6 +125,115 @@ async def test_library_batch_delete_supports_trash_and_permanent_removal(library
 
 
 @pytest.mark.asyncio
+async def test_permanent_delete_removes_corpus_row_so_bridge_cannot_resurrect(
+    library_db, tmp_path
+):
+    from cyrene.runtime import attachments
+
+    current_uploads = tmp_path / "current" / "data" / "webui_uploads"
+    current_uploads.mkdir(parents=True)
+    monkeypatch = pytest.MonkeyPatch()
+    monkeypatch.setattr(attachments, "UPLOADS_DIR", current_uploads)
+    monkeypatch.setattr(attachments, "EXPORTS_DIR", tmp_path / "exports")
+
+    upload_dir = current_uploads / "library_default"
+    upload_dir.mkdir(parents=True)
+    file_path = upload_dir / "orphan.pdf"
+    file_path.write_bytes(b"%PDF-orphan")
+
+    document = await store.upsert_document_by_path(
+        library_db,
+        path=str(file_path.resolve()),
+        name=file_path.name,
+        content_type="application/pdf",
+        kind="pdf",
+        size=file_path.stat().st_size,
+        source="library_upload",
+        content_hash=store.content_hash_file(file_path),
+    )
+    await store.replace_chunks(
+        library_db,
+        document["id"],
+        [{"ordinal": 0, "content": "orphaned knowledge chunk"}],
+    )
+
+    items, total = await library.list_items(library_db)
+    assert total == 1
+    item_id = items[0]["id"]
+
+    # A soft delete keeps the item in the trash and must not touch the corpus.
+    assert await library.delete_items(library_db, [item_id]) == 1
+    assert (await library.list_items(library_db, trash=True))[1] == 1
+    async with aiosqlite.connect(library_db) as db:
+        cursor = await db.execute("SELECT COUNT(*) FROM kb_documents")
+        assert (await cursor.fetchone())[0] == 1
+
+    assert await library.delete_items(library_db, [item_id], permanent=True) == 1
+    assert (await library.list_items(library_db))[1] == 0
+    assert (await library.list_items(library_db, trash=True))[1] == 0
+    async with aiosqlite.connect(library_db) as db:
+        for table in ("kb_documents", "kb_chunks", "kb_chunks_fts"):
+            cursor = await db.execute(f"SELECT COUNT(*) FROM {table}")
+            assert (await cursor.fetchone())[0] == 0
+    assert not file_path.exists()
+
+    # The bridge (and the catalog rescan) must not bring the item back.
+    assert await library.sync_knowledge_documents(library_db) == 0
+    assert (await library.list_items(library_db))[1] == 0
+    monkeypatch.undo()
+
+
+@pytest.mark.asyncio
+async def test_permanent_delete_keeps_kb_document_shared_with_another_item(
+    library_db,
+):
+    async with aiosqlite.connect(library_db) as db:
+        await db.execute(
+            """INSERT INTO kb_documents (
+                id,name,path,content_hash,content_type,kind,size,status,source,title,
+                summary,tags,char_count,chunk_count,error,created_at,updated_at,metadata
+            ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+            (
+                "shared-doc", "shared.pdf", "/project/shared.pdf", "hash-shared",
+                "application/pdf", "pdf", 2048, "indexed", "kb_upload", "Shared",
+                "", "[]", 10, 1, "",
+                "2026-01-01T00:00:00+00:00", "2026-01-01T00:00:00+00:00", "{}",
+            ),
+        )
+        await db.execute(
+            """INSERT INTO kb_chunks
+               (id,document_id,ordinal,content,char_start,char_end,token_count,
+                embedding,embedding_dim,embedding_model,created_at)
+               VALUES (?,?,?,?,?,?,?,?,?,?,?)""",
+            (
+                "shared-chunk", "shared-doc", 0, "shared content", 0, 13, 2,
+                None, 0, "", "2026-01-01T00:00:00+00:00",
+            ),
+        )
+        await db.commit()
+
+    first = (await library.list_items(library_db))[0][0]
+    second = await library.create_item(library_db, {"title": "Second view"})
+    await library.add_attachment(
+        library_db,
+        second["id"],
+        {"kb_document_id": "shared-doc", "filename": "shared.pdf"},
+    )
+
+    assert await library.delete_items(library_db, [first["id"]], permanent=True) == 1
+    async with aiosqlite.connect(library_db) as db:
+        cursor = await db.execute("SELECT COUNT(*) FROM kb_documents")
+        assert (await cursor.fetchone())[0] == 1
+
+    assert await library.delete_items(library_db, [second["id"]], permanent=True) == 1
+    async with aiosqlite.connect(library_db) as db:
+        for table in ("kb_documents", "kb_chunks"):
+            cursor = await db.execute(f"SELECT COUNT(*) FROM {table}")
+            assert (await cursor.fetchone())[0] == 0
+    assert (await library.list_items(library_db))[1] == 0
+
+
+@pytest.mark.asyncio
 async def test_library_filters_general_knowledge_by_file_type(library_db):
     image = await library.create_item(library_db, {"title": "Product mockup"})
     audio = await library.create_item(library_db, {"title": "Interview recording"})
