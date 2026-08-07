@@ -12854,6 +12854,8 @@ html[data-theme="dark"] .wb-init-progress-dot { border-color: #46586b; }
   --wbc-shared-glass-rail-top-inset: calc(58px + 48px * var(--wb-ui-font-scale, 1));
   --wbc-shared-glass-right-inset: var(--wb-right-w, 350px);
   --wbc-side-track-width: var(--wb-right-w, 350px);
+  /* Right anchor: the overlay panel's left edge sits at the right track. */
+  --wbc-motion-left: calc(100% - var(--wbc-side-track-width));
   /* Preserve a readable main conversation lane while a detail split is open.
      The JS resizer uses the same 36vw / 380–440px envelope. */
   --wbc-main-min-width: clamp(380px, 36vw, 440px);
@@ -12867,9 +12869,11 @@ html[data-theme="dark"] .wb-init-progress-dot { border-color: #46586b; }
     0 1px 2px rgba(15, 23, 42, 0.028),
     0 5px 14px rgba(15, 23, 42, 0.02);
   display: grid;
-  /* Right column shares --wb-right-w (inherited from .workbench-grid) so the
-     conversation viewer/map panel resizes with the same drag handle. */
-  grid-template-columns: var(--wbc-rail-width) minmax(var(--wbc-main-min-width), 1fr) var(--wbc-side-track-width);
+  /* Always four tracks, so an anchored-side swap animates as a pure width
+     interpolation (0 <-> split track) instead of a track-count change, which
+     interpolates wrongly. The split overlay's reserved lane is the second
+     track on the right anchor and the fourth on the left. */
+  grid-template-columns: var(--wbc-rail-width) 0px minmax(var(--wbc-main-min-width), 1fr) var(--wbc-side-track-width);
   /* The detail split and the grid share one lightly under-damped curve. This
      lets the conversation lane compress as a single elastic surface instead
      of reflowing first and then having the split catch up from the right. */
@@ -12880,6 +12884,11 @@ html[data-theme="dark"] .wb-init-progress-dot { border-color: #46586b; }
   overflow: hidden;
   background: var(--wb-main-bg);
 }
+/* Pin each column explicitly; with the reserved 0-width second track the DOM
+   order (rail, main, side) no longer matches the track order. */
+.wbc-page > .wbc-rail { grid-column: 1; }
+.wbc-page > .wbc-main { grid-column: 3; }
+.wbc-page > .wbc-side { grid-column: 4; }
 
 /* One L-shaped glass plane covers the complete conversation rail and turns
    across the bottom of the main column. Rendering this material once avoids
@@ -13130,9 +13139,16 @@ html[data-theme="dark"] .wb-init-progress-dot { border-color: #46586b; }
   cursor: grabbing;
 }
 
-.wbc-chat-card.dragging {
-  opacity: .22;
-  transform: scale(.985);
+.wbc-chat-card.dragging,
+.wbc-chat-card.wbc-split-card-lifted {
+  /* The card lifts off the rail: stays fully opaque so the drag image reads
+     as the whole conversation being picked up. The lifted class is added by
+     the split-panel drag when its ghost enters the rail. */
+  opacity: 1;
+  transform: translateY(-3px) scale(1.03);
+  z-index: 50;
+  background: var(--wb-card-bg-strong);
+  box-shadow: 0 12px 30px rgba(15, 23, 42, 0.25);
 }
 
 .wbc-chat-card:hover {
@@ -13248,8 +13264,9 @@ html[data-theme="dark"] .wb-init-progress-dot { border-color: #46586b; }
 }
 
 .wbc-chat-group.dragging {
-  opacity: .24;
-  transform: scale(.99);
+  opacity: 1;
+  transform: translateY(-3px) scale(1.01);
+  box-shadow: 0 12px 30px rgba(15, 23, 42, 0.22);
 }
 
 .wbc-chat-group.drop-ready {
@@ -13573,8 +13590,11 @@ span.wbc-chat-group-toggle {
   position: absolute;
   z-index: 44;
   top: 0;
-  right: 0;
   bottom: 0;
+  /* Both anchors are concrete left values (see --wbc-motion-left on the
+     page), so an anchored-side swap interpolates continuously instead of
+     jumping between auto and a length. */
+  left: var(--wbc-motion-left, calc(100% - var(--wbc-side-track-width)));
   width: var(--wbc-side-track-width);
   min-width: 0;
   min-height: 0;
@@ -13584,7 +13604,10 @@ span.wbc-chat-group-toggle {
   pointer-events: none;
   transition:
     opacity 160ms ease,
-    transform 500ms cubic-bezier(.22, 1.16, .36, 1);
+    transform 500ms cubic-bezier(.22, 1.16, .36, 1),
+    /* Anchored-side swap glides the panel across with the same elastic
+       curve as the grid, so it stays glued to the conversation lane. */
+    left 500ms cubic-bezier(.22, 1.16, .36, 1);
   will-change: transform, opacity;
 }
 
@@ -13604,6 +13627,12 @@ span.wbc-chat-group-toggle {
   outline: none;
   cursor: col-resize;
   touch-action: none;
+}
+/* On the left side the divider (and thus the resize handle) faces the
+   conversation column. */
+.wbc-page.wbc-split-left .wbc-side-agent-split-resizer {
+  left: auto;
+  right: 0;
 }
 
 .wbc-side-agent-split-resizer:focus-visible {
@@ -13628,11 +13657,342 @@ body.wbc-resizing-side-agent .wbc-page {
   box-sizing: border-box;
   display: flex;
   flex-direction: column;
+  /* Content splits no longer carry their own grip; only clear the fixed
+     application top bar. */
   padding-top: 58px;
   overflow: hidden;
   border-left: 1px solid var(--wb-line);
   background: var(--wb-right-bg);
   box-shadow: -12px 0 30px rgba(15, 23, 42, 0.055);
+}
+
+/* ── Detail split anchored to the LEFT side of the conversation ─────────────
+   The grid grows a dedicated split track between rail and main; the split
+   overlay then sticks to the rail edge instead of the window edge. The right
+   panel track collapses to 0 so the conversation lane keeps the same width on
+   both anchored sides (and the grid never overflows on narrow windows). */
+.wbc-page.wbc-split-left {
+  grid-template-columns: var(--wbc-rail-width) var(--wbc-side-track-width) minmax(var(--wbc-main-min-width), 1fr) 0px;
+  /* The overlay panel sits in the reserved second track; a concrete length
+     on both anchors keeps the swap animation continuous. */
+  --wbc-motion-left: var(--wbc-rail-width);
+}
+/* The left layout inserts the split track between rail and main, so the DOM
+   order (rail, main, side) no longer matches the track order. Pin each column
+   explicitly or auto-placement would drop main into the split track. */
+.wbc-page.wbc-split-left > .wbc-rail { grid-column: 1; }
+.wbc-page.wbc-split-left > .wbc-main { grid-column: 3; }
+.wbc-page.wbc-split-left > .wbc-side { grid-column: 4; }
+/* The divider (and shadow) sit on the side that faces the conversation. */
+.wbc-page.wbc-split-left .wbc-side-agent-split {
+  border-left: 0;
+  border-right: 1px solid var(--wb-line);
+  box-shadow: 12px 0 30px rgba(15, 23, 42, 0.055);
+}
+
+/* ── Main-conversation grip ─────────────────────────────────────────────── */
+.wbc-split-grip-bar-host {
+  position: relative;
+  width: 100%;
+  height: 100%;
+}
+/* The horizontal bar: drag to move the split (native drag, like an
+   image/document), click to open the menu. The visible affordance is a small
+   centred pill that stays always on. */
+.wbc-side-split-grip-bar {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: grab;
+  user-select: none;
+  border-radius: 6px;
+}
+.wbc-side-split-grip-bar:active {
+  cursor: grabbing;
+}
+.wbc-split-main-grip:hover .wbc-side-split-grip-bar,
+.wbc-side-split-grip-bar:focus-visible {
+  background: color-mix(in srgb, var(--wb-control-hover-bg) 26%, transparent);
+}
+.wbc-side-split-grip-bar:focus-visible {
+  outline: 0;
+  box-shadow: inset 0 2px 0 color-mix(in srgb, var(--wb-accent) 55%, transparent);
+}
+.wbc-side-split-grip-bar-visual {
+  width: 56px;
+  height: 4px;
+  border-radius: 2px;
+  background: color-mix(in srgb, var(--wb-text) 22%, transparent);
+  pointer-events: none;
+  transition: width .14s ease, background .14s ease;
+}
+.wbc-side-split-grip-bar:hover .wbc-side-split-grip-bar-visual,
+.wbc-side-split-grip-bar:focus-visible .wbc-side-split-grip-bar-visual {
+  width: 72px;
+  background: var(--wb-accent);
+}
+/* Menu opened by clicking the bar: restore the conversation panel, swap the
+   split side, or close. Anchor it to the grip's center on both columns. */
+.wbc-side-split-grip-menu {
+  position: absolute;
+  top: calc(100% + 4px);
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 1200;
+  min-width: 190px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 6px;
+  border: 1px solid var(--wb-line);
+  border-radius: 12px;
+  background: var(--wb-card-bg-strong);
+  box-shadow: 0 12px 34px rgba(15, 23, 42, 0.2);
+}
+.wbc-side-split-grip-menu button {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  width: 100%;
+  padding: 8px 10px;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--wb-text);
+  font-size: calc(12.5px * var(--wb-ui-font-scale, 1));
+  text-align: left;
+  cursor: pointer;
+}
+.wbc-side-split-grip-menu button:hover {
+  background: var(--wb-row-hover-bg);
+}
+.wbc-side-split-grip-menu button > span:first-child {
+  display: inline-flex;
+  flex: 0 0 32px;
+  width: 32px;
+  height: 20px;
+  align-items: center;
+  justify-content: center;
+  gap: 2px;
+  color: var(--wb-muted);
+}
+
+.wbc-side-split-grip-menu button > span:first-child svg {
+  display: block;
+  flex: 0 0 auto;
+}
+
+/* Mirror grip on the conversation column's top edge: reposition the split
+   from either side of the page. Positioned with the same CSS variables as the
+   grid tracks, so it stays centred live while the split animates or resizes
+   (no JS rect measurement, which would lag a frame behind). */
+.wbc-split-main-grip {
+  position: absolute;
+  z-index: 42;
+  top: 58px;
+  height: 26px;
+  box-sizing: border-box;
+  user-select: none;
+  /* Default (right-anchored): from the rail's right edge to the split's left. */
+  left: var(--wbc-rail-width);
+  right: var(--wbc-side-track-width);
+  /* Follows the elastic side swap with the grid, not a jump. */
+  transition: left 500ms cubic-bezier(.22, 1.16, .36, 1), right 500ms cubic-bezier(.22, 1.16, .36, 1);
+}
+.wbc-page.wbc-split-left .wbc-split-main-grip {
+  left: calc(var(--wbc-rail-width) + var(--wbc-side-track-width));
+  right: 0;
+}
+
+/* The existing conversation panel is reused as an anchored floating card
+   while a content split occupies the side track. Because it is rendered as a
+   child of the main grip, 50% is always the exact grip/conversation centre on
+   either split side. */
+.wbc-split-main-grip > .wbc-side-floating {
+  position: absolute;
+  z-index: 1190;
+  top: calc(100% + 4px);
+  left: 50%;
+  width: min(var(--wb-right-w, 350px), calc(100% - 24px));
+  height: auto;
+  display: block;
+  box-sizing: border-box;
+  padding: 0;
+  transform: translateX(-50%);
+  overflow: visible;
+  opacity: 1;
+  visibility: visible;
+  pointer-events: none;
+  animation: wbc-floating-side-panel-in 170ms cubic-bezier(.2, .8, .2, 1) both;
+}
+
+.wbc-side-floating > [class~="wbc-side-card"] {
+  max-height: calc(100vh - 104px);
+}
+
+.wbc-side-floating .wbc-side-floating-close svg {
+  width: 18px;
+  height: 18px;
+}
+
+@keyframes wbc-floating-side-panel-in {
+  from { opacity: 0; transform: translateX(-50%) translateY(-5px) scale(.985); }
+  to { opacity: 1; transform: translateX(-50%) translateY(0) scale(1); }
+}
+
+/* ── Split panel native drag drop zones ─────────────────────────────────────
+   While the grip is dragged, these zones sit over the conversation rail
+   (drop = close the split) and over the main column, split into halves
+   (drop = anchor the split to that side). Positioned with the same CSS
+   variables as the grid tracks, so they match the layout live. They are
+   pure visual: hit testing stays on the layers below, and the zone logic
+   runs document-level from pointer coordinates — an interactive overlay on
+   top of the drag source would make Chromium cancel the drag. */
+.wbc-split-drop-zones {
+  position: absolute;
+  z-index: 60;
+  inset: 0;
+  pointer-events: none;
+}
+/* Every highlight is a strip as wide as the split panel itself, showing
+   exactly where the panel would land — never a whole column, and never
+   covering the conversation rail. */
+.wbc-split-drop-zone {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: var(--wbc-side-track-width);
+  box-sizing: border-box;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: transparent;
+  transition: background 120ms ease, left 500ms cubic-bezier(.22, 1.16, .36, 1);
+}
+/* Hints light up only while their zone is under the pointer. */
+.wbc-split-drop-zone .wbc-chat-side-drop-hint {
+  display: none;
+}
+.wbc-split-drop-zone.active .wbc-chat-side-drop-hint {
+  display: block;
+}
+.wbc-split-drop-zone.active {
+  background: color-mix(in srgb, var(--wb-accent) 8%, transparent);
+}
+/* Left anchor preview: flush against the rail's right edge. */
+.wbc-split-drop-left {
+  left: var(--wbc-rail-width);
+}
+/* Right anchor preview: flush against the window's right edge. */
+.wbc-split-drop-right {
+  left: calc(100% - var(--wbc-side-track-width));
+}
+/* Close preview: the panel's current spot (the anchored side it would
+   retract from) — outside the rail on both anchors. */
+.wbc-split-drop-rail {
+  left: calc(100% - var(--wbc-side-track-width));
+}
+.wbc-page.wbc-split-left .wbc-split-drop-rail {
+  left: var(--wbc-rail-width);
+}
+
+/* ── Split panel drag ghost ─────────────────────────────────────────────────
+   The native ghost is hidden; this fixed overlay follows the pointer and
+   carries a clone of the real split panel, so the lifted "thing" reads as
+   the actual dialog. Over the conversation rail it switches to a clone of
+   the matching rail card, as if the conversation itself were being picked
+   up from the list. Size and position are set by JS (panel/card rect +
+   grab offset). */
+.wbc-split-drag-ghost {
+  position: fixed;
+  z-index: 90;
+  border-radius: 14px;
+  border: 1px solid color-mix(in srgb, var(--wb-line) 72%, transparent);
+  background: var(--wb-card-bg-strong);
+  box-shadow: 0 18px 44px rgba(15, 23, 42, 0.28);
+  opacity: 0.92;
+  overflow: hidden;
+  pointer-events: none;
+  transition: width 160ms ease, height 160ms ease, border-radius 160ms ease;
+}
+.wbc-split-drag-ghost > * {
+  width: 100%;
+  height: 100%;
+  min-height: 0;
+}
+.wbc-split-drag-ghost > .wbc-chat-card {
+  display: none;
+}
+.wbc-split-drag-ghost.card {
+  border-radius: 12px;
+}
+.wbc-split-drag-ghost.card > *:not(.wbc-chat-card) {
+  display: none;
+}
+.wbc-split-drag-ghost.card > .wbc-chat-card {
+  display: flex;
+}
+
+/* ── Chat split (rail chat dragged onto the side) ──────────────────────────
+   Uses the same thread-stage + thread structure as the main conversation so
+   the transcript reads identically. */
+.wbc-chat-split-stage {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: hidden;
+}
+.wbc-chat-split-state {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  padding: 32px 16px;
+  color: var(--wb-muted);
+  font-size: calc(12.5px * var(--wb-ui-font-scale, 1));
+}
+
+/* Rail chat held over the right-side split zone: a dedicated drop layer
+   covers the zone (right panel track on wide windows, right-edge band when
+   the panel is hidden on narrow windows) only while a chat drag is in
+   progress, so the rest of the main area keeps its original behaviour. */
+.wbc-chat-side-drop-layer {
+  position: absolute;
+  z-index: 60;
+  top: 0;
+  bottom: 0;
+  box-sizing: border-box;
+  border-left: 2px dashed transparent;
+  border-right: 2px dashed transparent;
+  background: color-mix(in srgb, var(--wb-accent) 5%, transparent);
+  transition: border-color 120ms ease, background 120ms ease;
+}
+.wbc-chat-side-drop-layer.active {
+  border-left-color: color-mix(in srgb, var(--wb-accent) 72%, transparent);
+  border-right-color: color-mix(in srgb, var(--wb-accent) 72%, transparent);
+  background: color-mix(in srgb, var(--wb-accent) 8%, transparent);
+}
+.wbc-chat-side-drop-hint {
+  position: absolute;
+  z-index: 70;
+  top: 50%;
+  left: 50%;
+  max-width: min(340px, calc(100% - 32px));
+  transform: translate(-50%, -50%);
+  padding: 10px 16px;
+  border: 1px solid color-mix(in srgb, var(--wb-accent) 52%, var(--wb-line));
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--wb-card-bg-strong) 92%, transparent);
+  box-shadow: 0 12px 34px rgba(15, 23, 42, 0.2);
+  color: var(--wb-text);
+  /* One line, never a broken word on its own row. */
+  white-space: nowrap;
+  font-size: calc(13px * var(--wb-ui-font-scale, 1));
+  font-weight: 680;
+  text-align: center;
+  pointer-events: none;
+  backdrop-filter: blur(18px);
 }
 
 .wbc-side-agent-split-head {
@@ -14458,6 +14818,15 @@ body.wbc-resizing-side-agent .wbc-page {
 .wbc-thread::-webkit-scrollbar {
   width: 0;
   height: 0;
+}
+
+/* Chat split transcript: match the main conversation's thread look, with its
+   own scroll surface inside the split panel. */
+.wbc-chat-split-stage .wbc-thread {
+  height: 100%;
+  box-sizing: border-box;
+  overflow-y: auto;
+  padding: 4px 18px 20px;
 }
 
 /* Selection belongs to the transcript rather than the whole shell: controls,
@@ -15993,6 +16362,155 @@ button.wbc-attach-file:focus-visible {
   border-radius: 0 6px 6px 0;
   background: color-mix(in srgb, var(--wb-blue) 6%, transparent);
   color: var(--wb-muted);
+}
+
+/* Interactive Markdown blocks. These classes are emitted as standard HTML by
+   the shared renderer, so the same treatment applies in chat, memory,
+   knowledge, document viewers, and sub-agent results. */
+.wbc-fold,
+.wbc-card {
+  margin: 10px 0;
+  border: 1px solid var(--wb-line);
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--wb-panel-2) 72%, transparent);
+  color: var(--wb-text);
+  overflow: hidden;
+}
+
+.wbc-fold > summary {
+  min-height: 24px;
+  padding: 10px 12px;
+  cursor: pointer;
+  color: var(--wb-text);
+  font-weight: 650;
+  line-height: 1.5;
+  touch-action: manipulation;
+  transition: background-color 0.18s ease, color 0.18s ease;
+}
+
+.wbc-fold > summary:hover {
+  background: color-mix(in srgb, var(--wb-accent) 7%, transparent);
+}
+
+.wbc-fold > summary:focus-visible {
+  outline: 2px solid var(--wb-accent);
+  outline-offset: -3px;
+  border-radius: 8px;
+}
+
+.wbc-fold[open] > summary {
+  border-bottom: 1px solid var(--wb-line);
+  background: color-mix(in srgb, var(--wb-accent) 5%, transparent);
+}
+
+.wbc-fold-body,
+.wbc-card-body {
+  min-width: 0;
+  padding: 10px 12px;
+  overflow-x: auto;
+}
+
+.wbc-card-title {
+  padding: 9px 12px;
+  border-bottom: 1px solid var(--wb-line);
+  color: var(--wb-text);
+  font-weight: 700;
+  line-height: 1.5;
+  background: color-mix(in srgb, var(--wb-accent) 7%, transparent);
+}
+
+.wbc-fold-body > :first-child,
+.wbc-card-body > :first-child { margin-top: 0; }
+.wbc-fold-body > :last-child,
+.wbc-card-body > :last-child { margin-bottom: 0; }
+.wbc-fold-body > table,
+.wbc-card-body > table { width: 100%; }
+
+@media (prefers-reduced-motion: reduce) {
+  .wbc-fold > summary { transition: none; }
+}
+
+/* ── Declarative :::chart block ─────────────────────────────────────────────
+   The raw spec text is the default content (graceful fallback); the mount
+   script hides it and renders the ECharts widget in its place. */
+.wbc-chart {
+  margin: 10px 0;
+  border: 1px solid var(--wb-line);
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--wb-panel-2) 72%, transparent);
+  color: var(--wb-text);
+  overflow: hidden;
+}
+
+.wbc-chart-spec {
+  margin: 0;
+  padding: 10px 12px;
+  overflow-x: auto;
+  font-family: var(--wb-mono-font, ui-monospace, SFMono-Regular, Menlo, monospace);
+  font-size: 12px;
+  line-height: 1.6;
+  color: color-mix(in srgb, var(--wb-text) 82%, transparent);
+  white-space: pre;
+}
+
+.wbc-chart-spec-hidden { display: none; }
+
+.wbc-chart-wrap {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.wbc-chart-canvas {
+  width: 100%;
+  height: 260px;
+  min-height: 160px;
+  box-sizing: border-box;
+}
+
+.wbc-chart-controls {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 18px;
+  padding: 8px 12px 12px;
+  border-top: 1px solid var(--wb-line);
+}
+
+.wbc-chart-control {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+  color: var(--wb-text);
+  user-select: none;
+}
+
+.wbc-chart-control-name {
+  font-weight: 650;
+  min-width: 1ch;
+}
+
+.wbc-chart-control input[type="range"] {
+  width: 120px;
+  accent-color: var(--wb-accent);
+  cursor: pointer;
+  touch-action: manipulation;
+}
+
+.wbc-chart-control-value {
+  min-width: 3ch;
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+  color: color-mix(in srgb, var(--wb-text) 75%, transparent);
+}
+
+.wbc-chart.wbc-chart-error::before {
+  content: attr(data-wbc-chart-error);
+  display: block;
+  padding: 6px 12px;
+  font-size: 12px;
+  color: color-mix(in srgb, var(--wb-danger, #e5484d) 85%, transparent);
+  border-bottom: 1px solid var(--wb-line);
 }
 
 .wbc-caret {

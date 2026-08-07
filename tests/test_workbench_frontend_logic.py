@@ -430,7 +430,7 @@ def test_hidden_chat_sidebar_slightly_widens_and_centers_the_conversation_lane()
     assert "--wbc-reclaimed-side-width: 0px;" in page_css
     assert "--wbc-conversation-shift: 0px;" in page_css
     assert "--wbc-side-track-width: var(--wb-right-w, 350px);" in page_css
-    assert "grid-template-columns: var(--wbc-rail-width) minmax(var(--wbc-main-min-width), 1fr) var(--wbc-side-track-width);" in page_css
+    assert "grid-template-columns: var(--wbc-rail-width) 0px minmax(var(--wbc-main-min-width), 1fr) var(--wbc-side-track-width);" in page_css
     assert "transition: grid-template-columns 500ms cubic-bezier(.22, 1.16, .36, 1);" in page_css
     assert "--wbc-collapsed-lane-growth: clamp(64px, 5vw, 96px);" in page_css
     assert "--wbc-side-track-width: 0px;" in hidden_css
@@ -800,13 +800,152 @@ def test_workbench_side_question_opens_the_existing_conversation_ui_in_a_split()
     assert 'style={splitDetailOpen ? { "--wbc-side-track-width": sideAgentSplitWidth + "px" } : undefined}' in source
     assert ".wbc-side-agent-split-resizer" in styles
     assert "body.wbc-resizing-side-agent .wbc-page" in styles
+    # The split panel is lifted with a native drag like an image/document:
+    # the grip starts the drag, the panel stays put and drop zones react.
+    assert 'var WBC_SPLIT_DRAG_MIME = "application/x-cyrene-split+json";' in source
+    assert "function wbcSetSplitDrag" in source
+    assert "function wbcHasSplitDrag" in source
+    assert "function handleSplitDragStart" in source
+    assert "setDragImage" in source
+    # The native ghost is hidden (1x1 canvas); a raw-DOM overlay (drag ghost
+    # + drop zones) follows the pointer and shrinks to a chat card over the
+    # conversation rail. It is built outside React so the drag source's DOM
+    # never changes mid-drag (a re-render there cancels the drag).
+    assert "canvas.width = 1;" in source
+    assert "splitOverlayCleanupRef" in source
+    assert "onDocumentDrop" in source
+    assert "function zoneAt" in source
+    # The ghost is a clone of the real split panel (the lifted dialog); over
+    # the conversation rail it switches to the matching rail card clone.
+    assert "panel.cloneNode(true)" in source
+    assert "cardClone" in source
+    assert 'data-chat-id={String(chat.id)}' in source
+    assert "wbc-split-card-lifted" in styles
+    # Only the main conversation keeps a grip; content splits do not render a
+    # duplicate handle.
+    assert 'closest(".wbc-split-main-grip")' in source
+    assert "activeChatIdRef.current" in source
+    assert "wbc-split-drag-ghost" in styles
+    assert 'wbcT("workbenchChat.splitDropClose"' in source
+    assert 'wbcT("workbenchChat.splitDropLeft"' in source
+    assert 'wbcT("workbenchChat.splitDropRight"' in source
+    grip_bar = source.split("function WbcSplitGripBar", 1)[1].split(
+        "function WbcSideAgentSplit", 1
+    )[0]
+    assert 'draggable="true"' in grip_bar
+    assert "onDragStart" in grip_bar
+    assert "onDragEnd" in grip_bar
+    assert "onClick" in grip_bar
+    assert "onDragPanel" not in grip_bar
+    assert ".wbc-split-drop-zones" in styles
+    assert ".wbc-split-drop-zone.active" in styles
+    assert ".wbc-split-drop-rail" in styles
+    assert ".wbc-split-drop-left" in styles
+    assert ".wbc-split-drop-right" in styles
+    # Highlights are strips as wide as the split panel, never whole columns.
+    assert "width: var(--wbc-side-track-width);" in styles.split(".wbc-split-drop-zone {", 1)[1].split("}", 1)[0]
+    assert ".wbc-split-drop-main" not in styles
+    assert ".wbc-split-drop-half" not in styles
     split_head_css = styles.split(".wbc-side-agent-split-head {", 1)[1].split("}", 1)[0]
     assert "border-radius: 14px;" in split_head_css
     assert "margin: 12px 12px 8px;" in split_head_css
     assert "z-index: 1001;" in split_head_css
     split_css = styles.split(".wbc-side-agent-split {", 1)[1].split("}", 1)[0]
+    # Content splits clear only the fixed app bar; there is no split grip band.
     assert "padding-top: 58px;" in split_css
+    assert "function WbcSideSplitGrip" not in source
+    resource_host = source.split("function WbcResourceSplitHost", 1)[1].split(
+        "function WbcMapSplitHost", 1
+    )[0]
+    assert "WbcSideSplitGrip" not in resource_host
     assert "--wbc-main-min-width: clamp(380px, 36vw, 440px);" in styles
+
+
+def test_workbench_split_grip_opens_a_centered_floating_conversation_panel():
+    root = Path(__file__).resolve().parent.parent
+    source = (root / "src" / "webui" / "frontend" / "workbench-chat.jsx").read_text(
+        encoding="utf-8"
+    )
+    styles = (root / "src" / "webui" / "frontend" / "workbench.css").read_text(
+        encoding="utf-8"
+    )
+
+    grip_bar = source.split("function WbcSplitGripBar", 1)[1].split(
+        "function WbcSideAgentSplit", 1
+    )[0]
+    assert "WBC_ICONS.sidebar" in grip_bar
+    assert 'wbcT("workbenchChat.detailPanel.openConversationPanel"' in grip_bar
+    assert "if (onOpenConversationPanel) onOpenConversationPanel();" in grip_bar
+    assert "if (onClose) onClose();" not in grip_bar.split("function openConversationPanel", 1)[1].split("return (", 1)[0]
+    assert "floatingConversationPanelOpen" in source
+    assert "renderConversationPanel(true)" in source
+    assert 'floating ? " wbc-side-floating" : ""' in source
+    assert "floating ? WBC_ICONS.x : WBC_ICONS.chevronsRight" in source
+    assert 'wbcT("workbenchChat.closeFloatingConversationPanel"' in source
+
+    split_menu_icon_css = styles.split(
+        ".wbc-side-split-grip-menu button > span:first-child {", 1
+    )[1].split("}", 1)[0]
+    assert "flex: 0 0 32px;" in split_menu_icon_css
+    assert "justify-content: center;" in split_menu_icon_css
+    split_menu_css = styles.split(".wbc-side-split-grip-menu {", 1)[1].split("}", 1)[0]
+    assert "top: calc(100% + 4px);" in split_menu_css
+    assert "left: 50%;" in split_menu_css
+    assert "transform: translateX(-50%);" in split_menu_css
+    assert "right:" not in split_menu_css
+
+    floating_css = styles.split(
+        ".wbc-split-main-grip > .wbc-side-floating {", 1
+    )[1].split("}", 1)[0]
+    assert "top: calc(100% + 4px);" in floating_css
+    assert "left: 50%;" in floating_css
+    assert "transform: translateX(-50%);" in floating_css
+    assert "width: min(var(--wb-right-w, 350px), calc(100% - 24px));" in floating_css
+
+
+def test_floating_conversation_panel_resource_split_replaces_right_and_restores_previous_split():
+    root = Path(__file__).resolve().parent.parent
+    source = (root / "src" / "webui" / "frontend" / "workbench-chat.jsx").read_text(
+        encoding="utf-8"
+    )
+
+    begin = source.split("  function beginFloatingPanelSplit(openSplit) {", 1)[1].split(
+        "\n  function restoreFloatingPanelSplit", 1
+    )[0]
+    restore = source.split("  function restoreFloatingPanelSplit() {", 1)[1].split(
+        "\n  function closeSideAgentSplit", 1
+    )[0]
+    render_panel = source.split("  function renderConversationPanel(floating) {", 1)[1].split(
+        "\n\n  return (\n    <div", 1
+    )[0]
+
+    # Snapshot the previous content and side before every floating-panel split.
+    assert "floatingSplitRestoreRef.current = {" in begin
+    assert "splitSide: splitSide" in begin
+    assert "sideAgentId: sideAgentSplitByChat[chatId]" in begin
+    assert "artifactKey: artifactSplitByChat[chatId]" in begin
+    assert "change: changeSplitByChat[chatId]" in begin
+    assert "resource: resourceSplitByChat[chatId]" in begin
+    # Whether the conversation started left or right, new content owns the
+    # right track; the existing animated grid moves a right conversation left.
+    assert 'setSplitSideDirect("right");' in begin
+    assert "openSplit();" in begin
+    # Closing any temporary content restores every displaced split store and
+    # the original left/right placement.
+    assert "restoreEntry(setSideAgentSplitByChat, snapshot.sideAgentId);" in restore
+    assert "restoreEntry(setArtifactSplitByChat, snapshot.artifactKey);" in restore
+    assert "restoreEntry(setChangeSplitByChat, snapshot.change);" in restore
+    assert "restoreEntry(setResourceSplitByChat, snapshot.resource);" in restore
+    assert 'setSplitSideDirect(snapshot.splitSide === "left" ? "left" : "right");' in restore
+    assert source.count("if (restoreFloatingPanelSplit()) return;") >= 5
+    assert "if (floating) beginFloatingPanelSplit(openSplit);" in render_panel
+    assert 'selectResourceSplit("viewer"' in render_panel
+    assert 'selectResourceSplit("map"' in render_panel
+    assert 'selectResourceSplit("browser"' in render_panel
+    assert 'selectResourceSplit("subagents"' in render_panel
+    assert "selectArtifact(file)" in render_panel
+    assert "selectChange(change)" in render_panel
+    assert "selectSideAgent(agentId)" in render_panel
 
 
 def test_workbench_artifacts_use_the_shared_resizable_split_preview():
@@ -835,7 +974,8 @@ def test_workbench_artifacts_use_the_shared_resizable_split_preview():
     assert "setArtifactSplitByChat" in select_handler
     assert "setSideAgentSplitByChat" in select_handler
     assert "function WbcArtifactSplitHost" in source
-    assert '<WbcSideAgentSplitResizer width={width} onResize={onResize} />' in source
+    assert "<WbcSideAgentSplitResizer width={width} onResize={onResize} splitSide={splitSide} />" in source
+    assert "<WbcSideSplitGrip" not in source
     assert 'className="wbc-side-agent-split wbc-artifact-split"' in artifact_split
     assert 'className="wbc-side-agent-split-picker"' in artifact_split
     assert "files.map(function (item, index)" in artifact_split
@@ -845,6 +985,22 @@ def test_workbench_artifacts_use_the_shared_resizable_split_preview():
     assert "splitViewer || splitMap || splitBrowserTabId || splitSubagents" in source
     assert ".wbc-artifact-list-row" in styles
     assert ".wbc-artifact-split-viewer" in styles
+
+
+def test_workbench_message_viewer_action_opens_the_file_split_directly():
+    root = Path(__file__).resolve().parent.parent
+    source = (root / "src" / "webui" / "frontend" / "workbench-chat.jsx").read_text(
+        encoding="utf-8"
+    )
+
+    open_viewer = source.split("  function openViewer(file) {", 1)[1].split(
+        "\n  function revealTopbarResource", 1
+    )[0]
+    assert "setViewerFile(file);" in open_viewer
+    assert 'setSideTab("");' in open_viewer
+    assert 'setSideTab("viewer");' not in open_viewer
+    assert 'selectResourceSplit("viewer", wbcArtifactFileKey(file));' in open_viewer
+    assert "viewerFile && wbcArtifactFileKey(viewerFile)" in source
 
 
 def test_workbench_changes_panel_is_list_only_and_opens_shared_diff_split():
@@ -5443,6 +5599,124 @@ process.stdout.write(JSON.stringify({{
     assert '<a href="https://example.com/a%EF%BC%8Cb">示例</a>' in result["explicit"]
 
 
+def test_markdown_interactive_blocks_render_only_after_streaming_finishes():
+    root = Path(__file__).resolve().parent.parent
+    renderer_path = root / "src" / "webui" / "frontend" / "shared" / "markdown" / "renderer.jsx"
+    marked_path = root / "src" / "webui" / "static" / "app" / "marked.min.js"
+    script = f"""
+const fs = require("fs");
+const vm = require("vm");
+const marked = require({json.dumps(str(marked_path))});
+const services = {{}};
+const window = {{
+  marked,
+  DOMPurify: {{ sanitize: (html) => html }},
+  CyreneUI: {{ register: (name, service) => (services[name] = service) }},
+}};
+vm.runInNewContext(fs.readFileSync({json.dumps(str(renderer_path))}, "utf8"), {{ window }});
+const source = [
+  "Visible introduction.",
+  "",
+  ":::details **Analysis**",
+  "Detailed **Markdown**.",
+  ":::",
+  "",
+  ":::card Performance comparison",
+  "| Option | Time |",
+  "| --- | --- |",
+  "| A | 12ms |",
+  ":::",
+  "",
+  "Visible conclusion.",
+].join("\\n");
+process.stdout.write(JSON.stringify({{
+  finalHtml: services.markdown.renderRich(source),
+  streamingHtml: services.markdown.renderRich(source, {{ interactive: false }}),
+}}));
+"""
+    completed = subprocess.run(["node", "-e", script], check=True, capture_output=True, text=True)
+    result = json.loads(completed.stdout)
+
+    assert '<details class="wbc-fold"><summary><strong>Analysis</strong></summary>' in result["finalHtml"]
+    assert '<div class="wbc-fold-body"><p>Detailed <strong>Markdown</strong>.</p>' in result["finalHtml"]
+    assert '<div class="wbc-card"><div class="wbc-card-title">Performance comparison</div>' in result["finalHtml"]
+    assert "<table>" in result["finalHtml"]
+    assert "Visible introduction." in result["streamingHtml"]
+    assert "Visible conclusion." in result["streamingHtml"]
+    assert "Detailed" not in result["streamingHtml"]
+    assert "Performance comparison" not in result["streamingHtml"]
+    assert "wbc-fold" not in result["streamingHtml"]
+    assert "wbc-card" not in result["streamingHtml"]
+
+
+def test_markdown_streaming_strip_preserves_directives_inside_code_fences():
+    root = Path(__file__).resolve().parent.parent
+    renderer_path = root / "src" / "webui" / "frontend" / "shared" / "markdown" / "renderer.jsx"
+    marked_path = root / "src" / "webui" / "static" / "app" / "marked.min.js"
+    script = f"""
+const fs = require("fs");
+const vm = require("vm");
+const marked = require({json.dumps(str(marked_path))});
+const services = {{}};
+const window = {{
+  marked,
+  DOMPurify: {{ sanitize: (html) => html }},
+  CyreneUI: {{ register: (name, service) => (services[name] = service) }},
+}};
+vm.runInNewContext(fs.readFileSync({json.dumps(str(renderer_path))}, "utf8"), {{ window }});
+const fenced = ["```text", ":::details literal", "inside code", ":::", "```", "Visible."].join("\\n");
+const unfinished = ["Before.", ":::card Pending", "hidden so far"].join("\\n");
+const embeddedFence = [
+  "Before.",
+  ":::details Complete",
+  "```text",
+  ":::",
+  "```",
+  "still hidden",
+  ":::",
+  "After.",
+].join("\\n");
+process.stdout.write(JSON.stringify({{
+  fenced: services.markdown.renderRich(fenced, {{ interactive: false }}),
+  unfinished: services.markdown.renderRich(unfinished, {{ interactive: false }}),
+  embeddedFence: services.markdown.renderRich(embeddedFence, {{ interactive: false }}),
+  finalEmbeddedFence: services.markdown.renderRich(embeddedFence),
+}}));
+"""
+    completed = subprocess.run(["node", "-e", script], check=True, capture_output=True, text=True)
+    result = json.loads(completed.stdout)
+
+    assert ":::details literal" in result["fenced"]
+    assert "inside code" in result["fenced"]
+    assert "Visible." in result["fenced"]
+    assert "Before." in result["unfinished"]
+    assert "Pending" not in result["unfinished"]
+    assert "hidden so far" not in result["unfinished"]
+    assert "Before." in result["embeddedFence"]
+    assert "After." in result["embeddedFence"]
+    assert "still hidden" not in result["embeddedFence"]
+    assert '<details class="wbc-fold"><summary>Complete</summary>' in result["finalEmbeddedFence"]
+    assert "still hidden" in result["finalEmbeddedFence"]
+    assert ":::" in result["finalEmbeddedFence"]
+    assert "After." in result["finalEmbeddedFence"]
+
+
+def test_workbench_live_reply_disables_interactive_markdown_until_done():
+    root = Path(__file__).resolve().parent.parent
+    chat = (root / "src" / "webui" / "frontend" / "workbench-chat.jsx").read_text(encoding="utf-8")
+    styles = (root / "src" / "webui" / "frontend" / "workbench.css").read_text(encoding="utf-8")
+    prompts = (root / "src" / "cyrene" / "agent" / "prompts.py").read_text(encoding="utf-8")
+
+    live_message = chat.split("function WbcLiveMessage", 1)[1].split("// ---------------------------------------------------------------------------", 1)[0]
+    assistant_message = chat.split("function WbcAssistantMessage", 1)[1].split("var WBC_HEARTBEAT_STALL_MS", 1)[0]
+    assert "wbcRenderMarkdown(runtime.text, { interactive: false })" in live_message
+    assert "wbcRenderMarkdown(msg.content)" in assistant_message
+    assert ".wbc-fold > summary:focus-visible" in styles
+    assert "@media (prefers-reduced-motion: reduce)" in styles
+    assert ":::details Title" in prompts
+    assert ":::card Title" in prompts
+
+
 def test_workbench_library_list_uses_explicit_pagination():
     root = Path(__file__).resolve().parent.parent
     source = (root / "src" / "webui" / "frontend" / "workbench-library.jsx").read_text(encoding="utf-8")
@@ -5528,3 +5802,262 @@ def test_phase1_stream_is_rendered_as_a_distinct_execution_card():
     assert '"workbenchChat.phase1Card": "正在理解指令"' in translations
     assert '"workbenchChat.phase1Understood": "已理解用户需求"' in translations
     assert "border-radius: 16px" in styles
+
+
+# ---------------------------------------------------------------------------
+# :::chart declarative interactive blocks
+# ---------------------------------------------------------------------------
+
+def _run_chart_services_js(expression: str):
+    """Run JS against the chart spec + mount modules (no marked/DOM needed)."""
+    root = Path(__file__).resolve().parent.parent
+    spec_path = root / "src" / "webui" / "frontend" / "shared" / "chart" / "spec.jsx"
+    mount_path = root / "src" / "webui" / "frontend" / "shared" / "chart" / "mount.jsx"
+    script = f"""
+const fs = require("fs");
+const services = {{}};
+const window = {{
+  CyreneUI: {{ register: (name, service) => (services[name] = service) }},
+  document: undefined,
+}};
+eval(fs.readFileSync({json.dumps(str(spec_path))}, "utf8"));
+eval(fs.readFileSync({json.dumps(str(mount_path))}, "utf8"));
+const result = ({expression});
+process.stdout.write(JSON.stringify(result));
+"""
+    completed = subprocess.run(["node", "-e", script], check=True, capture_output=True, text=True)
+    return json.loads(completed.stdout)
+
+
+def _run_chart_render_js(expression: str):
+    """Run JS against the real marked + chart spec + renderer modules."""
+    root = Path(__file__).resolve().parent.parent
+    renderer_path = root / "src" / "webui" / "frontend" / "shared" / "markdown" / "renderer.jsx"
+    spec_path = root / "src" / "webui" / "frontend" / "shared" / "chart" / "spec.jsx"
+    marked_path = root / "src" / "webui" / "static" / "app" / "marked.min.js"
+    script = f"""
+const fs = require("fs");
+const marked = require({json.dumps(str(marked_path))});
+const services = {{}};
+const window = {{
+  marked,
+  DOMPurify: {{ sanitize: (html) => html }},
+  CyreneUI: {{ register: (name, service) => (services[name] = service) }},
+}};
+eval(fs.readFileSync({json.dumps(str(spec_path))}, "utf8"));
+eval(fs.readFileSync({json.dumps(str(renderer_path))}, "utf8"));
+window.CyreneUI.markdown = services.markdown;
+const result = ({expression});
+process.stdout.write(JSON.stringify(result));
+"""
+    completed = subprocess.run(["node", "-e", script], check=True, capture_output=True, text=True)
+    return json.loads(completed.stdout)
+
+
+_CHART_SAMPLE = [
+    "Visible intro.",
+    "",
+    ":::chart line",
+    "x: [-4,-3,-2,-1,0,1,2,3,4]",
+    'y-binds: "a*x*x + b*x + c"',
+    "controls:",
+    "  - param: a",
+    "    range: [-5, 5]",
+    "    step: 0.1",
+    "    default: 1",
+    "  - param: b",
+    "    range: [-10, 10]",
+    "    step: 0.5",
+    "    default: 0",
+    "  - param: c",
+    "    range: [-10, 10]",
+    "    step: 0.5",
+    "    default: -4",
+    "options:",
+    "  title: y = a·x² + b·x + c",
+    ":::",  # noqa: E501
+    "",
+    "Visible conclusion.",
+]
+
+
+def test_markdown_chart_block_renders_payload_and_streaming_strips_it():
+    result = _run_chart_render_js(
+        "(() => {\n"
+        "  const src = " + json.dumps("\n".join(_CHART_SAMPLE)) + ";\n"
+        "  const finalHtml = services.markdown.renderRich(src);\n"
+        "  const streamingHtml = services.markdown.renderRich(src, { interactive: false });\n"
+        "  const match = finalHtml.match(/data-wbc-chart=\"([^\"]*)\"/);\n"
+        "  const payload = match ? JSON.parse(match[1].replace(/&quot;/g, '\"')) : null;\n"
+        "  return {\n"
+        "    finalHtml,\n"
+        "    streamingHtml,\n"
+        "    payload,\n"
+        "    hasSpecFallback: finalHtml.indexOf('<pre class=\"wbc-chart-spec\">') >= 0,\n"
+        "  };\n"
+        "})()"
+    )
+
+    assert 'class="wbc-chart"' in result["finalHtml"]
+    assert result["hasSpecFallback"]
+    assert result["payload"]["type"] == "line"
+    assert result["payload"]["x"] == [-4, -3, -2, -1, 0, 1, 2, 3, 4]
+    assert result["payload"]["y-binds"] == "a*x*x + b*x + c"
+    assert result["payload"]["controls"][0] == {"param": "a", "range": [-5, 5], "step": 0.1, "default": 1}
+    assert result["payload"]["options"]["title"] == "y = a·x² + b·x + c"
+    # The interactive block is hidden while streaming; prose survives.
+    assert "Visible intro." in result["streamingHtml"]
+    assert "Visible conclusion." in result["streamingHtml"]
+    assert "wbc-chart" not in result["streamingHtml"]
+    assert "a*x*x" not in result["streamingHtml"]
+
+
+def test_markdown_chart_invalid_spec_falls_back_to_spec_text():
+    result = _run_chart_render_js(
+        "(() => {\n"
+        "  const src = ['Bad chart:', '', ':::chart pie', 'x: [1,2,3]', 'y: [4,5,6]', ':::'].join('\\n');\n"
+        "  const html = services.markdown.renderRich(src);\n"
+        "  return { html };\n"
+        "})()"
+    )
+    assert 'class="wbc-chart wbc-chart-error"' in result["html"]
+    assert 'data-wbc-chart-error="unsupported chart type: pie"' in result["html"]
+    assert '<pre class="wbc-chart-spec">x: [1,2,3]' in result["html"]
+
+
+def test_chart_spec_validation_rejects_injection_and_bad_shapes():
+    result = _run_chart_services_js(
+        "(() => {\n"
+        "  const chartSpec = services['chart-spec'];\n"
+        "  const good = 'x: [1,2,3]\\ny: [4,5,6]\\n';\n"
+        "  function outcome(body, type) {\n"
+        "    try { chartSpec.buildPayload(body, type || 'line'); return true; }\n"
+        "    catch (e) { return false; }\n"
+        "  }\n"
+        "  const controlA = 'controls:\\n  - param: a\\n    range: [0, 1]\\n    step: 0.1\\n    default: 0\\n';\n"
+        "  return {\n"
+        "    good: outcome(good),\n"
+        "    unknown_type: outcome(good, 'pie'),\n"
+        "    html_in_binds: outcome('x: [1,2]\\ny-binds: \\\"a + <script>alert(1)</script>\\\"\\n' + controlA),\n"
+        "    eval_in_binds: outcome('x: [1,2]\\ny-binds: \\\"eval(1)\\\"\\n' + controlA),\n"
+        "    unbound_variable: outcome('x: [1,2]\\ny-binds: \\\"a + b\\\"\\n' + controlA),\n"
+        "    x_y_mismatch: outcome('x: [1,2,3]\\ny: [4]\\n'),\n"
+        "    missing_y: outcome('x: [1,2,3]\\n'),\n"
+        "    bad_range: outcome('x: [1,2]\\ny: [3,4]\\ncontrols:\\n  - param: a\\n    range: [5, 5]\\n    step: 0.1\\n    default: 1\\n'),\n"
+        "    reserved_x: outcome('x: [1,2]\\ny: [3,4]\\ncontrols:\\n  - param: x\\n    range: [0, 1]\\n    step: 0.1\\n    default: 0\\n'),\n"
+        "  };\n"
+        "})()"
+    )
+    assert result["good"] is True
+    assert result["unknown_type"] is False
+    assert result["html_in_binds"] is False
+    assert result["eval_in_binds"] is False
+    assert result["unbound_variable"] is False
+    assert result["x_y_mismatch"] is False
+    assert result["missing_y"] is False
+    assert result["bad_range"] is False
+    assert result["reserved_x"] is False
+
+
+def test_chart_spec_payload_size_is_capped():
+    result = _run_chart_services_js(
+        "(() => {\n"
+        "  const chartSpec = services['chart-spec'];\n"
+        "  const big = Array.from({ length: 4000 }, (_, i) => i);\n"
+        "  const body = 'x: [' + big.join(',') + ']\\ny: [' + big.join(',') + ']\\n';\n"
+        "  try { chartSpec.buildPayload(body, 'line'); return { accepted: true }; }\n"
+        "  catch (e) { return { accepted: false, message: e.message }; }\n"
+        "})()"
+    )
+    assert result["accepted"] is False
+    assert "32 KB" in result["message"]
+
+
+def test_chart_binds_evaluator_is_whitelisted_arithmetic():
+    result = _run_chart_services_js(
+        "(() => {\n"
+        "  const { compileExpr } = services['chart-spec'];\n"
+        "  const quad = compileExpr('a*x*x + b*x + c');\n"
+        "  const outcomes = {\n"
+        "    quad: [0, 1, 2, 3, 4].map(x => quad.evaluate({ a: 1, b: 0, c: -4, x })),\n"
+        "    parentheses: compileExpr('(a+b)*(c-d)').evaluate({ a: 1, b: 2, c: 5, d: 3 }),\n"
+        "    negation: compileExpr('-x*x + 2').evaluate({ x: 3 }),\n"
+        "    division: compileExpr('(x+1)/2').evaluate({ x: 3 }),\n"
+        "    decimal: compileExpr('x*0.5').evaluate({ x: 3 }),\n"
+        "  };\n"
+        "  const expressions = [\n"
+        "    \"eval('x')\", 'x ** 2', 'x < 2', 'a && b', 'Math.max(x)',\n"
+        "    'x + 1 = 2', 'a ? b : c', 'import os', 'x; alert(1)',\n"
+        "  ];\n"
+        "  const rejections = {};\n"
+        "  expressions.forEach(expr => {\n"
+        "    try { compileExpr(expr); rejections[expr] = false; }\n"
+        "    catch (e) { rejections[expr] = true; }\n"
+        "  });\n"
+        "  return { outcomes, rejections };\n"
+        "})()"
+    )
+    assert result["outcomes"]["quad"] == [-4, -3, 0, 5, 12]
+    assert result["outcomes"]["parentheses"] == 6
+    assert result["outcomes"]["negation"] == -7
+    assert result["outcomes"]["division"] == 2
+    assert result["outcomes"]["decimal"] == 1.5
+    assert all(result["rejections"].values())
+
+
+def test_chart_mount_builds_option_and_recomputes_series():
+    result = _run_chart_services_js(
+        "(() => {\n"
+        "  const chart = services['chart'];\n"
+        "  const payload = {\n"
+        "    type: 'line',\n"
+        "    x: [0, 1, 2],\n"
+        "    'y-binds': 'a*x + 1',\n"
+        "    controls: [{ param: 'a', range: [0, 2], step: 1, default: 2 }],\n"
+        "    options: { title: 'T', grid: true },\n"
+        "  };\n"
+        "  const optionA3 = chart.buildOption(payload, { a: 3 });\n"
+        "  const optionA2 = chart.buildOption(payload, { a: 2 });\n"
+        "  const scatter = chart.buildOption({ type: 'scatter', x: [0, 1], y: [5, 6] }, {});\n"
+        "  return {\n"
+        "    withA3: optionA3.series[0].data,\n"
+        "    withA2: optionA2.series[0].data,\n"
+        "    type: optionA3.series[0].type,\n"
+        "    title: optionA3.title.text,\n"
+        "    scatterData: scatter.series[0].data,\n"
+        "    scatterType: scatter.series[0].type,\n"
+        "    xAxis: optionA3.xAxis.data,\n"
+        "  };\n"
+        "})()"
+    )
+    assert result["withA3"] == [1, 4, 7]
+    assert result["withA2"] == [1, 3, 5]
+    assert result["type"] == "line"
+    assert result["title"] == "T"
+    assert result["scatterData"] == [[0, 5], [1, 6]]
+    assert result["scatterType"] == "scatter"
+    assert result["xAxis"] == [0, 1, 2]
+
+
+def test_workbench_assistant_message_mounts_charts_and_prompt_teaches_chart():
+    root = Path(__file__).resolve().parent.parent
+    chat = (root / "src" / "webui" / "frontend" / "workbench-chat.jsx").read_text(encoding="utf-8")
+    styles = (root / "src" / "webui" / "frontend" / "workbench.css").read_text(encoding="utf-8")
+    prompts = (root / "src" / "cyrene" / "agent" / "prompts.py").read_text(encoding="utf-8")
+    index_html = (root / "src" / "webui" / "frontend" / "index.html").read_text(encoding="utf-8")
+    build_script = (root / "src" / "webui" / "build-jsx.mjs").read_text(encoding="utf-8")
+
+    assistant_message = chat.split("function WbcAssistantMessage", 1)[1].split("function WbcHeartbeat", 1)[0]
+    assert 'window.CyreneUI.chart' in assistant_message
+    assert 'chartService.mount(bodyRef.current)' in assistant_message
+    assert 'chartService.dispose(bodyRef.current)' in assistant_message
+    assert 'ref={bodyRef}' in chat
+    assert ".wbc-chart-canvas" in styles
+    assert ".wbc-chart-controls" in styles
+    assert ".wbc-chart-spec" in styles
+    assert ":::chart line" in prompts
+    assert "y-binds" in prompts
+    assert "compiled/shared/chart/spec.js" in index_html
+    assert "compiled/shared/chart/mount.js" in index_html
+    assert "echarts.min.js" in index_html
+    assert "node_modules/echarts/dist/echarts.min.js" in build_script

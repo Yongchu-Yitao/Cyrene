@@ -5,6 +5,7 @@
     "build": "node build-jsx.mjs"
   },
   "dependencies": {
+    "echarts": "^6.1.0",
     "esbuild": "0.28.1",
     "katex": "^0.16.22",
     "pdfjs-dist": "^6.1.200",

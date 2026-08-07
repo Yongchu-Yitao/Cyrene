@@ -87,6 +87,70 @@ function wbcReadChatDrag(event) {
   }
 }
 
+// The right drop zone for rail chats: the side panel track on wide windows,
+// or a reserved band at the page's right edge when the panel is hidden
+// (display:none below 980px). The conversation column's own drag handling is
+// untouched — a dedicated drop layer sits above this zone only while a chat
+// drag is in progress, so the rest of the main area keeps its original
+// "drop to open" behaviour.
+function wbcChatSideZoneRect() {
+  var page = document.querySelector(".wbc-page");
+  if (!page) return null;
+  var pr = page.getBoundingClientRect();
+  if (!pr.width) return null;
+  var side = document.querySelector(".wbc-side");
+  if (side) {
+    var sr = side.getBoundingClientRect();
+    if (sr.width > 0) {
+      return { left: sr.left, top: pr.top, right: sr.right, bottom: pr.bottom };
+    }
+  }
+  var zoneWidth = Math.max(300, Math.min(340, Math.round(pr.width * 0.32)));
+  return {
+    left: pr.right - zoneWidth,
+    top: pr.top,
+    right: pr.right,
+    bottom: pr.bottom,
+  };
+}
+
+function wbcChatSideDropZone(event) {
+  if (event.clientX == null || event.clientY == null) return false;
+  var zone = wbcChatSideZoneRect();
+  if (!zone) return false;
+  return event.clientX >= zone.left && event.clientX <= zone.right
+    && event.clientY >= zone.top && event.clientY <= zone.bottom;
+}
+
+var WBC_SPLIT_DRAG_MIME = "application/x-cyrene-split+json";
+
+function wbcSetSplitDrag(event) {
+  var transfer = event && (event.dataTransfer || (event.nativeEvent && event.nativeEvent.dataTransfer));
+  if (!transfer) return;
+  try {
+    transfer.effectAllowed = "move";
+    transfer.setData(WBC_SPLIT_DRAG_MIME, "1");
+  } catch (e) {}
+}
+
+function wbcHasSplitDrag(event) {
+  var transfer = event && (event.dataTransfer || (event.nativeEvent && event.nativeEvent.dataTransfer));
+  if (!transfer) return false;
+  try {
+    return Array.prototype.slice.call(transfer.types || []).indexOf(WBC_SPLIT_DRAG_MIME) >= 0;
+  } catch (e) {
+    return false;
+  }
+}
+
+function wbcEscapeHtml(value) {
+  return String(value)
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;");
+}
+
 function wbcSetResourceDrag(event, payload) {
   var transfer = event && (event.dataTransfer || (event.nativeEvent && event.nativeEvent.dataTransfer));
   if (!transfer || !payload) return;
@@ -517,8 +581,8 @@ var wbcChatCacheState = { lists: {}, details: {}, subagents: {} };
 var wbcLastChatByProject = {};
 function wbcChatCache() { return wbcChatCacheState; }
 
-function wbcRenderMarkdown(text) {
-  return window.CyreneUI.require("markdown").renderRich(text);
+function wbcRenderMarkdown(text, options) {
+  return window.CyreneUI.require("markdown").renderRich(text, options);
 }
 
 function wbcRenderMapMarkdown(text) {
@@ -538,9 +602,15 @@ function wbcRenderMapMarkdown(text) {
 
 function wbcClampSideSplitWidth(value, viewportWidth) {
   var viewport = Math.max(0, Number(viewportWidth) || Number(window.innerWidth) || 0);
+  // Mirror the grid's --wbc-main-min-width (clamp(380px, 36vw, 440px)) so the
+  // split never reserves more room than the window actually has. A fixed
+  // lower floor under-estimates the lane and over-reserves the split, which
+  // pushes the panel past the window edge on smaller sizes.
   var mainMin = Math.min(440, Math.max(380, viewport * 0.36));
-  var maxWidth = Math.min(900, Math.max(300, viewport - 230 - mainMin));
-  return Math.round(Math.max(300, Math.min(maxWidth, Number(value) || 520)));
+  // A split on the left side hides the right panel track (grid column 4 is 0),
+  // so both anchored sides reserve the same room for the conversation lane.
+  var maxWidth = Math.min(900, Math.max(mainMin, viewport - 230 - mainMin));
+  return Math.round(Math.max(340, Math.min(maxWidth, Number(value) || 520)));
 }
 
 function WbcSplitPickerMenu({ open, className, children, ...props }) {
@@ -2448,6 +2518,239 @@ function WorkbenchChatPage({ active, project, newChatRequestId, onOpenTask, onAc
   }, [activeChatId]);
   var [error, setError] = useWbcState("");
   var [errorKind, setErrorKind] = useWbcState("load");
+  // Which side of the conversation the detail split anchors to. Global across
+  // chats (like the split width) so the choice survives conversation switches.
+  var [splitSide, setSplitSide] = useWbcState(function () {
+    try {
+      return localStorage.getItem("wbc-split-side") === "left" ? "left" : "right";
+    } catch (e) {
+      return "right";
+    }
+  });
+  function toggleSplitSide() {
+    setSplitSide(function (current) {
+      var next = current === "left" ? "right" : "left";
+      try { localStorage.setItem("wbc-split-side", next); } catch (e) {}
+      return next;
+    });
+  }
+  // Idempotent setter used by the grip drag so moving the pointer across the
+  // window midline follows the split live without toggling on every move.
+  function setSplitSideDirect(next) {
+    setSplitSide(function (current) {
+      if (current === next) return current;
+      try { localStorage.setItem("wbc-split-side", next); } catch (e) {}
+      return next;
+    });
+  }
+  // The split panel is lifted with a native drag, same as images/documents:
+  // the panel stays in place, a drag ghost follows the pointer (shrinking to
+  // a chat card over the rail), and the drop zones (rail = close, main
+  // left/right half = anchored side) light up under the cursor. The ghost and
+  // zones are created as raw DOM during the drag session — never through
+  // React — so the drag source's DOM stays untouched while Chromium is
+  // tracking the gesture (any React re-render here cancels the drag).
+  var splitOverlayCleanupRef = useWbcRef(null);
+
+  function handleSplitDragStart(event) {
+    var transfer = event && event.dataTransfer;
+    if (!transfer) return;
+    wbcSetSplitDrag(event);
+    // Hide the native ghost with a transparent 1x1 image; the custom overlay
+    // (panel-shaped, shrinking to a chat card over the rail) takes over.
+    try {
+      var canvas = document.createElement("canvas");
+      canvas.width = 1;
+      canvas.height = 1;
+      transfer.setDragImage(canvas, 0, 0);
+    } catch (e) {}
+    var page = pageRef.current;
+    if (!page) return;
+    if (splitOverlayCleanupRef.current) splitOverlayCleanupRef.current();
+    // The ghost is the real dialog being lifted: a clone of the live DOM
+    // (same transcript, header, composer) in a fixed overlay. The main
+    // conversation's grip lifts the main column; the split panel's grip
+    // lifts the split panel. It starts at the panel's own position and
+    // follows the pointer from the grab point. A clone of the matching rail
+    // card rides along; over the conversation rail the ghost switches to
+    // that card, as if the conversation itself were being picked up from
+    // the list.
+    var ghost = document.createElement("div");
+    ghost.className = "wbc-split-drag-ghost";
+    var grabOffset = null;
+    var panelW = 0;
+    var panelH = 0;
+    var cardW = 0;
+    var cardH = 0;
+    var fromMainGrip = !!(event.currentTarget && event.currentTarget.closest
+      && event.currentTarget.closest(".wbc-split-main-grip"));
+    var panel = fromMainGrip
+      ? page.querySelector(".wbc-main")
+      : page.querySelector(".wbc-side-agent-split");
+    if (panel) {
+      var panelRect = panel.getBoundingClientRect();
+      var clone = panel.cloneNode(true);
+      if (!fromMainGrip) {
+        // The split panel reserves 84px for the grip strip; the clone sits
+        // in its own shell, so drop that blank band.
+        clone.style.paddingTop = "0px";
+      }
+      clone.style.border = "0";
+      clone.style.boxShadow = "none";
+      ghost.appendChild(clone);
+      panelW = Math.round(panelRect.width);
+      panelH = Math.max(120, Math.min(
+        Math.round(panelRect.height),
+        Math.round(window.innerHeight * 0.72)
+      ));
+      ghost.style.width = panelW + "px";
+      ghost.style.height = panelH + "px";
+      ghost.style.left = panelRect.left + "px";
+      ghost.style.top = panelRect.top + "px";
+      grabOffset = {
+        x: Math.max(0, Math.min(panelRect.width, event.clientX - panelRect.left)),
+        y: Math.max(0, Math.min(panelRect.height, event.clientY - panelRect.top)),
+      };
+    } else {
+      ghost.style.left = event.clientX + "px";
+      ghost.style.top = event.clientY + "px";
+    }
+    var liftChatId = fromMainGrip ? String(activeChatIdRef.current || "") : splitChatId;
+    var railCard = liftChatId
+      ? page.querySelector('.wbc-chat-card[data-chat-id="' + liftChatId + '"]')
+      : null;
+    if (!railCard) railCard = page.querySelector(".wbc-chat-card.active");
+    if (!railCard) railCard = page.querySelector(".wbc-chat-card");
+    if (railCard) {
+      var cardRect = railCard.getBoundingClientRect();
+      var cardClone = railCard.cloneNode(true);
+      cardClone.classList.remove("active", "dragging", "menu-open", "group-drop-target", "wbc-chat-group-child");
+      ghost.appendChild(cardClone);
+      cardW = Math.round(cardRect.width);
+      cardH = Math.round(cardRect.height);
+    }
+    // Over the rail the matching real card lifts off the list, echoing the
+    // ghost: the conversation itself looks picked up from the rail.
+    var sourceCardEl = railCard;
+    // The theme palette lives on .workbench-shell; the ghost sits outside it,
+    // so copy the custom properties or the cloned panel renders unstyleed.
+    var shell = document.querySelector(".workbench-shell");
+    if (shell) {
+      var shellStyle = window.getComputedStyle(shell);
+      for (var i = 0; i < shellStyle.length; i++) {
+        var name = shellStyle[i];
+        if (name.indexOf("--") === 0) {
+          ghost.style.setProperty(name, shellStyle.getPropertyValue(name));
+        }
+      }
+    }
+    document.body.appendChild(ghost);
+    // The zones are pure visual (never hit-testable): an interactive overlay
+    // covering the drag source would make Chromium cancel the drag. Zone
+    // detection happens on document-level dragover/drop via pointer position.
+    var zones = document.createElement("div");
+    zones.className = "wbc-split-drop-zones";
+    zones.setAttribute("role", "presentation");
+    zones.innerHTML = ""
+      + '<div class="wbc-split-drop-zone wbc-split-drop-left" data-zone="left">'
+      + '<span class="wbc-chat-side-drop-hint" role="status">' + wbcEscapeHtml(wbcT("workbenchChat.splitDropLeft", "Release to move the split to the left side")) + '</span>'
+      + '</div>'
+      + '<div class="wbc-split-drop-zone wbc-split-drop-right" data-zone="right">'
+      + '<span class="wbc-chat-side-drop-hint" role="status">' + wbcEscapeHtml(wbcT("workbenchChat.splitDropRight", "Release to move the split to the right side")) + '</span>'
+      + '</div>'
+      + '<div class="wbc-split-drop-zone wbc-split-drop-rail" data-zone="rail">'
+      + '<span class="wbc-chat-side-drop-hint" role="status">' + wbcEscapeHtml(wbcT("workbenchChat.splitDropClose", "Release to close the split panel")) + '</span>'
+      + '</div>';
+    page.appendChild(zones);
+
+    var clearTimer = null;
+    // Sides are judged against the PAGE midline, not the main column's: the
+    // layout moves while the drag preview swaps anchors, so a column-relative
+    // test would lock the preview onto the side it already previewed.
+    function zoneAt(clientX, clientY) {
+      var rail = document.querySelector(".wbc-rail");
+      var r = rail ? rail.getBoundingClientRect() : null;
+      if (r && clientX >= r.left && clientX <= r.right && clientY >= r.top && clientY <= r.bottom) return "rail";
+      var page = pageRef.current;
+      if (!page) return "";
+      var pr = page.getBoundingClientRect();
+      if (!pr.width) return "";
+      return clientX < pr.left + pr.width / 2 ? "left" : "right";
+    }
+    function setActive(zone) {
+      ghost.classList.toggle("card", zone === "rail");
+      if (zone === "rail" && cardW) {
+        ghost.style.width = cardW + "px";
+        ghost.style.height = cardH + "px";
+      } else if (panelW) {
+        ghost.style.width = panelW + "px";
+        ghost.style.height = panelH + "px";
+      }
+      if (sourceCardEl) {
+        sourceCardEl.classList.toggle("wbc-split-card-lifted", zone === "rail");
+      }
+      // querySelectorAll: the half zones nest inside .wbc-split-drop-main.
+      var zoneEls = zones.querySelectorAll(".wbc-split-drop-zone");
+      for (var i = 0; i < zoneEls.length; i++) {
+        var el = zoneEls[i];
+        el.classList.toggle("active", el.getAttribute("data-zone") === zone);
+      }
+    }
+    function onDocumentDragOver(ev) {
+      if (grabOffset) {
+        ghost.style.left = (ev.clientX - grabOffset.x) + "px";
+        ghost.style.top = (ev.clientY - grabOffset.y) + "px";
+      } else {
+        ghost.style.left = ev.clientX + "px";
+        ghost.style.top = ev.clientY + "px";
+      }
+      if (clearTimer) { clearTimeout(clearTimer); clearTimer = null; }
+      var zone = zoneAt(ev.clientX, ev.clientY);
+      if (!zone) {
+        setActive("");
+        return;
+      }
+      ev.preventDefault();
+      if (ev.dataTransfer) ev.dataTransfer.dropEffect = "move";
+      setActive(zone);
+      if (zone !== "rail") {
+        // Live preview: crossing the midline glides the split to that side
+        // immediately (elastic grid animation pushing the main conversation
+        // to the other side); releasing anywhere keeps the last position.
+        setSplitSideDirect(zone === "left" ? "left" : "right");
+      }
+    }
+    function onDocumentDrop(ev) {
+      if (!wbcHasSplitDrag(ev)) return;
+      var zone = zoneAt(ev.clientX, ev.clientY);
+      if (!zone) return;
+      ev.preventDefault();
+      ev.stopImmediatePropagation();
+      handleSplitDragEnd();
+      if (zone === "rail") {
+        closeActiveSplit();
+        return;
+      }
+      setSplitSideDirect(zone === "left" ? "left" : "right");
+    }
+    function cleanup() {
+      if (splitOverlayCleanupRef.current !== cleanup) return;
+      splitOverlayCleanupRef.current = null;
+      if (clearTimer) clearTimeout(clearTimer);
+      document.removeEventListener("dragover", onDocumentDragOver, true);
+      document.removeEventListener("drop", onDocumentDrop, true);
+      if (sourceCardEl) sourceCardEl.classList.remove("wbc-split-card-lifted");
+      if (ghost.parentNode) ghost.parentNode.removeChild(ghost);
+      if (zones.parentNode) zones.parentNode.removeChild(zones);
+    }
+    document.addEventListener("dragover", onDocumentDragOver, true);
+    document.addEventListener("drop", onDocumentDrop, true);
+    splitOverlayCleanupRef.current = cleanup;
+  }
+
+  function handleSplitDragEnd() {
+    if (splitOverlayCleanupRef.current) splitOverlayCleanupRef.current();
+  }
   var [sideTab, setSideTab] = useWbcState("");
   var [sideVisible, setSideVisible] = useWbcState(true);
   var [sideAgents, setSideAgents] = useWbcState([]);
@@ -2465,6 +2768,12 @@ function WorkbenchChatPage({ active, project, newChatRequestId, onOpenTask, onAc
   // Map, browser, viewer and subagent details share the same right-side split
   // shell. The side panel only exposes their lightweight index/list surface.
   var [resourceSplitByChat, setResourceSplitByChat] = useWbcState({});
+  // While a detail split is open, the conversation panel can float beneath
+  // the main conversation grip without disturbing that split. If a resource
+  // is opened from the floating panel, remember the displaced split so its
+  // close action can restore the exact previous layout.
+  var [floatingConversationPanelOpen, setFloatingConversationPanelOpen] = useWbcState(false);
+  var floatingSplitRestoreRef = useWbcRef(null);
   var [sideAgentSplitWidth, setSideAgentSplitWidth] = useWbcState(function () {
     var initial = 520;
     try {
@@ -2495,7 +2804,7 @@ function WorkbenchChatPage({ active, project, newChatRequestId, onOpenTask, onAc
     keepSplitWithinViewport();
     window.addEventListener("resize", keepSplitWithinViewport);
     return function () { window.removeEventListener("resize", keepSplitWithinViewport); };
-  }, []);
+  }, [splitSide]);
 
   useWbcEffect(function () {
     function handleShowChatSide() {
@@ -2577,8 +2886,12 @@ function WorkbenchChatPage({ active, project, newChatRequestId, onOpenTask, onAc
   function openViewer(file) {
     if (!file) return;
     setViewerFile(file);
-    setSideTab("viewer");
+    // Message file actions are direct navigation: open the shared preview
+    // split immediately instead of expanding the Viewer index in the
+    // conversation panel first.
+    setSideTab("");
     setSideVisible(true);
+    selectResourceSplit("viewer", wbcArtifactFileKey(file));
   }
 
   function revealTopbarResource(chatId, resource) {
@@ -3426,7 +3739,53 @@ function WorkbenchChatPage({ active, project, newChatRequestId, onOpenTask, onAc
     });
   }
 
+  function beginFloatingPanelSplit(openSplit) {
+    var chatId = String(activeChatIdRef.current || "");
+    if (!chatId || typeof openSplit !== "function") return;
+    if (!floatingSplitRestoreRef.current) {
+      floatingSplitRestoreRef.current = {
+        chatId: chatId,
+        splitSide: splitSide,
+        sideAgentId: sideAgentSplitByChat[chatId] || "",
+        artifactKey: artifactSplitByChat[chatId] || "",
+        change: changeSplitByChat[chatId] || null,
+        resource: resourceSplitByChat[chatId] || null,
+      };
+    }
+    setFloatingConversationPanelOpen(false);
+    // A resource chosen from the floating conversation panel always owns the
+    // right track. If the conversation was on the right, the animated grid
+    // moves it left before the new resource enters from the right.
+    setSplitSideDirect("right");
+    openSplit();
+  }
+
+  function restoreFloatingPanelSplit() {
+    var snapshot = floatingSplitRestoreRef.current;
+    var chatId = String(activeChatIdRef.current || "");
+    if (!snapshot || !chatId || snapshot.chatId !== chatId) return false;
+    floatingSplitRestoreRef.current = null;
+
+    function restoreEntry(setter, value) {
+      setter(function (current) {
+        var updated = Object.assign({}, current);
+        if (value) updated[chatId] = value;
+        else delete updated[chatId];
+        return updated;
+      });
+    }
+
+    restoreEntry(setSideAgentSplitByChat, snapshot.sideAgentId);
+    restoreEntry(setArtifactSplitByChat, snapshot.artifactKey);
+    restoreEntry(setChangeSplitByChat, snapshot.change);
+    restoreEntry(setResourceSplitByChat, snapshot.resource);
+    setSplitSideDirect(snapshot.splitSide === "left" ? "left" : "right");
+    return true;
+  }
+
   function closeSideAgentSplit() {
+    setFloatingConversationPanelOpen(false);
+    if (restoreFloatingPanelSplit()) return;
     var chatId = String(activeChatIdRef.current || "");
     if (!chatId) return;
     setSideAgentSplitByChat(function (current) {
@@ -3438,6 +3797,8 @@ function WorkbenchChatPage({ active, project, newChatRequestId, onOpenTask, onAc
   }
 
   function closeArtifactSplit() {
+    setFloatingConversationPanelOpen(false);
+    if (restoreFloatingPanelSplit()) return;
     var chatId = String(activeChatIdRef.current || "");
     if (!chatId) return;
     setArtifactSplitByChat(function (current) {
@@ -3449,6 +3810,8 @@ function WorkbenchChatPage({ active, project, newChatRequestId, onOpenTask, onAc
   }
 
   function closeChangeSplit() {
+    setFloatingConversationPanelOpen(false);
+    if (restoreFloatingPanelSplit()) return;
     var chatId = String(activeChatIdRef.current || "");
     if (!chatId) return;
     setChangeSplitByChat(function (current) {
@@ -3460,6 +3823,8 @@ function WorkbenchChatPage({ active, project, newChatRequestId, onOpenTask, onAc
   }
 
   function closeResourceSplit() {
+    setFloatingConversationPanelOpen(false);
+    if (restoreFloatingPanelSplit()) return;
     var chatId = String(activeChatIdRef.current || "");
     if (!chatId) return;
     setResourceSplitByChat(function (current) {
@@ -3468,6 +3833,94 @@ function WorkbenchChatPage({ active, project, newChatRequestId, onOpenTask, onAc
       delete updated[chatId];
       return updated;
     });
+  }
+
+  function closeActiveSplit() {
+    setFloatingConversationPanelOpen(false);
+    if (restoreFloatingPanelSplit()) return;
+    closeSideAgentSplit();
+    closeArtifactSplit();
+    closeChangeSplit();
+    closeResourceSplit();
+  }
+
+  // A rail chat dragged onto the right side (or the open split) is opened
+  // beside the main conversation instead of replacing it. A dedicated drop
+  // layer covers the right zone while a chat drag is in progress; the main
+  // conversation column keeps its original drop-to-open behaviour untouched.
+  var pageRef = useWbcRef(null);
+  var [chatDragSession, setChatDragSession] = useWbcState(false);
+  var [chatSideDropActive, setChatSideDropActive] = useWbcState(false);
+  var chatSideDropClearTimerRef = useWbcRef(null);
+
+  useWbcEffect(function () {
+    function onDocumentDragStart(event) {
+      // Bubbles after the rail's React onDragStart has populated the
+      // dataTransfer, so the chat MIME is already visible here.
+      if (!wbcHasChatDrag(event)) return;
+      setChatDragSession(true);
+    }
+    function onDocumentDragEnd() {
+      setChatDragSession(false);
+      setChatSideDropActive(false);
+    }
+    document.addEventListener("dragstart", onDocumentDragStart);
+    document.addEventListener("dragend", onDocumentDragEnd);
+    document.addEventListener("drop", onDocumentDragEnd);
+    return function () {
+      document.removeEventListener("dragstart", onDocumentDragStart);
+      document.removeEventListener("dragend", onDocumentDragEnd);
+      document.removeEventListener("drop", onDocumentDragEnd);
+    };
+  }, []);
+
+  function handleSideLayerDragOver(event) {
+    if (!wbcHasChatDrag(event)) return;
+    if (chatSideDropClearTimerRef.current) {
+      clearTimeout(chatSideDropClearTimerRef.current);
+      chatSideDropClearTimerRef.current = null;
+    }
+    event.preventDefault();
+    event.stopPropagation();
+    if (event.dataTransfer) event.dataTransfer.dropEffect = "move";
+    setChatSideDropActive(true);
+  }
+
+  function handleSideLayerDragLeave(event) {
+    if (event.currentTarget.contains(event.relatedTarget)) return;
+    // Dragleave fires between element transitions with a null relatedTarget,
+    // so clearing immediately would fight the dragover highlight. Defer the
+    // clear; an in-zone dragover cancels it.
+    if (chatSideDropClearTimerRef.current) clearTimeout(chatSideDropClearTimerRef.current);
+    chatSideDropClearTimerRef.current = setTimeout(function () {
+      setChatSideDropActive(false);
+      chatSideDropClearTimerRef.current = null;
+    }, 200);
+  }
+
+  function handleSideLayerDrop(event) {
+    if (!wbcHasChatDrag(event)) return;
+    event.preventDefault();
+    event.stopPropagation();
+    if (chatSideDropClearTimerRef.current) {
+      clearTimeout(chatSideDropClearTimerRef.current);
+      chatSideDropClearTimerRef.current = null;
+    }
+    setChatSideDropActive(false);
+    setChatDragSession(false);
+    var payload = wbcReadChatDrag(event);
+    if (payload && payload.id) openChatSplit(String(payload.id));
+  }
+
+
+  function openChatSplit(chatId) {
+    var parentId = String(activeChatIdRef.current || "");
+    if (!parentId || !chatId) return;
+    selectResourceSplit("chat", String(chatId));
+    setSideVisible(true);
+    // The drop zone lives on the right side, so a drag-opened split should
+    // appear there regardless of the remembered side preference.
+    setSplitSideDirect("right");
   }
 
   function resizeSideAgentSplit(width) {
@@ -3913,12 +4366,42 @@ function WorkbenchChatPage({ active, project, newChatRequestId, onOpenTask, onAc
   var splitChange = changeSplitByChat[activeChatId] || null;
   var viewerItems = artifactItems;
   var splitViewer = splitResource && splitResource.type === "viewer"
-    ? (viewerItems.find(function (item) { return wbcArtifactFileKey(item && item.file) === String(splitResource.payload || ""); }) || {}).file
+    ? (
+      viewerFile && wbcArtifactFileKey(viewerFile) === String(splitResource.payload || "")
+        ? viewerFile
+        : (viewerItems.find(function (item) { return wbcArtifactFileKey(item && item.file) === String(splitResource.payload || ""); }) || {}).file
+    )
     : null;
   var splitMap = splitResource && splitResource.type === "map" ? splitResource.payload : null;
   var splitBrowserTabId = splitResource && splitResource.type === "browser" ? String(splitResource.payload || "") : "";
   var splitSubagents = !!(splitResource && splitResource.type === "subagents");
-  var splitDetailOpen = !!(splitSideAgent || splitArtifact || splitChange || splitViewer || splitMap || splitBrowserTabId || splitSubagents);
+  // Dragging a rail chat onto the right panel opens that conversation here.
+  var splitChatId = splitResource && splitResource.type === "chat" ? String(splitResource.payload || "") : "";
+  var splitDetailOpen = !!(splitSideAgent || splitArtifact || splitChange || splitViewer || splitMap || splitBrowserTabId || splitSubagents || splitChatId);
+
+  useWbcEffect(function () {
+    if (!splitDetailOpen) setFloatingConversationPanelOpen(false);
+  }, [splitDetailOpen]);
+
+  useWbcEffect(function () {
+    setFloatingConversationPanelOpen(false);
+    var snapshot = floatingSplitRestoreRef.current;
+    if (!snapshot || snapshot.chatId === String(activeChatId || "")) return;
+    floatingSplitRestoreRef.current = null;
+    var snapshotChatId = snapshot.chatId;
+    function restoreEntry(setter, value) {
+      setter(function (current) {
+        var updated = Object.assign({}, current);
+        if (value) updated[snapshotChatId] = value;
+        else delete updated[snapshotChatId];
+        return updated;
+      });
+    }
+    restoreEntry(setSideAgentSplitByChat, snapshot.sideAgentId);
+    restoreEntry(setArtifactSplitByChat, snapshot.artifactKey);
+    restoreEntry(setChangeSplitByChat, snapshot.change);
+    restoreEntry(setResourceSplitByChat, snapshot.resource);
+  }, [activeChatId]);
 
   // The browser page is an Electron WebContentsView, so it does not
   // participate in the renderer's grid layout. ResizeObserver normally keeps
@@ -3947,14 +4430,119 @@ function WorkbenchChatPage({ active, project, newChatRequestId, onOpenTask, onAc
     });
   }
 
+  function renderConversationPanel(floating) {
+    function openPanelSplit(openSplit) {
+      if (floating) beginFloatingPanelSplit(openSplit);
+      else openSplit();
+    }
+    return (
+      <WbcSide
+        project={project}
+        chat={visibleChat || selectedChatSummary}
+        chatLoading={chatLoading}
+        chatDetailed={!!visibleChat}
+        chats={chats}
+        activeChatId={activeChatId}
+        onSelectChat={selectChat}
+        runtime={activeRuntime}
+        subagentData={subagentData}
+        subagentLoading={subagentLoading}
+        onSelectSubagentRound={function (roundId) { loadSubagents(activeChatId, roundId); }}
+        tab={sideTab}
+        onTabChange={setSideTab}
+        viewerFile={viewerFile}
+        onOpenFile={function (file) { openPanelSplit(function () { openViewer(file); }); }}
+        onSelectArtifact={function (file) { openPanelSplit(function () { selectArtifact(file); }); }}
+        onSelectChange={function (change) { openPanelSplit(function () { selectChange(change); }); }}
+        onSelectViewer={function (file) { openPanelSplit(function () { selectResourceSplit("viewer", wbcArtifactFileKey(file)); }); }}
+        onSelectMap={function (item) { openPanelSplit(function () { selectResourceSplit("map", item); }); }}
+        onSelectBrowser={function (tabId) {
+          openPanelSplit(function () {
+            setActiveBrowserWindowMode("pip");
+            selectResourceSplit("browser", tabId);
+          });
+        }}
+        onOpenSubagents={function () { openPanelSplit(function () { selectResourceSplit("subagents", true); }); }}
+        onViewerViewed={markViewerFileRead}
+        onRename={openQuickRename}
+        onDelete={handleDelete}
+        onToTask={handleToTask}
+        toTaskBusy={toTaskBusy}
+        onCompact={handleCompact}
+        compactBusy={compactBusy}
+        sideAgents={sideAgents}
+        sideAgentsLoading={sideAgentsLoading}
+        activeSideAgentId={splitSideAgentId}
+        onSelectSideAgent={function (agentId) { openPanelSplit(function () { selectSideAgent(agentId); }); }}
+        onUpdateSideAgent={updateSideAgent}
+        onDeleteSideAgent={deleteSideAgent}
+        onToggleSide={onToggleSide}
+        onBrowserTakeoverComplete={function (payload) {
+          var pending = activeChat && activeChat.pendingQuestion;
+          if (!pending || !pending.id) return Promise.reject(new Error("登录确认已不在等待中。"));
+          var takeoverQuestionId = String(payload && payload.questionId || "");
+          if (takeoverQuestionId && String(pending.id || "") !== takeoverQuestionId) {
+            return Promise.reject(new Error("登录确认已更新，请使用对话中的最新确认。"));
+          }
+          handleAnswer(pending.id, (payload && payload.text) || "我已完成登录");
+          return Promise.resolve();
+        }}
+        browserActiveByChat={browserActiveByChat}
+        browserSuppressed={browserWindowMode === "maximized"}
+        floating={floating}
+        onCloseFloating={function () { setFloatingConversationPanelOpen(false); }}
+      />
+    );
+  }
+
   return (
     <div
-      className={"wbc-page" + (sideVisible ? "" : " wbc-side-hidden") + (splitDetailOpen ? " side-agent-split-open" : "")}
+      ref={pageRef}
+      className={"wbc-page"
+        + (sideVisible ? "" : " wbc-side-hidden")
+        + (splitDetailOpen ? " side-agent-split-open" : "")
+        + (splitDetailOpen && splitSide === "left" ? " wbc-split-left" : "")
+        + (chatSideDropActive ? " wbc-chat-side-drop-active" : "")}
       style={splitDetailOpen ? { "--wbc-side-track-width": sideAgentSplitWidth + "px" } : undefined}
       data-active-chat-id={activeChatId || ""}
       data-project-id={projectId || ""}
     >
-      {chatFileDropActive && <WorkbenchFileDropOverlay label={wbcT("workbenchChat.dropToAttach", "Release to add files to the message input")} />}
+      {chatFileDropActive && <WorkbenchFileDropOverlay key="file-drop-overlay" label={wbcT("workbenchChat.dropToAttach", "Release to add files to the message input")} />}
+      {chatDragSession && (function () {
+        var zone = wbcChatSideZoneRect();
+        if (!zone) return null;
+        var pageRect = pageRef.current ? pageRef.current.getBoundingClientRect() : null;
+        var left = pageRect ? zone.left - pageRect.left : 0;
+        return (
+          <div
+            key="chat-side-drop-layer"
+            className={"wbc-chat-side-drop-layer" + (chatSideDropActive ? " active" : "")}
+            style={{ left: left + "px", width: (zone.right - zone.left) + "px" }}
+            onDragOver={handleSideLayerDragOver}
+            onDragLeave={handleSideLayerDragLeave}
+            onDrop={handleSideLayerDrop}
+          >
+            {chatSideDropActive && (
+              <span className="wbc-chat-side-drop-hint" role="status">
+                {wbcT("workbenchChat.dropToOpenSide", "Release to open in the side panel")}
+              </span>
+            )}
+          </div>
+        );
+      })()}
+      {splitDetailOpen && (
+        <div key="split-main-grip" className="wbc-split-main-grip">
+          <WbcSplitGripBar
+            side={splitSide}
+            onToggleSide={toggleSplitSide}
+            onClose={closeActiveSplit}
+            onOpenConversationPanel={function () { setFloatingConversationPanelOpen(true); }}
+            onSplitDragStart={handleSplitDragStart}
+            onSplitDragEnd={handleSplitDragEnd}
+          />
+          {floatingConversationPanelOpen ? renderConversationPanel(true) : null}
+        </div>
+      )}
       <WbcRail
         projectId={projectId}
         chats={chats}
@@ -4002,6 +4590,7 @@ function WorkbenchChatPage({ active, project, newChatRequestId, onOpenTask, onAc
         sideVisible={sideVisible}
         sidePanelTabExpanded={sideVisible && !!sideTab}
         onToggleSide={onToggleSide}
+        splitOpen={splitDetailOpen}
         browserState={activeBrowserState}
         browserSessionId={activeChatId || ""}
         browserVisible={hasActiveBrowser && !browserTabOpen}
@@ -4049,58 +4638,7 @@ function WorkbenchChatPage({ active, project, newChatRequestId, onOpenTask, onAc
         onClose={function () { setQuickRenameChat(null); }}
         onRename={handleRenameChat}
       />
-      <WbcSide
-        project={project}
-        chat={visibleChat || selectedChatSummary}
-        chatLoading={chatLoading}
-        chatDetailed={!!visibleChat}
-        chats={chats}
-        activeChatId={activeChatId}
-        onSelectChat={selectChat}
-        runtime={activeRuntime}
-        subagentData={subagentData}
-        subagentLoading={subagentLoading}
-        onSelectSubagentRound={function (roundId) { loadSubagents(activeChatId, roundId); }}
-        tab={sideTab}
-        onTabChange={setSideTab}
-        viewerFile={viewerFile}
-        onOpenFile={openViewer}
-        onSelectArtifact={selectArtifact}
-        onSelectChange={selectChange}
-        onSelectViewer={function (file) { selectResourceSplit("viewer", wbcArtifactFileKey(file)); }}
-        onSelectMap={function (item) { selectResourceSplit("map", item); }}
-        onSelectBrowser={function (tabId) {
-          setActiveBrowserWindowMode("pip");
-          selectResourceSplit("browser", tabId);
-        }}
-        onOpenSubagents={function () { selectResourceSplit("subagents", true); }}
-        onViewerViewed={markViewerFileRead}
-        onRename={openQuickRename}
-        onDelete={handleDelete}
-        onToTask={handleToTask}
-        toTaskBusy={toTaskBusy}
-        onCompact={handleCompact}
-        compactBusy={compactBusy}
-        sideAgents={sideAgents}
-        sideAgentsLoading={sideAgentsLoading}
-        activeSideAgentId={splitSideAgentId}
-        onSelectSideAgent={selectSideAgent}
-        onUpdateSideAgent={updateSideAgent}
-        onDeleteSideAgent={deleteSideAgent}
-        onToggleSide={onToggleSide}
-        onBrowserTakeoverComplete={function (payload) {
-          var pending = activeChat && activeChat.pendingQuestion;
-          if (!pending || !pending.id) return Promise.reject(new Error("登录确认已不在等待中。"));
-          var takeoverQuestionId = String(payload && payload.questionId || "");
-          if (takeoverQuestionId && String(pending.id || "") !== takeoverQuestionId) {
-            return Promise.reject(new Error("登录确认已更新，请使用对话中的最新确认。"));
-          }
-          handleAnswer(pending.id, (payload && payload.text) || "我已完成登录");
-          return Promise.resolve();
-        }}
-        browserActiveByChat={browserActiveByChat}
-        browserSuppressed={browserWindowMode === "maximized"}
-      />
+      {!floatingConversationPanelOpen ? renderConversationPanel(false) : null}
       <WbcSideAgentSplitHost
         agent={splitSideAgent}
         agents={sideAgents}
@@ -4111,6 +4649,10 @@ function WorkbenchChatPage({ active, project, newChatRequestId, onOpenTask, onAc
         onSelect={selectSideAgent}
         onResize={resizeSideAgentSplit}
         onClose={closeSideAgentSplit}
+        splitSide={splitSide}
+        onToggleSide={toggleSplitSide}
+        onSplitDragStart={handleSplitDragStart}
+        onSplitDragEnd={handleSplitDragEnd}
       />
       <WbcArtifactSplitHost
         file={splitArtifact}
@@ -4120,6 +4662,10 @@ function WorkbenchChatPage({ active, project, newChatRequestId, onOpenTask, onAc
         onResize={resizeSideAgentSplit}
         onClose={closeArtifactSplit}
         onViewed={markViewerFileRead}
+        splitSide={splitSide}
+        onToggleSide={toggleSplitSide}
+        onSplitDragStart={handleSplitDragStart}
+        onSplitDragEnd={handleSplitDragEnd}
       />
       <WbcChangeSplitHost
         change={splitChange}
@@ -4127,6 +4673,10 @@ function WorkbenchChatPage({ active, project, newChatRequestId, onOpenTask, onAc
         onSelect={selectChange}
         onResize={resizeSideAgentSplit}
         onClose={closeChangeSplit}
+        splitSide={splitSide}
+        onToggleSide={toggleSplitSide}
+        onSplitDragStart={handleSplitDragStart}
+        onSplitDragEnd={handleSplitDragEnd}
       />
       <WbcArtifactSplitHost
         file={splitViewer}
@@ -4137,6 +4687,10 @@ function WorkbenchChatPage({ active, project, newChatRequestId, onOpenTask, onAc
         onResize={resizeSideAgentSplit}
         onClose={closeResourceSplit}
         onViewed={markViewerFileRead}
+        splitSide={splitSide}
+        onToggleSide={toggleSplitSide}
+        onSplitDragStart={handleSplitDragStart}
+        onSplitDragEnd={handleSplitDragEnd}
       />
       <WbcMapSplitHost
         chatId={activeChatId}
@@ -4145,6 +4699,10 @@ function WorkbenchChatPage({ active, project, newChatRequestId, onOpenTask, onAc
         onSelect={function (next) { selectResourceSplit("map", next); }}
         onResize={resizeSideAgentSplit}
         onClose={closeResourceSplit}
+        splitSide={splitSide}
+        onToggleSide={toggleSplitSide}
+        onSplitDragStart={handleSplitDragStart}
+        onSplitDragEnd={handleSplitDragEnd}
       />
       <WbcBrowserSplitHost
         tabId={splitBrowserTabId}
@@ -4160,6 +4718,10 @@ function WorkbenchChatPage({ active, project, newChatRequestId, onOpenTask, onAc
           handleAnswer(pending.id, (payload && payload.text) || "我已完成登录");
           return Promise.resolve();
         }}
+        splitSide={splitSide}
+        onToggleSide={toggleSplitSide}
+        onSplitDragStart={handleSplitDragStart}
+        onSplitDragEnd={handleSplitDragEnd}
       />
       <WbcSubagentsSplitHost
         open={splitSubagents}
@@ -4169,6 +4731,23 @@ function WorkbenchChatPage({ active, project, newChatRequestId, onOpenTask, onAc
         onSelectRound={function (roundId) { loadSubagents(activeChatId, roundId); }}
         onResize={resizeSideAgentSplit}
         onClose={closeResourceSplit}
+        splitSide={splitSide}
+        onToggleSide={toggleSplitSide}
+        onSplitDragStart={handleSplitDragStart}
+        onSplitDragEnd={handleSplitDragEnd}
+      />
+      <WbcChatSplitHost
+        chatId={splitChatId}
+        project={project}
+        width={sideAgentSplitWidth}
+        onOpenFile={openViewer}
+        onResize={resizeSideAgentSplit}
+        onClose={closeResourceSplit}
+        onOpenInMain={selectChat}
+        splitSide={splitSide}
+        onToggleSide={toggleSplitSide}
+        onSplitDragStart={handleSplitDragStart}
+        onSplitDragEnd={handleSplitDragEnd}
       />
     </div>
   );
@@ -4556,6 +5135,7 @@ function WbcRail({ projectId, chats, pinnedChatIds, activeChatId, loading, runni
   var [order, setOrder] = useWbcState(function () {
     return wbcLoadChatOrder(projectId, defaultOrder);
   });
+  useWbcEffect(function () { orderRef.current = order; }, [order]);
   var [groups, setGroups] = useWbcState(function () {
     return wbcLoadChatGroups(projectId, defaultOrder);
   });
@@ -4564,6 +5144,7 @@ function WbcRail({ projectId, chats, pinnedChatIds, activeChatId, loading, runni
   var [dragState, setDragState] = useWbcState(null);
   var [announcement, setAnnouncement] = useWbcState("");
   var dragOriginOrderRef = useWbcRef([]);
+  var orderRef = useWbcRef(order);
   var dropCommittedRef = useWbcRef(false);
   var suppressClickRef = useWbcRef("");
   var suppressGroupClickRef = useWbcRef("");
@@ -4864,12 +5445,13 @@ function WbcRail({ projectId, chats, pinnedChatIds, activeChatId, loading, runni
 
   function commitOrder(nextOrder, movedId) {
     var normalized = wbcNormalizeChatOrder(defaultOrder, nextOrder);
+    var positionChanged = normalized.join("|") !== (orderRef.current || []).join("|");
     setOrder(normalized);
     try {
       localStorage.setItem(WBC_CHAT_ORDER_PREFIX + String(projectId || ""), JSON.stringify(normalized));
     } catch (e) {}
     var movedChat = chatMap.get(String(movedId || ""));
-    if (movedChat) {
+    if (movedChat && positionChanged) {
       setAnnouncement(wbcT(
         "workbenchChat.chatMoved",
         "{title} moved to position {position} of {total}.",
@@ -4985,6 +5567,7 @@ function WbcRail({ projectId, chats, pinnedChatIds, activeChatId, loading, runni
     return (
       <div
         key={chat.id}
+        data-chat-id={String(chat.id)}
         role="button"
         tabIndex={0}
         draggable="true"
@@ -6844,7 +7427,7 @@ function WbcConversationNavigator({ threadRef, chatId }) {
   );
 }
 
-function WbcMain({ project, chat, chatSummary, loading, runtime, error, errorKind, onRetry, running, onSend, onGuidance, onInterrupt, onAnswer, onRetryMessage, onEditMessage, onAskSelection, sideAgentCreating, onConversationContextMenu, onRename, onDelete, onToTask, toTaskBusy, onOpenFile, onOpenDroppedChat, sideVisible, sidePanelTabExpanded, onToggleSide, browserState, browserSessionId, browserVisible, browserWindowMode, onBrowserMinimize, onBrowserMaximize, onBrowserRestore, onBrowserTakeoverComplete }) {
+function WbcMain({ project, chat, chatSummary, loading, runtime, error, errorKind, onRetry, running, onSend, onGuidance, onInterrupt, onAnswer, onRetryMessage, onEditMessage, onAskSelection, sideAgentCreating, onConversationContextMenu, onRename, onDelete, onToTask, toTaskBusy, onOpenFile, onOpenDroppedChat, sideVisible, sidePanelTabExpanded, onToggleSide, browserState, browserSessionId, browserVisible, browserWindowMode, onBrowserMinimize, onBrowserMaximize, onBrowserRestore, onBrowserTakeoverComplete, splitOpen }) {
   var mainRef = useWbcRef(null);
   var stageRef = useWbcRef(null);
   var scrollRef = useWbcRef(null);
@@ -7474,6 +8057,7 @@ function WbcMain({ project, chat, chatSummary, loading, runtime, error, errorKin
         onSend={onSend}
         onGuidance={onGuidance}
         onInterrupt={onInterrupt}
+        hideDisclaimer={splitOpen}
       />
     </main>
   );
@@ -7965,6 +8549,15 @@ function WbcAssistantMessage({ msg, onOpenFile, onRetryMessage }) {
   // re-renders on every streaming frame, so without this every prior message
   // would be re-parsed + re-sanitized per frame.
   var bodyHtml = useWbcMemo(function () { return wbcRenderMarkdown(msg.content); }, [msg.content]);
+  var bodyRef = useWbcRef(null);
+  useWbcEffect(function () {
+    if (!bodyRef.current) return undefined;
+    var chartService = window.CyreneUI && window.CyreneUI.chart;
+    if (chartService && typeof chartService.mount === "function") chartService.mount(bodyRef.current);
+    return function () {
+      if (chartService && typeof chartService.dispose === "function") chartService.dispose(bodyRef.current);
+    };
+  }, [bodyHtml]);
   async function copyText() {
     try {
       var text = String(msg.content || "");
@@ -7982,7 +8575,7 @@ function WbcAssistantMessage({ msg, onOpenFile, onRetryMessage }) {
   return (
     <div className="wbc-msg assistant">
       {msg.trace && msg.trace.length > 0 && <WbcTraceCard trace={msg.trace} />}
-      <div className="wbc-msg-body markdown" dangerouslySetInnerHTML={{ __html: bodyHtml }} />
+      <div className="wbc-msg-body markdown" ref={bodyRef} dangerouslySetInnerHTML={{ __html: bodyHtml }} />
       <WbcAgentFiles files={msg.attachments} onOpenFile={onOpenFile} />
       <div className="wbc-msg-foot">
         <button type="button" className="wbc-msg-action" onClick={copyText} title={wbcT("workbenchChat.copy", "Copy")}>
@@ -8172,7 +8765,7 @@ function WbcLiveMessage({ runtime, onOpenFile }) {
   // Re-parse the streaming markdown only when the text actually changed — not on
   // every heartbeat / progress-driven re-render of this card.
   var liveHtml = useWbcMemo(function () {
-    return runtime.text ? wbcRenderMarkdown(runtime.text) : "";
+    return runtime.text ? wbcRenderMarkdown(runtime.text, { interactive: false }) : "";
   }, [runtime.text]);
   if (!runtime.text) return null;
   return (
@@ -8251,7 +8844,7 @@ function wbcSaveWorkspaceOverride(key, path, ns) {
   } catch (e) {}
 }
 
-function WbcComposer({ chat, project, runtime, running, onSend, onGuidance, onInterrupt, draftNamespace, autoFocus, clearOnSend, error, errorKind, compact, placeholder, runningPlaceholder }) {
+function WbcComposer({ chat, project, runtime, running, onSend, onGuidance, onInterrupt, draftNamespace, autoFocus, clearOnSend, error, errorKind, compact, placeholder, runningPlaceholder, hideDisclaimer }) {
   var model = WorkbenchChatModel;
   var chatId = chat ? chat.id : "";
   var projectId = (project && project.id) || "";
@@ -8881,7 +9474,7 @@ function WbcComposer({ chat, project, runtime, running, onSend, onGuidance, onIn
           onPaste={onPaste}
           placeholder={running
             ? (runningPlaceholder || wbcT("workbenchChat.placeholderRunning", "Send guidance to the running agent..."))
-            : (placeholder || wbcT("workbenchChat.placeholder", "Message Cyrene... (Enter to send, Shift+Enter for a new line)"))}
+            : (placeholder || wbcT("workbenchChat.placeholder", "Message Cyrene..."))}
         />
         {!compact && <div className="wbc-context-chips">
           {personaOn && (
@@ -9088,7 +9681,7 @@ function WbcComposer({ chat, project, runtime, running, onSend, onGuidance, onIn
           </button>
         </div>
       </div>
-      {!compact && <div className="wb-composer-disclaimer">{wbcT("workbench.composerDisclaimer", "Cyrene is AI and can make mistakes. Please verify responses.")}</div>}
+      {!compact && !hideDisclaimer && <div className="wb-composer-disclaimer">{wbcT("workbench.composerDisclaimer", "Cyrene is AI and can make mistakes. Please verify responses.")}</div>}
     </div>
   );
 }
@@ -9367,9 +9960,9 @@ function wbcArtifactFileKey(file) {
   return String(file.id || file.url || file.path || file.name || "");
 }
 
-function WbcArtifactSplitHost({ file, items, width, label, onSelect, onResize, onClose, onViewed }) {
+function WbcArtifactSplitHost({ file, items, width, label, onSelect, onResize, onClose, onViewed, splitSide, onToggleSide, onSplitDragStart, onSplitDragEnd }) {
   return (
-    <WbcResourceSplitHost openKey={wbcArtifactFileKey(file)} width={width} onResize={onResize}>
+       <WbcResourceSplitHost openKey={wbcArtifactFileKey(file)} width={width} onResize={onResize} splitSide={splitSide} onToggleSide={onToggleSide} onClose={onClose} onSplitDragStart={onSplitDragStart} onSplitDragEnd={onSplitDragEnd}>
       {file ? (
         <WbcArtifactSplit
           file={file}
@@ -9471,10 +10064,10 @@ function WbcArtifactSplit({ file, items, label, onSelect, onClose, onViewed }) {
   );
 }
 
-function WbcChangeSplitHost({ change, width, onSelect, onResize, onClose }) {
+function WbcChangeSplitHost({ change, width, onSelect, onResize, onClose, splitSide, onToggleSide, onSplitDragStart, onSplitDragEnd }) {
   var changeKey = change ? String(change.setId || "") + ":" + String(change.path || "") : "";
   return (
-    <WbcResourceSplitHost openKey={changeKey} width={width} onResize={onResize}>
+       <WbcResourceSplitHost openKey={changeKey} width={width} onResize={onResize} splitSide={splitSide} onToggleSide={onToggleSide} onClose={onClose} onSplitDragStart={onSplitDragStart} onSplitDragEnd={onSplitDragEnd}>
       {change ? <WbcChangeSplit change={change} onSelect={onSelect} onClose={onClose} /> : null}
     </WbcResourceSplitHost>
   );
@@ -9666,7 +10259,7 @@ function WbcMapList({ chatId, onSelect }) {
   );
 }
 
-function WbcResourceSplitHost({ openKey, children, closingChildren, width, onResize }) {
+function WbcResourceSplitHost({ openKey, children, closingChildren, width, onResize, splitSide, onToggleSide, onClose, onSplitDragStart, onSplitDragEnd }) {
   var [lastChildren, setLastChildren] = useWbcState(children || null);
   var [entered, setEntered] = useWbcState(false);
   // A closing variant is meaningful only after this host has actually shown
@@ -9688,15 +10281,18 @@ function WbcResourceSplitHost({ openKey, children, closingChildren, width, onRes
     return function () { clearTimeout(timer); };
   }, [openKey]);
   if (!visibleChildren) return null;
-  return <div className={"wbc-side-agent-split-motion" + (entered ? " open" : "")}><WbcSideAgentSplitResizer width={width} onResize={onResize} />{visibleChildren}</div>;
+  return <div className={"wbc-side-agent-split-motion" + (entered ? " open" : "")}>
+    <WbcSideAgentSplitResizer width={width} onResize={onResize} splitSide={splitSide} />
+    {visibleChildren}
+  </div>;
 }
 
-function WbcMapSplitHost({ chatId, item, width, onSelect, onResize, onClose }) {
+function WbcMapSplitHost({ chatId, item, width, onSelect, onResize, onClose, splitSide, onToggleSide, onSplitDragStart, onSplitDragEnd }) {
   var data = useWbcMapData(chatId);
   var items = wbcMapItems(data);
   var key = wbcMapItemKey(item);
   return (
-    <WbcResourceSplitHost openKey={key} width={width} onResize={onResize}>
+       <WbcResourceSplitHost openKey={key} width={width} onResize={onResize} splitSide={splitSide} onToggleSide={onToggleSide} onClose={onClose} onSplitDragStart={onSplitDragStart} onSplitDragEnd={onSplitDragEnd}>
       {item ? <WbcMapSplit chatId={chatId} item={item} items={items} onSelect={onSelect} onClose={onClose} /> : null}
     </WbcResourceSplitHost>
   );
@@ -9720,7 +10316,7 @@ function WbcMapSplit({ chatId, item, items, onSelect, onClose }) {
   );
 }
 
-function WbcBrowserSplitHost({ tabId, browserState, browserSessionId, width, onSelect, onResize, onClose, onTakeoverComplete }) {
+function WbcBrowserSplitHost({ tabId, browserState, browserSessionId, width, onSelect, onResize, onClose, onTakeoverComplete, splitSide, onToggleSide, onSplitDragStart, onSplitDragEnd }) {
   var tabs = browserState && Array.isArray(browserState.tabs) ? browserState.tabs : [];
   var activeStateTab = browserState && browserState.activeTab || {};
   var resolvedTabId = tabId === "__active__"
@@ -9728,7 +10324,7 @@ function WbcBrowserSplitHost({ tabId, browserState, browserSessionId, width, onS
     : String(tabId || "");
   var browserSplit = <WbcBrowserSplit active={!!tabId} tabId={resolvedTabId} tabs={tabs} browserState={browserState} browserSessionId={browserSessionId} onSelect={onSelect} onClose={onClose} onTakeoverComplete={onTakeoverComplete} />;
   return (
-    <WbcResourceSplitHost openKey={tabId} closingChildren={!tabId ? browserSplit : null} width={width} onResize={onResize}>
+       <WbcResourceSplitHost openKey={tabId} closingChildren={!tabId ? browserSplit : null} width={width} onResize={onResize} splitSide={splitSide} onToggleSide={onToggleSide} onClose={onClose} onSplitDragStart={onSplitDragStart} onSplitDragEnd={onSplitDragEnd}>
       {tabId ? browserSplit : null}
     </WbcResourceSplitHost>
   );
@@ -9855,17 +10451,17 @@ function WbcBrowserSplit({ active: splitActive = true, tabId, tabs, browserState
   );
 }
 
-function WbcSubagentsSplitHost({ open, data, loading, width, onSelectRound, onResize, onClose }) {
+function WbcSubagentsSplitHost({ open, data, loading, width, onSelectRound, onResize, onClose, splitSide, onToggleSide, onSplitDragStart, onSplitDragEnd }) {
   return (
-    <WbcResourceSplitHost openKey={open ? "subagents" : ""} width={width} onResize={onResize}>
+       <WbcResourceSplitHost openKey={open ? "subagents" : ""} width={width} onResize={onResize} splitSide={splitSide} onToggleSide={onToggleSide} onClose={onClose} onSplitDragStart={onSplitDragStart} onSplitDragEnd={onSplitDragEnd}>
       {open ? <aside className="wbc-side-agent-split wbc-subagents-split" aria-label={wbcT("workbenchChat.subagents", "Subagents")}><header className="wbc-side-agent-split-head wbc-static-split-head"><span className="wbc-side-agent-split-title"><span>{wbcT("workbenchChat.subagents", "Subagents")}</span><b>{data && Array.isArray(data.agents) ? wbcT("workbenchChat.subagent.count", "{n} agents", { n: data.agents.length }) : ""}</b></span><button type="button" className="wbc-side-agent-split-close" onClick={onClose} aria-label={wbcT("workbenchChat.closeSubagents", "Close subagents")}>{WBC_ICONS.x}</button></header><div className="wbc-resource-split-body wbc-subagents-split-body"><WbcSubagentsTab data={data} loading={loading} onSelectRound={onSelectRound} /></div></aside> : null}
     </WbcResourceSplitHost>
   );
 }
 
-function WbcSideAgentSplitHost({ agent, agents, width, project, onOpenFile, onUpdate, onSelect, onResize, onClose }) {
+function WbcSideAgentSplitHost({ agent, agents, width, project, onOpenFile, onUpdate, onSelect, onResize, onClose, splitSide, onToggleSide, onSplitDragStart, onSplitDragEnd }) {
   return (
-    <WbcResourceSplitHost openKey={agent && agent.id || ""} width={width} onResize={onResize}>
+       <WbcResourceSplitHost openKey={agent && agent.id || ""} width={width} onResize={onResize} splitSide={splitSide} onToggleSide={onToggleSide} onClose={onClose} onSplitDragStart={onSplitDragStart} onSplitDragEnd={onSplitDragEnd}>
       {agent ? (
         <WbcSideAgentSplit
           agent={agent}
@@ -9881,7 +10477,238 @@ function WbcSideAgentSplitHost({ agent, agents, width, project, onOpenFile, onUp
   );
 }
 
-function WbcSideAgentSplitResizer({ width, onResize }) {
+// A rail chat dragged onto the side panel opens as a read-only conversation
+// beside the main thread. It polls while the source chat is running so a
+// background run keeps the split in sync.
+function WbcChatSplitHost({ chatId, width, onOpenFile, onResize, onClose, onOpenInMain, splitSide, onToggleSide, project, onSplitDragStart, onSplitDragEnd }) {
+  // The openKey must be empty when no chat is split, otherwise the host's
+  // close branch (exit animation + lastChildren cleanup) never runs.
+  var key = chatId ? "chat:" + chatId : "";
+  return (
+     <WbcResourceSplitHost openKey={key} width={width} onResize={onResize} splitSide={splitSide} onToggleSide={onToggleSide} onClose={onClose} onSplitDragStart={onSplitDragStart} onSplitDragEnd={onSplitDragEnd}>
+      {chatId ? <WbcChatSplit chatId={chatId} project={project} onOpenFile={onOpenFile} onClose={onClose} onOpenInMain={onOpenInMain} /> : null}
+    </WbcResourceSplitHost>
+  );
+}
+
+function WbcChatSplit({ chatId, project, onOpenFile, onClose, onOpenInMain }) {
+  var [chat, setChat] = useWbcState(null);
+  var [loading, setLoading] = useWbcState(true);
+  var [error, setError] = useWbcState("");
+  var [streamText, setStreamText] = useWbcState("");
+  var [running, setRunning] = useWbcState(false);
+  var scrollRef = useWbcRef(null);
+  var chatIdRef = useWbcRef(chatId);
+  var pollTimerRef = useWbcRef(null);
+  var disposedRef = useWbcRef(false);
+  var streamAttachedRef = useWbcRef(false);
+  var runStartedAtRef = useWbcRef(Date.now());
+  chatIdRef.current = chatId;
+
+  function stopPolling() {
+    if (pollTimerRef.current) {
+      clearInterval(pollTimerRef.current);
+      pollTimerRef.current = null;
+    }
+  }
+
+  function refresh(background) {
+    var requestedId = chatIdRef.current;
+    if (!requestedId) return Promise.resolve(null);
+    if (!background) setLoading(true);
+    return WorkbenchChatModel.getChat(requestedId, { toast: false })
+      .then(function (fresh) {
+        if (disposedRef.current || String(chatIdRef.current || "") !== requestedId) return null;
+        setChat(fresh);
+        setLoading(false);
+        return fresh;
+      })
+      .catch(function (err) {
+        if (disposedRef.current || String(chatIdRef.current || "") !== requestedId) return null;
+        setError(wbcErrorText(err));
+        setLoading(false);
+        return null;
+      });
+  }
+
+  useWbcEffect(function () {
+    disposedRef.current = false;
+    setChat(null);
+    setError("");
+    setLoading(true);
+    stopPolling();
+    refresh(true).then(function (fresh) {
+      if (disposedRef.current || !fresh || fresh.status !== "running") return;
+      pollTimerRef.current = setInterval(function () {
+        refresh(true).then(function (next) {
+          if (next && next.status !== "running") stopPolling();
+        });
+      }, 5000);
+    });
+    return function () {
+      disposedRef.current = true;
+      stopPolling();
+    };
+  }, [chatId]);
+
+  useWbcLayoutEffect(function () {
+    var el = scrollRef.current;
+    if (el) el.scrollTop = el.scrollHeight;
+  }, [chat && chat.messages && chat.messages.length, loading, running, streamText]);
+
+  // Sending goes through the same streamed sendMessage path as the main
+  // conversation, so the split transcript updates live while the agent works.
+  function streamHandlers() {
+    return {
+      onReplyStart: function () {
+        if (disposedRef.current) return;
+        setStreamText("");
+      },
+      onReplyDelta: function (delta) {
+        if (disposedRef.current) return;
+        setStreamText(function (current) { return current + delta; });
+      },
+      onReplyDone: function (text) {
+        if (disposedRef.current) return;
+        setStreamText(String(text || ""));
+      },
+      onSaved: function () {
+        if (disposedRef.current) return;
+        setRunning(false);
+        streamAttachedRef.current = false;
+        refresh(true).finally(function () {
+          if (disposedRef.current) return;
+          setStreamText("");
+        });
+      },
+      onAwaitingUser: function () {
+        if (disposedRef.current) return;
+        setRunning(false);
+        streamAttachedRef.current = false;
+        refresh(true).finally(function () {
+          if (disposedRef.current) return;
+          setStreamText("");
+        });
+      },
+      onError: function (err) {
+        if (disposedRef.current) return;
+        setError(wbcErrorText(err));
+        setRunning(false);
+        streamAttachedRef.current = false;
+        setStreamText("");
+      },
+    };
+  }
+
+  function ownStream(promise) {
+    streamAttachedRef.current = true;
+    setRunning(true);
+    promise.catch(function (err) {
+      if (disposedRef.current || !(err && err.name === "AbortError")) {
+        setError(wbcErrorText(err));
+      }
+    }).finally(function () {
+      if (disposedRef.current) return;
+      streamAttachedRef.current = false;
+      setRunning(false);
+      refresh(true).catch(function () {}).finally(function () {
+        if (disposedRef.current) return;
+        setStreamText("");
+      });
+    });
+  }
+
+  function submit(payload) {
+    var question = String(payload && payload.message || "").trim();
+    var attachments = payload && Array.isArray(payload.attachments) ? payload.attachments : [];
+    var current = chatIdRef.current;
+    if ((!question && !attachments.length) || running || !current) return;
+    var optimistic = {
+      id: "chat_split_pending_" + Date.now(),
+      role: "user",
+      content: question,
+      attachments: attachments,
+      createdAt: new Date().toISOString(),
+      optimistic: true,
+    };
+    setChat(function (prev) {
+      if (!prev || !prev.id) return prev;
+      return { ...prev, messages: (prev.messages || []).concat([optimistic]) };
+    });
+    setError("");
+    setStreamText("");
+    runStartedAtRef.current = Date.now();
+    ownStream(WorkbenchChatModel.sendMessage(current, {
+      message: question,
+      attachments: attachments,
+    }, streamHandlers()));
+  }
+
+  function stop() {
+    if (!running) return;
+    WorkbenchChatModel.interrupt(chatIdRef.current).catch(function () {});
+    setRunning(false);
+  }
+
+  var messages = chat && Array.isArray(chat.messages) ? chat.messages : [];
+  var errorText = error;
+  return (
+    <aside className="wbc-side-agent-split wbc-chat-split" aria-label={wbcT("workbenchChat.chatSplitLabel", "Chat")}>
+      <div className="wbc-thread-stage wbc-chat-split-stage">
+        <div className="wbc-thread" ref={scrollRef}>
+        {loading && !messages.length && (
+          <div className="wbc-chat-split-state" role="status">
+            <span className="wbc-spinner" aria-hidden="true" />
+            <span>{wbcT("workbenchChat.loading", "Loading chats...")}</span>
+          </div>
+        )}
+        {!loading && !messages.length && !errorText && (
+          <div className="wbc-chat-split-state">{wbcT("workbenchChat.noMessages", "No messages yet")}</div>
+        )}
+        {errorText && <div className="wbc-side-agent-error" role="alert">{errorText}</div>}
+        {messages.map(function (message) {
+          return (
+            <WbcThreadItem key={message.id || message.createdAt}>
+              {message.role === "user"
+                ? <WbcUserMessage msg={message} onOpenFile={onOpenFile} />
+                : <WbcAssistantMessage msg={message} onOpenFile={onOpenFile} />}
+            </WbcThreadItem>
+          );
+        })}
+        {running && !streamText && (
+          <WbcThreadItem>
+            <WbcHeartbeat startedAt={runStartedAtRef.current} />
+          </WbcThreadItem>
+        )}
+        {running && streamText && (
+          <WbcThreadItem>
+            <WbcLiveMessage runtime={{ text: streamText }} onOpenFile={onOpenFile} />
+          </WbcThreadItem>
+        )}
+        </div>
+      </div>
+      <WbcComposer
+        chat={chat}
+        project={project}
+        runtime={streamText ? { text: streamText } : null}
+        running={running}
+        onSend={submit}
+        onInterrupt={stop}
+        draftNamespace={"chat-split:"}
+        autoFocus={false}
+        clearOnSend={true}
+        error={error}
+        errorKind="message"
+        compact={false}
+        hideDisclaimer={true}
+        placeholder={wbcT("workbenchChat.placeholder", "Message Cyrene...")}
+        runningPlaceholder={wbcT("workbenchChat.placeholderRunning", "Send guidance to the running agent...")}
+      />
+    </aside>
+  );
+}
+
+function WbcSideAgentSplitResizer({ width, onResize, splitSide }) {
   function clampWidth(next) {
     return wbcClampSideSplitWidth(next, window.innerWidth);
   }
@@ -9892,7 +10719,12 @@ function WbcSideAgentSplitResizer({ width, onResize }) {
     var startX = event.clientX;
     var startWidth = Number(width) || 520;
     function move(moveEvent) {
-      onResize(clampWidth(startWidth + startX - moveEvent.clientX));
+      // The resizer rides the edge that faces the conversation: right-anchored
+      // panels widen when dragged left, left-anchored ones when dragged right.
+      var delta = splitSide === "left"
+        ? (moveEvent.clientX - startX)
+        : (startX - moveEvent.clientX);
+      onResize(clampWidth(startWidth + delta));
     }
     function stop() {
       window.removeEventListener("pointermove", move);
@@ -9907,7 +10739,10 @@ function WbcSideAgentSplitResizer({ width, onResize }) {
   function resizeWithKeyboard(event) {
     if (!onResize || (event.key !== "ArrowLeft" && event.key !== "ArrowRight")) return;
     event.preventDefault();
-    onResize(clampWidth((Number(width) || 520) + (event.key === "ArrowLeft" ? 16 : -16)));
+    var step = splitSide === "left"
+      ? (event.key === "ArrowRight" ? 16 : -16)
+      : (event.key === "ArrowLeft" ? 16 : -16);
+    onResize(clampWidth((Number(width) || 520) + step));
   }
 
   return (
@@ -9920,6 +10755,91 @@ function WbcSideAgentSplitResizer({ width, onResize }) {
       onPointerDown={startResize}
       onKeyDown={resizeWithKeyboard}
     />
+  );
+}
+
+// Top edge of the main conversation while a detail split is open. The grip
+// lifts the conversation with a native drag (like an image/document): dropping
+// it on the rail closes the split, and dropping it on either side moves the
+// split there. Its menu opens the floating conversation panel, swaps the split
+// side, or closes it. Content splits intentionally have no second grip.
+function WbcSplitGripBar({ side, onToggleSide, onClose, onOpenConversationPanel, onSplitDragStart, onSplitDragEnd }) {
+  var [menuOpen, setMenuOpen] = useWbcState(false);
+  var rootRef = useWbcRef(null);
+
+  useWbcEffect(function () {
+    if (!menuOpen) return undefined;
+    function closeOutside(event) {
+      if (rootRef.current && !rootRef.current.contains(event.target)) setMenuOpen(false);
+    }
+    document.addEventListener("pointerdown", closeOutside);
+    return function () { document.removeEventListener("pointerdown", closeOutside); };
+  }, [menuOpen]);
+
+  function handleKey(event) {
+    if (event.key === "Enter" || event.key === " ") {
+      event.preventDefault();
+      setMenuOpen(function (open) { return !open; });
+    } else if (event.key === "ArrowLeft" || event.key === "ArrowRight") {
+      event.preventDefault();
+      if (onToggleSide) onToggleSide();
+    }
+  }
+
+  var swapLabel = side === "left"
+    ? wbcT("workbenchChat.splitMoveRight", "Move split to the right side")
+    : wbcT("workbenchChat.splitMoveLeft", "Move split to the left side");
+  function openConversationPanel() {
+    setMenuOpen(false);
+    if (onOpenConversationPanel) onOpenConversationPanel();
+  }
+  return (
+    <div className="wbc-split-grip-bar-host" ref={rootRef}>
+      <div
+        className="wbc-side-split-grip-bar"
+        role="button"
+        tabIndex={0}
+        draggable="true"
+        aria-label={wbcT("workbenchChat.detailPanel.move", "Move split panel")}
+        title={wbcT("workbenchChat.detailPanel.move", "Move split panel")}
+        onClick={function () { setMenuOpen(function (open) { return !open; }); }}
+        onDragStart={function (event) { if (onSplitDragStart) onSplitDragStart(event); }}
+        onDragEnd={function () { if (onSplitDragEnd) onSplitDragEnd(); }}
+        onKeyDown={handleKey}
+      >
+        <span className="wbc-side-split-grip-bar-visual" aria-hidden="true" />
+      </div>
+      {menuOpen && (
+        <div className="wbc-side-split-grip-menu" role="menu">
+          <button
+            type="button"
+            role="menuitem"
+            onClick={openConversationPanel}
+          >
+            <span aria-hidden="true">{WBC_ICONS.sidebar}</span>
+            <span>{wbcT("workbenchChat.detailPanel.openConversationPanel", "Open conversation panel")}</span>
+          </button>
+          <button
+            type="button"
+            role="menuitem"
+            onClick={function () { setMenuOpen(false); if (onToggleSide) onToggleSide(); }}
+          >
+            <span aria-hidden="true">{WBC_ICONS.chevronLeft}{WBC_ICONS.chevronRight}</span>
+            <span>{swapLabel}</span>
+          </button>
+          {onClose ? (
+            <button
+              type="button"
+              role="menuitem"
+              onClick={function () { setMenuOpen(false); onClose(); }}
+            >
+              <span aria-hidden="true">{WBC_ICONS.x}</span>
+              <span>{wbcT("workbenchChat.detailPanel.close", "Close split panel")}</span>
+            </button>
+          ) : null}
+        </div>
+      )}
+    </div>
   );
 }
 
@@ -10321,6 +11241,8 @@ function WbcSide({
   browserActiveByChat,
   browserSuppressed,
   onToggleSide,
+  floating,
+  onCloseFloating,
 }) {
   window.CyreneUI.require("data").useVersion();
   var [changesAvailability, setChangesAvailability] = useWbcState({ chatId: "", hasChanges: false });
@@ -10449,13 +11371,23 @@ function WbcSide({
     </>
   );
   return (
-    <aside className="wbc-side">
+    <aside className={"wbc-side" + (floating ? " wbc-side-floating" : "")}>
       <div className="wbc-side-card">
-        {React.createElement(window.CyreneUI.require("shell").ColResizer, { cardEdge: true })}
+        {!floating && React.createElement(window.CyreneUI.require("shell").ColResizer, { cardEdge: true })}
         <div className="wbc-side-card-head">
           <strong>{wbcT("workbenchChat.sidePanelTitle", "Conversation panel")}</strong>
-          <button type="button" className="wbc-side-hide-btn" onClick={onToggleSide} title={wbcT("workbenchChat.hideSidebar", "Hide side panel")}>
-            {WBC_ICONS.chevronsRight}
+          <button
+            type="button"
+            className={"wbc-side-hide-btn" + (floating ? " wbc-side-floating-close" : "")}
+            onClick={floating ? onCloseFloating : onToggleSide}
+            title={floating
+              ? wbcT("workbenchChat.closeFloatingConversationPanel", "Close floating conversation panel")
+              : wbcT("workbenchChat.hideSidebar", "Hide side panel")}
+            aria-label={floating
+              ? wbcT("workbenchChat.closeFloatingConversationPanel", "Close floating conversation panel")
+              : wbcT("workbenchChat.hideSidebar", "Hide side panel")}
+          >
+            {floating ? WBC_ICONS.x : WBC_ICONS.chevronsRight}
           </button>
         </div>
         <div className="wbc-side-accordion">

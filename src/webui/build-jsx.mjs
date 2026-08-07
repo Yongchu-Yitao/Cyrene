@@ -96,6 +96,7 @@ async function build() {
   const reactAssets = [
     ['node_modules/react/umd/react.production.min.js', 'react.production.min.js'],
     ['node_modules/react-dom/umd/react-dom.production.min.js', 'react-dom.production.min.js'],
+    ['node_modules/echarts/dist/echarts.min.js', 'echarts.min.js'],
   ]
   for (const [source, target] of reactAssets) {
     copyFileSync(resolve(__dirname, source), join(APP_DIR, target))
