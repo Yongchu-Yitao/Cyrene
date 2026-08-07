@@ -236,6 +236,14 @@ class ChatGuidanceBody(APIBody):
     clientRequestId: str | None = Field(default=None, max_length=200)
 
 
+class ChatActionBody(APIBody):
+    """A `:::button` click forwarded from the frontend (block_actions protocol)."""
+    actionId: str = Field(min_length=1, max_length=64)
+    value: str = Field(default="", max_length=512)
+    messageId: str = Field(min_length=1, max_length=200)
+    eventId: str = Field(default="", max_length=200)
+
+
 class ChatToTaskBody(APIBody):
     title: str | None = Field(default=None, max_length=160)
     goal: str | None = Field(default=None, max_length=50_000)

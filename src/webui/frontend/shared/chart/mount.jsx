@@ -190,20 +190,159 @@
     return instances.get(element);
   }
 
-  function mount(container) {
+  // ---- :::button blocks ---------------------------------------------------
+  // Click events flow through one protocol shape (Slack block_actions-style):
+  // { type, action_id, block_id, value, mode, message_id, event_id, user_id,
+  // timestamp }. `mode: "local"` resolves in the frontend (the event is
+  // dispatched as a bubbling `wbc:block-action` CustomEvent for hosts to
+  // subscribe to); `mode: "model"` uses the same payload so a host/runtime
+  // can forward it to the model later. Every click gets a unique event_id,
+  // and a triggered button is locked briefly so one physical click produces
+  // exactly one event.
+
+  var eventSeq = 0;
+  function eventId() {
+    eventSeq += 1;
+    return Date.now().toString(36) + "-" + eventSeq.toString(36)
+      + "-" + Math.random().toString(36).slice(2, 8);
+  }
+
+  function hashString(text) {
+    var hash = 5381;
+    for (var i = 0; i < text.length; i++) {
+      hash = ((hash << 5) + hash + text.charCodeAt(i)) | 0;
+    }
+    return (hash >>> 0).toString(36);
+  }
+
+  function mountButton(element, context) {
+    var raw = element.getAttribute("data-wbc-button");
+    if (!raw) return null;
+    var spec;
+    try {
+      spec = JSON.parse(raw);
+    } catch (e) {
+      element.classList.add("wbc-button-error");
+      return null;
+    }
+    if (!spec || typeof spec.label !== "string" || typeof spec.action_id !== "string") {
+      element.classList.add("wbc-button-error");
+      return null;
+    }
+    var blockId = element.getAttribute("data-wbc-block-id");
+    if (!blockId) {
+      blockId = "btn-" + hashString(raw);
+      element.setAttribute("data-wbc-block-id", blockId);
+    }
+
+    var button = document.createElement("button");
+    button.type = "button";
+    button.className = "wbc-button-btn wbc-button-btn--" + (spec.style || "default");
+    button.textContent = spec.label;
+    button.setAttribute("data-action-id", spec.action_id);
+    if (spec.disabled) button.disabled = true;
+
+    var fired = false;
+    function release() {
+      button.disabled = false;
+      button.classList.remove("wbc-button-triggered");
+      fired = false;
+    }
+    function dispatch(payload) {
+      if (typeof root.CustomEvent === "function") {
+        element.dispatchEvent(new root.CustomEvent("wbc:block-action", {
+          bubbles: true,
+          detail: payload,
+        }));
+      }
+    }
+    button.addEventListener("click", function () {
+      if (fired || button.disabled) return;
+      fired = true;
+      button.disabled = true;
+      button.classList.add("wbc-button-triggered");
+      var payload = {
+        type: "block_actions",
+        action_id: spec.action_id,
+        block_id: blockId,
+        value: spec.value || "",
+        mode: spec.mode || "local",
+        message_id: (context && context.messageId) || "",
+        event_id: eventId(),
+        user_id: (context && context.userId) || "",
+        timestamp: Date.now(),
+      };
+      if (spec.mode === "model") {
+        // Forward to the runtime: the endpoint flips this block to disabled
+        // in the stored message (chat.update semantics) and routes the event
+        // through the send pipeline. On success the button stays disabled —
+        // the refreshed message re-renders it inert. On failure it re-arms.
+        var chatId = (context && context.chatId) || "";
+        if (chatId && typeof root.fetch === "function") {
+          var settled = false;
+          setTimeout(function () { if (!settled) release(); }, 600);
+          root.fetch("/api/workbench/chats/" + encodeURIComponent(chatId) + "/actions", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              actionId: spec.action_id,
+              value: spec.value || "",
+              messageId: payload.message_id,
+              eventId: payload.event_id,
+            }),
+          }).then(function (response) {
+            settled = true;
+            if (response.ok) {
+              dispatch(payload);
+            } else {
+              release();
+              dispatch(payload);
+            }
+          }).catch(function () {
+            settled = true;
+            release();
+            dispatch(payload);
+          });
+          return;
+        }
+        // No runtime context (read-only surface): degrade to the local event.
+        dispatch(payload);
+        setTimeout(release, 600);
+        return;
+      }
+      dispatch(payload);
+      setTimeout(release, 600);
+    });
+
+    var specEl = element.querySelector(".wbc-button-spec");
+    if (specEl) specEl.classList.add("wbc-button-spec-hidden");
+    element.innerHTML = "";
+    element.appendChild(button);
+
+    instances.set(element, { element: element, dispose: function () {} });
+    return instances.get(element);
+  }
+
+  function mountElement(element, context) {
+    if (element.hasAttribute("data-wbc-chart")) return mountOne(element);
+    if (element.hasAttribute("data-wbc-button")) return mountButton(element, context);
+    return null;
+  }
+
+  function mount(container, context) {
     if (!container || !instances) return 0;
-    var elements = container.querySelectorAll("[data-wbc-chart]");
+    var elements = container.querySelectorAll("[data-wbc-chart], [data-wbc-button]");
     var count = 0;
     for (var i = 0; i < elements.length; i++) {
       if (instances.has(elements[i])) continue;
-      if (mountOne(elements[i])) count += 1;
+      if (mountElement(elements[i], context)) count += 1;
     }
     return count;
   }
 
   function dispose(container) {
     if (!container || !instances) return;
-    var elements = container.querySelectorAll("[data-wbc-chart]");
+    var elements = container.querySelectorAll("[data-wbc-chart], [data-wbc-button]");
     for (var i = 0; i < elements.length; i++) {
       var entry = instances.get(elements[i]);
       if (entry) {
@@ -218,6 +357,7 @@
     dispose: dispose,
     buildOption: buildOption,
     computeSeries: computeSeries,
+    eventId: eventId,
   };
   root.CyreneUI.chart = root.CyreneUI.register("chart", service);
 })(window);

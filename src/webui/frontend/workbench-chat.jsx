@@ -7983,7 +7983,7 @@ function WbcMain({ project, chat, chatSummary, loading, runtime, error, errorKin
             <WbcThreadItem key={msg.id} navigation={msg.role === "user" ? wbcUserMessageNavigationMeta(msg) : null}>
               {msg.role === "user"
                 ? <WbcUserMessage msg={visibleMessage} onOpenFile={onOpenFile} onEditMessage={onEditMessage} canEdit={canEdit} onRetryMessage={canRetryUser ? onRetryMessage : null} />
-                : <WbcAssistantMessage msg={visibleMessage} onOpenFile={onOpenFile} onRetryMessage={canRetryAssistant ? onRetryMessage : null} />}
+                : <WbcAssistantMessage msg={visibleMessage} onOpenFile={onOpenFile} onRetryMessage={canRetryAssistant ? onRetryMessage : null} chatId={String(chat && chat.id || "")} />}
             </WbcThreadItem>
           );
         })}
@@ -8542,7 +8542,7 @@ function WbcTraceCard({ trace, live, running, label, reasoning, showReasoning, o
   );
 }
 
-function WbcAssistantMessage({ msg, onOpenFile, onRetryMessage }) {
+function WbcAssistantMessage({ msg, onOpenFile, onRetryMessage, chatId }) {
   var [copied, setCopied] = useWbcState(false);
   var processingDuration = wbcFormatProcessingDuration(msg.processingDurationMs);
   // Parse each finalized message's markdown once and reuse it: the whole thread
@@ -8553,7 +8553,12 @@ function WbcAssistantMessage({ msg, onOpenFile, onRetryMessage }) {
   useWbcEffect(function () {
     if (!bodyRef.current) return undefined;
     var chartService = window.CyreneUI && window.CyreneUI.chart;
-    if (chartService && typeof chartService.mount === "function") chartService.mount(bodyRef.current);
+    if (chartService && typeof chartService.mount === "function") {
+      chartService.mount(bodyRef.current, {
+        messageId: String(msg && msg.id || ""),
+        chatId: String(chatId || ""),
+      });
+    }
     return function () {
       if (chartService && typeof chartService.dispose === "function") chartService.dispose(bodyRef.current);
     };
@@ -10671,7 +10676,7 @@ function WbcChatSplit({ chatId, project, onOpenFile, onClose, onOpenInMain }) {
             <WbcThreadItem key={message.id || message.createdAt}>
               {message.role === "user"
                 ? <WbcUserMessage msg={message} onOpenFile={onOpenFile} />
-                : <WbcAssistantMessage msg={message} onOpenFile={onOpenFile} />}
+                : <WbcAssistantMessage msg={message} onOpenFile={onOpenFile} chatId={typeof chatId === "string" ? chatId : ""} />}
             </WbcThreadItem>
           );
         })}
@@ -11070,7 +11075,7 @@ function WbcSideAgentTab({ agent, project, onOpenFile, onUpdate }) {
             <WbcThreadItem key={message.id || message.createdAt}>
               {message.role === "user"
                 ? <WbcUserMessage msg={message} onOpenFile={onOpenFile} />
-                : <WbcAssistantMessage msg={message} onOpenFile={onOpenFile} />}
+                : <WbcAssistantMessage msg={message} onOpenFile={onOpenFile} chatId={typeof chatId === "string" ? chatId : ""} />}
             </WbcThreadItem>
           );
         })}

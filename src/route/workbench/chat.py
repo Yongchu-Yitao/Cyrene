@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import re
 import shutil
 import time
 from typing import Any
@@ -1775,6 +1776,84 @@ def register_workbench_chat_routes(
             chat_id,
             api_models.body_dict(body_model),
         )
+
+    @router.post("/api/workbench/chats/{chat_id}/actions")
+    async def api_workbench_chat_action(
+        chat_id: str, body_model: api_models.ChatActionBody
+    ):
+        """Handle a `:::button` click (block_actions protocol).
+
+        ``mode: "model"`` buttons land here. The source message is updated in
+        place (chat.update semantics: the clicked block flips to
+        ``disabled: true`` so one click is consumed exactly once), then the
+        event is routed through the normal send pipeline as a user turn so
+        the agent can answer semantically and the reply is appended.
+        """
+        body = api_models.body_dict(body_model)
+        action_id = str(body.get("actionId") or "").strip()
+        value = str(body.get("value") or "")
+        message_id = str(body.get("messageId") or "").strip()
+        if not action_id or not message_id:
+            return JSONResponse(
+                {"error": "actionId and messageId are required"}, status_code=400
+            )
+        # Mirrors the frontend spec validation: the event router is an attack
+        # surface, so action ids stay whitelisted and bounded.
+        if not re.fullmatch(r"[a-z0-9_]+", action_id) or len(action_id) > 32:
+            return JSONResponse({"error": "invalid action_id"}, status_code=400)
+        if len(value) > 256:
+            return JSONResponse({"error": "value too long"}, status_code=400)
+        if chat_id.startswith("legacy:"):
+            return JSONResponse(
+                {"error": "legacy chats cannot run actions"}, status_code=403
+            )
+
+        payload = await asyncio.to_thread(_read_chats_store)
+        chat = _find_chat(payload, chat_id)
+        if not chat:
+            return JSONResponse({"error": "chat not found"}, status_code=404)
+        messages = chat.get("messages") if isinstance(chat.get("messages"), list) else []
+        target = next(
+            (
+                entry
+                for entry in messages
+                if str(entry.get("id") or "") == message_id
+            ),
+            None,
+        )
+        if target is None:
+            return JSONResponse({"error": "message not found"}, status_code=404)
+        if str(target.get("role") or "") != "assistant":
+            return JSONResponse(
+                {"error": "actions target assistant messages"}, status_code=400
+            )
+
+        content = str(target.get("content") or "")
+        if not has_button_block(content, action_id):
+            return JSONResponse(
+                {"error": "action not found in message"}, status_code=404
+            )
+        updated_content, label = disable_button_block(content, action_id)
+        if updated_content is None:
+            # The block is already disabled: a duplicate click. Reject so the
+            # event stays idempotent regardless of client retries.
+            return JSONResponse(
+                {"error": "action already handled", "code": "action_duplicate"},
+                status_code=409,
+            )
+        target["content"] = updated_content
+        chat["updatedAt"] = _utc_now_iso()
+        await asyncio.to_thread(_write_chats_store, payload)
+
+        label_text = label or action_id
+        if value:
+            label_text = f"{label_text} ({action_id}: {value})"
+        # Route through the full send pipeline: budget gate, permission mode,
+        # model selection and run/finalize are all handled there.
+        return await _workbench_chat_send_impl(chat_id, {
+            "message": f"[按钮操作] {label_text}",
+            "stream": False,
+        })
 
     @router.post("/api/workbench/chats/{chat_id}/fork")
     async def api_workbench_chat_fork(

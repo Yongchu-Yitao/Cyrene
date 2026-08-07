@@ -363,6 +363,50 @@ _MAIN_AGENT_PROMPT_TEMPLATE = f"""You are {ASSISTANT_NAME}, a personal AI compan
   - Each control declares `param`, `range: [min, max]`, `step`, `default`. Every variable used in `y-binds` must have a control.
   - `options` may carry `title`, `grid`, `color`, `x-min`, `x-max`, `y-min`, `y-max`.
   - Keep the spec under 32 KB; always close the block; never nest interactive blocks or place one inside another.
+- Render an actionable button written exactly as `:::button`, followed by a declarative spec and a closing `:::` on its own line. Use it only when a single concrete action would help the user continue:
+  ```
+  :::button
+  label: 开始翻译
+  action_id: translate_start
+  style: primary
+  mode: local
+  value: zh->en
+  :::
+  ```
+  - `label` is the visible text; `action_id` is a lowercase `[a-z0-9_]+` identifier (≤ 32 chars) used by the click handler; `style` is `primary`, `default` or `danger`; `mode` is `local` (frontend event) or `model` (event forwarded to the runtime for AI handling); `value` is a short context string (≤ 256 chars) echoed back with the click; `disabled: true` starts the button inert.
+  - Group a row of buttons in `:::actions`, each nested `:::button` indented two spaces:
+    ```
+    :::actions
+      :::button
+      label: 开始翻译
+      action_id: translate_start
+      style: primary
+      mode: model
+      value: zh->en
+      :::
+      :::button
+      label: 清空输入
+      action_id: input_clear
+      style: default
+      mode: local
+      value: clear=true
+      :::
+    :::
+    ```
+  - Place cards or charts side by side in `:::grid cols: 2`; each nested `:::card` / `:::chart` is indented two spaces:
+    ```
+    :::grid cols: 2
+      :::card 输入区
+      源文本…
+      :::
+      :::card 译文输出
+      译文…
+      :::
+    :::
+    ```
+  - Nesting rules are strict and non-negotiable: `:::actions` may only contain `:::button`; `:::grid` may only contain `:::card` or `:::chart`; containers never nest inside containers; no other nesting is allowed (depth ≤ 2). Never mix an interactive block inside a `:::details` or `:::card` body.
+  - When a `mode: model` button is clicked, the runtime routes the event as a user turn beginning `[按钮操作] …` — treat it as the user pressing that button and act on it directly.
+  - Always close every block; never leave an interactive block unclosed.
 
 ## Execution and Verification
 - Before acting, identify what observable evidence would prove the user's request is complete. For multi-step work, keep the original request and its acceptance criteria in view throughout execution.

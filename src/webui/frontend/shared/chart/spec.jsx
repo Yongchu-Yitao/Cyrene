@@ -296,6 +296,45 @@
     return { spec: spec, compiled: compiled, json: json };
   }
 
+  // ---- :::button blocks ----
+
+  var ACTION_ID_RE = /^[a-z0-9_]+$/;
+  var MAX_ACTION_ID_LENGTH = 32;
+  var MAX_VALUE_LENGTH = 256;
+  var BUTTON_STYLES = { primary: true, default: true, danger: true };
+  var BUTTON_MODES = { local: true, model: true };
+
+  function buildButtonPayload(body) {
+    var spec = parseSpec(body);
+    var actionId = String(spec.action_id || "");
+    if (!ACTION_ID_RE.test(actionId)) throw fail("action_id must match [a-z0-9_]+");
+    if (actionId.length > MAX_ACTION_ID_LENGTH) throw fail("action_id exceeds 32 characters");
+    var label = String(spec.label || "");
+    if (!label.trim()) throw fail("button requires a non-empty label");
+    if (spec.style !== undefined && !BUTTON_STYLES[String(spec.style)]) {
+      throw fail("unsupported button style: " + String(spec.style));
+    }
+    if (spec.mode !== undefined && !BUTTON_MODES[String(spec.mode)]) {
+      throw fail("unsupported button mode: " + String(spec.mode));
+    }
+    var value = spec.value === undefined ? "" : String(spec.value);
+    if (value.length > MAX_VALUE_LENGTH) throw fail("button value exceeds 256 characters");
+    if (spec.disabled !== undefined && typeof spec.disabled !== "boolean") {
+      throw fail("button disabled must be a boolean");
+    }
+    var payloadSpec = {
+      action_id: actionId,
+      label: label,
+      style: String(spec.style || "default"),
+      mode: String(spec.mode || "local"),
+      value: value,
+      disabled: spec.disabled === true,
+    };
+    var json = JSON.stringify(payloadSpec);
+    if (json.length > MAX_PAYLOAD_BYTES) throw fail("button spec exceeds the 32 KB payload limit");
+    return { spec: payloadSpec, json: json };
+  }
+
   var service = {
     CHART_TYPES: CHART_TYPES,
     MAX_PAYLOAD_BYTES: MAX_PAYLOAD_BYTES,
@@ -304,6 +343,7 @@
     compileExpr: compileExpr,
     validateSpec: validateSpec,
     buildPayload: buildPayload,
+    buildButtonPayload: buildButtonPayload,
   };
   root.CyreneUI.chartSpec = root.CyreneUI.register("chart-spec", service);
 })(window);

@@ -6049,7 +6049,9 @@ def test_workbench_assistant_message_mounts_charts_and_prompt_teaches_chart():
 
     assistant_message = chat.split("function WbcAssistantMessage", 1)[1].split("function WbcHeartbeat", 1)[0]
     assert 'window.CyreneUI.chart' in assistant_message
-    assert 'chartService.mount(bodyRef.current)' in assistant_message
+    assert 'chartService.mount(bodyRef.current, {' in assistant_message
+    assert 'messageId: String(msg && msg.id || "")' in assistant_message
+    assert 'chatId: String(chatId || ""),' in assistant_message
     assert 'chartService.dispose(bodyRef.current)' in assistant_message
     assert 'ref={bodyRef}' in chat
     assert ".wbc-chart-canvas" in styles
@@ -6061,3 +6063,271 @@ def test_workbench_assistant_message_mounts_charts_and_prompt_teaches_chart():
     assert "compiled/shared/chart/mount.js" in index_html
     assert "echarts.min.js" in index_html
     assert "node_modules/echarts/dist/echarts.min.js" in build_script
+
+
+def test_markdown_button_block_renders_payload_with_readable_fallback():
+    result = _run_chart_render_js(
+        "(() => {\n"
+        "  const src = [\n"
+        "    'Intro.',\n"
+        "    '',\n"
+        "    ':::button',\n"
+        "    'label: 开始翻译',\n"
+        "    'action_id: translate_start',\n"
+        "    'style: primary',\n"
+        "    'mode: local',\n"
+        "    'value: zh->en',\n"
+        "    ':::',\n"
+        "    '',\n"
+        "    'Outro.',\n"
+        "  ].join('\\n');\n"
+        "  const finalHtml = services.markdown.renderRich(src);\n"
+        "  const streamingHtml = services.markdown.renderRich(src, { interactive: false });\n"
+        "  const match = finalHtml.match(/data-wbc-button=\"([^\"]*)\"/);\n"
+        "  const payload = match ? JSON.parse(match[1].replace(/&quot;/g, '\"').replace(/&gt;/g, '>').replace(/&lt;/g, '<')) : null;\n"
+        "  return { finalHtml, streamingHtml, payload };\n"
+        "})()"
+    )
+    assert 'class="wbc-button"' in result["finalHtml"]
+    # The fallback line is readable: "[按钮: 开始翻译]".
+    assert '[\\u6309\\u94ae: \\u5f00\\u59cb\\u7ffb\\u8bd1]' in result["finalHtml"] or "[按钮: 开始翻译]" in result["finalHtml"]
+    assert result["payload"]["action_id"] == "translate_start"
+    assert result["payload"]["label"] == "开始翻译"
+    assert result["payload"]["style"] == "primary"
+    assert result["payload"]["mode"] == "local"
+    assert result["payload"]["value"] == "zh->en"
+    assert result["payload"]["disabled"] is False
+    # Streaming keeps prose but hides the interactive block.
+    assert "Intro." in result["streamingHtml"]
+    assert "Outro." in result["streamingHtml"]
+    assert "wbc-button" not in result["streamingHtml"]
+
+
+def test_markdown_button_label_is_escaped_in_fallback():
+    result = _run_chart_render_js(
+        "(() => {\n"
+        "  const src = [\n"
+        "    ':::button',\n"
+        "    'label: <img src=x onerror=alert(1)>',\n"
+        "    'action_id: poke',\n"
+        "    ':::',\n"
+        "  ].join('\\n');\n"
+        "  return { html: services.markdown.renderRich(src) };\n"
+        "})()"
+    )
+    assert "<img" not in result["html"]
+    assert "&lt;img" in result["html"]
+    assert "onerror=alert" in result["html"]  # present only as escaped text
+
+
+def test_markdown_button_invalid_spec_falls_back_to_raw_spec():
+    result = _run_chart_render_js(
+        "(() => {\n"
+        "  const bad = [':::button', 'label: X', 'action_id: UPPER_CASE', ':::'].join('\\n');\n"
+        "  const missing = [':::button', 'action_id: ok_id', ':::'].join('\\n');\n"
+        "  return {\n"
+        "    bad: services.markdown.renderRich(bad),\n"
+        "    missing: services.markdown.renderRich(missing),\n"
+        "  };\n"
+        "})()"
+    )
+    assert 'class="wbc-button wbc-button-error"' in result["bad"]
+    assert 'data-wbc-button-error="action_id must match [a-z0-9_]+"' in result["bad"]
+    assert '<pre class="wbc-button-spec">label: X' in result["bad"]
+    assert 'data-wbc-button-error="button requires a non-empty label"' in result["missing"]
+
+
+def test_button_spec_validation_rejects_bad_fields():
+    result = _run_chart_services_js(
+        "(() => {\n"
+        "  const chartSpec = services['chart-spec'];\n"
+        "  function outcome(body) {\n"
+        "    try { chartSpec.buildButtonPayload(body); return true; }\n"
+        "    catch (e) { return false; }\n"
+        "  }\n"
+        "  const base = 'label: Go\\naction_id: go\\n';\n"
+        "  return {\n"
+        "    good: outcome(base),\n"
+        "    long_action_id: outcome('label: Go\\naction_id: ' + 'a'.repeat(33) + '\\n'),\n"
+        "    bad_style: outcome(base + 'style: giant\\n'),\n"
+        "    bad_mode: outcome(base + 'mode: remote\\n'),\n"
+        "    long_value: outcome(base + 'value: ' + 'v'.repeat(257) + '\\n'),\n"
+        "    bad_disabled: outcome(base + 'disabled: yes\\n'),\n"
+        "    empty_label: outcome('action_id: go\\n'),\n"
+        "  };\n"
+        "})()"
+    )
+    assert result["good"] is True
+    assert result["long_action_id"] is False
+    assert result["bad_style"] is False
+    assert result["bad_mode"] is False
+    assert result["long_value"] is False
+    assert result["bad_disabled"] is False
+    assert result["empty_label"] is False
+
+
+def test_button_click_protocol_payload_shape_and_event_ids():
+    result = _run_chart_services_js(
+        "(() => {\n"
+        "  const chart = services['chart'];\n"
+        "  const ids = [chart.eventId(), chart.eventId(), chart.eventId()];\n"
+        "  const unique = new Set(ids).size === ids.length;\n"
+        "  return { ids, unique };\n"
+        "})()"
+    )
+    assert result["unique"] is True
+
+
+def test_workbench_button_wiring_and_protocol_surface():
+    root = Path(__file__).resolve().parent.parent
+    chat = (root / "src" / "webui" / "frontend" / "workbench-chat.jsx").read_text(encoding="utf-8")
+    mount = (root / "src" / "webui" / "frontend" / "shared" / "chart" / "mount.jsx").read_text(encoding="utf-8")
+    renderer = (root / "src" / "webui" / "frontend" / "shared" / "markdown" / "renderer.jsx").read_text(encoding="utf-8")
+    styles = (root / "src" / "webui" / "frontend" / "workbench.css").read_text(encoding="utf-8")
+    prompts = (root / "src" / "cyrene" / "agent" / "prompts.py").read_text(encoding="utf-8")
+
+    assert 'chatId: String(chatId || "")' in chat
+    assert 'messageId: String(msg && msg.id || "")' in chat
+    assert 'type: "block_actions"' in mount
+    assert 'action_id: spec.action_id' in mount
+    assert 'block_id: blockId' in mount
+    assert 'event_id: eventId()' in mount
+    assert 'message_id: (context && context.messageId) || ""' in mount
+    assert 'new root.CustomEvent("wbc:block-action"' in mount
+    assert 'fired = true;' in mount
+    assert "(?:details|card|chart|button|actions|grid)" in renderer
+    assert 'buildButtonPayload' in renderer
+    assert ":::button" in prompts
+    assert "action_id" in prompts
+    assert ".wbc-button-btn" in styles
+    assert ".wbc-button-btn--primary" in styles
+    assert ".wbc-button-btn--danger" in styles
+    assert ".wbc-button-triggered" in styles
+
+
+def test_markdown_actions_container_renders_button_row_and_streaming_strips():
+    result = _run_chart_render_js(
+        "(() => {\n"
+        "  const src = [\n"
+        "    'Intro.',\n"
+        "    '',\n"
+        "    ':::actions',\n"
+        "    '  :::button',\n"
+        "    '  label: 开始翻译',\n"
+        "    '  action_id: translate_start',\n"
+        "    '  style: primary',\n"
+        "    '  mode: model',\n"
+        "    '  value: zh->en',\n"
+        "    '  :::',\n"
+        "    '  :::button',\n"
+        "    '  label: 清空输入',\n"
+        "    '  action_id: input_clear',\n"
+        "    '  mode: local',\n"
+        "    '  :::',\n"
+        "    ':::',\n"
+        "    '',\n"
+        "    'Outro.',\n"
+        "  ].join('\\n');\n"
+        "  const finalHtml = services.markdown.renderRich(src);\n"
+        "  const streamingHtml = services.markdown.renderRich(src, { interactive: false });\n"
+        "  return { finalHtml, streamingHtml };\n"
+        "})()"
+    )
+    assert '<div class="wbc-actions">' in result["finalHtml"]
+    assert result["finalHtml"].count('data-wbc-button="') == 2
+    assert 'data-wbc-button-action_id="translate_start"' not in result["finalHtml"]
+    assert "Intro." in result["streamingHtml"]
+    assert "Outro." in result["streamingHtml"]
+    assert "wbc-actions" not in result["streamingHtml"]
+    assert "translate_start" not in result["streamingHtml"]
+
+
+def test_markdown_grid_container_renders_columns_with_card_and_chart():
+    result = _run_chart_render_js(
+        "(() => {\n"
+        "  const src = [\n"
+        "    ':::grid cols: 2',\n"
+        "    '  :::card 输入区',\n"
+        "    '  源文本',\n"
+        "    '  :::',\n"
+        "    '  :::chart line',\n"
+        "    '  x: [1,2,3]',\n"
+        "    '  y: [4,5,6]',\n"
+        "    '  :::',\n"
+        "    ':::',\n"
+        "  ].join('\\n');\n"
+        "  return { html: services.markdown.renderRich(src) };\n"
+        "})()"
+    )
+    assert 'class="wbc-grid"' in result["html"]
+    assert "grid-template-columns: repeat(2, minmax(0, 1fr))" in result["html"]
+    assert 'class="wbc-card"' in result["html"]
+    assert 'data-wbc-chart="' in result["html"]
+
+
+def test_markdown_containers_reject_invalid_nesting_and_depth():
+    result = _run_chart_render_js(
+        "(() => {\n"
+        "  const actionWithCard = [':::actions', '  :::card 错', 'x', '  :::', ':::'].join('\\n');\n"
+        "  const gridWithButton = [':::grid', '  :::button', '  label: X', '  action_id: x', '  :::', ':::'].join('\\n');\n"
+        "  const containerInContainer = [':::actions', '  :::actions', '  :::', ':::'].join('\\n');\n"
+        "  const emptyActions = [':::actions', ':::'].join('\\n');\n"
+        "  const plain = ['Before.', '', ':::actions', '  :::button', '  label: A', '  action_id: a', '  :::', ':::', '', 'After.'].join('\\n');\n"
+        "  return {\n"
+        "    actionWithCard: services.markdown.renderRich(actionWithCard),\n"
+        "    gridWithButton: services.markdown.renderRich(gridWithButton),\n"
+        "    containerInContainer: services.markdown.renderRich(containerInContainer),\n"
+        "    emptyActions: services.markdown.renderRich(emptyActions),\n"
+        "    plain: services.markdown.renderRich(plain),\n"
+        "  };\n"
+        "})()"
+    )
+    assert 'class="wbc-actions wbc-actions-error"' in result["actionWithCard"]
+    assert 'class="wbc-grid wbc-grid-error"' in result["gridWithButton"]
+    assert 'class="wbc-actions wbc-actions-error"' in result["containerInContainer"]
+    assert 'class="wbc-actions wbc-actions-error"' in result["emptyActions"]
+    assert '<div class="wbc-actions">' in result["plain"]
+    assert "Before." in result["plain"] and "After." in result["plain"]
+
+
+def test_workbench_actions_grid_wiring_and_prompt_rules():
+    root = Path(__file__).resolve().parent.parent
+    renderer = (root / "src" / "webui" / "frontend" / "shared" / "markdown" / "renderer.jsx").read_text(encoding="utf-8")
+    styles = (root / "src" / "webui" / "frontend" / "workbench.css").read_text(encoding="utf-8")
+    prompts = (root / "src" / "cyrene" / "agent" / "prompts.py").read_text(encoding="utf-8")
+
+    assert "findClosingLine" in renderer
+    assert "depth" in renderer
+    assert "collectChildTypes" in renderer
+    assert '"actions"' in renderer
+    assert '"grid"' in renderer
+    assert 'token.blockType === "actions"' in renderer
+    assert 'token.blockType === "grid"' in renderer
+    assert ".wbc-actions" in styles
+    assert ".wbc-grid" in styles
+    assert "@media (max-width: 720px)" in styles
+    assert ":::actions" in prompts
+    assert ":::grid cols: 2" in prompts
+    assert "never nest" in prompts
+
+
+def test_workbench_button_model_mode_forwards_to_runtime_endpoint():
+    root = Path(__file__).resolve().parent.parent
+    mount = (root / "src" / "webui" / "frontend" / "shared" / "chart" / "mount.jsx").read_text(encoding="utf-8")
+    chat_route = (root / "src" / "route" / "workbench" / "chat.py").read_text(encoding="utf-8")
+    service = (root / "src" / "cyrene" / "workbench" / "chat.py").read_text(encoding="utf-8")
+    schemas = (root / "src" / "route" / "schemas.py").read_text(encoding="utf-8")
+    wbc = (root / "src" / "webui" / "frontend" / "workbench-chat.jsx").read_text(encoding="utf-8")
+
+    assert 'spec.mode === "model"' in mount
+    assert '/actions"' in mount
+    assert 'actionId: spec.action_id' in mount
+    assert 'chatId: String(chatId || "")' in wbc
+    assert 'chatId={String(chat && chat.id || "")}' in wbc
+    assert "@router.post(\"/api/workbench/chats/{chat_id}/actions\")" in chat_route or '@router.post("/api/workbench/chats/{chat_id}/actions")' in chat_route
+    assert "action_duplicate" in chat_route
+    assert "disable_button_block" in chat_route
+    assert "def disable_button_block" in service
+    assert "def has_button_block" in service
+    assert "class ChatActionBody" in schemas
+    assert "actionId" in schemas

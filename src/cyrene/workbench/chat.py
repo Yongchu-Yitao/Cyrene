@@ -2687,3 +2687,71 @@ async def remove_project_chats(project_id: str) -> int:
         except Exception:
             logger.exception("Failed to clear agent state for chat %s", chat.get("id"))
     return len(doomed)
+
+
+# ── :::button block_actions support ─────────────────────────────────────────
+
+_BUTTON_BLOCK_RE = re.compile(
+    r"^ {0,3}:::button[ \t]*\n(?P<body>.*?)\n {0,3}:::[ \t]*$",
+    re.M | re.S,
+)
+_BUTTON_ACTION_ID_RE = re.compile(
+    r"^ {0,3}action_id:[ \t]*([a-z0-9_]+)[ \t]*$", re.M
+)
+_BUTTON_DISABLED_RE = re.compile(
+    r"^ {0,3}disabled:[ \t]*(true|false)[ \t]*$", re.M
+)
+
+
+def _iter_button_blocks(content: str) -> list[tuple[str, str, str]]:
+    """Yield (raw_block, action_id, label) for every :::button block in an
+    assistant message's markdown content. Standalone buttons and buttons
+    nested inside :::actions share the same block shape."""
+    blocks: list[tuple[str, str, str]] = []
+    for match in _BUTTON_BLOCK_RE.finditer(str(content or "")):
+        body = match.group("body")
+        action_match = _BUTTON_ACTION_ID_RE.search(body)
+        if not action_match:
+            continue
+        label_match = re.search(
+            r"^ {0,3}label:[ \t]*(.+?)[ \t]*$", body, re.M
+        )
+        blocks.append((
+            match.group(0),
+            action_match.group(1),
+            (label_match.group(1) if label_match else "") or "",
+        ))
+    return blocks
+
+
+def disable_button_block(content: str, action_id: str) -> tuple[str | None, str]:
+    """Flip the :::button block with ``action_id`` to ``disabled: true``.
+
+    Returns ``(updated_content, label)``; ``updated_content`` is None when the
+    block is already disabled (a duplicate click) or the action is unknown,
+    so the caller can reject duplicates with it.
+    """
+    for raw, block_action, label in _iter_button_blocks(content):
+        if block_action != action_id:
+            continue
+        disabled_match = _BUTTON_DISABLED_RE.search(raw)
+        if disabled_match and disabled_match.group(1) == "true":
+            return None, label
+        if disabled_match:
+            updated = _BUTTON_DISABLED_RE.sub("disabled: true", raw, count=1)
+        else:
+            # Insert the flag after the action_id line to keep the block tidy.
+            inserted = re.sub(
+                r"^ {0,3}action_id:[^\n]*$",
+                lambda m: m.group(0) + "\ndisabled: true",
+                raw,
+                count=1,
+                flags=re.M,
+            )
+            updated = inserted if inserted != raw else raw + "\ndisabled: true"
+        return str(content).replace(raw, updated, 1), label
+    return None, ""
+
+
+def has_button_block(content: str, action_id: str) -> bool:
+    return any(action == action_id for _, action, _ in _iter_button_blocks(content))

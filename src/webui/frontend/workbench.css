@@ -16513,6 +16513,139 @@ button.wbc-attach-file:focus-visible {
   border-bottom: 1px solid var(--wb-line);
 }
 
+/* ── Declarative :::button block ────────────────────────────────────────────
+   The fallback renders "[按钮: label]"; the mount script swaps in the real
+   <button> and dispatches `wbc:block-action` events on click. */
+.wbc-button {
+  margin: 10px 0;
+}
+
+.wbc-button-spec {
+  display: inline-block;
+  margin: 0;
+  padding: 6px 12px;
+  font-size: 13px;
+  color: color-mix(in srgb, var(--wb-text) 80%, transparent);
+  background: color-mix(in srgb, var(--wb-panel-2) 72%, transparent);
+  border: 1px solid var(--wb-line);
+  border-radius: 10px;
+  white-space: pre-wrap;
+}
+
+.wbc-button-spec-hidden { display: none; }
+
+.wbc-button-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 7px 16px;
+  font-size: 13px;
+  font-weight: 600;
+  line-height: 1.4;
+  color: var(--wb-text);
+  background: color-mix(in srgb, var(--wb-panel-2) 72%, transparent);
+  border: 1px solid var(--wb-line);
+  border-radius: 10px;
+  cursor: pointer;
+  touch-action: manipulation;
+  transition: background-color 0.15s ease, border-color 0.15s ease, opacity 0.15s ease;
+}
+
+.wbc-button-btn:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--wb-accent) 8%, transparent);
+  border-color: color-mix(in srgb, var(--wb-accent) 35%, var(--wb-line));
+}
+
+.wbc-button-btn:focus-visible {
+  outline: 2px solid var(--wb-accent);
+  outline-offset: 2px;
+}
+
+.wbc-button-btn:disabled {
+  opacity: 0.55;
+  cursor: default;
+}
+
+.wbc-button-btn--primary {
+  color: #fff;
+  background: var(--wb-accent);
+  border-color: var(--wb-accent);
+}
+
+.wbc-button-btn--primary:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--wb-accent) 88%, #000);
+  border-color: var(--wb-accent);
+}
+
+.wbc-button-btn--danger {
+  color: #fff;
+  background: var(--wb-danger, #e5484d);
+  border-color: var(--wb-danger, #e5484d);
+}
+
+.wbc-button-btn--danger:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--wb-danger, #e5484d) 88%, #000);
+}
+
+.wbc-button-btn.wbc-button-triggered {
+  opacity: 0.7;
+  transform: translateY(1px);
+}
+
+.wbc-button.wbc-button-error::before {
+  content: attr(data-wbc-button-error);
+  display: block;
+  margin-bottom: 4px;
+  font-size: 12px;
+  color: color-mix(in srgb, var(--wb-danger, #e5484d) 85%, transparent);
+}
+
+/* ── Container blocks: :::actions row and :::grid columns ──────────────────
+   Children (buttons / cards / charts) keep their own block rendering; the
+   container only lays them out. Invalid nesting degrades to the raw body. */
+.wbc-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  margin: 10px 0;
+}
+
+.wbc-grid {
+  display: grid;
+  gap: 12px;
+  align-items: start;
+  margin: 10px 0;
+}
+
+.wbc-grid > .wbc-card,
+.wbc-grid > .wbc-chart {
+  min-width: 0;
+  margin: 0;
+}
+
+.wbc-actions-error,
+.wbc-grid-error {
+  display: block;
+}
+
+.wbc-actions-spec,
+.wbc-grid-spec {
+  margin: 0;
+  padding: 10px 12px;
+  font-size: 12px;
+  line-height: 1.6;
+  color: color-mix(in srgb, var(--wb-text) 82%, transparent);
+  background: color-mix(in srgb, var(--wb-panel-2) 72%, transparent);
+  border: 1px solid var(--wb-line);
+  border-radius: 10px;
+  white-space: pre-wrap;
+}
+
+@media (max-width: 720px) {
+  .wbc-grid { grid-template-columns: 1fr !important; }
+}
+
 .wbc-caret {
   display: inline-block;
   width: 8px;

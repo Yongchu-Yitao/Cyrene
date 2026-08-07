@@ -40,11 +40,17 @@
       || root.marked.__cyreneInteractiveBlocks
     ) return;
 
-    var openingLine = /^ {0,3}:::(details|card|chart)(?:[ \t]+([^\n]*?))?[ \t]*(?:\n|$)/;
+    var openingLine = /^ {0,3}:::(details|card|chart|button|actions|grid)(?:[ \t]+([^\n]*?))?[ \t]*(?:\n|$)/;
+    var openingLineOnly = /^ {0,3}:::(?:details|card|chart|button|actions|grid)(?:[ \t]+[^\n]*)?[ \t]*$/;
 
+    // Nesting is bounded: containers (:actions / :grid) may hold one level of
+    // child blocks, and child blocks never nest further. The closing scan is
+    // depth-aware anyway (openings increment, `:::` decrements) so a stray
+    // nested directive never swallows the container's real end.
     function findClosingLine(source) {
       var offset = 0;
       var fence = null;
+      var depth = 1;
       while (offset < source.length) {
         var newline = source.indexOf("\n", offset);
         var end = newline < 0 ? source.length : newline;
@@ -62,7 +68,10 @@
           if (fenceOpen) {
             fence = { character: fenceOpen[1].charAt(0), length: fenceOpen[1].length };
           } else if (/^ {0,3}:::[ \t]*$/.test(line)) {
-            return { index: offset, length: rawLength };
+            depth -= 1;
+            if (depth <= 0) return { index: offset, length: rawLength };
+          } else if (openingLineOnly.test(line)) {
+            depth += 1;
           }
         }
         if (newline < 0) break;
@@ -71,12 +80,47 @@
       return null;
     }
 
+    // The allowed child types per container; anything else (or a container
+    // inside a container) fails validation and the whole block degrades to
+    // plain text.
+    function collectChildTypes(body) {
+      var types = [];
+      var fence = null;
+      var lines = String(body || "").split("\n");
+      for (var i = 0; i < lines.length; i++) {
+        var line = lines[i];
+        if (fence) {
+          var fenceClose = /^ {0,3}(`+|~+)[ \t]*$/.exec(line);
+          if (
+            fenceClose
+            && fenceClose[1].charAt(0) === fence.character
+            && fenceClose[1].length >= fence.length
+          ) fence = null;
+          continue;
+        }
+        var fenceOpen = /^ {0,3}(`{3,}|~{3,})(?:[^\n]*)$/.exec(line);
+        if (fenceOpen) {
+          fence = { character: fenceOpen[1].charAt(0), length: fenceOpen[1].length };
+          continue;
+        }
+        var opening = openingLine.exec(line);
+        if (opening) types.push(opening[1]);
+      }
+      return types;
+    }
+
+    function parseGridCols(title) {
+      var match = /^cols:[ \t]*([1-9][0-9]*)/.exec(String(title || "").trim());
+      var cols = match ? Number(match[1]) : 1;
+      return Math.max(1, Math.min(4, cols));
+    }
+
     root.marked.use({
       extensions: [{
         name: "wbcblock",
         level: "block",
         start: function (source) {
-          var match = source.match(/^ {0,3}:::(?:details|card|chart)(?:[ \t]+[^\n]*)?[ \t]*$/m);
+          var match = source.match(/^ {0,3}:::(?:details|card|chart|button|actions|grid)(?:[ \t]+[^\n]*)?[ \t]*$/m);
           return match ? match.index : undefined;
         },
         tokenizer: function (source) {
@@ -94,12 +138,17 @@
             blockType: opening[1],
             title: title,
             titleTokens: this.lexer.inlineTokens(title),
+            specBody: body,
           };
-          if (token.blockType === "chart") {
-            // Chart bodies are declarative specs, never parsed as Markdown.
-            token.specBody = body;
+          if (token.blockType === "chart" || token.blockType === "button") {
+            // Chart and button bodies are declarative specs, never parsed as
+            // Markdown.
             token.chartType = title;
             token.tokens = [];
+          } else if (token.blockType === "actions" || token.blockType === "grid") {
+            token.childTypes = collectChildTypes(body);
+            token.cols = parseGridCols(title);
+            token.tokens = this.lexer.blockTokens(body, []);
           } else {
             token.tokens = this.lexer.blockTokens(body, []);
           }
@@ -135,6 +184,51 @@
             }
             return '<div class="wbc-chart wbc-chart-error" data-wbc-chart-error="chart rendering is unavailable">'
               + specHtml + "</div>\n";
+          }
+          if (token.blockType === "button") {
+            // The fallback renders a readable "[按钮: label]" line instead of
+            // the raw spec; the mount script swaps in the real <button>.
+            var buttonSpec = root.CyreneUI.chartSpec;
+            var buttonBody = String(token.specBody || "");
+            if (buttonSpec && typeof buttonSpec.buildButtonPayload === "function") {
+              try {
+                var buttonPayload = buttonSpec.buildButtonPayload(buttonBody);
+                return '<div class="wbc-button" data-wbc-button="' + escapeHtml(buttonPayload.json)
+                  + '"><pre class="wbc-button-spec">['
+                  + escapeHtml("按钮: " + buttonPayload.spec.label) + "]</pre></div>\n";
+              } catch (error) {
+                return '<div class="wbc-button wbc-button-error" data-wbc-button-error="'
+                  + escapeHtml((error && error.message) || "invalid button spec")
+                  + '"><pre class="wbc-button-spec">' + escapeHtml(buttonBody) + "</pre></div>\n";
+              }
+            }
+            return '<div class="wbc-button wbc-button-error" data-wbc-button-error="button rendering is unavailable">'
+              + '<pre class="wbc-button-spec">' + escapeHtml(buttonBody) + "</pre></div>\n";
+          }
+          if (token.blockType === "actions") {
+            // Nested blocks are validated by type: an actions row may only
+            // contain buttons, and never another container.
+            var actionsValid = Array.isArray(token.childTypes)
+              && token.childTypes.length > 0
+              && token.childTypes.every(function (type) { return type === "button"; });
+            if (!actionsValid) {
+              return '<div class="wbc-actions wbc-actions-error"><pre class="wbc-actions-spec">'
+                + escapeHtml(token.specBody) + "</pre></div>\n";
+            }
+            return '<div class="wbc-actions">' + bodyHtml + "</div>\n";
+          }
+          if (token.blockType === "grid") {
+            var gridValid = Array.isArray(token.childTypes)
+              && token.childTypes.length > 0
+              && token.childTypes.every(function (type) {
+                return type === "card" || type === "chart";
+              });
+            if (!gridValid) {
+              return '<div class="wbc-grid wbc-grid-error"><pre class="wbc-grid-spec">'
+                + escapeHtml(token.specBody) + "</pre></div>\n";
+            }
+            return '<div class="wbc-grid" style="grid-template-columns: repeat('
+              + token.cols + ', minmax(0, 1fr))">' + bodyHtml + "</div>\n";
           }
           var cardTitle = token.title
             ? '<div class="wbc-card-title">' + titleHtml + '</div>'
@@ -174,6 +268,7 @@
     var lines = source.split("\n");
     var visible = [];
     var interactive = false;
+    var depth = 0;
     var fence = null;
     for (var i = 0; i < lines.length; i++) {
       var line = lines[i];
@@ -196,11 +291,20 @@
       }
 
       if (interactive) {
-        if (/^ {0,3}:::[ \t]*$/.test(line)) interactive = false;
+        if (/^ {0,3}:::[ \t]*$/.test(line)) {
+          depth -= 1;
+          if (depth <= 0) {
+            interactive = false;
+            depth = 0;
+          }
+        } else if (/^ {0,3}:::(?:details|card|chart|button|actions|grid)(?:[ \t]+[^\n]*)?[ \t]*$/.test(line)) {
+          depth += 1;
+        }
         continue;
       }
-      if (/^ {0,3}:::(?:details|card|chart)(?:[ \t]+[^\n]*)?[ \t]*$/.test(line)) {
+      if (/^ {0,3}:::(?:details|card|chart|button|actions|grid)(?:[ \t]+[^\n]*)?[ \t]*$/.test(line)) {
         interactive = true;
+        depth = 1;
         continue;
       }
       visible.push(line);
