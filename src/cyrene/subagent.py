@@ -26,7 +26,6 @@ from datetime import datetime, timezone
 from typing import Any, Awaitable, Callable
 
 from cyrene.model_runtime.messages import parse_tool_arguments
-from cyrene.observability import debug
 from cyrene.config import DATA_DIR
 
 logger = logging.getLogger(__name__)
