@@ -67,7 +67,7 @@ def current_run_context() -> AgentRunContext:
         round_id=str(_state._current_round_id.get() or ""),
         session_id=str(_state._current_session_id.get() or ""),
         permission_mode=str(_state._permission_mode.get() or "default"),
-        response_capabilities=frozenset(_state._response_capabilities.get()),
+        response_capabilities=frozenset(_state.response_capabilities.get()),
         deep_research=bool(_state._deep_research_mode.get()),
         temporary_full_access=bool(_state._temporary_full_access.get()),
     )
@@ -103,7 +103,7 @@ def bind_run_context(
         (_state._current_session_id, session_id),
         (_state._active_workspace_dir, workspace_dir),
         (_state._permission_mode, permission_mode),
-        (_state._response_capabilities, response_capabilities),
+        (_state.response_capabilities, response_capabilities),
         (_state._deep_research_mode, deep_research),
         (_state._temporary_full_access, temporary_full_access),
         (_state._ui_round_assistant_meta, assistant_meta),

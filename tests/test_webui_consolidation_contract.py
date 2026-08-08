@@ -20,10 +20,10 @@ WEBUI_ROOT = ROOT / "src" / "webui"
 WORKBENCH_ROOT = WEBUI_ROOT / "frontend"
 INDEX = WORKBENCH_ROOT / "index.html"
 
-OPENAPI_OPERATION_COUNT = 309
+OPENAPI_OPERATION_COUNT = 310
 OPENAPI_BASELINE_FASTAPI = "0.136.1"
 OPENAPI_BASELINE_PYDANTIC = "2.13.4"
-OPENAPI_SHA256 = "81dae33c774f919bfcf4b4a9b88e6fa66c26bf9641e7ae9af95067a4a10adff2"
+OPENAPI_SHA256 = "795226eacd7d8416e63e4213e4c882d589a205f81d8bd591cb3bcff8f008fcf0"
 TOOL_REGISTRY_SHA256 = "d9aa25bbdcf1d7a3c33d5a791c6c90761ff16c0ee6afd6886669822df49ce3ad"
 MAIN_WIRE_SHA256 = "f8fa3f2b0c53ae9059ac763792a9a218fa7c8f30c5c2335a0ab2f332816e4136"
 SUBAGENT_WIRE_SHA256 = "4d2f207b6508c148e5756826b435c4ca95830b3b8441198e2066cc7529ae27ad"
@@ -42,6 +42,7 @@ BROWSER_AND_VENDOR_GLOBALS = {
     "cyrene",
     "dispatchEvent",
     "getSelection",
+    "getComputedStyle",
     "hljs",
     "katex",
     "innerHeight",
@@ -205,6 +206,7 @@ def test_single_webui_source_build_and_entrypoint_shape():
     package = json.loads((WEBUI_ROOT / "package.json").read_text(encoding="utf-8"))
     assert set(package["dependencies"]) == {
         "esbuild",
+        "echarts",
         "katex",
         "pdfjs-dist",
         "react",

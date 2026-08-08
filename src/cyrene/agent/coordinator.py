@@ -30,7 +30,7 @@ from cyrene.agent.prompts import (
     _MAIN_AGENT_PROMPT_TEMPLATE,
     _QUICK_ANSWER_PROMPT,
     _WORKBENCH_TASK_REPLY_PROMPT,
-    _WORKBENCH_RENDERER_TRIGGER_PROMPT,
+    WORKBENCH_RENDERER_TRIGGER_PROMPT,
     _WORKSPACE_SCOPE_BLOCK,
     _spawn_policy_prompt_block,
     conversation_identity_block,
@@ -46,7 +46,7 @@ from cyrene.agent.session import (
 )
 from cyrene.agent.state import (
     _active_workspace_dir,
-    _response_capabilities,
+    response_capabilities as response_capabilities_context,
     _AWAITING_USER_SENTINEL,
     _call_llm,
     _caller_type,
@@ -296,7 +296,7 @@ async def run_agent(
     """
     session_token = _current_session_id.set(session_id)
     workspace_token = _active_workspace_dir.set(workspace_dir or "")
-    response_capabilities_token = _response_capabilities.set(frozenset(
+    response_capabilities_token = response_capabilities_context.set(frozenset(
         str(item or "").strip()
         for item in response_capabilities
         if str(item or "").strip()
@@ -324,7 +324,7 @@ async def run_agent(
                 if ctx.active_task is current_task:
                     ctx.active_task = None
     finally:
-        _response_capabilities.reset(response_capabilities_token)
+        response_capabilities_context.reset(response_capabilities_token)
         _current_session_id.reset(session_token)
         _active_workspace_dir.reset(workspace_token)
 
@@ -562,7 +562,7 @@ async def _run_chat_agent(
             main_system = (
                 main_system
                 + "\n\n"
-                + _WORKBENCH_RENDERER_TRIGGER_PROMPT
+                + WORKBENCH_RENDERER_TRIGGER_PROMPT
             )
             main_system_context.append(context_block(
                 "client.renderer.workbench",
@@ -573,7 +573,7 @@ async def _run_chat_agent(
                     "loaded just in time through LoadRendererContract"
                 ),
                 transforms=["concat_into_system"],
-                content=_WORKBENCH_RENDERER_TRIGGER_PROMPT,
+                content=WORKBENCH_RENDERER_TRIGGER_PROMPT,
             ))
         if lang and lang != "en":
             lang_prompt = f"The user has set their preferred language to {lang}. Reply in this language."

@@ -204,7 +204,7 @@ def conversation_identity_block(session_id: Any = "") -> str:
 _MAIN_DELIVERY_COMMUNICATION_PROMPT = """- For tool-using work, the first tool call MUST be `send_message`, briefly stating the objective and first action. Start the first substantive tool in the same batch when possible. Pure conversation needs no progress update.
 - Send another brief update only for meaningful progress, new findings, approach changes, or a slow stage. Do not narrate individual tool calls or repeat yourself."""
 
-_WORKBENCH_RENDERER_TRIGGER_PROMPT = """## Interactive response format
+WORKBENCH_RENDERER_TRIGGER_PROMPT = """## Interactive response format
 - This Workbench client supports interactive response blocks. Before using one, call `LoadRendererContract` with only the formats you need; otherwise use normal Markdown."""
 
 _MAIN_SUBAGENT_PROMPT = _tool_pack_prompt_block(

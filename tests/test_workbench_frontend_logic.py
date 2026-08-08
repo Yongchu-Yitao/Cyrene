@@ -517,7 +517,7 @@ def test_workbench_chat_rail_keeps_its_own_fixed_header_surface():
         encoding="utf-8"
     )
 
-    rail_css = styles.split(".wbc-rail {", 1)[1].split("}", 1)[0]
+    rail_css = styles.split("\n.wbc-rail {", 1)[1].split("}", 1)[0]
     rail_glass_css = styles.split(".wbc-rail-glass {", 1)[1].split("}", 1)[0]
     rail_glass_surface_css = styles.split(".wbc-rail-glass::before {", 1)[1].split("}", 1)[0]
     rail_toolbar_css = styles.split(".wbc-rail-toolbar {", 1)[1].split("}", 1)[0]
@@ -1670,8 +1670,8 @@ def test_maximized_browser_has_compact_agent_chat_with_transient_status():
     assert ".wbc-browser-fullscreen-composer" in styles
     composer = styles.split(".wbc-browser-fullscreen-composer {", 1)[1].split("}", 1)[0]
     focused_composer = styles.split(".wbc-browser-fullscreen-composer:focus-within {", 1)[1].split("}", 1)[0]
-    assert "box-shadow: none;" in composer
-    assert "box-shadow: none;" in focused_composer
+    assert "box-shadow: 0 3px 12px rgba(9, 17, 30, 0.04);" in composer
+    assert "box-shadow: 0 0 0 2px color-mix(in srgb, var(--wb-accent) 7%, transparent);" in focused_composer
     assert "padding-bottom: 58px" not in styles
 
 
@@ -1694,7 +1694,7 @@ def test_electron_browser_chat_overlay_floats_above_native_page():
     assert "this.bounds.height - height - bottomOffset" in main
     assert "browser:set-chat-overlay" in main
     assert "browser-chat-overlay:action" in main
-    assert "form:focus-within { border-color: var(--accent, #6d5dfc); box-shadow: none; }" in main
+    assert "form:focus-within { border-color: color-mix(in srgb, var(--accent, #6d5dfc) 36%, var(--line, #d8dce4)); box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent, #6d5dfc) 7%, transparent); }" in main
     assert "statusComplete" in main
     assert "setChatOverlay:" in preload
     assert "onChatOverlayAction:" in preload
@@ -2405,7 +2405,8 @@ def test_workbench_chat_opens_bounded_browser_window_from_live_browser_events():
     assert 'ref={minimizedRef}' in minimized_surface
     assert 'onError={function (event) { event.currentTarget.hidden = true; }}' in minimized_surface
     assert 'className="fallback"' in minimized_surface
-    assert "wbc-material-icon close-fullscreen" in source
+    assert "runModeTransition(onRestore, \"pip\")" in source
+    assert "{WBC_ICONS.x}" in source
     assert 'close-fullscreen-rounded.svg' in styles
     assert "height: 58px;" in styles
     assert "wbc-browser-title-pill" in source
@@ -2592,13 +2593,14 @@ def test_electron_browser_bounds_follow_floating_window_with_frame_coalescing():
     assert "Page.captureScreenshot" in main
     assert "cssVisualViewport" in main
     assert "const surfaceRef = React.useRef(null);" in browser_view
-    assert 'const pipWindow = node.closest(".wbc-browser-window.pip")' in browser_view
+    assert 'const browserWindow = node.closest(".wbc-browser-window")' in browser_view
     assert "const borderRadius = 0;" in browser_view
     assert "const node = surfaceRef.current;" in browser_view
     assert "contentInset" not in browser_view
     assert "x: rect.left" in browser_view
     assert "width: Math.max(0, rect.width)" in browser_view
-    assert "const pageCornerRadius = pipWindow ? 8 : 0;" in browser_view
+    assert 'browserWindow.classList.contains("pip")' in browser_view
+    assert 'browserWindow.classList.contains("maximized") ? 12 : 0' in browser_view
     assert "pageCornerRadius: pageCornerRadius" in browser_view
     assert "pageCornerColor" not in browser_view
     assert "data-cyrene-page-top-cover" not in main
@@ -2745,7 +2747,7 @@ def test_active_browser_tab_uses_standard_text_color():
     root = Path(__file__).resolve().parent.parent
     styles = (root / "src" / "webui" / "frontend" / "workbench.css").read_text(encoding="utf-8")
 
-    active_tab_styles = styles.split(".browser-tab.active {", 1)[1].split("}", 1)[0]
+    active_tab_styles = styles.split("\n.browser-tab.active {", 1)[1].split("}", 1)[0]
     assert "color: var(--wb-text, var(--text));" in active_tab_styles
     assert "color: var(--wb-accent, var(--accent));" not in active_tab_styles
 

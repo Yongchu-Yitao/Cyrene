@@ -75,15 +75,15 @@ _active_workspace_dir: ContextVar[str] = ContextVar("_active_workspace_dir", def
 # Client response features available for the current run.  Keep these separate
 # from the workspace/session identity: they determine the stable model-facing
 # tool bundle and must therefore be set before the catalog snapshot is built.
-_response_capabilities: ContextVar[frozenset[str]] = ContextVar(
-    "_response_capabilities",
+response_capabilities: ContextVar[frozenset[str]] = ContextVar(
+    "response_capabilities",
     default=frozenset(),
 )
 
 
 def has_response_capability(name: str) -> bool:
     """Return whether the current client advertises one response feature."""
-    return str(name or "").strip() in _response_capabilities.get()
+    return str(name or "").strip() in response_capabilities.get()
 
 
 def active_workspace_dir() -> Path:

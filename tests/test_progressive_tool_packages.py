@@ -46,7 +46,7 @@ def test_renderer_contract_tool_is_exposed_only_for_workbench_surface():
     default_hash = get_wire_bundle_hash("main")
     assert "LoadRendererContract" not in default_names
 
-    token = state._response_capabilities.set(
+    token = state.response_capabilities.set(
         frozenset({"interactive_blocks"})
     )
     try:
@@ -61,7 +61,7 @@ def test_renderer_contract_tool_is_exposed_only_for_workbench_surface():
             get_subagent_wire_tool_defs()
         )
     finally:
-        state._response_capabilities.reset(token)
+        state.response_capabilities.reset(token)
 
 
 @pytest.mark.asyncio
@@ -109,7 +109,7 @@ async def test_renderer_contract_is_loaded_as_a_tail_tool_result(monkeypatch):
 
     monkeypatch.setattr(agent_module, "_call_llm", fake_llm)
     monkeypatch.setattr(agent_module, "_save_session_messages", AsyncMock())
-    token = state._response_capabilities.set(
+    token = state.response_capabilities.set(
         frozenset({"interactive_blocks"})
     )
     try:
@@ -117,7 +117,7 @@ async def test_renderer_contract_is_loaded_as_a_tail_tool_result(monkeypatch):
             "show a chart", [], None, 0, "db.sqlite3",
         )
     finally:
-        state._response_capabilities.reset(token)
+        state.response_capabilities.reset(token)
 
     assert result == "Rendered with the loaded contract."
     assert "LoadRendererContract" in calls[0][1] == calls[1][1] == calls[2][1]
@@ -330,7 +330,7 @@ def test_package_switch_omits_gateway_and_member_metadata_from_model_context(
     assert "Prefer clicking visible page UI" not in filtered_prompt
     assert "browser file uploads" not in filtered_prompt
     assert "code_tools" in filtered_prompt
-    assert "Progressive tool modules" in filtered_prompt
+    assert "Progressive gateways" in filtered_prompt
     assert "[[CYRENE_TOOL_PACK:" not in filtered_prompt
 
 
@@ -906,7 +906,8 @@ def test_prompts_use_new_module_names_and_keep_deep_research_specialized():
         assert module_name in combined
     assert "AnalyzeAttachment" in combined
     assert "always direct" in combined
-    assert "Capability IDs are not callable function names" in combined
+    assert "Call the owning gateway" in combined
+    assert "`capability_id`" in combined
     assert "research_tools" not in combined
     assert "work_tools" not in combined
     assert "collaboration_tools" not in combined

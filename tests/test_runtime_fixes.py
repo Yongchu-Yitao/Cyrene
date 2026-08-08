@@ -986,7 +986,7 @@ async def test_workbench_renderer_trigger_is_a_small_stable_system_extension(mon
         return "ok"
 
     monkeypatch.setattr(_agent_core, "_run_main_agent", fake_run_main_agent)
-    token = _agent_state._response_capabilities.set(
+    token = _agent_state.response_capabilities.set(
         frozenset({"interactive_blocks"})
     )
     try:
@@ -994,7 +994,7 @@ async def test_workbench_renderer_trigger_is_a_small_stable_system_extension(mon
             "hello", None, 0, "db.sqlite3"
         ) == "ok"
     finally:
-        _agent_state._response_capabilities.reset(token)
+        _agent_state.response_capabilities.reset(token)
 
     prompt = seen["system_prompt"]
     assert "call `LoadRendererContract`" in prompt
