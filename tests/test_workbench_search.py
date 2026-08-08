@@ -918,9 +918,9 @@ def test_workspace_scope_block_uses_runtime_workspace(tmp_path):
     project_workspace = tmp_path / "project"
     block = workspace_scope_block(project_workspace)
 
-    assert f"Your workspace is at `{project_workspace}`." in block
-    assert "already starts with CWD set to the workspace root" in block
-    assert f"do not prepend `cd {project_workspace}`" in block
+    assert f"Use `{project_workspace}` as the default root" in block
+    assert "already starts at the workspace root" in block
+    assert f"without `cd {project_workspace}`" in block
 
 
 def test_workbench_chat_answer_resumes_in_project_workspace(

@@ -34,6 +34,109 @@ def test_main_wire_bundle_is_the_fixed_29_tool_contract(monkeypatch):
     )
 
 
+def test_renderer_contract_tool_is_exposed_only_for_workbench_surface():
+    from cyrene.agent import state
+    from cyrene.tooling import (
+        get_main_wire_tool_defs,
+        get_subagent_wire_tool_defs,
+        get_wire_bundle_hash,
+    )
+
+    default_names = _names(get_main_wire_tool_defs())
+    default_hash = get_wire_bundle_hash("main")
+    assert "LoadRendererContract" not in default_names
+
+    token = state._response_capabilities.set(
+        frozenset({"interactive_blocks"})
+    )
+    try:
+        workbench_names = _names(get_main_wire_tool_defs())
+        assert workbench_names == [
+            *default_names[:16],
+            "LoadRendererContract",
+            *default_names[16:],
+        ]
+        assert get_wire_bundle_hash("main") != default_hash
+        assert "LoadRendererContract" not in _names(
+            get_subagent_wire_tool_defs()
+        )
+    finally:
+        state._response_capabilities.reset(token)
+
+
+@pytest.mark.asyncio
+async def test_renderer_contract_is_loaded_as_a_tail_tool_result(monkeypatch):
+    from cyrene.agent import agent as agent_module
+    from cyrene.agent import state
+
+    calls = []
+    responses = iter([
+        {
+            "content": "",
+            "tool_calls": [{
+                "id": "phase1",
+                "function": {
+                    "name": "use_tools",
+                    "arguments": json.dumps({
+                        "task": "show a chart",
+                        "execution_brief": "Load the chart contract, then answer.",
+                    }),
+                },
+            }],
+        },
+        {
+            "content": "",
+            "tool_calls": [{
+                "id": "contract",
+                "function": {
+                    "name": "LoadRendererContract",
+                    "arguments": json.dumps({"formats": ["chart"]}),
+                },
+            }],
+        },
+        {
+            "content": "Rendered with the loaded contract.",
+            "tool_calls": [{
+                "id": "done",
+                "function": {"name": "quit", "arguments": "{}"},
+            }],
+        },
+    ])
+
+    async def fake_llm(messages, tools=None, **_kwargs):
+        calls.append((json.loads(json.dumps(messages)), _names(tools or [])))
+        return next(responses)
+
+    monkeypatch.setattr(agent_module, "_call_llm", fake_llm)
+    monkeypatch.setattr(agent_module, "_save_session_messages", AsyncMock())
+    token = state._response_capabilities.set(
+        frozenset({"interactive_blocks"})
+    )
+    try:
+        result = await agent_module._run_main_agent(
+            "show a chart", [], None, 0, "db.sqlite3",
+        )
+    finally:
+        state._response_capabilities.reset(token)
+
+    assert result == "Rendered with the loaded contract."
+    assert "LoadRendererContract" in calls[0][1] == calls[1][1] == calls[2][1]
+    second_messages = calls[1][0]
+    third_messages = calls[2][0]
+    assert third_messages[:len(second_messages)] == second_messages
+    contract_results = [
+        message for message in third_messages
+        if message.get("role") == "tool"
+        and "[Trusted Workbench renderer contract]" in str(message.get("content") or "")
+    ]
+    assert len(contract_results) == 1
+    assert not any(
+        message.get("role") == "system"
+        and "Trusted Workbench renderer contract" in str(message.get("content") or "")
+        for message in third_messages
+    )
+
+
 def test_every_native_tool_is_either_direct_or_in_exactly_one_pack():
     from cyrene.tooling.catalog import all_capabilities
     from cyrene.tooling.wire import DIRECT_TOOL_NAMES
@@ -153,7 +256,7 @@ def test_memory_pack_exposes_inventory_listing():
     assert "memory.list" in ids
 
 
-def test_static_memory_prompt_exposes_proactive_save_triggers_before_discovery():
+def test_static_memory_prompt_exposes_selective_save_triggers_before_discovery():
     from cyrene.agent.prompts import (
         _MAIN_AGENT_PROMPT_TEMPLATE,
         _TOOL_PACK_PROMPT_TERMS,
@@ -165,10 +268,9 @@ def test_static_memory_prompt_exposes_proactive_save_triggers_before_discovery()
         set(_TOOL_PACK_PROMPT_TERMS),
     )
 
-    assert "use `memory.project.save` proactively" in rendered
-    assert "This decision rule is available before tool discovery" in rendered
-    assert "durable environment facts learned from tool results" in rendered
-    assert "Do not wait for the user to ask you to remember them" in rendered
+    assert "Save or update durable, confirmed preferences" in rendered
+    assert "useful successes or dead ends" in rendered
+    assert "Never save secrets, guesses, transient results, or noisy details" in rendered
 
 
 def test_static_entity_prompt_requires_foreground_extraction_with_steward_fallback():
@@ -183,10 +285,10 @@ def test_static_entity_prompt_requires_foreground_extraction_with_steward_fallba
         set(_TOOL_PACK_PROMPT_TERMS),
     )
 
-    assert "前台主动提取 + 后台兜底" in rendered
-    assert "先用 `entity.query` 去重" in rendered
-    assert '调用 `entity.track`（source="extracted"' in rendered
-    assert "后台存在不免除前台 Agent 的主动提取责任" in rendered
+    assert "Foreground extraction is responsible for immediate tracking" in rendered
+    assert "Always `entity.query` first to deduplicate" in rendered
+    assert '`source="extracted"` with evidence-based confidence' in rendered
+    assert "the hourly Steward is only a fallback and does not replace it" in rendered
 
 
 def test_package_switch_omits_gateway_and_member_metadata_from_model_context(
@@ -247,10 +349,10 @@ def test_disabled_package_prompt_blocks_are_removed_as_complete_sections():
     }
     filtered = prompt_for_enabled_tool_packs(_MAIN_AGENT_PROMPT_TEMPLATE, enabled)
 
-    assert "Proactive progress reporting" in filtered
+    assert "the first tool call MUST be `send_message`" in filtered
     assert "## Memory" not in filtered
     assert "## Learned Skills" not in filtered
-    assert "## 事务追踪" not in filtered
+    assert "## Entity Tracking" not in filtered
     assert "code_tools" in filtered
     assert "browser_tools" in filtered
     assert "delivery_tools" not in filtered

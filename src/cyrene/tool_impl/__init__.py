@@ -19,6 +19,7 @@ NATIVE_TOOL_MODULES = (
     "cyrene.tool_impl.core.write",
     "cyrene.tool_impl.core.edit",
     "cyrene.tool_impl.core.analyze_attachment",
+    "cyrene.tool_impl.renderer.load_contract",
     "cyrene.tool_impl.image.generate_image",
     "cyrene.tool_impl.core.glob",
     "cyrene.tool_impl.core.grep",

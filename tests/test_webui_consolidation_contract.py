@@ -24,7 +24,7 @@ OPENAPI_OPERATION_COUNT = 309
 OPENAPI_BASELINE_FASTAPI = "0.136.1"
 OPENAPI_BASELINE_PYDANTIC = "2.13.4"
 OPENAPI_SHA256 = "81dae33c774f919bfcf4b4a9b88e6fa66c26bf9641e7ae9af95067a4a10adff2"
-TOOL_REGISTRY_SHA256 = "48032ba1f1237c49e3900777c8dc4d292dabf002178a5f64e158bb99c3466d56"
+TOOL_REGISTRY_SHA256 = "d9aa25bbdcf1d7a3c33d5a791c6c90761ff16c0ee6afd6886669822df49ce3ad"
 MAIN_WIRE_SHA256 = "f8fa3f2b0c53ae9059ac763792a9a218fa7c8f30c5c2335a0ab2f332816e4136"
 SUBAGENT_WIRE_SHA256 = "4d2f207b6508c148e5756826b435c4ca95830b3b8441198e2066cc7529ae27ad"
 
@@ -107,9 +107,9 @@ def test_tool_registry_wire_and_actor_policy_contracts_are_unchanged(monkeypatch
         "get_models",
         lambda: [{"provider": "openai_compatible", "model": "custom-model"}],
     )
-    assert len(catalog.TOOL_DEFS) == 101
-    assert len(catalog.TOOL_HANDLERS) == 101
-    assert len(catalog._MAIN_ONLY_TOOLS) == 40
+    assert len(catalog.TOOL_DEFS) == 102
+    assert len(catalog.TOOL_HANDLERS) == 102
+    assert len(catalog._MAIN_ONLY_TOOLS) == 41
     assert _sha256_json(catalog.TOOL_DEFS) == TOOL_REGISTRY_SHA256
 
     assert len(wire.get_main_wire_tool_defs()) == 29

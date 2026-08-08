@@ -963,6 +963,45 @@ async def test_run_chat_agent_avoids_duplicate_short_term_memory_in_system_promp
     assert "stable trait" in seen["system_prompt"]
 
 
+async def test_workbench_renderer_trigger_is_a_small_stable_system_extension(monkeypatch, tmp_path):
+    from cyrene import agent
+    from cyrene.agent import agent as _agent_core
+    from cyrene.agent import session as _agent_session
+    from cyrene.agent import state as _agent_state
+
+    seen: dict[str, Any] = {}
+    _patch_state_file(monkeypatch, tmp_path / "state.json")
+    _patch_data_dir(monkeypatch, tmp_path)
+    monkeypatch.setattr(_agent_session, "_refresh_session_labels", AsyncMock())
+    _patch_runtime_context(
+        monkeypatch,
+        get_context=lambda max_chars=5000: "",
+        get_memory_context=lambda include_short_term=True: "",
+    )
+
+    async def fake_run_main_agent(
+        user_message, history, bot, chat_id, db_path, system_prompt="", **kwargs
+    ):
+        seen["system_prompt"] = system_prompt
+        return "ok"
+
+    monkeypatch.setattr(_agent_core, "_run_main_agent", fake_run_main_agent)
+    token = _agent_state._response_capabilities.set(
+        frozenset({"interactive_blocks"})
+    )
+    try:
+        assert await agent._run_chat_agent(
+            "hello", None, 0, "db.sqlite3"
+        ) == "ok"
+    finally:
+        _agent_state._response_capabilities.reset(token)
+
+    prompt = seen["system_prompt"]
+    assert "call `LoadRendererContract`" in prompt
+    assert ":::chart line" not in prompt
+    assert "action_id:" not in prompt
+
+
 async def test_run_chat_agent_keeps_global_short_term_out_of_workbench_sessions(monkeypatch, tmp_path):
     """Per-session workbench runs must not inherit the default session's
     short-term context (regression: fresh task sessions answered stale topics)."""
@@ -4654,7 +4693,7 @@ async def test_compress_old_messages_labels_llm_as_compactor(monkeypatch):
     assert callers == ["compactor"]
 
 
-def test_build_current_session_detects_activity_after_done_event(monkeypatch, tmp_path):
+def test_build_current_session_ignores_completed_llm_accounting_after_done(monkeypatch, tmp_path):
     from datetime import datetime, timedelta, timezone
 
     from cyrene.observability import debug
@@ -4673,7 +4712,7 @@ def test_build_current_session_detects_activity_after_done_event(monkeypatch, tm
 
     session = routes._build_current_session()
 
-    assert session["status"] == "running"
+    assert session["status"] == "done"
 
 
 def test_build_sessions_includes_today_archive_when_live_session_exists(tmp_path, monkeypatch):
@@ -6053,3 +6092,26 @@ async def test_streamed_chat_only_final_reply_persists_usage(monkeypatch, tmp_pa
     ]
     assert final_entries, "streamed final reply should be persisted"
     assert final_entries[-1].get("usage", {}).get("total_tokens") == 12
+
+
+def test_recent_main_agent_activity_ignores_completed_accounting_events_and_terminal_phases():
+    from datetime import datetime, timedelta, timezone
+
+    from cyrene.workbench.session_view import has_recent_main_agent_activity
+
+    now = datetime.now(timezone.utc)
+
+    def stamp(offset):
+        return (now + timedelta(seconds=offset)).isoformat()
+
+    assert has_recent_main_agent_activity([
+        {"type": "session_update", "status": "running", "timestamp": stamp(-4)},
+        {"type": "llm_call", "caller": "main_agent", "status": "completed", "timestamp": stamp(-3)},
+        {"type": "phase_transition", "to": "done", "timestamp": stamp(-2)},
+    ], now) is False
+
+    assert has_recent_main_agent_activity([
+        {"type": "tool_call_started", "caller": "main_agent", "tool_call_id": "a", "timestamp": stamp(-4)},
+        {"type": "tool_call_started", "caller": "main_agent", "tool_call_id": "b", "timestamp": stamp(-3)},
+        {"type": "tool_call_finished", "caller": "main_agent", "tool_call_id": "a", "timestamp": stamp(-2)},
+    ], now) is True

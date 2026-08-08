@@ -2629,7 +2629,35 @@ def _workbench_session_summary(session: dict[str, Any]) -> dict[str, Any]:
     summary["id"] = str(summary.get("id") or session.get("id") or "")
     summary["projectId"] = str(summary.get("projectId") or session.get("projectId") or "")
     summary["isSummary"] = True
-    summary["planStepCount"] = len(session.get("plan") or []) if isinstance(session.get("plan"), list) else 0
+    plan = session.get("plan") if isinstance(session.get("plan"), list) else []
+    summary["planStepCount"] = len(plan)
+    resolved_statuses = {"completed", "done", "skipped"}
+    summary["planCompletedCount"] = sum(
+        1
+        for step in plan
+        if isinstance(step, dict)
+        and str(step.get("status") or "pending") in resolved_statuses
+    )
+    current_step: dict[str, Any] | None = None
+    current_index = 0
+    for index, step in enumerate(plan):
+        if isinstance(step, dict) and str(step.get("status") or "pending") == "running":
+            current_step = step
+            current_index = index + 1
+            break
+    if current_step is None:
+        for index, step in enumerate(plan):
+            if (
+                isinstance(step, dict)
+                and str(step.get("status") or "pending") not in resolved_statuses
+            ):
+                current_step = step
+                current_index = index + 1
+                break
+    if current_step is not None:
+        summary["planCurrentIndex"] = current_index
+        summary["planCurrentTitle"] = str(current_step.get("title") or "")
+        summary["planCurrentAction"] = str(current_step.get("currentAction") or "")
     summary["eventCount"] = len(session.get("events") or []) if isinstance(session.get("events"), list) else 0
     summary["runCount"] = len(session.get("runs") or []) if isinstance(session.get("runs"), list) else 0
     summary["artifactCount"] = len(session.get("artifacts") or []) if isinstance(session.get("artifacts"), list) else 0
@@ -6195,6 +6223,7 @@ async def _workbench_answer_pending(
     binding = bind_run_context(
         session_id=str(session_id or ""),
         workspace_dir=workspace_dir or "",
+        response_capabilities=frozenset({"interactive_blocks"}),
     )
     try:
         return await answer_pending_question(
@@ -6363,6 +6392,7 @@ async def _workbench_agent_reply(
             ephemeral_system=str(ephemeral_system or ""),
             volatile_ephemeral_system=str(volatile_ephemeral_system or ""),
             static_system_extra=str(static_system_extra or ""),
+            response_capabilities=("interactive_blocks",),
         )
     except Exception:
         logger.exception("Workbench agent run failed for session %s", session_id)

@@ -1376,14 +1376,15 @@ def test_main_prompt_prefers_inbox_wakeup_over_fixed_time_waits():
     assert "Never use Bash `sleep`" not in _MAIN_AGENT_PROMPT
 
 
-def test_learned_skills_use_progressive_disclosure_without_auto_router():
+def test_learned_skills_require_explicit_successful_inspection_without_auto_router():
     from pathlib import Path
     from cyrene.agent.prompts import _MAIN_AGENT_PROMPT
 
     source = Path("src/cyrene/agent/agent.py").read_text(encoding="utf-8")
     assert "try_route_and_execute_skill" not in source
-    assert "Progressive disclosure" in _MAIN_AGENT_PROMPT
-    assert "call `skill.get_learned` only for a plausibly relevant" in _MAIN_AGENT_PROMPT
+    assert "inspect it with `skill.get_learned` through `skill_tools`" in _MAIN_AGENT_PROMPT
+    assert "use `skill.run_learned` only when its disclosed procedure fits" in _MAIN_AGENT_PROMPT
+    assert "unless the corresponding call succeeded" in _MAIN_AGENT_PROMPT
 
 
 def test_subagent_monitoring_has_no_fixed_two_second_completion_sleep():

@@ -50,22 +50,62 @@ function wbRememberWelcomeHandled() {
 // popover can safely overlap another modal without restoring the native view
 // too early.
 var wbBrowserOverlayCount = 0;
+var wbBrowserOverlayObscured = false;
+var wbBrowserOverlayTransition = 0;
 function wbSetBrowserOverlayObscured(delta) {
   wbBrowserOverlayCount = Math.max(0, wbBrowserOverlayCount + delta);
   var obscured = wbBrowserOverlayCount > 0;
-  // Let the renderer-side browser host stop publishing visible bounds too.
-  // setObscured is the authoritative native-view guard, while this event makes
-  // the transition immediate and prevents a pending ResizeObserver/rAF bounds
-  // update from re-showing the view during an overlay.
-  window.dispatchEvent(new CustomEvent("workbench:browser-obscured", {
-    detail: { obscured: obscured },
-  }));
+  var forceRestore = delta === 0 && wbBrowserOverlayCount === 0;
+  if (!forceRestore && obscured === wbBrowserOverlayObscured) return;
+  wbBrowserOverlayObscured = obscured;
+  var transition = wbBrowserOverlayTransition + 1;
+  wbBrowserOverlayTransition = transition;
   var bridge = window.cyrene && window.cyrene.browser;
-  if (bridge && typeof bridge.setObscured === "function") {
-    bridge.setObscured(obscured).catch(function (err) {
+
+  function setNativeObscured(value) {
+    if (transition !== wbBrowserOverlayTransition) return Promise.resolve(null);
+    if (!bridge || typeof bridge.setObscured !== "function") return Promise.resolve(null);
+    return bridge.setObscured(value).catch(function (err) {
       console.error("setObscured failed", err);
+      return null;
     });
   }
+
+  if (obscured) {
+    var captureStarted = false;
+    var nativeHidden = false;
+    function hideNativeAfterPreview() {
+      if (nativeHidden || transition !== wbBrowserOverlayTransition) return;
+      nativeHidden = true;
+      setNativeObscured(true);
+    }
+    // A native WebContentsView cannot be covered by renderer CSS. Ask the
+    // viewport to capture and paint its current frame first; only its onReady
+    // callback may hide the native layer. This keeps the page visually stable
+    // while renderer menus render above the bitmap proxy.
+    window.dispatchEvent(new CustomEvent("workbench:browser-obscured", {
+      detail: {
+        obscured: true,
+        preview: true,
+        onCaptureStarted: function () { captureStarted = true; },
+        onReady: hideNativeAfterPreview,
+      },
+    }));
+    // No mounted native viewport accepted the preview request. There is no
+    // frame to preserve, so fall back to the ordinary authoritative guard.
+    if (!captureStarted) hideNativeAfterPreview();
+    return;
+  }
+
+  // Re-enable the native compositor before asking the renderer proxy to fade
+  // away. The viewport keeps its screenshot mounted until a live frame at the
+  // current bounds is confirmed, avoiding a white flash in the other direction.
+  setNativeObscured(false).finally(function () {
+    if (transition !== wbBrowserOverlayTransition) return;
+    window.dispatchEvent(new CustomEvent("workbench:browser-obscured", {
+      detail: { obscured: false },
+    }));
+  });
 }
 // Other classic-script bundles (chat composer and shared feedback host) render
 // overlays too. Register the reference-counted coordinator instead of creating
@@ -185,6 +225,7 @@ function wbRecentSessionTabs(projects, chatsByProject, recentOpenedKeys, pinnedK
         projectId: projectId,
         projectName: String(project.name || ""),
         updatedAt: String(session.updatedAt || session.createdAt || ""),
+        source: session,
       });
     });
     var chats = chatsByProject && Array.isArray(chatsByProject[projectId])
@@ -199,6 +240,7 @@ function wbRecentSessionTabs(projects, chatsByProject, recentOpenedKeys, pinnedK
         projectId: projectId,
         projectName: String(project.name || ""),
         updatedAt: String(chat.updatedAt || chat.createdAt || ""),
+        source: chat,
       });
     });
   });
@@ -241,6 +283,195 @@ function wbRecentSessionTabs(projects, chatsByProject, recentOpenedKeys, pinnedK
   // A pinned session is a fixed topbar tab, so it must not disappear merely
   // because the ordinary recent-tab quota has already been filled.
   return ordered.slice(0, Math.max(visiblePinnedCount, Math.max(0, Number(limit) || 0)));
+}
+
+function wbVisibleSessionTabs(items, activeKey, limit) {
+  var candidates = Array.isArray(items) ? items : [];
+  var maxItems = Math.max(1, Number(limit) || 3);
+  var visible = candidates.slice(0, maxItems);
+  var active = String(activeKey || "");
+  if (active && !visible.some(function (item) { return item.kind + ":" + item.id === active; })) {
+    var activeItem = candidates.find(function (item) { return item.kind + ":" + item.id === active; });
+    if (activeItem) visible = visible.slice(0, Math.max(0, maxItems - 1)).concat([activeItem]);
+  }
+  var visibleKeys = {};
+  visible.forEach(function (item) { visibleKeys[item.kind + ":" + item.id] = true; });
+  return {
+    visible: visible,
+    overflow: candidates.filter(function (item) { return !visibleKeys[item.kind + ":" + item.id]; }),
+  };
+}
+
+function wbSessionPlanProgress(item) {
+  var source = item && item.source || {};
+  var plan = [];
+  if (item && item.kind === "chat") {
+    var activePlan = source.activePlan && typeof source.activePlan === "object" ? source.activePlan : null;
+    plan = activePlan && Array.isArray(activePlan.steps) ? activePlan.steps : [];
+  } else {
+    plan = Array.isArray(source.plan) ? source.plan : [];
+  }
+  var total = plan.length || Math.max(0, Number(source.planStepCount) || 0);
+  var resolved = { completed: true, done: true, skipped: true };
+  var completed = plan.length
+    ? plan.filter(function (step) { return step && resolved[String(step.status || "pending")]; }).length
+    : Math.max(0, Number(source.planCompletedCount) || 0);
+  var currentIndex = 0;
+  var currentStep = null;
+  for (var index = 0; index < plan.length; index += 1) {
+    if (String(plan[index] && plan[index].status || "") === "running" || String(plan[index] && plan[index].status || "") === "in_progress") {
+      currentIndex = index + 1;
+      currentStep = plan[index];
+      break;
+    }
+  }
+  if (!currentIndex) {
+    currentIndex = Math.max(0, Number(source.planCurrentIndex) || 0);
+    currentStep = plan[currentIndex - 1] || null;
+  }
+  if (!currentIndex && total && completed < total) currentIndex = Math.min(total, completed + 1);
+  return {
+    current: currentIndex,
+    completed: completed,
+    total: total,
+    title: String(currentStep && currentStep.title || source.planCurrentTitle || ""),
+    action: String(currentStep && (currentStep.currentAction || currentStep.description) || source.planCurrentAction || ""),
+  };
+}
+
+function wbSessionActivityPhase(item, runtime, live) {
+  var source = item && item.source || {};
+  function statusIsActive(status) {
+    return ["running", "resumed", "planning", "initializing", "finishing", "waiting"].indexOf(
+      String(status || "").toLowerCase()
+    ) >= 0;
+  }
+  var sourceUpdatedAt = Date.parse(String(source.updatedAt || "")) || 0;
+  var liveStatusAt = Number(live && live.statusAt) || 0;
+  var liveStatusIsFresh = !!(live && live.status) && (!sourceUpdatedAt || liveStatusAt > sourceUpdatedAt);
+  var livePresenceIsFresh = !!live && (!sourceUpdatedAt || Number(live.lastEventAt || 0) > sourceUpdatedAt);
+  var raw = String((liveStatusIsFresh && live.status) || source.runStatus || source.status || "idle").toLowerCase();
+  var activeSignal = !!runtime || !!source.agentBusy || !!(live && live.active);
+  var hasPendingQuestion = !!(source.pendingQuestion && source.pendingQuestion.id);
+  var livePresenceIsCredible = !!(livePresenceIsFresh && live && (
+    live.phaseActive
+    || Object.keys(live.activeTools || {}).length
+    || Object.keys(live.agents || {}).some(function (key) {
+      return statusIsActive(live.agents[key] && live.agents[key].status);
+    })
+    || (liveStatusIsFresh && statusIsActive(live.status))
+  ));
+  // The module-level Chat runtime exists only while a stream is attached. It
+  // is stronger evidence than a delayed/stale SSE summary, including a prior
+  // tool-level failure cached before the next lifecycle update arrives.
+  if (runtime) return { phase: "running", reason: "running", active: true };
+  // Presence is independent from the last durable lifecycle result. A newer
+  // tool/subagent event proves that work is happening even while the list
+  // summary still describes the previous exchange.
+  if (livePresenceIsCredible) return { phase: "running", reason: "running", active: true };
+  if (source.agentBusy) return {
+    phase: /plan/i.test(String(source.agentBusy && (source.agentBusy.type || source.agentBusy.label) || "")) ? "planning" : "running",
+    reason: "running",
+    active: true,
+  };
+  if (["failed", "error", "timeout"].indexOf(raw) >= 0) return { phase: "failed", reason: "failed", active: false };
+  if (hasPendingQuestion || ["waiting_for_user", "awaiting_user"].indexOf(raw) >= 0) return { phase: "attention", reason: "input", active: false };
+  if (raw === "waiting_for_approval") return { phase: "attention", reason: "approval", active: false };
+  if (raw === "review") return { phase: "attention", reason: "review", active: false };
+  if (raw === "blocked") return { phase: "attention", reason: "blocked", active: false };
+  if (raw === "paused") return { phase: "paused", reason: "paused", active: false };
+  if (["cancelled", "canceled", "interrupted", "stopped"].indexOf(raw) >= 0) return { phase: "cancelled", reason: "cancelled", active: false };
+  if (["running", "resumed", "finishing", "answered", "acted"].indexOf(raw) >= 0) return { phase: "running", reason: "running", active: true };
+  if (["planning", "initializing", "proposed"].indexOf(raw) >= 0) return { phase: "planning", reason: "planning", active: activeSignal };
+  if (["done", "completed", "success"].indexOf(raw) >= 0) return { phase: "completed", reason: "completed", active: false };
+  if (item && item.kind === "chat" && Number(source.messageCount || 0) > 0) return { phase: "completed", reason: "completed", active: false };
+  return { phase: "idle", reason: "idle", active: false };
+}
+
+function wbLatestRuntimeActivity(runtime) {
+  if (!runtime) return null;
+  var progress = Array.isArray(runtime.progress) ? runtime.progress : [];
+  for (var index = progress.length - 1; index >= 0; index -= 1) {
+    var entry = progress[index];
+    if (!entry) continue;
+    if (entry.kind === "tool" && entry.status === "running") {
+      return { kind: "tool", label: String(entry.text || ""), detail: String(entry.preview || "") };
+    }
+    if (entry.kind === "phase" && (entry.text || entry.detailKey)) {
+      return { kind: "phase", label: String(entry.text || entry.detailKey || ""), detail: String(entry.preview || "") };
+    }
+  }
+  var activities = Array.isArray(runtime.activities) ? runtime.activities : [];
+  var latest = activities.length ? activities[activities.length - 1] : null;
+  if (latest && latest.reasoningActive) return { kind: "reasoning", label: "Thinking", detail: "" };
+  if (runtime.finalizing) return { kind: "finalizing", label: "Finalizing", detail: "" };
+  return null;
+}
+
+function wbSessionActivitySnapshot(item, runtime, live, browserState) {
+  var state = wbSessionActivityPhase(item, runtime, live);
+  var source = item && item.source || {};
+  var progress = wbSessionPlanProgress(item);
+  // Activity events are ephemeral. The persisted session status is authoritative
+  // once a run settles, so never surface an old tool/LLM event as "current" on
+  // an idle, completed, paused, failed, or attention-waiting session.
+  var activity = state.active
+    ? (wbLatestRuntimeActivity(runtime) || (live && live.active ? live.activity : null) || null)
+    : null;
+  var browser = browserState && typeof browserState === "object" ? browserState : {};
+  var tabs = Array.isArray(browser.tabs) ? browser.tabs : [];
+  var browserTab = tabs.find(function (tab) {
+    return String(tab && tab.id || "") === String(browser.activeTabId || "");
+  }) || browser.activeTab || tabs[0] || null;
+  if (state.phase === "running" && browserTab && browserTab.url && activity && /browser|browse|web|navigate|click/i.test(String(activity.label || ""))) {
+    var domain = "";
+    try { domain = new URL(browserTab.url).hostname.replace(/^www\./, ""); } catch (e) {}
+    activity = { kind: "browser", label: domain || String(browserTab.title || browserTab.url), detail: "Browsing" };
+  }
+  var agentsById = live && live.agents || {};
+  var agents = Object.keys(agentsById).map(function (id) { return agentsById[id]; });
+  var sourceUpdatedAt = Date.parse(String(source.updatedAt || "")) || 0;
+  var lastEventAt = Math.max(sourceUpdatedAt, Number(live && live.lastEventAt) || 0);
+  return {
+    phase: state.phase,
+    reason: state.reason,
+    isLive: !!state.active,
+    progress: progress,
+    activity: activity,
+    agents: agents,
+    activeAgentCount: agents.filter(function (agent) {
+      return ["running", "resumed", "waiting"].indexOf(String(agent.status || "")) >= 0;
+    }).length,
+    morphUntil: state.phase === "completed" && lastEventAt ? lastEventAt + 8000 : 0,
+    capabilities: {
+      canPause: item && item.kind === "task" && state.phase === "running",
+      canStop: item && item.kind === "chat" && state.phase === "running",
+    },
+  };
+}
+
+function wbSessionActivityRank(activity) {
+  return { failed: 0, attention: 1, running: 2, planning: 3, paused: 4, cancelled: 5, completed: 6, idle: 7 }[
+    String(activity && activity.phase || "idle")
+  ];
+}
+
+function wbOverflowSessionTime(item) {
+  var value = item && item.updatedAt;
+  if (typeof value === "number" && Number.isFinite(value)) return value;
+  return Date.parse(String(value || "")) || 0;
+}
+
+function wbSplitOverflowSessions(items) {
+  var groups = { regular: [], exceptional: [] };
+  (Array.isArray(items) ? items : []).slice().sort(function (left, right) {
+    var timeOrder = wbOverflowSessionTime(right) - wbOverflowSessionTime(left);
+    return timeOrder || String(left && left.title || "").localeCompare(String(right && right.title || ""));
+  }).forEach(function (item) {
+    var phase = String(item && item.activity && item.activity.phase || "idle");
+    groups[phase === "attention" || phase === "failed" ? "exceptional" : "regular"].push(item);
+  });
+  return groups;
 }
 
 function wbRememberOpenedSessionKey(recentOpenedKeys, visibleSessionKeys, key, limit) {
@@ -441,6 +672,163 @@ function wbArgsPreview(args) {
     parts.push(text);
   });
   return parts.join("  ").slice(0, 80);
+}
+
+function wbActivityStatusIsActive(status) {
+  return ["running", "resumed", "planning", "initializing", "finishing", "waiting"].indexOf(
+    String(status || "").toLowerCase()
+  ) >= 0;
+}
+
+function wbActivityStatusIsTerminal(status) {
+  return [
+    "done", "completed", "success", "failed", "error", "timeout", "paused",
+    "blocked", "review", "waiting_for_user", "awaiting_user",
+    "waiting_for_approval", "cancelled", "canceled", "interrupted", "stopped",
+  ].indexOf(String(status || "").toLowerCase()) >= 0;
+}
+
+function wbActivityEventRunKey(data) {
+  return String(data && (data.runId || data.run_id || data.round_id) || "").trim();
+}
+
+function wbActivityEventTimestamp(data) {
+  return Date.parse(String(data && data.timestamp || "")) || Date.now();
+}
+
+function wbReduceSessionActivity(prior, data) {
+  var previous = prior && typeof prior === "object" ? prior : {};
+  var type = String(data && data.type || "");
+  var eventAt = wbActivityEventTimestamp(data);
+  var runKey = wbActivityEventRunKey(data);
+  var previousRunKey = String(previous.runKey || "");
+  var next = Object.assign({}, previous, {
+    agents: Object.assign({}, previous.agents || {}),
+    activeTools: Object.assign({}, previous.activeTools || {}),
+    lastEventAt: eventAt,
+  });
+
+  var incomingLifecycleStatus = "";
+  if (type === "goal_loop_update") {
+    var loop = data.goal_loop && typeof data.goal_loop === "object" ? data.goal_loop : {};
+    incomingLifecycleStatus = String(loop.status || "");
+    runKey = runKey || String(loop.id || loop.runId || loop.run_id || "");
+  } else if (type === "session_update") {
+    incomingLifecycleStatus = String(data.status || "");
+  } else if (type === "error") {
+    incomingLifecycleStatus = "failed";
+  } else if (type === "interrupted") {
+    incomingLifecycleStatus = "cancelled";
+  } else if (type === "awaiting_user") {
+    incomingLifecycleStatus = "awaiting_user";
+  }
+
+  var startsNewRun = !!runKey && !!previousRunKey && runKey !== previousRunKey;
+  if (!startsNewRun && incomingLifecycleStatus && wbActivityStatusIsActive(incomingLifecycleStatus)) {
+    startsNewRun = wbActivityStatusIsTerminal(previous.status);
+  }
+  if (startsNewRun) {
+    next.agents = {};
+    next.activeTools = {};
+    next.activity = null;
+    next.phaseActive = false;
+  }
+  if (runKey) next.runKey = runKey;
+
+  if (incomingLifecycleStatus) {
+    next.status = incomingLifecycleStatus;
+    next.statusAt = eventAt;
+    if (wbActivityStatusIsTerminal(incomingLifecycleStatus)) {
+      next.activeTools = {};
+      next.phaseActive = false;
+      next.activity = null;
+      Object.keys(next.agents).forEach(function (key) {
+        if (wbActivityStatusIsActive(next.agents[key] && next.agents[key].status)) {
+          next.agents[key] = Object.assign({}, next.agents[key], { status: "done" });
+        }
+      });
+    }
+  } else if (type === "subagent_update") {
+    var agentId = String(data.agent_id || data.caller || "agent");
+    next.agents[agentId] = {
+      id: agentId,
+      name: String(data.name || agentId),
+      task: String(data.task || data.message || ""),
+      status: String(data.status || "running"),
+    };
+    if (wbActivityStatusIsActive(data.status || "running")) {
+      next.activity = {
+        kind: "subagent",
+        label: String(data.name || agentId),
+        detail: String(data.task || data.message || ""),
+      };
+    } else {
+      var remainingAgentId = Object.keys(next.agents).reverse().find(function (key) {
+        return wbActivityStatusIsActive(next.agents[key] && next.agents[key].status);
+      });
+      next.activity = remainingAgentId ? {
+        kind: "subagent",
+        label: String(next.agents[remainingAgentId].name || remainingAgentId),
+        detail: String(next.agents[remainingAgentId].task || ""),
+      } : null;
+    }
+  } else if (type === "phase_transition") {
+    var phaseTarget = String(data.to || "");
+    next.phaseActive = !/done|complete|finish|idle|cancel|error|fail/i.test(phaseTarget);
+    next.activity = next.phaseActive ? {
+      kind: "phase",
+      label: String(data.detail || data.detail_key || phaseTarget),
+      detail: "",
+      failed: !!data.failed,
+    } : null;
+  } else if (type === "llm_call") {
+    // `llm_call` is emitted as a completed accounting event. Live reasoning is owned by the
+    // per-chat runtime and must not resurrect presence here.
+  } else if (["tool_call", "tool_call_started", "tool_call_progress", "tool_call_finished"].indexOf(type) >= 0) {
+    var toolName = String(data.tool || "");
+    var toolId = String(data.tool_call_id || data.toolCallId || (data.caller || "agent") + ":" + toolName);
+    var toolActivity = {
+      kind: /browser|browse|web|navigate|click/i.test(toolName) ? "browser" : "tool",
+      label: toolName,
+      detail: wbArgsPreview(data.args),
+      failed: !!data.failed,
+    };
+    if (type === "tool_call_started" || type === "tool_call_progress") {
+      next.activeTools[toolId] = toolActivity;
+      next.activity = toolActivity;
+    } else {
+      delete next.activeTools[toolId];
+      var remainingToolIds = Object.keys(next.activeTools);
+      next.activity = remainingToolIds.length
+        ? next.activeTools[remainingToolIds[remainingToolIds.length - 1]]
+        : null;
+    }
+  }
+
+  var lifecycleActive = wbActivityStatusIsActive(next.status);
+  var toolsActive = Object.keys(next.activeTools || {}).length > 0;
+  var agentsActive = Object.keys(next.agents || {}).some(function (key) {
+    return wbActivityStatusIsActive(next.agents[key] && next.agents[key].status);
+  });
+  next.active = lifecycleActive || toolsActive || agentsActive || !!next.phaseActive;
+  if (next.active && !next.activity) {
+    var fallbackToolIds = Object.keys(next.activeTools || {});
+    if (fallbackToolIds.length) {
+      next.activity = next.activeTools[fallbackToolIds[fallbackToolIds.length - 1]];
+    } else {
+      var fallbackAgentId = Object.keys(next.agents || {}).reverse().find(function (key) {
+        return wbActivityStatusIsActive(next.agents[key] && next.agents[key].status);
+      });
+      if (fallbackAgentId) {
+        next.activity = {
+          kind: "subagent",
+          label: String(next.agents[fallbackAgentId].name || fallbackAgentId),
+          detail: String(next.agents[fallbackAgentId].task || ""),
+        };
+      }
+    }
+  }
+  return next;
 }
 
 function wbActorLabel(caller, agentId) {
@@ -815,6 +1203,12 @@ function WorkbenchApp({ theme, actualTheme, onToggleTheme, needsOnboarding }) {
   var [activeChatId, setActiveChatId] = useWorkbenchState("");
   var [recentChatsByProject, setRecentChatsByProject] = useWorkbenchState({});
   var [pinnedResources, setPinnedResources] = useWorkbenchState([]);
+  var chatModule = window.CyreneUI.require("chat");
+  var chatRuntimeEngine = chatModule && chatModule.Runtimes;
+  var [chatRuntimes, setChatRuntimes] = useWorkbenchState(function () {
+    return chatRuntimeEngine && chatRuntimeEngine.snapshot ? chatRuntimeEngine.snapshot() : {};
+  });
+  var [sessionActivityLive, setSessionActivityLive] = useWorkbenchState({});
   var [recentOpenedSessionKeys, setRecentOpenedSessionKeys] = useWorkbenchState(function () {
     try {
       var stored = JSON.parse(localStorage.getItem("wb-recent-opened-sessions") || "[]");
@@ -851,6 +1245,30 @@ function WorkbenchApp({ theme, actualTheme, onToggleTheme, needsOnboarding }) {
   var sessionLoadSeqRef = useWorkbenchRef(0);
   var launchReadyRef = useWorkbenchRef(false);
   var menuActionsRef = useWorkbenchRef({ createProject: function () {}, createSession: function () {}, createChat: function () {}, onToggleTheme: function () {} });
+
+  useWorkbenchEffect(function () {
+    if (!chatRuntimeEngine || typeof chatRuntimeEngine.subscribe !== "function") return undefined;
+    setChatRuntimes(chatRuntimeEngine.snapshot());
+    return chatRuntimeEngine.subscribe(function (snapshot) { setChatRuntimes(snapshot); });
+  }, [chatRuntimeEngine]);
+
+  useWorkbenchEffect(function () {
+    function onActivityEvent(data) {
+      if (!data) return;
+      var sessionId = String(data.session_id || data.chatId || data.chat_id || "").trim();
+      if (!sessionId) return;
+      var type = String(data.type || "");
+      if (["tool_call", "tool_call_started", "tool_call_progress", "tool_call_finished", "llm_call", "phase_transition", "subagent_update", "goal_loop_update", "session_update", "error", "interrupted", "awaiting_user"].indexOf(type) < 0) return;
+      setSessionActivityLive(function (previous) {
+        var prior = previous[sessionId] || { agents: {} };
+        // Tool failure is local to this call; the reducer keeps lifecycle and
+        // parallel presence separate instead of promoting it to Session failure.
+        var next = wbReduceSessionActivity(prior, data);
+        return Object.assign({}, previous, { [sessionId]: next });
+      });
+    }
+    return window.CyreneUI.require("events").subscribe(onActivityEvent);
+  }, []);
 
   function projectForSession(snapshot, sessionId) {
     if (!snapshot || !sessionId) return null;
@@ -1398,6 +1816,33 @@ function WorkbenchApp({ theme, actualTheme, onToggleTheme, needsOnboarding }) {
     window.addEventListener("cyrene:wbc-refresh-chats", onChatsChanged);
     return function () {
       window.removeEventListener("cyrene:wbc-refresh-chats", onChatsChanged);
+    };
+  }, [recentProjectIds]);
+
+  // The topbar stays visible outside the task board, so its persisted fallback
+  // state must refresh globally as background sessions settle or pause. Live
+  // deltas render immediately from sessionActivityLive; this trailing summary
+  // pull repairs terminal state and supports runs started in another window.
+  useWorkbenchEffect(function () {
+    var timer = null;
+    function refreshTopbarSessions() {
+      if (timer) clearTimeout(timer);
+      timer = setTimeout(function () {
+        timer = null;
+        refreshTaskBoard();
+        reloadRecentChats(store.projects || []);
+      }, 420);
+    }
+    function onRuntimeEvent(data) {
+      if (!data) return;
+      if (["goal_loop_update", "session_update", "user_question", "user_question_answered"].indexOf(data.type) >= 0) {
+        refreshTopbarSessions();
+      }
+    }
+    var unsubscribe = window.CyreneUI.require("events").subscribe(onRuntimeEvent);
+    return function () {
+      if (timer) clearTimeout(timer);
+      unsubscribe();
     };
   }, [recentProjectIds]);
 
@@ -2042,14 +2487,31 @@ function WorkbenchApp({ theme, actualTheme, onToggleTheme, needsOnboarding }) {
   var showMemoryPage = isMemory || mountedPages.memory;
   var showWelcomePage = isWelcome || mountedPages.welcome;
   var showProfilePage = isProfile || mountedPages.profile;
-  var recentSessionTabs = wbRecentSessionTabs(
+  var activeSessionKey = isChat && activeChatId
+    ? "chat:" + activeChatId
+    : (!fullPage && taskView === "detail" && store.activeSessionId ? "task:" + store.activeSessionId : "");
+  var sessionTabCandidates = wbRecentSessionTabs(
     store.projects,
     recentChatsByProject,
     recentOpenedSessionKeys,
     pinnedSessionKeys,
     hiddenSessionKeys,
-    3
-  );
+    1000
+  ).map(function (item) {
+    var runtime = item.kind === "chat" ? chatRuntimes[item.id] : null;
+    var browserByChat = dataState.browserByChat || {};
+    var browserState = browserByChat[item.id] || (
+      dataState.browser && String(dataState.browser.sessionId || dataState.browser.chatId || "") === item.id
+        ? dataState.browser
+        : null
+    );
+    return Object.assign({}, item, {
+      activity: wbSessionActivitySnapshot(item, runtime, sessionActivityLive[item.id], browserState),
+    });
+  });
+  var sessionTabLayout = wbVisibleSessionTabs(sessionTabCandidates, activeSessionKey, 3);
+  var recentSessionTabs = sessionTabLayout.visible;
+  var overflowSessionTabs = sessionTabLayout.overflow;
 
   // First-run onboarding (LLM + personality). Driven by the backend onboarding
   // state — the workbench's own setup flow, independent of the legacy wizard.
@@ -2092,6 +2554,7 @@ function WorkbenchApp({ theme, actualTheme, onToggleTheme, needsOnboarding }) {
         activeTaskId={store.activeSessionId}
         activeChatId={activeChatId}
         recentSessions={recentSessionTabs}
+        overflowSessions={overflowSessionTabs}
         pinnedResources={pinnedResources}
         keyboardEnabled={!searchOpen && !settingsOpen && !newProjectOpen && !newTaskOpen}
         onPinResource={pinTopbarResource}
@@ -2126,6 +2589,47 @@ function WorkbenchApp({ theme, actualTheme, onToggleTheme, needsOnboarding }) {
           } else {
             navigateFromSearch({ type: "task", projectId: item.projectId, sessionId: item.id });
           }
+        }}
+        onPauseSession={function (item) {
+          if (!item || item.kind !== "task") return Promise.resolve(null);
+          return model.fetchSession(item.id).then(function (payload) {
+            var session = payload && payload.session;
+            if (!session) throw new Error(t("workbench.sessionActivity.missing", "Session is unavailable"));
+            if (session.goalLoop && session.goalLoop.status === "running") {
+              return model.pauseGoalLoop(item.id);
+            }
+            return model.interruptSession(item.id).then(function () {
+              var now = new Date().toISOString();
+              var plan = Array.isArray(session.plan) ? session.plan.map(function (step) {
+                if (!step || step.status !== "running") return step;
+                return Object.assign({}, step, {
+                  status: "pending",
+                  startedAt: null,
+                  currentAction: t("workbench.sessionActivity.stoppedAction", "Stopped; ready to run again."),
+                  updatedAt: now,
+                });
+              }) : session.plan;
+              return model.patchSession(item.id, {
+                status: "paused",
+                plan: plan,
+                agentReply: t("workbench.sessionActivity.pausedReply", "Execution was paused from the topbar."),
+                events: model.withEvent(session, "Paused", t("workbench.sessionActivity.pausedEvent", "Paused from the topbar.")),
+              });
+            });
+          }).then(function (next) {
+            if (next && next.projects) setStore(function (prev) { return mergeTaskResponse(prev, next, item.id); });
+            return next;
+          }).catch(function (err) {
+            window.CyreneUI.require("feedback").showToast(wbErrorText(err), "error");
+            return null;
+          });
+        }}
+        onStopSession={function (item) {
+          if (!item || item.kind !== "chat" || !chatRuntimeEngine) return Promise.resolve(null);
+          return chatRuntimeEngine.interrupt(item.id, chatModule.Model).catch(function (err) {
+            window.CyreneUI.require("feedback").showToast(wbErrorText(err), "error");
+            return null;
+          });
         }}
         notifications={notifications}
         onReloadNotifications={reloadNotifications}
@@ -2345,17 +2849,140 @@ function WorkbenchApp({ theme, actualTheme, onToggleTheme, needsOnboarding }) {
   );
 }
 
-function WorkbenchTopbar({ activePage, taskView, activeTaskId, activeChatId, recentSessions, pinnedResources, keyboardEnabled, onPinResource, onUnpinResource, onOpenPinnedResource, onOpenSession, onTogglePinnedSession, onRemoveSessionTab, onLoadSessionResources, onOpenSessionResource, notifications, onReloadNotifications, onOpenNotification, onSearch, onSettings, onNewProject, onNewTask, onOpenPage, theme, actualTheme, onToggleTheme }) {
+function wbSessionStatusLabel(activity, t) {
+  var state = activity || {};
+  if (state.phase === "attention") {
+    return {
+      input: t("workbench.sessionStatus.needsInput", "Needs input"),
+      approval: t("workbench.sessionStatus.needsApproval", "Needs approval"),
+      review: t("workbench.sessionStatus.needsReview", "Needs review"),
+      blocked: t("workbench.sessionStatus.blocked", "Blocked"),
+    }[state.reason] || t("workbench.sessionStatus.needsAttention", "Needs attention");
+  }
+  return {
+    idle: t("workbench.sessionStatus.idle", "Idle"),
+    planning: state.isLive
+      ? t("workbench.sessionStatus.planning", "Planning")
+      : t("workbench.sessionStatus.planningStage", "Planning stage"),
+    running: t("workbench.sessionStatus.running", "Running"),
+    paused: t("workbench.sessionStatus.paused", "Paused"),
+    cancelled: t("workbench.sessionStatus.cancelled", "Stopped"),
+    completed: t("workbench.sessionStatus.completed", "Completed"),
+    failed: t("workbench.sessionStatus.failed", "Failed"),
+  }[state.phase] || t("workbench.sessionStatus.idle", "Idle");
+}
+
+function wbSessionActivityCopy(activity, t) {
+  var state = activity || {};
+  if (state.phase === "attention" || state.phase === "failed" || state.phase === "paused" || state.phase === "cancelled" || state.phase === "completed") {
+    return wbSessionStatusLabel(state, t);
+  }
+  if (state.phase === "planning") return wbSessionStatusLabel(state, t);
+  if (state.phase === "running") {
+    if (state.activity && state.activity.kind === "browser" && state.activity.label) return state.activity.label;
+    if (state.progress && state.progress.current && state.progress.total) {
+      return t("workbench.sessionStatus.step", {
+        current: state.progress.current,
+        total: state.progress.total,
+      }, "Step {current}/{total}");
+    }
+    if (state.activity && state.activity.label) return state.activity.label;
+  }
+  return "";
+}
+
+function WorkbenchSessionStatusIcon({ phase, active }) {
+  var state = String(phase || "idle");
+  if (state === "attention") {
+    return <svg className="workbench-session-status-svg" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round"><path d="M8 2 14 13H2Z"/><path d="M8 5.5v3.4M8 11.3h.01"/></svg>;
+  }
+  if (state === "completed") {
+    return <svg className="workbench-session-status-svg" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d="m3.2 8.2 3 3L12.8 4.8"/></svg>;
+  }
+  if (state === "failed") {
+    return <svg className="workbench-session-status-svg" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round"><circle cx="8" cy="8" r="5.6"/><path d="m6 6 4 4m0-4-4 4"/></svg>;
+  }
+  if (state === "cancelled") {
+    return <svg className="workbench-session-status-svg" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round"><circle cx="8" cy="8" r="5.6"/><path d="M5.7 8h4.6"/></svg>;
+  }
+  if (state === "paused") {
+    return <svg className="workbench-session-status-svg" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round"><path d="M5.7 4.5v7M10.3 4.5v7"/></svg>;
+  }
+  return <span className={"workbench-session-status-dot " + state + (active ? " is-live" : "")} />;
+}
+
+function WorkbenchSessionActivityPreview({ preview, t }) {
+  if (!preview) return null;
+  var item = preview.item;
+  var activity = preview.activity || {};
+  var progress = activity.progress || {};
+  var activeAgents = (activity.agents || []).filter(function (agent) {
+    return ["running", "resumed", "waiting"].indexOf(String(agent.status || "")) >= 0;
+  });
+  var percent = progress.total ? Math.max(0, Math.min(100, Math.round((progress.completed / progress.total) * 100))) : 0;
+  return (
+    <div
+      id="workbench-session-activity-preview"
+      className="workbench-session-activity-preview"
+      role="tooltip"
+      style={{ left: preview.left, top: preview.top, ...preview.portalTheme }}
+    >
+      <div className="workbench-session-activity-preview-head">
+        <WorkbenchSessionStatusIcon phase={activity.phase} active={activity.isLive} />
+        <div><b>{item.title}</b><small>{wbSessionStatusLabel(activity, t)}</small></div>
+      </div>
+      {progress.total ? (
+        <div className="workbench-session-activity-progress">
+          <div><span>{t("workbench.sessionStatus.progress", "Progress")}</span><b>{progress.current || progress.completed}/{progress.total}</b></div>
+          <span className="workbench-session-activity-progress-track"><i style={{ width: percent + "%" }} /></span>
+          {progress.title || progress.action ? <p>{progress.action || progress.title}</p> : null}
+        </div>
+      ) : null}
+      {activity.activity && (activity.activity.label || activity.activity.detail) ? (
+        <div className="workbench-session-activity-current">
+          <span>{activity.activity.kind === "browser" ? t("workbench.sessionStatus.browsing", "Browsing") : t("workbench.sessionStatus.currentActivity", "Current activity")}</span>
+          <b>{activity.activity.label || activity.activity.detail}</b>
+          {activity.activity.label && activity.activity.detail ? <small>{activity.activity.detail}</small> : null}
+        </div>
+      ) : null}
+      {activeAgents.length ? <div className="workbench-session-activity-agents">{t("workbench.sessionStatus.agentsRunning", { count: activeAgents.length }, "{count} agents active")}</div> : null}
+    </div>
+  );
+}
+
+function WorkbenchTopbar({ activePage, taskView, activeTaskId, activeChatId, recentSessions, overflowSessions, pinnedResources, keyboardEnabled, onPinResource, onUnpinResource, onOpenPinnedResource, onOpenSession, onPauseSession, onStopSession, onTogglePinnedSession, onRemoveSessionTab, onLoadSessionResources, onOpenSessionResource, notifications, onReloadNotifications, onOpenNotification, onSearch, onSettings, onNewProject, onNewTask, onOpenPage, theme, actualTheme, onToggleTheme }) {
   var { t } = window.CyreneUI.require("i18n").use();
   var dataState = window.CyreneUI.require("data").state;
   var tabs = Array.isArray(recentSessions) ? recentSessions : [];
+  var overflowTabs = Array.isArray(overflowSessions) ? overflowSessions : [];
+  var overflowGroups = wbSplitOverflowSessions(overflowTabs);
   var resources = Array.isArray(pinnedResources) ? pinnedResources : [];
   var [sessionMenu, setSessionMenu] = useWorkbenchState(null);
   var [resourceMenu, setResourceMenu] = useWorkbenchState(null);
+  var [overflowMenu, setOverflowMenu] = useWorkbenchState(null);
+  var [hoverPreview, setHoverPreview] = useWorkbenchState(null);
+  var [activityClock, setActivityClock] = useWorkbenchState(function () { return Date.now(); });
   var [resourceDropActive, setResourceDropActive] = useWorkbenchState(false);
   var [chatSideHidden, setChatSideHidden] = useWorkbenchState(false);
   var topbarRef = useWorkbenchRef(null);
   var sessionMenuSeqRef = useWorkbenchRef(0);
+  var previewTimerRef = useWorkbenchRef(0);
+  var terminalMorphKey = tabs.map(function (item) {
+    return item.kind + ":" + item.id + ":" + Number(item.activity && item.activity.morphUntil || 0);
+  }).join("|");
+
+  useWorkbenchEffect(function () {
+    var now = Date.now();
+    var nextExpiry = tabs.reduce(function (soonest, item) {
+      var expiry = Number(item.activity && item.activity.morphUntil || 0);
+      if (expiry <= now) return soonest;
+      return !soonest || expiry < soonest ? expiry : soonest;
+    }, 0);
+    setActivityClock(now);
+    if (!nextExpiry) return undefined;
+    var timer = setTimeout(function () { setActivityClock(Date.now()); }, Math.max(16, nextExpiry - now + 20));
+    return function () { clearTimeout(timer); };
+  }, [terminalMorphKey]);
   function acceptsResourceDrag(event, resourceApi) {
     var transfer = event && event.dataTransfer;
     if (!transfer || !resourceApi) return false;
@@ -2373,6 +3000,77 @@ function WorkbenchTopbar({ activePage, taskView, activeTaskId, activeChatId, rec
   ) : (
     <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/></svg>
   );
+
+  function readTopbarPortalTheme() {
+    var portalTheme = {};
+    var themeSource = document.querySelector(".workbench-shell");
+    if (themeSource && typeof getComputedStyle === "function") {
+      var computedTheme = getComputedStyle(themeSource);
+      [
+        "--wb-surface", "--wb-card-bg", "--wb-card-bg-strong", "--wb-line", "--wb-line-2",
+        "--wb-text", "--wb-muted", "--wb-faint",
+        "--wb-control-bg", "--wb-control-hover-bg", "--wb-row-hover-bg",
+        "--wb-green", "--wb-amber", "--wb-red", "--wb-accent", "--wb-ui-font-scale",
+      ].forEach(function (name) { portalTheme[name] = computedTheme.getPropertyValue(name); });
+      portalTheme.fontFamily = computedTheme.fontFamily;
+    }
+    return portalTheme;
+  }
+
+  function closeSessionPreview() {
+    if (previewTimerRef.current) clearTimeout(previewTimerRef.current);
+    previewTimerRef.current = 0;
+    setHoverPreview(null);
+  }
+
+  function scheduleSessionPreview(event, item, activity, immediate) {
+    if (previewTimerRef.current) clearTimeout(previewTimerRef.current);
+    var node = event.currentTarget;
+    var rect = node.getBoundingClientRect();
+    previewTimerRef.current = setTimeout(function () {
+      previewTimerRef.current = 0;
+      var width = 300;
+      setHoverPreview({
+        item: item,
+        activity: activity,
+        left: Math.max(8, Math.min(rect.left + rect.width / 2 - width / 2, window.innerWidth - width - 8)),
+        top: Math.min(window.innerHeight - 12, rect.bottom + 8),
+        portalTheme: readTopbarPortalTheme(),
+      });
+    }, immediate ? 80 : 420);
+  }
+
+  function openOverflowMenu(event) {
+    event.preventDefault();
+    event.stopPropagation();
+    closeSessionPreview();
+    var rect = event.currentTarget.getBoundingClientRect();
+    var width = 300;
+    var height = Math.min(420, window.innerHeight - 16);
+    setSessionMenu(null);
+    setResourceMenu(null);
+    setOverflowMenu({
+      left: Math.max(8, Math.min(rect.left, window.innerWidth - width - 8)),
+      top: Math.max(8, Math.min(rect.bottom + 8, window.innerHeight - height - 8)),
+      portalTheme: readTopbarPortalTheme(),
+    });
+  }
+
+  function closeOverflowMenu() { setOverflowMenu(null); }
+
+  function renderOverflowSession(item) {
+    var status = wbSessionStatusLabel(item.activity, t);
+    var detail = wbSessionActivityCopy(item.activity, t);
+    return (
+      <button key={item.kind + ":" + item.id} type="button" role="menuitem" onClick={function () {
+        closeOverflowMenu();
+        if (onOpenSession) onOpenSession(item);
+      }}>
+        <span className={"workbench-session-overflow-icon " + String(item.activity.phase || "idle")}><WorkbenchSessionStatusIcon phase={item.activity.phase} active={item.activity.isLive} /></span>
+        <span><b>{item.title}</b><small>{detail && detail !== status ? status + " · " + detail : status}</small></span>
+      </button>
+    );
+  }
 
   function activeSessionIndex() {
     return tabs.findIndex(function (item) {
@@ -2490,60 +3188,78 @@ function WorkbenchTopbar({ activePage, taskView, activeTaskId, activeChatId, rec
   }, []);
 
   useWorkbenchEffect(function () {
-    if (!sessionMenu && !resourceMenu) return undefined;
+    if (!sessionMenu && !resourceMenu && !overflowMenu) return undefined;
     function closeMenu() {
       sessionMenuSeqRef.current += 1;
       setSessionMenu(null);
       setResourceMenu(null);
+      setOverflowMenu(null);
     }
     function handleKey(event) {
       if (event.key === "Escape") closeMenu();
+      if (["ArrowDown", "ArrowUp", "Home", "End"].indexOf(event.key) < 0) return;
+      var menu = document.querySelector(".workbench-session-context-menu[role='menu']");
+      if (!menu) return;
+      var items = Array.prototype.slice.call(menu.querySelectorAll("[role='menuitem']:not(:disabled)"));
+      if (!items.length) return;
+      var current = items.indexOf(document.activeElement);
+      var nextIndex = event.key === "Home"
+        ? 0
+        : event.key === "End"
+          ? items.length - 1
+          : event.key === "ArrowUp"
+            ? (current <= 0 ? items.length - 1 : current - 1)
+            : (current < 0 || current >= items.length - 1 ? 0 : current + 1);
+      event.preventDefault();
+      items[nextIndex].focus();
+    }
+    function handleScroll(event) {
+      var target = event && event.target;
+      if (target && target.nodeType === 1 && target.closest && target.closest(
+        ".workbench-session-overflow-menu, .workbench-session-menu"
+      )) return;
+      closeMenu();
     }
     window.addEventListener("resize", closeMenu);
-    window.addEventListener("scroll", closeMenu, true);
+    window.addEventListener("scroll", handleScroll, true);
     document.addEventListener("keydown", handleKey);
     return function () {
       window.removeEventListener("resize", closeMenu);
-      window.removeEventListener("scroll", closeMenu, true);
+      window.removeEventListener("scroll", handleScroll, true);
       document.removeEventListener("keydown", handleKey);
     };
-  }, [!!sessionMenu, !!resourceMenu]);
+  }, [!!sessionMenu, !!resourceMenu, !!overflowMenu]);
 
   useWorkbenchEffect(function () {
-    if (!sessionMenu && !resourceMenu) return undefined;
+    if (!sessionMenu && !resourceMenu) {
+      if (!overflowMenu && !hoverPreview) return undefined;
+    }
     wbSetBrowserOverlayObscured(1);
     return function () { wbSetBrowserOverlayObscured(-1); };
-  }, [!!sessionMenu, !!resourceMenu]);
+  }, [!!sessionMenu, !!resourceMenu, !!overflowMenu, !!hoverPreview]);
 
-  function openSessionMenu(event, item) {
+  useWorkbenchEffect(function () {
+    return function () {
+      if (previewTimerRef.current) clearTimeout(previewTimerRef.current);
+    };
+  }, []);
+
+  function openSessionMenu(event, item, activity, anchored) {
     event.preventDefault();
     event.stopPropagation();
-    var menuWidth = 224;
-    var menuHeight = 360;
-    var left = Math.max(8, Math.min(event.clientX, window.innerWidth - menuWidth - 8));
-    var top = Math.max(8, Math.min(event.clientY, window.innerHeight - menuHeight - 8));
-    var portalTheme = {};
-    var themeSource = document.querySelector(".workbench-shell");
-    if (themeSource && typeof getComputedStyle === "function") {
-      var computedTheme = getComputedStyle(themeSource);
-      [
-        "--wb-card-bg",
-        "--wb-line",
-        "--wb-text",
-        "--wb-muted",
-        "--wb-faint",
-        "--wb-control-hover-bg",
-        "--wb-row-hover-bg",
-        "--wb-red",
-        "--wb-ui-font-scale",
-      ].forEach(function (name) {
-        portalTheme[name] = computedTheme.getPropertyValue(name);
-      });
-      portalTheme.fontFamily = computedTheme.fontFamily;
-    }
+    closeSessionPreview();
+    setOverflowMenu(null);
+    var menuWidth = 360;
+    var menuHeight = 420;
+    var rect = event.currentTarget && event.currentTarget.getBoundingClientRect ? event.currentTarget.getBoundingClientRect() : null;
+    var left = anchored && rect ? rect.right - menuWidth : event.clientX;
+    var top = anchored && rect ? rect.bottom + 8 : event.clientY;
+    left = Math.max(8, Math.min(left, window.innerWidth - menuWidth - 8));
+    top = Math.max(8, Math.min(top, window.innerHeight - menuHeight - 8));
+    var portalTheme = readTopbarPortalTheme();
     var seq = sessionMenuSeqRef.current + 1;
     sessionMenuSeqRef.current = seq;
-    setSessionMenu({ item: item, left: left, top: top, portalTheme: portalTheme, loading: true, resources: { browser: false, files: [] } });
+    setSessionMenu({ item: item, activity: activity || item.activity || {}, left: left, top: top, portalTheme: portalTheme, loading: true, resources: { browser: false, files: [] } });
     Promise.resolve(onLoadSessionResources ? onLoadSessionResources(item) : null)
       .then(function (resources) {
         if (sessionMenuSeqRef.current !== seq) return;
@@ -2590,16 +3306,7 @@ function WorkbenchTopbar({ activePage, taskView, activeTaskId, activeChatId, rec
 
   function portalThemeAt(event, height) {
     var menuWidth = 224;
-    var themeStyle = {};
-    var themeSource = document.querySelector(".workbench-shell");
-    if (themeSource && typeof getComputedStyle === "function") {
-      var computedTheme = getComputedStyle(themeSource);
-      ["--wb-card-bg", "--wb-line", "--wb-text", "--wb-muted", "--wb-faint",
-        "--wb-control-hover-bg", "--wb-row-hover-bg", "--wb-red", "--wb-ui-font-scale"].forEach(function (name) {
-        themeStyle[name] = computedTheme.getPropertyValue(name);
-      });
-      themeStyle.fontFamily = computedTheme.fontFamily;
-    }
+    var themeStyle = readTopbarPortalTheme();
     return {
       left: Math.max(8, Math.min(event.clientX, window.innerWidth - menuWidth - 8)),
       top: Math.max(8, Math.min(event.clientY, window.innerHeight - (height || 220) - 8)),
@@ -2610,7 +3317,9 @@ function WorkbenchTopbar({ activePage, taskView, activeTaskId, activeChatId, rec
   function openResourceMenu(event, resource) {
     event.preventDefault();
     event.stopPropagation();
+    closeSessionPreview();
     setSessionMenu(null);
+    setOverflowMenu(null);
     setResourceMenu(Object.assign({ resource: resource }, portalThemeAt(event, 210)));
   }
 
@@ -2630,34 +3339,56 @@ function WorkbenchTopbar({ activePage, taskView, activeTaskId, activeChatId, rec
     });
   }
 
+  var sessionMenuCurrentItem = sessionMenu && (tabs.concat(overflowTabs).find(function (item) {
+    return item.kind === sessionMenu.item.kind && item.id === sessionMenu.item.id;
+  }) || sessionMenu.item);
+  var sessionMenuCurrentActivity = sessionMenuCurrentItem && sessionMenuCurrentItem.activity || (sessionMenu && sessionMenu.activity);
   var sessionMenuPortal = sessionMenu && typeof ReactDOM !== "undefined"
     ? ReactDOM.createPortal((
       <div className="workbench-session-menu-portal" style={sessionMenu.portalTheme}>
         <div className="workbench-session-menu-scrim" onPointerDown={closeSessionMenu} />
         <div
-          className="workbench-account-menu workbench-session-menu"
+          className="workbench-account-menu workbench-session-menu workbench-session-context-menu"
           role="menu"
-          aria-label={sessionMenu.item.title}
-          style={{ left: sessionMenu.left, top: sessionMenu.top }}
+          aria-label={sessionMenuCurrentItem.title}
+          style={{ ...sessionMenu.portalTheme, left: sessionMenu.left, top: sessionMenu.top }}
           onContextMenu={function (event) { event.preventDefault(); }}
         >
-          <button type="button" role="menuitem" onClick={function () {
-            runSessionMenuAction(function () { if (onTogglePinnedSession) onTogglePinnedSession(sessionMenu.item); });
-          }}>
-            <span className="workbench-session-menu-icon" aria-hidden="true">
-              <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
-                <path d="M12 17v5"/>
-                <path d="M5 17h14"/>
-                <path d="M17 3a1 1 0 0 1 1 1v4.6a2 2 0 0 0 .6 1.4l1.7 1.7A1 1 0 0 1 19.6 13H4.4a1 1 0 0 1-.7-1.7l1.7-1.7A2 2 0 0 0 6 8.2V4a1 1 0 0 1 1-1Z"/>
-              </svg>
+          <div className="workbench-session-activity-menu-head">
+            <span className={"workbench-session-activity-menu-state " + String(sessionMenuCurrentActivity.phase || "idle")}>
+              <WorkbenchSessionStatusIcon phase={sessionMenuCurrentActivity.phase} active={sessionMenuCurrentActivity.isLive} />
             </span>
-            <span>{sessionMenu.item.pinned
-              ? t("workbench.sessionMenu.unpin", "Unpin tab")
-              : t("workbench.sessionMenu.pin", "Pin tab")}</span>
-          </button>
+            <div>
+              <b>{t("workbench.sessionActivity.title", "Agent activity")}</b>
+              <small>{wbSessionStatusLabel(sessionMenuCurrentActivity, t)}</small>
+            </div>
+          </div>
+          <div className="workbench-session-activity-menu-list">
+            <div className="workbench-session-activity-menu-row">
+              <span className={"workbench-session-activity-agent-mark main " + (sessionMenuCurrentActivity.isLive ? "running" : "idle")} aria-hidden="true" />
+              <span><b>{t("workbench.sessionActivity.mainAgent", "Main Agent")}</b><small>{sessionMenuCurrentActivity.isLive ? (wbSessionActivityCopy(sessionMenuCurrentActivity, t) || t("workbench.sessionStatus.running", "Running")) : wbSessionStatusLabel(sessionMenuCurrentActivity, t)}</small></span>
+            </div>
+            {(sessionMenuCurrentActivity.agents || []).slice(0, 5).map(function (agent) {
+              return (
+                <div className="workbench-session-activity-menu-row" key={agent.id}>
+                  <span className={"workbench-session-activity-agent-mark " + String(agent.status || "idle")} aria-hidden="true" />
+                  <span><b>{agent.name || agent.id}</b><small>{agent.task || String(agent.status || "")}</small></span>
+                </div>
+              );
+            })}
+          </div>
+          {sessionMenuCurrentActivity.progress && sessionMenuCurrentActivity.progress.total ? (
+            <div className="workbench-session-activity-menu-progress">
+              <span>{t("workbench.sessionStatus.step", {
+                current: sessionMenuCurrentActivity.progress.current || sessionMenuCurrentActivity.progress.completed,
+                total: sessionMenuCurrentActivity.progress.total,
+              }, "Step {current}/{total}")}</span>
+              <b>{sessionMenuCurrentActivity.progress.title}</b>
+            </div>
+          ) : null}
           {sessionMenu.resources.browser ? (
             <button type="button" role="menuitem" className="workbench-session-browser-preview" onClick={function () {
-              var item = sessionMenu.item;
+              var item = sessionMenuCurrentItem;
               runSessionMenuAction(function () {
                 if (onOpenSessionResource) onOpenSessionResource(item, { type: "browser" });
               });
@@ -2666,29 +3397,20 @@ function WorkbenchTopbar({ activePage, taskView, activeTaskId, activeChatId, rec
                 <span className="workbench-session-menu-icon" aria-hidden="true">
                   <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" strokeWidth="1.8"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M3 8h18M6 6h.01M9 6h.01"/></svg>
                 </span>
-                <span>
-                  <b>{sessionMenu.resources.browser.title || t("workbench.sessionMenu.browserPreview", "Browser preview")}</b>
-                  <small>{sessionMenu.resources.browser.url}</small>
-                </span>
+                <b>{t("workbench.resourceShelf.browser", "Browser")}</b>
+                <small>{sessionMenu.resources.browser.url || sessionMenu.resources.browser.title}</small>
+                <svg className="workbench-session-resource-chevron" viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="m6 3.5 4.5 4.5L6 12.5" /></svg>
               </span>
-              {sessionMenu.resources.browser.previewUrl ? (
-                <img src={sessionMenu.resources.browser.previewUrl} alt="" draggable="false" />
-              ) : (
-                <span className="workbench-session-browser-preview-empty">
-                  {t("workbench.sessionMenu.browserPreview", "Browser preview")}
-                </span>
-              )}
             </button>
           ) : null}
           {sessionMenu.resources.files.length ? (
-            <>
-              <div className="workbench-session-menu-separator" />
+            <div className="workbench-session-resource-section">
               <div className="wb-menu-head workbench-session-menu-label">{t("workbench.sessionMenu.files", "Files")}</div>
               {sessionMenu.resources.files.map(function (file, index) {
                 var fileKey = String(file.id || file.url || file.name || index);
                 return (
                   <button key={fileKey} type="button" role="menuitem" className="workbench-session-menu-file" onClick={function () {
-                    var item = sessionMenu.item;
+                    var item = sessionMenuCurrentItem;
                     runSessionMenuAction(function () {
                       if (onOpenSessionResource) onOpenSessionResource(item, { type: "file", file: file });
                     });
@@ -2700,28 +3422,100 @@ function WorkbenchTopbar({ activePage, taskView, activeTaskId, activeChatId, rec
                   </button>
                 );
               })}
-            </>
+            </div>
           ) : null}
           {sessionMenu.loading ? (
             <div className="workbench-session-menu-loading">{t("workbench.sessionMenu.loading", "Loading resources…")}</div>
           ) : null}
-          <div className="workbench-session-menu-separator" />
-          <button type="button" role="menuitem" onClick={function () {
-            var item = sessionMenu.item;
-            runSessionMenuAction(function () { copySessionTitle(item); });
-          }}>
-            <span className="workbench-session-menu-icon" aria-hidden="true">
-              <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" strokeWidth="1.8"><rect x="8" y="8" width="12" height="12" rx="2"/><path d="M16 8V6a2 2 0 0 0-2-2H6a2 2 0 0 0-2 2v8a2 2 0 0 0 2 2h2"/></svg>
-            </span>
-            <span>{t("workbench.sessionMenu.copyTitle", "Copy title")}</span>
-          </button>
-          <button type="button" role="menuitem" className="danger" onClick={function () {
-            var item = sessionMenu.item;
-            runSessionMenuAction(function () { if (onRemoveSessionTab) onRemoveSessionTab(item); });
-          }}>
-            <span className="workbench-session-menu-icon" aria-hidden="true">×</span>
-            <span>{t("workbench.sessionMenu.remove", "Remove from topbar")}</span>
-          </button>
+          <div className={"workbench-session-primary-actions" + (sessionMenuCurrentActivity.capabilities && (sessionMenuCurrentActivity.capabilities.canPause || sessionMenuCurrentActivity.capabilities.canStop) ? " has-runtime-control" : "")}>
+            {sessionMenuCurrentActivity.capabilities && sessionMenuCurrentActivity.capabilities.canPause ? (
+              <button type="button" role="menuitem" onClick={function () {
+                var item = sessionMenuCurrentItem;
+                runSessionMenuAction(function () { if (onPauseSession) onPauseSession(item); });
+              }}>
+                <span className="workbench-session-menu-icon" aria-hidden="true"><WorkbenchSessionStatusIcon phase="paused" /></span>
+                <span>{t("workbench.sessionActivity.pause", "Pause")}</span>
+              </button>
+            ) : null}
+            {sessionMenuCurrentActivity.capabilities && sessionMenuCurrentActivity.capabilities.canStop ? (
+              <button type="button" role="menuitem" className="stop" onClick={function () {
+                var item = sessionMenuCurrentItem;
+                runSessionMenuAction(function () { if (onStopSession) onStopSession(item); });
+              }}>
+                <span className="workbench-session-menu-icon" aria-hidden="true">
+                  <svg viewBox="0 0 16 16" width="13" height="13" fill="currentColor"><rect x="3.5" y="3.5" width="9" height="9" rx="1.5"/></svg>
+                </span>
+                <span>{t("workbench.sessionActivity.stop", "Stop")}</span>
+              </button>
+            ) : null}
+            <button type="button" role="menuitem" className="open-session" onClick={function () {
+              var item = sessionMenuCurrentItem;
+              runSessionMenuAction(function () { if (onOpenSession) onOpenSession(item); });
+            }}>
+              <span className="workbench-session-menu-icon" aria-hidden="true">
+                <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d="M5 12h14M13 6l6 6-6 6"/></svg>
+              </span>
+              <span>{t("workbench.sessionActivity.openSession", "Open Session")}</span>
+            </button>
+          </div>
+          <div className="workbench-session-utility-actions">
+            <button type="button" role="menuitem" onClick={function () {
+              runSessionMenuAction(function () { if (onTogglePinnedSession) onTogglePinnedSession(sessionMenuCurrentItem); });
+            }}>
+              <span className="workbench-session-menu-icon" aria-hidden="true">
+                <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d="M12 17v5"/><path d="M5 17h14"/><path d="M17 3a1 1 0 0 1 1 1v4.6a2 2 0 0 0 .6 1.4l1.7 1.7A1 1 0 0 1 19.6 13H4.4a1 1 0 0 1-.7-1.7l1.7-1.7A2 2 0 0 0 6 8.2V4a1 1 0 0 1 1-1Z"/></svg>
+              </span>
+              <span>{sessionMenuCurrentItem.pinned ? t("workbench.sessionMenu.unpin", "Unpin tab") : t("workbench.sessionMenu.pin", "Pin tab")}</span>
+            </button>
+            <button type="button" role="menuitem" onClick={function () {
+              var item = sessionMenuCurrentItem;
+              runSessionMenuAction(function () { copySessionTitle(item); });
+            }}>
+              <span className="workbench-session-menu-icon" aria-hidden="true"><svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" strokeWidth="1.8"><rect x="8" y="8" width="12" height="12" rx="2"/><path d="M16 8V6a2 2 0 0 0-2-2H6a2 2 0 0 0-2 2v8a2 2 0 0 0 2 2h2"/></svg></span>
+              <span>{t("workbench.sessionMenu.copyTitle", "Copy title")}</span>
+            </button>
+            <button type="button" role="menuitem" className="danger" onClick={function () {
+              var item = sessionMenuCurrentItem;
+              runSessionMenuAction(function () { if (onRemoveSessionTab) onRemoveSessionTab(item); });
+            }}>
+              <span className="workbench-session-menu-icon" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="9"/><path d="m9 9 6 6m0-6-6 6"/></svg></span>
+              <span>{t("workbench.sessionMenu.remove", "Remove")}</span>
+            </button>
+          </div>
+        </div>
+      </div>
+    ), document.body)
+    : null;
+
+  var overflowMenuPortal = overflowMenu && typeof ReactDOM !== "undefined"
+    ? ReactDOM.createPortal((
+      <div className="workbench-session-menu-portal" style={overflowMenu.portalTheme}>
+        <div className="workbench-session-menu-scrim" onPointerDown={closeOverflowMenu} />
+        <div
+          className={"workbench-session-overflow-menu workbench-session-context-menu" + (overflowGroups.regular.length && overflowGroups.exceptional.length ? " split-scroll" : "")}
+          role="menu"
+          aria-label={t("workbench.sessionOverflow.title", "More sessions")}
+          style={{ ...overflowMenu.portalTheme, left: overflowMenu.left, top: overflowMenu.top }}
+        >
+          <div className="workbench-session-overflow-head">
+            <b>{t("workbench.sessionOverflow.title", "All conversations")}</b>
+            <small>{t("workbench.sessionOverflow.count", { count: overflowTabs.length }, "{count} more")}</small>
+          </div>
+          <div className={"workbench-session-overflow-list" + (overflowGroups.regular.length ? " has-regular" : "") + (overflowGroups.exceptional.length ? " has-exceptions" : "")}>
+            {overflowGroups.regular.length ? (
+              <div className="workbench-session-overflow-group" role="group" aria-label={t("workbench.sessionOverflow.other", "Other sessions")}>
+                <div className="workbench-session-overflow-group-head"><span>{t("workbench.sessionOverflow.other", "Other sessions")}</span><small>{overflowGroups.regular.length}</small></div>
+                <div className="workbench-session-overflow-group-items">{overflowGroups.regular.map(renderOverflowSession)}</div>
+              </div>
+            ) : null}
+            {overflowGroups.regular.length && overflowGroups.exceptional.length ? <div className="workbench-session-overflow-divider" /> : null}
+            {overflowGroups.exceptional.length ? (
+              <div className="workbench-session-overflow-group exceptional" role="group" aria-label={t("workbench.sessionOverflow.exceptions", "Exceptions")}>
+                <div className="workbench-session-overflow-group-head"><span>{t("workbench.sessionOverflow.exceptions", "Exceptions")}</span><small>{overflowGroups.exceptional.length}</small></div>
+                <div className="workbench-session-overflow-group-items">{overflowGroups.exceptional.map(renderOverflowSession)}</div>
+              </div>
+            ) : null}
+          </div>
         </div>
       </div>
     ), document.body)
@@ -2732,10 +3526,10 @@ function WorkbenchTopbar({ activePage, taskView, activeTaskId, activeChatId, rec
       <div className="workbench-session-menu-portal" style={resourceMenu.portalTheme}>
         <div className="workbench-session-menu-scrim" onPointerDown={closeResourceMenu} />
         <div
-          className="workbench-account-menu workbench-session-menu workbench-resource-menu"
+          className="workbench-account-menu workbench-session-menu workbench-session-context-menu workbench-resource-menu"
           role="menu"
           aria-label={resourceMenu.resource.title}
-          style={{ left: resourceMenu.left, top: resourceMenu.top }}
+          style={{ ...resourceMenu.portalTheme, left: resourceMenu.left, top: resourceMenu.top }}
           onContextMenu={function (event) { event.preventDefault(); }}
         >
           <button type="button" role="menuitem" onClick={function () {
@@ -2775,13 +3569,26 @@ function WorkbenchTopbar({ activePage, taskView, activeTaskId, activeChatId, rec
             closeResourceMenu();
             if (onUnpinResource) onUnpinResource(resource);
           }}>
-            <span className="workbench-session-menu-icon" aria-hidden="true">×</span>
+            <span className="workbench-session-menu-icon" aria-hidden="true">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="9"/><path d="m9 9 6 6m0-6-6 6"/></svg>
+            </span>
             <span>{t("workbench.resourceShelf.remove", "Remove from topbar")}</span>
           </button>
         </div>
       </div>
     ), document.body)
     : null;
+
+  var hoverPreviewPortal = hoverPreview && typeof ReactDOM !== "undefined"
+    ? ReactDOM.createPortal((
+      <WorkbenchSessionActivityPreview preview={hoverPreview} t={t} />
+    ), document.body)
+    : null;
+
+  var overflowActivity = overflowTabs.reduce(function (highest, item) {
+    if (!highest || wbSessionActivityRank(item.activity) < wbSessionActivityRank(highest)) return item.activity;
+    return highest;
+  }, null) || { phase: "idle" };
 
   return (
     <div ref={topbarRef} className="workbench-topbar">
@@ -2806,73 +3613,140 @@ function WorkbenchTopbar({ activePage, taskView, activeTaskId, activeChatId, rec
           var kindLabel = item.kind === "chat"
             ? t("workbench.page.chat", "Conversation")
             : t("workbench.page.task", "Task");
+          var activity = item.activity || { phase: "idle" };
+          var statusLabel = wbSessionStatusLabel(activity, t);
+          var activityCopy = wbSessionActivityCopy(activity, t);
+          var progress = activity.progress || {};
+          var showActivityCopy = !!activityCopy && (
+            activity.phase !== "completed" || Number(activity.morphUntil || 0) > activityClock
+          );
+          var replaceTitleForMorph = isActive && showActivityCopy && (
+            (activity.activity && activity.activity.kind === "browser")
+            || ["attention", "completed", "failed", "paused"].indexOf(activity.phase) >= 0
+          );
+          var morphTitle = replaceTitleForMorph && activity.activity && activity.activity.kind === "browser"
+            ? String(activity.activity.label || activityCopy)
+            : (replaceTitleForMorph ? activityCopy : "");
+          var morphDetail = replaceTitleForMorph && activity.activity && activity.activity.kind === "browser"
+            ? t("workbench.sessionStatus.browsing", "Browsing")
+            : "";
           return (
-            <button
+            <div
               key={item.kind + ":" + item.id}
-              type="button"
-              className={"workbench-session-tab" + (isActive ? " active" : "")}
-              data-workbench-topbar-item="session"
-              data-session-kind={item.kind}
-              data-session-id={item.id}
-              aria-current={isActive ? "page" : undefined}
-              aria-label={kindLabel + ": " + item.title}
-              title={[item.projectName, kindLabel, item.title].filter(Boolean).join(" · ")}
-              onClick={function () { if (onOpenSession) onOpenSession(item); }}
-              onKeyDown={function (event) {
-                handleTopbarItemKeyDown(event, function () {
-                  if (onRemoveSessionTab) onRemoveSessionTab(item);
-                });
-              }}
-              onContextMenu={function (event) { openSessionMenu(event, item); }}
-              onDragOver={item.kind === "chat" ? function (event) {
-                var resourceApi = window.CyreneUI.require("resources");
-                if (acceptsResourceDrag(event, resourceApi)) {
-                  event.preventDefault();
-                  event.dataTransfer.dropEffect = "copy";
-                  event.currentTarget.classList.add("resource-drop-target");
-                }
-              } : undefined}
-              onDragLeave={item.kind === "chat" ? function (event) {
-                event.currentTarget.classList.remove("resource-drop-target");
-              } : undefined}
-              onDrop={item.kind === "chat" ? function (event) {
-                event.preventDefault();
-                event.currentTarget.classList.remove("resource-drop-target");
-                var resourceApi = window.CyreneUI.require("resources");
-                var resource = resourceApi && resourceApi.readDrag(event);
-                if (!resource) return;
-                if (resource.kind === "browser") {
-                  copyBrowserToConversation(item.id, resource);
-                  return;
-                }
-                if (wbDeliverResourceToChat(item.id, resource)) {
-                  window.CyreneUI.require("feedback").showToast(
-                    t("workbench.resourceShelf.addedToChat", "Added to conversation input"),
-                    "success"
-                  );
-                }
-              } : undefined}
+              className={"workbench-session-tab-group phase-" + String(activity.phase || "idle") + (isActive ? " active" : "")}
             >
-              <span className="workbench-session-tab-icon" aria-hidden="true">
-                {item.kind === "chat" ? (
-                  <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d="M20 11.5a7.5 7.5 0 0 1-10.6 6.8L4 20l1.6-4.6A7.5 7.5 0 1 1 20 11.5Z"/></svg>
-                ) : (
-                  <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><rect x="5" y="3" width="14" height="18" rx="2"/><path d="m8.5 9 1.5 1.5L13 7.5M8.5 15h7"/></svg>
-                )}
-              </span>
-              <WbcHoverMarquee text={item.title} className="workbench-session-tab-title" />
-              {item.pinned ? (
-                <span className="workbench-session-tab-pin" aria-label={t("workbench.sessionMenu.pinned", "Pinned")}>
-                  <svg viewBox="0 0 24 24" width="10" height="10" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                    <path d="M12 17v5"/>
-                    <path d="M5 17h14"/>
-                    <path d="M17 3a1 1 0 0 1 1 1v4.6a2 2 0 0 0 .6 1.4l1.7 1.7A1 1 0 0 1 19.6 13H4.4a1 1 0 0 1-.7-1.7l1.7-1.7A2 2 0 0 0 6 8.2V4a1 1 0 0 1 1-1Z"/>
-                  </svg>
+              <button
+                type="button"
+                className={"workbench-session-tab" + (isActive ? " active" : "")}
+                data-workbench-topbar-item="session"
+                data-session-kind={item.kind}
+                data-session-id={item.id}
+                aria-current={isActive ? "page" : undefined}
+                aria-describedby={hoverPreview && hoverPreview.item.id === item.id && hoverPreview.item.kind === item.kind
+                  ? "workbench-session-activity-preview"
+                  : undefined}
+                aria-label={kindLabel + ": " + item.title + " · " + statusLabel}
+                title={[item.projectName, kindLabel, item.title, statusLabel].filter(Boolean).join(" · ")}
+                onClick={function () { if (onOpenSession) onOpenSession(item); }}
+                onPointerEnter={function (event) { scheduleSessionPreview(event, item, activity, false); }}
+                onPointerLeave={closeSessionPreview}
+                onFocus={function (event) { scheduleSessionPreview(event, item, activity, true); }}
+                onBlur={closeSessionPreview}
+                onKeyDown={function (event) {
+                  handleTopbarItemKeyDown(event, function () {
+                    if (onRemoveSessionTab) onRemoveSessionTab(item);
+                  });
+                }}
+                onContextMenu={function (event) { openSessionMenu(event, item, activity, false); }}
+                onDragOver={item.kind === "chat" ? function (event) {
+                  var resourceApi = window.CyreneUI.require("resources");
+                  if (acceptsResourceDrag(event, resourceApi)) {
+                    event.preventDefault();
+                    event.dataTransfer.dropEffect = "copy";
+                    event.currentTarget.classList.add("resource-drop-target");
+                  }
+                } : undefined}
+                onDragLeave={item.kind === "chat" ? function (event) {
+                  event.currentTarget.classList.remove("resource-drop-target");
+                } : undefined}
+                onDrop={item.kind === "chat" ? function (event) {
+                  event.preventDefault();
+                  event.currentTarget.classList.remove("resource-drop-target");
+                  var resourceApi = window.CyreneUI.require("resources");
+                  var resource = resourceApi && resourceApi.readDrag(event);
+                  if (!resource) return;
+                  if (resource.kind === "browser") {
+                    copyBrowserToConversation(item.id, resource);
+                    return;
+                  }
+                  if (wbDeliverResourceToChat(item.id, resource)) {
+                    window.CyreneUI.require("feedback").showToast(
+                      t("workbench.resourceShelf.addedToChat", "Added to conversation input"),
+                      "success"
+                    );
+                  }
+                } : undefined}
+              >
+                <span className={"workbench-session-tab-status " + String(activity.phase || "idle")} aria-hidden="true">
+                  <WorkbenchSessionStatusIcon phase={activity.phase} active={activity.isLive} />
                 </span>
-              ) : null}
-            </button>
+                <span className="workbench-session-tab-copy">
+                  {replaceTitleForMorph ? (
+                    <span className="workbench-session-tab-title workbench-session-tab-morph-title">{morphTitle}</span>
+                  ) : (
+                    <WbcHoverMarquee text={item.title} className="workbench-session-tab-title" />
+                  )}
+                  {isActive && showActivityCopy && !replaceTitleForMorph ? (
+                    <span className="workbench-session-tab-activity-copy">· {activityCopy}</span>
+                  ) : isActive && morphDetail ? (
+                    <span className="workbench-session-tab-activity-copy">· {morphDetail}</span>
+                  ) : !isActive && progress.total && (activity.phase === "running" || activity.phase === "planning") ? (
+                    <span className="workbench-session-tab-activity-copy">· {progress.current || progress.completed}/{progress.total}</span>
+                  ) : null}
+                </span>
+                {item.pinned ? (
+                  <span className="workbench-session-tab-pin" aria-label={t("workbench.sessionMenu.pinned", "Pinned")}>
+                    <svg viewBox="0 0 24 24" width="10" height="10" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                      <path d="M12 17v5"/>
+                      <path d="M5 17h14"/>
+                      <path d="M17 3a1 1 0 0 1 1 1v4.6a2 2 0 0 0 .6 1.4l1.7 1.7A1 1 0 0 1 19.6 13H4.4a1 1 0 0 1-.7-1.7l1.7-1.7A2 2 0 0 0 6 8.2V4a1 1 0 0 1 1-1Z"/>
+                    </svg>
+                  </span>
+                ) : null}
+              </button>
+              <button
+                type="button"
+                className="workbench-session-tab-more"
+                aria-label={t("workbench.sessionActivity.moreActions", { title: item.title }, "More actions for {title}")}
+                title={t("workbench.sessionActivity.title", "Agent activity")}
+                onClick={function (event) { openSessionMenu(event, item, activity, true); }}
+              >
+                <svg viewBox="0 0 16 16" width="14" height="14" fill="currentColor" aria-hidden="true"><circle cx="3" cy="8" r="1.25"/><circle cx="8" cy="8" r="1.25"/><circle cx="13" cy="8" r="1.25"/></svg>
+              </button>
+            </div>
           );
         })}
+        {overflowTabs.length ? (
+          <button
+            type="button"
+            className={"workbench-session-overflow-button " + String(overflowActivity.phase || "idle")}
+            data-workbench-topbar-item="overflow"
+            aria-label={t("workbench.sessionOverflow.buttonLabel", { count: overflowTabs.length }, "Show {count} more sessions") + " · " + wbSessionStatusLabel(overflowActivity, t)}
+            title={t("workbench.sessionOverflow.title", "All conversations")}
+            onClick={openOverflowMenu}
+            onKeyDown={handleTopbarItemKeyDown}
+          >
+            <span className="workbench-session-overflow-stack" aria-hidden="true">
+              <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinejoin="round">
+                <rect x="5.5" y="4" width="10.5" height="9" rx="2" />
+                <path d="M13.5 16H5a2 2 0 0 1-2-2V7.5" />
+              </svg>
+              <span className={"workbench-session-overflow-indicator " + String(overflowActivity.phase || "idle")} />
+            </span>
+            <span className="workbench-session-overflow-count">{overflowTabs.length}</span>
+            <svg className="workbench-session-overflow-chevron" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="m5 6.5 3 3 3-3" /></svg>
+          </button>
+        ) : null}
       </nav>
       <div
         className={"workbench-resource-shelf" + (resourceDropActive ? " drop-active" : "")}
@@ -2971,13 +3845,24 @@ function WorkbenchTopbar({ activePage, taskView, activeTaskId, activeChatId, rec
             <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M15 3v18"/><path d="m9 10-2 2 2 2"/></svg>
           </button>
         )}
-        <button type="button" className="workbench-search-box" onClick={onSearch} title={t("workbench.search")}>
-          <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.2-3.2"/></svg>
-          <span>{t("workbench.search")}</span>
-        </button>
+        <div
+          className="workbench-top-action-group"
+          role="group"
+          aria-label={t("help.title") + " · " + t("workbench.search")}
+        >
+          <button
+            type="button"
+            className="workbench-icon-btn workbench-search-btn"
+            onClick={onSearch}
+            title={t("workbench.search")}
+            aria-label={t("workbench.search")}
+          >
+            <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.2-3.2"/></svg>
+          </button>
+          <WorkbenchHelpCenter onNewProject={onNewProject} onNewTask={onNewTask} onOpenPage={onOpenPage} onSettings={onSettings} />
+        </div>
         <WorkbenchNotificationCenter notifications={notifications} onReload={onReloadNotifications} onOpenNotification={onOpenNotification} onSettings={onSettings} />
         <button type="button" className="workbench-icon-btn" onClick={onToggleTheme} title={themeTitle}>{themeIcon}</button>
-        <WorkbenchHelpCenter onNewProject={onNewProject} onNewTask={onNewTask} onOpenPage={onOpenPage} onSettings={onSettings} />
         <button type="button" className="workbench-icon-btn" onClick={function () { onSettings(); }} title={t("nav.settings")}>
           <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2Z"/><circle cx="12" cy="12" r="3"/></svg>
         </button>
@@ -2988,7 +3873,9 @@ function WorkbenchTopbar({ activePage, taskView, activeTaskId, activeChatId, rec
         </button>
       </div>
       {sessionMenuPortal}
+      {overflowMenuPortal}
       {resourceMenuPortal}
+      {hoverPreviewPortal}
     </div>
   );
 }
@@ -3234,7 +4121,7 @@ function WorkbenchHelpCenter({ onNewProject, onNewTask, onOpenPage, onSettings }
 
   return (
     <div className={"workbench-help-anchor" + (open ? " open" : "")} ref={rootRef}>
-      <button type="button" className={"workbench-icon-btn" + (open ? " active" : "")} title={t("workbench.help")} onClick={function () { setOpen(!open); }}>
+      <button type="button" className={"workbench-icon-btn" + (open ? " active" : "")} title={t("workbench.help")} aria-label={t("workbench.help")} aria-expanded={open} onClick={function () { setOpen(!open); }}>
         <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="10"/><path d="M9.1 9a3 3 0 0 1 5.8 1c0 2-3 3-3 3"/><path d="M12 17h.01"/></svg>
       </button>
       {open ? (

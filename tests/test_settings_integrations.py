@@ -205,7 +205,7 @@ def test_integration_settings_routes_hide_secrets_and_probe_drafts(monkeypatch, 
     assert called_config["api_key"] == "one-use-secret"
 
 
-def test_general_settings_ui_exposes_zotero_and_embedding_controls():
+def test_settings_ui_keeps_zotero_in_general_and_embedding_in_models():
     root = Path(__file__).resolve().parent.parent
     source = (root / "src" / "webui" / "frontend" / "settings-overlay.jsx").read_text(encoding="utf-8")
     translations = (root / "src" / "webui" / "frontend" / "workbench-i18n.jsx").read_text(encoding="utf-8")
@@ -219,6 +219,12 @@ def test_general_settings_ui_exposes_zotero_and_embedding_controls():
     assert 'function importFromZotero()' in source
     assert '"/api/workbench/library/zotero/sync?workspace="' in source
     assert 'disabled: !!integrationBusy || !(p.project && p.project.id)' in source
+    general_panel = source.split("function GeneralPanel(p) {", 1)[1].split("// ── Models Panel ──", 1)[0]
+    models_panel = source.split("// ── Models Panel ──", 1)[1].split("// ── Channels Panel ──", 1)[0]
+    assert 'settings.zoteroIntegration' in general_panel
+    assert 'settings.embeddingIntegration' not in general_panel
+    assert 'function EmbeddingSettingsSection(p)' in models_panel
+    assert 'React.createElement(EmbeddingSettingsSection, { t: t })' in models_panel
     assert translations.count('"settings.embeddingIntegration"') == 2
     assert translations.count('"settings.zoteroIntegration"') == 2
     assert translations.count('"settings.zoteroImportAction"') == 2

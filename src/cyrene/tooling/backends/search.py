@@ -314,8 +314,8 @@ def _fallback_synthesis(relevant_results: list[dict], fetched_contents: list[str
 # ---------------------------------------------------------------------------
 
 
-async def deep_search(topic: str) -> str:
-    """Multi-stage deep search pipeline.
+async def _deep_search_simplexng(topic: str) -> str:
+    """Run the existing multi-stage SimpleXNG search pipeline.
 
     Stages:
         1. Query selection: use the original user topic
@@ -323,7 +323,8 @@ async def deep_search(topic: str) -> str:
         3. Filter (LLM): keep only relevant results
         4. Synthesize (LLM): produce structured answer
 
-    Search intentionally goes through the built-in SimpleXNG backend only.
+    This remains the dependency-free fallback when DeepSeek native search is
+    unavailable or the user has not configured an official DeepSeek account.
     """
     logger.info("Deep search starting for: %s", topic)
 
@@ -414,3 +415,74 @@ async def deep_search(topic: str) -> str:
     logger.info("Stage 4 complete: synthesis generated (%d chars)", len(answer))
 
     return answer
+
+
+async def deep_search(
+    topic: str,
+    *,
+    db_path: str = "",
+    session_id: str = "",
+    round_id: str = "",
+) -> str:
+    """Search with official DeepSeek first, then fall back to SimpleXNG."""
+    from cyrene.tooling.backends.deepseek_web_search import (
+        DeepSeekWebSearchError,
+        find_official_deepseek_search_candidate,
+        search_with_deepseek,
+    )
+
+    try:
+        candidate = find_official_deepseek_search_candidate()
+    except Exception as exc:
+        logger.warning(
+            "DeepSeek web_search candidate discovery failed (%s); using SimpleXNG",
+            exc.__class__.__name__,
+        )
+        candidate = None
+
+    if candidate is not None:
+        logger.info(
+            "Web search using official DeepSeek Responses API "
+            "(candidate=%s configured_model=%s search_model=%s)",
+            candidate.candidate_id,
+            candidate.configured_model,
+            candidate.search_model,
+        )
+        try:
+            result = await search_with_deepseek(topic, candidate)
+        except DeepSeekWebSearchError as exc:
+            logger.warning("%s; falling back to SimpleXNG", exc)
+        except Exception as exc:
+            logger.warning(
+                "Unexpected DeepSeek web_search failure (%s); falling back to SimpleXNG",
+                exc.__class__.__name__,
+            )
+        else:
+            if db_path:
+                try:
+                    from cyrene.runtime.database import record_token_usage
+
+                    await record_token_usage(
+                        db_path,
+                        model=result.model,
+                        prompt_tokens=result.usage["prompt_tokens"],
+                        completion_tokens=result.usage["completion_tokens"],
+                        total_tokens=result.usage["total_tokens"],
+                        cache_hit_tokens=result.usage["prompt_cache_hit_tokens"],
+                        cache_miss_tokens=result.usage["prompt_cache_miss_tokens"],
+                        duration_ms=result.duration_ms,
+                        round_id=round_id,
+                        session_id=session_id,
+                        caller="search",
+                    )
+                except Exception as exc:
+                    # Search succeeded; telemetry failure must not discard a
+                    # valid answer or trigger a second paid search pipeline.
+                    logger.warning(
+                        "Failed to record DeepSeek web_search usage (%s)",
+                        exc.__class__.__name__,
+                    )
+            return result.text
+
+    logger.info("Web search using SimpleXNG fallback")
+    return await _deep_search_simplexng(topic)

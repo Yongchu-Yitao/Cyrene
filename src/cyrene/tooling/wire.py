@@ -30,6 +30,7 @@ DIRECT_TOOL_NAMES = (
     "WebSearch",
     "WebFetch",
     "AnalyzeAttachment",
+    "LoadRendererContract",
     "GenerateImage",
 )
 
@@ -185,6 +186,7 @@ def _wire_bundle(
     actor: str,
     enabled_modules: tuple[str, ...],
     oauth_image_generation: bool,
+    interactive_blocks: bool,
 ) -> tuple[dict[str, Any], ...]:
     direct_names = (
         SUBAGENT_DIRECT_TOOL_NAMES if actor == "subagent" else DIRECT_TOOL_NAMES
@@ -192,6 +194,10 @@ def _wire_bundle(
     if not oauth_image_generation:
         direct_names = tuple(
             name for name in direct_names if name != "GenerateImage"
+        )
+    if actor != "main" or not interactive_blocks:
+        direct_names = tuple(
+            name for name in direct_names if name != "LoadRendererContract"
         )
     direct_defs = [
         _direct_def(name, enabled_modules)
@@ -206,10 +212,13 @@ def _wire_bundle(
 
 def get_main_wire_tool_defs() -> list[dict[str, Any]]:
     """Return direct tools plus enabled package gateways in stable order."""
+    from cyrene.agent.state import has_response_capability
+
     return deepcopy(list(_wire_bundle(
         "main",
         enabled_module_tool_names(),
         _oauth_image_generation_enabled(),
+        has_response_capability("interactive_blocks"),
     )))
 
 
@@ -219,6 +228,7 @@ def get_subagent_wire_tool_defs() -> list[dict[str, Any]]:
         "subagent",
         enabled_module_tool_names(),
         False,
+        False,
     )))
 
 
@@ -227,12 +237,14 @@ def _get_wire_tool_bundle(
     actor: str,
     enabled_modules: tuple[str, ...],
     oauth_image_generation: bool,
+    interactive_blocks: bool,
 ) -> WireToolBundle:
     normalized_actor = "subagent" if actor == "subagent" else "main"
     definitions = _wire_bundle(
         normalized_actor,
         enabled_modules,
         oauth_image_generation,
+        interactive_blocks,
     )
     encoded = json.dumps(
         definitions,
@@ -251,10 +263,17 @@ def _get_wire_tool_bundle(
 
 def get_wire_tool_bundle(actor: str = "main") -> WireToolBundle:
     normalized_actor = "subagent" if actor == "subagent" else "main"
+    from cyrene.agent.state import has_response_capability
+
     return _get_wire_tool_bundle(
         normalized_actor,
         enabled_module_tool_names(),
         _oauth_image_generation_enabled() if normalized_actor == "main" else False,
+        (
+            has_response_capability("interactive_blocks")
+            if normalized_actor == "main"
+            else False
+        ),
     )
 
 

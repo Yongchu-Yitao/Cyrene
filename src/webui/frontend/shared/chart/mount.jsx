@@ -173,10 +173,15 @@
     }
 
     var observer = null;
+    function resizeChart() {
+      if (root.document && root.document.body.classList.contains("wbc-resizing-side-agent")) return;
+      chart.resize();
+    }
     if (typeof ResizeObserver === "function") {
-      observer = new ResizeObserver(function () { chart.resize(); });
+      observer = new ResizeObserver(resizeChart);
       observer.observe(wrap);
     }
+    root.addEventListener("workbench:split-resize-end", resizeChart);
 
     instances.set(element, {
       chart: chart,
@@ -184,6 +189,7 @@
       element: element,
       dispose: function () {
         if (observer) observer.disconnect();
+        root.removeEventListener("workbench:split-resize-end", resizeChart);
         chart.dispose();
       },
     });

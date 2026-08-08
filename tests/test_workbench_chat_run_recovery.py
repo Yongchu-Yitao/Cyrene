@@ -30,6 +30,8 @@ def test_startup_recovers_crashed_running_chat_and_clears_stale_question(monkeyp
 
     assert payload["chats"][0]["status"] == "idle"
     assert "pendingQuestion" not in payload["chats"][0]
+    assert payload["chats"][0]["lastRun"]["status"] == "error"
+    assert payload["chats"][0]["lastRun"]["terminationReason"] == "process_restarted"
     assert payload["chats"][1]["pendingQuestion"]["id"] == "valid"
     assert written == [payload]
 

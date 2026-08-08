@@ -17,7 +17,15 @@ async def _tool_websearch(args: dict[str, Any], _bot: Any, _chat_id: int, _db_pa
     query = str(args.get("query", ""))
     if not query:
         return "No query provided."
-    return await deep_search(query)
+    from cyrene.agent.context import current_run_context
+
+    run_context = current_run_context()
+    return await deep_search(
+        query,
+        db_path=str(_db_path or ""),
+        session_id=run_context.session_id or str(_chat_id or ""),
+        round_id=run_context.round_id,
+    )
 
 
 handler = _tool_websearch

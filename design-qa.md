@@ -107,8 +107,6 @@ archived result: passed
 
 final result: passed
 
----
-
 # Design QA — resource lists, shared splits, and map detail polish
 
 ## Comparison target
@@ -538,3 +536,49 @@ final result: passed
 - Focused crops were required because the changes concern 1 px dividers, subtle selection fills, 11–14 px type, and compact 5 px progress tracks that are not reliably judgeable in a whole-window capture.
 
 final result: passed
+
+---
+
+# Design QA — compact Tab context-menu actions
+
+## Comparison target
+
+- Source visual truth: `/var/folders/zm/qgh_rgw903j0b9t01yg2l0mc0000gn/T/codex-clipboard-445d2623-d00e-4104-8f33-1963a65c3698.png`.
+- Latest pre-fix implementation capture supplied by the user: `/var/folders/zm/qgh_rgw903j0b9t01yg2l0mc0000gn/T/codex-clipboard-9ca97457-ae2f-4b61-8463-3f37a6d8e2e9.png`.
+- Focused combined comparison: `/Users/syw/Documents/playground/Cyrene/.codex-qa/tab-menu-reference-comparison-latest.png`.
+- Post-fix browser-rendered implementation screenshot: unavailable; the selected in-app browser blocked the local Cyrene URL before rendering.
+
+## Viewport and normalization
+
+- Source capture: 572 × 394 px; latest pre-fix implementation capture: 732 × 710 px.
+- Both captures were normalized to 700 px height and placed side by side for the focused comparison.
+- State: dark-theme completed Session with one file resource and no available pause/stop control.
+
+## Findings and comparison history
+
+- Latest P2: stacked dividers and boxed rows gave every section equal visual weight. Fix: the two activity-menu separators were removed and sections are now grouped through whitespace and small labels.
+- Latest P2: status content consumed too much vertical space. Fix: overall status and Main Agent status now use compact two-column rows, reducing the menu width to 340 px and its vertical footprint.
+- Latest P2: the full-width primary action plus a two-row utility block made the lower half feel like four nested cards. Fix: “Open Session” remains the single emphasized action while Pin, Copy, and Remove now share one bordered three-column utility row; the destructive control keeps its semantic red border and label.
+- Earlier P2: the visible scrollbar competed with the menu content. Fix: the Tab context menu hides scrollbar chrome while preserving wheel and trackpad scrolling.
+- Fonts and typography: existing Cyrene type tokens are retained; the hierarchy now uses 14 px headings, 12 px resource/primary labels, and 11 px secondary actions.
+- Spacing and layout rhythm: the menu uses a 340 px content frame, a 4/8 px spacing rhythm, compact two-column activity rows, a lightweight resource row, and one-line utility actions.
+- Colors and visual tokens: all surfaces, borders, hover states, and semantic danger color use existing Workbench tokens.
+- Image quality and asset fidelity: the reference contains only interface icons; the implementation reuses the menu's existing icon assets and does not add raster imagery.
+- Copy and content: all existing actions remain available; only the fallback destructive label is shortened to “Remove”.
+
+## Interaction and runtime checks
+
+- JSX compilation succeeded.
+- 25 focused Session-tab tests passed, including action grouping, button borders, scrollbar hiding, keyboard menu items, and resource actions.
+- Local visual verification was attempted in the required in-app browser, but localhost access was blocked before a rendered capture, interaction check, or console-log check could be completed.
+
+## Focused comparison evidence
+
+- The combined pre-fix comparison clearly exposes the over-tall status block, divider-heavy grouping, and stacked card treatment that the latest code corrects.
+- A post-fix focused comparison is still required before visual QA can pass.
+
+## Remaining blocker
+
+- Capture the revised open Tab context menu in the running Cyrene/Electron surface and compare it with the source at the same state.
+
+final result: blocked

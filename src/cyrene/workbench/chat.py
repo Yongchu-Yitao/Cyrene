@@ -160,6 +160,45 @@ def _settle_chat_running_status(chat_id: str) -> None:
         chat["updatedAt"] = _utc_now_iso()
         _write_chats_store(payload)
 
+
+def _record_chat_run_outcome(
+    chat_id: str,
+    *,
+    run_id: str,
+    status: str,
+    termination_reason: str = "",
+    outcome_kind: str = "",
+    created_at: str = "",
+) -> None:
+    """Persist the last exchange outcome alongside the chat summary.
+
+    The event store remains the detailed audit log.  This compact projection is
+    the list/topbar source of truth, so a finished error or interruption does not
+    collapse back to an indistinguishable ``idle`` chat after the live run is
+    released by :class:`ChatRunManager`.
+    """
+    payload = _read_chats_store()
+    chat = _find_chat(payload, str(chat_id))
+    if not chat:
+        return
+    previous = chat.get("lastRun") if isinstance(chat.get("lastRun"), dict) else {}
+    previous_created_at = str(previous.get("createdAt") or "")
+    if previous_created_at and created_at and previous_created_at > created_at:
+        return
+    completed_at = _utc_now_iso()
+    chat["lastRun"] = {
+        "id": str(run_id or ""),
+        "status": str(status or "idle"),
+        "terminationReason": str(termination_reason or ""),
+        "outcome": str(outcome_kind or ""),
+        "createdAt": str(created_at or ""),
+        "completedAt": completed_at,
+    }
+    if chat.get("status") == "running":
+        chat["status"] = "idle"
+    chat["updatedAt"] = completed_at
+    _write_chats_store(payload)
+
 # Internal control tools that say nothing useful in a progress trace.
 _TRACE_SKIP_TOOLS = {"use_tools", "quit", "send_message", "update_plan_progress"}
 _USAGE_KEYS = (
@@ -919,12 +958,36 @@ def _side_agent_parent_transcript(chat: dict[str, Any] | None) -> str:
 def _public_chat_light(chat: dict[str, Any]) -> dict[str, Any]:
     """Listing payload — transcript omitted to keep the rail cheap."""
     usage = _aggregate_usage(chat.get("messages") or [])
+    chat_id = str(chat.get("id") or "")
+    active_run = _CHAT_RUN_MANAGER.get(chat_id) if chat_id else None
+    persisted_status = str(chat.get("status") or "idle")
+    last_run = chat.get("lastRun") if isinstance(chat.get("lastRun"), dict) else {}
+    if active_run is not None:
+        run_status = str(getattr(active_run, "status", "") or "running")
+    else:
+        last_status = str(last_run.get("status") or "").lower()
+        last_outcome = str(last_run.get("outcome") or "").lower()
+        termination_reason = str(last_run.get("terminationReason") or "").lower()
+        if last_status == "error" or last_outcome == "error":
+            run_status = "failed"
+        elif last_status in {"cancelled", "interrupted"} or termination_reason in {
+            "cancelled", "user_interrupted", "shutdown_timeout"
+        }:
+            run_status = "cancelled"
+        elif last_outcome == "awaiting" or termination_reason == "awaiting_user":
+            run_status = "awaiting_user"
+        elif last_status in {"done", "completed", "success"} or last_outcome == "reply":
+            run_status = "completed"
+        else:
+            run_status = "idle" if persisted_status == "running" else persisted_status
     payload = {
         "id": chat.get("id"),
         "projectId": chat.get("projectId"),
         "kind": str(chat.get("kind") or "chat"),
         "title": chat.get("title"),
         "status": chat.get("status") or "idle",
+        "runStatus": run_status,
+        "lastRun": last_run or None,
         "model": chat.get("model") or "",
         "lastModel": chat.get("lastModel") or "",
         "modelSelectionId": chat.get("modelSelectionId") or "",
@@ -2443,6 +2506,7 @@ async def dispatch_shell_wake_run(wake: dict[str, Any], *, bot: Any, db_path: st
             permission_mode="auto" if is_permission_mode("auto") else "default",
             public_user_message=prompt,
             workspace_dir=workspace_dir,
+            response_capabilities=("interactive_blocks",),
             static_system_extra=(
                 "This turn was triggered by an automatic shell-exit wake. "
                 "Inspect the provided terminal output, continue the prior work, "

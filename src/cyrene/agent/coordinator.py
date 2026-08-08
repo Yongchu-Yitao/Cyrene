@@ -30,6 +30,7 @@ from cyrene.agent.prompts import (
     _MAIN_AGENT_PROMPT_TEMPLATE,
     _QUICK_ANSWER_PROMPT,
     _WORKBENCH_TASK_REPLY_PROMPT,
+    _WORKBENCH_RENDERER_TRIGGER_PROMPT,
     _WORKSPACE_SCOPE_BLOCK,
     _spawn_policy_prompt_block,
     conversation_identity_block,
@@ -45,6 +46,7 @@ from cyrene.agent.session import (
 )
 from cyrene.agent.state import (
     _active_workspace_dir,
+    _response_capabilities,
     _AWAITING_USER_SENTINEL,
     _call_llm,
     _caller_type,
@@ -269,6 +271,7 @@ async def run_agent(
     fixed_ephemeral_system: str = "",
     volatile_ephemeral_system: str = "",
     static_system_extra: str = "",
+    response_capabilities: tuple[str, ...] | frozenset[str] = (),
 ) -> str:
     """Main entry point. Runs the main agent loop with stable tool gateways.
 
@@ -286,9 +289,18 @@ async def run_agent(
     ahead of every volatile block. Use it for instructions that never change
     between runs so they stay in the cache-stable prefix; use ``ephemeral_system``
     for anything that varies per run.
+
+    ``response_capabilities`` declares stable client rendering features. It
+    participates in the wire-bundle cache key; Workbench uses
+    ``interactive_blocks`` to expose ``LoadRendererContract``.
     """
     session_token = _current_session_id.set(session_id)
     workspace_token = _active_workspace_dir.set(workspace_dir or "")
+    response_capabilities_token = _response_capabilities.set(frozenset(
+        str(item or "").strip()
+        for item in response_capabilities
+        if str(item or "").strip()
+    ))
     try:
         ctx = _ensure_session(session_id)
         if ctx.lock.locked():
@@ -312,6 +324,7 @@ async def run_agent(
                 if ctx.active_task is current_task:
                     ctx.active_task = None
     finally:
+        _response_capabilities.reset(response_capabilities_token)
         _current_session_id.reset(session_token)
         _active_workspace_dir.reset(workspace_token)
 
@@ -496,7 +509,7 @@ async def _run_chat_agent(
             "## Current Date\n"
             f"- Current local date: {now:%Y-%m-%d} ({now:%A}).\n"
             "- Interpret relative phrases such as today, recently, this week, last week, 最近, 最近一周, 今天, 本周 relative to this date.\n"
-            "- For current weather or travel recommendations, search for current forecast/current conditions. Do not invent or substitute old years unless the user explicitly asks for historical weather."
+            "- When dealing with time-related tasks, search for current forecast/current conditions. Do not invent or substitute old years unless the user explicitly asks for historical weather."
         )
         main_system_context = [
             context_block(
@@ -544,6 +557,23 @@ async def _run_chat_agent(
                 reason="caller-provided static system extension; cache-stable prefix",
                 transforms=["concat_into_system"],
                 content=static_system_extra,
+            ))
+        if _state.has_response_capability("interactive_blocks"):
+            main_system = (
+                main_system
+                + "\n\n"
+                + _WORKBENCH_RENDERER_TRIGGER_PROMPT
+            )
+            main_system_context.append(context_block(
+                "client.renderer.workbench",
+                "system",
+                source="run_agent(response_capabilities)",
+                reason=(
+                    "Workbench renderer is available; detailed contracts are "
+                    "loaded just in time through LoadRendererContract"
+                ),
+                transforms=["concat_into_system"],
+                content=_WORKBENCH_RENDERER_TRIGGER_PROMPT,
             ))
         if lang and lang != "en":
             lang_prompt = f"The user has set their preferred language to {lang}. Reply in this language."

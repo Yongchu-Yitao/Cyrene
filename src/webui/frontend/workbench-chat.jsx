@@ -600,17 +600,31 @@ function wbcRenderMapMarkdown(text) {
   return markdown.sanitizeHtml(safe);
 }
 
-function wbcClampSideSplitWidth(value, viewportWidth) {
-  var viewport = Math.max(0, Number(viewportWidth) || Number(window.innerWidth) || 0);
-  // Mirror the grid's --wbc-main-min-width (clamp(380px, 36vw, 440px)) so the
-  // split never reserves more room than the window actually has. A fixed
-  // lower floor under-estimates the lane and over-reserves the split, which
-  // pushes the panel past the window edge on smaller sizes.
-  var mainMin = Math.min(440, Math.max(380, viewport * 0.36));
+function wbcClampSideSplitWidth(value, availableWidth, viewportWidth, railWidth) {
+  var available = Math.max(0, Number(availableWidth) || Number(window.innerWidth) || 0);
+  var viewport = Math.max(0, Number(viewportWidth) || Number(window.innerWidth) || available);
+  // Both conversation panes use the same 380px floor. At exceptionally compact
+  // widths, reduce that floor symmetrically so neither anchored side wins the
+  // remaining space merely because it happens to be the split track.
+  var rail = Math.max(0, Number(railWidth) || (viewport <= 980 ? 220 : 230));
+  var paneMin = Math.min(380, Math.max(0, (available - rail) / 2));
   // A split on the left side hides the right panel track (grid column 4 is 0),
   // so both anchored sides reserve the same room for the conversation lane.
-  var maxWidth = Math.min(900, Math.max(mainMin, viewport - 230 - mainMin));
-  return Math.round(Math.max(340, Math.min(maxWidth, Number(value) || 520)));
+  var maxWidth = Math.min(900, Math.max(paneMin, available - rail - paneMin));
+  return Math.round(Math.max(paneMin, Math.min(maxWidth, Number(value) || 520)));
+}
+
+function wbcClampSideSplitWidthForPage(value, page) {
+  var available = 0;
+  var rail = 0;
+  if (page) {
+    var rect = page.getBoundingClientRect ? page.getBoundingClientRect() : null;
+    available = Math.round((rect && rect.width) || page.clientWidth || 0);
+    try {
+      rail = parseFloat(window.getComputedStyle(page).getPropertyValue("--wbc-rail-width")) || 0;
+    } catch (e) {}
+  }
+  return wbcClampSideSplitWidth(value, available, window.innerWidth, rail);
 }
 
 function WbcSplitPickerMenu({ open, className, children, ...props }) {
@@ -1068,25 +1082,35 @@ function wbcClampBrowserWindowFrame(frame, areaWidth, areaHeight, minWidth, minH
   return { x: x, y: y, width: width, height: height };
 }
 
+function wbcBrowserComposerDockFrame(frame, areaRect, composerRect, gap, minHeight) {
+  if (!frame || !areaRect || !composerRect) return frame;
+  var composerLeft = composerRect.left - areaRect.left;
+  var composerRight = composerRect.right - areaRect.left;
+  var overlapsComposerColumn = frame.x < composerRight && frame.x + frame.width > composerLeft;
+  if (!overlapsComposerColumn) return frame;
+  var gutter = Math.max(0, Number(gap) || 0);
+  var minimumHeight = Math.max(1, Number(minHeight) || 1);
+  var ceiling = Math.max(0, composerRect.top - areaRect.top - gutter);
+  if (frame.y + frame.height <= ceiling) return frame;
+  var height = Math.min(frame.height, Math.max(minimumHeight, ceiling));
+  return Object.assign({}, frame, {
+    y: Math.max(0, ceiling - height),
+    height: height,
+  });
+}
+
 function wbcKeepBrowserWindowClearOfComposer(frame, area) {
   if (!frame || !area || !area.closest) return frame;
   var main = area.closest(".wbc-main");
   var composer = main && main.querySelector(":scope > .wbc-composer");
   if (!composer) return frame;
-  var areaRect = area.getBoundingClientRect();
-  var composerRect = composer.getBoundingClientRect();
-  var composerLeft = composerRect.left - areaRect.left;
-  var composerRight = composerRect.right - areaRect.left;
-  var overlapsComposerColumn = frame.x < composerRight && frame.x + frame.width > composerLeft;
-  if (!overlapsComposerColumn) return frame;
-  var gap = 10;
-  var ceiling = Math.max(0, composerRect.top - areaRect.top - gap);
-  if (frame.y + frame.height <= ceiling) return frame;
-  var height = Math.min(frame.height, Math.max(180, ceiling));
-  return Object.assign({}, frame, {
-    y: Math.max(0, ceiling - height),
-    height: height,
-  });
+  return wbcBrowserComposerDockFrame(
+    frame,
+    area.getBoundingClientRect(),
+    composer.getBoundingClientRect(),
+    10,
+    180
+  );
 }
 
 var WBC_BROWSER_FRAME_STORAGE_PREFIX = "wbc-browser-window-frame:";
@@ -2589,12 +2613,9 @@ function WorkbenchChatPage({ active, project, newChatRequestId, onOpenTask, onAc
       : page.querySelector(".wbc-side-agent-split");
     if (panel) {
       var panelRect = panel.getBoundingClientRect();
+      // The clone keeps the panel's own padding (top bar clearance + grip
+      // band), so the lifted ghost mirrors the real panel one-to-one.
       var clone = panel.cloneNode(true);
-      if (!fromMainGrip) {
-        // The split panel reserves 84px for the grip strip; the clone sits
-        // in its own shell, so drop that blank band.
-        clone.style.paddingTop = "0px";
-      }
       clone.style.border = "0";
       clone.style.boxShadow = "none";
       ghost.appendChild(clone);
@@ -2615,7 +2636,11 @@ function WorkbenchChatPage({ active, project, newChatRequestId, onOpenTask, onAc
       ghost.style.left = event.clientX + "px";
       ghost.style.top = event.clientY + "px";
     }
-    var liftChatId = fromMainGrip ? String(activeChatIdRef.current || "") : splitChatId;
+    // A chat split carries its own id; a side-question split lifts the side
+    // agent's chat (if it has no rail card the active card is used instead).
+    var liftChatId = fromMainGrip
+      ? String(activeChatIdRef.current || "")
+      : (splitChatId || splitSideAgentId);
     var railCard = liftChatId
       ? page.querySelector('.wbc-chat-card[data-chat-id="' + liftChatId + '"]')
       : null;
@@ -2795,15 +2820,22 @@ function WorkbenchChatPage({ active, project, newChatRequestId, onOpenTask, onAc
   useWbcEffect(function () {
     function keepSplitWithinViewport() {
       setSideAgentSplitWidth(function (current) {
-        var next = wbcClampSideSplitWidth(current, window.innerWidth);
+        var next = wbcClampSideSplitWidthForPage(current, pageRef.current);
         if (next === current) return current;
         try { localStorage.setItem("wbc-side-agent-split-width", String(next)); } catch (e) {}
         return next;
       });
     }
     keepSplitWithinViewport();
+    var observer = typeof ResizeObserver !== "undefined" && pageRef.current
+      ? new ResizeObserver(keepSplitWithinViewport)
+      : null;
+    if (observer) observer.observe(pageRef.current);
     window.addEventListener("resize", keepSplitWithinViewport);
-    return function () { window.removeEventListener("resize", keepSplitWithinViewport); };
+    return function () {
+      if (observer) observer.disconnect();
+      window.removeEventListener("resize", keepSplitWithinViewport);
+    };
   }, [splitSide]);
 
   useWbcEffect(function () {
@@ -3924,7 +3956,7 @@ function WorkbenchChatPage({ active, project, newChatRequestId, onOpenTask, onAc
   }
 
   function resizeSideAgentSplit(width) {
-    var next = wbcClampSideSplitWidth(width, window.innerWidth);
+    var next = wbcClampSideSplitWidthForPage(width, pageRef.current);
     if (!next) return;
     setSideAgentSplitWidth(next);
     try { localStorage.setItem("wbc-side-agent-split-width", String(next)); } catch (e) {}
@@ -4558,6 +4590,10 @@ function WorkbenchChatPage({ active, project, newChatRequestId, onOpenTask, onAc
         toTaskBusy={toTaskBusy}
         onTogglePinned={onTogglePinnedChat}
       />
+      {/* A native browser surface does not participate in the split grid and
+          would otherwise cover the newly opened conversation/detail pane.
+          Hide only its presentation while a split is open; browser state,
+          tabs and the remembered window mode remain intact for restoration. */}
       <WbcMain
         project={project}
         chat={visibleChat}
@@ -4593,7 +4629,7 @@ function WorkbenchChatPage({ active, project, newChatRequestId, onOpenTask, onAc
         splitOpen={splitDetailOpen}
         browserState={activeBrowserState}
         browserSessionId={activeChatId || ""}
-        browserVisible={hasActiveBrowser && !browserTabOpen}
+        browserVisible={hasActiveBrowser && !browserTabOpen && !splitDetailOpen}
         browserWindowMode={browserWindowMode}
         onBrowserMinimize={function () { setActiveBrowserWindowMode("minimized"); }}
         onBrowserMaximize={function () { setActiveBrowserWindowMode("maximized"); }}
@@ -6142,11 +6178,14 @@ function WbcRail({ projectId, chats, pinnedChatIds, activeChatId, loading, runni
 // Conversation main (column 3)
 // ---------------------------------------------------------------------------
 
-function WbcBrowserFloatingSurface({ browserState, browserSessionId, visible, mode, runtime, running, latestAssistantReplyId, latestAssistantReplyText, onSend, onGuidance, onInterrupt, onMinimize, onMaximize, onRestore, onTakeoverComplete }) {
+function WbcBrowserFloatingSurface({ browserState, browserSessionId, visible, mode, composerDocked, runtime, running, latestAssistantReplyId, latestAssistantReplyText, onSend, onGuidance, onInterrupt, onMinimize, onMaximize, onRestore, onTakeoverComplete }) {
   var shellRef = useWbcRef(null);
   var minimizedRef = useWbcRef(null);
   var frameRef = useWbcRef(null);
   var frameSessionRef = useWbcRef("");
+  var composerDockedRef = useWbcRef(composerDocked === true);
+  var preComposerDockFrameRef = useWbcRef(null);
+  var composerDockRestoreTimerRef = useWbcRef(null);
   var previousVisibleRef = useWbcRef(visible);
   var pipRestoreGuardUntilRef = useWbcRef(0);
   var pipRestoreTimerRef = useWbcRef(null);
@@ -6169,6 +6208,10 @@ function WbcBrowserFloatingSurface({ browserState, browserSessionId, visible, mo
   var fullscreenFinalReplyTimerRef = useWbcRef(null);
   var fullscreenReplyBaselineRef = useWbcRef("");
   var effectiveMode = mode || "pip";
+  // Enter avoidance synchronously with the collapsed render. On reopening,
+  // keep avoidance active through the panel's 500ms grid transition; the
+  // effect below releases it only after the composer has finished shrinking.
+  if (composerDocked) composerDockedRef.current = true;
   var displayBrowserState = nativeBrowserState || browserState || {};
   var displayBrowserTabs = Array.isArray(displayBrowserState.tabs) ? displayBrowserState.tabs : [];
   var displayActiveBrowserTab = displayBrowserState.activeTab || displayBrowserTabs.find(function (tab) {
@@ -6468,9 +6511,14 @@ function WbcBrowserFloatingSurface({ browserState, browserSessionId, visible, mo
     var clamped = host
       ? wbcClampBrowserWindowFrame(next, host.clientWidth, host.clientHeight, 240, 180)
       : next;
-    var constrained = wbcKeepBrowserWindowClearOfComposer(clamped, host);
+    var constrained = composerDockedRef.current
+      ? wbcKeepBrowserWindowClearOfComposer(clamped, host)
+      : clamped;
     var committed = commitFloatingFrame(shellRef.current, constrained, host, 240, 180, frameRef, setFrame);
-    if (committed) wbcSaveBrowserWindowFrame(browserSessionId, committed);
+    // Collapsing the conversation panel creates a temporary dock above the
+    // composer. Do not overwrite the user's saved drag/resize position with
+    // that transient frame; reopening the panel must restore it exactly.
+    if (committed && !composerDockedRef.current) wbcSaveBrowserWindowFrame(browserSessionId, committed);
   }
 
   // PiP and minimized mode share the same coordinate system and clamping
@@ -6783,10 +6831,47 @@ function WbcBrowserFloatingSurface({ browserState, browserSessionId, visible, mo
     var savedFrame = wbcLoadBrowserWindowFrame(browserSessionId);
     frameSessionRef.current = String(browserSessionId || "");
     frameRef.current = savedFrame;
+    composerDockedRef.current = composerDocked === true;
+    preComposerDockFrameRef.current = null;
     minimizedFrameRef.current = null;
     setFrame(savedFrame);
     setMinimizedFrame(null);
   }, [browserSessionId]);
+
+  useWbcEffect(function () {
+    if (!visible || effectiveMode !== "pip") return undefined;
+    var node = shellRef.current;
+    var area = node && node.parentElement;
+    if (!node || !area) return undefined;
+
+    if (composerDocked) {
+      if (composerDockRestoreTimerRef.current) {
+        clearTimeout(composerDockRestoreTimerRef.current);
+        composerDockRestoreTimerRef.current = null;
+      }
+      if (!preComposerDockFrameRef.current) {
+        preComposerDockFrameRef.current = frameRef.current || measuredFrame();
+      }
+      var original = preComposerDockFrameRef.current;
+      if (original) commitFrame(original, area);
+      return undefined;
+    }
+
+    var restore = preComposerDockFrameRef.current;
+    if (!restore) return undefined;
+    composerDockRestoreTimerRef.current = setTimeout(function () {
+      composerDockRestoreTimerRef.current = null;
+      composerDockedRef.current = false;
+      preComposerDockFrameRef.current = null;
+      commitFrame(restore, area);
+      wbcNotifyBrowserLayoutChanged();
+    }, 520);
+    return function () {
+      if (!composerDockRestoreTimerRef.current) return;
+      clearTimeout(composerDockRestoreTimerRef.current);
+      composerDockRestoreTimerRef.current = null;
+    };
+  }, [composerDocked, visible, effectiveMode]);
 
   // A fullscreen session starts visually quiet. Only commands sent from this
   // compact composer opt into the live status pill; runs that were already in
@@ -7042,7 +7127,9 @@ function WbcBrowserFloatingSurface({ browserState, browserSessionId, visible, mo
           wbcNotifyBrowserLayoutChanged();
           return;
         }
-        var current = frameRef.current;
+        var current = composerDockedRef.current && preComposerDockFrameRef.current
+          ? preComposerDockFrameRef.current
+          : frameRef.current;
         if (current) commitFrame(current, area);
       } else {
         var minimizedCurrent = minimizedFrameRef.current;
@@ -7051,8 +7138,11 @@ function WbcBrowserFloatingSurface({ browserState, browserSessionId, visible, mo
       wbcNotifyBrowserLayoutChanged();
     });
     observer.observe(area);
+    var main = area.closest && area.closest(".wbc-main");
+    var composer = main && main.querySelector(":scope > .wbc-composer");
+    if (composer) observer.observe(composer);
     return function () { observer.disconnect(); };
-  }, [visible, effectiveMode]);
+  }, [visible, effectiveMode, composerDocked]);
 
   useWbcEffect(function () {
     var raf = requestAnimationFrame(wbcNotifyBrowserLayoutChanged);
@@ -7073,6 +7163,7 @@ function WbcBrowserFloatingSurface({ browserState, browserSessionId, visible, mo
       stopInteraction();
       finishMinimizedDrag();
       cancelModeTransition();
+      if (composerDockRestoreTimerRef.current) clearTimeout(composerDockRestoreTimerRef.current);
     };
   }, []);
 
@@ -7352,6 +7443,7 @@ function WbcConversationNavigator({ threadRef, chatId }) {
     }
 
     function scheduleMeasure() {
+      if (document.body.classList.contains("wbc-resizing-side-agent")) return;
       if (raf) return;
       raf = requestAnimationFrame(measure);
     }
@@ -7366,6 +7458,7 @@ function WbcConversationNavigator({ threadRef, chatId }) {
     if (mutationObserver) mutationObserver.observe(thread, { childList: true, subtree: true, characterData: true });
     thread.addEventListener("scroll", scheduleMeasure, { passive: true });
     window.addEventListener("resize", scheduleMeasure);
+    window.addEventListener("workbench:split-resize-end", scheduleMeasure);
     scheduleMeasure();
     return function () {
       if (raf) cancelAnimationFrame(raf);
@@ -7374,6 +7467,7 @@ function WbcConversationNavigator({ threadRef, chatId }) {
       if (mutationObserver) mutationObserver.disconnect();
       thread.removeEventListener("scroll", scheduleMeasure);
       window.removeEventListener("resize", scheduleMeasure);
+      window.removeEventListener("workbench:split-resize-end", scheduleMeasure);
     };
   }, [threadRef, chatId]);
 
@@ -7717,6 +7811,7 @@ function WbcMain({ project, chat, chatSummary, loading, runtime, error, errorKin
     var itemObserver = typeof ResizeObserver === "function"
       ? new ResizeObserver(function () {
           if (avoidanceApplyingRef.current) return;
+          if (document.body.classList.contains("wbc-resizing-side-agent")) return;
           scheduleStickyViewportRestore();
           scheduleBrowserAvoidance();
         })
@@ -7733,6 +7828,7 @@ function WbcMain({ project, chat, chatSummary, loading, runtime, error, errorKin
     var stageObserver = typeof ResizeObserver === "function"
       ? new ResizeObserver(function () {
           if (avoidanceApplyingRef.current) return;
+          if (document.body.classList.contains("wbc-resizing-side-agent")) return;
           scheduleStickyViewportRestore();
           scheduleBrowserAvoidance();
         })
@@ -8033,6 +8129,7 @@ function WbcMain({ project, chat, chatSummary, loading, runtime, error, errorKin
           browserSessionId={browserSessionId}
           visible={floatingBrowserVisible}
           mode={browserWindowMode}
+          composerDocked={!sideVisible}
           runtime={runtime}
           running={running}
           latestAssistantReplyId={latestAssistantReplyId}
@@ -8329,6 +8426,10 @@ function WbcMessageAttachment({ file, onOpenFile }) {
 
 function WbcUserMessage({ msg, onOpenFile, onEditMessage, canEdit, onRetryMessage }) {
   var attachments = Array.isArray(msg.attachments) ? msg.attachments : [];
+  var hasInlineImage = attachments.some(function (file) {
+    return file && file.url && (file.kind === "image" || String(file.content_type || "").indexOf("image") === 0);
+  });
+  var bubbleClassName = "wbc-bubble" + (hasInlineImage ? " with-inline-image" : "");
   var [editing, setEditing] = useWbcState(false);
   var [draft, setDraft] = useWbcState(String(msg.content || ""));
   var taRef = useWbcRef(null);
@@ -8375,7 +8476,7 @@ function WbcUserMessage({ msg, onOpenFile, onEditMessage, canEdit, onRetryMessag
   if (editing) {
     return (
       <div className="wbc-msg user editing">
-        <div className="wbc-bubble wbc-edit-bubble">
+        <div className={bubbleClassName + " wbc-edit-bubble"}>
           <textarea
             ref={taRef}
             className="wbc-edit-textarea"
@@ -8404,7 +8505,7 @@ function WbcUserMessage({ msg, onOpenFile, onEditMessage, canEdit, onRetryMessag
     <div className="wbc-msg user">
       <div className="wbc-msg-row">
         <time>{wbcFormatTime(msg.createdAt)}</time>
-        <div className="wbc-bubble">
+        <div className={bubbleClassName}>
           {msg.content ? <p>{msg.content}</p> : null}
           {attachments.length > 0 && (
             <div className={"wbc-msg-attachments" + (msg.content ? " after-copy" : "")}>
@@ -10491,17 +10592,24 @@ function WbcChatSplitHost({ chatId, width, onOpenFile, onResize, onClose, onOpen
   var key = chatId ? "chat:" + chatId : "";
   return (
      <WbcResourceSplitHost openKey={key} width={width} onResize={onResize} splitSide={splitSide} onToggleSide={onToggleSide} onClose={onClose} onSplitDragStart={onSplitDragStart} onSplitDragEnd={onSplitDragEnd}>
-      {chatId ? <WbcChatSplit chatId={chatId} project={project} onOpenFile={onOpenFile} onClose={onClose} onOpenInMain={onOpenInMain} /> : null}
+      {chatId ? <WbcChatSplit chatId={chatId} project={project} onOpenFile={onOpenFile} onClose={onClose} onOpenInMain={onOpenInMain} splitSide={splitSide} onToggleSide={onToggleSide} onSplitDragStart={onSplitDragStart} onSplitDragEnd={onSplitDragEnd} /> : null}
     </WbcResourceSplitHost>
   );
 }
 
-function WbcChatSplit({ chatId, project, onOpenFile, onClose, onOpenInMain }) {
+function WbcChatSplit({ chatId, project, onOpenFile, onClose, onOpenInMain, splitSide, onToggleSide, onSplitDragStart, onSplitDragEnd }) {
   var [chat, setChat] = useWbcState(null);
   var [loading, setLoading] = useWbcState(true);
   var [error, setError] = useWbcState("");
   var [streamText, setStreamText] = useWbcState("");
   var [running, setRunning] = useWbcState(false);
+  // The grip menu's "open conversation panel" action floats this split chat's
+  // own conversation panel here — never the main conversation's panel. Like
+  // the main panel it starts collapsed (no accordion tab open), and a
+  // pointer-down anywhere outside the panel dismisses it.
+  var [splitPanelOpen, setSplitPanelOpen] = useWbcState(false);
+  var [splitPanelTab, setSplitPanelTab] = useWbcState("");
+  var splitPanelRef = useWbcRef(null);
   var scrollRef = useWbcRef(null);
   var chatIdRef = useWbcRef(chatId);
   var pollTimerRef = useWbcRef(null);
@@ -10541,6 +10649,8 @@ function WbcChatSplit({ chatId, project, onOpenFile, onClose, onOpenInMain }) {
     setChat(null);
     setError("");
     setLoading(true);
+    setSplitPanelOpen(false);
+    setSplitPanelTab("");
     stopPolling();
     refresh(true).then(function (fresh) {
       if (disposedRef.current || !fresh || fresh.status !== "running") return;
@@ -10560,6 +10670,19 @@ function WbcChatSplit({ chatId, project, onOpenFile, onClose, onOpenInMain }) {
     var el = scrollRef.current;
     if (el) el.scrollTop = el.scrollHeight;
   }, [chat && chat.messages && chat.messages.length, loading, running, streamText]);
+
+  // Dismiss the panel when the user interacts with the split conversation
+  // around it (transcript, composer, grip); clicks inside the panel keep it.
+  useWbcEffect(function () {
+    if (!splitPanelOpen) return undefined;
+    function closeOutside(event) {
+      if (splitPanelRef.current && !splitPanelRef.current.contains(event.target)) {
+        setSplitPanelOpen(false);
+      }
+    }
+    document.addEventListener("pointerdown", closeOutside);
+    return function () { document.removeEventListener("pointerdown", closeOutside); };
+  }, [splitPanelOpen]);
 
   // Sending goes through the same streamed sendMessage path as the main
   // conversation, so the split transcript updates live while the agent works.
@@ -10658,7 +10781,63 @@ function WbcChatSplit({ chatId, project, onOpenFile, onClose, onOpenInMain }) {
   var messages = chat && Array.isArray(chat.messages) ? chat.messages : [];
   var errorText = error;
   return (
-    <aside className="wbc-side-agent-split wbc-chat-split" aria-label={wbcT("workbenchChat.chatSplitLabel", "Chat")}>
+    <aside className="wbc-side-agent-split wbc-chat-split wbc-conversation-split" aria-label={wbcT("workbenchChat.chatSplitLabel", "Chat")}>
+      <div className="wbc-split-panel-grip">
+        <WbcSplitGripBar
+          side={splitSide}
+          onToggleSide={onToggleSide}
+          onClose={onClose}
+          onOpenConversationPanel={function () { setSplitPanelOpen(true); }}
+          onSplitDragStart={onSplitDragStart}
+          onSplitDragEnd={onSplitDragEnd}
+        />
+      </div>
+      {splitPanelOpen && (
+        <div className="wbc-split-chat-panel" ref={splitPanelRef} role="dialog" aria-label={wbcT("workbenchChat.sidePanelTitle", "Conversation panel")}>
+          <WbcSide
+            project={project}
+            chat={chat}
+            chatLoading={loading}
+            chatDetailed={!!chat}
+            chats={chat ? [chat] : []}
+            activeChatId={chatId}
+            onSelectChat={function () {}}
+            runtime={running ? { text: streamText } : null}
+            subagentData={null}
+            subagentLoading={false}
+            onSelectSubagentRound={function () {}}
+            tab={splitPanelTab}
+            onTabChange={setSplitPanelTab}
+            viewerFile={null}
+            onOpenFile={onOpenFile}
+            onSelectArtifact={function (file) { if (onOpenFile) onOpenFile(file && file.file || file); }}
+            onSelectChange={function () {}}
+            onSelectViewer={function () {}}
+            onSelectMap={function () {}}
+            onSelectBrowser={function () {}}
+            onOpenSubagents={function () {}}
+            onViewerViewed={function () {}}
+            onRename={function () {}}
+            onDelete={function () {}}
+            onToTask={function () {}}
+            toTaskBusy={false}
+            onCompact={function () {}}
+            compactBusy={false}
+            sideAgents={[]}
+            sideAgentsLoading={false}
+            activeSideAgentId=""
+            onSelectSideAgent={function () {}}
+            onUpdateSideAgent={function () {}}
+            onDeleteSideAgent={function () {}}
+            onBrowserTakeoverComplete={function () { return Promise.resolve(); }}
+            browserActiveByChat={{}}
+            browserSuppressed={true}
+            onToggleSide={function () {}}
+            floating={true}
+            onCloseFloating={function () { setSplitPanelOpen(false); }}
+          />
+        </div>
+      )}
       <div className="wbc-thread-stage wbc-chat-split-stage">
         <div className="wbc-thread" ref={scrollRef}>
         {loading && !messages.length && (
@@ -10714,8 +10893,8 @@ function WbcChatSplit({ chatId, project, onOpenFile, onClose, onOpenInMain }) {
 }
 
 function WbcSideAgentSplitResizer({ width, onResize, splitSide }) {
-  function clampWidth(next) {
-    return wbcClampSideSplitWidth(next, window.innerWidth);
+  function clampWidth(next, page) {
+    return wbcClampSideSplitWidthForPage(next, page);
   }
 
   function startResize(event) {
@@ -10723,22 +10902,52 @@ function WbcSideAgentSplitResizer({ width, onResize, splitSide }) {
     event.preventDefault();
     var startX = event.clientX;
     var startWidth = Number(width) || 520;
+    var handle = event.currentTarget;
+    var page = handle && handle.closest ? handle.closest(".wbc-page") : null;
+    var frame = 0;
+    var nextWidth = startWidth;
+
+    // Keep the panels live, but do only the single layout write here. Heavy
+    // observers (charts/PDF/map/browser/navigation) pause while the body class
+    // is present and receive one explicit refresh when the gesture finishes.
+    function paint() {
+      frame = 0;
+      if (page) page.style.setProperty("--wbc-side-track-width", nextWidth + "px");
+    }
     function move(moveEvent) {
       // The resizer rides the edge that faces the conversation: right-anchored
       // panels widen when dragged left, left-anchored ones when dragged right.
       var delta = splitSide === "left"
         ? (moveEvent.clientX - startX)
         : (startX - moveEvent.clientX);
-      onResize(clampWidth(startWidth + delta));
+      nextWidth = clampWidth(startWidth + delta, page);
+      if (!frame) frame = requestAnimationFrame(paint);
     }
-    function stop() {
+    function stop(stopEvent) {
       window.removeEventListener("pointermove", move);
       window.removeEventListener("pointerup", stop);
+      window.removeEventListener("pointercancel", stop);
+      if (frame) {
+        cancelAnimationFrame(frame);
+        paint();
+      }
+      if (handle && handle.releasePointerCapture && handle.hasPointerCapture && handle.hasPointerCapture(event.pointerId)) {
+        handle.releasePointerCapture(event.pointerId);
+      }
       document.body.classList.remove("wbc-resizing-side-agent");
+      // pointercancel keeps the last painted size as the least surprising
+      // result and, like pointerup, performs one durable React/storage commit.
+      onResize(nextWidth);
+      window.dispatchEvent(new CustomEvent("workbench:split-resize-end", {
+        detail: { width: nextWidth, side: splitSide },
+      }));
+      wbcNotifyBrowserLayoutChanged();
     }
+    if (handle && handle.setPointerCapture) handle.setPointerCapture(event.pointerId);
     document.body.classList.add("wbc-resizing-side-agent");
     window.addEventListener("pointermove", move);
     window.addEventListener("pointerup", stop, { once: true });
+    window.addEventListener("pointercancel", stop, { once: true });
   }
 
   function resizeWithKeyboard(event) {
@@ -10747,7 +10956,10 @@ function WbcSideAgentSplitResizer({ width, onResize, splitSide }) {
     var step = splitSide === "left"
       ? (event.key === "ArrowRight" ? 16 : -16)
       : (event.key === "ArrowLeft" ? 16 : -16);
-    onResize(clampWidth((Number(width) || 520) + step));
+    var page = event.currentTarget && event.currentTarget.closest
+      ? event.currentTarget.closest(".wbc-page")
+      : null;
+    onResize(clampWidth((Number(width) || 520) + step, page));
   }
 
   return (
@@ -10756,6 +10968,8 @@ function WbcSideAgentSplitResizer({ width, onResize, splitSide }) {
       role="separator"
       aria-orientation="vertical"
       aria-label={wbcT("workbenchChat.detailPanel.resize", "Resize detail panel")}
+      aria-valuenow={Math.round(Number(width) || 520)}
+      aria-valuemin={380}
       tabIndex={0}
       onPointerDown={startResize}
       onKeyDown={resizeWithKeyboard}
@@ -10763,11 +10977,12 @@ function WbcSideAgentSplitResizer({ width, onResize, splitSide }) {
   );
 }
 
-// Top edge of the main conversation while a detail split is open. The grip
-// lifts the conversation with a native drag (like an image/document): dropping
-// it on the rail closes the split, and dropping it on either side moves the
-// split there. Its menu opens the floating conversation panel, swaps the split
-// side, or closes it. Content splits intentionally have no second grip.
+// Horizontal grip for a detail split: drag to lift the split (native drag,
+// like an image/document) — dropping it on the rail closes it, dropping it on
+// either side moves it there — and click to open a menu (open the floating
+// conversation panel, swap the side, or close). Conversation splits (split
+// chats) carry their own grip on the panel's top edge; content splits
+// intentionally carry no grip of their own.
 function WbcSplitGripBar({ side, onToggleSide, onClose, onOpenConversationPanel, onSplitDragStart, onSplitDragEnd }) {
   var [menuOpen, setMenuOpen] = useWbcState(false);
   var rootRef = useWbcRef(null);
@@ -11951,8 +12166,13 @@ function WbcPdfJsViewer({ file, url, onViewed }) {
     eventBus.on('pagechanging', onPageChanging);
 
     // Handle resize (e.g. sidebar panel resize)
-    var resizeObserver = new ResizeObserver(function () { viewer.update(); });
+    function updateViewerSize() {
+      if (document.body.classList.contains("wbc-resizing-side-agent")) return;
+      viewer.update();
+    }
+    var resizeObserver = new ResizeObserver(updateViewerSize);
     resizeObserver.observe(container);
+    window.addEventListener("workbench:split-resize-end", updateViewerSize);
 
     // Copy the original PDF text rather than browser-measured text-layer content.
     var selectionSanitizer = pdf.installSelectionSanitizer(container, viewer, eventBus);
@@ -11987,6 +12207,7 @@ function WbcPdfJsViewer({ file, url, onViewed }) {
       selectionSanitizer.abort();
       copyFix.abort();
       resizeObserver.disconnect();
+      window.removeEventListener("workbench:split-resize-end", updateViewerSize);
       eventBus.off('pagechanging', onPageChanging);
       if (viewerRef.current) {
         try { viewerRef.current.setDocument(null); } catch (e) {}
@@ -12336,6 +12557,7 @@ function WbcMapTab({ chatId, focusItem }) {
     layerRef.current = L.layerGroup().addTo(map);
     var frame = 0;
     var invalidate = function () {
+      if (document.body.classList.contains("wbc-resizing-side-agent")) return;
       cancelAnimationFrame(frame);
       frame = requestAnimationFrame(function () {
         try { map.invalidateSize({ pan: false, animate: false }); } catch (e) {}
@@ -12344,6 +12566,7 @@ function WbcMapTab({ chatId, focusItem }) {
     var observer = typeof ResizeObserver !== "undefined" ? new ResizeObserver(invalidate) : null;
     if (observer) observer.observe(holderRef.current);
     window.addEventListener("resize", invalidate);
+    window.addEventListener("workbench:split-resize-end", invalidate);
     var settleTimer = setTimeout(invalidate, 560);
     invalidate();
     return function () {
@@ -12351,6 +12574,7 @@ function WbcMapTab({ chatId, focusItem }) {
       cancelAnimationFrame(frame);
       if (observer) observer.disconnect();
       window.removeEventListener("resize", invalidate);
+      window.removeEventListener("workbench:split-resize-end", invalidate);
       try { map.remove(); } catch (e) {}
       mapRef.current = null;
       layerRef.current = null;
@@ -13328,8 +13552,9 @@ function WbcInboxCard({ chat, running, hideTitle }) {
   return (
     <section className={"workbench-side-section wbc-inbox-card" + (hideTitle ? " title-hidden" : "")} aria-labelledby={hideTitle ? undefined : "wbc-inbox-title"} aria-label={hideTitle ? wbcT("workbenchChat.inbox.title", "Session inbox") : undefined}>
       <div className="wbc-inbox-head">
-        {!hideTitle && <h3 id="wbc-inbox-title">{wbcT("workbenchChat.inbox.title", "Session inbox")}</h3>}
-        {hideTitle && feed.length === 0 && (
+        {!hideTitle ? (
+          <h3 id="wbc-inbox-title">{wbcT("workbenchChat.inbox.title", "Session inbox")}</h3>
+        ) : (
           <span className="wbc-context-empty-label">{wbcT("workbenchChat.inbox.title", "Session inbox")}</span>
         )}
         <span className={"wbc-inbox-queue-count" + (queueDepth !== null && queueDepth > 0 ? " active" : "")} aria-live="polite">
@@ -13370,7 +13595,14 @@ function WbcInboxCard({ chat, running, hideTitle }) {
                         <b>{wbcInboxEventLabel(item)}</b>
                         <span className={"wbc-inbox-status status-" + status.value}><i aria-hidden="true" />{status.label}</span>
                       </div>
-                      {item.preview && <p title={item.preview}>{item.preview}</p>}
+                      {item.preview && (
+                        <p
+                          className={"wbc-inbox-event-preview" + (item.type === "tool_result" || item.type === "tool_activity" ? " is-tool" : "")}
+                          title={item.preview}
+                        >
+                          {item.preview}
+                        </p>
+                      )}
                       <div className="wbc-inbox-event-meta">
                         {item.createdAt && <time dateTime={item.createdAt} title={item.createdAt}>{wbcFormatTime(item.createdAt)}</time>}
                       </div>

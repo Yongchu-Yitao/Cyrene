@@ -14,12 +14,12 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 # Main-agent operating contract  (agent/prompts.py)
 # ===========================================================================
 
-def test_main_agent_prompt_requires_result_verification_before_quit():
+def test_main_agent_prompt_requires_final_deliverable_verification():
     from cyrene.agent.prompts import _MAIN_AGENT_PROMPT
 
-    assert "Before calling `quit`, perform a final self-check" in _MAIN_AGENT_PROMPT
-    assert "Never claim verification you did not perform" in _MAIN_AGENT_PROMPT
-    assert "Inspect the resulting state" in _MAIN_AGENT_PROMPT
+    assert "compare the result with the original request" in _MAIN_AGENT_PROMPT
+    assert "inspect the final deliverables yourself" in _MAIN_AGENT_PROMPT
+    assert "report any failed or unavailable checks" in _MAIN_AGENT_PROMPT
 
 
 def test_main_agent_prompt_proactively_consults_knowledge_base():

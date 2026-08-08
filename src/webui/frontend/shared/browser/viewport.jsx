@@ -511,7 +511,7 @@ function ElectronBrowserViewportPanel({ roundId, browserSessionId, onClose, brow
     const splitEntranceToken = splitEntranceTokenRef.current + 1;
     splitEntranceTokenRef.current = splitEntranceToken;
     const ro = typeof ResizeObserver !== "undefined" && node ? new ResizeObserver(function () {
-      if (!splitEntranceActive) scheduleBounds();
+      if (!splitEntranceActive && !document.body.classList.contains("wbc-resizing-side-agent")) scheduleBounds();
     }) : null;
     if (ro && node) ro.observe(node);
     if (ro && surface) ro.observe(surface);
@@ -616,6 +616,7 @@ function ElectronBrowserViewportPanel({ roundId, browserSessionId, onClose, brow
           });
           return;
         }
+        if (typeof detail.onCaptureStarted === "function") detail.onCaptureStarted();
         // Native WebContentsView is always above renderer DOM. Capture its
         // current frame, mount that frame in the renderer, and only then hide
         // the native view. The dropdown can now sit above the page without the

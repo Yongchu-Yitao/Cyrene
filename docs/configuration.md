@@ -116,7 +116,14 @@ the proactive cadence, daytime window, or lottery parameters.
 | `SEARXNG_URL` | External SearXNG URL (overrides auto-start) | — |
 | `SEARCH_PROXY` | Manual proxy for search HTTP requests | — |
 
-> Cyrene now uses **SimpleXNG only** for web search. The older DDG/Bing/Baidu scrapers have been removed.
+> When an official DeepSeek V4 model is configured with an
+> `https://api.deepseek.com` API key, Cyrene uses DeepSeek's server-side
+> [Responses API Web Search](https://api-docs.deepseek.com/guides/responses_api/)
+> first. The documented `deepseek-v4-flash` model is
+> used as the search worker. If native search is unavailable or fails, Cyrene
+> automatically falls back to SimpleXNG. Third-party DeepSeek-compatible
+> endpoints do not activate native search. The older DDG/Bing/Baidu scrapers
+> remain removed.
 
 ### Web UI
 
@@ -140,7 +147,7 @@ Most settings can be edited at runtime through the Web UI **Settings** page with
   packages; direct control/filesystem/web tools remain part of the stable wire
   contract
 - **Agents** — Main-agent execution is completion-driven with no tool-round limit; configure execution subagent lease checkpoints, no-progress detection, wide tool/time/cost/context safety fuses, and separate discussion round/message/information-gain limits
-- **Search** — Built-in SimpleXNG only
+- **Search** — official DeepSeek Responses Web Search when configured, with built-in SimpleXNG fallback
 - **MCP Servers** — Add, remove, and restart MCP server connections
 - **SOUL.md** — Edit the personality document directly
 - **Budget** — Configure estimated-cost tracking, CNY/USD display, billing

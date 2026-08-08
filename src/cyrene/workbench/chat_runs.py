@@ -744,6 +744,19 @@ class ChatRunManager:
                 # non-streaming callers.
                 logger.exception("Failed to close chat inbox for %s", run.chat_id)
             run.status = "done" if run.status in {"running", "finishing"} else run.status
+            if self._db_path:
+                try:
+                    await asyncio.to_thread(
+                        chat_service()._record_chat_run_outcome,
+                        run.chat_id,
+                        run_id=run.run_id,
+                        status=run.status,
+                        termination_reason=run.termination_reason,
+                        outcome_kind=outcome_kind,
+                        created_at=run.created_at,
+                    )
+                except Exception:
+                    logger.exception("Failed to persist chat run outcome for %s", run.chat_id)
             if self._event_store is not None:
                 try:
                     await run.flush_event_store()
@@ -846,6 +859,15 @@ class ChatRunManager:
                     # running belongs to the crashed exchange. There is no live
                     # agent state in this process that can resume it safely.
                     chat.pop("pendingQuestion", None)
+                    chat["lastRun"] = {
+                        "id": "",
+                        "status": "error",
+                        "terminationReason": "process_restarted",
+                        "outcome": "error",
+                        "createdAt": str(chat.get("updatedAt") or ""),
+                        "completedAt": datetime.now(timezone.utc).isoformat(),
+                    }
+                    chat["updatedAt"] = chat["lastRun"]["completedAt"]
                     changed = True
             if changed:
                 chat_mod._write_chats_store(payload)

@@ -114,7 +114,13 @@ Portable Backup ZIP 不由 Cyrene 加密。为了让 Restore 能用目标 Instal
 | `SEARXNG_URL` | 外部 SearXNG URL | — |
 | `SEARCH_PROXY` | Search HTTP 手动代理 | — |
 
-Cyrene 只使用 SimpleXNG。旧 DDG/Bing/Baidu Scraper 已从主路径移除。
+配置带 API Key 的官方 DeepSeek V4 模型（Endpoint 为
+`https://api.deepseek.com`）后，Cyrene 会优先使用
+[DeepSeek Responses API](https://api-docs.deepseek.com/zh-cn/guides/responses_api/)
+提供的服务端联网搜索。搜索工作模型使用官方文档明确支持的
+`deepseek-v4-flash`；未配置、调用失败或原生搜索不可用时会自动回退到
+SimpleXNG。第三方 DeepSeek 兼容 Endpoint 不会启用原生搜索。旧
+DDG/Bing/Baidu Scraper 仍已从主路径移除。
 
 ### Web 与 Map
 

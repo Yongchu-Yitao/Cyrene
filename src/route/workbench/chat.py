@@ -1290,6 +1290,7 @@ def register_workbench_chat_routes(
                 public_user_message=message or None,
                 public_attachments=public_attachments or None,
                 workspace_dir=workspace_dir,
+                response_capabilities=("interactive_blocks",),
             )
 
         def _finalize(reply_text: str) -> dict[str, Any]:

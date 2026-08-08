@@ -606,7 +606,7 @@ def test_workbench_chat_sidebar_is_a_top_aligned_floating_accordion():
 
     right_panel_styles = styles.split("/* ---- right panel ---- */", 1)[1]
     side_css = right_panel_styles.split(".wbc-side {", 1)[1].split("}", 1)[0]
-    card_css = styles.split(".wbc-side-card {", 1)[1].split("}", 1)[0]
+    card_css = styles.split("\n.wbc-side-card {", 1)[1].split("}", 1)[0]
     accordion_css = styles.split(".wbc-side-accordion {", 1)[1].split("}", 1)[0]
     side_body_css = styles.split(".wbc-side-body {", 1)[1].split("}", 1)[0]
     flush_css = styles.split(".wbc-side-body.flush {", 1)[1].split("}", 1)[0]
@@ -635,7 +635,7 @@ def test_workbench_chat_sidebar_expanded_lists_share_a_responsive_content_system
     )
 
     trigger_css = styles.split(".wbc-side-accordion-trigger {", 1)[1].split("}", 1)[0]
-    card_css = styles.split(".wbc-side-card {", 1)[1].split("}", 1)[0]
+    card_css = styles.split("\n.wbc-side-card {", 1)[1].split("}", 1)[0]
     file_row_css = styles.split(".wbc-side-body .wbc-file-row {", 1)[1].split("}", 1)[0]
     compact_container = styles.split("@container wbc-side-card (max-width: 320px) {", 1)[1]
 
@@ -778,28 +778,156 @@ def test_workbench_side_question_opens_the_existing_conversation_ui_in_a_split()
     assert "requestAnimationFrame(function ()" in source
     assert '(entered ? " open" : "")' in source
     assert '<WbcSideAgentTab agent={agent}' in split_component
-    assert '<aside className="wbc-side-agent-split"' in split_component
+    assert 'className="wbc-side-agent-split"' in split_component
     assert 'className="wbc-side-agent-split-picker"' in split_component
     assert '<WbcSplitPickerMenu open={pickerOpen}' in split_component
     assert "items.map(function (item, index)" in split_component
     assert "if (onSelect) onSelect(item.id);" in split_component
     assert "<WbcSideAgentTab" not in panel
     assert '(splitDetailOpen ? " side-agent-split-open" : "")' in source
+    assert "browserVisible={hasActiveBrowser && !browserTabOpen && !splitDetailOpen}" in source
     assert "activeSideAgentId={splitSideAgentId}" in source
     assert "position: absolute;" in styles.split(".wbc-side-agent-split-motion {", 1)[1].split("}", 1)[0]
-    assert ".wbc-page.side-agent-split-open" not in styles
+    # The open-state selector is needed only inside the compact responsive
+    # override, where it restores the split's reserved grid track.
+    assert ".wbc-page.side-agent-split-open {\n  grid-template-columns" not in styles.split(
+        "@media (max-width: 980px) {", 1
+    )[0]
     split_motion_css = styles.split(".wbc-side-agent-split-motion {", 1)[1].split("}", 1)[0]
     assert "width: var(--wbc-side-track-width);" in split_motion_css
-    assert "transform 500ms cubic-bezier(.22, 1.16, .36, 1);" in split_motion_css
+    assert "transform 500ms cubic-bezier(.22, 1.16, .36, 1)," in split_motion_css
     assert "transform: translateX(100%);" in styles
     assert ".wbc-side-agent-split-motion.open" in styles
     assert 'localStorage.setItem("wbc-side-agent-split-width"' in source
     assert "function wbcClampSideSplitWidth" in source
-    assert "var mainMin = Math.min(440, Math.max(380, viewport * 0.36));" in source
+    assert "var paneMin = Math.min(380, Math.max(0, (available - rail) / 2));" in source
+    assert "function wbcClampSideSplitWidthForPage" in source
+    assert "available - rail - paneMin" in source
+    assert "wbcClampSideSplitWidthForPage(current, pageRef.current)" in source
+    assert 'new ResizeObserver(keepSplitWithinViewport)' in source
+    assert "--wbc-main-min-width: 300px;" not in styles
+    assert "--wbc-main-min-width: 380px;" in styles
     assert 'window.addEventListener("resize", keepSplitWithinViewport);' in source
     assert 'style={splitDetailOpen ? { "--wbc-side-track-width": sideAgentSplitWidth + "px" } : undefined}' in source
     assert ".wbc-side-agent-split-resizer" in styles
     assert "body.wbc-resizing-side-agent .wbc-page" in styles
+    # Pointer movement stays out of React while the grid remains live. Heavy
+    # content observers pause during the gesture and refresh once on pointerup.
+    resizer = source.split("function WbcSideAgentSplitResizer", 1)[1].split(
+        "function WbcSplitGripBar", 1
+    )[0]
+    move = resizer.split("function move(moveEvent)", 1)[1].split(
+        "function stop(stopEvent)", 1
+    )[0]
+    stop = resizer.split("function stop(stopEvent)", 1)[1].split(
+        "function resizeWithKeyboard", 1
+    )[0]
+    assert 'page.style.setProperty("--wbc-side-track-width", nextWidth + "px")' in resizer
+    assert "requestAnimationFrame(paint)" in move
+    assert "wbcNotifyBrowserLayoutChanged" not in move
+    assert "onResize(" not in move
+    assert 'new CustomEvent("workbench:split-resize-end"' in stop
+    assert "wbcNotifyBrowserLayoutChanged();" in stop
+    assert "onResize(nextWidth);" in stop
+    assert 'window.addEventListener("pointercancel", stop' in resizer
+    assert "aria-valuemin={380}" in resizer
+    assert 'aria-valuenow={Math.round(Number(width) || 520)}' in resizer
+    resize_motion_css = styles.split(
+        "body.wbc-resizing-side-agent .wbc-side-agent-split-motion,", 1
+    )[1].split("}", 1)[0]
+    assert ".wbc-main > .wbc-composer" in resize_motion_css
+    assert "transition: none;" in resize_motion_css
+    # The outside edge is a physical anchor during direct manipulation: only
+    # the divider facing the conversation is allowed to move.
+    right_anchor_css = styles.split(
+        "body.wbc-resizing-side-agent .wbc-page:not(.wbc-split-left) .wbc-side-agent-split-motion {",
+        1,
+    )[1].split("}", 1)[0]
+    left_anchor_css = styles.split(
+        "body.wbc-resizing-side-agent .wbc-page.wbc-split-left .wbc-side-agent-split-motion {",
+        1,
+    )[1].split("}", 1)[0]
+    assert "right: 0;" in right_anchor_css
+    assert "left: auto;" in right_anchor_css
+    assert "right: auto;" in left_anchor_css
+    assert "left: var(--wbc-rail-width);" in left_anchor_css
+    assert 'document.body.classList.contains("wbc-resizing-side-agent")' in source
+    chart_mount = (root / "src" / "webui" / "frontend" / "shared" / "chart" / "mount.jsx").read_text(
+        encoding="utf-8"
+    )
+    browser_viewport = (root / "src" / "webui" / "frontend" / "shared" / "browser" / "viewport.jsx").read_text(
+        encoding="utf-8"
+    )
+    assert 'root.addEventListener("workbench:split-resize-end", resizeChart)' in chart_mount
+    assert 'root.document.body.classList.contains("wbc-resizing-side-agent")' in chart_mount
+    assert '!document.body.classList.contains("wbc-resizing-side-agent")' in browser_viewport
+    # A minimum-width chat split owns a shrinkable, border-box composer.
+    split_composer_css = styles.split(
+        ".wbc-chat-split > .wbc-composer,", 1
+    )[1].split("}", 1)[0]
+    assert "width: 100%;" in split_composer_css
+    assert "min-width: 0;" in split_composer_css
+    assert "box-sizing: border-box;" in split_composer_css
+    split_glass_css = styles.split(
+        ".wbc-conversation-split::after {", 1
+    )[1].split("}", 1)[0]
+    assert "height: var(--wbc-shared-glass-height);" in split_glass_css
+    assert "background: color-mix(in srgb, var(--wb-topbar-bg) 58%, transparent);" in split_glass_css
+    assert "backdrop-filter: blur(32px) saturate(170%) contrast(102%);" in split_glass_css
+    assert "mask-image: linear-gradient(to top, #000 0%, #000 82%, transparent 100%);" in split_glass_css
+    foreground_composer_css = styles.split(
+        ".wbc-chat-split > .wbc-composer {", 1
+    )[1].split("}", 1)[0]
+    assert "position: relative;" in foreground_composer_css
+    assert "z-index: 24;" in foreground_composer_css
+    split_message_css = styles.split(
+        ".wbc-chat-split-stage .wbc-thread-item,", 1
+    )[1].split("}", 1)[0]
+    assert ".wbc-chat-split-stage .wbc-msg-body" in split_message_css
+    assert ".wbc-chat-split-stage .wbc-chart" in split_message_css
+    assert "min-width: 0;" in split_message_css
+    assert "max-width: 100%;" in split_message_css
+    split_overflow_css = styles.split(
+        ".wbc-chat-split-stage .wbc-msg-body.markdown pre,", 1
+    )[1].split("}", 1)[0]
+    assert ".wbc-chat-split-stage .wbc-msg-body.markdown table" in split_overflow_css
+    assert "overflow-x: auto;" in split_overflow_css
+    compact_composer_css = styles.split(
+        "@container wbc-composer (max-width: 420px) {", 1
+    )[1].split("\n}", 1)[0]
+    assert ".wbc-model-button-name" in compact_composer_css
+    assert ".wbc-model-button-effort" in compact_composer_css
+    assert ".wbc-composer-icon.mode > span" not in compact_composer_css
+    assert ".wbc-send > span" not in compact_composer_css
+    assert ".wbc-composer-actions" in compact_composer_css
+    assert "flex-wrap: wrap;" in compact_composer_css
+    assert ".wbc-composer-spacer" in compact_composer_css
+    assert "flex: 0 0 100%;" in compact_composer_css
+    main_clip_css = styles.split(
+        ".wbc-page.side-agent-split-open > .wbc-main {", 1
+    )[1].split("}", 1)[0]
+    assert "overflow: hidden;" in main_clip_css
+    main_message_css = styles.split(
+        ".wbc-thread .wbc-thread-item,", 1
+    )[1].split("}", 1)[0]
+    assert ".wbc-thread .wbc-msg-body" in main_message_css
+    assert "min-width: 0;" in main_message_css
+    assert "max-width: 100%;" in main_message_css
+    # Below 980px, an open split must override the generic two-column fallback
+    # and reserve a physical track instead of covering the main conversation.
+    responsive_css = styles.rsplit("@media (max-width: 980px) {", 1)[1].split(
+        "@media (prefers-reduced-motion: reduce)", 1
+    )[0]
+    responsive_right = responsive_css.split(
+        ".wbc-page.side-agent-split-open {", 1
+    )[1].split("}", 1)[0]
+    responsive_left = responsive_css.split(
+        ".wbc-page.side-agent-split-open.wbc-split-left {", 1
+    )[1].split("}", 1)[0]
+    assert "var(--wbc-side-track-width);" in responsive_right
+    assert "minmax(0, 1fr)" in responsive_right
+    assert "var(--wbc-side-track-width)" in responsive_left
+    assert responsive_left.rstrip().endswith("0px;")
     # The split panel is lifted with a native drag like an image/document:
     # the grip starts the drag, the panel stays put and drop zones react.
     assert 'var WBC_SPLIT_DRAG_MIME = "application/x-cyrene-split+json";' in source
@@ -821,10 +949,53 @@ def test_workbench_side_question_opens_the_existing_conversation_ui_in_a_split()
     assert "cardClone" in source
     assert 'data-chat-id={String(chat.id)}' in source
     assert "wbc-split-card-lifted" in styles
-    # Only the main conversation keeps a grip; content splits do not render a
-    # duplicate handle.
+    # Only conversation splits carry their own top grip: the split-chat panel
+    # (rail chat dragged onto the side). Side questions belong to the content
+    # tabs and, like artifact/change/map/browser/subagents, render only the
+    # main-conversation grip with no duplicate handle.
     assert 'closest(".wbc-split-main-grip")' in source
     assert "activeChatIdRef.current" in source
+    assert "splitSideAgentId" in source
+    assert "wbc-conversation-split" in source
+    assert '<div className="wbc-split-panel-grip">' in source
+    side_split = source.split("function WbcSideAgentSplit({", 1)[1].split(
+        "function WbcSideAgentTab", 1
+    )[0]
+    assert "<WbcSplitGripBar" not in side_split
+    assert "wbc-conversation-split" not in side_split
+    chat_split = source.split("function WbcChatSplit({", 1)[1].split(
+        "function WbcChatSplitHost", 1
+    )[0]
+    assert "<WbcSplitGripBar" in chat_split
+    assert "wbc-conversation-split" in chat_split
+    # The split chat's grip menu opens the full conversation panel (the same
+    # WbcSide component as the main float) inside the split, fed with the
+    # split chat's own data — never the main conversation's float.
+    assert "splitPanelOpen" in chat_split
+    assert "setSplitPanelOpen(true)" in chat_split
+    assert '<div className="wbc-split-chat-panel"' in chat_split
+    assert "<WbcSide" in chat_split
+    assert "activeChatId={chatId}" in chat_split
+    assert "chats={chat ? [chat] : []}" in chat_split
+    assert "floating={true}" in chat_split
+    assert "onCloseFloating={function () { setSplitPanelOpen(false); }}" in chat_split
+    # The panel starts collapsed (no accordion tab open), like the main one,
+    # and a pointer-down outside the panel dismisses it.
+    assert 'var [splitPanelTab, setSplitPanelTab] = useWbcState("");' in chat_split
+    assert "splitPanelRef" in chat_split
+    assert "function closeOutside(event)" in chat_split
+    assert "splitPanelRef.current.contains(event.target)" in chat_split
+    assert 'ref={splitPanelRef}' in chat_split
+    for name, marker, tail in (
+        ("artifact", "function WbcArtifactSplit({", "function WbcChangeSplitHost"),
+        ("change", "function WbcChangeSplit({", "function WbcResourceSplitHost"),
+        ("map", "function WbcMapSplit({", "function WbcBrowserSplitHost"),
+        ("browser", "function WbcBrowserSplit({", "function WbcSideAgentSplitHost"),
+        ("subagents", "function WbcSubagentsSplitHost", "function WbcSideAgentSplitHost"),
+        ("side-question", "function WbcSideAgentSplit({", "function WbcSideAgentTab"),
+    ):
+        body = source.split(marker, 1)[1].split(tail, 1)[0]
+        assert "<WbcSplitGripBar" not in body, name
     assert "wbc-split-drag-ghost" in styles
     assert 'wbcT("workbenchChat.splitDropClose"' in source
     assert 'wbcT("workbenchChat.splitDropLeft"' in source
@@ -858,7 +1029,42 @@ def test_workbench_side_question_opens_the_existing_conversation_ui_in_a_split()
         "function WbcMapSplitHost", 1
     )[0]
     assert "WbcSideSplitGrip" not in resource_host
-    assert "--wbc-main-min-width: clamp(380px, 36vw, 440px);" in styles
+    # Conversation splits extend the panel with a 26px grip band below the
+    # fixed app bar; the panel grip mirrors the main-conversation grip.
+    conv_css = styles.split(
+        ".wbc-side-agent-split.wbc-conversation-split {", 1
+    )[1].split("}", 1)[0]
+    assert "position: relative;" in conv_css
+    assert "padding-top: 72px;" in conv_css
+    panel_grip_css = styles.split(".wbc-split-panel-grip {", 1)[1].split("}", 1)[0]
+    assert "top: 58px;" in panel_grip_css
+    assert "height: 26px;" in panel_grip_css
+    assert "z-index: 42;" in panel_grip_css
+    assert ".wbc-split-panel-grip:hover .wbc-side-split-grip-bar" in styles
+    # The split chat's own floating panel reuses the full conversation panel:
+    # the container anchors inside the split, sizes to its content like the
+    # main float (never fills the split) and its card stays opaque.
+    split_panel_css = styles.split(".wbc-split-chat-panel {", 1)[1].split("}", 1)[0]
+    assert "position: absolute;" in split_panel_css
+    assert "z-index: 1190;" in split_panel_css
+    assert "max-height: calc(100% - 100px);" in split_panel_css
+    assert "width: min(var(--wb-right-w, 350px), calc(100% - 24px));" in split_panel_css
+    assert "transform: translateX(-50%);" in split_panel_css
+    # Matches the main floating panel: non-blocking shell, entrance animation,
+    # flush padding so the card spans the full 350px.
+    assert "overflow: visible;" in split_panel_css
+    assert "pointer-events: none;" in split_panel_css
+    assert "animation: wbc-floating-side-panel-in" in split_panel_css
+    split_panel_side_css = styles.split(
+        ".wbc-split-chat-panel .wbc-side {", 1
+    )[1].split("}", 1)[0]
+    assert "padding: 0;" in split_panel_side_css
+    split_panel_card_css = styles.split(
+        ".wbc-split-chat-panel .wbc-side-card {", 1
+    )[1].split("}", 1)[0]
+    assert "max-height: calc(100vh - 104px);" in split_panel_card_css
+    assert "background: var(--wb-card-bg);" in split_panel_card_css
+    assert "--wbc-main-min-width: 380px;" in styles
 
 
 def test_workbench_split_grip_opens_a_centered_floating_conversation_panel():
@@ -901,6 +1107,13 @@ def test_workbench_split_grip_opens_a_centered_floating_conversation_panel():
     assert "left: 50%;" in floating_css
     assert "transform: translateX(-50%);" in floating_css
     assert "width: min(var(--wb-right-w, 350px), calc(100% - 24px));" in floating_css
+    # The floating panel floats over live transcript content, so its card must
+    # stay opaque — matching the docked panel instead of showing the
+    # conversation through it.
+    floating_card_css = styles.split(
+        ".wbc-split-main-grip > .wbc-side-floating .wbc-side-card {", 1
+    )[1].split("}", 1)[0]
+    assert "background: var(--wb-card-bg);" in floating_card_css
 
 
 def test_floating_conversation_panel_resource_split_replaces_right_and_restores_previous_split():
@@ -1030,6 +1243,14 @@ def test_workbench_changes_panel_is_list_only_and_opens_shared_diff_split():
     assert 'className="wbc-change-split-diff wbc-change-diff"' in change_split
     assert "files.map(function (item)" in change_split
     assert ".wbc-change-split-diff" in styles
+    change_diff_styles = styles.split(".wbc-change-diff {", 1)[1].split("}", 1)[0]
+    assert "display: flex;" in change_diff_styles
+    assert "flex-direction: column;" in change_diff_styles
+    assert "min-height: 0;" in change_diff_styles
+    diff_content_styles = styles.split(
+        ".wbc-change-diff .diff-viewer-content {", 1
+    )[1].split("}", 1)[0]
+    assert "overflow-y: auto;" in diff_content_styles
 
 
 def test_workbench_resource_tabs_use_lists_and_shared_splits_while_branches_expand_inline():
@@ -2613,6 +2834,34 @@ process.stdout.write(JSON.stringify(result));
     ]
 
 
+def test_browser_window_docks_above_composer_without_changing_its_normal_frame():
+    root = Path(__file__).resolve().parent.parent
+    source = (root / "src" / "webui" / "frontend" / "workbench-chat.jsx").read_text(encoding="utf-8")
+    helper_source = "function wbcBrowserComposerDockFrame(" + source.split(
+        "function wbcBrowserComposerDockFrame(", 1
+    )[1].split("\nfunction wbcKeepBrowserWindowClearOfComposer", 1)[0]
+    script = f"""
+{helper_source}
+const original = {{ x: 640, y: 430, width: 340, height: 240 }};
+const area = {{ left: 100, top: 80 }};
+const overlappingComposer = {{ left: 120, right: 1080, top: 610 }};
+const narrowComposer = {{ left: 120, right: 620, top: 610 }};
+const docked = wbcBrowserComposerDockFrame(original, area, overlappingComposer, 10, 180);
+const untouched = wbcBrowserComposerDockFrame(original, area, narrowComposer, 10, 180);
+process.stdout.write(JSON.stringify({{ original, docked, untouched }}));
+"""
+    completed = subprocess.run(["node", "-e", script], check=True, capture_output=True, text=True)
+    result = json.loads(completed.stdout)
+    assert result["docked"] == {"x": 640, "y": 280, "width": 340, "height": 240}
+    assert result["untouched"] == result["original"]
+    assert result["original"] == {"x": 640, "y": 430, "width": 340, "height": 240}
+    assert "composerDocked={!sideVisible}" in source
+    assert "preComposerDockFrameRef.current = frameRef.current || measuredFrame();" in source
+    assert "if (committed && !composerDockedRef.current)" in source
+    assert "composerDockedRef.current = false;" in source
+    assert "}, 520);" in source
+
+
 def test_workbench_chat_tracks_actual_model_from_live_llm_events():
     result = _run_workbench_runtime_js(
         """
@@ -3080,6 +3329,16 @@ def test_workbench_chat_cards_reorder_and_open_when_dropped_on_conversation():
     assert "onDrop={handleChatDrop}" in main
     assert 'className="wbc-chat-open-drop-hint"' in main
     assert ".wbc-chat-card.dragging" in styles
+    dragged_card_css = styles.split(
+        ".wbc-chat-card.dragging {", 1
+    )[1].split("}", 1)[0]
+    assert "opacity: .22;" in dragged_card_css
+    assert "transform: scale(.985);" in dragged_card_css
+    lifted_card_css = styles.split(
+        ".wbc-chat-card.wbc-split-card-lifted {", 1
+    )[1].split("}", 1)[0]
+    assert "opacity: 1;" in lifted_card_css
+    assert "transform: translateY(-3px);" in lifted_card_css
     assert ".wbc-main.chat-drop-active" in styles
     drop_border_css = styles.split(
         ".wbc-main.chat-drop-active::after {", 1
@@ -3320,6 +3579,21 @@ def test_workbench_permission_prompt_renders_every_scoped_option():
     assert "onAnswer(pq.id, opt)" in prompt
     assert "options[options.length - 1]" not in prompt.split(") : (", 1)[0]
 
+    styles = (root / "src" / "webui" / "frontend" / "workbench.css").read_text(
+        encoding="utf-8"
+    )
+    group_css = styles.split(".wbc-question-group {", 1)[1].split("}", 1)[0]
+    question_css = styles.split(".wbc-question {", 1)[1].split("}", 1)[0]
+    text_css = styles.split(".wbc-question-text {", 1)[1].split("}", 1)[0]
+    option_css = styles.split(".wbc-question-opt {", 1)[1].split("}", 1)[0]
+    assert "width: 100%;" in group_css
+    assert "min-width: 0;" in group_css
+    assert "max-width: 100%;" in question_css
+    assert "overflow-wrap: anywhere;" in text_css
+    assert "word-break: break-word;" in text_css
+    assert "max-width: 100%;" in option_css
+    assert "white-space: normal;" in option_css
+
 
 def test_workbench_context_tab_has_live_session_inbox_card():
     root = Path(__file__).resolve().parents[1]
@@ -3362,6 +3636,8 @@ def test_workbench_context_tab_has_live_session_inbox_card():
     assert 'workbenchChat.inbox.queue' in inbox_card
     assert 'workbenchChat.inbox.queueEmpty' in inbox_card
     assert 'className={"wbc-inbox-queue-count"' in inbox_card
+    assert 'className="wbc-context-empty-label"' in inbox_card
+    assert "hideTitle && feed.length === 0" not in inbox_card
     assert "queueDepth === 0 ? (" in inbox_card
     assert 'queueDepth === null ? "—" : queueDepth' in inbox_card
     inbox_head_css = css.split("\n.wbc-inbox-head {", 1)[1].split("}", 1)[0]
@@ -3379,6 +3655,8 @@ def test_workbench_context_tab_has_live_session_inbox_card():
     assert 'wbcT("toolName." + item.toolName, item.toolName)' in source
     assert "wbcInboxArgumentPreview(tool.arguments)" in inbox_card
     assert "item.toolCallId && <code" not in inbox_card
+    assert 'className={"wbc-inbox-event-preview"' in inbox_card
+    assert 'item.type === "tool_result" || item.type === "tool_activity"' in inbox_card
     assert 'aria-live="polite"' in source
     assert ".wbc-inbox-card" in css
     inbox_card_css = css.split(".wbc-inbox-card", 1)[1].split(
@@ -3646,6 +3924,7 @@ def test_workbench_attachment_preview_falls_back_without_overflowing():
     assert "onError={function () {" in source
     assert "showImagePreview" in source
     assert "function WbcMessageAttachment({ file, onOpenFile })" in source
+    assert 'var bubbleClassName = "wbc-bubble" + (hasInlineImage ? " with-inline-image" : "");' in source
     message_attachment = source.split(
         "function WbcMessageAttachment({ file, onOpenFile })", 1
     )[1].split("function WbcUserMessage(", 1)[0]
@@ -3668,6 +3947,11 @@ def test_workbench_attachment_preview_falls_back_without_overflowing():
     assert 'className={"wbc-attach-card" + (showImagePreview ? " image" : " file")}' in source
     assert ".wbc-attach-file-open" in styles
     assert ".wbc-inline-image-preview img" in styles
+    image_bubble_rule = styles.split(
+        ".wbc-msg.user .wbc-bubble.with-inline-image {", 1
+    )[1].split("}", 1)[0]
+    assert "width: fit-content;" in image_bubble_rule
+    assert "max-width: 100%;" in image_bubble_rule
     assert ".wbc-inline-image-actions .wbc-inline-image-action" in styles
     inline_image_rule = styles.split(".wbc-inline-image {", 1)[1].split("}", 1)[0]
     assert "width: min(280px, 100%);" in inline_image_rule
@@ -4441,7 +4725,8 @@ def test_native_browser_yields_to_model_confirm_and_topbar_overlays():
     ).read_text(encoding="utf-8")
 
     assert 'window.CyreneUI.register("browser-overlays"' in workbench
-    assert "if (!sessionMenu && !resourceMenu) return undefined;" in workbench
+    assert "if (!sessionMenu && !resourceMenu)" in workbench
+    assert "if (!overflowMenu && !hoverPreview) return undefined;" in workbench
     assert "if (!modelOpen) return undefined;" in workbench
     assert 'window.CyreneUI.require("browser-overlays")' in chat
     assert 'platform.require("browser-overlays")' in feedback
@@ -5705,7 +5990,7 @@ def test_workbench_live_reply_disables_interactive_markdown_until_done():
     root = Path(__file__).resolve().parent.parent
     chat = (root / "src" / "webui" / "frontend" / "workbench-chat.jsx").read_text(encoding="utf-8")
     styles = (root / "src" / "webui" / "frontend" / "workbench.css").read_text(encoding="utf-8")
-    prompts = (root / "src" / "cyrene" / "agent" / "prompts.py").read_text(encoding="utf-8")
+    contract = (root / "src" / "cyrene" / "tool_impl" / "renderer" / "load_contract.py").read_text(encoding="utf-8")
 
     live_message = chat.split("function WbcLiveMessage", 1)[1].split("// ---------------------------------------------------------------------------", 1)[0]
     assistant_message = chat.split("function WbcAssistantMessage", 1)[1].split("var WBC_HEARTBEAT_STALL_MS", 1)[0]
@@ -5713,8 +5998,8 @@ def test_workbench_live_reply_disables_interactive_markdown_until_done():
     assert "wbcRenderMarkdown(msg.content)" in assistant_message
     assert ".wbc-fold > summary:focus-visible" in styles
     assert "@media (prefers-reduced-motion: reduce)" in styles
-    assert ":::details Title" in prompts
-    assert ":::card Title" in prompts
+    assert ":::details Title" in contract
+    assert ":::card Title" in contract
 
 
 def test_workbench_library_list_uses_explicit_pagination():
@@ -6039,11 +6324,11 @@ def test_chart_mount_builds_option_and_recomputes_series():
     assert result["xAxis"] == [0, 1, 2]
 
 
-def test_workbench_assistant_message_mounts_charts_and_prompt_teaches_chart():
+def test_workbench_assistant_message_mounts_charts_and_contract_teaches_chart():
     root = Path(__file__).resolve().parent.parent
     chat = (root / "src" / "webui" / "frontend" / "workbench-chat.jsx").read_text(encoding="utf-8")
     styles = (root / "src" / "webui" / "frontend" / "workbench.css").read_text(encoding="utf-8")
-    prompts = (root / "src" / "cyrene" / "agent" / "prompts.py").read_text(encoding="utf-8")
+    contract = (root / "src" / "cyrene" / "tool_impl" / "renderer" / "load_contract.py").read_text(encoding="utf-8")
     index_html = (root / "src" / "webui" / "frontend" / "index.html").read_text(encoding="utf-8")
     build_script = (root / "src" / "webui" / "build-jsx.mjs").read_text(encoding="utf-8")
 
@@ -6057,8 +6342,8 @@ def test_workbench_assistant_message_mounts_charts_and_prompt_teaches_chart():
     assert ".wbc-chart-canvas" in styles
     assert ".wbc-chart-controls" in styles
     assert ".wbc-chart-spec" in styles
-    assert ":::chart line" in prompts
-    assert "y-binds" in prompts
+    assert ":::chart line" in contract
+    assert "y-binds" in contract
     assert "compiled/shared/chart/spec.js" in index_html
     assert "compiled/shared/chart/mount.js" in index_html
     assert "echarts.min.js" in index_html
@@ -6184,7 +6469,7 @@ def test_workbench_button_wiring_and_protocol_surface():
     mount = (root / "src" / "webui" / "frontend" / "shared" / "chart" / "mount.jsx").read_text(encoding="utf-8")
     renderer = (root / "src" / "webui" / "frontend" / "shared" / "markdown" / "renderer.jsx").read_text(encoding="utf-8")
     styles = (root / "src" / "webui" / "frontend" / "workbench.css").read_text(encoding="utf-8")
-    prompts = (root / "src" / "cyrene" / "agent" / "prompts.py").read_text(encoding="utf-8")
+    contract = (root / "src" / "cyrene" / "tool_impl" / "renderer" / "load_contract.py").read_text(encoding="utf-8")
 
     assert 'chatId: String(chatId || "")' in chat
     assert 'messageId: String(msg && msg.id || "")' in chat
@@ -6197,8 +6482,8 @@ def test_workbench_button_wiring_and_protocol_surface():
     assert 'fired = true;' in mount
     assert "(?:details|card|chart|button|actions|grid)" in renderer
     assert 'buildButtonPayload' in renderer
-    assert ":::button" in prompts
-    assert "action_id" in prompts
+    assert ":::button" in contract
+    assert "action_id" in contract
     assert ".wbc-button-btn" in styles
     assert ".wbc-button-btn--primary" in styles
     assert ".wbc-button-btn--danger" in styles
@@ -6290,11 +6575,11 @@ def test_markdown_containers_reject_invalid_nesting_and_depth():
     assert "Before." in result["plain"] and "After." in result["plain"]
 
 
-def test_workbench_actions_grid_wiring_and_prompt_rules():
+def test_workbench_actions_grid_wiring_and_contract_rules():
     root = Path(__file__).resolve().parent.parent
     renderer = (root / "src" / "webui" / "frontend" / "shared" / "markdown" / "renderer.jsx").read_text(encoding="utf-8")
     styles = (root / "src" / "webui" / "frontend" / "workbench.css").read_text(encoding="utf-8")
-    prompts = (root / "src" / "cyrene" / "agent" / "prompts.py").read_text(encoding="utf-8")
+    contract = (root / "src" / "cyrene" / "tool_impl" / "renderer" / "load_contract.py").read_text(encoding="utf-8")
 
     assert "findClosingLine" in renderer
     assert "depth" in renderer
@@ -6306,9 +6591,9 @@ def test_workbench_actions_grid_wiring_and_prompt_rules():
     assert ".wbc-actions" in styles
     assert ".wbc-grid" in styles
     assert "@media (max-width: 720px)" in styles
-    assert ":::actions" in prompts
-    assert ":::grid cols: 2" in prompts
-    assert "never nest" in prompts
+    assert ":::actions" in contract
+    assert ":::grid cols: 2" in contract
+    assert "cannot contain containers" in contract
 
 
 def test_workbench_button_model_mode_forwards_to_runtime_endpoint():

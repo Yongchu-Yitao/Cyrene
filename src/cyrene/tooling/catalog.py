@@ -61,6 +61,7 @@ _MAIN_ONLY_TOOLS = {
     "browser_user_events",
     "browser_request_takeover",
     "GenerateImage",
+    "LoadRendererContract",
     "RemoteCyreneAction",
     "RemoteHarness",
     "RunRemoteCyrene",
@@ -301,6 +302,8 @@ def get_active_tool_defs_for_actor(actor: str = "main") -> list[dict[str, Any]]:
     """Return tool defs filtered by actor and whole-package settings."""
 
     blocked = _tool_blocklist_for_actor(actor)
+    from cyrene.agent.state import has_response_capability
+
     try:
         from cyrene.runtime.settings_store import get_models
 
@@ -314,6 +317,13 @@ def get_active_tool_defs_for_actor(actor: str = "main") -> list[dict[str, Any]]:
     defs = [
         td for td in TOOL_DEFS
         if td["function"]["name"] not in blocked
+        and (
+            td["function"]["name"] != "LoadRendererContract"
+            or (
+                actor == "main"
+                and has_response_capability("interactive_blocks")
+            )
+        )
         and (
             td["function"]["name"] != "GenerateImage"
             or oauth_image_generation

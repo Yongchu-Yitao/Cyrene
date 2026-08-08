@@ -52,7 +52,9 @@ def has_recent_main_agent_activity(
 ) -> bool:
     """Return whether recent runtime events indicate an unfinished main-agent run."""
     cutoff_ts = now_ts - timedelta(seconds=30)
-    active = False
+    lifecycle_active = False
+    phase_active = False
+    active_tools: set[str] = set()
     for event in recent:
         try:
             event_ts = datetime.fromisoformat(str(event.get("timestamp") or ""))
@@ -63,17 +65,39 @@ def has_recent_main_agent_activity(
 
         event_type = str(event.get("type") or "")
         if event_type == "session_update":
-            active = str(event.get("status") or "") == "running"
+            status = str(event.get("status") or "").lower()
+            if status:
+                lifecycle_active = status in {"running", "planning", "finishing"}
+                if not lifecycle_active:
+                    phase_active = False
+                    active_tools.clear()
             continue
         if event_type == "phase_transition":
-            active = True
+            target = str(event.get("to") or "").lower()
+            phase_active = not bool(
+                re.search(r"done|complete|finish|idle|cancel|error|fail", target)
+            )
+            if not phase_active:
+                lifecycle_active = False
+                active_tools.clear()
             continue
-        if (
-            event_type in ("llm_call", "tool_call")
-            and str(event.get("caller") or "") == "main_agent"
-        ):
-            active = True
-    return active
+        if str(event.get("caller") or "") != "main_agent":
+            continue
+        if event_type == "llm_call":
+            # This is a completed accounting event. Reasoning-start/finish is
+            # tracked by the attached run stream, so it must not resurrect a
+            # session after a terminal transition.
+            continue
+        tool_id = str(
+            event.get("tool_call_id")
+            or event.get("toolCallId")
+            or f"{event.get('caller', '')}:{event.get('tool', '')}"
+        )
+        if event_type in {"tool_call_started", "tool_call_progress"}:
+            active_tools.add(tool_id)
+        elif event_type in {"tool_call_finished", "tool_call"}:
+            active_tools.discard(tool_id)
+    return lifecycle_active or phase_active or bool(active_tools)
 
 
 def _is_trace_only_agent_message(msg: dict[str, Any]) -> bool:

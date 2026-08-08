@@ -146,7 +146,7 @@
         <ul>
           <li><strong>文件操作</strong>——Read / Write / Edit / Glob / Grep，配合工作区范围守卫确保安全。</li>
           <li><strong>Shell 执行</strong>——执行 Bash 命令，支持持久 Shell 会话跨步骤复用。</li>
-          <li><strong>Web 搜索与获取</strong>——内置 SimpleXNG 搜索引擎（基于 SearXNG）搜索 Web，WebFetch 获取页面内容。无需 Docker 或外部搜索 API。</li>
+          <li><strong>Web 搜索与获取</strong>——配置官方 DeepSeek V4 模型时优先使用 DeepSeek Responses API 联网搜索，否则或调用失败时回退到内置 SimpleXNG（基于 SearXNG）；WebFetch 获取页面内容。</li>
           <li><strong>知识库检索</strong>——代理通过 knowledge_tools 渐进披露并调用 knowledge.search，在工作区知识库中执行语义或关键词搜索。</li>
           <li><strong>浏览器自动化</strong>——Electron 桌面版直接使用内嵌 Chromium（原生标签页、持久登录、无需 Playwright）；非桌面运行可选 Playwright 实时画面与登录接管。详见<a href="#" onclick="navigateTo('browser')">浏览器实况</a>。</li>
           <li><strong>并行子代理</strong>——生成独立代理并行执行任务，通过文件收件箱协调，支持 running → waiting → resumed → done 生命周期。详见<a href="#" onclick="navigateTo('subagents')">子代理系统</a>。</li>
@@ -246,7 +246,7 @@
         <ul>
           <li><strong>File operations</strong> — Read / Write / Edit / Glob / Grep, scoped by workspace guard.</li>
           <li><strong>Shell execution</strong> — run Bash commands with persistent shell sessions across rounds.</li>
-          <li><strong>Web search & fetch</strong> — built-in SimpleXNG (SearXNG) for web search, WebFetch for URL content. No Docker or external API key.</li>
+          <li><strong>Web search & fetch</strong> — official DeepSeek Responses Web Search is preferred when a DeepSeek V4 model is configured, with built-in SimpleXNG (SearXNG) as the automatic fallback; WebFetch retrieves page content.</li>
           <li><strong>Knowledge search</strong> — the agent progressively discovers knowledge.search through knowledge_tools for semantic/keyword search over the workspace knowledge base.</li>
           <li><strong>Browser automation</strong> — Electron desktop uses its embedded Chromium directly (native tabs, persistent logins, no Playwright); non-desktop runs can opt into Playwright live view and login takeover. See <a href="#" onclick="navigateTo('browser')">Browser</a>.</li>
           <li><strong>Parallel sub-agents</strong> — spawn independent agents with a stable actor-scoped wire bundle, coordinated via a file-based inbox. Main-only capabilities are rejected by runtime policy. Lifecycle: running → waiting → resumed → done. See <a href="#" onclick="navigateTo('subagents')">Sub-agents</a>.</li>
@@ -630,7 +630,7 @@ cd src/webui && npm install && node build-jsx.mjs && cd ../..</code></pre></div>
               <tr><td>工具包</td><td>按完整工具包启用/关闭渐进能力</td></tr>
               <tr><td>MCP 服务器</td><td>添加、删除和重启 MCP 连接（<strong>无需重启进程</strong>）</td></tr>
               <tr><td>SOUL.md</td><td>直接编辑人格文档</td></tr>
-              <tr><td>搜索</td><td>内置 SimpleXNG 配置</td></tr>
+              <tr><td>搜索</td><td>官方 DeepSeek 原生搜索优先，内置 SimpleXNG 回退</td></tr>
               <tr><td>外观</td><td>主题、文字大小、密度</td></tr>
             </tbody>
           </table>
@@ -1607,19 +1607,20 @@ cyrene mcp add my-api sse http://localhost:3000/mcp</code></pre></div>
 <div lang="zh">
 <div class="page-header">
         <h1>搜索</h1>
-        <p class="page-subtitle">内置 Web 搜索和深度研究管道。无需 Docker，无需外部搜索 API 密钥。</p>
+        <p class="page-subtitle">配置官方 DeepSeek 时使用原生联网搜索，并以内置 SimpleXNG 自动回退。</p>
       </div>
 
       <section>
-        <h2>SimpleXNG 内置搜索</h2>
-        <p>Cyrene 使用 <strong>SimpleXNG</strong>——一个基于 SearXNG 的零配置封装。它不需要 Docker，不需要外部搜索 API 密钥，开箱即用。</p>
+        <h2>DeepSeek 优先，SimpleXNG 回退</h2>
+        <p>配置带 API Key 的官方 DeepSeek V4 Endpoint（<code>https://api.deepseek.com</code>）后，Cyrene 会优先调用 DeepSeek Responses API 的服务端联网搜索，并使用 <code>deepseek-v4-flash</code> 作为搜索工作模型。第三方兼容 Endpoint 不会启用原生搜索。</p>
+        <p>没有官方 DeepSeek 配置或原生搜索调用失败时，Cyrene 自动使用 <strong>SimpleXNG</strong>——一个基于 SearXNG 的零配置封装。它不需要 Docker，不需要外部搜索 API 密钥，开箱即用。</p>
         <ul>
           <li><strong>自动配置</strong>——管理器自动生成 <code>data/simplexng_settings.yml</code></li>
           <li><strong>自动启动</strong>——端口 8888 上的搜索实例在 Cyrene 启动时自动运行</li>
           <li><strong>代理发现</strong>——自动处理 proxy 配置</li>
         </ul>
         <div class="note">
-          <strong>注意：</strong>Cyrene 目前<strong>仅使用 SimpleXNG</strong> 进行 Web 搜索。旧的 DuckDuckGo/Bing/Baidu 爬虫已移除。
+          <strong>注意：</strong>DeepSeek 原生搜索会产生对应账户的模型用量；超时、鉴权、限流、协议或空结果错误都会透明回退到 SimpleXNG。旧的 DuckDuckGo/Bing/Baidu 爬虫已移除。
         </div>
         <p>如果需要使用外部 SearXNG 实例：</p>
         <div class="code-block"><pre><code># 在设置或 .env 中
@@ -1644,10 +1645,11 @@ SEARXNG_AUTO_START=0</code></pre></div>
 <div lang="en">
 <div class="page-header">
         <h1>Search</h1>
-        <p class="page-subtitle">Built-in web search and deep research pipeline. No Docker or external API key needed.</p>
+        <p class="page-subtitle">DeepSeek-native web search when configured, with a built-in SimpleXNG fallback.</p>
       </div>
       <section>
-        <p>Cyrene uses <strong>SimpleXNG</strong> (based on SearXNG) — zero-config, auto-starts on port 8888. No Docker required.</p>
+        <p>When an official DeepSeek V4 endpoint (<code>https://api.deepseek.com</code>) and API key are configured, Cyrene first uses server-side Web Search through the DeepSeek Responses API, with <code>deepseek-v4-flash</code> as the documented search worker. Compatible third-party endpoints do not activate native search.</p>
+        <p>Without that configuration, or whenever the native request fails, Cyrene automatically falls back to <strong>SimpleXNG</strong> (based on SearXNG). It is zero-config, auto-starts on port 8888, and requires no Docker or external search key.</p>
       </section>
 </div>
 

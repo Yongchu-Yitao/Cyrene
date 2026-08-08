@@ -202,20 +202,54 @@ def test_session_tab_context_menu_supports_pinning_resources_and_removal():
     )
     css = (ROOT / "src/webui/frontend/workbench.css").read_text(encoding="utf-8")
 
-    assert "onContextMenu={function (event) { openSessionMenu(event, item); }}" in shell
+    assert "openSessionMenu(event, item, activity, false)" in shell
     assert "onTogglePinnedSession" in shell
     assert "onRemoveSessionTab" in shell
     assert "onLoadSessionResources" in shell
     assert "bridge.screenshot({" in shell
     assert 'className="workbench-session-browser-preview"' in shell
-    assert "<img src={sessionMenu.resources.browser.previewUrl}" in shell
+    assert 'className="workbench-session-resource-chevron"' in shell
     assert "function WorkbenchSessionMenuFileName" in shell
     assert "contentWidth - node.clientWidth" in shell
     assert "wb-session-file-name-scroll" in css
     assert 'onOpenSessionResource(item, { type: "browser" })' in shell
     assert 'onOpenSessionResource(item, { type: "file", file: file })' in shell
     assert "workbench.sessionMenu.copyTitle" in shell
-    assert 'className="workbench-account-menu workbench-session-menu"' in shell
+    assert "workbench-session-primary-actions" in shell
+    assert "workbench-session-utility-actions" in shell
+    assert 'className="open-session"' in shell
+    assert ".workbench-session-primary-actions.has-runtime-control" in css
+    assert "grid-template-columns: repeat(2, minmax(0, 1fr))" in css
+    assert ".workbench-session-utility-actions" in css
+    assert "workbench-session-primary-actions:not(.has-runtime-control)" in css
+    assert "justify-content: flex-start" in css
+    utility_css = css.rsplit(".workbench-session-utility-actions {", 1)[1].split("}", 1)[0]
+    assert "grid-template-columns: repeat(3, minmax(0, 1fr))" in utility_css
+    assert "margin-top: 8px" in utility_css
+    action_button_css = css.split(
+        ".workbench-account-menu.workbench-session-context-menu .workbench-session-primary-actions > button,",
+        1,
+    )[1].split("}", 1)[0]
+    assert "font-weight: 700" in action_button_css
+    utility_button_css = css.rsplit(
+        ".workbench-account-menu.workbench-session-context-menu .workbench-session-utility-actions > button {",
+        1,
+    )[1].split("}", 1)[0]
+    assert "min-height: 40px" in utility_button_css
+    assert "color: var(--wb-text)" in utility_button_css
+    danger_utility_css = css.split(
+        ".workbench-session-utility-actions > button.danger {", 1
+    )[1].split("}", 1)[0]
+    assert "grid-column: auto" in danger_utility_css
+    assert 'className="workbench-session-resource-section"' in shell
+    session_menu = shell.split('className="workbench-account-menu workbench-session-menu workbench-session-context-menu"', 1)[1].split("var overflowMenuPortal", 1)[0]
+    assert 'className="workbench-session-menu-separator"' not in session_menu
+    hidden_scrollbar_css = css.split(
+        ".workbench-session-context-menu.workbench-session-menu {", 1
+    )[1].split("}", 1)[0]
+    assert "scrollbar-width: none" in hidden_scrollbar_css
+    assert ".workbench-session-context-menu.workbench-session-menu::-webkit-scrollbar" in css
+    assert 'className="workbench-account-menu workbench-session-menu workbench-session-context-menu"' in shell
     assert 'className="workbench-session-menu-portal"' in shell
     assert "portalTheme[name] = computedTheme.getPropertyValue(name)" in shell
     assert "workbench-session-menu" in css
@@ -227,6 +261,441 @@ def test_session_tab_context_menu_supports_pinning_resources_and_removal():
     assert "pendingTopbarResourceRef" in chat
     assert 'resource.type === "browser"' in chat
     assert 'resource.type === "file"' in chat
+
+
+def test_session_activity_view_model_prioritizes_attention_and_preserves_active_tab():
+    source = (ROOT / "src/webui/frontend/workbench.jsx").read_text(encoding="utf-8")
+    helper = source.split("function wbVisibleSessionTabs", 1)[1].split(
+        "\nfunction wbRememberOpenedSessionKey", 1
+    )[0]
+    script = (
+        "function wbVisibleSessionTabs"
+        + helper
+        + """
+const items = [
+  {kind:"task", id:"t1", source:{status:"idle"}},
+  {kind:"chat", id:"c1", source:{runStatus:"running"}},
+  {kind:"task", id:"t2", source:{status:"waiting_for_user", pendingQuestion:{id:"q1"}}},
+  {kind:"task", id:"t3", source:{status:"running", planStepCount:5, planCompletedCount:2, planCurrentIndex:3}},
+  {kind:"task", id:"t4", source:{status:"planning"}},
+  {kind:"chat", id:"c2", source:{status:"idle", messageCount:4}}
+];
+const layout = wbVisibleSessionTabs(items, "task:t3", 3);
+process.stdout.write(JSON.stringify({
+  visible: layout.visible.map((item) => item.id),
+  overflow: layout.overflow.map((item) => item.id),
+  attention: wbSessionActivityPhase(items[2], null, null),
+  running: wbSessionActivitySnapshot(items[3], null, null, null),
+  staticPlanning: wbSessionActivitySnapshot(items[4], null, null, null),
+  livePlanning: wbSessionActivitySnapshot(items[4], null, {active:true}, null),
+  settledChat: wbSessionActivitySnapshot(items[5], null, {
+    active:true,
+    activity:{kind:"reasoning", label:"phase2", detail:"deepseek-v4-flash"}
+  }, null),
+  finishedTool: wbSessionActivitySnapshot(items[3], null, {
+    active:false,
+    activity:{kind:"tool", label:"browser.navigate", detail:"completed"}
+  }, null),
+  liveTool: wbSessionActivitySnapshot(items[3], null, {
+    active:true,
+    activity:{kind:"tool", label:"browser.navigate", detail:"running"}
+  }, null),
+  runtimeWinsToolFailure: wbSessionActivitySnapshot(items[5], {
+    progress:[], activities:[]
+  }, {
+    status:"failed",
+    active:false,
+    activity:{kind:"tool", label:"shell", failed:true}
+  }, null)
+}));
+"""
+    )
+    completed = subprocess.run(
+        ["node", "-e", script],
+        check=True,
+        capture_output=True,
+        text=True,
+        cwd=ROOT,
+    )
+    result = json.loads(completed.stdout)
+
+    assert result["visible"] == ["t1", "c1", "t3"]
+    assert result["overflow"] == ["t2", "t4", "c2"]
+    assert result["attention"] == {
+        "phase": "attention",
+        "reason": "input",
+        "active": False,
+    }
+    assert result["running"]["phase"] == "running"
+    assert result["running"]["progress"] == {
+        "current": 3,
+        "completed": 2,
+        "total": 5,
+        "title": "",
+        "action": "",
+    }
+    assert result["running"]["capabilities"]["canPause"] is True
+    assert result["running"]["isLive"] is True
+    assert result["staticPlanning"]["phase"] == "planning"
+    assert result["staticPlanning"]["isLive"] is False
+    assert result["livePlanning"]["isLive"] is True
+    assert result["settledChat"]["phase"] == "completed"
+    assert result["settledChat"]["isLive"] is False
+    assert result["settledChat"]["activity"] is None
+    assert result["finishedTool"]["activity"] is None
+    assert result["liveTool"]["activity"]["label"] == "browser.navigate"
+    assert result["runtimeWinsToolFailure"]["phase"] == "running"
+    assert result["runtimeWinsToolFailure"]["isLive"] is True
+
+
+def test_topbar_activity_controls_hover_preview_and_overflow_are_separate():
+    shell = (ROOT / "src/webui/frontend/workbench.jsx").read_text(encoding="utf-8")
+    css = (ROOT / "src/webui/frontend/workbench.css").read_text(encoding="utf-8")
+
+    assert 'className="workbench-session-tab-more"' in shell
+    assert "openSessionMenu(event, item, activity, true)" in shell
+    assert "onClick={function () { if (onOpenSession) onOpenSession(item); }}" in shell
+    assert "scheduleSessionPreview(event, item, activity, false)" in shell
+    assert "scheduleSessionPreview(event, item, activity, true)" in shell
+    assert 'morphUntil: state.phase === "completed"' in shell
+    assert "setActivityClock(Date.now())" in shell
+    assert "replaceTitleForMorph" in shell
+    assert 'id="workbench-session-activity-preview"' in shell
+    assert 'className={"workbench-session-overflow-button "' in shell
+    assert 'className="workbench-session-overflow-stack"' in shell
+    assert 'className="workbench-session-overflow-count"' in shell
+    assert 'className="workbench-session-overflow-chevron"' in shell
+    assert '<span>… {overflowTabs.length}</span>' not in shell
+    assert "overflowMenuPortal" in shell
+    assert "wbSessionActivityRank" in shell
+    assert "wbSplitOverflowSessions" in shell
+    assert 't("workbench.sessionOverflow.title", "All conversations")' in shell
+    assert 't("workbench.sessionOverflow.other", "Other sessions")' in shell
+    assert 't("workbench.sessionOverflow.exceptions", "Exceptions")' in shell
+    assert 'className="workbench-session-overflow-divider"' in shell
+    assert shell.count('className="workbench-session-overflow-group-items"') == 2
+    assert "has-regular" in shell
+    assert "has-exceptions" in shell
+    assert '" split-scroll"' in shell
+    assert ".workbench-session-overflow-menu.split-scroll" in css
+    assert ".workbench-session-overflow-group-items" in css
+    group_items_css = css.split(".workbench-session-overflow-group-items {", 1)[1].split("}", 1)[0]
+    assert "overflow-y: auto" in group_items_css
+    assert "overscroll-behavior: contain" in group_items_css
+    exceptional_css = css.split(
+        ".workbench-session-overflow-list.has-regular.has-exceptions .workbench-session-overflow-group.exceptional {",
+        1,
+    )[1].split("}", 1)[0]
+    assert "min-height: 92px" in exceptional_css
+    assert "max-height: min(170px, 42%)" in exceptional_css
+    assert ".workbench-session-tab-more" in css
+    assert ".workbench-session-activity-preview" in css
+    assert ".workbench-session-overflow-menu" in css
+    assert "wb-session-running-pulse" in css
+    assert ".workbench-session-status-dot.planning.is-live" in css
+    assert "planning: state.isLive" in shell
+    assert 't("workbench.sessionStatus.planningStage", "Planning stage")' in shell
+    assert 't("workbench.sessionStatus.step", {' in shell
+    assert '}, "Step {current}/{total}")' in shell
+    assert "`llm_call` is emitted as a completed accounting event" in shell
+    activity_reducer = shell.split("function onActivityEvent(data)", 1)[1].split(
+        'return window.CyreneUI.require("events").subscribe(onActivityEvent)', 1
+    )[0]
+    assert 'next.status = "failed"' not in activity_reducer
+    assert "Tool failure is local to this call" in activity_reducer
+    reduced_motion = css.split("@media (prefers-reduced-motion: reduce)", 1)[1]
+    assert ".workbench-session-status-dot" in reduced_motion
+    assert "animation: none" in reduced_motion
+
+
+def test_overflow_sessions_group_exceptions_last_and_sort_each_group_by_time():
+    source = (ROOT / "src/webui/frontend/workbench.jsx").read_text(encoding="utf-8")
+    helper = source.split("function wbOverflowSessionTime", 1)[1].split(
+        "\nfunction wbRememberOpenedSessionKey", 1
+    )[0]
+    script = (
+        "function wbOverflowSessionTime"
+        + helper
+        + """
+const sourceItems = [
+  {id: "attention-old", title: "Needs input", updatedAt: "2026-08-01T10:00:00Z", activity: {phase: "attention"}},
+  {id: "planning-old", title: "Planning", updatedAt: "2026-08-02T10:00:00Z", activity: {phase: "planning"}},
+  {id: "failed-new", title: "Failed", updatedAt: "2026-08-04T10:00:00Z", activity: {phase: "failed"}},
+  {id: "completed-new", title: "Completed", updatedAt: "2026-08-05T10:00:00Z", activity: {phase: "completed"}},
+  {id: "running-middle", title: "Running", updatedAt: "2026-08-03T10:00:00Z", activity: {phase: "running"}}
+];
+const groups = wbSplitOverflowSessions(sourceItems);
+process.stdout.write(JSON.stringify({
+  regular: groups.regular.map(item => item.id),
+  exceptional: groups.exceptional.map(item => item.id),
+  original: sourceItems.map(item => item.id)
+}));
+"""
+    )
+    completed = subprocess.run(
+        ["node", "-e", script], check=True, capture_output=True, text=True, cwd=ROOT
+    )
+    result = json.loads(completed.stdout)
+
+    assert result["regular"] == ["completed-new", "running-middle", "planning-old"]
+    assert result["exceptional"] == ["failed-new", "attention-old"]
+    assert result["original"] == [
+        "attention-old",
+        "planning-old",
+        "failed-new",
+        "completed-new",
+        "running-middle",
+    ]
+
+
+def test_overflow_menu_keeps_internal_scroll_open_and_has_no_accent_outline():
+    shell = (ROOT / "src/webui/frontend/workbench.jsx").read_text(encoding="utf-8")
+    css = (ROOT / "src/webui/frontend/workbench.css").read_text(encoding="utf-8")
+
+    assert "function handleScroll(event)" in shell
+    assert 'target.closest(\n        ".workbench-session-overflow-menu, .workbench-session-menu"' in shell
+    assert 'window.addEventListener("scroll", handleScroll, true)' in shell
+    assert 'window.removeEventListener("scroll", handleScroll, true)' in shell
+    focus_rule = css.split(".workbench-session-overflow-button:focus,", 1)[1].split("}", 1)[0]
+    assert "outline: none" in focus_rule
+    assert "box-shadow: none" in focus_rule
+
+
+def test_topbar_overlay_captures_browser_frame_before_hiding_native_view():
+    shell = (ROOT / "src/webui/frontend/workbench.jsx").read_text(encoding="utf-8")
+    viewport = (
+        ROOT / "src/webui/frontend/shared/browser/viewport.jsx"
+    ).read_text(encoding="utf-8")
+
+    coordinator = shell.split("function wbSetBrowserOverlayObscured", 1)[1].split(
+        "// Other classic-script bundles", 1
+    )[0]
+    assert "preview: true" in coordinator
+    assert "onCaptureStarted" in coordinator
+    assert "onReady: hideNativeAfterPreview" in coordinator
+    assert coordinator.index('window.dispatchEvent(new CustomEvent("workbench:browser-obscured"') < coordinator.index(
+        "if (!captureStarted) hideNativeAfterPreview()"
+    )
+    assert "setNativeObscured(false).finally" in coordinator
+    assert 'typeof detail.onCaptureStarted === "function"' in viewport
+    assert "detail.onCaptureStarted()" in viewport
+    assert "setOverlayPreview(preview)" in viewport
+    assert "restoreNativeAfterPreview()" in viewport
+
+
+def test_overflow_count_uses_the_i18n_parameter_position():
+    i18n = (ROOT / "src/webui/frontend/workbench-i18n.jsx").read_text(encoding="utf-8")
+    helper = i18n.split("function workbenchInterpolate", 1)[1].split(
+        "\nfunction workbenchToolName", 1
+    )[0]
+    script = (
+        'var WORKBENCH_TRANSLATIONS={zh:{"workbench.sessionOverflow.count":"另有 {count} 个"},en:{}};'
+        'var workbenchI18nLang="zh";'
+        "function workbenchInterpolate"
+        + helper
+        + 'process.stdout.write(workbenchT("workbench.sessionOverflow.count", {count: 8}, "{count} more"));'
+    )
+    completed = subprocess.run(
+        ["node", "-e", script],
+        check=True,
+        capture_output=True,
+        text=True,
+        cwd=ROOT,
+    )
+
+    assert completed.stdout == "另有 8 个"
+
+
+def test_task_summary_exposes_compact_plan_progress_for_the_topbar():
+    from cyrene.workbench.runtime import _workbench_session_summary
+
+    summary = _workbench_session_summary(
+        {
+            "id": "task-1",
+            "projectId": "project-1",
+            "status": "running",
+            "plan": [
+                {"title": "Done", "status": "completed"},
+                {"title": "Inspect loader", "status": "running", "currentAction": "Reading files"},
+                {"title": "Verify", "status": "pending"},
+            ],
+        }
+    )
+
+    assert summary["planStepCount"] == 3
+    assert summary["planCompletedCount"] == 1
+    assert summary["planCurrentIndex"] == 2
+    assert summary["planCurrentTitle"] == "Inspect loader"
+    assert summary["planCurrentAction"] == "Reading files"
+
+
+def test_chat_summary_exposes_live_run_status_without_stale_running_state():
+    from cyrene.workbench.chat import _public_chat_light
+
+    summary = _public_chat_light(
+        {
+            "id": "topbar-status-test-chat",
+            "projectId": "project-1",
+            "status": "running",
+            "messages": [],
+        }
+    )
+
+    assert summary["status"] == "running"
+    assert summary["runStatus"] == "idle"
+
+
+def test_chat_summary_preserves_failed_cancelled_and_awaiting_run_outcomes():
+    from cyrene.workbench.chat import _public_chat_light
+
+    base = {
+        "projectId": "project-1",
+        "status": "idle",
+        "messages": [{"role": "user", "content": "hello"}],
+    }
+    failed = _public_chat_light({
+        **base,
+        "id": "topbar-last-failed-chat",
+        "lastRun": {"status": "error", "outcome": "error"},
+    })
+    cancelled = _public_chat_light({
+        **base,
+        "id": "topbar-last-cancelled-chat",
+        "lastRun": {"status": "cancelled", "terminationReason": "user_interrupted"},
+    })
+    awaiting = _public_chat_light({
+        **base,
+        "id": "topbar-last-awaiting-chat",
+        "lastRun": {"status": "done", "outcome": "awaiting"},
+    })
+
+    assert failed["runStatus"] == "failed"
+    assert cancelled["runStatus"] == "cancelled"
+    assert awaiting["runStatus"] == "awaiting_user"
+
+
+def test_chat_run_outcome_projection_is_persisted_for_list_and_topbar(monkeypatch):
+    from cyrene.workbench import chat as chat_mod
+
+    payload = {
+        "chats": [{
+            "id": "chat-outcome-projection",
+            "status": "running",
+            "updatedAt": "2026-08-08T09:00:00+00:00",
+            "messages": [],
+        }]
+    }
+    written = []
+    monkeypatch.setattr(chat_mod, "_read_chats_store", lambda: payload)
+    monkeypatch.setattr(chat_mod, "_write_chats_store", lambda value: written.append(value))
+
+    chat_mod._record_chat_run_outcome(
+        "chat-outcome-projection",
+        run_id="run-1",
+        status="error",
+        termination_reason="driver_error",
+        outcome_kind="error",
+        created_at="2026-08-08T10:00:00+00:00",
+    )
+
+    chat = payload["chats"][0]
+    assert chat["status"] == "idle"
+    assert chat["lastRun"]["id"] == "run-1"
+    assert chat["lastRun"]["status"] == "error"
+    assert chat["lastRun"]["outcome"] == "error"
+    assert written == [payload]
+
+
+def test_session_activity_reducer_tracks_parallel_work_and_resets_between_runs():
+    source = (ROOT / "src/webui/frontend/workbench.jsx").read_text(encoding="utf-8")
+    helper = source.split("function wbArgsPreview", 1)[1].split(
+        "\nfunction wbActorLabel", 1
+    )[0]
+    script = (
+        "function wbArgsPreview"
+        + helper
+        + """
+let state = {};
+state = wbReduceSessionActivity(state, {type:"tool_call_started", session_id:"c1", runId:"r1", tool_call_id:"a", tool:"shell", timestamp:"2026-08-08T10:00:00Z"});
+state = wbReduceSessionActivity(state, {type:"tool_call_started", session_id:"c1", runId:"r1", tool_call_id:"b", tool:"browser", timestamp:"2026-08-08T10:00:01Z"});
+state = wbReduceSessionActivity(state, {type:"tool_call_finished", session_id:"c1", runId:"r1", tool_call_id:"a", tool:"shell", timestamp:"2026-08-08T10:00:02Z"});
+const afterOneFinished = {active:state.active, tools:Object.keys(state.activeTools)};
+state = wbReduceSessionActivity(state, {type:"subagent_update", session_id:"c1", runId:"r1", agent_id:"research", status:"running", task:"Search"});
+state = wbReduceSessionActivity(state, {type:"tool_call_finished", session_id:"c1", runId:"r1", tool_call_id:"b", tool:"browser"});
+const subagentSurvives = state.active;
+state = wbReduceSessionActivity(state, {type:"session_update", session_id:"c1", runId:"r1", status:"error"});
+const terminal = {active:state.active, tools:Object.keys(state.activeTools), activity:state.activity, agent:state.agents.research.status};
+state = wbReduceSessionActivity(state, {type:"session_update", session_id:"c1", runId:"r2", status:"running"});
+const nextRun = {active:state.active, activity:state.activity, agents:Object.keys(state.agents), status:state.status};
+process.stdout.write(JSON.stringify({afterOneFinished, subagentSurvives, terminal, nextRun}));
+"""
+    )
+    completed = subprocess.run(
+        ["node", "-e", script], check=True, capture_output=True, text=True, cwd=ROOT
+    )
+    result = json.loads(completed.stdout)
+
+    assert result["afterOneFinished"] == {"active": True, "tools": ["b"]}
+    assert result["subagentSurvives"] is True
+    assert result["terminal"] == {
+        "active": False,
+        "tools": [],
+        "activity": None,
+        "agent": "done",
+    }
+    assert result["nextRun"] == {
+        "active": True,
+        "activity": None,
+        "agents": [],
+        "status": "running",
+    }
+
+
+def test_session_activity_uses_newer_durable_status_and_maps_terminal_variants():
+    source = (ROOT / "src/webui/frontend/workbench.jsx").read_text(encoding="utf-8")
+    helper = source.split("function wbSessionActivityPhase", 1)[1].split(
+        "\nfunction wbLatestRuntimeActivity", 1
+    )[0]
+    script = (
+        "function wbSessionActivityPhase"
+        + helper
+        + """
+const completed = wbSessionActivityPhase({kind:"chat", source:{runStatus:"completed", updatedAt:"2026-08-08T10:00:02Z", messageCount:2}}, null, {status:"failed", statusAt:Date.parse("2026-08-08T10:00:01Z"), lastEventAt:Date.parse("2026-08-08T10:00:01Z"), active:true, activeTools:{old:{label:"shell"}}});
+const cancelled = wbSessionActivityPhase({kind:"chat", source:{runStatus:"cancelled"}}, null, null);
+const awaiting = wbSessionActivityPhase({kind:"chat", source:{runStatus:"awaiting_user"}}, null, null);
+process.stdout.write(JSON.stringify({completed, cancelled, awaiting}));
+"""
+    )
+    completed = subprocess.run(
+        ["node", "-e", script], check=True, capture_output=True, text=True, cwd=ROOT
+    )
+    result = json.loads(completed.stdout)
+
+    assert result["completed"]["phase"] == "completed"
+    assert result["cancelled"]["phase"] == "cancelled"
+    assert result["awaiting"] == {
+        "phase": "attention",
+        "reason": "input",
+        "active": False,
+    }
+
+
+def test_tab_menus_use_cyrene_context_menu_surface():
+    shell = (ROOT / "src/webui/frontend/workbench.jsx").read_text(encoding="utf-8")
+    css = (ROOT / "src/webui/frontend/workbench.css").read_text(encoding="utf-8")
+
+    assert "workbench-session-context-menu" in shell
+    assert ".workbench-session-context-menu" in css
+    context_css = css.split(".workbench-session-context-menu,", 1)[1].split("}", 1)[0]
+    assert "border-radius: 14px" in context_css
+    assert '"--wb-card-bg-strong"' in shell
+    assert "...sessionMenu.portalTheme" in shell
+    assert "...overflowMenu.portalTheme" in shell
+    assert "...resourceMenu.portalTheme" in shell
+    assert "background: var(--wb-card-bg-strong, var(--wb-card-bg" in context_css
+    assert "sessionMenuCurrentActivity" in shell
+    assert '["ArrowDown", "ArrowUp", "Home", "End"]' in shell
+    assert "items[nextIndex].focus()" in shell
 
 
 def test_browser_can_be_copied_to_another_conversation_by_drop():

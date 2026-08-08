@@ -241,9 +241,272 @@ html[data-theme="dark"] .brand-mark {
   box-shadow: 0 1px 2px color-mix(in srgb, var(--accent) 10%, transparent);
 }
 
+.workbench-session-tab-group {
+  min-width: 0;
+  width: clamp(82px, 9.5vw, 136px);
+  height: 32px;
+  flex: 0 1 136px;
+  position: relative;
+  transition: width 240ms cubic-bezier(0.22, 1, 0.36, 1), flex-basis 240ms cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+.workbench-session-tab-group.active {
+  width: clamp(150px, 17vw, 244px);
+  flex-basis: 244px;
+}
+
+.workbench-session-tab-group .workbench-session-tab {
+  width: 100%;
+  height: 100%;
+  padding-right: 28px;
+  flex: 1 1 auto;
+}
+
+.workbench-session-tab-group .workbench-session-tab.active {
+  width: 100%;
+  flex-basis: auto;
+}
+
+.workbench-session-tab-copy {
+  min-width: 0;
+  display: flex;
+  flex: 1 1 auto;
+  align-items: center;
+  gap: 3px;
+  overflow: hidden;
+}
+
+.workbench-session-tab-activity-copy {
+  min-width: 0;
+  flex: 0 1 auto;
+  overflow: hidden;
+  color: var(--wb-muted);
+  font-size: calc(11px * var(--wb-ui-font-scale, 1));
+  font-weight: 580;
+  line-height: 1;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  animation: wb-session-activity-reveal 180ms ease-out both;
+}
+
+.workbench-session-tab-morph-title {
+  animation: wb-session-activity-reveal 180ms ease-out both;
+}
+
+@keyframes wb-session-activity-reveal {
+  from { opacity: 0; transform: translateX(-3px); }
+  to { opacity: 1; transform: translateX(0); }
+}
+
+.workbench-session-tab-status,
+.workbench-session-overflow-icon,
+.workbench-session-activity-menu-state {
+  width: 16px;
+  height: 16px;
+  flex: 0 0 16px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--wb-faint);
+}
+
+.workbench-session-tab-status.running,
+.workbench-session-overflow-indicator.running,
+.workbench-session-overflow-icon.running,
+.workbench-session-activity-menu-state.running { color: var(--wb-green); }
+.workbench-session-tab-status.planning,
+.workbench-session-overflow-indicator.planning,
+.workbench-session-overflow-icon.planning,
+.workbench-session-activity-menu-state.planning { color: var(--wb-blue); }
+.workbench-session-tab-status.attention,
+.workbench-session-overflow-indicator.attention,
+.workbench-session-overflow-icon.attention,
+.workbench-session-activity-menu-state.attention { color: var(--wb-amber); }
+.workbench-session-tab-status.completed,
+.workbench-session-overflow-indicator.completed,
+.workbench-session-overflow-icon.completed,
+.workbench-session-activity-menu-state.completed { color: var(--wb-green); }
+.workbench-session-tab-status.failed,
+.workbench-session-overflow-indicator.failed,
+.workbench-session-overflow-icon.failed,
+.workbench-session-activity-menu-state.failed { color: var(--wb-red); }
+.workbench-session-tab-status.cancelled,
+.workbench-session-overflow-indicator.cancelled,
+.workbench-session-overflow-icon.cancelled,
+.workbench-session-activity-menu-state.cancelled { color: var(--wb-muted); }
+
+.workbench-session-status-svg {
+  width: 16px;
+  height: 16px;
+  display: block;
+}
+
+.workbench-session-status-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 999px;
+  background: currentColor;
+  box-shadow: 0 0 0 2px color-mix(in srgb, currentColor 12%, transparent);
+}
+
+.workbench-session-status-dot.idle {
+  width: 6px;
+  height: 6px;
+  background: transparent;
+  border: 1.5px solid currentColor;
+  box-shadow: none;
+}
+
+.workbench-session-status-dot.running.is-live {
+  animation: wb-session-running-pulse 1.6s ease-in-out infinite;
+}
+
+.workbench-session-status-dot.planning {
+  background: transparent;
+  border: 1.5px dashed currentColor;
+  box-shadow: none;
+}
+
+.workbench-session-status-dot.planning.is-live {
+  animation: wb-session-planning-spin 1.8s linear infinite;
+}
+
+@keyframes wb-session-running-pulse {
+  50% { box-shadow: 0 0 0 4px color-mix(in srgb, currentColor 4%, transparent); opacity: 0.74; }
+}
+
+@keyframes wb-session-planning-spin {
+  to { transform: rotate(360deg); }
+}
+
+.workbench-session-tab-more {
+  width: 25px;
+  height: 28px;
+  padding: 0;
+  border: 0;
+  border-radius: 6px;
+  position: absolute;
+  z-index: 2;
+  top: 2px;
+  right: 2px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: transparent;
+  color: var(--wb-muted);
+  cursor: pointer;
+  opacity: 0;
+  transition: opacity 120ms ease, background-color 120ms ease, color 120ms ease;
+}
+
+.workbench-session-tab-group:hover .workbench-session-tab-more,
+.workbench-session-tab-group:focus-within .workbench-session-tab-more,
+.workbench-session-tab-group.phase-running .workbench-session-tab-more,
+.workbench-session-tab-group.phase-attention .workbench-session-tab-more,
+.workbench-session-tab-group.phase-failed .workbench-session-tab-more {
+  opacity: 1;
+}
+
+.workbench-session-tab-more:hover,
+.workbench-session-tab-more:focus-visible {
+  background: color-mix(in srgb, var(--wb-text) 9%, var(--wb-control-bg));
+  color: var(--wb-text);
+}
+
+.workbench-session-tab-more:focus-visible {
+  outline: 2px solid var(--wb-accent);
+  outline-offset: -1px;
+}
+
+.workbench-session-overflow-button {
+  height: 32px;
+  min-width: 58px;
+  padding: 0 7px 0 8px;
+  border: 1px solid color-mix(in srgb, var(--wb-text) 13%, var(--wb-line));
+  border-radius: 8px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+  flex: 0 0 auto;
+  background: color-mix(in srgb, var(--wb-text) 2%, var(--wb-control-bg));
+  color: var(--wb-muted);
+  cursor: pointer;
+  font-size: calc(12px * var(--wb-ui-font-scale, 1));
+  font-weight: 650;
+}
+
+.workbench-session-overflow-stack {
+  width: 18px;
+  height: 18px;
+  position: relative;
+  display: inline-grid;
+  flex: 0 0 18px;
+  place-items: center;
+  color: var(--wb-muted);
+}
+
+.workbench-session-overflow-stack > svg {
+  width: 18px;
+  height: 18px;
+  display: block;
+}
+
+.workbench-session-overflow-indicator {
+  width: 6px;
+  height: 6px;
+  position: absolute;
+  right: -1px;
+  bottom: 0;
+  border: 1.5px solid var(--wb-control-bg);
+  border-radius: 999px;
+  background: currentColor;
+  color: var(--wb-faint);
+  box-shadow: 0 0 0 1px color-mix(in srgb, currentColor 10%, transparent);
+}
+
+.workbench-session-overflow-count {
+  min-width: 2ch;
+  color: var(--wb-text);
+  font-variant-numeric: tabular-nums;
+  line-height: 1;
+  text-align: center;
+}
+
+.workbench-session-overflow-chevron {
+  width: 12px;
+  height: 12px;
+  flex: 0 0 12px;
+  color: var(--wb-faint);
+  transition: transform 150ms ease, color 150ms ease;
+}
+
+.workbench-session-overflow-button:hover,
+.workbench-session-overflow-button:focus-visible {
+  border-color: color-mix(in srgb, var(--wb-text) 23%, var(--wb-line));
+  background: color-mix(in srgb, var(--wb-text) 5%, var(--wb-control-bg));
+}
+
+.workbench-session-overflow-button:hover .workbench-session-overflow-chevron,
+.workbench-session-overflow-button:focus-visible .workbench-session-overflow-chevron {
+  color: var(--wb-text);
+  transform: translateY(1px);
+}
+
+.workbench-session-overflow-button:focus,
+.workbench-session-overflow-button:focus-visible {
+  outline: none;
+  box-shadow: none;
+}
+
 @media (prefers-reduced-motion: reduce) {
-  .workbench-session-tab {
+  .workbench-session-tab,
+  .workbench-session-tab-group,
+  .workbench-session-tab-activity-copy,
+  .workbench-session-status-dot,
+  .workbench-session-overflow-chevron {
     transition: none;
+    animation: none;
   }
 }
 
@@ -305,11 +568,318 @@ html[data-theme="dark"] .brand-mark {
   z-index: 10031;
   right: auto;
   bottom: auto;
-  width: 224px;
-  max-height: min(420px, calc(100vh - 16px));
+  width: min(340px, calc(100vw - 16px));
+  max-height: min(440px, calc(100vh - 16px));
   overflow: auto;
   -webkit-app-region: no-drag;
 }
+
+.workbench-session-context-menu.workbench-session-menu {
+  scrollbar-width: none;
+  -ms-overflow-style: none;
+}
+
+.workbench-session-context-menu.workbench-session-menu::-webkit-scrollbar {
+  width: 0;
+  height: 0;
+  display: none;
+}
+
+.workbench-session-activity-preview,
+.workbench-session-overflow-menu {
+  position: fixed;
+  z-index: 10031;
+  width: 300px;
+  box-sizing: border-box;
+  border: 1px solid color-mix(in srgb, var(--wb-text) 12%, var(--wb-line));
+  border-radius: 12px;
+  background: color-mix(in srgb, var(--wb-card-bg) 96%, transparent);
+  color: var(--wb-text);
+  box-shadow: 0 16px 42px color-mix(in srgb, #06101d 18%, transparent), 0 3px 10px color-mix(in srgb, #06101d 7%, transparent);
+  -webkit-app-region: no-drag;
+}
+
+.workbench-session-activity-preview {
+  padding: 13px;
+  pointer-events: none;
+}
+
+.workbench-session-activity-preview-head,
+.workbench-session-activity-menu-head {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+}
+
+.workbench-session-activity-preview-head > div,
+.workbench-session-activity-menu-head > div {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.workbench-session-activity-preview-head b,
+.workbench-session-activity-preview-head small,
+.workbench-session-activity-menu-head b,
+.workbench-session-activity-menu-head small {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.workbench-session-activity-preview-head b,
+.workbench-session-activity-menu-head b { font-size: calc(13px * var(--wb-ui-font-scale, 1)); }
+.workbench-session-activity-preview-head small,
+.workbench-session-activity-menu-head small { color: var(--wb-muted); font-size: calc(11px * var(--wb-ui-font-scale, 1)); }
+
+.workbench-session-activity-progress,
+.workbench-session-activity-current {
+  margin-top: 12px;
+  padding-top: 10px;
+  border-top: 1px solid var(--wb-line);
+}
+
+.workbench-session-activity-progress > div {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  color: var(--wb-muted);
+  font-size: calc(11px * var(--wb-ui-font-scale, 1));
+}
+
+.workbench-session-activity-progress-track {
+  height: 5px;
+  margin-top: 7px;
+  border-radius: 999px;
+  display: block;
+  overflow: hidden;
+  background: color-mix(in srgb, var(--wb-text) 9%, transparent);
+}
+
+.workbench-session-activity-progress-track i {
+  height: 100%;
+  display: block;
+  border-radius: inherit;
+  background: var(--wb-accent);
+}
+
+.workbench-session-activity-progress p,
+.workbench-session-activity-current b,
+.workbench-session-activity-current small {
+  margin: 6px 0 0;
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: calc(11px * var(--wb-ui-font-scale, 1));
+}
+
+.workbench-session-activity-current > span {
+  color: var(--wb-muted);
+  font-size: calc(10px * var(--wb-ui-font-scale, 1));
+  text-transform: uppercase;
+  letter-spacing: .04em;
+}
+
+.workbench-session-activity-current small { color: var(--wb-muted); }
+
+.workbench-session-activity-agents {
+  margin-top: 11px;
+  color: var(--wb-green);
+  font-size: calc(11px * var(--wb-ui-font-scale, 1));
+  font-weight: 650;
+}
+
+.workbench-session-activity-menu-head {
+  padding: 8px 9px 10px;
+}
+
+.workbench-session-activity-menu-list {
+  padding: 0 4px 4px;
+}
+
+.workbench-session-activity-menu-row {
+  min-width: 0;
+  padding: 6px 5px;
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+}
+
+.workbench-session-activity-menu-row > span:last-child {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.workbench-session-context-menu .workbench-session-activity-menu-row > span:last-child {
+  display: grid;
+  grid-template-columns: minmax(88px, .72fr) minmax(0, 1.28fr);
+  align-items: center;
+  gap: 12px;
+}
+
+.workbench-session-context-menu .workbench-session-activity-menu-row > span:last-child small {
+  text-align: left;
+}
+
+.workbench-session-activity-menu-row b,
+.workbench-session-activity-menu-row small {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.workbench-session-activity-menu-row b { font-size: calc(11px * var(--wb-ui-font-scale, 1)); }
+.workbench-session-activity-menu-row small { color: var(--wb-muted); font-size: calc(10px * var(--wb-ui-font-scale, 1)); }
+
+.workbench-session-activity-agent-mark {
+  width: 7px;
+  height: 7px;
+  margin-top: 4px;
+  flex: 0 0 7px;
+  border-radius: 999px;
+  background: var(--wb-faint);
+}
+
+.workbench-session-activity-agent-mark.running,
+.workbench-session-activity-agent-mark.resumed { background: var(--wb-green); }
+.workbench-session-activity-agent-mark.failed { background: var(--wb-red); }
+
+.workbench-session-activity-menu-progress {
+  margin: 3px 9px 8px;
+  padding: 8px 9px;
+  border-radius: 7px;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  background: color-mix(in srgb, var(--wb-accent) 8%, transparent);
+}
+
+.workbench-session-activity-menu-progress span { color: var(--wb-muted); font-size: calc(10px * var(--wb-ui-font-scale, 1)); }
+.workbench-session-activity-menu-progress b { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: calc(11px * var(--wb-ui-font-scale, 1)); }
+
+.workbench-session-overflow-menu {
+  padding: 7px;
+  max-height: min(420px, calc(100vh - 16px));
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.workbench-session-overflow-menu.split-scroll {
+  height: min(420px, calc(100vh - 16px));
+}
+
+.workbench-session-overflow-head {
+  padding: 8px 9px 9px;
+  display: flex;
+  flex: 0 0 auto;
+  align-items: baseline;
+  justify-content: space-between;
+}
+
+.workbench-session-overflow-head b { font-size: calc(13px * var(--wb-ui-font-scale, 1)); }
+.workbench-session-overflow-head small { color: var(--wb-muted); font-size: calc(10px * var(--wb-ui-font-scale, 1)); }
+
+.workbench-session-overflow-list {
+  min-height: 0;
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  gap: 6px;
+  overflow: hidden;
+}
+
+.workbench-session-overflow-group {
+  min-width: 0;
+  min-height: 0;
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  gap: 2px;
+  overflow: hidden;
+}
+
+.workbench-session-overflow-list.has-regular.has-exceptions .workbench-session-overflow-group.exceptional {
+  min-height: 92px;
+  max-height: min(170px, 42%);
+  flex: 0 1 auto;
+}
+
+.workbench-session-overflow-group-head {
+  min-height: 25px;
+  padding: 3px 10px;
+  display: flex;
+  flex: 0 0 auto;
+  align-items: center;
+  justify-content: space-between;
+  color: var(--wb-faint);
+  font-size: calc(10px * var(--wb-ui-font-scale, 1));
+  font-weight: 650;
+  letter-spacing: .025em;
+}
+
+.workbench-session-overflow-group.exceptional .workbench-session-overflow-group-head {
+  color: var(--wb-red);
+}
+
+.workbench-session-overflow-group-head small {
+  min-width: 2ch;
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+}
+
+.workbench-session-overflow-divider {
+  height: 1px;
+  margin: 3px 8px;
+  flex: 0 0 auto;
+  background: color-mix(in srgb, var(--wb-text) 10%, var(--wb-line));
+}
+
+.workbench-session-overflow-group-items {
+  min-height: 0;
+  padding-right: 2px;
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  gap: 2px;
+  overflow-x: hidden;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  scrollbar-gutter: stable;
+}
+
+.workbench-session-overflow-group-items > button {
+  min-width: 0;
+  padding: 8px 9px;
+  border: 0;
+  border-radius: 7px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  background: transparent;
+  color: var(--wb-text);
+  cursor: pointer;
+  text-align: left;
+}
+
+.workbench-session-overflow-group-items > button:hover,
+.workbench-session-overflow-group-items > button:focus-visible { background: var(--wb-row-hover-bg); }
+
+.workbench-session-overflow-group-items > button > span:last-child {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.workbench-session-overflow-list b,
+.workbench-session-overflow-list small { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.workbench-session-overflow-list b { font-size: calc(12px * var(--wb-ui-font-scale, 1)); }
+.workbench-session-overflow-list small { color: var(--wb-muted); font-size: calc(10px * var(--wb-ui-font-scale, 1)); }
 
 .workbench-account-menu.workbench-session-menu > button {
   margin-block: 1px;
@@ -328,6 +898,7 @@ html[data-theme="dark"] .brand-mark {
   min-width: 0;
   flex: 1 1 auto;
   overflow: hidden;
+  font-weight: 700;
   white-space: nowrap;
 }
 
@@ -335,6 +906,7 @@ html[data-theme="dark"] .brand-mark {
   display: inline-block;
   max-width: 100%;
   overflow: hidden;
+  font-weight: 700;
   text-overflow: ellipsis;
   vertical-align: bottom;
   white-space: nowrap;
@@ -355,10 +927,11 @@ html[data-theme="dark"] .brand-mark {
 }
 
 .workbench-account-menu button.workbench-session-browser-preview {
-  align-items: stretch;
-  flex-direction: column;
-  gap: 7px;
-  padding: 7px;
+  min-height: 42px;
+  align-items: center;
+  flex-direction: row;
+  gap: 0;
+  padding: 7px 9px;
   margin-top: 5px;
   border: 1px solid color-mix(in srgb, var(--wb-text) 10%, var(--wb-line));
   background: color-mix(in srgb, var(--wb-text) 3%, var(--wb-card-bg));
@@ -370,19 +943,12 @@ html[data-theme="dark"] .brand-mark {
 }
 
 .workbench-session-browser-preview-head {
+  width: 100%;
   min-width: 0;
-  display: flex;
+  display: grid;
+  grid-template-columns: 19px minmax(58px, auto) minmax(0, 1fr) 14px;
   align-items: center;
-  gap: 7px;
-  padding: 0 2px;
-}
-
-.workbench-session-browser-preview-head > span:last-child {
-  min-width: 0;
-  display: flex;
-  flex: 1 1 auto;
-  flex-direction: column;
-  gap: 1px;
+  gap: 8px;
 }
 
 .workbench-session-browser-preview-head b,
@@ -398,8 +964,14 @@ html[data-theme="dark"] .brand-mark {
 }
 
 .workbench-session-browser-preview-head small {
+  min-width: 0;
   color: var(--wb-muted);
   font-size: calc(10px * var(--wb-ui-font-scale, 1));
+  text-align: right;
+}
+
+.workbench-session-resource-chevron {
+  color: var(--wb-faint);
 }
 
 .workbench-session-browser-preview img,
@@ -433,6 +1005,240 @@ html[data-theme="dark"] .brand-mark {
 .workbench-session-menu-label,
 .workbench-session-menu-loading {
   color: var(--wb-faint);
+}
+
+/* Cyrene context-menu language: the same dense dark surface, generous action
+   rows, consistent outline icons and separated destructive action used by the
+   conversation-card menu. Theme tokens keep the treatment paired in light and
+   dark mode without hard-coded component colors. */
+.workbench-session-context-menu,
+.workbench-account-menu.workbench-session-context-menu {
+  box-sizing: border-box;
+  padding: 10px;
+  border: 1px solid color-mix(in srgb, var(--wb-text) 14%, var(--wb-line));
+  border-radius: 14px;
+  background: var(--wb-card-bg-strong, var(--wb-card-bg, var(--wb-surface, #ffffff)));
+  box-shadow: 0 18px 44px color-mix(in srgb, #06101d 24%, transparent), 0 3px 10px color-mix(in srgb, #06101d 10%, transparent);
+}
+
+.workbench-account-menu.workbench-session-context-menu > button,
+.workbench-session-context-menu .workbench-session-overflow-group-items > button {
+  min-height: 40px;
+  margin: 1px 0;
+  padding: 8px 10px;
+  border-radius: 9px;
+  gap: 11px;
+  font-size: calc(14px * var(--wb-ui-font-scale, 1));
+  font-weight: 620;
+  line-height: 1.3;
+  transition: background-color 150ms ease, color 150ms ease;
+}
+
+.workbench-account-menu.workbench-session-context-menu > button:hover,
+.workbench-account-menu.workbench-session-context-menu > button:focus-visible,
+.workbench-session-context-menu .workbench-session-overflow-group-items > button:hover,
+.workbench-session-context-menu .workbench-session-overflow-group-items > button:focus-visible {
+  outline: none;
+  background: var(--wb-row-hover-bg);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--wb-text) 6%, transparent);
+}
+
+.workbench-session-context-menu .workbench-session-menu-icon {
+  width: 19px;
+  height: 19px;
+  flex-basis: 19px;
+}
+
+.workbench-session-context-menu .workbench-session-menu-icon svg {
+  width: 18px;
+  height: 18px;
+}
+
+.workbench-account-menu.workbench-session-context-menu > button.danger {
+  margin-top: 7px;
+  color: var(--wb-red);
+}
+
+.workbench-session-context-menu .workbench-session-menu-separator {
+  margin: 7px 5px;
+  background: color-mix(in srgb, var(--wb-text) 10%, var(--wb-line));
+}
+
+.workbench-session-primary-actions,
+.workbench-session-utility-actions {
+  display: grid;
+  gap: 8px;
+}
+
+.workbench-session-primary-actions {
+  grid-template-columns: minmax(0, 1fr);
+}
+
+.workbench-session-primary-actions.has-runtime-control {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.workbench-account-menu.workbench-session-context-menu .workbench-session-primary-actions > button,
+.workbench-account-menu.workbench-session-context-menu .workbench-session-utility-actions > button {
+  min-width: 0;
+  border: 1px solid color-mix(in srgb, var(--wb-text) 10%, var(--wb-line));
+  border-radius: 9px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: transparent;
+  color: var(--wb-text);
+  cursor: pointer;
+  font-family: inherit;
+  font-weight: 700;
+  transition: background-color 150ms ease, border-color 150ms ease, color 150ms ease;
+}
+
+.workbench-account-menu.workbench-session-context-menu .workbench-session-primary-actions > button {
+  min-height: 44px;
+  padding: 9px 12px;
+  gap: 8px;
+  border-color: color-mix(in srgb, var(--wb-accent) 32%, var(--wb-line));
+  background: color-mix(in srgb, var(--wb-accent) 9%, var(--wb-card-bg-strong));
+  font-size: calc(12px * var(--wb-ui-font-scale, 1));
+}
+
+.workbench-session-primary-actions > button.open-session {
+  grid-column: 1 / -1;
+}
+
+.workbench-session-primary-actions.has-runtime-control > button.open-session {
+  grid-column: auto;
+}
+
+.workbench-session-primary-actions:not(.has-runtime-control) > button.open-session {
+  justify-content: flex-start;
+}
+
+.workbench-account-menu.workbench-session-context-menu .workbench-session-primary-actions > button:hover,
+.workbench-account-menu.workbench-session-context-menu .workbench-session-primary-actions > button:focus-visible,
+.workbench-account-menu.workbench-session-context-menu .workbench-session-utility-actions > button:hover,
+.workbench-account-menu.workbench-session-context-menu .workbench-session-utility-actions > button:focus-visible {
+  outline: none;
+  border-color: color-mix(in srgb, var(--wb-accent) 48%, var(--wb-line));
+  background: var(--wb-row-hover-bg);
+}
+
+.workbench-session-utility-actions {
+  margin-top: 8px;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+.workbench-account-menu.workbench-session-context-menu .workbench-session-utility-actions > button {
+  min-height: 40px;
+  padding: 8px 6px;
+  gap: 5px;
+  color: var(--wb-text);
+  font-size: calc(11px * var(--wb-ui-font-scale, 1));
+}
+
+.workbench-session-utility-actions > button > span:last-child {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.workbench-session-utility-actions > button.danger {
+  grid-column: auto;
+  border-color: color-mix(in srgb, var(--wb-red) 28%, var(--wb-line));
+  color: var(--wb-red);
+}
+
+.workbench-session-utility-actions .workbench-session-menu-icon {
+  width: 15px;
+  height: 15px;
+  flex-basis: 15px;
+}
+
+.workbench-session-utility-actions .workbench-session-menu-icon svg {
+  width: 15px;
+  height: 15px;
+}
+
+.workbench-session-context-menu .workbench-session-activity-menu-head {
+  padding: 7px 6px 9px;
+  display: grid;
+  grid-template-columns: 18px minmax(0, 1fr);
+  gap: 8px;
+  text-transform: none;
+  letter-spacing: 0;
+}
+
+.workbench-session-context-menu .workbench-session-activity-menu-head > div {
+  min-width: 0;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: baseline;
+  gap: 10px;
+}
+
+.workbench-session-context-menu .workbench-session-activity-menu-head small {
+  color: var(--wb-muted);
+  font-size: calc(10px * var(--wb-ui-font-scale, 1));
+  white-space: nowrap;
+}
+
+.workbench-session-context-menu .workbench-session-activity-menu-head b,
+.workbench-session-context-menu .workbench-session-overflow-head b {
+  font-size: calc(14px * var(--wb-ui-font-scale, 1));
+  font-weight: 700;
+}
+
+.workbench-session-context-menu .workbench-session-activity-menu-list {
+  padding: 0 5px 6px;
+}
+
+.workbench-session-context-menu .workbench-session-activity-menu-row {
+  padding: 7px 1px;
+  align-items: center;
+}
+
+.workbench-session-context-menu .workbench-session-activity-agent-mark {
+  margin-top: 0;
+}
+
+.workbench-session-context-menu .workbench-session-resource-section {
+  margin-top: 8px;
+  margin-bottom: 8px;
+  padding-top: 6px;
+}
+
+.workbench-session-context-menu .workbench-session-menu-label {
+  padding: 5px 6px 2px;
+  font-size: calc(9px * var(--wb-ui-font-scale, 1));
+  letter-spacing: .02em;
+}
+
+.workbench-account-menu.workbench-session-context-menu > button.workbench-session-menu-file {
+  min-height: 40px;
+  margin: 0;
+  padding: 8px 6px;
+  font-size: calc(12px * var(--wb-ui-font-scale, 1));
+  font-weight: 700;
+}
+
+.workbench-account-menu.workbench-session-context-menu .workbench-session-primary-actions > button:focus-visible,
+.workbench-account-menu.workbench-session-context-menu .workbench-session-utility-actions > button:focus-visible {
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--wb-accent) 58%, transparent);
+}
+
+.workbench-session-context-menu .workbench-session-overflow-list b {
+  font-size: calc(13px * var(--wb-ui-font-scale, 1));
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .workbench-account-menu.workbench-session-context-menu > button,
+  .workbench-session-context-menu .workbench-session-overflow-group-items > button,
+  .workbench-session-primary-actions > button,
+  .workbench-session-utility-actions > button {
+    transition: none;
+  }
 }
 
 .workbench-resource-shelf {
@@ -1145,29 +1951,63 @@ html[data-theme="dark"] .workbench-help-quick-icon.purple { background: rgba(121
   }
 }
 
-.workbench-search-box {
+.workbench-top-action-group {
   height: 34px;
-  width: 168px;
-  flex: 0 0 168px;
+  box-sizing: border-box;
+  display: inline-flex;
+  align-items: stretch;
+  flex: 0 0 auto;
   border: 1px solid var(--wb-line);
   border-radius: 9px;
   background: var(--wb-control-bg);
-  color: var(--wb-muted);
-  display: inline-flex;
-  align-items: center;
-  gap: 8px;
-  padding: 0 12px;
-  cursor: pointer;
-  font-size: calc(13px * var(--wb-ui-font-scale, 1));
 }
 
-.workbench-search-box svg {
-  flex: 0 0 auto;
+.workbench-top-action-group .workbench-help-anchor {
+  display: flex;
 }
 
-.workbench-search-box:hover {
+.workbench-top-action-group .workbench-icon-btn {
+  height: 32px;
+  min-width: 36px;
+  border-radius: 8px;
+}
+
+.workbench-top-action-group .workbench-search-btn {
+  border-right: 1px solid var(--wb-line);
+  border-radius: 8px 0 0 8px;
+}
+
+.workbench-top-action-group .workbench-help-anchor > .workbench-icon-btn {
+  border-radius: 0 8px 8px 0;
+}
+
+.workbench-top-action-group:focus-within {
   border-color: var(--wb-line-2);
-  background: var(--wb-control-hover-bg);
+}
+
+.workbench-top-action-group .workbench-icon-btn:focus-visible {
+  position: relative;
+  z-index: 1;
+  outline: 2px solid var(--wb-accent);
+  outline-offset: 1px;
+}
+
+html[data-theme="dark"] .workbench-top-action-group {
+  border-color: color-mix(in srgb, var(--wb-line-2) 76%, var(--wb-surface));
+  background: color-mix(in srgb, var(--wb-card-bg) 30%, var(--wb-surface));
+}
+
+html[data-theme="dark"] .workbench-top-action-group .workbench-search-btn {
+  border-right-color: color-mix(in srgb, var(--wb-line-2) 76%, var(--wb-surface));
+}
+
+html[data-theme="dark"] .workbench-top-action-group .workbench-icon-btn:hover {
+  background: color-mix(in srgb, var(--wb-text) 7%, transparent);
+}
+
+html[data-theme="dark"] .workbench-top-action-group .workbench-help-anchor.open > .workbench-icon-btn {
+  background: color-mix(in srgb, var(--wb-accent) 14%, transparent);
+  color: var(--wb-text);
 }
 
 .workbench-avatar {
@@ -12856,9 +13696,9 @@ html[data-theme="dark"] .wb-init-progress-dot { border-color: #46586b; }
   --wbc-side-track-width: var(--wb-right-w, 350px);
   /* Right anchor: the overlay panel's left edge sits at the right track. */
   --wbc-motion-left: calc(100% - var(--wbc-side-track-width));
-  /* Preserve a readable main conversation lane while a detail split is open.
-     The JS resizer uses the same 36vw / 380–440px envelope. */
-  --wbc-main-min-width: clamp(380px, 36vw, 440px);
+  /* Both conversation panes share the same minimum. The JS resizer uses this
+     380px boundary for the split track as well, keeping either anchor equal. */
+  --wbc-main-min-width: 380px;
   /* When the side panel closes, let the conversation lane use only a modest
      slice of the reclaimed space. The remainder becomes a symmetric inset so
      the messages and composer still glide into the new visual centre. */
@@ -13139,13 +13979,20 @@ html[data-theme="dark"] .wb-init-progress-dot { border-color: #46586b; }
   cursor: grabbing;
 }
 
-.wbc-chat-card.dragging,
+.wbc-chat-card.dragging {
+  /* Match the established rail-reorder treatment: the native drag image
+     carries the conversation while its source leaves a quiet placeholder in
+     the list. Keeping this separate from the split-panel lift also prevents
+     the source card from reading as a clipped second drag image. */
+  opacity: .22;
+  transform: scale(.985);
+}
+
 .wbc-chat-card.wbc-split-card-lifted {
-  /* The card lifts off the rail: stays fully opaque so the drag image reads
-     as the whole conversation being picked up. The lifted class is added by
-     the split-panel drag when its ghost enters the rail. */
+  /* A split-panel drag intentionally lifts the matching rail card when its
+     custom ghost enters the rail. */
   opacity: 1;
-  transform: translateY(-3px) scale(1.03);
+  transform: translateY(-3px);
   z-index: 50;
   background: var(--wb-card-bg-strong);
   box-shadow: 0 12px 30px rgba(15, 23, 42, 0.25);
@@ -13586,6 +14433,13 @@ span.wbc-chat-group-toggle {
   overflow: visible;
 }
 
+/* A detail split owns the neighbouring track. Keep the main conversation's
+   paint and intrinsic content inside its assigned grid cell instead of letting
+   long messages or the composer extend underneath the split overlay. */
+.wbc-page.side-agent-split-open > .wbc-main {
+  overflow: hidden;
+}
+
 .wbc-side-agent-split-motion {
   position: absolute;
   z-index: 44;
@@ -13619,7 +14473,9 @@ span.wbc-chat-group-toggle {
 
 .wbc-side-agent-split-resizer {
   position: absolute;
-  z-index: 6;
+  /* Above the conversation-split grip band so its full height stays a
+     resize surface; the grip only captures the rest of the band. */
+  z-index: 43;
   top: 58px;
   bottom: 0;
   left: 0;
@@ -13649,6 +14505,31 @@ body.wbc-resizing-side-agent .wbc-page {
   transition: none;
 }
 
+/* Resizing is a direct manipulation: remove every width-dependent easing so
+   the split edge and the bottom composer stay under the pointer. The normal
+   open/close and side-swap motion resumes as soon as the pointer is released. */
+body.wbc-resizing-side-agent .wbc-side-agent-split-motion,
+body.wbc-resizing-side-agent .wbc-split-main-grip,
+body.wbc-resizing-side-agent .wbc-thread-stage,
+body.wbc-resizing-side-agent .wbc-main > .wbc-composer,
+body.wbc-resizing-side-agent .wbc-page::before,
+body.wbc-resizing-side-agent .wbc-page::after {
+  transition: none;
+}
+
+/* Lock the split's outside edge while its conversation-facing divider moves.
+   Using a physical anchor during direct manipulation avoids recomputing both
+   left and width from the same variable, which can expose subpixel drift. */
+body.wbc-resizing-side-agent .wbc-page:not(.wbc-split-left) .wbc-side-agent-split-motion {
+  right: 0;
+  left: auto;
+}
+
+body.wbc-resizing-side-agent .wbc-page.wbc-split-left .wbc-side-agent-split-motion {
+  right: auto;
+  left: var(--wbc-rail-width);
+}
+
 .wbc-side-agent-split {
   width: 100%;
   height: 100%;
@@ -13662,8 +14543,75 @@ body.wbc-resizing-side-agent .wbc-page {
   padding-top: 58px;
   overflow: hidden;
   border-left: 1px solid var(--wb-line);
-  background: var(--wb-right-bg);
+  background: var(--wb-right-bg, var(--wb-surface, #f5f6f8));
   box-shadow: -12px 0 30px rgba(15, 23, 42, 0.055);
+}
+/* Conversation splits (side questions, split chats) carry their own top grip:
+   58px app bar + a 26px grip band, with the header's 12px margin below. */
+.wbc-side-agent-split.wbc-conversation-split {
+  position: relative;
+  padding-top: 72px;
+}
+
+/* Give a split conversation the same bottom glass plane as the main thread.
+   It is rendered inside the split because the page-level L-shaped glass stops
+   at the split boundary. The transcript can continue beneath it while the
+   composer card remains on the clear foreground layer. */
+.wbc-conversation-split::after {
+  content: "";
+  position: absolute;
+  z-index: 20;
+  right: 0;
+  bottom: 0;
+  left: 0;
+  height: var(--wbc-shared-glass-height);
+  pointer-events: none;
+  background: color-mix(in srgb, var(--wb-topbar-bg) 58%, transparent);
+  -webkit-backdrop-filter: blur(32px) saturate(170%) contrast(102%);
+  backdrop-filter: blur(32px) saturate(170%) contrast(102%);
+  -webkit-mask-image: linear-gradient(to top, #000 0%, #000 82%, transparent 100%);
+  mask-image: linear-gradient(to top, #000 0%, #000 82%, transparent 100%);
+}
+/* The panel grip strip: same pill as the main-conversation grip, anchored to
+   the conversation split's top band so the panel can be lifted from its own
+   edge (native drag onto the rail/side zones) or clicked for its menu. */
+.wbc-split-panel-grip {
+  position: absolute;
+  z-index: 42;
+  top: 58px;
+  left: 0;
+  right: 0;
+  height: 26px;
+  box-sizing: border-box;
+  user-select: none;
+}
+
+/* The split chat's own floating conversation panel: opened from the panel
+   grip menu, it floats over the split transcript and reuses the exact
+   conversation-panel component (WbcSide) with this chat's own data. It mirrors
+   the main grip's floating panel — same width and padding, content-sized
+   height capped by the same card budget, opaque card, entrance animation,
+   non-blocking shell. */
+.wbc-split-chat-panel {
+  position: absolute;
+  z-index: 1190;
+  top: 88px;
+  left: 50%;
+  width: min(var(--wb-right-w, 350px), calc(100% - 24px));
+  transform: translateX(-50%);
+  max-height: calc(100% - 100px);
+  box-sizing: border-box;
+  overflow: visible;
+  pointer-events: none;
+  animation: wbc-floating-side-panel-in 170ms cubic-bezier(.2, .8, .2, 1) both;
+}
+.wbc-split-chat-panel .wbc-side {
+  padding: 0;
+  box-sizing: border-box;
+}
+.wbc-split-chat-panel .wbc-side-card {
+  max-height: calc(100vh - 104px);
+  background: var(--wb-card-bg);
 }
 
 /* ── Detail split anchored to the LEFT side of the conversation ─────────────
@@ -13713,6 +14661,7 @@ body.wbc-resizing-side-agent .wbc-page {
   cursor: grabbing;
 }
 .wbc-split-main-grip:hover .wbc-side-split-grip-bar,
+.wbc-split-panel-grip:hover .wbc-side-split-grip-bar,
 .wbc-side-split-grip-bar:focus-visible {
   background: color-mix(in srgb, var(--wb-control-hover-bg) 26%, transparent);
 }
@@ -13831,6 +14780,13 @@ body.wbc-resizing-side-agent .wbc-page {
 .wbc-side-floating > [class~="wbc-side-card"] {
   max-height: calc(100vh - 104px);
 }
+/* The floating conversation panel floats over live conversation content, so
+   its card must stay opaque — the docked panel reads as a solid white card
+   because it sits on a plain surface, and a translucent float would show the
+   transcript through it. */
+.wbc-split-main-grip > .wbc-side-floating .wbc-side-card {
+  background: var(--wb-card-bg);
+}
 
 .wbc-side-floating .wbc-side-floating-close svg {
   width: 18px;
@@ -13942,6 +14898,18 @@ body.wbc-resizing-side-agent .wbc-page {
   flex: 1 1 auto;
   min-height: 0;
   overflow: hidden;
+}
+
+.wbc-chat-split > .wbc-composer,
+.wbc-chat-split > .wbc-composer > :where(.wbc-composer-box) {
+  width: 100%;
+  min-width: 0;
+  box-sizing: border-box;
+}
+.wbc-chat-split > .wbc-composer {
+  position: relative;
+  z-index: 24;
+  isolation: isolate;
 }
 .wbc-chat-split-state {
   display: flex;
@@ -14827,6 +15795,42 @@ body.wbc-resizing-side-agent .wbc-page {
   box-sizing: border-box;
   overflow-y: auto;
   padding: 4px 18px 20px;
+}
+
+/* Every descendant in a narrow split must be allowed to yield inline space.
+   Without this chain, a table, code block or chart establishes the message's
+   min-content width and the panel's overflow clips the whole right side. */
+.wbc-chat-split-stage .wbc-thread-item,
+.wbc-chat-split-stage .wbc-msg,
+.wbc-chat-split-stage .wbc-msg-row,
+.wbc-chat-split-stage .wbc-bubble,
+.wbc-chat-split-stage .wbc-msg-body,
+.wbc-chat-split-stage .wbc-card,
+.wbc-chat-split-stage .wbc-fold,
+.wbc-chat-split-stage .wbc-chart,
+.wbc-chat-split-stage .wbc-chart-wrap {
+  min-width: 0;
+  max-width: 100%;
+  box-sizing: border-box;
+}
+
+.wbc-chat-split-stage .wbc-msg.assistant,
+.wbc-chat-split-stage .wbc-msg-body {
+  width: 100%;
+}
+
+.wbc-chat-split-stage .wbc-msg-body,
+.wbc-chat-split-stage .wbc-bubble {
+  overflow-wrap: anywhere;
+}
+
+.wbc-chat-split-stage .wbc-msg-body.markdown pre,
+.wbc-chat-split-stage .wbc-msg-body.markdown table {
+  display: block;
+  width: 100%;
+  max-width: 100%;
+  box-sizing: border-box;
+  overflow-x: auto;
 }
 
 /* Selection belongs to the transcript rather than the whole shell: controls,
@@ -15987,6 +16991,29 @@ html[data-platform="darwin"] .wbc-browser-window.maximized .wbc-browser-window-b
   padding-inline-end: var(--wbc-browser-avoid-end, 0px);
 }
 
+/* Main and split conversations share the same shrink chain. Every message
+   layer must yield to the current grid column or its min-content width will
+   be painted underneath the adjacent split. */
+.wbc-thread .wbc-thread-item,
+.wbc-thread .wbc-msg,
+.wbc-thread .wbc-msg-row,
+.wbc-thread .wbc-bubble,
+.wbc-thread .wbc-msg-body {
+  min-width: 0;
+  max-width: 100%;
+  box-sizing: border-box;
+}
+
+.wbc-thread .wbc-msg.assistant,
+.wbc-thread .wbc-msg-body {
+  width: 100%;
+}
+
+.wbc-thread .wbc-msg-body,
+.wbc-thread .wbc-bubble {
+  overflow-wrap: anywhere;
+}
+
 .wbc-thread-item > .wbc-msg.user {
   align-self: flex-end;
 }
@@ -16071,6 +17098,14 @@ html[data-platform="darwin"] .wbc-browser-window.maximized .wbc-browser-window-b
 
 .wbc-bubble p {
   margin: 0;
+}
+
+/* Image previews have their own bounded width. Keep the surrounding user
+   bubble content-sized so it does not extend into an empty column beside the
+   preview, while still yielding on narrow conversation lanes. */
+.wbc-msg.user .wbc-bubble.with-inline-image {
+  width: fit-content;
+  max-width: 100%;
 }
 
 .wbc-msg-attachments {
@@ -17226,8 +18261,11 @@ button.wbc-attach-file:focus-visible {
 
 /* Inline permission / clarification prompt at the bottom of the chat thread. */
 .wbc-question-group {
+  width: 100%;
+  min-width: 0;
   align-self: stretch;
   max-width: 760px;
+  box-sizing: border-box;
   margin: 4px auto 8px;
   display: flex;
   flex-direction: column;
@@ -17237,6 +18275,10 @@ button.wbc-attach-file:focus-visible {
   max-width: none;
 }
 .wbc-question {
+  width: 100%;
+  min-width: 0;
+  max-width: 100%;
+  box-sizing: border-box;
   padding: 14px 16px;
   background: var(--wb-main-bg, #fff);
   border: 1px solid var(--wb-line);
@@ -17244,6 +18286,7 @@ button.wbc-attach-file:focus-visible {
   box-shadow: 0 1px 3px rgba(0, 0, 0, 0.04);
 }
 .wbc-question-head {
+  min-width: 0;
   display: flex;
   align-items: center;
   gap: 7px;
@@ -17252,20 +18295,32 @@ button.wbc-attach-file:focus-visible {
   font-size: calc(13px * var(--wb-ui-font-scale, 1));
   font-weight: 600;
 }
+.wbc-question-head > b {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
 .wbc-question-ico { display: inline-flex; }
 .wbc-question-text {
+  min-width: 0;
+  max-width: 100%;
   margin: 0 0 12px;
   font-size: calc(14px * var(--wb-ui-font-scale, 1));
   line-height: 1.6;
   color: var(--wb-text, inherit);
   white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  word-break: break-word;
 }
 .wbc-question-options {
+  min-width: 0;
+  max-width: 100%;
   display: flex;
   flex-wrap: wrap;
   gap: 8px;
 }
 .wbc-question-opt {
+  min-width: 0;
+  max-width: 100%;
   padding: 7px 14px;
   font-size: calc(13px * var(--wb-ui-font-scale, 1));
   font-weight: 500;
@@ -17273,6 +18328,9 @@ button.wbc-attach-file:focus-visible {
   background: var(--wb-surface, #f5f6f8);
   border: 1px solid var(--wb-line);
   border-radius: 8px;
+  line-height: 1.35;
+  overflow-wrap: anywhere;
+  white-space: normal;
   cursor: pointer;
   transition: background 0.12s, border-color 0.12s;
 }
@@ -17562,6 +18620,7 @@ button.wbc-attach-file:focus-visible {
 .wbc-composer-actions {
   display: flex;
   align-items: center;
+  min-width: 0;
   gap: 6px;
   padding-top: 6px;
   border-top: 1px solid var(--wb-line);
@@ -17569,6 +18628,7 @@ button.wbc-attach-file:focus-visible {
 }
 
 .wbc-composer-icon {
+  box-sizing: border-box;
   height: 30px;
   min-width: 30px;
   border: 0;
@@ -17610,6 +18670,7 @@ button.wbc-attach-file:focus-visible {
 }
 
 .wbc-model-button {
+  box-sizing: border-box;
   height: 30px;
   min-width: 0;
   max-width: 100%;
@@ -17704,6 +18765,7 @@ html[data-theme="dark"] .wbc-model-button.active {
 }
 
 .wbc-send {
+  box-sizing: border-box;
   flex: 0 0 auto;
   display: inline-flex;
   align-items: center;
@@ -17734,8 +18796,20 @@ html[data-theme="dark"] .wbc-model-button.active {
 }
 
 @container wbc-composer (max-width: 420px) {
+  .wbc-composer-actions {
+    flex-wrap: wrap;
+  }
+
+  /* Preserve the visible Auto and Send labels. Put the model/send group on a
+     second row instead of squeezing or clipping it at the split boundary. */
+  .wbc-composer-spacer {
+    flex: 0 0 100%;
+    height: 0;
+  }
+
   .wbc-model-anchor {
     flex: 0 0 auto;
+    margin-left: auto;
   }
 
   .wbc-model-button {
@@ -18285,6 +19359,8 @@ body.wb-col-resizing .wbc-side-card > .wb-col-resizer.card-edge::after {
 .wbc-change-diff {
   flex: 1 1 auto;
   min-height: 0;
+  display: flex;
+  flex-direction: column;
   overflow: hidden;
   background: var(--wb-right-bg);
 }
@@ -19265,7 +20341,7 @@ body.wb-col-resizing .wbc-side-card > .wb-col-resizer.card-edge::after {
 }
 
 .wbc-inbox-row {
-  padding: 8px 0 0;
+  padding: 12px 0 0;
   border-top: 1px solid var(--wb-line);
 }
 
@@ -19275,13 +20351,14 @@ body.wb-col-resizing .wbc-side-card > .wb-col-resizer.card-edge::after {
 
 .wbc-inbox-event-head {
   justify-content: space-between;
-  gap: 8px;
+  gap: 12px;
 }
 
 .wbc-inbox-event-head > b {
+  min-width: 0;
   overflow: hidden;
   color: var(--wb-text);
-  font-size: calc(11.5px * var(--wb-ui-font-scale, 1));
+  font-size: calc(12px * var(--wb-ui-font-scale, 1));
   font-weight: 680;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -19301,23 +20378,29 @@ body.wb-col-resizing .wbc-side-card > .wb-col-resizer.card-edge::after {
 .wbc-inbox-status.status-failed { color: var(--wb-red); }
 .wbc-inbox-status.status-cancelled { color: var(--wb-faint); }
 
-.wbc-inbox-event-body > p {
+.wbc-inbox-event-preview {
   display: -webkit-box;
-  margin: 4px 0 0;
+  margin: 8px 0 0;
   overflow: hidden;
   color: var(--wb-muted);
-  font-size: calc(11px * var(--wb-ui-font-scale, 1));
-  line-height: 1.45;
+  font-size: calc(10.75px * var(--wb-ui-font-scale, 1));
+  font-weight: 500;
+  line-height: 1.55;
+  overflow-wrap: anywhere;
   -webkit-box-orient: vertical;
   -webkit-line-clamp: 2;
+}
+
+.wbc-inbox-event-preview.is-tool {
+  font-family: var(--mono, "IBM Plex Mono", monospace);
 }
 
 .wbc-inbox-event-meta {
   justify-content: flex-end;
   gap: 8px;
-  margin-top: 4px;
+  margin-top: 6px;
   color: var(--wb-faint);
-  font-size: calc(9.5px * var(--wb-ui-font-scale, 1));
+  font-size: calc(10px * var(--wb-ui-font-scale, 1));
 }
 
 .wbc-inbox-event-meta time {
@@ -19953,8 +21036,9 @@ body.wb-col-resizing .wbc-side-card > .wb-col-resizer.card-edge::after {
 
 .wbc-context-sections .wbc-inbox-card.title-hidden .wbc-inbox-head {
   min-height: 24px;
-  margin-bottom: 5px;
+  margin-bottom: 10px;
   justify-content: space-between;
+  gap: 12px;
 }
 
 .wbc-context-empty-label {
@@ -19987,7 +21071,7 @@ body.wb-col-resizing .wbc-side-card > .wb-col-resizer.card-edge::after {
 }
 
 .wbc-context-sections .wbc-inbox-card.title-hidden .wbc-side-empty p,
-.wbc-context-empty-module p {
+.wbc-context-sections .wbc-context-empty-module .wbc-side-empty p {
   margin: 0;
   color: var(--wb-faint);
   font-size: calc(11.75px * var(--wb-ui-font-scale, 1)) !important;
@@ -20742,7 +21826,6 @@ html[data-theme="dark"] .wbc-overview-token-grid {
 
 @media (max-width: 1320px) {
   .wbc-page {
-    --wbc-main-min-width: 300px;
     --wbc-side-track-width: var(--wb-right-w, 310px);
   }
   .wbc-page.wbc-side-hidden {
@@ -20756,6 +21839,23 @@ html[data-theme="dark"] .wbc-overview-token-grid {
   .wbc-page {
     --wbc-rail-width: 220px;
     grid-template-columns: var(--wbc-rail-width) minmax(0, 1fr);
+  }
+  /* An open detail split must keep reserving a real grid track at compact
+     desktop widths. The generic two-column fallback otherwise leaves the
+     absolutely positioned split floating over (and clipping) the main chat. */
+  .wbc-page.side-agent-split-open {
+    grid-template-columns:
+      var(--wbc-rail-width)
+      0px
+      minmax(0, 1fr)
+      var(--wbc-side-track-width);
+  }
+  .wbc-page.side-agent-split-open.wbc-split-left {
+    grid-template-columns:
+      var(--wbc-rail-width)
+      var(--wbc-side-track-width)
+      minmax(0, 1fr)
+      0px;
   }
   .wbc-page.wbc-side-hidden {
     --wbc-reclaimed-side-width: 0px;
