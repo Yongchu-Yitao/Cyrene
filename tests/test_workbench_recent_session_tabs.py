@@ -389,6 +389,15 @@ def test_topbar_activity_controls_hover_preview_and_overflow_are_separate():
     assert "min-height: 92px" in exceptional_css
     assert "max-height: min(170px, 42%)" in exceptional_css
     assert ".workbench-session-tab-more" in css
+    inactive_tab_css = css.split(
+        ".workbench-session-tab-group .workbench-session-tab {", 1
+    )[1].split("}", 1)[0]
+    assert "padding-right: 6px" in inactive_tab_css
+    reserved_action_css = css.split(
+        ".workbench-session-tab-group.active .workbench-session-tab,", 1
+    )[1].split("}", 1)[0]
+    assert ".workbench-session-tab-group:hover .workbench-session-tab" in reserved_action_css
+    assert "padding-right: 28px" in reserved_action_css
     assert ".workbench-session-activity-preview" in css
     assert ".workbench-session-overflow-menu" in css
     assert "wb-session-running-pulse" in css

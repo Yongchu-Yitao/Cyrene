@@ -258,8 +258,20 @@ html[data-theme="dark"] .brand-mark {
 .workbench-session-tab-group .workbench-session-tab {
   width: 100%;
   height: 100%;
-  padding-right: 28px;
+  padding-right: 6px;
   flex: 1 1 auto;
+}
+
+/* Keep the full tab width available to inactive labels. Only reserve the
+   trailing action slot when its menu is visible or the active tab needs a
+   stable morphing area. */
+.workbench-session-tab-group.active .workbench-session-tab,
+.workbench-session-tab-group:hover .workbench-session-tab,
+.workbench-session-tab-group:focus-within .workbench-session-tab,
+.workbench-session-tab-group.phase-running .workbench-session-tab,
+.workbench-session-tab-group.phase-attention .workbench-session-tab,
+.workbench-session-tab-group.phase-failed .workbench-session-tab {
+  padding-right: 28px;
 }
 
 .workbench-session-tab-group .workbench-session-tab.active {
@@ -8883,6 +8895,36 @@ details.wb-model-section > .wb-model-section-head::marker {
   font-size: calc(10.5px * var(--wb-ui-font-scale, 1));
 }
 
+.wb-local-model > .wb-runtime-badge {
+  font-weight: 650;
+  letter-spacing: 0.02em;
+}
+
+.wb-local-model > .wb-runtime-badge.is-mlx {
+  background: color-mix(in srgb, #8b5cf6 15%, transparent);
+  color: #7c3aed;
+}
+
+.wb-local-model > .wb-runtime-badge.is-cuda {
+  background: color-mix(in srgb, #16a34a 15%, transparent);
+  color: #15803d;
+}
+
+.wb-local-model > .wb-runtime-badge.is-onnx {
+  background: color-mix(in srgb, #0284c7 14%, transparent);
+  color: #0369a1;
+}
+
+.wb-local-model > .wb-model-status.is-error {
+  background: color-mix(in srgb, var(--wb-red) 14%, transparent);
+  color: var(--wb-red);
+  font-weight: 650;
+}
+
+html[data-theme="dark"] .wb-local-model > .wb-runtime-badge.is-mlx { color: #c4b5fd; }
+html[data-theme="dark"] .wb-local-model > .wb-runtime-badge.is-cuda { color: #86efac; }
+html[data-theme="dark"] .wb-local-model > .wb-runtime-badge.is-onnx { color: #7dd3fc; }
+
 .wb-local-model > .wb-btn.compact {
   height: 28px;
   min-height: 28px;
@@ -13751,7 +13793,7 @@ html[data-theme="dark"] .wb-init-progress-dot { border-color: #46586b; }
   /* When the side panel closes, let the conversation lane use only a modest
      slice of the reclaimed space. The remainder becomes a symmetric inset so
      the messages and composer still glide into the new visual centre. */
-  --wbc-collapsed-lane-growth: clamp(64px, 5vw, 96px);
+  --wbc-collapsed-lane-growth: clamp(144px, 12vw, 208px);
   --wbc-reclaimed-side-width: 0px;
   --wbc-conversation-shift: 0px;
   --wbc-control-shadow:

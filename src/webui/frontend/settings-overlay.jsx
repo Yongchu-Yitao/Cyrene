@@ -2168,16 +2168,20 @@ function ModelsPanel(p) {
       children: localModels.map(function (item) {
         var percent = item.total_bytes ? Math.min(100, Math.round(item.downloaded_bytes * 100 / item.total_bytes)) : 0;
         var isQwen = item.id === "qwen3-embedding-0.6b";
+        var displayTitle = t(isQwen ? "settings.localEmbeddingTitle" : "settings.localOcrTitle");
         var displayName = t(isQwen ? "settings.localQwenName" : "settings.localOcrName");
         var displayDescription = t(isQwen ? "settings.localQwenHint" : "settings.localOcrHint");
+        var runtime = String(item.runtime || "onnx").toLowerCase();
+        var runtimeLabel = runtime === "onnx-cpu" ? "ONNX" : runtime.toUpperCase();
+        var runtimeClass = runtime.indexOf("cuda") >= 0 ? " is-cuda" : runtime.indexOf("mlx") >= 0 ? " is-mlx" : " is-onnx";
         return React.createElement("div", { className: "wb-model-card wb-local-model", key: item.id },
           React.createElement("div", { className: "wb-local-model-copy" },
-            React.createElement("strong", null, displayName),
-            React.createElement("small", null, displayDescription + (item.runtime ? " · " + String(item.runtime).toUpperCase() : "")),
+            React.createElement("strong", null, displayTitle),
+            React.createElement("small", null, displayName + " · " + displayDescription),
             item.downloading && React.createElement("progress", { max: "100", value: percent }),
             item.error && React.createElement("small", { className: "wb-local-model-error" }, item.error),
           ),
-          React.createElement("span", { className: "wb-model-status" }, item.ready ? t("settings.localModelReady") : item.downloading ? (percent + "%") : t("settings.localModelNotDownloaded")),
+          React.createElement("span", { className: "wb-model-status" + (item.error ? " is-error" : item.ready ? " wb-runtime-badge" + runtimeClass : "") }, item.error ? t("settings.localModelError") : item.ready ? runtimeLabel : item.downloading ? (percent + "%") : t("settings.localModelNotDownloaded")),
           React.createElement("button", {
             className: "wb-btn compact " + (item.ready ? "muted" : "tonal"),
             disabled: !!localBusy || item.downloading,

@@ -2623,6 +2623,7 @@ def test_electron_browser_bounds_follow_floating_window_with_frame_coalescing():
     assert "this._pageZoomTokenByContents = new Map();" in main
     assert "this._pageZoomTokenByContents.get(contentsId) === zoomToken" in main
     assert "request = request * (PAGE_CSS_TARGET_WIDTH / innerW)" not in main
+    assert "overscroll-behavior-y: auto !important;" in main
     assert "await this.settlePageViewport(active.view, targetBounds, true)" in commit_transition_block
     assert "prepared = await this.prepareBoundsTransition();" in settle_transition_block
     assert "return this.commitBoundsTransition();" in settle_transition_block

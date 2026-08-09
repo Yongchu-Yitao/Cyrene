@@ -1637,6 +1637,7 @@ class BrowserTabManager {
             'html[data-cyrene-pip-fit-width] body {' +
             'overflow-x: hidden !important;' +
             'overscroll-behavior-x: none !important;' +
+            'overscroll-behavior-y: auto !important;' +
             '}';
           (document.head || document.documentElement).appendChild(style);
         }
