@@ -341,9 +341,9 @@ async def delete_document(db_path: str, doc_id: str, *, remove_file: bool = True
     """
     # Stop fire-and-forget indexers before the authoritative transaction.  The
     # existence check in replace_chunks remains the final race guard.
-    from cyrene.knowledge import ingest
+    from cyrene.knowledge.ingest_tasks import cancel_pending_tasks
 
-    await ingest.cancel_pending_tasks(doc_id)
+    await cancel_pending_tasks(doc_id)
 
     # Get the document to find its path
     doc = await get_document(db_path, doc_id)

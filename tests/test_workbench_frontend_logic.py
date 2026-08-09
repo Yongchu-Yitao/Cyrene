@@ -331,13 +331,15 @@ def test_chat_sidebar_context_is_flat_and_overview_is_integrated():
     assert '<WbcInboxCard chat={chat} running={!!runtime} hideTitle={true} />' in context_source
     assert "usedToolPackages.length === 0" in context_source
     assert "workbenchChat.noUsedToolPackages" in context_source
+    tool_package_heading = context_source.index('className="wbc-context-empty-head wbc-tool-pack-head"')
+    tool_package_condition = context_source.index("usedToolPackages.length === 0 ? (")
+    assert tool_package_heading < tool_package_condition
     assert 'className="workbench-side-section wbc-context-stats"' in context_source
     assert "WbcSortableCardStack" not in context_source
     context_css = styles.split(".wbc-context-sections {", 1)[1].split("}", 1)[0]
     assert "flex-direction: column;" in context_css
     first_tool_package_css = styles.split(
-        ".wbc-context-sections > .workbench-side-section > "
-        ".wbc-tool-pack-row:first-child {",
+        ".wbc-context-sections .wbc-tool-pack-head + .wbc-tool-pack-row {",
         1,
     )[1].split("}", 1)[0]
     assert "border-top: 0;" in first_tool_package_css

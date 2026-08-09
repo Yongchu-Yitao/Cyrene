@@ -13776,12 +13776,12 @@ function WbcContextTab({ project, chat, runtime }) {
       </section>
       <WbcInboxCard chat={chat} running={!!runtime} hideTitle={true} />
       <section className="workbench-side-section" aria-label={wbcT("workbenchChat.usedToolPackages", "Used tool packages")}>
+        <div className="wbc-context-empty-head wbc-tool-pack-head">
+          <span className="wbc-context-empty-label">{wbcT("workbenchChat.usedToolPackages", "Used tool packages")}</span>
+          {usedToolPackages.length === 0 ? <b>{wbcT("workbenchChat.notUsed", "Not used")}</b> : null}
+        </div>
         {usedToolPackages.length === 0 ? (
           <div className="wbc-context-empty-module">
-            <div className="wbc-context-empty-head">
-              <span className="wbc-context-empty-label">{wbcT("workbenchChat.usedToolPackages", "Used tool packages")}</span>
-              <b>{wbcT("workbenchChat.notUsed", "Not used")}</b>
-            </div>
             <div className="wbc-side-empty">
               <p>{wbcT("workbenchChat.noUsedToolPackages", "The agent has not used a tool package in this chat.")}</p>
             </div>

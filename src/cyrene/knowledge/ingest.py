@@ -18,6 +18,11 @@ from cyrene.runtime.attachments import (
 )
 from cyrene.model_runtime.client import approx_token_count
 from cyrene.knowledge import store, embeddings
+from cyrene.knowledge.ingest_tasks import (
+    ACTIVE_INDEX_DOCS as _ACTIVE_INDEX_DOCS,
+    ACTIVE_INDEX_TASKS as _ACTIVE_INDEX_TASKS,
+    cancel_pending_tasks as _cancel_pending_tasks,
+)
 from cyrene.knowledge.extractors import (
     extract_office_xml_text as _extract_office_xml_text,
 )
@@ -157,28 +162,11 @@ def chunk_text(
 
 
 _INDEX_LOCK = asyncio.Lock()
-_ACTIVE_INDEX_TASKS: set[asyncio.Task] = set()
-_ACTIVE_INDEX_DOCS: dict[asyncio.Task, str] = {}
 
 
 async def cancel_pending_tasks(doc_id: str | None = None) -> None:
-    """Cancel active knowledge indexing before destructive data operations."""
-    current = asyncio.current_task()
-    known_tasks = list(_ACTIVE_INDEX_TASKS)
-    tasks = [
-        task for task in known_tasks
-        if task is not current
-        and not task.done()
-        and (doc_id is None or _ACTIVE_INDEX_DOCS.get(task) == doc_id)
-    ]
-    for task in tasks:
-        task.cancel()
-    if tasks:
-        await asyncio.gather(*tasks, return_exceptions=True)
-    finished = {task for task in known_tasks if task.done() or task in tasks}
-    _ACTIVE_INDEX_TASKS.difference_update(finished)
-    for task in finished:
-        _ACTIVE_INDEX_DOCS.pop(task, None)
+    """Cancel active knowledge indexing tasks."""
+    await _cancel_pending_tasks(doc_id)
 
 
 async def index_document(db_path: str, doc_id: str) -> None:

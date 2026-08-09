@@ -25,6 +25,9 @@ def reset_engine() -> None:
         _ENGINE = None
 
 
+local_models.register_resetter(MODEL_ID, reset_engine)
+
+
 def _load_engine():
     global _ENGINE
     if _ENGINE is not None:

@@ -14,7 +14,7 @@ import platform
 import shutil
 import sys
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 import httpx
 
@@ -128,6 +128,14 @@ else:
 _TASKS: dict[str, asyncio.Task] = {}
 _PROGRESS: dict[str, dict[str, Any]] = {}
 _VALIDATED: set[str] = set()
+_RESETTERS: dict[str, Callable[[], None]] = {}
+
+
+def register_resetter(model_id: str, resetter: Callable[[], None]) -> None:
+    """Register cleanup for an inference adapter that has been loaded."""
+    if model_id not in MODEL_CATALOG:
+        raise ValueError("unknown local model")
+    _RESETTERS[model_id] = resetter
 
 
 def model_dir(model_id: str) -> Path:
@@ -295,12 +303,9 @@ async def delete_model(model_id: str) -> dict[str, Any]:
     if task and not task.done():
         task.cancel()
         await asyncio.gather(task, return_exceptions=True)
-    if model_id == "qwen3-embedding-0.6b":
-        from cyrene.knowledge.local_onnx import reset_model
-        reset_model()
-    elif model_id == "pp-ocrv6-medium":
-        from cyrene.knowledge.ocr import reset_engine
-        reset_engine()
+    resetter = _RESETTERS.get(model_id)
+    if resetter is not None:
+        resetter()
     await asyncio.to_thread(shutil.rmtree, model_dir(model_id), True)
     _PROGRESS.pop(model_id, None)
     _VALIDATED.discard(model_id)

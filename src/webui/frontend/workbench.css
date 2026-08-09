@@ -21089,7 +21089,7 @@ body.wb-col-resizing .wbc-side-card > .wb-col-resizer.card-edge::after {
 /* The section boundary already separates tool packages from the inbox above.
    Keep dividers between subsequent packages without drawing a duplicate rule
    above the first package. */
-.wbc-context-sections > .workbench-side-section > .wbc-tool-pack-row:first-child {
+.wbc-context-sections .wbc-tool-pack-head + .wbc-tool-pack-row {
   border-top: 0;
 }
 

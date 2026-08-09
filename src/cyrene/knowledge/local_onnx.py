@@ -24,6 +24,9 @@ def reset_model() -> None:
         _MLX_MODEL = None
 
 
+local_models.register_resetter(MODEL_ID, reset_model)
+
+
 def _runtime() -> str:
     return str(local_models.MODEL_CATALOG[MODEL_ID].get("runtime") or "onnx")
 
