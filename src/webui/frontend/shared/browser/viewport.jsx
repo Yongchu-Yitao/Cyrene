@@ -506,7 +506,11 @@ function ElectronBrowserViewportPanel({ roundId, browserSessionId, onClose, brow
     const splitEntranceToken = splitEntranceTokenRef.current + 1;
     splitEntranceTokenRef.current = splitEntranceToken;
     const ro = typeof ResizeObserver !== "undefined" && node ? new ResizeObserver(function () {
-      if (!splitEntranceActive && !document.body.classList.contains("wbc-resizing-side-agent")) scheduleBounds();
+      // The native page sits outside the renderer layout tree, so it must keep
+      // receiving the split's live rectangle while the divider is dragged.
+      // Other heavy split content can pause during this gesture; Electron's
+      // setBounds path already coalesces these updates to a safe ~30fps.
+      if (!splitEntranceActive) scheduleBounds();
     }) : null;
     if (ro && node) ro.observe(node);
     if (ro && surface) ro.observe(surface);
@@ -708,9 +712,17 @@ function ElectronBrowserViewportPanel({ roundId, browserSessionId, onClose, brow
   // publishes an explicit layout event while a window is dragged or resized.
   React.useEffect(function () {
     function onBrowserLayout() { scheduleBounds(); }
+    function onSplitResizeEnd() {
+      // Re-send the final rectangle even when it rounds to the last live
+      // sample, so Chromium gets a deterministic post-drag settle pass.
+      lastBoundsRef.current = "";
+      scheduleBounds();
+    }
     window.addEventListener("workbench:browser-layout", onBrowserLayout);
+    window.addEventListener("workbench:split-resize-end", onSplitResizeEnd);
     return function () {
       window.removeEventListener("workbench:browser-layout", onBrowserLayout);
+      window.removeEventListener("workbench:split-resize-end", onSplitResizeEnd);
     };
   }, [electronSessionId]);
 

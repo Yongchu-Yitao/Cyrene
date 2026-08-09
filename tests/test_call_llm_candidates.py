@@ -636,6 +636,11 @@ async def test_codex_quota_failure_publishes_actionable_notice_before_fallback(
     monkeypatch.setattr(codex_provider, "get_codex_provider", lambda: FakeCodex())
     monkeypatch.setattr(cl, "_get_http_client", lambda _timeout: (FakeClient(), "test", True))
     monkeypatch.setattr(cl, "_publish_codex_availability_event", capture)
+    monkeypatch.setattr(
+        cl,
+        "get_setting",
+        lambda key, default=None: True if key == "codex_budget_enabled" else default,
+    )
     candidates = [
         {
             "id": "codex",

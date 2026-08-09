@@ -394,11 +394,10 @@
       { id: "starred", label: L("library.starred", "Starred"), icon: icon("star"), count: stats.starred },
       { id: "trash", label: L("library.trash", "Trash"), icon: icon("trash"), count: stats.trash },
     ];
-    return h("aside", { className: "wb-lib-sidebar" + (props.open ? " open" : "") },
-      h("div", { className: "wb-lib-sidebar-head" },
-        h("h1", null, L("library.title", "Knowledge base")),
-        h("button", { type: "button", className: "wb-lib-side-close", onClick: props.onClose, title: L("library.collapseSidebar", "Collapse sidebar") }, icon("close"))),
-      h("div", { className: "wb-lib-side-scroll" },
+    return h("aside", { className: "wb-lib-sidebar workbench-integrated-rail" + (props.sidebarCollapsed ? " is-collapsed" : "") },
+      h("div", { className: "wb-lib-sidebar-head workbench-integrated-rail-head" },
+        h("h1", null, L("library.title", "Knowledge base")), props.collapseControl),
+      h("div", { className: "wb-lib-side-scroll workbench-integrated-rail-body" },
         h("section", { className: "wb-lib-side-section" },
           sectionHeading("library", L("library.myLibrary", "My knowledge base")),
           !collapsed.library && base.map(function (row) {
@@ -419,7 +418,8 @@
           !collapsed.tags && (props.tags.length ? h("div", { className: "wb-lib-cloud" }, props.tags.map(function (tag) {
             var name = typeof tag === "string" ? tag : tag.name;
             return h("button", { key: name, type: "button", className: props.scope.type === "tag" && props.scope.value === name ? "active" : "", onClick: function () { props.onScope({ type: "tag", value: name, label: name }); } }, name, h("span", null, typeof tag === "string" ? "" : tag.count));
-          })) : h("p", { className: "wb-lib-side-empty" }, L("library.noTags", "No tags yet")))))));
+          })) : h("p", { className: "wb-lib-side-empty" }, L("library.noTags", "No tags yet")))))),
+      props.moduleDock);
   }
 
   function TableHead(props) {
@@ -1166,7 +1166,6 @@
     var workTabState = useState("info"); var workTab = workTabState[0]; var setWorkTab = workTabState[1];
     var rightTabState = useState("detail"); var rightTab = rightTabState[0]; var setRightTab = rightTabState[1];
     var rightOpenState = useState(true); var rightOpen = rightOpenState[0]; var setRightOpen = rightOpenState[1];
-    var sidebarOpenState = useState(false); var sidebarOpen = sidebarOpenState[0]; var setSidebarOpen = sidebarOpenState[1];
     var manualState = useState(false); var manualOpen = manualState[0]; var setManualOpen = manualState[1];
     var collectionModalState = useState(false); var collectionModalOpen = collectionModalState[0]; var setCollectionModalOpen = collectionModalState[1];
     var uploadingState = useState(false); var uploading = uploadingState[0]; var setUploading = uploadingState[1];
@@ -1515,10 +1514,9 @@
 
     return h("section", { className: "wb-lib-page" },
       h("input", { ref: fileRef, className: "wb-lib-file-input", type: "file", multiple: true, onChange: function (event) { handleFiles(event.target.files); } }),
-      h(LibrarySidebar, { open: sidebarOpen, onClose: function () { setSidebarOpen(false); }, onBack: props.onBack, stats: data.stats, collections: data.collections, tags: data.tags, scope: scope, onCreateCollection: function () { setCollectionModalOpen(true); }, onScope: function (next) { setScope(next); setSidebarOpen(false); setSelectedId(""); setChecked([]); } }),
+      h(LibrarySidebar, { onBack: props.onBack, stats: data.stats, collections: data.collections, tags: data.tags, scope: scope, onCreateCollection: function () { setCollectionModalOpen(true); }, onScope: function (next) { setScope(next); setSelectedId(""); setChecked([]); }, sidebarCollapsed: props.sidebarCollapsed, collapseControl: props.collapseControl, moduleDock: props.moduleDock }),
       h("main", { className: "wb-lib-main" },
         h("header", { className: "wb-lib-main-head" },
-          h("button", { type: "button", className: "wb-lib-sidebar-toggle", onClick: function () { setSidebarOpen(true); }, title: L("library.openSidebar", "Open knowledge categories") }, icon("panel", 18)),
           h("div", { className: "wb-lib-heading" }, scope.type !== "all" && h("h2", null, scopeTitle), h("span", null, L("library.count", "{count} items", { count: Number(data.total || 0).toLocaleString() }))),
           h("div", { className: "wb-lib-head-actions" },
             h("div", { className: "wb-lib-menu-wrap" }, h("button", { type: "button", className: "wb-lib-primary", onClick: function () { setMenu(menu === "add" ? "" : "add"); } }, icon("plus", 16), " ", L("library.addItem", "Add item")), h(Dropdown, { open: menu === "add", onClose: function () { setMenu(""); } }, h("button", { type: "button", onClick: function () { setMenu(""); setManualOpen(true); } }, icon("note", 16), h("span", null, h("b", null, L("library.manualAdd", "Add manually")), h("small", null, L("library.createItem", "Create a knowledge item")))), h("button", { type: "button", onClick: function () { setMenu(""); fileRef.current && fileRef.current.click(); } }, icon("upload", 16), h("span", null, h("b", null, L("library.uploadFile", "Upload file")), h("small", null, L("library.uploadTypes", "Documents, images, audio and video")))))),

@@ -167,14 +167,17 @@
   // Donut chart for 记忆来源 built from {label,count,pct} segments.
   function Donut(props) {
     var segs = (props.segments || []).filter(function (s) { return s.count > 0; });
-    var total = segs.reduce(function (a, s) { return a + s.count; }, 0);
+    var segmentTotal = segs.reduce(function (a, s) { return a + s.count; }, 0);
+    var displayTotal = typeof props.total === "number" ? props.total : segmentTotal;
     var R = 30, C = 2 * Math.PI * R, off = 0;
-    if (!total) {
+    if (!segmentTotal) {
       return h("svg", { className: "wb-mem-donut", viewBox: "0 0 80 80", width: 78, height: 78 },
-        h("circle", { cx: 40, cy: 40, r: R, fill: "none", stroke: "var(--wb-line)", strokeWidth: 12 }));
+        h("circle", { cx: 40, cy: 40, r: R, fill: "none", stroke: "var(--wb-line)", strokeWidth: 12 }),
+        h("text", { x: 40, y: 37, textAnchor: "middle", className: "wb-mem-donut-num" }, displayTotal),
+        h("text", { x: 40, y: 50, textAnchor: "middle", className: "wb-mem-donut-cap" }, props.t ? props.t("memory.itemsUnit", "items") : "条"));
     }
     var arcs = segs.map(function (s, i) {
-      var len = (s.count / total) * C;
+      var len = (s.count / segmentTotal) * C;
       var el = h("circle", {
         key: i, cx: 40, cy: 40, r: R, fill: "none",
         stroke: "var(--wb-mem-" + (SOURCE_TONE[s.id] || "slate") + ")", strokeWidth: 12,
@@ -186,7 +189,7 @@
     });
     return h("svg", { className: "wb-mem-donut", viewBox: "0 0 80 80", width: 78, height: 78 },
       arcs,
-      h("text", { x: 40, y: 37, textAnchor: "middle", className: "wb-mem-donut-num" }, total),
+      h("text", { x: 40, y: 37, textAnchor: "middle", className: "wb-mem-donut-num" }, displayTotal),
       h("text", { x: 40, y: 50, textAnchor: "middle", className: "wb-mem-donut-cap" }, props.t ? props.t("memory.itemsUnit", "items") : "条"));
   }
 
@@ -1291,11 +1294,14 @@
     }
 
     // ── category rail ──
-    var rail = h("aside", { className: "wb-mem-rail" },
-      h("div", { className: "wb-mem-rail-head" },
+    var rail = h("aside", { className: "wb-mem-rail workbench-integrated-rail" + (props.sidebarCollapsed ? " is-collapsed" : "") },
+      h("div", { className: "wb-mem-rail-head workbench-integrated-rail-head" },
           h("b", null, t("memory.title", "Memory")),
-        h("button", { type: "button", className: "wb-mem-new-btn", onClick: function () { setModal({ mode: "create", draft: {} }); } },
-          svg({ width: 13, height: 13, strokeWidth: 2.4 }, h("path", { d: "M12 5v14M5 12h14" })), h("span", null, t("memory.new", "New memory")))),
+        h("div", { className: "workbench-integrated-rail-actions" },
+          h("button", { type: "button", className: "wb-mem-new-btn workbench-integrated-rail-primary-action", onClick: function () { setModal({ mode: "create", draft: {} }); } },
+            svg({ width: 13, height: 13, strokeWidth: 2.4 }, h("path", { d: "M12 5v14M5 12h14" })), h("span", null, t("memory.new", "New memory"))),
+          props.collapseControl)),
+      h("div", { className: "wb-mem-rail-scroll workbench-integrated-rail-body" },
       h("div", { className: "wb-mem-cats" },
         categories.map(function (c) {
           var meta = c.id === "all" ? { tone: "accent" } : catMeta(c.id);
@@ -1309,21 +1315,20 @@
           h("span", { className: "wb-mem-cat-label" }, t("memory.learningNav", "Skill learning")),
           h("span", { className: "wb-mem-cat-count" }, "›"))),
       h("div", { className: "wb-mem-card" },
-        h("div", { className: "wb-mem-card-head" }, t("memory.overview", "Memory overview")),
-        h("div", { className: "wb-mem-ov-row" }, h("span", null, t("memory.total", "Total memories")), h("b", null, overview.total || 0)),
-        h("div", { className: "wb-mem-ov-row" }, h("span", null, t("memory.recentAdded", "Recently added")), h("b", null, overview.recent_added || 0)),
-        h("div", { className: "wb-mem-ov-row" }, h("span", null, t("memory.citations", "Citations")), h("b", null, overview.total_citations || 0)),
-        h("div", { className: "wb-mem-ov-row" }, h("span", null, t("memory.lastUpdated", "Last updated")), h("b", null, formatRel(overview.last_updated, t)))),
-      h("div", { className: "wb-mem-card" },
         h("div", { className: "wb-mem-card-head" }, t("memory.sources", "Memory sources")),
         h("div", { className: "wb-mem-source-body" },
-          h(Donut, { segments: sources, t: t }),
+          h(Donut, { segments: sources, total: overview.total || 0, t: t }),
           h("div", { className: "wb-mem-source-legend" }, sources.map(function (s) {
             return h("div", { key: s.id, className: "wb-mem-legend-row" },
               h("span", { className: "wb-mem-legend-dot " + (SOURCE_TONE[s.id] || "slate") }),
               h("span", { className: "wb-mem-legend-label" }, sourceLabel(s.id, t)),
               h("span", { className: "wb-mem-legend-pct" }, s.pct + "%"));
-          })))));
+          })),
+          h("div", { className: "wb-mem-source-overview" },
+            h("div", { className: "wb-mem-ov-row" }, h("span", null, t("memory.recentAdded", "Recently added")), h("b", null, overview.recent_added || 0)),
+            h("div", { className: "wb-mem-ov-row" }, h("span", null, t("memory.citations", "Citations")), h("b", null, overview.total_citations || 0)),
+            h("div", { className: "wb-mem-ov-row" }, h("span", null, t("memory.lastUpdated", "Last updated")), h("b", null, formatRel(overview.last_updated, t))))))),
+      props.moduleDock);
 
     // ── memory card list ──
     function card(m) {
@@ -1400,7 +1405,7 @@
         h("div", { className: "wb-mem-count" }, t("memory.count", "{count} memories", { count: visible.length }))));
 
     return h("section", { className: "wb-mem-page" + (activePanel === "learning" ? " learning-active" : "") },
-      activePanel === "learning" ? null : rail,
+      rail,
       main,
       activePanel === "learning" ? h(SkillLearningPanel, { learning: learning, detailKind: selectedLearningDetailKind, chain: selectedLearningChain, skill: selectedLearningSkill, onDeleteSkill: handleDeleteLearnedSkill }) : h(DetailPanel, {
         memory: selected, related: related, busy: busy,

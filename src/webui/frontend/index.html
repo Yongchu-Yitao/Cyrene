@@ -13,14 +13,14 @@
     z-index: 2147483647;
     display: grid;
     place-items: center;
-    background: #f5f6f8;
+    background: var(--wb-user-bg-light, #f5f6f8);
     color: #171c22;
     opacity: 1;
     visibility: visible;
     transition: opacity 140ms ease, visibility 0s linear 140ms;
   }
   html[data-theme="dark"] #cyrene-launch-screen {
-    background: #1a2230;
+    background: var(--wb-user-bg-dark, #1a2230);
     color: #edf2f8;
   }
   #cyrene-launch-screen[data-ready="1"] {
@@ -63,6 +63,14 @@
     };
     document.documentElement.dataset.density = readTweak("density", "cozy");
     document.documentElement.dataset.textSize = readTweak("textSize", "default") || "default";
+    const lightBackground = readTweak("backgroundLight", null);
+    const darkBackground = readTweak("backgroundDark", null);
+    if (/^#[0-9a-f]{6}$/i.test(lightBackground || "")) {
+      document.documentElement.style.setProperty("--wb-user-bg-light", lightBackground);
+    }
+    if (/^#[0-9a-f]{6}$/i.test(darkBackground || "")) {
+      document.documentElement.style.setProperty("--wb-user-bg-dark", darkBackground);
+    }
     document.documentElement.dataset.booting = "1";
   } catch (e) {}
 

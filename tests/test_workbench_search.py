@@ -263,6 +263,7 @@ def test_rename_workbench_chat_persists_trimmed_title(client, search_env):
         (search_env["data_dir"] / "workbench_chats.json").read_text(encoding="utf-8")
     )
     assert stored["chats"][0]["title"] == "Renamed conversation"
+    assert stored["chats"][0]["titleLocked"] is True
     assert stored["chats"][0]["updatedAt"] != "2026-01-02T00:00:00+00:00"
 
 
@@ -723,6 +724,62 @@ def test_workbench_chat_run_uses_project_workspace(client, search_env, monkeypat
         == assistant_message["processingDurationMs"]
     )
     assert chats["chats"][0]["messages"][-2]["clientRequestId"] == "send_test_1"
+
+
+def test_chat_session_is_llm_named_only_after_its_first_message(
+    client, search_env, monkeypatch,
+):
+    from cyrene import agent
+    from cyrene.workbench import session_naming
+
+    calls = []
+
+    async def fake_run_agent(**kwargs):
+        return "done"
+
+    async def fake_generate(message, *, limit=60):
+        calls.append(message)
+        await asyncio.sleep(0)
+        return "检查当前 Session 命名"
+
+    monkeypatch.setattr(agent, "run_agent", fake_run_agent)
+    monkeypatch.setattr(session_naming, "generate_session_title", fake_generate)
+
+    created = client.post(
+        "/api/workbench/chats",
+        json={"projectId": "project_1"},
+    ).json()["chat"]
+    chat_id = created["id"]
+
+    first = client.post(
+        f"/api/workbench/chats/{chat_id}/messages",
+        json={"message": "检查目前 Cyrene 的 session 有没有 LLM 自动命名"},
+    )
+    assert first.status_code == 200
+
+    deadline = time.monotonic() + 1
+    stored_chat = None
+    while time.monotonic() < deadline:
+        payload = json.loads(
+            (search_env["data_dir"] / "workbench_chats.json").read_text(
+                encoding="utf-8"
+            )
+        )
+        stored_chat = next(item for item in payload["chats"] if item["id"] == chat_id)
+        if stored_chat.get("titleNamingStatus") == "generated":
+            break
+        time.sleep(0.01)
+
+    assert stored_chat is not None
+    assert stored_chat["title"] == "检查当前 Session 命名"
+    assert stored_chat["titleNamingStatus"] == "generated"
+
+    second = client.post(
+        f"/api/workbench/chats/{chat_id}/messages",
+        json={"message": "再检查一次"},
+    )
+    assert second.status_code == 200
+    assert calls == ["检查目前 Cyrene 的 session 有没有 LLM 自动命名"]
 
 
 def test_workbench_chat_run_persists_non_git_workspace_diff(

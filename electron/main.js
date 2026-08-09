@@ -437,6 +437,138 @@ const BROWSER_CHAT_OVERLAY_HTML = `<!doctype html>
   </script>
 </body></html>`;
 
+const BROWSER_TAB_PICKER_HTML = `<!doctype html>
+<html><head><meta charset="utf-8"><style>
+  :root { color-scheme: light dark; }
+  * { box-sizing: border-box; }
+  html, body { width: 100%; height: 100%; margin: 0; overflow: hidden; background: transparent; }
+  body { padding: 6px; font-family: Inter, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
+  #menu { width: 100%; height: 100%; display: flex; flex-direction: column; gap: 4px; padding: 7px; overflow: auto; border: 1px solid var(--line, #d8dce4); border-radius: 14px; background: var(--panel, #fff); color: var(--text, #17191d); box-shadow: 0 14px 34px rgba(9,17,30,.18); opacity: 0; transform: translate3d(0,-10px,0) scale(.985); transform-origin: top center; }
+  body.open #menu { animation: picker-in 220ms cubic-bezier(.22,1,.36,1) both; }
+  body.closing #menu { pointer-events: none; animation: picker-out 150ms cubic-bezier(.4,0,.2,1) both; }
+  .row { min-height: 44px; display: flex; flex: 0 0 auto; align-items: center; gap: 4px; padding: 3px; border-radius: 10px; color: var(--muted, #6f737b); }
+  .row:hover { background: var(--hover, rgba(23,25,29,.06)); color: var(--text, #17191d); }
+  .row.active { background: var(--selected, rgba(23,25,29,.045)); color: var(--text, #17191d); box-shadow: inset 0 0 0 1px var(--line, #d8dce4); }
+  button { border: 0; background: transparent; color: inherit; font: inherit; cursor: pointer; }
+  button:focus-visible { outline: none; }
+  .row:focus-within { background: var(--hover, rgba(23,25,29,.06)); color: var(--text, #17191d); box-shadow: inset 0 0 0 1px var(--line, #d8dce4); }
+  .select { min-width: 0; min-height: 38px; display: flex; flex: 1 1 auto; align-items: center; gap: 10px; padding: 5px 8px; text-align: left; }
+  .select b { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12px; font-weight: 650; }
+  .favicon { position: relative; width: 22px; height: 22px; flex: 0 0 22px; display: grid; place-items: center; border-radius: 6px; background: var(--hover, rgba(23,25,29,.06)); color: var(--faint, #9297a1); overflow: hidden; }
+  .favicon img { position: absolute; inset: 3px; width: 16px; height: 16px; object-fit: contain; }
+  .actions { display: flex; flex: 0 0 auto; align-items: center; gap: 2px; }
+  .actions button { width: 30px; height: 30px; display: grid; place-items: center; padding: 0; border-radius: 8px; color: var(--faint, #9297a1); }
+  .actions button:hover, .actions button.active { background: var(--hover, rgba(23,25,29,.07)); color: var(--text, #17191d); }
+  svg { width: 15px; height: 15px; fill: none; stroke: currentColor; stroke-width: 1.9; stroke-linecap: round; stroke-linejoin: round; }
+  @keyframes picker-in { from { opacity: 0; transform: translate3d(0,-10px,0) scale(.985); } to { opacity: 1; transform: translate3d(0,0,0) scale(1); } }
+  @keyframes picker-out { from { opacity: 1; transform: translate3d(0,0,0) scale(1); } to { opacity: 0; transform: translate3d(0,-8px,0) scale(.985); } }
+  @media (prefers-reduced-motion: reduce) { body.open #menu { animation-duration: 1ms; } body.closing #menu { animation-duration: 1ms; } }
+</style></head><body><div id="menu" role="menu"></div><script>
+  const menu = document.getElementById('menu');
+  const icons = {
+    tab: '<svg viewBox="0 0 24 24"><rect x="4" y="6" width="16" height="12" rx="2"/><path d="M4 9h16"/></svg>',
+    reload: '<svg viewBox="0 0 24 24"><path d="M20 11a8 8 0 1 0-2.3 5.7"/><path d="M20 5v6h-6"/></svg>',
+    volume: '<svg viewBox="0 0 24 24"><path d="M11 5 6.5 9H3v6h3.5L11 19Z"/><path d="M15 9a4 4 0 0 1 0 6"/></svg>',
+    muted: '<svg viewBox="0 0 24 24"><path d="M11 5 6.5 9H3v6h3.5L11 19Z"/><path d="m16 10 5 5m0-5-5 5"/></svg>',
+    close: '<svg viewBox="0 0 24 24"><path d="m7 7 10 10M17 7 7 17"/></svg>'
+  };
+  let state = { visible: false, tabs: [], activeTabId: '', labels: {}, colors: {} };
+  let wasVisible = false;
+  function action(type, tabId) { window.browserTabPicker.action(type, tabId || ''); }
+  function iconButton(type, tab, label, active) {
+    const button = document.createElement('button');
+    button.type = 'button';
+    button.className = active ? 'active' : '';
+    button.dataset.key = type + ':' + String(tab.id || '');
+    button.setAttribute('role', 'menuitem');
+    button.title = label;
+    button.setAttribute('aria-label', label);
+    button.innerHTML = icons[type] || '';
+    button.addEventListener('click', () => action(type === 'volume' || type === 'muted' ? 'mute' : type, tab.id));
+    return button;
+  }
+  function render() {
+    const focusKey = document.activeElement && document.activeElement.dataset
+      ? String(document.activeElement.dataset.key || '')
+      : '';
+    const colors = state.colors || {};
+    Object.keys(colors).forEach((key) => document.documentElement.style.setProperty('--' + key, String(colors[key] || '')));
+    menu.setAttribute('aria-label', String(state.labels && state.labels.tabs || 'Browser tabs'));
+    menu.replaceChildren();
+    (Array.isArray(state.tabs) ? state.tabs : []).forEach((tab) => {
+      const selected = String(tab.id || '') === String(state.activeTabId || '');
+      const row = document.createElement('div');
+      row.className = 'row' + (selected ? ' active' : '');
+      row.setAttribute('role', 'none');
+      const select = document.createElement('button');
+      select.type = 'button';
+      select.className = 'select';
+      select.dataset.key = 'select:' + String(tab.id || '');
+      select.setAttribute('role', 'menuitemradio');
+      select.setAttribute('aria-checked', selected ? 'true' : 'false');
+      const favicon = document.createElement('span');
+      favicon.className = 'favicon';
+      favicon.innerHTML = icons.tab;
+      if (tab.favicon) {
+        const image = document.createElement('img');
+        image.src = String(tab.favicon);
+        image.alt = '';
+        image.addEventListener('error', () => image.remove());
+        favicon.appendChild(image);
+      }
+      const title = document.createElement('b');
+      title.textContent = String(tab.title || tab.url || state.labels.browser || 'Browser');
+      select.append(favicon, title);
+      select.addEventListener('click', () => action('select', tab.id));
+      const actions = document.createElement('span');
+      actions.className = 'actions';
+      actions.append(
+        iconButton('reload', tab, state.labels.reload || 'Reload', false),
+        iconButton(tab.muted ? 'muted' : 'volume', tab, tab.muted ? (state.labels.unmute || 'Unmute') : (state.labels.mute || 'Mute'), !!tab.muted),
+        iconButton('close', tab, state.labels.close || 'Close tab', false)
+      );
+      row.append(select, actions);
+      menu.appendChild(row);
+    });
+    document.body.classList.toggle('closing', !state.visible);
+    if (state.visible && !wasVisible) {
+      document.body.classList.remove('open', 'closing');
+      void menu.offsetWidth;
+      requestAnimationFrame(() => {
+        document.body.classList.add('open');
+        const target = menu.querySelector('.row.active .select') || menu.querySelector('button');
+        if (target) target.focus({ preventScroll: true });
+      });
+    } else if (state.visible) {
+      document.body.classList.add('open');
+      document.body.classList.remove('closing');
+      if (focusKey) {
+        const target = Array.from(menu.querySelectorAll('button')).find((button) => button.dataset.key === focusKey);
+        if (target) target.focus({ preventScroll: true });
+      }
+    } else {
+      document.body.classList.remove('open');
+    }
+    wasVisible = !!state.visible;
+  }
+  window.browserTabPicker.onState((next) => { state = next || state; render(); });
+  window.addEventListener('keydown', (event) => {
+    if (event.key === 'Escape') { event.preventDefault(); action('dismiss', ''); return; }
+    if (!['ArrowDown', 'ArrowUp', 'Home', 'End'].includes(event.key)) return;
+    const buttons = Array.from(menu.querySelectorAll('button'));
+    if (!buttons.length) return;
+    event.preventDefault();
+    const current = Math.max(0, buttons.indexOf(document.activeElement));
+    const next = event.key === 'Home' ? 0
+      : event.key === 'End' ? buttons.length - 1
+      : event.key === 'ArrowDown' ? (current + 1) % buttons.length
+      : (current - 1 + buttons.length) % buttons.length;
+    buttons[next].focus({ preventScroll: true });
+  });
+  menu.addEventListener('animationend', (event) => { if (!state.visible && event.animationName === 'picker-out') window.browserTabPicker.hiddenReady(); });
+  window.browserTabPicker.ready();
+</script></body></html>`;
+
 function normalizeBrowserSessionId(value) {
   return String(value || '').trim();
 }
@@ -697,6 +829,19 @@ class BrowserTabManager {
     this.chatOverlayView = null;
     this.chatOverlayParent = null;
     this.chatOverlayState = { visible: false, running: false, showStatus: false };
+    this.tabPickerView = null;
+    this.tabPickerParent = null;
+    this.tabPickerState = {
+      visible: false,
+      closing: false,
+      variant: 'maximized',
+      colors: {},
+      labels: {},
+    };
+    this.tabPickerReady = false;
+    this.tabPickerWindow = null;
+    this._tabPickerWindowBlurHandler = null;
+    this._tabPickerHideTimer = null;
     this.visible = false;
     this.obscured = browserSurfaceObscured;
     this.attachedTabId = '';
@@ -946,6 +1091,14 @@ class BrowserTabManager {
     });
     wc.on('media-started-playing', update);
     wc.on('media-paused', update);
+    wc.on('focus', () => {
+      if (this.tabPickerState.visible) this.dismissTabPicker(true);
+    });
+    wc.on('before-input-event', (_event, input) => {
+      if (this.tabPickerState.visible && String(input && input.key || '') === 'Escape') {
+        this.dismissTabPicker(true);
+      }
+    });
     wc.on('enter-html-full-screen', () => {
       this.enterVideoFullscreen(view).catch((err) => {
         console.error('[electron] Failed to enter browser video fullscreen:', err);
@@ -1431,6 +1584,7 @@ class BrowserTabManager {
   }
 
   emitState() {
+    if (this.tabPickerState.visible || this.tabPickerState.closing) this.pushTabPickerState();
     if (this.sessionId !== activeBrowserSessionId) return;
     // Fullscreen video may live in a separate macOS window, but state updates
     // always belong to the Cyrene renderer so each in-app browser surface can
@@ -1448,6 +1602,9 @@ class BrowserTabManager {
 
   async createTab({ url = 'about:blank', activate = true } = {}) {
     if (!WebContentsView) throw new Error('Electron WebContentsView is unavailable.');
+    // Warm the tiny picker renderer alongside the first page so opening the
+    // menu never waits for a new preload/data-document navigation.
+    try { this.ensureTabPickerView(); } catch (_) {}
     const id = `tab_${this.nextTabId++}`;
     const view = this.createView();
     const tab = {
@@ -1875,8 +2032,273 @@ class BrowserTabManager {
     // The page WebContentsView can be reattached or promoted while entering
     // maximized mode. Re-add the Agent overlay after it so the composer stays
     // above the live page instead of silently ending up behind it.
-    this.syncChatOverlay(this.ownerWindow()?.contentView || null, true);
+    const parent = this.ownerWindow()?.contentView || null;
+    this.syncChatOverlay(parent, true);
+    if (this.tabPickerState.visible || this.tabPickerState.closing) {
+      this.syncTabPicker(parent, true);
+    }
     return { ok: true, visible: this.chatOverlayState.visible };
+  }
+
+  tabPickerSnapshot() {
+    const state = this.tabPickerState || {};
+    return {
+      sessionId: this.sessionId,
+      visible: state.visible === true,
+      closing: state.closing === true,
+      variant: state.variant === 'split' ? 'split' : 'maximized',
+      activeTabId: this.activeTabId,
+      tabs: Array.from(this.tabs.values()).map((tab) => this.tabState(tab)).filter(Boolean),
+      labels: state.labels && typeof state.labels === 'object' ? state.labels : {},
+      colors: state.colors && typeof state.colors === 'object' ? state.colors : {},
+    };
+  }
+
+  notifyTabPickerRenderer(extra = {}) {
+    const win = this.ownerWindow();
+    if (!win) return;
+    try {
+      win.webContents.send('browser:tab-picker-action', {
+        sessionId: this.sessionId,
+        visible: this.tabPickerState.visible === true,
+        variant: this.tabPickerState.variant === 'split' ? 'split' : 'maximized',
+        ...extra,
+      });
+    } catch (_) {}
+  }
+
+  ensureTabPickerView() {
+    if (this.tabPickerView && !this.tabPickerView.webContents.isDestroyed()) return this.tabPickerView;
+    if (!WebContentsView) throw new Error('Electron WebContentsView is unavailable.');
+    const view = new WebContentsView({
+      webPreferences: {
+        preload: path.join(__dirname, 'browser-tab-picker-preload.js'),
+        contextIsolation: true,
+        nodeIntegration: false,
+        sandbox: true,
+        backgroundThrottling: true,
+      },
+    });
+    this.tabPickerReady = false;
+    try { view.setBackgroundColor('#00000000'); } catch (_) {}
+    view.webContents.on('did-finish-load', () => {
+      if (this.tabPickerView !== view) return;
+      this.tabPickerReady = true;
+      this.pushTabPickerState();
+      if (this.tabPickerState.visible) {
+        try { view.webContents.focus(); } catch (_) {}
+      }
+    });
+    view.webContents.on('did-fail-load', (_event, code, description) => {
+      if (Number(code) === -3) return;
+      console.warn(`[electron] Browser tab picker failed to load (${code}): ${description}`);
+    });
+    this.tabPickerView = view;
+    view.webContents.loadURL(`data:text/html;charset=utf-8,${encodeURIComponent(BROWSER_TAB_PICKER_HTML)}`).catch((err) => {
+      console.error('[electron] Failed to load browser tab picker:', err);
+    });
+    return view;
+  }
+
+  pushTabPickerState() {
+    const view = this.tabPickerView;
+    if (!view || view.webContents.isDestroyed()) return;
+    try { view.webContents.send('browser-tab-picker:state', this.tabPickerSnapshot()); } catch (_) {}
+  }
+
+  tabPickerBounds() {
+    const surface = this.pageViewBounds(this.bounds);
+    const variant = this.tabPickerState.variant === 'split' ? 'split' : 'maximized';
+    const horizontalInset = variant === 'maximized' ? 116 : 12;
+    // The native page starts below the browser navigation row. Lift the
+    // floating picker by that chrome height so it sits beneath the title bar
+    // and overlays the navigation row, matching the renderer-hosted menu.
+    const verticalLift = 60;
+    const availableWidth = Math.max(0, surface.width - horizontalInset);
+    const width = Math.min(560, availableWidth);
+    const rows = Math.max(1, this.tabs.size);
+    const desiredHeight = 22 + (rows * 48);
+    const height = Math.min(350, desiredHeight, Math.max(0, surface.height - 12));
+    return {
+      x: surface.x + Math.max(0, Math.round((surface.width - width) / 2)),
+      y: Math.max(0, surface.y - verticalLift),
+      width: Math.max(0, Math.round(width)),
+      height: Math.max(0, Math.round(height)),
+    };
+  }
+
+  trackTabPickerWindow(win) {
+    if (this.tabPickerWindow === win) return;
+    if (this.tabPickerWindow && this._tabPickerWindowBlurHandler) {
+      try { this.tabPickerWindow.removeListener('blur', this._tabPickerWindowBlurHandler); } catch (_) {}
+    }
+    this.tabPickerWindow = win || null;
+    this._tabPickerWindowBlurHandler = null;
+    if (!win || win.isDestroyed()) return;
+    this._tabPickerWindowBlurHandler = () => {
+      if (this.tabPickerState.visible) this.dismissTabPicker(true);
+    };
+    win.on('blur', this._tabPickerWindowBlurHandler);
+  }
+
+  finishTabPickerHide() {
+    if (this.tabPickerState.visible) return;
+    if (this._tabPickerHideTimer) clearTimeout(this._tabPickerHideTimer);
+    this._tabPickerHideTimer = null;
+    this.tabPickerState = { ...this.tabPickerState, closing: false };
+    const view = this.tabPickerView;
+    const win = this.ownerWindow();
+    let restoreRendererFocus = false;
+    if (view && !view.webContents.isDestroyed()) {
+      try {
+        restoreRendererFocus = !!(win && win.isFocused() && view.webContents.isFocused());
+      } catch (_) {}
+      try { view.setVisible(false); } catch (_) {}
+    }
+    if (restoreRendererFocus && win) {
+      try { win.webContents.focus(); } catch (_) {}
+    }
+  }
+
+  dismissTabPicker(animate = true) {
+    const wasVisible = this.tabPickerState.visible === true;
+    const wasClosing = this.tabPickerState.closing === true;
+    if (!wasVisible && !wasClosing) return { ok: true, visible: false };
+    if (this._tabPickerHideTimer) clearTimeout(this._tabPickerHideTimer);
+    this._tabPickerHideTimer = null;
+    const shouldAnimate = animate === true && wasVisible && this.tabPickerReady
+      && !!this.tabPickerView && !this.tabPickerView.webContents.isDestroyed();
+    this.tabPickerState = {
+      ...this.tabPickerState,
+      visible: false,
+      closing: shouldAnimate,
+    };
+    this.pushTabPickerState();
+    this.notifyTabPickerRenderer({ type: 'visibility' });
+    if (!shouldAnimate) {
+      this.finishTabPickerHide();
+    } else {
+      this._tabPickerHideTimer = setTimeout(() => this.finishTabPickerHide(), 220);
+    }
+    return { ok: true, visible: false };
+  }
+
+  syncTabPicker(container, raise = false) {
+    const parent = container && container.contentView ? container.contentView : container;
+    const hostReady = !!(
+      this.visible
+      && !this.obscured
+      && !this._boundsTransitioning
+      && !this.videoFullscreen.active
+      && parent
+      && this.activeTabId
+    );
+    if (!hostReady) {
+      if (this.tabPickerState.visible || this.tabPickerState.closing) this.dismissTabPicker(false);
+      else this.finishTabPickerHide();
+      return;
+    }
+    if (!this.tabPickerState.visible && !this.tabPickerState.closing) {
+      this.finishTabPickerHide();
+      return;
+    }
+    const bounds = this.tabPickerBounds();
+    if (bounds.width < 120 || bounds.height < 48) {
+      this.dismissTabPicker(false);
+      return;
+    }
+    const view = this.ensureTabPickerView();
+    if (this.tabPickerParent && this.tabPickerParent !== parent) {
+      try { this.tabPickerParent.removeChildView(view); } catch (_) {}
+      this.tabPickerParent = null;
+    }
+    try { view.setBounds(bounds); } catch (_) {}
+    if (raise && this.tabPickerParent === parent) {
+      try { parent.removeChildView(view); } catch (_) {}
+      this.tabPickerParent = null;
+    }
+    if (this.tabPickerParent !== parent) {
+      try {
+        parent.addChildView(view);
+        this.tabPickerParent = parent;
+      } catch (err) {
+        console.error('[electron] Failed to attach browser tab picker:', err);
+        this.dismissTabPicker(false);
+        return;
+      }
+    }
+    this.trackTabPickerWindow(this.ownerWindow());
+    try { view.setVisible(true); } catch (_) {}
+    if (this.tabPickerState.visible) this.pushTabPickerState();
+  }
+
+  setTabPicker(info = {}) {
+    const requestedVariant = info.variant === 'split' ? 'split' : 'maximized';
+    if (info.visible !== true || !this.tabs.size) {
+      if ((this.tabPickerState.visible || this.tabPickerState.closing)
+        && this.tabPickerState.variant !== requestedVariant) {
+        return { ok: true, visible: this.tabPickerState.visible === true };
+      }
+      return this.dismissTabPicker(true);
+    }
+    if (this._tabPickerHideTimer) clearTimeout(this._tabPickerHideTimer);
+    this._tabPickerHideTimer = null;
+    const labels = info.labels && typeof info.labels === 'object' ? info.labels : {};
+    const colors = info.colors && typeof info.colors === 'object' ? info.colors : {};
+    this.tabPickerState = {
+      visible: true,
+      closing: false,
+      variant: requestedVariant,
+      labels: Object.fromEntries(Object.entries(labels).map(([key, value]) => [String(key), String(value || '').slice(0, 120)])),
+      colors: Object.fromEntries(Object.entries(colors).map(([key, value]) => [String(key), String(value || '').slice(0, 120)])),
+    };
+    this.syncTabPicker(this.ownerWindow()?.contentView || null, true);
+    this.notifyTabPickerRenderer({ type: 'visibility' });
+    const view = this.tabPickerView;
+    if (view && !view.webContents.isDestroyed()) {
+      setTimeout(() => {
+        if (!this.tabPickerState.visible || this.tabPickerView !== view) return;
+        try { view.webContents.focus(); } catch (_) {}
+      }, 0);
+    }
+    return { ok: true, visible: this.tabPickerState.visible };
+  }
+
+  handleTabPickerAction(action = {}) {
+    const type = String(action.type || '');
+    const tabId = String(action.tabId || '');
+    if (type === 'dismiss') return this.dismissTabPicker(true);
+    if (!this.tabPickerState.visible || !tabId || !this.tabs.has(tabId)) return this.state();
+    if (type === 'select') {
+      this.dismissTabPicker(true);
+      const result = this.activateTab(tabId);
+      this.recordUserEvent('select_tab', { payload: { tabId } });
+      this.notifyTabPickerRenderer({ type, tabId, activeTabId: result.activeTabId, tabCount: result.tabs.length });
+      return result;
+    }
+    if (type === 'reload') {
+      const result = this.reload({ tabId });
+      this.recordUserEvent('navigate', { payload: { action: 'reload', tabId } });
+      this.notifyTabPickerRenderer({ type, tabId, activeTabId: result.activeTabId, tabCount: result.tabs.length });
+      return result;
+    }
+    if (type === 'mute') {
+      const tab = this.tabs.get(tabId);
+      const muted = tab && typeof tab.view.webContents.isAudioMuted === 'function'
+        ? tab.view.webContents.isAudioMuted()
+        : false;
+      const result = this.setMuted({ tabId, muted: !muted });
+      this.notifyTabPickerRenderer({ type, tabId, activeTabId: result.activeTabId, tabCount: result.tabs.length });
+      return result;
+    }
+    if (type === 'close') {
+      this.recordUserEvent('close_tab', { payload: { tabId } });
+      const result = this.closeTab(tabId);
+      if (!result.tabs.length) this.dismissTabPicker(false);
+      this.notifyTabPickerRenderer({ type, tabId, activeTabId: result.activeTabId, tabCount: result.tabs.length });
+      return result;
+    }
+    return this.state();
   }
 
   syncAttachedView() {
@@ -1886,6 +2308,7 @@ class BrowserTabManager {
     const win = this.surfaceWindow();
     if (!win) {
       this.hideChatOverlay();
+      this.dismissTabPicker(false);
       return;
     }
     const ownsVisibleSurface = fullscreenActive || this.sessionId === activeBrowserSessionId;
@@ -1894,6 +2317,7 @@ class BrowserTabManager {
     }
     if (!active || !ownsVisibleSurface) {
       this.hideChatOverlay();
+      this.dismissTabPicker(false);
       return;
     }
     const shouldShow = fullscreenActive || (this.visible && !this.obscured && !this._boundsTransitioning);
@@ -1905,6 +2329,7 @@ class BrowserTabManager {
         try { active.view.setVisible(false); } catch (_) {}
       }
       this.hideChatOverlay();
+      this.dismissTabPicker(false);
       return;
     }
     const wasAttached = this.attachedTabId === active.id;
@@ -1933,6 +2358,10 @@ class BrowserTabManager {
     // may change the page view's native stacking order during a resize even
     // when the JS-side attachment did not change.
     this.syncChatOverlay(win.contentView, true);
+    // The picker is another native child view. Raise it after the live page so
+    // it can float over that page without hiding, snapshotting, or reattaching
+    // the page's compositor surface.
+    this.syncTabPicker(win.contentView, true);
     if (!wasAttached || !wasVisible) this.repaintView(active);
   }
 
@@ -3027,6 +3456,29 @@ class BrowserTabManager {
     this.chatOverlayView = null;
     this.chatOverlayParent = null;
     this.chatOverlayState = { visible: false, running: false, showStatus: false };
+    if (this._tabPickerHideTimer) clearTimeout(this._tabPickerHideTimer);
+    this._tabPickerHideTimer = null;
+    if (this.tabPickerWindow && this._tabPickerWindowBlurHandler) {
+      try { this.tabPickerWindow.removeListener('blur', this._tabPickerWindowBlurHandler); } catch (_) {}
+    }
+    this.tabPickerWindow = null;
+    this._tabPickerWindowBlurHandler = null;
+    if (this.tabPickerView && this.tabPickerParent) {
+      try { this.tabPickerParent.removeChildView(this.tabPickerView); } catch (_) {}
+    }
+    if (this.tabPickerView && !this.tabPickerView.webContents.isDestroyed()) {
+      try { this.tabPickerView.webContents.close(); } catch (_) {}
+    }
+    this.tabPickerView = null;
+    this.tabPickerParent = null;
+    this.tabPickerReady = false;
+    this.tabPickerState = {
+      visible: false,
+      closing: false,
+      variant: 'maximized',
+      colors: {},
+      labels: {},
+    };
     this.visible = false;
   }
 }
@@ -3206,6 +3658,8 @@ async function handleBrowserRpc(method, args, context = {}) {
       return manager.setBounds(args || {});
     case 'setChatOverlay':
       return manager.setChatOverlay(args || {});
+    case 'setTabPicker':
+      return manager.setTabPicker(args || {});
     case 'setObscured':
       return setBrowserSurfaceObscured(args && args.obscured);
     case 'createTab':
@@ -4552,6 +5006,7 @@ if (!gotSingleInstanceLock) {
     ipcMain.handle('browser:get-state', (_event, info) => handleBrowserRpc('state', {}, info || {}));
     ipcMain.handle('browser:set-bounds', (_event, info) => handleBrowserRpc('setBounds', info || {}, info || {}));
     ipcMain.handle('browser:set-chat-overlay', (_event, info) => handleBrowserRpc('setChatOverlay', info || {}, info || {}));
+    ipcMain.handle('browser:set-tab-picker', (_event, info) => handleBrowserRpc('setTabPicker', info || {}, info || {}));
     ipcMain.handle('browser:set-context', (_event, info) => handleBrowserRpc('setContext', info || {}));
     ipcMain.handle('browser:set-obscured', (_event, info) => handleBrowserRpc('setObscured', info || {}, info || {}));
     ipcMain.handle('browser:create-tab', async (_event, info) => {
@@ -4602,6 +5057,27 @@ if (!gotSingleInstanceLock) {
           text: String(action && action.text || '').slice(0, 20000),
         });
       }
+    });
+    ipcMain.on('browser-tab-picker:ready', (event, info) => {
+      const sessionId = normalizeBrowserSessionId(info && info.sessionId);
+      const manager = browserTabManagers.get(sessionId) || Array.from(browserTabManagers.values()).find((candidate) => (
+        candidate.tabPickerView && candidate.tabPickerView.webContents === event.sender
+      ));
+      if (!manager || !manager.tabPickerView || manager.tabPickerView.webContents !== event.sender) return;
+      manager.tabPickerReady = true;
+      manager.pushTabPickerState();
+    });
+    ipcMain.on('browser-tab-picker:action', (event, action) => {
+      const sessionId = normalizeBrowserSessionId(action && action.sessionId);
+      const manager = browserTabManagers.get(sessionId);
+      if (!manager || !manager.tabPickerView || manager.tabPickerView.webContents !== event.sender) return;
+      manager.handleTabPickerAction(action || {});
+    });
+    ipcMain.on('browser-tab-picker:hidden-ready', (event, info) => {
+      const sessionId = normalizeBrowserSessionId(info && info.sessionId);
+      const manager = browserTabManagers.get(sessionId);
+      if (!manager || !manager.tabPickerView || manager.tabPickerView.webContents !== event.sender) return;
+      manager.finishTabPickerHide();
     });
     spawnPython();
     if (!launchHidden) {

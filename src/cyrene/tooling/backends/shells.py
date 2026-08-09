@@ -14,7 +14,7 @@ from cyrene.config import WORKSPACE_DIR
 from cyrene.tooling.backends.shell_registry import (
     external_shells as _external_shells,
 )
-from cyrene.tooling.backends.shell_runtime import interactive_argv, resolve_shell
+from cyrene.tooling.backends.shell_runtime import command_argv, interactive_argv, resolve_shell
 
 _shells: dict[str, dict[str, Any]] = {}
 _shell_lock = asyncio.Lock()
@@ -117,6 +117,17 @@ async def _watch_shell(shell_id: str) -> None:
         code = await proc.wait()
     except Exception:
         code = -1
+    # Drain both pipes before building the wake snapshot.  Fast one-shot jobs
+    # can exit before their pump tasks have appended the final output lines.
+    async with _shell_lock:
+        current = _shells.get(shell_id) or {}
+        pump_tasks = [
+            task
+            for task in (current.get("stdout_task"), current.get("stderr_task"))
+            if task is not None
+        ]
+    if pump_tasks:
+        await asyncio.gather(*pump_tasks, return_exceptions=True)
     async with _shell_lock:
         shell = _shells.get(shell_id)
         if shell is None:
@@ -157,9 +168,18 @@ async def start_shell(
     interactive: bool = True,
     survive_interrupt: bool = False,
 ) -> dict[str, Any]:
-    """Start an independent persistent shell session."""
+    """Start a persistent shell, or a watched one-shot initial command."""
     global _shell_counter
-    if interactive:
+    # A watched initial command is a job, not a persistent terminal.  Run it as
+    # the shell process itself so command completion also ends the process and
+    # reliably reaches ``_watch_shell``.  Previously the command was written to
+    # an interactive shell which returned to its prompt after the command and
+    # therefore never emitted the promised exit wake.
+    one_shot_command = bool(wake_on_exit and command.strip())
+    if one_shot_command:
+        shell_kind, _executable = resolve_shell(unix_fallback="/bin/bash")
+        shell_argv = command_argv(command)
+    elif interactive:
         shell_kind, shell_argv = interactive_argv()
     else:
         shell_kind, executable = resolve_shell(unix_fallback="/bin/bash")
@@ -188,7 +208,7 @@ async def start_shell(
         *shell_argv,
         cwd=str(resolved_cwd),
         env=env,
-        stdin=asyncio.subprocess.PIPE,
+        stdin=(asyncio.subprocess.DEVNULL if one_shot_command else asyncio.subprocess.PIPE),
         stdout=asyncio.subprocess.PIPE,
         stderr=asyncio.subprocess.PIPE,
         **({"start_new_session": True} if os.name != "nt" else {}),
@@ -241,6 +261,7 @@ async def start_shell(
             "updated_at": now,
             "exit_code": None,
             "proc": proc,
+            "execution_mode": "one_shot" if one_shot_command else "persistent",
             "lines": deque(maxlen=240),
             "line_seq": 0,
             "wake_on_exit": want_wake,
@@ -248,9 +269,6 @@ async def start_shell(
             "wake_note": note if want_wake else "",
             "wake_id": str((wake_record or {}).get("wake_id") or ""),
         }
-        _shells[shell_id]["stdout_task"] = asyncio.create_task(_pump_stream(shell_id, proc.stdout, "out"))
-        _shells[shell_id]["stderr_task"] = asyncio.create_task(_pump_stream(shell_id, proc.stderr, "err"))
-        _shells[shell_id]["watch_task"] = asyncio.create_task(_watch_shell(shell_id))
     await _append_lines(shell_id, "meta", f"[shell started: {shell_kind} ({shell_argv[0]})]")
     if want_wake:
         await _append_lines(
@@ -260,7 +278,15 @@ async def start_shell(
             + (f"; note={note[:120]}" if note else "")
             + "]",
         )
-    if command.strip():
+    if one_shot_command:
+        await _append_lines(shell_id, "prompt", f"$ {command}")
+    async with _shell_lock:
+        shell = _shells.get(shell_id)
+        if shell is not None:
+            shell["stdout_task"] = asyncio.create_task(_pump_stream(shell_id, proc.stdout, "out"))
+            shell["stderr_task"] = asyncio.create_task(_pump_stream(shell_id, proc.stderr, "err"))
+            shell["watch_task"] = asyncio.create_task(_watch_shell(shell_id))
+    if command.strip() and not one_shot_command:
         await send_shell(shell_id, command)
     return get_shell_snapshot(shell_id) or {}
 
@@ -355,6 +381,7 @@ def get_shell_snapshot(shell_id: str) -> dict[str, Any] | None:
         "wakeOnExit": bool(shell.get("wake_on_exit")),
         "wakeChatId": shell.get("wake_chat_id", ""),
         "wakeId": shell.get("wake_id", ""),
+        "executionMode": shell.get("execution_mode", "persistent"),
     }
     return snapshot
 

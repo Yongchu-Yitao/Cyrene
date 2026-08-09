@@ -74,6 +74,15 @@ function quickChatApplyTheme() {
 function quickChatApplyPresentation() {
   document.documentElement.dataset.density = quickChatReadTweak("density", "cozy") || "cozy";
   document.documentElement.dataset.textSize = quickChatReadTweak("textSize", "default") || "default";
+  var root = document.documentElement.style;
+  [
+    ["--wb-user-bg-light", quickChatReadTweak("backgroundLight", null)],
+    ["--wb-user-bg-dark", quickChatReadTweak("backgroundDark", null)],
+  ].forEach(function (entry) {
+    var value = typeof entry[1] === "string" ? entry[1].trim() : "";
+    if (/^#[0-9a-f]{6}$/i.test(value)) root.setProperty(entry[0], value);
+    else root.removeProperty(entry[0]);
+  });
 }
 
 function quickChatJson(url) {
@@ -328,13 +337,15 @@ function QuickChatApp() {
       if (!e || !e.key) { onChange(); return; }
       if (e.key === "cyrene-tweak-theme" || e.key === "cyrene-theme-mode") quickChatApplyTheme();
       else if (e.key === "cyrene-tweak-accent") quickChatApplyAccent();
-      else if (e.key === "cyrene-tweak-density" || e.key === "cyrene-tweak-textSize") quickChatApplyPresentation();
+      else if (e.key === "cyrene-tweak-density" || e.key === "cyrene-tweak-textSize" || e.key === "cyrene-tweak-backgroundLight" || e.key === "cyrene-tweak-backgroundDark") quickChatApplyPresentation();
     }
     window.addEventListener("storage", onStorage);
     window.addEventListener("cyrene-tweak-accent-change", onChange);
     window.addEventListener("cyrene-tweak-theme-change", onChange);
     window.addEventListener("cyrene-tweak-density-change", onChange);
     window.addEventListener("cyrene-tweak-textSize-change", onChange);
+    window.addEventListener("cyrene-tweak-backgroundLight-change", onChange);
+    window.addEventListener("cyrene-tweak-backgroundDark-change", onChange);
 
     // Follow the OS while the user is on "system" mode.
     var mq = window.matchMedia ? window.matchMedia("(prefers-color-scheme: dark)") : null;
@@ -347,6 +358,8 @@ function QuickChatApp() {
       window.removeEventListener("cyrene-tweak-theme-change", onChange);
       window.removeEventListener("cyrene-tweak-density-change", onChange);
       window.removeEventListener("cyrene-tweak-textSize-change", onChange);
+      window.removeEventListener("cyrene-tweak-backgroundLight-change", onChange);
+      window.removeEventListener("cyrene-tweak-backgroundDark-change", onChange);
       if (mq && mq.removeEventListener) mq.removeEventListener("change", onSystem);
     };
   }, []);

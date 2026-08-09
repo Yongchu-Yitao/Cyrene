@@ -316,36 +316,41 @@
   // ── calendar rail (column 2) ─────────────────────────────────────────
   function CalendarRail(props) {
     return React.createElement(
-      "aside", { className: "wb-sched-rail" },
+      "aside", { className: "wb-sched-rail workbench-integrated-rail" + (props.sidebarCollapsed ? " is-collapsed" : "") },
       React.createElement(
-        "div", { className: "wb-sched-rail-head" },
+        "div", { className: "wb-sched-rail-head workbench-integrated-rail-head" },
         props.onBack && React.createElement(
           "button", { type: "button", className: "wb-sched-rail-back", onClick: props.onBack, title: T("schedule.backToWorkbench") },
           svg(["m15 18-6-6 6-6"], { width: 17, height: 17 })
         ),
-        React.createElement("span", null, T("schedule.calendar"))
+        React.createElement("span", null, T("schedule.calendar")),
+        props.collapseControl
       ),
-      React.createElement(MiniMonth, {
-        viewMonth: props.viewMonth, onViewMonth: props.onViewMonth,
-        selected: props.anchorDate, onPick: props.onPickDay, markedDays: props.markedDays,
-      }),
       React.createElement(
-        "div", { className: "wb-sched-cal-section" },
-        React.createElement("div", { className: "wb-sched-cal-section-title" }, T("schedule.myCalendar")),
-        CATEGORIES.map(function (c) {
-          var on = props.visible[c.id];
-          return React.createElement(
-            "button", {
-              key: c.id, type: "button", className: "wb-sched-cal-item" + (on ? "" : " off"),
-              onClick: function () { props.onToggle(c.id); }, title: T(c.hintKey),
-            },
-            React.createElement("span", { className: "wb-sched-cal-check cat-" + c.id + (on ? " on" : "") },
-              on ? svg(["M5 12l4 4 10-10"], { width: 12, height: 12, strokeWidth: 2.6 }) : null),
-            React.createElement("span", { className: "wb-sched-cal-name" }, T(c.labelKey)),
-            React.createElement("span", { className: "wb-sched-cal-count" }, props.counts[c.id] || 0)
-          );
-        })
-      )
+        "div", { className: "wb-sched-rail-scroll workbench-integrated-rail-body" },
+        React.createElement(MiniMonth, {
+          viewMonth: props.viewMonth, onViewMonth: props.onViewMonth,
+          selected: props.anchorDate, onPick: props.onPickDay, markedDays: props.markedDays,
+        }),
+        React.createElement(
+          "div", { className: "wb-sched-cal-section" },
+          React.createElement("div", { className: "wb-sched-cal-section-title" }, T("schedule.myCalendar")),
+          CATEGORIES.map(function (c) {
+            var on = props.visible[c.id];
+            return React.createElement(
+              "button", {
+                key: c.id, type: "button", className: "wb-sched-cal-item" + (on ? "" : " off"),
+                onClick: function () { props.onToggle(c.id); }, title: T(c.hintKey),
+              },
+              React.createElement("span", { className: "wb-sched-cal-check cat-" + c.id + (on ? " on" : "") },
+                on ? svg(["M5 12l4 4 10-10"], { width: 12, height: 12, strokeWidth: 2.6 }) : null),
+              React.createElement("span", { className: "wb-sched-cal-name" }, T(c.labelKey)),
+              React.createElement("span", { className: "wb-sched-cal-count" }, props.counts[c.id] || 0)
+            );
+          })
+        )
+      ),
+      props.moduleDock
     );
   }
 
@@ -1206,6 +1211,9 @@
         anchorDate: anchorDate, onPickDay: pickDay, markedDays: markedDays,
         visible: visible, counts: counts,
         onToggle: function (id) { setVisible(function (p) { var n = Object.assign({}, p); n[id] = !n[id]; return n; }); },
+        sidebarCollapsed: props.sidebarCollapsed,
+        collapseControl: props.collapseControl,
+        moduleDock: props.moduleDock,
       }),
       React.createElement(
         "div", { className: "wb-sched-main" },

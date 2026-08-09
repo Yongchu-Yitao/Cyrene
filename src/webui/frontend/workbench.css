@@ -12,7 +12,7 @@
   /* Theme-NEUTRAL surface (not accent-tinted): every column shares the same
      background so the panes read as one surface (separated only by 1px lines).
      Light = soft white, dark = blue-grey (set in the [data-theme] overrides). */
-  --wb-surface: #f5f6f8;
+  --wb-surface: var(--wb-user-bg-light, #f5f6f8);
   --wb-shell-bg: var(--wb-surface);
   --wb-topbar-bg: var(--wb-surface);
   --wb-rail-bg: var(--wb-surface);
@@ -85,7 +85,7 @@
 .workbench-topbar {
   height: 58px;
   display: grid;
-  grid-template-columns: minmax(170px, 188px) minmax(0, max-content) minmax(34px, 1fr) auto;
+  grid-template-columns: 174px minmax(0, max-content) minmax(34px, 1fr) auto;
   align-items: center;
   border-bottom: 1px solid color-mix(in srgb, var(--wb-line) 64%, transparent);
   background: color-mix(in srgb, var(--wb-topbar-bg) 58%, transparent);
@@ -97,6 +97,13 @@
   width: 100%;
   box-sizing: border-box;
   z-index: 200;
+}
+
+/* On macOS, the first track also contains the inset traffic lights.  Keeping
+   62px of additional track space gives the selector the same 8px optical gap
+   to the lights on the left and the first session tab on the right. */
+html[data-platform="darwin"] .workbench-topbar {
+  grid-template-columns: 236px minmax(0, max-content) minmax(34px, 1fr) auto;
 }
 
 .workbench-topbar .workbench-icon-btn {
@@ -122,6 +129,7 @@
 .workbench-brand {
   gap: 10px;
   padding-left: 6px;
+  position: relative;
 }
 
 .workbench-traffic-space {
@@ -196,6 +204,288 @@ html[data-theme="dark"] .brand-mark {
 .workbench-brand-btn:focus-visible {
   outline: 2px solid var(--wb-accent);
   outline-offset: 2px;
+}
+
+.workbench-project-switcher-btn {
+  width: 150px;
+  flex: 0 1 150px;
+  max-width: 100%;
+  min-width: 0;
+  min-height: 0;
+  border: 0;
+  background: transparent;
+}
+
+html[data-platform="darwin"] .workbench-project-switcher-btn {
+  /* Offset the inherited -8px brand-button compensation just enough to
+     visually center the selector between the traffic lights and first tab. */
+  margin-left: -3px;
+}
+
+.workbench-project-switcher-btn:hover,
+.workbench-project-switcher-btn.active {
+  background: color-mix(in srgb, var(--wb-text) 8%, transparent);
+}
+
+.workbench-project-switcher-btn strong {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.workbench-top-project-icon {
+  width: 26px;
+  height: 26px;
+  flex: 0 0 26px;
+  display: grid;
+  place-items: center;
+  overflow: hidden;
+  border-radius: 8px;
+  color: #fff;
+  font-size: 9px;
+  font-weight: 760;
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, .16);
+}
+
+.workbench-top-project-icon.logo {
+  background: transparent;
+  box-shadow: none;
+}
+
+.workbench-top-project-icon .brand-mark,
+.workbench-brand .workbench-top-project-icon .brand-mark {
+  width: 26px;
+  height: 26px;
+  background-size: cover;
+}
+
+.workbench-project-switcher-chevron {
+  display: inline-flex;
+  flex: 0 0 auto;
+  margin-left: auto;
+  color: var(--wb-faint);
+  transition: transform 160ms ease;
+}
+
+.workbench-project-switcher-btn.active .workbench-project-switcher-chevron {
+  transform: rotate(180deg);
+}
+
+.workbench-top-project-menu {
+  position: absolute;
+  z-index: 320;
+  top: 50px;
+  left: 6px;
+  width: 286px;
+  max-height: min(450px, calc(100vh - 70px));
+  overflow: visible;
+  box-sizing: border-box;
+  border: 1px solid color-mix(in srgb, var(--wb-line-2) 78%, transparent);
+  border-radius: 16px;
+  background: var(--wb-card-bg-strong);
+  box-shadow: 0 18px 48px rgba(9, 17, 30, .18);
+  -webkit-backdrop-filter: none;
+  backdrop-filter: none;
+  -webkit-app-region: no-drag;
+}
+
+html[data-platform="darwin"] .workbench-top-project-menu {
+  left: 76px;
+}
+
+.workbench-top-project-menu-head {
+  min-height: 44px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 0 8px 0 14px;
+  border-bottom: 1px solid color-mix(in srgb, var(--wb-line) 58%, transparent);
+}
+
+.workbench-top-project-menu-head > strong {
+  color: var(--wb-muted);
+  font-size: calc(13.5px * var(--wb-ui-font-scale, 1));
+  font-weight: 680;
+}
+
+.workbench-top-project-menu-head > button {
+  min-height: 30px;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 0 9px;
+  border: 0;
+  border-radius: 9px;
+  background: color-mix(in srgb, var(--wb-accent) 7%, transparent);
+  color: var(--wb-muted);
+  cursor: pointer;
+  font-size: calc(12.5px * var(--wb-ui-font-scale, 1));
+  font-weight: 650;
+}
+
+.workbench-top-project-menu-head > button:hover {
+  background: color-mix(in srgb, var(--wb-accent) 11%, transparent);
+  color: var(--wb-text);
+}
+
+.workbench-top-project-menu-list {
+  max-height: min(390px, calc(100vh - 126px));
+  overflow-y: auto;
+  padding: 6px;
+  scrollbar-width: none;
+}
+
+.workbench-top-project-menu-list:has(.workbench-top-project-row.menu-open) {
+  overflow: visible;
+}
+
+.workbench-top-project-menu-list::-webkit-scrollbar {
+  width: 0;
+}
+
+.workbench-top-project-row {
+  position: relative;
+  display: flex;
+  align-items: center;
+  min-width: 0;
+  border-radius: 11px;
+}
+
+.workbench-top-project-row.menu-open {
+  z-index: 6;
+}
+
+.workbench-top-project-row:hover,
+.workbench-top-project-row.menu-open {
+  background: color-mix(in srgb, var(--wb-accent) 5%, transparent);
+}
+
+.workbench-top-project-row.active {
+  background: var(--wb-active-bg);
+}
+
+.workbench-top-project-select {
+  min-width: 0;
+  flex: 1 1 auto;
+  min-height: 54px;
+  display: grid;
+  grid-template-columns: 28px minmax(0, 1fr) 18px;
+  align-items: center;
+  gap: 9px;
+  padding: 5px 2px 5px 8px;
+  border: 0;
+  border-radius: 11px;
+  background: transparent;
+  color: var(--wb-text);
+  text-align: left;
+  cursor: pointer;
+}
+
+.workbench-top-project-copy {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+
+.workbench-top-project-copy b,
+.workbench-top-project-copy small {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.workbench-top-project-copy b {
+  font-size: calc(14px * var(--wb-ui-font-scale, 1));
+  font-weight: 680;
+  line-height: 1.35;
+}
+
+.workbench-top-project-copy small {
+  color: var(--wb-faint);
+  font-size: calc(11.5px * var(--wb-ui-font-scale, 1));
+  line-height: 1.35;
+}
+
+.workbench-top-project-check {
+  color: var(--wb-accent);
+  font-size: 13px;
+}
+
+.workbench-top-project-more {
+  width: 28px;
+  height: 28px;
+  flex: 0 0 28px;
+  display: grid;
+  place-items: center;
+  margin-right: 5px;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--wb-faint);
+  opacity: 0;
+  cursor: pointer;
+}
+
+.workbench-top-project-row:hover .workbench-top-project-more,
+.workbench-top-project-row.menu-open .workbench-top-project-more,
+.workbench-top-project-more:focus-visible {
+  opacity: 1;
+}
+
+.workbench-top-project-more:hover {
+  background: color-mix(in srgb, var(--wb-accent) 8%, transparent);
+  color: var(--wb-text);
+}
+
+.workbench-top-project-actions {
+  position: absolute;
+  z-index: 4;
+  top: 42px;
+  right: 5px;
+  min-width: 126px;
+  padding: 5px;
+  border: 1px solid var(--wb-line);
+  border-radius: 10px;
+  background: var(--wb-card-bg-strong);
+  box-shadow: 0 12px 28px rgba(9, 17, 30, .16);
+}
+
+.workbench-top-project-actions button {
+  width: 100%;
+  min-height: 30px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 0 9px;
+  border: 0;
+  border-radius: 7px;
+  background: transparent;
+  color: var(--wb-text);
+  text-align: left;
+  cursor: pointer;
+}
+
+.workbench-top-project-actions button svg {
+  width: 15px;
+  height: 15px;
+  flex: 0 0 auto;
+}
+
+.workbench-top-project-row:nth-last-child(-n + 2) .workbench-top-project-actions {
+  top: auto;
+  bottom: 42px;
+}
+
+.workbench-top-project-actions button:hover {
+  background: var(--wb-row-hover-bg);
+}
+
+.workbench-top-project-actions button.danger {
+  color: var(--wb-danger);
 }
 
 .workbench-session-tabs {
@@ -793,14 +1083,15 @@ html[data-theme="dark"] .brand-mark {
 
 .workbench-session-overflow-menu {
   padding: 7px;
-  max-height: min(420px, calc(100vh - 16px));
+  max-height: min(500px, calc(100vh - 16px));
+  max-height: min(500px, calc(100dvh - 16px));
   display: flex;
   flex-direction: column;
   overflow: hidden;
 }
 
 .workbench-session-overflow-menu.split-scroll {
-  height: min(420px, calc(100vh - 16px));
+  height: auto;
 }
 
 .workbench-session-overflow-head {
@@ -834,9 +1125,10 @@ html[data-theme="dark"] .brand-mark {
 }
 
 .workbench-session-overflow-list.has-regular.has-exceptions .workbench-session-overflow-group.exceptional {
-  min-height: 92px;
-  max-height: min(170px, 42%);
-  flex: 0 1 auto;
+  height: auto;
+  min-height: 0;
+  max-height: 190px;
+  flex: 0 0 auto;
 }
 
 .workbench-session-overflow-group-head {
@@ -3132,13 +3424,17 @@ body.wb-col-resizing {
   transition: opacity .12s ease;
 }
 
-.wbc-chat-card-time {
+.wbc-chat-card-time,
+.wbc-chat-card-status {
   transition: opacity .12s ease;
 }
 
 .wbc-chat-card:hover .wbc-chat-card-time,
 .wbc-chat-card.active .wbc-chat-card-time,
-.wbc-chat-card.menu-open .wbc-chat-card-time {
+.wbc-chat-card.menu-open .wbc-chat-card-time,
+.wbc-chat-card:hover .wbc-chat-card-status,
+.wbc-chat-card.active .wbc-chat-card-status,
+.wbc-chat-card.menu-open .wbc-chat-card-status {
   opacity: 0;
 }
 
@@ -5436,6 +5732,217 @@ html[data-theme="dark"] .wb-goal-loop-number input { color-scheme: dark; }
   .wb-goal-loop-error { margin-left: 16px; margin-right: 16px; }
   .wb-goal-loop-foot { flex-wrap: wrap; }
 }
+
+/* ===================================================================
+   Unified module rail
+   One global switcher is shared by task, chat, knowledge, schedule and memory.
+   Module pages keep their own category sidebars without duplicating navigation.
+   =================================================================== */
+
+.workbench-grid.has-module-rail {
+  --wb-rail-w: 64px;
+  --wb-rail-w-open: 64px;
+}
+
+.workbench-module-rail {
+  position: relative;
+  z-index: 70;
+  min-width: 0;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  box-sizing: border-box;
+  padding: 12px 7px;
+  border-right: 0;
+  background: transparent;
+}
+
+.workbench-module-account {
+  position: relative;
+  width: 48px;
+  margin-top: auto;
+  padding: 4px;
+  box-sizing: border-box;
+  border: 1px solid color-mix(in srgb, var(--wb-line-2) 72%, transparent);
+  border-radius: 16px;
+  background: color-mix(in srgb, var(--wb-card-bg) 88%, transparent);
+  box-shadow:
+    0 8px 22px rgba(9, 17, 30, .055),
+    inset 0 1px 0 color-mix(in srgb, #fff 9%, transparent);
+  -webkit-backdrop-filter: blur(18px) saturate(112%);
+  backdrop-filter: blur(18px) saturate(112%);
+}
+
+.workbench-module-account-button {
+  position: relative;
+  width: 38px;
+  height: 38px;
+  display: grid;
+  place-items: center;
+  padding: 0;
+  border: 0;
+  border-radius: 11px;
+  background: transparent;
+  cursor: pointer;
+}
+
+.workbench-module-account-button:hover,
+.workbench-module-account.active .workbench-module-account-button {
+  background: var(--wb-active-bg);
+}
+
+.workbench-module-account-button:focus-visible {
+  outline: 0;
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--wb-accent) 45%, transparent);
+}
+
+.workbench-module-account-button .workbench-account-avatar,
+.workbench-module-account-button .workbench-account-avatar > *,
+.workbench-module-account-button .workbench-avatar.photo {
+  width: 30px !important;
+  height: 30px !important;
+}
+
+.workbench-module-account-menu {
+  left: calc(100% + 10px);
+  right: auto;
+  bottom: 0;
+  width: 286px;
+  min-width: 286px;
+  padding: 8px;
+  border-radius: 14px;
+  background: var(--wb-card-bg-strong);
+  box-shadow: 0 18px 46px rgba(6, 14, 26, .22);
+  -webkit-backdrop-filter: none;
+  backdrop-filter: none;
+}
+
+.workbench-account-menu button.workbench-module-account-profile {
+  min-height: 52px;
+  padding: 6px 8px;
+  gap: 10px;
+}
+
+.workbench-module-account-profile .workbench-account-avatar,
+.workbench-module-account-profile .workbench-account-avatar > *,
+.workbench-module-account-profile .workbench-avatar.photo {
+  width: 38px !important;
+  height: 38px !important;
+}
+
+.workbench-module-account-copy {
+  min-width: 0;
+  flex: 1 1 auto;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.workbench-module-account-copy > span {
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 7px;
+}
+
+.workbench-module-account-copy b,
+.workbench-module-account-copy small {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.workbench-module-account-copy b {
+  color: var(--wb-text);
+  font-size: calc(13px * var(--wb-ui-font-scale, 1));
+}
+
+.workbench-module-account-copy small {
+  color: var(--wb-muted);
+  font-size: calc(10px * var(--wb-ui-font-scale, 1));
+}
+
+.workbench-module-account-copy em {
+  flex: 0 0 auto;
+  padding: 3px 6px;
+  border-radius: 999px;
+  background: var(--wb-purple);
+  color: #fff;
+  font-size: calc(9px * var(--wb-ui-font-scale, 1));
+  font-style: normal;
+  font-weight: 750;
+  line-height: 1;
+}
+
+.workbench-grid.is-chat > .workbench-module-rail {
+  padding-top: 70px;
+}
+
+.workbench-module-rail-card {
+  width: 48px;
+  align-self: flex-start;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  padding: 4px;
+  box-sizing: border-box;
+  border: 1px solid color-mix(in srgb, var(--wb-line-2) 72%, transparent);
+  border-radius: 16px;
+  background: color-mix(in srgb, var(--wb-card-bg) 88%, transparent);
+  box-shadow:
+    0 8px 22px rgba(9, 17, 30, .055),
+    inset 0 1px 0 color-mix(in srgb, #fff 9%, transparent);
+  -webkit-backdrop-filter: blur(18px) saturate(112%);
+  backdrop-filter: blur(18px) saturate(112%);
+}
+
+.workbench-module-rail-card button {
+  width: 38px;
+  height: 38px;
+  display: grid;
+  place-items: center;
+  padding: 0;
+  border: 0;
+  border-radius: 11px;
+  background: transparent;
+  color: var(--wb-faint);
+  cursor: pointer;
+}
+
+.workbench-module-rail-card button:hover {
+  background: color-mix(in srgb, var(--wb-accent) 6%, transparent);
+  color: var(--wb-text);
+}
+
+.workbench-module-rail-card button.active {
+  background: var(--wb-active-bg);
+  color: var(--wb-accent-strong);
+}
+
+.workbench-module-rail-card button:focus-visible {
+  outline: 0;
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--wb-accent) 34%, transparent);
+}
+
+.workbench-module-rail-card button > span {
+  display: inline-flex;
+}
+
+.workbench-module-rail-card button svg {
+  width: 18px;
+  height: 18px;
+}
+
+.workbench-module-rail-card button b {
+  display: none;
+}
+
+.workbench-grid.has-module-rail.is-chat {
+  grid-template-columns: 64px minmax(0, 1fr);
+}
 .wb-scope-prompt {
   border: 1px solid color-mix(in srgb, var(--wb-amber) 40%, var(--wb-line));
   background: color-mix(in srgb, var(--wb-amber) 8%, var(--wb-card-bg));
@@ -6120,7 +6627,7 @@ html[data-theme="dark"] .wb-composer-disclaimer {
   }
 
   .workbench-topbar {
-    grid-template-columns: minmax(170px, 188px) minmax(0, max-content) minmax(34px, 1fr) auto;
+    grid-template-columns: 174px minmax(0, max-content) minmax(34px, 1fr) auto;
   }
 
   .workbench-task-header {
@@ -6269,7 +6776,7 @@ html[data-theme="light"] .workbench-shell {
 html[data-theme="dark"] .workbench-shell {
   --wb-bg: #111827;
   --wb-bg-2: #172133;
-  --wb-surface: #1a2230;
+  --wb-surface: var(--wb-user-bg-dark, #1a2230);
   --wb-selection-bg: color-mix(in srgb, var(--wb-accent) 42%, #263447);
   --wb-selection-text: #f4f8f6;
   --wb-link: #6fb4ff;
@@ -8513,6 +9020,59 @@ html[data-theme="light"] .wb-tool-list .mono {
 .wb-accent-native-input::-webkit-color-swatch-wrapper { padding: 0; }
 .wb-accent-native-input::-webkit-color-swatch { border: 0; border-radius: 4px; }
 
+.wb-workbench-backgrounds {
+  min-width: 196px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.wb-field:has(.wb-workbench-backgrounds) {
+  align-items: center;
+}
+
+.wb-background-color-row {
+  min-height: 32px;
+  display: grid;
+  grid-template-columns: minmax(42px, auto) 28px auto;
+  align-items: center;
+  justify-content: end;
+  gap: 10px;
+}
+
+.wb-background-color-label {
+  color: var(--wb-muted);
+  font-size: calc(12px * var(--wb-ui-font-scale, 1));
+  font-weight: 650;
+}
+
+.wb-background-picker {
+  position: relative;
+}
+
+.wb-background-swatch {
+  width: 28px;
+  height: 28px;
+  flex-basis: 28px;
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--wb-line-2) 86%, transparent);
+}
+
+.wb-background-reset {
+  min-height: 32px;
+  padding-inline: 10px;
+  white-space: nowrap;
+}
+
+.wb-background-reset:disabled {
+  cursor: default;
+  opacity: 0.42;
+}
+
+.wb-background-reset:focus-visible {
+  outline: 2px solid var(--wb-accent);
+  outline-offset: 2px;
+}
+
 .wb-accent-popover-actions {
   display: flex;
   align-items: center;
@@ -8547,6 +9107,7 @@ html[data-theme="light"] .wb-tool-list .mono {
     display: grid;
     grid-template-columns: 1fr 1fr;
   }
+
 }
 
 /* Model card */
@@ -11620,14 +12181,14 @@ html[data-theme="dark"] .wb-local-model > .wb-runtime-badge.is-onnx { color: #7d
 
 .wb-mem-source-body {
   display: grid;
-  grid-template-columns: minmax(0, 1fr);
-  justify-items: center;
-  gap: 12px;
+  grid-template-columns: 78px minmax(0, 1fr);
+  align-items: center;
+  gap: 8px 12px;
 }
-.wb-mem-donut { display: block; }
+.wb-mem-donut { display: block; justify-self: center; }
 .wb-mem-donut-num { font-size: calc(15px * var(--wb-ui-font-scale, 1)); font-weight: 800; fill: var(--wb-text); }
 .wb-mem-donut-cap { font-size: calc(8px * var(--wb-ui-font-scale, 1)); fill: var(--wb-faint); }
-.wb-mem-source-legend { width: 100%; min-width: 0; display: grid; grid-auto-rows: auto; gap: 7px; }
+.wb-mem-source-legend { width: 100%; min-width: 0; display: grid; grid-auto-rows: auto; gap: 5px; }
 .wb-mem-legend-row {
   min-width: 0;
   display: grid;
@@ -11645,6 +12206,14 @@ html[data-theme="dark"] .wb-local-model > .wb-runtime-badge.is-onnx { color: #7d
 .wb-mem-legend-dot.slate  { background: var(--wb-mem-slate); }
 .wb-mem-legend-label { min-width: 0; color: var(--wb-muted); overflow-wrap: normal; word-break: normal; }
 .wb-mem-legend-pct { justify-self: end; padding-left: 8px; color: var(--wb-text); font-weight: 640; font-variant-numeric: tabular-nums; }
+.wb-mem-source-overview {
+  grid-column: 1 / -1;
+  width: 100%;
+  min-width: 0;
+  padding-top: 6px;
+  border-top: 1px solid var(--wb-line);
+}
+.wb-mem-source-overview .wb-mem-ov-row { padding: 4px 0; }
 
 /* ── main (toolbar + list) ── */
 .wb-mem-main {
@@ -13808,19 +14377,14 @@ html[data-theme="dark"] .wb-init-progress-dot { border-color: #46586b; }
    =================================================================== */
 
 .workbench-grid.is-chat {
-  grid-template-columns: var(--wb-rail-w) minmax(0, 1fr);
+  grid-template-columns: minmax(0, 1fr);
   height: 100vh;
   margin-top: -58px;
 }
 
-.workbench-grid.is-chat > .workbench-project-rail {
-  box-sizing: border-box;
-  padding-top: 58px;
-}
-
 .wbc-page {
   --wbc-shared-glass-height: calc(164px * var(--wb-ui-font-scale, 1));
-  --wbc-rail-width: 230px;
+  --wbc-rail-width: 300px;
   --wbc-shared-glass-rail-width: calc(var(--wbc-rail-width) + 26px);
   --wbc-shared-glass-rail-top-inset: calc(58px + 48px * var(--wb-ui-font-scale, 1));
   --wbc-shared-glass-right-inset: var(--wb-right-w, 350px);
@@ -13854,6 +14418,10 @@ html[data-theme="dark"] .wb-init-progress-dot { border-color: #46586b; }
   height: 100%;
   overflow: hidden;
   background: var(--wb-main-bg);
+}
+
+.wbc-page.wbc-nav-collapsed {
+  --wbc-rail-width: 64px;
 }
 /* Pin each column explicitly; with the reserved 0-width second track the DOM
    order (rail, main, side) no longer matches the track order. */
@@ -13948,8 +14516,8 @@ html[data-theme="dark"] .wb-init-progress-dot { border-color: #46586b; }
 /* ---- conversation rail ---- */
 
 .wbc-rail {
-  --wbc-rail-overlay-height: calc(48px * var(--wb-ui-font-scale, 1));
-  --wbc-rail-content-inset: calc(var(--wbc-rail-overlay-height) + 8px);
+  --wbc-rail-overlay-height: 56px;
+  --wbc-rail-content-inset: calc(var(--wbc-rail-overlay-height) + 6px);
   position: relative;
   z-index: 21;
   display: flex;
@@ -13962,29 +14530,232 @@ html[data-theme="dark"] .wb-init-progress-dot { border-color: #46586b; }
   isolation: isolate;
 }
 
+.wbc-rail::before {
+  content: "";
+  position: absolute;
+  z-index: 0;
+  inset: 70px 8px 12px;
+  border: var(--wb-floating-rail-border);
+  border-radius: var(--wb-floating-rail-radius);
+  background: var(--wb-floating-rail-bg);
+  box-shadow: var(--wb-floating-rail-shadow);
+  -webkit-backdrop-filter: blur(18px) saturate(112%);
+  backdrop-filter: blur(18px) saturate(112%);
+  pointer-events: none;
+}
+
 .wbc-rail-glass {
   position: absolute;
   z-index: 22;
-  inset: 58px 0 auto;
+  inset: 70px 8px auto;
   min-height: var(--wbc-rail-overlay-height);
   box-sizing: border-box;
   isolation: isolate;
   display: flex;
-  padding: 8px 12px;
+  padding: 0;
   background: transparent;
 }
 
 .wbc-rail-glass::before {
-  content: "";
-  position: absolute;
-  z-index: -1;
-  inset: 0;
-  pointer-events: none;
-  background: color-mix(in srgb, var(--wb-topbar-bg) 58%, transparent);
-  -webkit-backdrop-filter: blur(32px) saturate(170%) contrast(102%);
-  backdrop-filter: blur(32px) saturate(170%) contrast(102%);
-  -webkit-mask-image: linear-gradient(to right, #000 0%, #000 calc(100% - 24px), transparent 100%);
-  mask-image: linear-gradient(to right, #000 0%, #000 calc(100% - 24px), transparent 100%);
+  content: none;
+}
+
+.wbc-nav-card {
+  position: relative;
+  width: 100%;
+  overflow: visible;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  box-shadow: none;
+}
+
+.wbc-nav-card.picker-open {
+  border-color: transparent;
+  box-shadow: none;
+}
+
+.wbc-nav-card-head {
+  min-height: 38px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 0;
+}
+
+.wbc-chat-nav-title {
+  min-width: 0;
+  flex: 1 1 auto;
+  min-height: 42px;
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  padding: 0 8px;
+  border: 0;
+  border-radius: 11px;
+  background: transparent;
+  color: var(--wb-text);
+  text-align: left;
+  outline: 0;
+}
+
+.wbc-chat-nav-title:focus-visible {
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--wb-accent) 34%, transparent);
+}
+
+.wbc-chat-nav-title > span {
+  display: inline-flex;
+  color: var(--wb-muted);
+}
+
+.wbc-chat-nav-title svg {
+  width: 17px;
+  height: 17px;
+}
+
+.wbc-chat-nav-title b {
+  font-size: calc(13px * var(--wb-ui-font-scale, 1));
+  font-weight: 690;
+}
+
+.wbc-project-trigger {
+  min-width: 0;
+  flex: 1 1 auto;
+  min-height: 46px;
+  display: grid;
+  grid-template-columns: 34px minmax(0, 1fr) 16px;
+  align-items: center;
+  gap: 9px;
+  padding: 4px 9px 4px 6px;
+  border: 1px solid color-mix(in srgb, var(--wb-accent) 10%, transparent);
+  border-radius: 13px;
+  background: var(--wb-active-bg);
+  color: var(--wb-text);
+  text-align: left;
+  cursor: pointer;
+}
+
+.wbc-project-trigger:hover,
+.wbc-project-trigger:focus-visible,
+.wbc-project-trigger[aria-expanded="true"] {
+  background: color-mix(in srgb, var(--wb-accent) 14%, var(--wb-card-bg));
+}
+
+.wbc-project-trigger:focus-visible,
+.wbc-nav-collapse-btn:focus-visible,
+.wbc-project-picker button:focus-visible,
+.wbc-module-nav button:focus-visible {
+  outline: 0;
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--wb-line-2) 78%, transparent);
+}
+
+.wbc-project-avatar {
+  width: 34px;
+  height: 34px;
+  display: grid;
+  place-items: center;
+  flex: 0 0 auto;
+  border-radius: 10px;
+  color: #fff;
+  font-size: 11px;
+  font-weight: 780;
+  letter-spacing: -.02em;
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, .16);
+}
+
+.wbc-project-avatar.logo {
+  overflow: hidden;
+  background: transparent;
+  box-shadow: none;
+}
+
+.wbc-project-avatar.logo .brand-mark {
+  width: 34px;
+  height: 34px;
+  background-size: cover;
+}
+
+.wbc-project-trigger-copy,
+.wbc-project-picker-copy {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+
+.wbc-project-trigger-copy small {
+  display: none;
+}
+
+.wbc-project-trigger-copy b,
+.wbc-project-picker-copy b {
+  min-width: 0;
+  overflow: hidden;
+  font-size: 13px;
+  font-weight: 620;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.wbc-project-trigger-chevron {
+  display: inline-flex;
+  color: var(--wb-faint);
+  transition: transform 170ms cubic-bezier(.2, .8, .2, 1);
+}
+
+.wbc-project-new-chat {
+  width: 32px;
+  height: 32px;
+  flex: 0 0 32px;
+  display: grid;
+  place-items: center;
+  border: 1px solid color-mix(in srgb, var(--wb-line-2) 72%, transparent);
+  border-radius: 9px;
+  background: color-mix(in srgb, var(--wb-card-bg) 58%, transparent);
+  color: var(--wb-muted);
+  cursor: pointer;
+}
+
+.wbc-project-new-chat:hover {
+  background: var(--wb-row-hover-bg);
+  color: var(--wb-text);
+}
+
+.wbc-project-new-chat svg {
+  width: 14px;
+  height: 14px;
+}
+
+.wbc-project-trigger-chevron svg {
+  width: 14px;
+  height: 14px;
+}
+
+.wbc-project-trigger[aria-expanded="true"] .wbc-project-trigger-chevron {
+  transform: rotate(90deg);
+}
+
+.wbc-nav-collapse-btn {
+  width: 32px;
+  height: 32px;
+  flex: 0 0 32px;
+  display: grid;
+  place-items: center;
+  border: 0;
+  border-radius: 9px;
+  background: transparent;
+  color: var(--wb-faint);
+  cursor: pointer;
+}
+
+.wbc-nav-collapse-btn:hover {
+  background: color-mix(in srgb, var(--wb-accent) 5%, transparent);
+  color: var(--wb-text);
+}
+
+.wbc-nav-collapse-btn svg {
+  width: 16px;
+  height: 16px;
 }
 
 .wbc-rail-toolbar {
@@ -13992,6 +14763,155 @@ html[data-theme="dark"] .wb-init-progress-dot { border-color: #46586b; }
   display: flex;
   align-items: center;
   gap: 8px;
+  padding: 8px 0 0;
+  box-sizing: border-box;
+}
+
+.wbc-project-picker {
+  position: absolute;
+  z-index: 205;
+  top: calc(100% + 8px);
+  left: 0;
+  right: 0;
+  max-height: min(440px, calc(100vh - 196px));
+  overflow: visible;
+  border: 1px solid color-mix(in srgb, var(--wb-line-2) 76%, transparent);
+  border-radius: 18px;
+  background: color-mix(in srgb, var(--wb-card-bg) 94%, transparent);
+  box-shadow: 0 20px 52px rgba(9, 17, 30, .18);
+  -webkit-backdrop-filter: blur(22px) saturate(118%);
+  backdrop-filter: blur(22px) saturate(118%);
+}
+
+.wbc-project-picker-head {
+  min-height: 44px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 0 8px 0 14px;
+  border-bottom: 1px solid color-mix(in srgb, var(--wb-line) 58%, transparent);
+}
+
+.wbc-project-picker-head strong {
+  color: var(--wb-muted);
+  font-size: 13px;
+  font-weight: 560;
+}
+
+.wbc-project-picker-head button {
+  min-height: 30px;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 0 9px;
+  border: 0;
+  border-radius: 9px;
+  background: color-mix(in srgb, var(--wb-accent) 7%, transparent);
+  color: var(--wb-muted);
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.wbc-project-picker-head button:hover {
+  background: color-mix(in srgb, var(--wb-accent) 11%, transparent);
+  color: var(--wb-text);
+}
+
+.wbc-project-picker-head button svg {
+  width: 13px;
+  height: 13px;
+}
+
+.wbc-project-picker-list {
+  max-height: min(380px, calc(100vh - 250px));
+  overflow-y: auto;
+  padding: 6px;
+  scrollbar-width: none;
+}
+
+.wbc-project-picker-list::-webkit-scrollbar {
+  width: 0;
+}
+
+.wbc-project-picker-row {
+  position: relative;
+  display: flex;
+  align-items: center;
+  min-width: 0;
+  border-radius: 12px;
+}
+
+.wbc-project-picker-row:hover,
+.wbc-project-picker-row.menu-open {
+  background: color-mix(in srgb, var(--wb-accent) 5%, transparent);
+}
+
+.wbc-project-picker-row.active {
+  background: var(--wb-active-bg);
+}
+
+.wbc-project-picker-select {
+  min-width: 0;
+  flex: 1 1 auto;
+  min-height: 50px;
+  display: grid;
+  grid-template-columns: 34px minmax(0, 1fr) 18px;
+  align-items: center;
+  gap: 10px;
+  padding: 6px 2px 6px 8px;
+  border: 0;
+  border-radius: 12px;
+  background: transparent;
+  color: var(--wb-text);
+  text-align: left;
+  cursor: pointer;
+}
+
+.wbc-project-picker-copy small {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--wb-faint);
+  font-size: 10px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.wbc-project-active-check {
+  display: inline-flex;
+  color: var(--wb-accent);
+}
+
+.wbc-project-picker-more {
+  width: 30px;
+  height: 30px;
+  flex: 0 0 30px;
+  display: grid;
+  place-items: center;
+  margin-right: 5px;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--wb-faint);
+  opacity: 0;
+  cursor: pointer;
+}
+
+.wbc-project-picker-row:hover .wbc-project-picker-more,
+.wbc-project-picker-row.menu-open .wbc-project-picker-more,
+.wbc-project-picker-more:focus-visible {
+  opacity: 1;
+}
+
+.wbc-project-picker-more:hover {
+  background: color-mix(in srgb, var(--wb-accent) 7%, transparent);
+  color: var(--wb-text);
+}
+
+.wbc-project-picker-row > .wb-card-menu {
+  z-index: 230;
+  top: 42px;
+  right: 5px;
 }
 
 .wbc-search {
@@ -14027,21 +14947,59 @@ html[data-theme="dark"] .wb-init-progress-dot { border-color: #46586b; }
 
 .wbc-search input {
   width: 100%;
-  height: 32px;
-  border: 0;
-  border-radius: 9px;
-  background: var(--wb-card-bg);
+  height: 38px;
+  border: 1px solid color-mix(in srgb, var(--wb-line-2) 68%, transparent);
+  border-radius: 12px;
+  background: color-mix(in srgb, var(--wb-card-bg) 66%, transparent);
   color: var(--wb-text);
   padding: 0 10px 0 30px;
   font: inherit;
   font-size: calc(13px * var(--wb-ui-font-scale, 1));
   outline: none;
   box-sizing: border-box;
-  box-shadow: var(--wbc-control-shadow);
+  box-shadow: none;
 }
 
 .wbc-search input:focus {
-  background: var(--wb-row-hover-bg);
+  border-color: color-mix(in srgb, var(--wb-accent) 32%, var(--wb-line));
+  background: var(--wb-card-bg);
+}
+
+.wbc-rail-filter {
+  position: relative;
+  flex: 0 0 70px;
+  height: 40px;
+  display: flex;
+  align-items: center;
+}
+
+.wbc-rail-filter select {
+  width: 100%;
+  height: 100%;
+  appearance: none;
+  padding: 0 26px 0 11px;
+  border: 1px solid color-mix(in srgb, var(--wb-line-2) 68%, transparent);
+  border-radius: 12px;
+  background: color-mix(in srgb, var(--wb-card-bg) 66%, transparent);
+  color: var(--wb-text);
+  font: inherit;
+  font-size: calc(12px * var(--wb-ui-font-scale, 1));
+  font-weight: 620;
+  cursor: pointer;
+  outline: none;
+}
+
+.wbc-rail-filter > span {
+  position: absolute;
+  right: 8px;
+  display: inline-flex;
+  color: var(--wb-faint);
+  pointer-events: none;
+}
+
+.wbc-rail-filter svg {
+  width: 13px;
+  height: 13px;
 }
 
 .wbc-chat-list {
@@ -14053,9 +15011,218 @@ html[data-theme="dark"] .wb-init-progress-dot { border-color: #46586b; }
   scrollbar-width: none;
   display: flex;
   flex-direction: column;
-  gap: 8px;
+  gap: 0;
   box-sizing: border-box;
-  padding: calc(58px + var(--wbc-rail-content-inset)) 0 8px;
+  padding: calc(70px + var(--wbc-rail-content-inset)) 10px 18px;
+}
+
+/* Keep a visible home for chat groups on short windows. Recent conversations
+   scroll in the flexible upper region; groups use an independently scrollable
+   lower region that can grow for expanded children without taking over the
+   whole navigator. */
+.wbc-chat-list.has-groups {
+  overflow: hidden;
+}
+
+.wbc-chat-list-primary {
+  width: 100%;
+  max-width: 100%;
+  min-height: 0;
+  flex: 1 1 auto;
+  overflow-y: auto;
+  overflow-x: hidden;
+  overscroll-behavior-x: none;
+  box-sizing: border-box;
+  scrollbar-width: none;
+}
+
+.wbc-chat-list-primary > .wbc-rail-section,
+.wbc-chat-list-primary .wbc-rail-section-items {
+  width: 100%;
+  max-width: 100%;
+  min-width: 0;
+  box-sizing: border-box;
+}
+
+.wbc-chat-list-primary::-webkit-scrollbar,
+.wbc-chat-list-group-region::-webkit-scrollbar {
+  width: 0;
+  height: 0;
+}
+
+.wbc-chat-list-group-region {
+  position: relative;
+  z-index: 2;
+  flex: 0 1 auto;
+  min-height: 108px;
+  max-height: min(44%, 320px);
+  overflow-y: auto;
+  scrollbar-width: none;
+  padding-top: 11px;
+  background:
+    linear-gradient(
+      90deg,
+      transparent,
+      color-mix(in srgb, var(--wb-line-2) 72%, transparent) 14%,
+      color-mix(in srgb, var(--wb-line-2) 72%, transparent) 86%,
+      transparent
+    ) 8px 4px / calc(100% - 16px) 1px no-repeat;
+}
+
+.wbc-chat-list-group-region:has(.wbc-chat-group.expanded) {
+  flex-shrink: 0;
+}
+
+/* Menus may be taller than the reserved group region in a compact window.
+   While one is open, let it paint across the neighbouring rail space; the
+   existing menu-active stacking layer keeps it above the Dock and scrim. */
+.wbc-chat-list.has-groups.menu-active,
+.wbc-chat-list-group-region:has(.menu-open) {
+  overflow: visible;
+}
+
+.wbc-chat-list-group-region .wbc-rail-section {
+  padding-bottom: 0;
+}
+
+.wbc-module-nav {
+  position: absolute;
+  z-index: 22;
+  left: 16px;
+  right: 16px;
+  bottom: 16px;
+  min-height: 48px;
+  display: grid;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  gap: 2px;
+  padding: 4px;
+  border: 0;
+  border-top: 1px solid color-mix(in srgb, var(--wb-line) 55%, transparent);
+  border-radius: 0;
+  background: transparent;
+  box-shadow: none;
+}
+
+.wbc-module-nav button {
+  min-width: 0;
+  min-height: 38px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 2px;
+  padding: 3px 2px;
+  border: 0;
+  border-radius: 11px;
+  background: transparent;
+  color: var(--wb-faint);
+  cursor: pointer;
+}
+
+.wbc-module-nav button:hover {
+  background: color-mix(in srgb, var(--wb-accent) 5%, transparent);
+  color: var(--wb-text);
+}
+
+.wbc-module-nav button.active {
+  background: var(--wb-active-bg);
+  color: var(--wb-accent-strong);
+}
+
+.wbc-module-nav button > span {
+  display: inline-flex;
+}
+
+.wbc-module-nav button svg {
+  width: 15px;
+  height: 15px;
+}
+
+.wbc-module-nav button b {
+  max-width: 100%;
+  overflow: hidden;
+  font-size: 9px;
+  font-weight: 560;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.wbc-rail.is-collapsed {
+  padding-inline: 0;
+}
+
+.wbc-rail.is-collapsed .wbc-rail-glass {
+  left: 10px;
+  right: 10px;
+  min-height: 46px;
+}
+
+.wbc-rail.is-collapsed::before {
+  left: 8px;
+  right: 8px;
+}
+
+.wbc-rail.is-collapsed .wbc-nav-card {
+  border-radius: 0;
+}
+
+.wbc-rail.is-collapsed .wbc-nav-card-head {
+  flex-basis: 44px;
+  height: 44px;
+  min-height: 44px;
+  justify-content: center;
+  padding: 0;
+}
+
+.wbc-rail.is-collapsed .wbc-chat-nav-title {
+  width: 44px;
+  min-height: 44px;
+  justify-content: center;
+  padding: 0;
+  cursor: pointer;
+}
+
+.wbc-rail.is-collapsed .wbc-chat-nav-title:hover {
+  background: color-mix(in srgb, var(--wb-accent) 7%, transparent);
+}
+
+.wbc-rail.is-collapsed .wbc-chat-nav-title b {
+  display: none;
+}
+
+.wbc-rail.is-collapsed .wbc-project-trigger {
+  width: 42px;
+  min-height: 42px;
+  grid-template-columns: 34px;
+  justify-content: center;
+  padding: 4px;
+}
+
+.wbc-rail.is-collapsed .wbc-project-trigger-copy,
+.wbc-rail.is-collapsed .wbc-project-trigger-chevron,
+.wbc-rail.is-collapsed .wbc-chat-list {
+  visibility: hidden;
+  pointer-events: none;
+}
+
+.wbc-rail.is-collapsed .wbc-module-nav {
+  left: 10px;
+  right: 10px;
+  grid-template-columns: 1fr;
+  min-height: 0;
+  border-top-color: color-mix(in srgb, var(--wb-line) 55%, transparent);
+  border-radius: 0;
+  padding: 3px;
+}
+
+.wbc-rail.is-collapsed .wbc-module-nav button {
+  width: 36px;
+  min-height: 36px;
+  padding: 0;
+}
+
+.wbc-rail.is-collapsed .wbc-module-nav button b {
+  display: none;
 }
 
 .wbc-chat-list::-webkit-scrollbar {
@@ -14064,6 +15231,13 @@ html[data-theme="dark"] .wb-init-progress-dot { border-color: #46586b; }
 }
 
 .wbc-chat-list.is-loading {
+  align-items: center;
+  justify-content: center;
+}
+
+.wbc-chat-list.is-loading .wbc-chat-list-primary {
+  width: 100%;
+  display: flex;
   align-items: center;
   justify-content: center;
 }
@@ -14294,22 +15468,6 @@ span.wbc-chat-group-toggle {
   font-weight: 680;
 }
 
-.wbc-chat-group-icon {
-  width: 22px;
-  height: 22px;
-  flex: 0 0 auto;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  border-radius: 7px;
-  background: color-mix(in srgb, var(--wb-accent) 12%, transparent);
-  color: var(--wb-accent);
-  font-size: calc(11px * var(--wb-ui-font-scale, 1));
-  font-weight: 720;
-  font-variant-numeric: tabular-nums;
-  line-height: 1;
-}
-
 .wbc-chat-group-actions {
   position: relative;
   display: flex;
@@ -14375,8 +15533,8 @@ span.wbc-chat-group-toggle {
   grid-template-rows: 1fr;
   opacity: 1;
   transition:
-    grid-template-rows .24s cubic-bezier(.2, .75, .25, 1),
-    opacity .16s ease;
+    grid-template-rows .2s cubic-bezier(.22, 1, .36, 1),
+    opacity .14s ease-out;
 }
 
 .wbc-chat-group-content.collapsed {
@@ -14388,6 +15546,10 @@ span.wbc-chat-group-toggle {
 .wbc-chat-group-content-inner {
   min-height: 0;
   overflow: hidden;
+}
+
+.wbc-chat-group-content.expanded:has(.wbc-chat-card.menu-open) > .wbc-chat-group-content-inner {
+  overflow: visible;
 }
 
 .wbc-chat-group-children {
@@ -14477,6 +15639,409 @@ span.wbc-chat-group-toggle {
   color: var(--wb-faint);
 }
 
+/* Unified project + conversation navigator. The rail is one floating surface;
+   its rows stay deliberately flat so drag affordances and group hierarchy do
+   not turn into nested cards. */
+.wbc-rail-section {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 0 0 10px;
+}
+
+.wbc-rail-section + .wbc-rail-section {
+  padding-top: 4px;
+}
+
+.wbc-rail-section-label {
+  min-height: 30px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 0 10px;
+  color: var(--wb-text);
+}
+
+.wbc-rail-section-label > span {
+  display: inline-flex;
+  color: var(--wb-muted);
+}
+
+.wbc-rail-section-label svg {
+  width: 15px;
+  height: 15px;
+}
+
+.wbc-rail-section-label b {
+  font-size: calc(12px * var(--wb-ui-font-scale, 1));
+  font-weight: 720;
+  letter-spacing: .01em;
+}
+
+.wbc-rail-section-items {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.wbc-rail-empty {
+  padding: 24px 10px;
+  text-align: center;
+}
+
+.wbc-rail-show-all {
+  min-height: 34px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin: -6px 2px 8px;
+  padding: 0 10px;
+  border: 0;
+  border-radius: 9px;
+  background: transparent;
+  color: var(--wb-faint);
+  font: inherit;
+  font-size: calc(10.5px * var(--wb-ui-font-scale, 1));
+  cursor: pointer;
+}
+
+.wbc-rail-show-all:hover {
+  background: color-mix(in srgb, var(--wb-row-hover-bg) 62%, transparent);
+  color: var(--wb-text);
+}
+
+.wbc-rail-show-all svg {
+  width: 13px;
+  height: 13px;
+}
+
+.wbc-rail .wbc-chat-card {
+  min-height: 44px;
+  display: block;
+  box-sizing: border-box;
+  padding: 0 10px;
+  border: 0;
+  border-radius: 11px;
+  background: transparent;
+  box-shadow: none;
+  transition:
+    transform 180ms cubic-bezier(.22, 1, .36, 1),
+    background-color 150ms ease,
+    color 150ms ease,
+    box-shadow 150ms ease;
+}
+
+.wbc-rail .wbc-chat-card:hover,
+.wbc-rail .wbc-chat-card:focus,
+.wbc-rail .wbc-chat-card:focus-visible {
+  transform: translateX(2px);
+  background: color-mix(in srgb, var(--wb-accent) 7%, var(--wb-control-bg));
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--wb-accent) 10%, transparent);
+}
+
+.wbc-rail .wbc-chat-card.active,
+.wbc-rail .wbc-chat-card.menu-open,
+.wbc-rail .wbc-chat-card.active:focus,
+.wbc-rail .wbc-chat-card.active:focus-visible {
+  background: var(--wb-active-bg);
+  color: var(--wb-accent-strong);
+  box-shadow:
+    inset 0 0 0 1px color-mix(in srgb, var(--wb-accent) 10%, transparent),
+    0 4px 12px color-mix(in srgb, var(--wb-accent) 6%, transparent);
+  transform: none;
+}
+
+.wbc-rail .wbc-chat-card.active:hover {
+  background: color-mix(in srgb, var(--wb-active-bg) 92%, var(--wb-accent));
+  box-shadow:
+    inset 0 0 0 1px color-mix(in srgb, var(--wb-accent) 16%, transparent),
+    0 5px 14px color-mix(in srgb, var(--wb-accent) 8%, transparent);
+}
+
+.wbc-rail .wbc-chat-card.active .wbc-chat-row-icon,
+.wbc-rail .wbc-chat-card.active .wbc-chat-card-title,
+.wbc-rail .wbc-chat-card.active .wbc-chat-card-menu-btn {
+  color: var(--wb-accent-strong);
+}
+
+.wbc-rail .wbc-chat-card.status-completed .wbc-chat-row-icon {
+  color: var(--wb-green);
+}
+
+.wbc-rail .wbc-chat-card.status-attention .wbc-chat-row-icon,
+.wbc-rail .wbc-chat-card.status-attention .wbc-chat-card-top b {
+  color: var(--wb-amber);
+}
+
+.wbc-rail .wbc-chat-card.status-failed .wbc-chat-row-icon,
+.wbc-rail .wbc-chat-card.status-failed .wbc-chat-card-top b {
+  color: var(--wb-red);
+}
+
+.wbc-rail .wbc-chat-card.status-running .wbc-chat-row-icon {
+  color: var(--wb-accent);
+}
+
+.wbc-rail .wbc-chat-card-top {
+  width: 100%;
+  min-height: 44px;
+  display: grid;
+  grid-template-columns: 20px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 8px;
+}
+
+.wbc-chat-row-icon {
+  width: 18px;
+  height: 18px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--wb-muted);
+}
+
+.wbc-chat-row-icon svg {
+  width: 17px;
+  height: 17px;
+}
+
+.wbc-rail .wbc-chat-card-title {
+  gap: 4px;
+}
+
+.wbc-rail .wbc-chat-card-top b {
+  font-size: calc(13px * var(--wb-ui-font-scale, 1));
+  font-weight: 620;
+}
+
+.wbc-rail .wbc-chat-card-pin {
+  display: none;
+}
+
+.wbc-rail .wbc-chat-card-right {
+  min-width: 42px;
+  flex-direction: column;
+  align-items: flex-end;
+  justify-content: center;
+  gap: 1px;
+}
+
+.wbc-rail .wbc-chat-card-time,
+.wbc-rail .wbc-chat-card-status {
+  font-size: calc(10.5px * var(--wb-ui-font-scale, 1));
+  font-variant-numeric: tabular-nums;
+}
+
+.wbc-chat-card-status {
+  color: var(--wb-muted);
+  font-style: normal;
+  font-weight: 560;
+  line-height: 1.2;
+  white-space: nowrap;
+}
+
+.wbc-chat-card.status-attention .wbc-chat-card-status {
+  color: var(--wb-amber);
+}
+
+.wbc-chat-card.status-failed .wbc-chat-card-status {
+  color: var(--wb-red);
+}
+
+.wbc-rail .wbc-chat-card-preview {
+  display: none;
+}
+
+.wbc-rail .wbc-chat-group {
+  gap: 2px;
+  padding: 5px 0;
+  border: 1px solid transparent;
+  border-radius: 13px;
+  background: color-mix(in srgb, var(--wb-card-bg) 42%, transparent);
+  box-shadow: none;
+}
+
+.wbc-rail .wbc-chat-group.collapsed {
+  gap: 0;
+}
+
+.wbc-rail .wbc-chat-group:hover,
+.wbc-rail .wbc-chat-group.menu-open {
+  border-color: color-mix(in srgb, var(--wb-line-2) 58%, transparent);
+  background: color-mix(in srgb, var(--wb-card-bg) 58%, transparent);
+  box-shadow: none;
+}
+
+.wbc-rail .wbc-chat-group.menu-open,
+.wbc-rail .wbc-chat-group:has(.wbc-chat-card.menu-open) {
+  z-index: 210;
+  border-color: color-mix(in srgb, var(--wb-accent) 20%, var(--wb-line-2));
+  background: color-mix(in srgb, var(--wb-active-bg) 24%, var(--wb-control-bg));
+  box-shadow:
+    0 7px 18px color-mix(in srgb, var(--wb-accent) 6%, transparent);
+}
+
+.wbc-rail .wbc-chat-group:has(.wbc-chat-card.menu-open) .wbc-chat-card.menu-open {
+  z-index: 220;
+}
+
+.wbc-rail .wbc-chat-group:has(.wbc-chat-card.menu-open) .wb-card-menu {
+  z-index: 230;
+}
+
+.wbc-rail .wbc-chat-group.drop-ready {
+  background: color-mix(in srgb, var(--wb-active-bg) 58%, transparent);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--wb-accent) 24%, transparent);
+}
+
+.wbc-rail .wbc-chat-group-preview {
+  gap: 4px;
+  padding: 6px;
+  border: 1px solid color-mix(in srgb, var(--wb-accent) 34%, var(--wb-line));
+  border-radius: 13px;
+  background: color-mix(in srgb, var(--wb-active-bg) 36%, var(--wb-card-bg));
+  box-shadow: 0 8px 20px color-mix(in srgb, var(--wb-accent) 7%, transparent);
+}
+
+.wbc-rail .wbc-chat-group-preview .wbc-chat-group-head {
+  min-height: 36px;
+  padding: 0 7px 0 4px;
+}
+
+.wbc-rail .wbc-chat-group-preview .wbc-chat-group-children {
+  gap: 2px;
+  padding: 0;
+}
+
+.wbc-rail .wbc-chat-group-preview .wbc-chat-card {
+  min-height: 40px;
+  background: color-mix(in srgb, var(--wb-card-bg) 78%, transparent);
+}
+
+.wbc-rail .wbc-chat-group-preview .wbc-chat-card-top {
+  min-height: 40px;
+}
+
+.wbc-rail .wbc-chat-group-preview .wbc-chat-group-drop-clone {
+  opacity: .72;
+}
+
+.wbc-rail .wbc-chat-group-preview .wbc-chat-group-drop-hint {
+  min-height: 22px;
+  margin-top: 1px;
+  padding-inline: 8px;
+  border: 0;
+  background: transparent;
+  box-shadow: none;
+}
+
+.wbc-rail .wbc-chat-group-head {
+  min-height: 40px;
+  padding: 0 10px 0 8px;
+  border-radius: 9px;
+  transition: background-color 140ms ease;
+}
+
+.wbc-rail .wbc-chat-group.expanded .wbc-chat-group-head:hover {
+  background: color-mix(in srgb, var(--wb-row-hover-bg) 48%, transparent);
+}
+
+.wbc-rail .wbc-chat-group-toggle {
+  display: grid;
+  grid-template-columns: 14px 22px minmax(0, 1fr);
+  gap: 6px;
+  padding: 0;
+}
+
+.wbc-chat-group-leading-chevron {
+  display: inline-flex;
+  color: var(--wb-muted);
+}
+
+.wbc-chat-group-leading-chevron svg {
+  width: 13px;
+  height: 13px;
+  transition: transform .2s cubic-bezier(.2, .75, .25, 1);
+}
+
+.wbc-chat-group-leading-chevron.expanded svg {
+  transform: rotate(90deg);
+}
+
+.wbc-rail .wbc-chat-group-toggle b {
+  font-size: calc(13px * var(--wb-ui-font-scale, 1));
+  font-weight: 640;
+}
+
+.wbc-rail .wbc-chat-group-actions {
+  gap: 3px;
+}
+
+.wbc-chat-group-count {
+  min-width: 22px;
+  height: 22px;
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0 7px;
+  box-sizing: border-box;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--wb-muted) 9%, transparent);
+  color: var(--wb-muted);
+  font-size: calc(10px * var(--wb-ui-font-scale, 1));
+  font-weight: 650;
+  font-variant-numeric: tabular-nums;
+}
+
+.wbc-rail .wbc-chat-group-summary {
+  display: none;
+}
+
+.wbc-rail .wbc-chat-group-children {
+  gap: 2px;
+  margin-left: 0;
+  padding: 1px 6px;
+  border-left: 0;
+}
+
+.wbc-rail .wbc-chat-group-child {
+  width: auto;
+  min-height: 40px;
+  padding-inline: 8px;
+  border: 0;
+  border-radius: 9px;
+  background: transparent;
+  box-shadow: none;
+  transform: none;
+}
+
+.wbc-rail .wbc-chat-group .wbc-chat-group-child:hover,
+.wbc-rail .wbc-chat-group .wbc-chat-group-child:focus,
+.wbc-rail .wbc-chat-group .wbc-chat-group-child:focus-visible {
+  transform: none;
+  background: color-mix(in srgb, var(--wb-accent) 7%, var(--wb-control-bg));
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--wb-accent) 10%, transparent);
+}
+
+.wbc-rail .wbc-chat-group-child .wbc-chat-card-top {
+  min-height: 40px;
+  grid-template-columns: 18px minmax(0, 1fr) auto;
+  gap: 7px;
+}
+
+.wbc-rail .wbc-chat-group .wbc-chat-group-child.active,
+.wbc-rail .wbc-chat-group .wbc-chat-group-child.active:focus,
+.wbc-rail .wbc-chat-group .wbc-chat-group-child.active:focus-visible {
+  border: 0;
+  background: var(--wb-active-bg);
+  color: var(--wb-accent-strong);
+  box-shadow:
+    inset 0 0 0 1px color-mix(in srgb, var(--wb-accent) 10%, transparent),
+    0 4px 12px color-mix(in srgb, var(--wb-accent) 6%, transparent);
+}
+
 .wbc-hover-marquee {
   display: block;
   width: 100%;
@@ -14522,6 +16087,7 @@ span.wbc-chat-group-toggle {
 @media (prefers-reduced-motion: reduce) {
   .wbc-chat-group-content,
   .wbc-chat-group-chevron svg,
+  .wbc-chat-group-leading-chevron svg,
   .wbc-hover-marquee.overflow:hover .wbc-hover-marquee-track,
   .wbc-hover-marquee.overflow:focus-within .wbc-hover-marquee-track,
   .wbc-chat-card:hover .wbc-hover-marquee.overflow .wbc-hover-marquee-track,
@@ -15038,8 +16604,9 @@ body.wbc-resizing-side-agent .wbc-page.wbc-split-left .wbc-side-agent-split-moti
   box-sizing: border-box;
 }
 .wbc-chat-split > .wbc-composer {
-  position: relative;
+  position: absolute;
   z-index: 24;
+  inset: auto 0 0;
   isolation: isolate;
 }
 .wbc-chat-split-state {
@@ -15310,6 +16877,17 @@ body.wbc-resizing-side-agent .wbc-page.wbc-split-left .wbc-side-agent-split-moti
 
 .wbc-side-agent-split-menu.open {
   animation: wbc-split-menu-in 340ms cubic-bezier(.22, 1, .36, 1) both;
+}
+
+/* Legacy/web fallback: mount the picker in its final layout immediately. The
+   Electron path uses a separate animated WebContentsView above the live page. */
+.wbc-browser-picker-menu.open {
+  position: relative;
+  top: auto;
+  right: auto;
+  left: auto;
+  animation: none;
+  will-change: auto;
 }
 
 .wbc-side-agent-split-menu.closing {
@@ -15925,7 +17503,9 @@ body.wbc-resizing-side-agent .wbc-page.wbc-split-left .wbc-side-agent-split-moti
   height: 100%;
   box-sizing: border-box;
   overflow-y: auto;
-  padding: 4px 18px 20px;
+  /* Match the main thread's under-composer scroll runway so real transcript
+     content reaches the shared glass plane instead of ending above it. */
+  padding: 4px 18px var(--wbc-thread-inset-bottom);
 }
 
 /* Every descendant in a narrow split must be allowed to yield inline space.
@@ -16586,11 +18166,17 @@ html[data-platform="darwin"] .wbc-browser-window.maximized .wbc-browser-window-b
 }
 
 .wbc-browser-maximized-menu {
+  position: relative;
+  z-index: 1;
+  top: auto;
+  right: auto;
+  left: auto;
   box-sizing: border-box;
   width: min(560px, calc(100vw - 116px));
   max-width: min(560px, calc(100vw - 116px));
   margin-left: auto;
   margin-right: auto;
+  margin-top: 6px;
   max-height: min(340px, 44vh);
   border-color: var(--wb-line-2);
   background: var(--wb-card-bg-strong);
@@ -18509,9 +20095,9 @@ button.wbc-attach-file:focus-visible {
   padding: 10px 22px 8px;
 }
 
-/* Only the main conversation composer becomes a glass dock. The white input
-   card itself remains unchanged; the transcript scrolls underneath this
-   outer surface and stays legible through the blur. */
+/* The main conversation composer sits on the shared bottom glass plane. Its
+   input card adds one restrained translucent layer so the selected Workbench
+   background can show through without reducing text contrast. */
 .wbc-main > .wbc-composer {
   position: absolute;
   z-index: 24;
@@ -18552,11 +20138,16 @@ button.wbc-attach-file:focus-visible {
 .wbc-composer-box {
   container-name: wbc-composer;
   container-type: inline-size;
-  border: 0;
+  border: 1px solid color-mix(in srgb, var(--wb-line-2) 64%, transparent);
   border-radius: 14px;
-  background: var(--wb-card-bg);
+  background: color-mix(in srgb, var(--wb-card-bg) 72%, transparent);
   padding: 10px 12px 8px;
-  box-shadow: var(--wbc-control-shadow);
+  box-shadow:
+    var(--wbc-control-shadow),
+    inset 0 1px 0 color-mix(in srgb, #fff 10%, transparent),
+    inset 0 0 0 1px color-mix(in srgb, var(--wb-line) 14%, transparent);
+  -webkit-backdrop-filter: blur(18px) saturate(120%) contrast(102%);
+  backdrop-filter: blur(18px) saturate(120%) contrast(102%);
 }
 
 .wbc-composer-box textarea {
@@ -21978,7 +23569,7 @@ html[data-theme="dark"] .wbc-overview-token-grid {
    usable; normal 1280px desktop windows keep the Workbench context tabs. */
 @media (max-width: 980px) {
   .wbc-page {
-    --wbc-rail-width: 220px;
+    --wbc-rail-width: 300px;
     grid-template-columns: var(--wbc-rail-width) minmax(0, 1fr);
   }
   /* An open detail split must keep reserving a real grid track at compact
@@ -25509,5 +27100,853 @@ html[data-density="compact"] .workbench-shell :where(.wb-budget-model-head, .wb-
   .wb-board-tool-btn,
   .wb-board-new-btn {
     width: 100%;
+  }
+}
+
+/* ===================================================================
+   Integrated workspace sidebars
+   Each workspace owns one floating directory card. Module navigation and the
+   account surface live in a fixed dock at the bottom of that same card.
+   =================================================================== */
+
+.workbench-grid.integrated-sidebars {
+  --wb-rail-w: 300px;
+  --wb-rail-w-open: 300px;
+  --wb-sidebar-dock-height: 120px;
+  --wb-sidebar-motion-duration: 440ms;
+  --wb-sidebar-motion-ease: cubic-bezier(.22, 1.14, .36, 1);
+  --wb-floating-rail-border: 1px solid color-mix(in srgb, var(--wb-line-2) 72%, transparent);
+  --wb-floating-rail-radius: 18px;
+  --wb-floating-rail-bg: color-mix(in srgb, var(--wb-card-bg) 88%, var(--wb-surface));
+  --wb-floating-rail-shadow:
+    0 8px 22px rgba(9, 17, 30, .055),
+    inset 0 1px 0 color-mix(in srgb, #fff 9%, transparent),
+    inset 0 0 0 1px color-mix(in srgb, var(--wb-line) 18%, transparent);
+  --wb-floating-control-border: 1px solid color-mix(in srgb, var(--wb-line-2) 70%, transparent);
+  --wb-floating-control-radius: 12px;
+  --wb-floating-control-bg: color-mix(in srgb, var(--wb-card-bg) 88%, var(--wb-surface));
+  --wb-floating-control-hover-bg: color-mix(in srgb, var(--wb-accent) 6%, var(--wb-floating-control-bg));
+  --wb-floating-control-shadow:
+    0 5px 14px rgba(9, 17, 30, .045),
+    inset 0 1px 0 color-mix(in srgb, #fff 8%, transparent);
+  transition: grid-template-columns var(--wb-sidebar-motion-duration) var(--wb-sidebar-motion-ease);
+}
+
+/* Main-canvas toolbars use the same soft, bordered material as the floating
+   directory card.  Shared tokens keep task, memory and schedule controls from
+   drifting into separate near-black button systems. */
+.workbench-grid.integrated-sidebars :is(
+  .wb-board-tool-btn,
+  .wb-board-new-btn,
+  .wb-mem-searchbox,
+  .wb-mem-tool,
+  .wb-sched-today,
+  .wb-sched-iconbtn,
+  .wb-sched-viewseg,
+  .wb-sched-new
+) {
+  border: var(--wb-floating-control-border);
+  border-radius: var(--wb-floating-control-radius);
+  background: var(--wb-floating-control-bg);
+  box-shadow: var(--wb-floating-control-shadow);
+  transition:
+    transform 180ms cubic-bezier(.22, 1, .36, 1),
+    border-color 160ms ease,
+    background-color 160ms ease,
+    color 160ms ease,
+    box-shadow 160ms ease;
+}
+
+.workbench-grid.integrated-sidebars :is(
+  .wb-board-tool-btn,
+  .wb-mem-tool,
+  .wb-sched-today,
+  .wb-sched-iconbtn
+):hover {
+  transform: translateY(-1px);
+  border-color: color-mix(in srgb, var(--wb-accent) 34%, var(--wb-line-2));
+  background: var(--wb-floating-control-hover-bg);
+  color: var(--wb-text);
+  box-shadow:
+    0 8px 18px rgba(9, 17, 30, .07),
+    inset 0 1px 0 color-mix(in srgb, #fff 10%, transparent);
+}
+
+.workbench-grid.integrated-sidebars .wb-board-tool-btn.active,
+.workbench-grid.integrated-sidebars .wb-mem-tool.on {
+  border-color: color-mix(in srgb, var(--wb-accent) 58%, var(--wb-line-2));
+  background: color-mix(in srgb, var(--wb-accent) 10%, var(--wb-floating-control-bg));
+  color: var(--wb-text);
+}
+
+.workbench-grid.integrated-sidebars .wb-mem-searchbox:focus-within {
+  border-color: color-mix(in srgb, var(--wb-accent) 62%, var(--wb-line-2));
+  background: var(--wb-floating-control-bg);
+  box-shadow:
+    0 7px 18px rgba(9, 17, 30, .065),
+    inset 0 0 0 1px color-mix(in srgb, var(--wb-accent) 18%, transparent);
+}
+
+.workbench-grid.integrated-sidebars .wb-sched-viewseg {
+  height: 34px;
+  gap: 2px;
+  padding: 2px;
+  box-sizing: border-box;
+  overflow: visible;
+}
+
+.workbench-grid.integrated-sidebars .wb-sched-viewseg button {
+  height: 28px;
+  padding: 0 13px;
+  border-radius: 9px;
+  transition: background-color 160ms ease, color 160ms ease, box-shadow 160ms ease;
+}
+
+.workbench-grid.integrated-sidebars :is(.wb-sched-today, .wb-sched-iconbtn) {
+  height: 32px;
+}
+
+.workbench-grid.integrated-sidebars .wb-sched-iconbtn {
+  width: 32px;
+}
+
+.workbench-grid.integrated-sidebars .wb-sched-new {
+  height: 34px;
+  box-sizing: border-box;
+}
+
+.workbench-grid.integrated-sidebars .wb-sched-viewseg button:hover {
+  background: var(--wb-row-hover-bg);
+  color: var(--wb-text);
+}
+
+.workbench-grid.integrated-sidebars .wb-sched-viewseg button.on {
+  background: color-mix(in srgb, var(--wb-accent) 12%, var(--wb-card-bg));
+  color: var(--wb-text);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--wb-accent) 28%, transparent);
+}
+
+.workbench-grid.integrated-sidebars :is(.wb-board-new-btn, .wb-sched-new) {
+  border-color: color-mix(in srgb, var(--wb-accent) 72%, var(--wb-line-2));
+  background: color-mix(in srgb, var(--wb-accent) 76%, var(--wb-card-bg));
+  color: var(--wb-accent-contrast, #fff);
+}
+
+.workbench-grid.integrated-sidebars :is(.wb-board-new-btn, .wb-sched-new):hover {
+  transform: translateY(-1px);
+  filter: none;
+  background: color-mix(in srgb, var(--wb-accent) 84%, var(--wb-card-bg));
+  box-shadow:
+    0 8px 18px color-mix(in srgb, var(--wb-accent) 18%, transparent),
+    inset 0 1px 0 color-mix(in srgb, #fff 16%, transparent);
+}
+
+.workbench-grid.integrated-sidebars .wbc-page {
+  min-height: 0;
+  grid-template-rows: minmax(0, 1fr);
+  transition: grid-template-columns var(--wb-sidebar-motion-duration) var(--wb-sidebar-motion-ease);
+}
+
+.workbench-grid.integrated-sidebars.rail-collapsed {
+  --wb-rail-w: 64px;
+}
+
+.workbench-grid.integrated-sidebars.is-chat,
+.workbench-grid.integrated-sidebars.is-knowledge,
+.workbench-grid.integrated-sidebars.is-schedule,
+.workbench-grid.integrated-sidebars.is-memory,
+.workbench-grid.integrated-sidebars.is-welcome {
+  grid-template-columns: minmax(0, 1fr);
+}
+
+.workbench-grid.integrated-sidebars.is-task-board {
+  grid-template-columns: 300px minmax(0, 1fr);
+}
+
+.workbench-grid.integrated-sidebars.is-task-detail {
+  grid-template-columns: 300px minmax(420px, 1fr) var(--wb-right-w, 350px);
+}
+
+.workbench-grid.integrated-sidebars.is-profile {
+  grid-template-columns: 300px minmax(0, 1fr);
+}
+
+.workbench-grid.integrated-sidebars.rail-collapsed.is-task-board {
+  grid-template-columns: 64px minmax(0, 1fr);
+}
+
+.workbench-grid.integrated-sidebars.rail-collapsed.is-task-detail {
+  grid-template-columns: 64px minmax(420px, 1fr) var(--wb-right-w, 350px);
+}
+
+.workbench-grid.integrated-sidebars.rail-collapsed.is-profile {
+  grid-template-columns: 64px minmax(0, 1fr);
+}
+
+.workbench-grid.integrated-sidebars .workbench-integrated-rail {
+  position: relative;
+  z-index: 21;
+  align-self: stretch;
+  flex: 0 0 calc(var(--wb-rail-w) - 16px);
+  width: calc(var(--wb-rail-w) - 16px);
+  height: calc(100% - 24px);
+  max-height: calc(100% - 24px);
+  margin: 12px 4px 12px 12px;
+  box-sizing: border-box;
+  border: var(--wb-floating-rail-border);
+  border-radius: var(--wb-floating-rail-radius);
+  background: var(--wb-floating-rail-bg);
+  box-shadow: var(--wb-floating-rail-shadow);
+  -webkit-backdrop-filter: blur(18px) saturate(112%);
+  backdrop-filter: blur(18px) saturate(112%);
+  overflow: hidden;
+  transition:
+    width var(--wb-sidebar-motion-duration) var(--wb-sidebar-motion-ease),
+    flex-basis var(--wb-sidebar-motion-duration) var(--wb-sidebar-motion-ease),
+    box-shadow 220ms ease,
+    border-radius 220ms ease;
+  will-change: width, flex-basis;
+}
+
+/* The collapsed Account menu opens into the conversation lane.  Lift the
+   whole rail while that popover exists, otherwise the main composer (which
+   owns its own stacking context) can paint over the menu even when the menu's
+   local z-index is high. */
+.workbench-grid.integrated-sidebars .workbench-integrated-rail:has(.workbench-module-account-menu) {
+  z-index: 90;
+  overflow: visible;
+}
+
+/* Chat used to paint an equivalent-looking card with a pseudo-element while
+   keeping its actual rail full-height.  That made its footer participate in a
+   different box model from every other module.  The chat rail is now the same
+   physical floating card as the rest of the Workbench. */
+.workbench-grid.integrated-sidebars .wbc-rail.workbench-integrated-rail {
+  height: calc(100% - 82px);
+  max-height: calc(100% - 82px);
+  margin: 70px 4px 12px 12px;
+  padding: 0;
+  isolation: isolate;
+}
+
+/* Keep the main and split conversation cards on the floating rail's 12px
+   bottom baseline. */
+.workbench-grid.integrated-sidebars.is-chat .wbc-composer {
+  padding-bottom: 12px;
+}
+
+.workbench-grid.integrated-sidebars .wbc-rail.workbench-integrated-rail::before {
+  content: none;
+}
+
+.workbench-grid.integrated-sidebars .wbc-rail.workbench-integrated-rail .wbc-rail-glass {
+  position: relative;
+  inset: auto;
+  flex: 0 0 56px;
+  width: 100%;
+  height: 56px;
+  min-height: 56px;
+}
+
+.workbench-grid.integrated-sidebars .wbc-rail.workbench-integrated-rail .wbc-chat-list {
+  padding: 10px;
+}
+
+.workbench-grid.integrated-sidebars .workbench-integrated-rail-head {
+  position: relative;
+  flex: 0 0 56px;
+  width: 100%;
+  height: 56px;
+  min-height: 56px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 0 12px;
+  box-sizing: border-box;
+  color: var(--wb-text);
+}
+
+.workbench-grid.integrated-sidebars .workbench-sidebar-collapse-control {
+  flex: 0 0 auto;
+  width: 32px;
+  height: 32px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  border: 1px solid color-mix(in srgb, var(--wb-line-2) 72%, transparent);
+  border-radius: 9px;
+  background: color-mix(in srgb, var(--wb-card-bg) 58%, transparent);
+  color: var(--wb-muted);
+  cursor: pointer;
+}
+
+.workbench-grid.integrated-sidebars .workbench-sidebar-collapse-control:hover {
+  border-color: color-mix(in srgb, var(--wb-line-2) 88%, transparent);
+  background: var(--wb-row-hover-bg);
+  color: var(--wb-text);
+}
+
+.workbench-grid.integrated-sidebars .workbench-sidebar-collapse-control:focus-visible {
+  outline: 0;
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--wb-accent) 40%, transparent);
+}
+
+.workbench-grid.integrated-sidebars .workbench-integrated-rail-head > h1,
+.workbench-grid.integrated-sidebars .workbench-integrated-rail-head > b,
+.workbench-grid.integrated-sidebars .workbench-integrated-rail-head > span {
+  min-width: 0;
+  margin: 0;
+  overflow: hidden;
+  color: var(--wb-text);
+  font-size: calc(17px * var(--wb-ui-font-scale, 1));
+  font-weight: 760;
+  line-height: 1.15;
+  letter-spacing: -.015em;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.workbench-integrated-rail-actions {
+  min-width: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 6px;
+}
+
+.workbench-grid.integrated-sidebars .workbench-integrated-rail-primary-action {
+  min-height: 32px;
+  height: 32px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+  padding: 0 10px;
+  border: 1px solid color-mix(in srgb, var(--wb-line-2) 72%, transparent);
+  border-radius: 9px;
+  background: color-mix(in srgb, var(--wb-card-bg) 58%, transparent);
+  color: var(--wb-text);
+  font-size: calc(12px * var(--wb-ui-font-scale, 1));
+  font-weight: 650;
+  line-height: 1;
+  white-space: nowrap;
+}
+
+.workbench-grid.integrated-sidebars .workbench-integrated-rail-primary-action:hover {
+  border-color: color-mix(in srgb, var(--wb-line-2) 88%, transparent);
+  background: var(--wb-row-hover-bg);
+}
+
+.workbench-grid.integrated-sidebars .wb-sched-rail-back {
+  width: 32px;
+  height: 32px;
+  flex: 0 0 32px;
+  border: 1px solid color-mix(in srgb, var(--wb-line-2) 72%, transparent);
+  border-radius: 9px;
+  background: color-mix(in srgb, var(--wb-card-bg) 58%, transparent);
+  color: var(--wb-muted);
+}
+
+.workbench-grid.integrated-sidebars .wb-sched-rail-back:hover {
+  border-color: color-mix(in srgb, var(--wb-line-2) 88%, transparent);
+  background: var(--wb-row-hover-bg);
+  color: var(--wb-text);
+}
+
+.workbench-integrated-rail-body {
+  min-height: 0;
+  flex: 1 1 auto;
+  overflow-y: auto;
+  box-sizing: border-box;
+  opacity: 1;
+  transform: translateX(0);
+  transition:
+    opacity 150ms ease 90ms,
+    transform 260ms var(--wb-sidebar-motion-ease) 70ms;
+}
+
+.workbench-grid.integrated-sidebars .workbench-task-list.workbench-integrated-rail-body,
+.workbench-grid.integrated-sidebars .wb-lib-side-scroll.workbench-integrated-rail-body,
+.workbench-grid.integrated-sidebars .wb-mem-rail-scroll.workbench-integrated-rail-body {
+  padding: 10px;
+}
+
+.workbench-grid.integrated-sidebars .workbench-integrated-rail-search-head {
+  gap: 6px;
+  padding-inline: 12px;
+}
+
+.wb-lib-sidebar.workbench-integrated-rail {
+  --lib-sidebar: calc(var(--wb-rail-w) - 16px);
+}
+
+.wb-sched-rail.workbench-integrated-rail {
+  overflow: hidden;
+}
+
+.wb-sched-rail-scroll {
+  min-height: 0;
+  flex: 1 1 auto;
+  overflow-y: auto;
+}
+
+.wb-mem-rail.workbench-integrated-rail {
+  padding: 0;
+  gap: 0;
+  overflow: hidden;
+}
+
+.wb-mem-rail-scroll {
+  min-height: 0;
+  flex: 1 1 auto;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  padding: 10px;
+  overflow-y: auto;
+}
+
+.workbench-task-list {
+  min-height: 0;
+  flex: 1 1 auto;
+  overflow-y: auto;
+}
+
+.workbench-profile-rail {
+  display: flex;
+  flex-direction: column;
+}
+
+.workbench-profile-rail > header {
+  min-height: 58px;
+  display: flex;
+  align-items: center;
+  padding: 0 18px;
+  color: var(--wb-text);
+  font-size: calc(17px * var(--wb-ui-font-scale, 1));
+}
+
+.workbench-profile-rail-spacer {
+  min-height: 0;
+  flex: 1 1 auto;
+}
+
+.workbench-sidebar-dock {
+  position: relative;
+  z-index: 64;
+  flex: 0 0 auto;
+  display: grid;
+  grid-template-rows: 56px 46px;
+  gap: 4px;
+  min-width: 0;
+  width: auto;
+  height: var(--wb-sidebar-dock-height);
+  min-height: var(--wb-sidebar-dock-height);
+  /* Keep the Dock bottom-anchored in both states. Switching margin-top from
+     0 to auto at collapse time caused a discrete downward jump before the
+     Dock height transition moved the vertical stack back upward. */
+  margin: auto 14px 12px;
+  padding: 12px 0 0;
+  box-sizing: border-box;
+  border-top: 0;
+  transition:
+    height var(--wb-sidebar-motion-duration) var(--wb-sidebar-motion-ease),
+    min-height var(--wb-sidebar-motion-duration) var(--wb-sidebar-motion-ease),
+    margin var(--wb-sidebar-motion-duration) var(--wb-sidebar-motion-ease),
+    padding var(--wb-sidebar-motion-duration) var(--wb-sidebar-motion-ease),
+    grid-template-rows var(--wb-sidebar-motion-duration) var(--wb-sidebar-motion-ease);
+}
+
+.workbench-sidebar-dock::before {
+  content: none;
+}
+
+.wbc-rail > .workbench-sidebar-dock {
+  z-index: 24;
+}
+
+.workbench-sidebar-dock-nav {
+  --wb-dock-nav-bg: color-mix(in srgb, var(--wb-card-bg) 78%, var(--wb-control-bg));
+  grid-row: 1;
+  min-width: 0;
+  display: grid;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  grid-template-rows: 48px;
+  align-content: start;
+  gap: 2px;
+  height: 56px;
+  margin-top: 0;
+  padding: 3px;
+  box-sizing: border-box;
+  border: 1px solid color-mix(in srgb, var(--wb-line-2) 58%, transparent);
+  border-radius: 15px;
+  background: var(--wb-dock-nav-bg);
+  box-shadow:
+    inset 0 1px 0 color-mix(in srgb, #fff 6%, transparent),
+    0 4px 12px rgba(9, 17, 30, .035);
+  transition:
+    height var(--wb-sidebar-motion-duration) var(--wb-sidebar-motion-ease),
+    grid-template-columns var(--wb-sidebar-motion-duration) var(--wb-sidebar-motion-ease),
+    grid-template-rows var(--wb-sidebar-motion-duration) var(--wb-sidebar-motion-ease),
+    gap var(--wb-sidebar-motion-duration) var(--wb-sidebar-motion-ease);
+}
+
+.workbench-grid.integrated-sidebars .workbench-sidebar-dock-nav button {
+  width: 100%;
+  min-width: 34px;
+  height: 48px;
+  min-height: 48px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 2px;
+  padding: 3px 1px;
+  border: 0;
+  border-radius: 10px;
+  background: transparent;
+  color: var(--wb-faint);
+  cursor: pointer;
+  transition:
+    transform var(--wb-sidebar-motion-duration) var(--wb-sidebar-motion-ease),
+    background-color 150ms ease,
+    color 150ms ease,
+    box-shadow 150ms ease;
+}
+
+.workbench-grid.integrated-sidebars .workbench-sidebar-dock-nav button:hover {
+  transform: translateY(-1px);
+  background: color-mix(in srgb, var(--wb-accent) 9%, var(--wb-dock-nav-bg));
+  color: var(--wb-text);
+  box-shadow:
+    inset 0 0 0 1px color-mix(in srgb, var(--wb-accent) 16%, transparent),
+    0 4px 10px color-mix(in srgb, var(--wb-accent) 7%, transparent);
+}
+
+.workbench-grid.integrated-sidebars .workbench-sidebar-dock-nav button.active {
+  background: var(--wb-active-bg);
+  color: var(--wb-accent-strong);
+  box-shadow:
+    inset 0 0 0 1px color-mix(in srgb, var(--wb-accent) 16%, transparent),
+    0 4px 12px color-mix(in srgb, var(--wb-accent) 7%, transparent);
+}
+
+.workbench-grid.integrated-sidebars .workbench-sidebar-dock-nav button:focus-visible {
+  outline: 0;
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--wb-accent) 38%, transparent);
+}
+
+.workbench-grid.integrated-sidebars .workbench-sidebar-dock-nav button > span {
+  display: inline-flex;
+}
+
+.workbench-grid.integrated-sidebars .workbench-sidebar-dock-nav button svg {
+  width: 18px;
+  height: 18px;
+  stroke-width: 2;
+}
+
+.workbench-grid.integrated-sidebars .workbench-sidebar-dock-nav button b {
+  max-width: 100%;
+  overflow: hidden;
+  color: inherit;
+  font-size: calc(10px * var(--wb-ui-font-scale, 1));
+  font-weight: 680;
+  line-height: 1.2;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.workbench-rail-account {
+  position: relative;
+  grid-row: 2;
+  height: 46px;
+  min-width: 0;
+  transform: translateY(5px);
+  transition:
+    height var(--wb-sidebar-motion-duration) var(--wb-sidebar-motion-ease),
+    transform var(--wb-sidebar-motion-duration) var(--wb-sidebar-motion-ease);
+}
+
+.workbench-rail-account-button {
+  position: relative;
+  width: 100%;
+  min-width: 0;
+  height: 46px;
+  min-height: 46px;
+  display: grid;
+  grid-template-columns: 32px minmax(0, 1fr) 16px;
+  align-items: center;
+  gap: 9px;
+  padding: 4px 8px;
+  border: 0;
+  border-radius: 11px;
+  background: transparent;
+  color: var(--wb-text);
+  cursor: pointer;
+  text-align: left;
+  transition:
+    height var(--wb-sidebar-motion-duration) var(--wb-sidebar-motion-ease),
+    min-height var(--wb-sidebar-motion-duration) var(--wb-sidebar-motion-ease),
+    padding var(--wb-sidebar-motion-duration) var(--wb-sidebar-motion-ease),
+    grid-template-columns var(--wb-sidebar-motion-duration) var(--wb-sidebar-motion-ease),
+    gap var(--wb-sidebar-motion-duration) var(--wb-sidebar-motion-ease),
+    background-color 150ms ease;
+}
+
+.workbench-rail-account-button:hover,
+.workbench-rail-account-button:focus-visible {
+  background: color-mix(in srgb, var(--wb-accent) 6%, transparent);
+}
+
+.workbench-rail-account.active .workbench-rail-account-button {
+  background: var(--wb-active-bg);
+}
+
+.workbench-rail-account-button:focus-visible {
+  outline: 0;
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--wb-accent) 44%, transparent);
+}
+
+.workbench-rail-account-button .workbench-account-avatar,
+.workbench-rail-account-button .workbench-account-avatar > *,
+.workbench-rail-account-button .workbench-avatar.photo {
+  width: 30px !important;
+  height: 30px !important;
+}
+
+.workbench-rail-account-button .workbench-account-avatar {
+  transform: translateX(0);
+  transition: transform var(--wb-sidebar-motion-duration) var(--wb-sidebar-motion-ease);
+}
+
+.workbench-rail-account-summary {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.workbench-rail-account-summary b,
+.workbench-rail-account-summary small {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.workbench-rail-account-summary b {
+  font-size: calc(14px * var(--wb-ui-font-scale, 1));
+  font-weight: 720;
+  line-height: 1.15;
+}
+
+.workbench-rail-account-summary small {
+  color: var(--wb-faint);
+  font-size: calc(11.5px * var(--wb-ui-font-scale, 1));
+  line-height: 1.15;
+}
+
+.workbench-rail-account-chevron {
+  color: var(--wb-faint);
+}
+
+.workbench-rail-account.is-docked .workbench-module-account-menu {
+  left: 0;
+  right: 0;
+  bottom: calc(100% + 8px);
+  width: auto;
+  min-width: 0;
+  max-height: min(540px, calc(100vh - 150px));
+  overflow-y: auto;
+}
+
+.workbench-grid.integrated-sidebars .workbench-integrated-rail.is-collapsed {
+  flex-basis: 48px;
+  width: 48px;
+  overflow: visible;
+}
+
+.workbench-grid.integrated-sidebars .workbench-integrated-rail.is-collapsed .workbench-integrated-rail-head {
+  flex-basis: 56px;
+  height: 56px;
+  min-height: 56px;
+  justify-content: center;
+  padding: 0;
+}
+
+.workbench-grid.integrated-sidebars .workbench-integrated-rail.is-collapsed .workbench-integrated-rail-head > h1,
+.workbench-grid.integrated-sidebars .workbench-integrated-rail.is-collapsed .workbench-integrated-rail-head > b,
+.workbench-grid.integrated-sidebars .workbench-integrated-rail.is-collapsed .workbench-integrated-rail-head > span,
+.workbench-grid.integrated-sidebars .workbench-integrated-rail.is-collapsed .workbench-integrated-rail-primary-action,
+.workbench-grid.integrated-sidebars .workbench-integrated-rail.is-collapsed .wb-sched-rail-back {
+  max-width: 0;
+  margin: 0;
+  padding: 0;
+  overflow: hidden;
+  opacity: 0;
+  visibility: hidden;
+  transform: translateX(-8px);
+  pointer-events: none;
+}
+
+.workbench-grid.integrated-sidebars .workbench-integrated-rail.is-collapsed .workbench-integrated-rail-primary-action,
+.workbench-grid.integrated-sidebars .workbench-integrated-rail.is-collapsed .wb-sched-rail-back {
+  display: none;
+}
+
+.workbench-grid.integrated-sidebars .workbench-integrated-rail.is-collapsed .workbench-integrated-rail-actions {
+  position: absolute;
+  inset: 0;
+  width: auto;
+  justify-content: center;
+  gap: 0;
+}
+
+.workbench-grid.integrated-sidebars .workbench-integrated-rail.is-collapsed .workbench-sidebar-collapse-control {
+  width: 36px;
+  height: 36px;
+  border: 0;
+  border-radius: 9px;
+  background: transparent;
+  color: var(--wb-faint);
+}
+
+.workbench-grid.integrated-sidebars .workbench-integrated-rail.is-collapsed .workbench-sidebar-collapse-control:hover,
+.workbench-grid.integrated-sidebars .workbench-integrated-rail.is-collapsed .workbench-sidebar-collapse-control:focus-visible {
+  background: color-mix(in srgb, var(--wb-accent) 6%, transparent);
+  color: var(--wb-text);
+}
+
+.workbench-grid.integrated-sidebars .workbench-integrated-rail.is-collapsed .workbench-integrated-rail-body {
+  overflow: hidden;
+  opacity: 0;
+  visibility: hidden;
+  transform: translateX(-10px);
+  pointer-events: none;
+  transition:
+    opacity 110ms ease,
+    transform 190ms ease,
+    visibility 0s linear 190ms;
+}
+
+.workbench-grid.integrated-sidebars .wbc-rail.workbench-integrated-rail.is-collapsed .wbc-rail-glass {
+  inset: auto;
+  width: 100%;
+}
+
+.workbench-grid.integrated-sidebars .workbench-integrated-rail.is-collapsed > .workbench-sidebar-dock {
+  width: auto;
+  height: 244px;
+  min-height: 244px;
+  margin: auto 2px 12px;
+  padding-top: 8px;
+  grid-template-rows: 196px 36px;
+  gap: 4px;
+}
+
+.workbench-grid.integrated-sidebars .workbench-integrated-rail.is-collapsed .workbench-rail-account {
+  height: 36px;
+  transform: translateY(4px);
+}
+
+.workbench-grid.integrated-sidebars .workbench-integrated-rail.is-collapsed .workbench-rail-account-button {
+  width: 100%;
+  height: 36px;
+  min-height: 36px;
+  grid-template-columns: 32px minmax(0, 0fr) 0fr;
+  gap: 0;
+  padding: 3px 4px;
+}
+
+.workbench-grid.integrated-sidebars .workbench-integrated-rail.is-collapsed .workbench-rail-account-button .workbench-account-avatar {
+  transform: translateX(2px);
+}
+
+.workbench-grid.integrated-sidebars .workbench-integrated-rail.is-collapsed .workbench-rail-account-summary,
+.workbench-grid.integrated-sidebars .workbench-integrated-rail.is-collapsed .workbench-rail-account-chevron,
+.workbench-grid.integrated-sidebars .workbench-integrated-rail.is-collapsed .workbench-sidebar-dock-nav button b {
+  display: none;
+}
+
+.workbench-grid.integrated-sidebars .workbench-integrated-rail.is-collapsed .workbench-sidebar-dock-nav {
+  height: 196px;
+  grid-template-columns: repeat(5, minmax(0, 0fr));
+  grid-template-rows: 36px;
+  gap: 0;
+}
+
+.workbench-grid.integrated-sidebars .workbench-integrated-rail.is-collapsed .workbench-sidebar-dock-nav button {
+  width: 34px;
+  height: 36px;
+  min-height: 36px;
+  padding: 0;
+  border-radius: 9px;
+}
+
+/* Keep one five-track Grid in both states. Collapsing the tracks to zero and
+   translating each row uses the exact same interpolated properties in both
+   directions, so closing is the mathematical reverse of opening instead of a
+   second layout that snaps into place. */
+.workbench-grid.integrated-sidebars .workbench-integrated-rail.is-collapsed .workbench-sidebar-dock-nav button:nth-child(1) { transform: translateY(0px); }
+.workbench-grid.integrated-sidebars .workbench-integrated-rail.is-collapsed .workbench-sidebar-dock-nav button:nth-child(2) { transform: translateY(38px); }
+.workbench-grid.integrated-sidebars .workbench-integrated-rail.is-collapsed .workbench-sidebar-dock-nav button:nth-child(3) { transform: translateY(76px); }
+.workbench-grid.integrated-sidebars .workbench-integrated-rail.is-collapsed .workbench-sidebar-dock-nav button:nth-child(4) { transform: translateY(114px); }
+.workbench-grid.integrated-sidebars .workbench-integrated-rail.is-collapsed .workbench-sidebar-dock-nav button:nth-child(5) { transform: translateY(152px); }
+
+.workbench-grid.integrated-sidebars .workbench-integrated-rail.is-collapsed .workbench-sidebar-dock-nav button svg {
+  width: 16px;
+  height: 16px;
+}
+
+.workbench-grid.integrated-sidebars .workbench-integrated-rail.is-collapsed .workbench-rail-account.is-docked .workbench-module-account-menu {
+  left: calc(100% + 10px);
+  right: auto;
+  bottom: 0;
+  width: 260px;
+}
+
+.workbench-grid.integrated-sidebars .workbench-integrated-rail-head > h1,
+.workbench-grid.integrated-sidebars .workbench-integrated-rail-head > b,
+.workbench-grid.integrated-sidebars .workbench-integrated-rail-head > span,
+.workbench-grid.integrated-sidebars .workbench-integrated-rail-primary-action,
+.workbench-grid.integrated-sidebars .wb-sched-rail-back {
+  opacity: 1;
+  transform: translateX(0);
+  transition:
+    max-width var(--wb-sidebar-motion-duration) var(--wb-sidebar-motion-ease),
+    opacity 150ms ease 130ms,
+    transform 260ms var(--wb-sidebar-motion-ease) 100ms;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .workbench-grid.integrated-sidebars,
+  .workbench-grid.integrated-sidebars .wbc-page,
+  .workbench-grid.integrated-sidebars .workbench-integrated-rail,
+  .workbench-grid.integrated-sidebars .workbench-integrated-rail-body,
+  .workbench-grid.integrated-sidebars .workbench-sidebar-dock,
+  .workbench-grid.integrated-sidebars .workbench-sidebar-dock-nav {
+    transition-duration: 1ms !important;
+    animation-duration: 1ms !important;
+  }
+}
+
+@media (max-width: 1320px) {
+  .workbench-grid.integrated-sidebars.is-task-detail {
+    grid-template-columns: 280px minmax(360px, 1fr) var(--wb-right-w, 280px);
+  }
+}
+
+@media (max-width: 1040px) {
+  .workbench-grid.integrated-sidebars.is-task-board,
+  .workbench-grid.integrated-sidebars.is-task-detail,
+  .workbench-grid.integrated-sidebars.is-profile {
+    grid-template-columns: var(--wb-rail-w) minmax(0, 1fr);
+  }
+
+  .workbench-grid.integrated-sidebars.is-task-detail > .workbench-right-panel {
+    display: none;
   }
 }

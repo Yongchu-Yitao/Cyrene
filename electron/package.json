@@ -129,6 +129,7 @@
       "browser-input.js",
       "preload.js",
       "browser-chat-overlay-preload.js",
+      "browser-tab-picker-preload.js",
       "app-use.js",
       "package.json"
     ]

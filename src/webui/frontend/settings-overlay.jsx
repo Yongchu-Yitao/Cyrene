@@ -274,6 +274,8 @@ function SettingsOverlay({
     return {
       theme: initialTheme,
       accent: readTweak("accent", null),
+      backgroundLight: readTweak("backgroundLight", null),
+      backgroundDark: readTweak("backgroundDark", null),
       textSize: readTweak("textSize", "default"),
       density: readTweak("density", "cozy"),
       animatePulse: readTweak("animatePulse", true),
@@ -2579,6 +2581,214 @@ function accentHsvToHex(hue, saturation, value) {
   }).join("").toUpperCase();
 }
 
+function ColorPickerPopover(p) {
+  var { t, value, defaultValue, onApply, onReset, onClose, ariaLabel } = p;
+  var current = normalizeAccentHex(value) || defaultValue;
+  var [draft, setDraft] = useStateSt(current);
+  var [hsv, setHsv] = useStateSt(function () { return hexToAccentHsv(current); });
+
+  useEffectSt(function () {
+    setDraft(current);
+    setHsv(hexToAccentHsv(current));
+  }, [current]);
+
+  function updateDraft(next) {
+    var normalized = normalizeAccentHex(next);
+    setDraft(next);
+    if (normalized) {
+      setDraft(normalized);
+      setHsv(hexToAccentHsv(normalized));
+    }
+  }
+
+  function updateFromHsv(next) {
+    setHsv(next);
+    setDraft(accentHsvToHex(next.h, next.s, next.v));
+  }
+
+  function updatePlane(event) {
+    var rect = event.currentTarget.getBoundingClientRect();
+    var saturation = Math.round(Math.max(0, Math.min(1, (event.clientX - rect.left) / rect.width)) * 100);
+    var brightness = Math.round((1 - Math.max(0, Math.min(1, (event.clientY - rect.top) / rect.height))) * 100);
+    updateFromHsv({ h: hsv.h, s: saturation, v: brightness });
+  }
+
+  function updateHue(event) {
+    var rect = event.currentTarget.getBoundingClientRect();
+    var ratio = Math.max(0, Math.min(1, (event.clientY - rect.top) / rect.height));
+    updateFromHsv({ h: Math.round(ratio * 359), s: hsv.s, v: hsv.v });
+  }
+
+  function applyDraft() {
+    var next = normalizeAccentHex(draft);
+    if (!next) return;
+    onApply(next);
+    onClose();
+  }
+
+  function resetDraft() {
+    onReset();
+    onClose();
+  }
+
+  return React.createElement("div", {
+    className: "wb-accent-popover",
+    role: "dialog",
+    "aria-label": ariaLabel || t("settings.customColor"),
+    onKeyDown: function (event) {
+      if (event.key === "Escape") {
+        event.preventDefault();
+        event.stopPropagation();
+        onClose();
+      }
+    },
+  },
+    React.createElement("div", { className: "wb-accent-popover-body" },
+      React.createElement("div", { className: "wb-accent-picker-visuals" },
+        React.createElement("div", {
+          className: "wb-accent-sv",
+          style: { "--picker-hue": "hsl(" + hsv.h + " 100% 50%)" },
+          onPointerDown: function (event) {
+            event.currentTarget.setPointerCapture(event.pointerId);
+            updatePlane(event);
+          },
+          onPointerMove: function (event) {
+            if (event.currentTarget.hasPointerCapture(event.pointerId)) updatePlane(event);
+          },
+          role: "slider",
+          tabIndex: 0,
+          "aria-label": t("settings.colorSaturationBrightness"),
+          "aria-valuetext": draft,
+        }, React.createElement("span", {
+          className: "wb-accent-sv-thumb",
+          style: { left: hsv.s + "%", top: (100 - hsv.v) + "%" },
+        })),
+        React.createElement("div", {
+          className: "wb-accent-hue",
+          role: "slider",
+          tabIndex: 0,
+          "aria-label": t("settings.colorHue"),
+          "aria-valuemin": "0",
+          "aria-valuemax": "359",
+          "aria-valuenow": String(hsv.h),
+          onPointerDown: function (event) {
+            event.currentTarget.setPointerCapture(event.pointerId);
+            updateHue(event);
+          },
+          onPointerMove: function (event) {
+            if (event.currentTarget.hasPointerCapture(event.pointerId)) updateHue(event);
+          },
+          onKeyDown: function (event) {
+            if (event.key !== "ArrowUp" && event.key !== "ArrowDown") return;
+            event.preventDefault();
+            var delta = event.key === "ArrowUp" ? -1 : 1;
+            updateFromHsv({
+              h: Math.max(0, Math.min(359, hsv.h + delta)),
+              s: hsv.s,
+              v: hsv.v,
+            });
+          },
+        }, React.createElement("span", {
+          className: "wb-accent-hue-thumb",
+          style: { top: (hsv.h / 359 * 100) + "%" },
+        })),
+      ),
+      React.createElement("div", { className: "wb-accent-picker-fields" },
+        React.createElement("div", { className: "wb-accent-preview-row" },
+          React.createElement("span", null, t("settings.currentColor")),
+          React.createElement("span", { className: "wb-accent-preview-dot", style: { "--swatch": current } }),
+          React.createElement("code", null, current),
+        ),
+        React.createElement("div", { className: "wb-accent-preview-row" },
+          React.createElement("span", null, t("settings.newColor")),
+          React.createElement("span", { className: "wb-accent-preview-dot", style: { "--swatch": normalizeAccentHex(draft) || current } }),
+          React.createElement("code", null, normalizeAccentHex(draft) || "—"),
+        ),
+        React.createElement("label", { className: "wb-accent-hex-field" },
+          React.createElement("span", null, "HEX"),
+          React.createElement("input", {
+            value: draft,
+            maxLength: 7,
+            spellCheck: false,
+            onChange: function (event) { updateDraft(event.target.value); },
+            onKeyDown: function (event) { if (event.key === "Enter") applyDraft(); },
+            "aria-invalid": normalizeAccentHex(draft) ? "false" : "true",
+          }),
+        ),
+        React.createElement("input", {
+          className: "wb-accent-native-input",
+          type: "color",
+          value: normalizeAccentHex(draft) || current,
+          onChange: function (event) { updateDraft(event.target.value); },
+          "aria-label": t("settings.openSystemColorPicker"),
+        }),
+      ),
+    ),
+    React.createElement("div", { className: "wb-accent-popover-actions" },
+      React.createElement("button", { type: "button", className: "wb-btn muted", onClick: resetDraft }, t("settings.restoreDefault")),
+      React.createElement("div", { className: "wb-accent-popover-actions-end" },
+        React.createElement("button", { type: "button", className: "wb-btn muted", onClick: onClose }, t("settings.cancel")),
+        React.createElement("button", {
+          type: "button",
+          className: "wb-btn primary",
+          disabled: !normalizeAccentHex(draft),
+          onClick: applyDraft,
+        }, t("settings.apply")),
+      ),
+    ),
+  );
+}
+
+function WorkbenchBackgroundColorControl(p) {
+  var { t, label, tweakKey, value, defaultValue, setTweak } = p;
+  var applied = normalizeAccentHex(value) || defaultValue;
+  var [pickerOpen, setPickerOpen] = useStateSt(false);
+  var pickerRef = useRefSt(null);
+
+  useEffectSt(function () {
+    if (!pickerOpen) return undefined;
+    function closePicker(event) {
+      if (pickerRef.current && !pickerRef.current.contains(event.target)) setPickerOpen(false);
+    }
+    document.addEventListener("pointerdown", closePicker);
+    return function () { document.removeEventListener("pointerdown", closePicker); };
+  }, [pickerOpen]);
+
+  return React.createElement("div", { className: "wb-background-color-row" },
+    React.createElement("span", { className: "wb-background-color-label" }, label),
+    React.createElement("div", { className: "wb-background-picker", ref: pickerRef },
+      React.createElement("button", {
+        type: "button",
+        className: "wb-color-swatch wb-background-swatch",
+        style: { "--swatch": applied },
+        onClick: function () { setPickerOpen(!pickerOpen); },
+        title: t("settings.backgroundColorFor", { theme: label }),
+        "aria-label": t("settings.backgroundColorFor", { theme: label }),
+        "aria-expanded": pickerOpen ? "true" : "false",
+        "aria-haspopup": "dialog",
+      }),
+      pickerOpen && React.createElement(ColorPickerPopover, {
+        t: t,
+        value: value,
+        defaultValue: defaultValue,
+        onApply: function (next) { setTweak(tweakKey, next === defaultValue ? null : next); },
+        onReset: function () { setTweak(tweakKey, null); },
+        onClose: function () { setPickerOpen(false); },
+        ariaLabel: t("settings.backgroundColorFor", { theme: label }),
+      }),
+    ),
+    React.createElement("button", {
+      type: "button",
+      className: "wb-btn muted wb-background-reset",
+      disabled: !normalizeAccentHex(value),
+      onClick: function () {
+        setTweak(tweakKey, null);
+        setPickerOpen(false);
+      },
+    }, t("settings.restoreDefault")),
+  );
+}
+
 function AppearancePanel(p) {
   var { t, tweaks, setTweak, actualTheme, theme } = p;
   var accentPresets = ["#4378ff", "#8b5cf6", "#e8796b", "#34b8a0", "#f4a93e", "#e5488b", "#6b8cff", "#a78bfa"];
@@ -2589,16 +2799,7 @@ function AppearancePanel(p) {
     return normalizeAccentHex(color) === normalizedAccent;
   });
   var [accentPickerOpen, setAccentPickerOpen] = useStateSt(false);
-  var [accentDraft, setAccentDraft] = useStateSt(appliedAccent);
-  var [accentHsv, setAccentHsv] = useStateSt(function () { return hexToAccentHsv(appliedAccent); });
   var accentPickerRef = useRefSt(null);
-
-  useEffectSt(function () {
-    if (accentPickerOpen) return;
-    var next = normalizeAccentHex(tweaks.accent) || defaultAccent;
-    setAccentDraft(next);
-    setAccentHsv(hexToAccentHsv(next));
-  }, [tweaks.accent, actualTheme, accentPickerOpen]);
 
   useEffectSt(function () {
     if (!accentPickerOpen) return undefined;
@@ -2610,54 +2811,6 @@ function AppearancePanel(p) {
     document.addEventListener("pointerdown", closeAccentPicker);
     return function () { document.removeEventListener("pointerdown", closeAccentPicker); };
   }, [accentPickerOpen]);
-
-  function updateAccentDraft(next) {
-    var normalized = normalizeAccentHex(next);
-    setAccentDraft(next);
-    if (normalized) {
-      setAccentDraft(normalized);
-      setAccentHsv(hexToAccentHsv(normalized));
-    }
-  }
-
-  function updateAccentFromHsv(next) {
-    setAccentHsv(next);
-    setAccentDraft(accentHsvToHex(next.h, next.s, next.v));
-  }
-
-  function updateAccentPlane(event) {
-    var rect = event.currentTarget.getBoundingClientRect();
-    var saturation = Math.round(Math.max(0, Math.min(1, (event.clientX - rect.left) / rect.width)) * 100);
-    var value = Math.round((1 - Math.max(0, Math.min(1, (event.clientY - rect.top) / rect.height))) * 100);
-    updateAccentFromHsv({ h: accentHsv.h, s: saturation, v: value });
-  }
-
-  function updateAccentHue(event) {
-    var rect = event.currentTarget.getBoundingClientRect();
-    var ratio = Math.max(0, Math.min(1, (event.clientY - rect.top) / rect.height));
-    updateAccentFromHsv({ h: Math.round(ratio * 359), s: accentHsv.s, v: accentHsv.v });
-  }
-
-  function openAccentPicker() {
-    var next = normalizeAccentHex(tweaks.accent) || defaultAccent;
-    setAccentDraft(next);
-    setAccentHsv(hexToAccentHsv(next));
-    setAccentPickerOpen(true);
-  }
-
-  function applyAccentDraft() {
-    var next = normalizeAccentHex(accentDraft);
-    if (!next) return;
-    setTweak("accent", next);
-    setAccentPickerOpen(false);
-  }
-
-  function resetAccentDraft() {
-    setTweak("accent", null);
-    setAccentDraft(defaultAccent);
-    setAccentHsv(hexToAccentHsv(defaultAccent));
-    setAccentPickerOpen(false);
-  }
 
   return React.createElement("div", { className: "settings-panel" },
     SectionTitle(t("settings.appearance"), t("settings.appearanceSubtitle")),
@@ -2692,7 +2845,7 @@ function AppearancePanel(p) {
             type: "button",
             className: "wb-color-swatch wb-color-swatch-custom" + (customAccentSelected ? " active" : ""),
             style: { "--swatch": appliedAccent },
-            onClick: function () { accentPickerOpen ? setAccentPickerOpen(false) : openAccentPicker(); },
+            onClick: function () { setAccentPickerOpen(!accentPickerOpen); },
             title: t("settings.currentThemeColor", { color: appliedAccent }),
             "aria-label": t("settings.currentThemeColor", { color: appliedAccent }),
             "aria-pressed": customAccentSelected ? "true" : "false",
@@ -2700,116 +2853,35 @@ function AppearancePanel(p) {
             "aria-haspopup": "dialog",
           }),
         ),
-        accentPickerOpen && React.createElement("div", {
-          className: "wb-accent-popover",
-          role: "dialog",
-          "aria-label": t("settings.customColor"),
-          onKeyDown: function (event) {
-            if (event.key === "Escape") {
-              event.preventDefault();
-              event.stopPropagation();
-              setAccentPickerOpen(false);
-            }
-          },
-        },
-          React.createElement("div", { className: "wb-accent-popover-body" },
-            React.createElement("div", { className: "wb-accent-picker-visuals" },
-              React.createElement("div", {
-                className: "wb-accent-sv",
-                style: { "--picker-hue": "hsl(" + accentHsv.h + " 100% 50%)" },
-                onPointerDown: function (event) {
-                  event.currentTarget.setPointerCapture(event.pointerId);
-                  updateAccentPlane(event);
-                },
-                onPointerMove: function (event) {
-                  if (event.currentTarget.hasPointerCapture(event.pointerId)) updateAccentPlane(event);
-                },
-                role: "slider",
-                tabIndex: 0,
-                "aria-label": t("settings.colorSaturationBrightness"),
-                "aria-valuetext": accentDraft,
-              },
-                React.createElement("span", {
-                  className: "wb-accent-sv-thumb",
-                  style: { left: accentHsv.s + "%", top: (100 - accentHsv.v) + "%" },
-                }),
-              ),
-              React.createElement("div", {
-                className: "wb-accent-hue",
-                role: "slider",
-                tabIndex: 0,
-                "aria-label": t("settings.colorHue"),
-                "aria-valuemin": "0",
-                "aria-valuemax": "359",
-                "aria-valuenow": String(accentHsv.h),
-                onPointerDown: function (event) {
-                  event.currentTarget.setPointerCapture(event.pointerId);
-                  updateAccentHue(event);
-                },
-                onPointerMove: function (event) {
-                  if (event.currentTarget.hasPointerCapture(event.pointerId)) updateAccentHue(event);
-                },
-                onKeyDown: function (event) {
-                  if (event.key !== "ArrowUp" && event.key !== "ArrowDown") return;
-                  event.preventDefault();
-                  var delta = event.key === "ArrowUp" ? -1 : 1;
-                  updateAccentFromHsv({
-                    h: Math.max(0, Math.min(359, accentHsv.h + delta)),
-                    s: accentHsv.s,
-                    v: accentHsv.v,
-                  });
-                },
-              },
-                React.createElement("span", {
-                  className: "wb-accent-hue-thumb",
-                  style: { top: (accentHsv.h / 359 * 100) + "%" },
-                }),
-              ),
-            ),
-            React.createElement("div", { className: "wb-accent-picker-fields" },
-              React.createElement("div", { className: "wb-accent-preview-row" },
-                React.createElement("span", null, t("settings.currentColor")),
-                React.createElement("span", { className: "wb-accent-preview-dot", style: { "--swatch": appliedAccent } }),
-                React.createElement("code", null, appliedAccent),
-              ),
-              React.createElement("div", { className: "wb-accent-preview-row" },
-                React.createElement("span", null, t("settings.newColor")),
-                React.createElement("span", { className: "wb-accent-preview-dot", style: { "--swatch": normalizeAccentHex(accentDraft) || appliedAccent } }),
-                React.createElement("code", null, normalizeAccentHex(accentDraft) || "—"),
-              ),
-              React.createElement("label", { className: "wb-accent-hex-field" },
-                React.createElement("span", null, "HEX"),
-                React.createElement("input", {
-                  value: accentDraft,
-                  maxLength: 7,
-                  spellCheck: false,
-                  onChange: function (event) { updateAccentDraft(event.target.value); },
-                  onKeyDown: function (event) { if (event.key === "Enter") applyAccentDraft(); },
-                  "aria-invalid": normalizeAccentHex(accentDraft) ? "false" : "true",
-                }),
-              ),
-              React.createElement("input", {
-                className: "wb-accent-native-input",
-                type: "color",
-                value: normalizeAccentHex(accentDraft) || appliedAccent,
-                onChange: function (event) { updateAccentDraft(event.target.value); },
-                "aria-label": t("settings.openSystemColorPicker"),
-              }),
-            ),
-          ),
-          React.createElement("div", { className: "wb-accent-popover-actions" },
-            React.createElement("button", { type: "button", className: "wb-btn muted", onClick: resetAccentDraft }, t("settings.restoreDefault")),
-            React.createElement("div", { className: "wb-accent-popover-actions-end" },
-              React.createElement("button", { type: "button", className: "wb-btn muted", onClick: function () { setAccentPickerOpen(false); } }, t("settings.cancel")),
-              React.createElement("button", {
-                type: "button",
-                className: "wb-btn primary",
-                disabled: !normalizeAccentHex(accentDraft),
-                onClick: applyAccentDraft,
-              }, t("settings.apply")),
-            ),
-          ),
-        ),
+        accentPickerOpen && React.createElement(ColorPickerPopover, {
+          t: t,
+          value: tweaks.accent,
+          defaultValue: defaultAccent,
+          onApply: function (next) { setTweak("accent", next); },
+          onReset: function () { setTweak("accent", null); },
+          onClose: function () { setAccentPickerOpen(false); },
+          ariaLabel: t("settings.customColor"),
+        }),
+      ),
+    ),
+    FieldRow(t("settings.workbenchBackground"), t("settings.workbenchBackgroundHint"),
+      React.createElement("div", { className: "wb-workbench-backgrounds" },
+        React.createElement(WorkbenchBackgroundColorControl, {
+          t: t,
+          label: t("settings.lightBackground"),
+          tweakKey: "backgroundLight",
+          value: tweaks.backgroundLight,
+          defaultValue: "#F5F6F8",
+          setTweak: setTweak,
+        }),
+        React.createElement(WorkbenchBackgroundColorControl, {
+          t: t,
+          label: t("settings.darkBackground"),
+          tweakKey: "backgroundDark",
+          value: tweaks.backgroundDark,
+          defaultValue: "#1A2230",
+          setTweak: setTweak,
+        }),
       ),
     ),
     FieldRow(t("settings.textSize"), t("settings.textSizeHint"),

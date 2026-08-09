@@ -21,6 +21,7 @@ import hashlib
 import importlib
 import json
 import logging
+import mimetypes
 import re
 import time
 import uuid
@@ -40,6 +41,7 @@ from cyrene.workbench.workspace_changes import (
     WorkspaceSnapshot,
     build_change_set,
     capture_workspace_snapshot,
+    list_chat_change_sets,
     save_change_set,
 )
 from cyrene.workbench.chat_runs import ChatRun, ChatRunManager
@@ -693,6 +695,11 @@ async def _finalize_workspace_changes(
         )
         if change_set.get("fileCount"):
             await asyncio.to_thread(save_change_set, _STORE_DB_PATH, change_set)
+            await asyncio.to_thread(
+                _sync_chat_generated_files,
+                chat_id,
+                change_set,
+            )
         event = {
             "type": "workspace_changes",
             "chatId": chat_id,
@@ -721,6 +728,63 @@ async def _finalize_workspace_changes(
     finally:
         if before is not None and not before.released:
             await _complete_workspace_changes_baseline(before, workspace_dir)
+
+
+def _sync_chat_generated_files(
+    chat_id: str,
+    change_set: dict[str, Any] | None = None,
+) -> None:
+    """Keep a current file index for the conversation's right-hand Files panel.
+
+    Workspace change sets are run-scoped and optimized for diffs.  The panel,
+    however, needs one de-duplicated view of files that still exist after all
+    runs.  Persist only workspace-relative metadata; the download route resolves
+    and confines the path against the project's current workspace root.
+    """
+    payload = _read_chats_store()
+    chat = _find_chat(payload, chat_id)
+    if not chat:
+        return
+    existing: dict[str, dict[str, Any]] = {
+        str(item.get("path") or ""): dict(item)
+        for item in chat.get("generatedFiles") or []
+        if isinstance(item, dict) and str(item.get("path") or "")
+    }
+    change_sets: list[dict[str, Any]] = []
+    if "generatedFiles" not in chat:
+        # One-time migration for conversations created before the Files panel
+        # indexed workspace output. Apply oldest -> newest to preserve deletes.
+        change_sets.extend(reversed(list_chat_change_sets(_STORE_DB_PATH, chat_id)))
+    if change_set is not None:
+        change_sets.append(change_set)
+    changed_paths: list[str] = []
+    for item in change_sets:
+        for change in item.get("files") or []:
+            if not isinstance(change, dict):
+                continue
+            path = str(change.get("path") or "").strip().replace("\\", "/")
+            if not path:
+                continue
+            if path in changed_paths:
+                changed_paths.remove(path)
+            changed_paths.append(path)
+            if str(change.get("changeType") or "") == "deleted":
+                existing.pop(path, None)
+                continue
+            name = Path(path).name or path
+            existing[path] = {
+                "id": str(change.get("id") or f"workspace_{uuid.uuid4().hex[:12]}"),
+                "name": name,
+                "path": path,
+                "content_type": mimetypes.guess_type(name)[0] or "application/octet-stream",
+                "size": int(change.get("afterSize") or 0),
+                "kind": "file",
+                "source": "agent",
+            }
+    ordered = [existing[path] for path in changed_paths if path in existing]
+    ordered.extend(item for path, item in existing.items() if path not in changed_paths)
+    chat["generatedFiles"] = ordered[:200]
+    _write_chats_store(payload)
 
 
 def _mark_user_activity(chat: dict[str, Any], timestamp: str) -> None:
@@ -846,11 +910,13 @@ async def create_proactive_chat(
 
 def _new_chat(project_id: str, title: str = "", model: str = "") -> dict[str, Any]:
     now = _utc_now_iso()
+    supplied_title = str(title or "").strip()
     return {
         "id": _short_id("wbchat"),
         "projectId": str(project_id or ""),
         "kind": "chat",
-        "title": str(title or "新对话").strip()[:60] or "新对话",
+        "title": supplied_title[:60] or "新对话",
+        "titleLocked": bool(supplied_title),
         "status": "idle",
         "model": model,
         "permissionMode": "auto",
@@ -1168,6 +1234,11 @@ def _remove_retry_replaced_messages(
 def _public_chat_full(chat: dict[str, Any]) -> dict[str, Any]:
     payload = _public_chat_light(chat)
     payload["messages"] = [_public_message(m) for m in (chat.get("messages") or [])]
+    payload["files"] = [
+        dict(item)
+        for item in (chat.get("generatedFiles") or [])
+        if isinstance(item, dict) and str(item.get("path") or "").strip()
+    ]
     return payload
 
 

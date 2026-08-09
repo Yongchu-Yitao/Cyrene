@@ -1,4 +1,5 @@
 import * as esbuild from 'esbuild'
+import { createHash } from 'crypto'
 import { readFileSync, writeFileSync, mkdirSync, readdirSync, statSync, existsSync, copyFileSync, rmSync } from 'fs'
 import { join, relative, dirname, extname, resolve } from 'path'
 import { fileURLToPath } from 'url'
@@ -43,8 +44,24 @@ function collectCss(dir) {
   return files
 }
 
+function frontendRevision(files, cssFiles, indexTemplate) {
+  const hash = createHash('sha256')
+  const sources = [...files, ...cssFiles].sort()
+  for (const file of sources) {
+    hash.update(relative(WORKBENCH_DIR, file))
+    hash.update('\0')
+    hash.update(readFileSync(file))
+    hash.update('\0')
+  }
+  // Ignore the previous query value so rebuilding identical sources remains
+  // deterministic instead of hashing the last generated revision.
+  hash.update(indexTemplate.replace(/(\?v=)[A-Za-z0-9.+-]+/g, '$1'))
+  return `${projectVersion()}-${hash.digest('hex').slice(0, 10)}`
+}
+
 async function build() {
   const workbenchFiles = existsSync(WORKBENCH_DIR) ? collect(WORKBENCH_DIR) : []
+  const cssFiles = existsSync(WORKBENCH_DIR) ? collectCss(WORKBENCH_DIR) : []
   const files = workbenchFiles
   rmSync(OUT_DIR, { recursive: true, force: true })
   mkdirSync(OUT_DIR, { recursive: true })
@@ -85,13 +102,14 @@ async function build() {
   const total = files.length
   console.log(`\nDone. ${total} JSX file${total > 1 ? 's' : ''} compiled to ${OUT_DIR}`)
 
-  const indexHtml = readFileSync(INDEX_SOURCE, 'utf8').replace(
+  const indexTemplate = readFileSync(INDEX_SOURCE, 'utf8')
+  const revision = frontendRevision(files, cssFiles, indexTemplate)
+  const indexHtml = indexTemplate.replace(
     /(\?v=)[A-Za-z0-9.+-]+/g,
-    `$1${projectVersion()}`,
+    `$1${revision}`,
   )
-  writeFileSync(INDEX_SOURCE, indexHtml)
   writeFileSync(join(APP_DIR, 'index.html'), indexHtml)
-  console.log('✓ index.html')
+  console.log(`✓ index.html (${revision})`)
 
   const reactAssets = [
     ['node_modules/react/umd/react.production.min.js', 'react.production.min.js'],
@@ -105,7 +123,7 @@ async function build() {
 
   // CSS is maintained beside its owning source and copied to the one static
   // output namespace with the same relative path.
-  for (const srcPath of collectCss(WORKBENCH_DIR)) {
+  for (const srcPath of cssFiles) {
     const rel = relative(WORKBENCH_DIR, srcPath)
     const outPath = join(APP_DIR, rel)
     mkdirSync(dirname(outPath), { recursive: true })

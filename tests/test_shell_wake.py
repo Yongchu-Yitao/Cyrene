@@ -132,7 +132,7 @@ async def test_watch_shell_triggers_wake_service(monkeypatch, tmp_path):
     (tmp_path / "workspace").mkdir(exist_ok=True)
 
     snap = await shells.start_shell(
-        command="printf 'hello-wake\\n'; exit 7",
+        command="printf 'hello-wake\\n'; false",
         cwd=".",
         title="wake-test",
         wake_on_exit=True,
@@ -141,6 +141,7 @@ async def test_watch_shell_triggers_wake_service(monkeypatch, tmp_path):
     )
     assert snap.get("wakeOnExit") is True
     assert snap.get("wakeId")
+    assert snap.get("executionMode") == "one_shot"
 
     # Wait for the process + wake dispatch.
     for _ in range(50):
@@ -150,11 +151,42 @@ async def test_watch_shell_triggers_wake_service(monkeypatch, tmp_path):
 
     assert calls, "expected shell-exit wake dispatch"
     assert calls[0]["chat_id"] == "chat_watch"
-    assert "exit_code: 7" in calls[0]["prompt"] or "exit_code: 7" in calls[0].get("prompt", "")
-    # Interactive shells may wrap the command; accept either captured output or meta.
+    assert "exit_code: 1" in calls[0]["prompt"] or "exit_code: 1" in calls[0].get("prompt", "")
     prompt = calls[0]["prompt"]
     assert "shell_id:" in prompt
     assert "automatic wake" in prompt
+
+
+@pytest.mark.asyncio
+async def test_watched_initial_command_wakes_without_explicit_shell_exit(monkeypatch, tmp_path):
+    from cyrene.runtime.shell_wake import get_shell_wake_service
+    from cyrene.tooling.backends import shells
+
+    service = get_shell_wake_service()
+    calls: list[dict] = []
+
+    async def dispatcher(wake):
+        calls.append(wake)
+        return "started"
+
+    service.configure(dispatcher=dispatcher, is_busy=lambda _chat_id: False)
+    monkeypatch.setattr(shells, "WORKSPACE_DIR", tmp_path)
+
+    snap = await shells.start_shell(
+        command="printf 'job-complete\\n'",
+        wake_on_exit=True,
+        wake_chat_id="chat_one_shot",
+    )
+
+    for _ in range(50):
+        if calls:
+            break
+        await asyncio.sleep(0.05)
+
+    assert calls, "command completion should trigger the registered wake"
+    assert snap["executionMode"] == "one_shot"
+    assert "exit_code: 0" in calls[0]["prompt"]
+    assert "job-complete" in calls[0]["prompt"]
 
 
 @pytest.mark.asyncio

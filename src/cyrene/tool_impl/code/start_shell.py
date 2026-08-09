@@ -96,6 +96,7 @@ async def _tool_start_shell(args: dict[str, Any], _bot: Any, _chat_id: int, _db_
         "wake_on_exit": bool(snap.get("wakeOnExit")),
         "wake_id": snap.get("wakeId", ""),
         "wake_chat_id": snap.get("wakeChatId", ""),
+        "execution_mode": snap.get("executionMode", "persistent"),
     }
     if wake_on_exit and not result["wake_on_exit"]:
         result["wake_error"] = (
@@ -103,10 +104,16 @@ async def _tool_start_shell(args: dict[str, Any], _bot: Any, _chat_id: int, _db_
             "shell started without an exit wake."
         )
     elif result["wake_on_exit"]:
-        result["wake_hint"] = (
-            "Shell is running in the background. Do not wait or poll. "
-            "Quit this turn; you will be woken with the terminal output when it exits."
-        )
+        if result["execution_mode"] == "one_shot":
+            result["wake_hint"] = (
+                "The command is running as a one-shot background job. Do not wait or poll. "
+                "Quit this turn; you will be woken with the terminal output when it completes."
+            )
+        else:
+            result["wake_hint"] = (
+                "The persistent shell is running in the background. Do not wait or poll. "
+                "Quit this turn; you will be woken only when the shell process exits."
+            )
     return json_result(result)
 
 

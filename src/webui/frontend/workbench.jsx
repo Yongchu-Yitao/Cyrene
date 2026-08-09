@@ -1189,6 +1189,7 @@ function WorkbenchApp({ theme, actualTheme, onToggleTheme, needsOnboarding }) {
       return null;
     } catch (e) { return null; }
   });
+  var sidebarModuleWheelRef = useWorkbenchRef({ delta: 0, direction: 0, lockedUntil: 0 });
   // The task entry point is a project-wide board. A task detail is opened only
   // after the user selects a card (or follows a direct task link/search hit).
   var [taskView, setTaskView] = useWorkbenchState("board");
@@ -2490,8 +2491,65 @@ function WorkbenchApp({ theme, actualTheme, onToggleTheme, needsOnboarding }) {
   }
 
   function handleOpenPage(page) {
-    if (page === "task") { setTaskView("board"); setFullPage(null); return; }
-    setFullPage(function (prev) { return prev === page ? null : page; });
+    /* The active Dock item is a location indicator, not a toggle. Re-clicking
+       it must preserve the current page (and a task detail, when applicable)
+       instead of falling through to the default Task surface. */
+    if (page === "task") {
+      if (!fullPage) return;
+      setTaskView("board");
+      setFullPage(null);
+      return;
+    }
+    if (fullPage === page) return;
+    setFullPage(page);
+  }
+
+  function handleSidebarModuleWheel(event) {
+    var target = event.target;
+    if (!target || !target.closest || !target.closest(".workbench-integrated-rail")) return;
+    var deltaX = Number(event.deltaX || 0);
+    var deltaY = Number(event.deltaY || 0);
+    if (Math.abs(deltaX) < 2 || Math.abs(deltaX) <= Math.abs(deltaY) * 1.15) return;
+
+    event.preventDefault();
+    var gesture = sidebarModuleWheelRef.current;
+    var now = Date.now();
+    var direction = deltaX < 0 ? -1 : 1;
+    if (gesture.direction && gesture.direction !== direction) gesture.delta = 0;
+    gesture.direction = direction;
+    if (now < gesture.lockedUntil) return;
+    gesture.delta += deltaX;
+    if (Math.abs(gesture.delta) < 44) return;
+
+    var moduleOrder = ["schedule", "task", "chat", "knowledge", "memory"];
+    var activeModule = moduleOrder.indexOf(fullPage) >= 0 ? fullPage : "task";
+    var activeIndex = moduleOrder.indexOf(activeModule);
+    var nextIndex = (activeIndex + direction + moduleOrder.length) % moduleOrder.length;
+    handleOpenPage(moduleOrder[nextIndex]);
+    gesture.lockedUntil = now + 420;
+    gesture.delta = 0;
+  }
+
+  function toggleWorkspaceSidebar() {
+    setRailCollapsed(function (value) {
+      var next = !value;
+      try { localStorage.setItem("wb-rail-collapsed", next ? "1" : "0"); } catch (e) {}
+      return next;
+    });
+  }
+
+  function renderSidebarCollapseControl() {
+    return <WorkbenchSidebarCollapseControl collapsed={railCollapsed} onToggle={toggleWorkspaceSidebar} />;
+  }
+
+  function renderSidebarDock() {
+    return (
+      <WorkbenchSidebarDock
+        activePage={fullPage}
+        onOpenPage={handleOpenPage}
+        onSettings={function () { setSettingsTab(""); setSettingsOpen(true); }}
+      />
+    );
   }
 
   // Conversation → task promotion: the chat page returns the refreshed store
@@ -2505,8 +2563,9 @@ function WorkbenchApp({ theme, actualTheme, onToggleTheme, needsOnboarding }) {
     setRightTab("context");
   }
 
-  // The 知识库 / 日程 / 记忆 / 对话 views keep the ProjectRail (so you can
-  // navigate while viewing them); other pages take over the full screen.
+  // Knowledge / schedule / memory keep the shared ProjectRail. Chat owns a
+  // unified project + conversation navigator so the two related scopes do not
+  // occupy separate columns there; other pages take over the full screen.
   var isKnowledge = fullPage === "knowledge";
   var isSchedule = fullPage === "schedule";
   var isMemory = fullPage === "memory";
@@ -2612,6 +2671,8 @@ function WorkbenchApp({ theme, actualTheme, onToggleTheme, needsOnboarding }) {
   return (
     <div className="workbench-shell" data-screen-label="Cyrene · workbench">
       <WorkbenchTopbar
+        projects={store.projects}
+        activeProject={store.activeProject}
         activePage={fullPage}
         taskView={taskView}
         activeTaskId={store.activeSessionId}
@@ -2701,6 +2762,9 @@ function WorkbenchApp({ theme, actualTheme, onToggleTheme, needsOnboarding }) {
         onSearch={function () { setSearchOpen(true); }}
         onSettings={function (tab) { setSettingsTab(typeof tab === "string" ? tab : ""); setSettingsOpen(true); }}
         onNewProject={createProject}
+        onSelectProject={selectProject}
+        onEditProject={setEditProject}
+        onDeleteProject={handleDeleteProject}
         onNewTask={createSession}
         onOpenPage={handleOpenPage}
         theme={theme}
@@ -2710,26 +2774,7 @@ function WorkbenchApp({ theme, actualTheme, onToggleTheme, needsOnboarding }) {
       {fullPageConfig ? (
         <WorkbenchFullPage config={fullPageConfig} onClose={function () { setFullPage(null); }} />
       ) : (
-        <div ref={wbApplyStoredRightWidth} className={"workbench-grid" + (railCollapsed ? " rail-collapsed" : "") + (isKnowledge ? " is-knowledge" : "") + (isSchedule ? " is-schedule" : "") + (isMemory ? " is-memory" : "") + (isChat ? " is-chat" : "") + (isWelcome ? " is-welcome" : "") + (isProfile ? " is-profile" : "") + (!isModulePage ? (taskView === "board" ? " is-task-board" : " is-task-detail") : "")}>
-          <ProjectRail
-            projects={store.projects}
-            activeProjectId={store.activeProjectId}
-            activePage={fullPage}
-            collapsed={railCollapsed}
-            onToggleCollapse={function () {
-              setRailCollapsed(function (v) {
-                var next = !v;
-                try { localStorage.setItem("wb-rail-collapsed", next ? "1" : "0"); } catch (e) {}
-                return next;
-              });
-            }}
-            onSelectProject={selectProject}
-            onCreateProject={createProject}
-            onEditProject={setEditProject}
-            onDeleteProject={handleDeleteProject}
-            onOpenPage={handleOpenPage}
-            onSettings={function () { setSettingsTab(""); setSettingsOpen(true); }}
-          />
+        <div ref={wbApplyStoredRightWidth} className={"workbench-grid integrated-sidebars" + (railCollapsed ? " rail-collapsed" : "") + (isKnowledge ? " is-knowledge" : "") + (isSchedule ? " is-schedule" : "") + (isMemory ? " is-memory" : "") + (isChat ? " is-chat" : "") + (isWelcome ? " is-welcome" : "") + (isProfile ? " is-profile" : "") + (!isModulePage ? (taskView === "board" ? " is-task-board" : " is-task-detail") : "")} onWheel={handleSidebarModuleWheel}>
           {showChatPage && (
             <WorkbenchStableSurface active={isChat}>
               {React.createElement(window.CyreneUI.require("chat").Page || function () { return <div className="workbench-empty">{t("workbench.chatLoading")}</div>; }, {
@@ -2753,6 +2798,10 @@ function WorkbenchApp({ theme, actualTheme, onToggleTheme, needsOnboarding }) {
                   if (!chat || !chat.id) return;
                   togglePinnedSession({ id: chat.id, kind: "chat" }, pinned);
                 },
+                navCollapsed: railCollapsed,
+                onToggleNavCollapsed: toggleWorkspaceSidebar,
+                collapseControl: isChat ? renderSidebarCollapseControl() : null,
+                moduleDock: isChat ? renderSidebarDock() : null,
               })}
             </WorkbenchStableSurface>
           )}
@@ -2763,17 +2812,20 @@ function WorkbenchApp({ theme, actualTheme, onToggleTheme, needsOnboarding }) {
                 project: store.activeProject,
                 onBack: function () { setFullPage(null); },
                 onNavigate: navigateFromSearch,
+                sidebarCollapsed: railCollapsed,
+                collapseControl: isKnowledge ? renderSidebarCollapseControl() : null,
+                moduleDock: isKnowledge ? renderSidebarDock() : null,
               })}
             </WorkbenchStableSurface>
           )}
           {showSchedulePage && (
             <WorkbenchStableSurface active={isSchedule}>
-              {React.createElement(window.CyreneUI.require("schedule").Page || function () { return <div className="workbench-empty">{t("workbench.scheduleLoading")}</div>; }, { active: isSchedule, project: store.activeProject, onBack: function () { setFullPage(null); } })}
+              {React.createElement(window.CyreneUI.require("schedule").Page || function () { return <div className="workbench-empty">{t("workbench.scheduleLoading")}</div>; }, { active: isSchedule, project: store.activeProject, onBack: function () { setFullPage(null); }, sidebarCollapsed: railCollapsed, collapseControl: isSchedule ? renderSidebarCollapseControl() : null, moduleDock: isSchedule ? renderSidebarDock() : null })}
             </WorkbenchStableSurface>
           )}
           {showMemoryPage && (
             <WorkbenchStableSurface active={isMemory}>
-              {React.createElement(window.CyreneUI.require("memory").Page || function () { return <div className="workbench-empty">{t("workbench.memoryLoading")}</div>; }, { active: isMemory, project: store.activeProject, onBack: function () { setFullPage(null); } })}
+              {React.createElement(window.CyreneUI.require("memory").Page || function () { return <div className="workbench-empty">{t("workbench.memoryLoading")}</div>; }, { active: isMemory, project: store.activeProject, onBack: function () { setFullPage(null); }, sidebarCollapsed: railCollapsed, collapseControl: isMemory ? renderSidebarCollapseControl() : null, moduleDock: isMemory ? renderSidebarDock() : null })}
             </WorkbenchStableSurface>
           )}
           {showWelcomePage && (
@@ -2793,13 +2845,27 @@ function WorkbenchApp({ theme, actualTheme, onToggleTheme, needsOnboarding }) {
           )}
           {showProfilePage && (
             <WorkbenchStableSurface active={isProfile}>
-              {window.CyreneUI.require("profile").Page
-                ? React.createElement(window.CyreneUI.require("profile").Page, { active: isProfile })
-                : <div className="workbench-empty">…</div>}
+              <>
+                <WorkbenchProfileRail collapsed={railCollapsed} collapseControl={isProfile ? renderSidebarCollapseControl() : null} moduleDock={isProfile ? renderSidebarDock() : null} />
+                {window.CyreneUI.require("profile").Page
+                  ? React.createElement(window.CyreneUI.require("profile").Page, { active: isProfile })
+                  : <div className="workbench-empty">…</div>}
+              </>
             </WorkbenchStableSurface>
           )}
           <WorkbenchStableSurface active={!isModulePage}>
           <>
+          <TaskRail
+            project={store.activeProject}
+            activeSessionId={store.activeSessionId}
+            onSelectSession={selectSession}
+            onCreateSession={createSession}
+            onDeleteSession={handleDeleteSession}
+            loading={loading}
+            collapsed={railCollapsed}
+            collapseControl={renderSidebarCollapseControl()}
+            moduleDock={!isModulePage ? renderSidebarDock() : null}
+          />
           {taskView === "board" ? (
             <TaskBoard
               project={store.activeProject}
@@ -3014,7 +3080,7 @@ function WorkbenchSessionActivityPreview({ preview, t }) {
   );
 }
 
-function WorkbenchTopbar({ activePage, taskView, activeTaskId, activeChatId, recentSessions, overflowSessions, pinnedResources, keyboardEnabled, onPinResource, onUnpinResource, onOpenPinnedResource, onOpenSession, onPauseSession, onStopSession, onTogglePinnedSession, onRemoveSessionTab, onLoadSessionResources, onLoadSessionBrowserPreview, onOpenSessionResource, notifications, onReloadNotifications, onOpenNotification, onSearch, onSettings, onNewProject, onNewTask, onOpenPage, theme, actualTheme, onToggleTheme }) {
+function WorkbenchTopbar({ projects, activeProject, activePage, taskView, activeTaskId, activeChatId, recentSessions, overflowSessions, pinnedResources, keyboardEnabled, onPinResource, onUnpinResource, onOpenPinnedResource, onOpenSession, onPauseSession, onStopSession, onTogglePinnedSession, onRemoveSessionTab, onLoadSessionResources, onLoadSessionBrowserPreview, onOpenSessionResource, notifications, onReloadNotifications, onOpenNotification, onSearch, onSettings, onNewProject, onSelectProject, onEditProject, onDeleteProject, onNewTask, onOpenPage, theme, actualTheme, onToggleTheme }) {
   var { t } = window.CyreneUI.require("i18n").use();
   var dataState = window.CyreneUI.require("data").state;
   var tabs = Array.isArray(recentSessions) ? recentSessions : [];
@@ -3028,12 +3094,31 @@ function WorkbenchTopbar({ activePage, taskView, activeTaskId, activeChatId, rec
   var [activityClock, setActivityClock] = useWorkbenchState(function () { return Date.now(); });
   var [resourceDropActive, setResourceDropActive] = useWorkbenchState(false);
   var [chatSideHidden, setChatSideHidden] = useWorkbenchState(false);
+  var [projectMenuOpen, setProjectMenuOpen] = useWorkbenchState(false);
+  var [projectActionId, setProjectActionId] = useWorkbenchState("");
   var topbarRef = useWorkbenchRef(null);
+  var projectMenuRef = useWorkbenchRef(null);
   var sessionMenuSeqRef = useWorkbenchRef(0);
   var previewTimerRef = useWorkbenchRef(0);
   var terminalMorphKey = tabs.map(function (item) {
     return item.kind + ":" + item.id + ":" + Number(item.activity && item.activity.morphUntil || 0);
   }).join("|");
+
+  useWorkbenchEffect(function () {
+    if (!projectMenuOpen) return undefined;
+    function closeProjectMenu(event) {
+      if (event.key && event.key !== "Escape") return;
+      if (!event.key && projectMenuRef.current && projectMenuRef.current.contains(event.target)) return;
+      setProjectMenuOpen(false);
+      setProjectActionId("");
+    }
+    document.addEventListener("mousedown", closeProjectMenu);
+    document.addEventListener("keydown", closeProjectMenu);
+    return function () {
+      document.removeEventListener("mousedown", closeProjectMenu);
+      document.removeEventListener("keydown", closeProjectMenu);
+    };
+  }, [projectMenuOpen]);
 
   useWorkbenchEffect(function () {
     var now = Date.now();
@@ -3110,7 +3195,7 @@ function WorkbenchTopbar({ activePage, taskView, activeTaskId, activeChatId, rec
     closeSessionPreview();
     var rect = event.currentTarget.getBoundingClientRect();
     var width = 300;
-    var height = Math.min(420, window.innerHeight - 16);
+    var height = Math.min(500, window.innerHeight - 16);
     setSessionMenu(null);
     setResourceMenu(null);
     setOverflowMenu({
@@ -3699,18 +3784,84 @@ function WorkbenchTopbar({ activePage, taskView, activeTaskId, activeChatId, rec
 
   return (
     <div ref={topbarRef} className="workbench-topbar">
-      <div className="workbench-brand">
+      <div className="workbench-brand" ref={projectMenuRef}>
         <div className="workbench-traffic-space"></div>
         <button
           type="button"
-          className="workbench-brand-btn"
-          onClick={function () { onSettings && onSettings("about"); }}
-          title={t("nav.settings")}
-          aria-label={t("nav.settings")}
+          className={"workbench-brand-btn workbench-project-switcher-btn" + (projectMenuOpen ? " active" : "")}
+          onClick={function () { setProjectActionId(""); setProjectMenuOpen(function (open) { return !open; }); }}
+          title={t("rail.projects")}
+          aria-label={t("rail.projects")}
+          aria-haspopup="menu"
+          aria-expanded={projectMenuOpen}
         >
-          <span className="brand-mark" aria-hidden="true"></span>
-          <strong>Cyrene</strong>
+          <span
+            className={"workbench-top-project-icon" + (activeProject && (activeProject.dataKey === "default" || activeProject.name === "Cyrene") ? " logo" : "")}
+            style={activeProject && activeProject.dataKey !== "default" && activeProject.name !== "Cyrene" ? { background: activeProject.color || WorkbenchModel.projectGradient(activeProject.id || activeProject.name) } : undefined}
+            aria-hidden="true"
+          >
+            {activeProject && (activeProject.dataKey === "default" || activeProject.name === "Cyrene")
+              ? <span className="brand-mark" />
+              : WorkbenchModel.initials(activeProject && activeProject.name)}
+          </span>
+          <strong>{activeProject ? activeProject.name : t("workbench.selectProject", "Select project")}</strong>
+          <span className="workbench-project-switcher-chevron" aria-hidden="true">
+            <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="m6 9 6 6 6-6"/></svg>
+          </span>
         </button>
+        {projectMenuOpen && (
+          <div className="workbench-top-project-menu" role="menu" aria-label={t("rail.projects")}>
+            <div className="workbench-top-project-menu-head">
+              <strong>{t("rail.projects")}</strong>
+              <button type="button" onClick={function () { setProjectMenuOpen(false); if (onNewProject) onNewProject(); }}>
+                <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round"><path d="M12 5v14M5 12h14"/></svg>
+                <span>{t("rail.newProject")}</span>
+              </button>
+            </div>
+            <div className="workbench-top-project-menu-list">
+              {(Array.isArray(projects) ? projects : []).map(function (project) {
+                var selected = activeProject && String(activeProject.id || "") === String(project.id || "");
+                var isCyrene = project.dataKey === "default" || project.name === "Cyrene";
+                var actionsOpen = projectActionId === project.id;
+                return (
+                  <div key={project.id} className={"workbench-top-project-row" + (selected ? " active" : "") + (actionsOpen ? " menu-open" : "")}>
+                    <button type="button" className="workbench-top-project-select" role="menuitem" onClick={function () {
+                      setProjectMenuOpen(false);
+                      setProjectActionId("");
+                      if (onSelectProject) onSelectProject(project.id);
+                    }}>
+                      <span
+                        className={"workbench-top-project-icon" + (isCyrene ? " logo" : "")}
+                        style={isCyrene ? undefined : { background: project.color || WorkbenchModel.projectGradient(project.id || project.name) }}
+                        aria-hidden="true"
+                      >{isCyrene ? <span className="brand-mark" /> : WorkbenchModel.initials(project.name)}</span>
+                      <span className="workbench-top-project-copy"><b>{project.name}</b><small>{WorkbenchModel.pathLabel(project.workspacePath, project.name)}</small></span>
+                      {selected ? <span className="workbench-top-project-check" aria-hidden="true">✓</span> : null}
+                    </button>
+                    <button type="button" className="workbench-top-project-more" aria-label={t("rail.projectActions")} onClick={function (event) {
+                      event.stopPropagation();
+                      setProjectActionId(actionsOpen ? "" : project.id);
+                    }}>
+                      <svg viewBox="0 0 24 24" width="15" height="15" fill="currentColor"><circle cx="5" cy="12" r="1.7"/><circle cx="12" cy="12" r="1.7"/><circle cx="19" cy="12" r="1.7"/></svg>
+                    </button>
+                    {actionsOpen && (
+                      <div className="workbench-top-project-actions" role="menu">
+                        <button type="button" role="menuitem" onClick={function () { setProjectActionId(""); setProjectMenuOpen(false); if (onEditProject) onEditProject(project); }}>
+                          <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M12 20h9"/><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4Z"/></svg>
+                          <span>{t("rail.editProject")}</span>
+                        </button>
+                        {!isCyrene ? <button type="button" role="menuitem" className="danger" onClick={function () { setProjectActionId(""); setProjectMenuOpen(false); if (onDeleteProject) onDeleteProject(project); }}>
+                          <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M3 6h18M8 6V4a1 1 0 0 1 1-1h6a1 1 0 0 1 1 1v2M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/></svg>
+                          <span>{t("rail.deleteProject")}</span>
+                        </button> : null}
+                      </div>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        )}
       </div>
       <nav className="workbench-session-tabs" aria-label={t("workbench.recentSessions", "Recent sessions")}>
         {tabs.map(function (item) {
@@ -4350,6 +4501,302 @@ function WorkbenchEditProjectModal({ project, onClose, onSave }) {
   );
 }
 
+function WorkbenchSidebarCollapseControl({ collapsed, onToggle }) {
+  var { t } = window.CyreneUI.require("i18n").use();
+  var label = collapsed ? t("rail.expand", null, "Expand sidebar") : t("rail.collapse", null, "Collapse sidebar");
+  return (
+    <button
+      type="button"
+      className="workbench-sidebar-collapse-control"
+      title={label}
+      aria-label={label}
+      aria-expanded={!collapsed}
+      onClick={onToggle}
+    >
+      <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+        <rect x="3" y="3" width="18" height="18" rx="2"/>
+        <path d="M15 3v18"/>
+        <path d={collapsed ? "m8 10 2 2-2 2" : "m9 10-2 2 2 2"}/>
+      </svg>
+    </button>
+  );
+}
+
+function WorkbenchRailAccount({ activePage, onOpenPage, onSettings, docked }) {
+  var { t } = window.CyreneUI.require("i18n").use();
+  var dataStore = window.CyreneUI.require("data");
+  dataStore.useVersion();
+  var dataState = dataStore.state;
+  var [accountMenuOpen, setAccountMenuOpen] = useWorkbenchState(false);
+  var [budgetState, setBudgetState] = useWorkbenchState(null);
+  var cachedCodexQuota = WorkbenchModel.readCodexQuotaCache();
+  var [codexQuotaState, setCodexQuotaState] = useWorkbenchState({
+    primary: false,
+    connected: !!(cachedCodexQuota && cachedCodexQuota.connected),
+    windows: cachedCodexQuota ? WorkbenchModel.codexQuotaWindows(cachedCodexQuota.limits) : [],
+    plan: cachedCodexQuota ? WorkbenchModel.codexPlanLabel(cachedCodexQuota.account, cachedCodexQuota.limits) : "",
+  });
+
+  function fetchBudget() {
+    fetch("/api/budget/status")
+      .then(function (response) { return response.json(); })
+      .then(function (payload) { setBudgetState(payload); })
+      .catch(function () {});
+  }
+
+  function fetchCodexQuotaSummary() {
+    return fetch("/api/settings/models")
+      .then(function (response) { return response.json(); })
+      .then(function (modelsPayload) {
+        var primary = (modelsPayload.models || modelsPayload.primary_candidates || [])[0];
+        if (!primary || primary.provider !== "codex_oauth") {
+          setCodexQuotaState({ primary: false, connected: false, windows: [], plan: "" });
+          return null;
+        }
+        var cached = WorkbenchModel.readCodexQuotaCache();
+        if (cached) {
+          setCodexQuotaState({
+            primary: true,
+            connected: cached.connected === true,
+            windows: WorkbenchModel.codexQuotaWindows(cached.limits),
+            plan: WorkbenchModel.codexPlanLabel(cached.account, cached.limits),
+          });
+        }
+        return fetch("/api/settings/openai-oauth/limits")
+          .then(function (response) { return response.json(); })
+          .then(function (quotaPayload) {
+            WorkbenchModel.writeCodexQuotaCache(quotaPayload);
+            setCodexQuotaState({
+              primary: true,
+              connected: quotaPayload.connected === true,
+              windows: WorkbenchModel.codexQuotaWindows(quotaPayload.limits),
+              plan: WorkbenchModel.codexPlanLabel(quotaPayload.account, quotaPayload.limits),
+            });
+            return quotaPayload;
+          });
+      })
+      .catch(function () {});
+  }
+
+  function formatTimeDiff(isoStr) {
+    if (!isoStr) return "";
+    var dt = new Date(isoStr);
+    var now = new Date();
+    if (dt - now <= 0) return "";
+    var time = String(dt.getHours()).padStart(2, "0") + ":" + String(dt.getMinutes()).padStart(2, "0");
+    if (dt.toDateString() === now.toDateString()) return time;
+    var tomorrow = new Date(now);
+    tomorrow.setDate(tomorrow.getDate() + 1);
+    if (dt.toDateString() === tomorrow.toDateString()) return t("general.tomorrow", null, "Tomorrow") + " " + time;
+    return (dt.getMonth() + 1) + "/" + dt.getDate() + " " + time;
+  }
+
+  function formatRefreshTime(isoStr) {
+    var time = formatTimeDiff(isoStr);
+    return time ? t("rail.refreshAt", { time: time }) : t("rail.budgetExhausted");
+  }
+  function currencySymbol(currency) { return currency === "CNY" ? "¥" : currency === "USD" ? "$" : currency === "EUR" ? "€" : currency === "GBP" ? "£" : currency || ""; }
+  function formatBudgetAmount(value, currency) { return currencySymbol(currency) + Number(value || 0).toFixed(2); }
+  function codexQuotaWindowName(windowData) {
+    if (windowData.kind === "five_hour") return t("rail.budgetFiveHour");
+    if (windowData.kind === "weekly") return t("rail.budgetWeekly");
+    return windowData.label || t("settings.codexQuotaWindow");
+  }
+  function codexQuotaResetTime(windowData) {
+    return windowData.resetsAt ? new Date(windowData.resetsAt * 1000).toLocaleString() : "—";
+  }
+
+  useWorkbenchEffect(function () {
+    fetchBudget();
+    fetchCodexQuotaSummary();
+  }, []);
+  useWorkbenchEffect(function () {
+    if (!accountMenuOpen) return undefined;
+    fetchBudget();
+    fetchCodexQuotaSummary();
+    function closeMenu(event) {
+      if (event.key && event.key !== "Escape") return;
+      if (!event.key && event.target && event.target.closest && event.target.closest(".workbench-rail-account")) return;
+      setAccountMenuOpen(false);
+    }
+    document.addEventListener("mousedown", closeMenu);
+    document.addEventListener("keydown", closeMenu);
+    return function () {
+      document.removeEventListener("mousedown", closeMenu);
+      document.removeEventListener("keydown", closeMenu);
+    };
+  }, [accountMenuOpen]);
+  useWorkbenchEffect(function () {
+    function onBudgetSaved() { fetchBudget(); }
+    try { window.addEventListener("budget-saved", onBudgetSaved); } catch (e) {}
+    return function () { try { window.removeEventListener("budget-saved", onBudgetSaved); } catch (e) {} };
+  }, []);
+
+  var user = dataState.user || {};
+  var modelLabel = (dataState.sessions && dataState.sessions[0] && dataState.sessions[0].model) || dataState.appVersion || "model";
+  function openProfile() {
+    setAccountMenuOpen(false);
+    if (onOpenPage) onOpenPage("profile");
+  }
+
+  return (
+    <div className={"workbench-rail-account" + (docked ? " is-docked" : "") + (activePage === "profile" ? " active" : "")}>
+      <button
+        type="button"
+        className="workbench-rail-account-button"
+        title={t("rail.profile")}
+        aria-label={t("rail.profile")}
+        aria-expanded={accountMenuOpen}
+        onClick={function () { setAccountMenuOpen(function (open) { return !open; }); }}
+      >
+        <span className="workbench-account-avatar">
+          {window.CyreneUI.require("profile").Avatar
+            ? React.createElement(window.CyreneUI.require("profile").Avatar, { user: user, size: 34 })
+            : <div className="workbench-avatar photo">{WorkbenchModel.initials(user.name)}</div>}
+        </span>
+        {docked && (
+          <span className="workbench-rail-account-summary">
+            <b>{user.name || "User"}</b>
+            <small>{codexQuotaState.plan || modelLabel}</small>
+          </span>
+        )}
+        {docked && <svg className="workbench-rail-account-chevron" viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="m9 6 6 6-6 6"/></svg>}
+      </button>
+      {accountMenuOpen && (
+        <div className="workbench-account-menu workbench-module-account-menu" onClick={function (event) { event.stopPropagation(); }}>
+          <button type="button" className="workbench-module-account-profile" onClick={openProfile}>
+            <span className="workbench-account-avatar">
+              {window.CyreneUI.require("profile").Avatar
+                ? React.createElement(window.CyreneUI.require("profile").Avatar, { user: user, size: 38 })
+                : <div className="workbench-avatar photo">{WorkbenchModel.initials(user.name)}</div>}
+            </span>
+            <span className="workbench-module-account-copy">
+              <span><b>{user.name || "User"}</b>{codexQuotaState.plan && <em>{codexQuotaState.plan}</em>}</span>
+              <small>{modelLabel}</small>
+            </span>
+          </button>
+          <div className="wb-account-menu-divider"></div>
+          {codexQuotaState.primary && codexQuotaState.connected && codexQuotaState.windows.length > 0 && (
+            <>
+              <div className="wb-account-menu-codex">
+                <div className="wb-account-menu-codex-head">
+                  <strong>{t("settings.codexQuota")}</strong>
+                  <span>{t("settings.codexQuotaPlan", { plan: codexQuotaState.plan || "—" })}</span>
+                </div>
+                {codexQuotaState.windows.map(function (windowData) {
+                  return (
+                    <div className="wb-account-menu-codex-window" key={windowData.kind + "-" + windowData.durationMins}>
+                      <div className="wb-account-menu-usage-row">
+                        <span>{codexQuotaWindowName(windowData)}</span>
+                        <span className={"wb-account-menu-usage-val" + (windowData.remainingPercent <= 0 ? " over" : "")}>
+                          {t("settings.codexQuotaRemaining", { pct: windowData.remainingPercent })}
+                        </span>
+                      </div>
+                      <div className="wb-budget-progress-bar">
+                        <div className={"wb-budget-progress-fill" + (windowData.usedPercent >= 100 ? " over" : windowData.usedPercent >= 80 ? " high" : "")} style={{ width: Math.round(windowData.usedPercent) + "%" }} />
+                      </div>
+                      <small>{t("settings.codexQuotaResets", { time: codexQuotaResetTime(windowData) })}</small>
+                    </div>
+                  );
+                })}
+              </div>
+              <div className="wb-account-menu-divider"></div>
+            </>
+          )}
+          {budgetState && budgetState.monthly_budget > 0 && (
+            <>
+              <div className="wb-account-menu-usage">
+                <div className="wb-account-menu-usage-row">
+                  <span>{t("rail.budgetFiveHour")}</span>
+                  <span className={"wb-account-menu-usage-val" + (budgetState.five_hour_remaining <= 0 ? " over" : "")}>
+                    {budgetState.five_hour_remaining > 0
+                      ? (budgetState.five_hour_remaining / budgetState.five_hour_budget * 100).toFixed(0) + "% · " + formatBudgetAmount(budgetState.five_hour_remaining, budgetState.currency) + " / " + formatBudgetAmount(budgetState.five_hour_budget, budgetState.currency)
+                      : formatRefreshTime(budgetState.five_hour_next_refresh_at)}
+                  </span>
+                </div>
+                <div className="wb-account-menu-usage-row">
+                  <span>{t("rail.budgetWeekly")}</span>
+                  <span className={"wb-account-menu-usage-val" + (budgetState.weekly_remaining <= 0 ? " over" : "")}>
+                    {budgetState.weekly_remaining > 0
+                      ? (budgetState.weekly_remaining / budgetState.weekly_budget * 100).toFixed(0) + "% · " + formatBudgetAmount(budgetState.weekly_remaining, budgetState.currency) + " / " + formatBudgetAmount(budgetState.weekly_budget, budgetState.currency)
+                      : formatRefreshTime(budgetState.weekly_next_refresh_at)}
+                  </span>
+                </div>
+              </div>
+              {(budgetState.weekly_remaining <= 0 || budgetState.five_hour_remaining <= 0 || budgetState.monthly_remaining <= 0) && <div className="wb-account-menu-usage-blocked">{t("rail.budgetBlocked")}</div>}
+              <div className="wb-account-menu-divider"></div>
+            </>
+          )}
+          <button type="button" onClick={function () { setAccountMenuOpen(false); if (onSettings) onSettings(); }}>
+            <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="3"/><path d="M12 1v2M12 21v2M4.2 4.2l1.4 1.4M18.4 18.4l1.4 1.4M1 12h2M21 12h2M4.2 19.8l1.4-1.4M18.4 5.6l1.4-1.4"/></svg>
+            {t("rail.settings")}
+          </button>
+          <button type="button" onClick={openProfile}>
+            <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>
+            {t("rail.profile")}
+          </button>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function WorkbenchSidebarDock({ activePage, onOpenPage, onSettings }) {
+  var { t } = window.CyreneUI.require("i18n").use();
+  var items = [
+    { id: "schedule", label: t("workbench.page.schedule"), icon: (
+      <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round"><rect x="3" y="4.5" width="18" height="17" rx="2.5"/><path d="M3 9.5h18M8 2.5v4M16 2.5v4"/></svg>
+    ) },
+    { id: "task", label: t("workbench.page.task"), icon: (
+      <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round"><path d="M9 5H7a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V7a2 2 0 0 0-2-2h-2"/><rect x="9" y="3" width="6" height="4" rx="1.5"/><path d="M9 14 10.5 15.5 15 11"/></svg>
+    ) },
+    { id: "chat", label: t("workbench.page.chat"), icon: (
+      <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round"><path d="M21 11.5a8.5 8.5 0 0 1-12.2 7.6L3 21l1.9-5.8A8.5 8.5 0 1 1 21 11.5Z"/></svg>
+    ) },
+    { id: "knowledge", label: t("workbench.page.knowledge"), icon: (
+      <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round"><path d="M5 4.5A2.5 2.5 0 0 1 7.5 2H20v15H7.5A2.5 2.5 0 0 0 5 19.5Z"/><path d="M5 19.5A2.5 2.5 0 0 0 7.5 22H20"/></svg>
+    ) },
+    { id: "memory", label: t("workbench.page.memory"), icon: (
+      <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round"><path d="M12 4 13.6 10.4 20 12 13.6 13.6 12 20 10.4 13.6 4 12 10.4 10.4Z"/></svg>
+    ) },
+  ];
+  return (
+    <div className="workbench-sidebar-dock">
+      <WorkbenchRailAccount docked={true} activePage={activePage} onOpenPage={onOpenPage} onSettings={onSettings} />
+      <nav className="workbench-sidebar-dock-nav" aria-label={t("workbench.navigation", "Workbench navigation")}>
+        {items.map(function (item) {
+          var active = item.id === "task" ? !activePage : activePage === item.id;
+          return (
+            <button
+              key={item.id}
+              type="button"
+              className={active ? "active" : ""}
+              title={item.label}
+              aria-label={item.label}
+              aria-current={active ? "page" : undefined}
+              onClick={function () { if (onOpenPage) onOpenPage(item.id); }}
+            >
+              <span aria-hidden="true">{item.icon}</span>
+              <b>{item.label}</b>
+            </button>
+          );
+        })}
+      </nav>
+    </div>
+  );
+}
+
+function WorkbenchProfileRail({ collapsed, collapseControl, moduleDock }) {
+  var { t } = window.CyreneUI.require("i18n").use();
+  return (
+    <aside className={"workbench-profile-rail workbench-integrated-rail" + (collapsed ? " is-collapsed" : "")}>
+      <header className="workbench-integrated-rail-head"><b>{t("rail.profile")}</b>{collapseControl}</header>
+      <div className="workbench-profile-rail-spacer"></div>
+      {moduleDock}
+    </aside>
+  );
+}
+
 // Temporarily keep sign-out unavailable until the authentication flow is ready.
 var WB_ACCOUNT_LOGOUT_VISIBLE = false;
 
@@ -4896,21 +5343,24 @@ function TaskBoardCard({ session, column, menuOpen, onMenu, onOpen, onDelete }) 
   );
 }
 
-function TaskRail({ project, activeSessionId, onSelectSession, onCreateSession, onDeleteSession, loading }) {
+function TaskRail({ project, activeSessionId, onSelectSession, onCreateSession, onDeleteSession, loading, collapsed, collapseControl, moduleDock }) {
   var { t } = window.CyreneUI.require("i18n").use();
   var sessions = project && Array.isArray(project.sessions) ? project.sessions : [];
   var [menuId, setMenuId] = useWorkbenchState("");
 
   return (
-    <aside className="workbench-task-rail">
-      <div className="workbench-rail-head">
+    <aside className={"workbench-task-rail workbench-integrated-rail" + (collapsed ? " is-collapsed" : "")}>
+      <div className="workbench-rail-head workbench-integrated-rail-head">
         <span>{t("rail.tasks")}</span>
-        <button type="button" onClick={onCreateSession} disabled={!project}>+ {t("rail.newTask")}</button>
+        <div className="workbench-integrated-rail-actions">
+          <button type="button" className="workbench-integrated-rail-primary-action" onClick={onCreateSession} disabled={!project}>+ {t("rail.newTask")}</button>
+          {collapseControl}
+        </div>
       </div>
       {menuId && <div className="wb-card-menu-scrim" onClick={function () { setMenuId(""); }} />}
       {loading && <div className="workbench-muted">{t("rail.loadingTasks")}</div>}
       {!loading && sessions.length === 0 && <div className="workbench-muted">{t("rail.noTasks")}</div>}
-      <div className="workbench-task-list">
+      <div className="workbench-task-list workbench-integrated-rail-body">
         {sessions.map(function (session) {
           var tone = WorkbenchModel.statusTone(session.status);
           var isMenuOpen = menuId === session.id;
@@ -4962,6 +5412,7 @@ function TaskRail({ project, activeSessionId, onSelectSession, onCreateSession, 
           );
         })}
       </div>
+      {moduleDock}
     </aside>
   );
 }

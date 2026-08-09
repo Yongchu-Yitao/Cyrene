@@ -8,13 +8,15 @@ from __future__ import annotations
 
 import asyncio
 import json
+import mimetypes
 import re
 import shutil
 import time
+from pathlib import Path
 from typing import Any
 
 from fastapi import APIRouter, Request
-from fastapi.responses import JSONResponse, StreamingResponse
+from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 
 from cyrene.workbench import chat as _service
 from cyrene.workbench.workspace_changes import (
@@ -31,12 +33,28 @@ globals().update({
 })
 
 _DETACHED_ANSWER_TASKS: set[asyncio.Task[Any]] = set()
+_SESSION_TITLE_TASKS: set[asyncio.Task[Any]] = set()
 
 
 def _finish_detached_answer_task(task: asyncio.Task[Any]) -> None:
     _DETACHED_ANSWER_TASKS.discard(task)
     if not task.cancelled():
         task.exception()
+
+
+def _track_session_title_task(task: asyncio.Task[Any]) -> None:
+    _SESSION_TITLE_TASKS.add(task)
+
+    def done(completed: asyncio.Task[Any]) -> None:
+        _SESSION_TITLE_TASKS.discard(completed)
+        try:
+            completed.exception()
+        except asyncio.CancelledError:
+            return
+        except Exception:
+            logger.exception("Failed to inspect Workbench session naming task")
+
+    task.add_done_callback(done)
 
 
 def register_workbench_chat_routes(
@@ -408,6 +426,12 @@ def register_workbench_chat_routes(
         chat = _find_chat(payload, chat_id)
         if not chat:
             return JSONResponse({"error": "chat not found"}, status_code=404)
+        if "generatedFiles" not in chat:
+            await asyncio.to_thread(_sync_chat_generated_files, chat_id)
+            payload = await asyncio.to_thread(_read_chats_store)
+            chat = _find_chat(payload, chat_id)
+            if not chat:
+                return JSONResponse({"error": "chat not found"}, status_code=404)
         elapsed_ms = (time.monotonic() - started) * 1000
         if elapsed_ms >= 1000:
             logger.warning("Slow Workbench chat detail load [chat_id=%s duration_ms=%.1f]", chat_id, elapsed_ms)
@@ -451,6 +475,49 @@ def register_workbench_chat_routes(
         if change is None:
             return JSONResponse({"error": "file change not found"}, status_code=404)
         return {"change": change}
+
+    @router.get("/api/workbench/chats/{chat_id}/files/{file_path:path}")
+    async def api_workbench_chat_file(chat_id: str, file_path: str):
+        """Preview/download a tracked agent file inside the chat's workspace."""
+        if chat_id.startswith("legacy:"):
+            return JSONResponse({"error": "file not found"}, status_code=404)
+        payload = await asyncio.to_thread(_read_chats_store)
+        chat = _find_chat(payload, chat_id)
+        if not chat:
+            return JSONResponse({"error": "chat not found"}, status_code=404)
+        normalized = str(file_path or "").strip().replace("\\", "/")
+        tracked = next(
+            (
+                item for item in (chat.get("generatedFiles") or [])
+                if isinstance(item, dict)
+                and str(item.get("path") or "").replace("\\", "/") == normalized
+            ),
+            None,
+        )
+        if not tracked:
+            return JSONResponse({"error": "file not found"}, status_code=404)
+        R = _routes()
+        project_store = await asyncio.to_thread(R._read_workbench_store)
+        project = R._workbench_find_project(
+            project_store, str(chat.get("projectId") or "")
+        )
+        if not project:
+            return JSONResponse({"error": "project not found"}, status_code=404)
+        root = Path(R._workbench_resolve_workspace_dir(project)).expanduser().resolve()
+        try:
+            target = (root / normalized).resolve()
+            target.relative_to(root)
+        except (OSError, ValueError):
+            return JSONResponse({"error": "file path is outside workspace"}, status_code=403)
+        if not target.is_file():
+            return JSONResponse({"error": "file not found"}, status_code=404)
+        filename = Path(str(tracked.get("name") or target.name)).name or target.name
+        media_type = (
+            str(tracked.get("content_type") or "").strip()
+            or mimetypes.guess_type(filename)[0]
+            or "application/octet-stream"
+        )
+        return FileResponse(target, filename=filename, media_type=media_type)
 
     @router.get("/api/workbench/chats/{chat_id}/subagents")
     async def api_workbench_chat_subagents(chat_id: str, round_id: str = ""):
@@ -794,6 +861,7 @@ def register_workbench_chat_routes(
             return JSONResponse({"error": "chat not found"}, status_code=404)
         if "title" in body:
             chat["title"] = str(body.get("title") or "").strip()[:60] or chat.get("title")
+            chat["titleLocked"] = True
         chat["updatedAt"] = _utc_now_iso()
         await asyncio.to_thread(_write_chats_store, payload)
         return {"ok": True, "chat": _public_chat_full(chat)}
@@ -1161,6 +1229,7 @@ def register_workbench_chat_routes(
 
         now = _utc_now_iso()
         messages = chat.setdefault("messages", [])
+        should_generate_title = False
         user_entry: dict[str, Any]
         truncate_after_id = ""
         retry_replaced_message_ids: set[str] = set()
@@ -1216,6 +1285,15 @@ def register_workbench_chat_routes(
             messages.append(user_entry)
             if is_first_message and chat.get("title") in ("", "新对话", None) and message:
                 chat["title"] = message.replace("\n", " ")[:24]
+            if (
+                is_first_message
+                and bool(message)
+                and not bool(chat.get("titleLocked"))
+                and not chat.get("titleNamingStatus")
+            ):
+                should_generate_title = True
+                chat["titleNamingStatus"] = "pending"
+                chat["titleNamingStartedAt"] = now
         if not is_side_agent:
             try:
                 # Retry truncation can remove a membership event that followed
@@ -1238,6 +1316,48 @@ def register_workbench_chat_routes(
             chat["model"] = R._get_model()
         _mark_user_activity(chat, now)
         await asyncio.to_thread(_write_chats_store, payload)
+
+        async def _name_session_once() -> None:
+            if not should_generate_title:
+                return
+            from cyrene.workbench.session_naming import generate_session_title
+
+            try:
+                generated_title = await generate_session_title(message, limit=60)
+            except Exception:
+                logger.warning("Workbench session naming failed for %s", chat_id, exc_info=True)
+                generated_title = ""
+
+            def persist_title() -> bool:
+                fresh = _read_chats_store()
+                fresh_chat = _find_chat(fresh, chat_id)
+                if not fresh_chat or fresh_chat.get("titleNamingStatus") != "pending":
+                    return False
+                if generated_title and not bool(fresh_chat.get("titleLocked")):
+                    fresh_chat["title"] = generated_title
+                    fresh_chat["titleNamingStatus"] = "generated"
+                    fresh_chat["titleGeneratedAt"] = _utc_now_iso()
+                else:
+                    fresh_chat["titleNamingStatus"] = (
+                        "locked" if bool(fresh_chat.get("titleLocked")) else "failed"
+                    )
+                _write_chats_store(fresh)
+                return bool(generated_title) and not bool(fresh_chat.get("titleLocked"))
+
+            changed = await asyncio.to_thread(persist_title)
+            if changed:
+                from cyrene.observability import debug
+
+                await debug.publish_event({
+                    "type": "workbench_chat_changed",
+                    "change": "renamed",
+                    "session_id": chat_id,
+                    "chat_id": chat_id,
+                    "project_id": project_id,
+                }, session_id=chat_id)
+
+        if should_generate_title:
+            _track_session_title_task(asyncio.create_task(_name_session_once()))
 
         agent_message = message
         if is_side_agent:

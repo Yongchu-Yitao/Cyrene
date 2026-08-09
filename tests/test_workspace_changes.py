@@ -3,6 +3,40 @@ from __future__ import annotations
 import asyncio
 
 
+def test_chat_generated_file_index_includes_nested_output_and_removes_deleted(monkeypatch):
+    from cyrene.workbench import chat as chat_service
+
+    store = {
+        "chats": [{"id": "chat_1", "projectId": "project_1", "messages": []}]
+    }
+    historical = [{
+        "id": "run_old",
+        "files": [
+            {"id": "old_file", "path": "reports/old.md", "changeType": "created", "afterSize": 12},
+            {"id": "keep_file", "path": "exports/data.csv", "changeType": "created", "afterSize": 42},
+        ],
+    }]
+    monkeypatch.setattr(chat_service, "_read_chats_store", lambda: store)
+    monkeypatch.setattr(chat_service, "_write_chats_store", lambda payload: None)
+    monkeypatch.setattr(chat_service, "list_chat_change_sets", lambda _db, _chat: historical)
+
+    chat_service._sync_chat_generated_files("chat_1", {
+        "id": "run_new",
+        "files": [
+            {"id": "delete_old", "path": "reports/old.md", "changeType": "deleted", "afterSize": 0},
+            {"id": "new_file", "path": "other/place/result.pdf", "changeType": "created", "afterSize": 99},
+        ],
+    })
+
+    files = store["chats"][0]["generatedFiles"]
+    assert [item["path"] for item in files] == [
+        "exports/data.csv",
+        "other/place/result.pdf",
+    ]
+    assert files[1]["content_type"] == "application/pdf"
+    assert chat_service._public_chat_full(store["chats"][0])["files"] == files
+
+
 def test_workspace_snapshot_records_created_modified_deleted_and_binary(tmp_path):
     from cyrene.workbench.workspace_changes import (
         capture_workspace_snapshot,

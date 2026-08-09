@@ -44,6 +44,18 @@ function applyWorkbenchAccent(accent) {
   );
 }
 
+function applyWorkbenchBackgrounds(lightBackground, darkBackground) {
+  var rootStyle = document.documentElement.style;
+  [
+    ["--wb-user-bg-light", lightBackground],
+    ["--wb-user-bg-dark", darkBackground],
+  ].forEach(function (entry) {
+    var value = typeof entry[1] === "string" ? entry[1].trim() : "";
+    if (/^#[0-9a-f]{6}$/i.test(value)) rootStyle.setProperty(entry[0], value);
+    else rootStyle.removeProperty(entry[0]);
+  });
+}
+
 function WorkbenchRoot() {
   var dataStore = window.CyreneUI.require("data");
   dataStore.useVersion();
@@ -52,6 +64,12 @@ function WorkbenchRoot() {
   });
   var [accent, setAccent] = useStateBootstrap(function () {
     return readWorkbenchTweak("accent", null);
+  });
+  var [lightBackground, setLightBackground] = useStateBootstrap(function () {
+    return readWorkbenchTweak("backgroundLight", null);
+  });
+  var [darkBackground, setDarkBackground] = useStateBootstrap(function () {
+    return readWorkbenchTweak("backgroundDark", null);
   });
   var [density, setDensity] = useStateBootstrap(function () {
     return readWorkbenchTweak("density", "cozy");
@@ -103,11 +121,21 @@ function WorkbenchRoot() {
   }, [accent, actualTheme, needsOnboarding]);
 
   useEffectBootstrap(function () {
+    applyWorkbenchBackgrounds(lightBackground, darkBackground);
+  }, [lightBackground, darkBackground]);
+
+  useEffectBootstrap(function () {
     function onTheme() {
       setThemeMode(readWorkbenchTweak("theme", "system"));
     }
     function onAccent() {
       setAccent(readWorkbenchTweak("accent", null));
+    }
+    function onLightBackground() {
+      setLightBackground(readWorkbenchTweak("backgroundLight", null));
+    }
+    function onDarkBackground() {
+      setDarkBackground(readWorkbenchTweak("backgroundDark", null));
     }
     function onDensity() {
       setDensity(readWorkbenchTweak("density", "cozy"));
@@ -117,11 +145,15 @@ function WorkbenchRoot() {
     }
     window.addEventListener("cyrene-tweak-theme-change", onTheme);
     window.addEventListener("cyrene-tweak-accent-change", onAccent);
+    window.addEventListener("cyrene-tweak-backgroundLight-change", onLightBackground);
+    window.addEventListener("cyrene-tweak-backgroundDark-change", onDarkBackground);
     window.addEventListener("cyrene-tweak-density-change", onDensity);
     window.addEventListener("cyrene-tweak-textSize-change", onTextSize);
     return function () {
       window.removeEventListener("cyrene-tweak-theme-change", onTheme);
       window.removeEventListener("cyrene-tweak-accent-change", onAccent);
+      window.removeEventListener("cyrene-tweak-backgroundLight-change", onLightBackground);
+      window.removeEventListener("cyrene-tweak-backgroundDark-change", onDarkBackground);
       window.removeEventListener("cyrene-tweak-density-change", onDensity);
       window.removeEventListener("cyrene-tweak-textSize-change", onTextSize);
     };
@@ -180,6 +212,7 @@ var WorkbenchBootstrapService = {
   readSurface: readWorkbenchSurface,
   readTweak: readWorkbenchTweak,
   applyAccent: applyWorkbenchAccent,
+  applyBackgrounds: applyWorkbenchBackgrounds,
   Root: WorkbenchBootstrap,
 };
 window.CyreneUI.bootstrap = window.CyreneUI.register(

@@ -14,7 +14,10 @@ def test_electron_background_renderers_are_throttled():
     ).read_text(encoding="utf-8")
 
     assert "backgroundThrottling: false" not in source
-    assert source.count("backgroundThrottling: true") == 3
+    # Main renderer, browser page, native tab picker, and browser chat overlay
+    # all retain Chromium's background throttling.
+    assert source.count("backgroundThrottling: true") == 4
+    assert "browser-tab-picker-preload.js" in source
 
 
 async def test_scheduler_uses_independent_maintenance_cadences(

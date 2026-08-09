@@ -1242,11 +1242,10 @@ def get_session_labels(round_id: str = "") -> dict[str, str]:
 
 
 def _schedule_session_label_refresh(current_user_message: str, round_id: str) -> None:
-    """Compatibility no-op: Workbench owns visible chat titles.
+    """Compatibility no-op: Workbench owns visible one-shot session naming.
 
-    Automatic LLM-based session naming was removed because its result is not
-    displayed by the current frontend and it added one full model call per
-    completed user turn.
+    Visible Chat and Task sessions schedule naming directly after their first
+    user message, so this legacy per-round hook must remain disabled.
     """
 
 async def _refresh_session_labels(

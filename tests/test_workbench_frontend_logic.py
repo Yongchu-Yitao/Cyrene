@@ -3,6 +3,30 @@ import subprocess
 from pathlib import Path
 
 
+def test_chat_files_merge_message_attachments_and_nested_agent_output():
+    root = Path(__file__).resolve().parent.parent
+    source = (root / "src" / "webui" / "frontend" / "workbench-chat.jsx").read_text(
+        encoding="utf-8"
+    )
+    helper_source = "function wbcChatArtifactFiles(" + source.split(
+        "function wbcChatArtifactFiles(", 1
+    )[1].split("function wbcArtifactFileKey", 1)[0]
+    script = f"""
+eval({json.dumps(helper_source)});
+const files = wbcChatArtifactFiles({{
+  id: "chat/one",
+  messages: [{{ role: "user", attachments: [{{ id: "upload", name: "brief.txt", url: "/uploads/brief" }}] }}],
+  files: [{{ id: "made", name: "result.md", path: "other folder/result.md", source: "agent" }}]
+}});
+process.stdout.write(JSON.stringify(files));
+"""
+    completed = subprocess.run(["node", "-e", script], check=True, capture_output=True, text=True)
+    files = json.loads(completed.stdout)
+
+    assert [item["file"]["name"] for item in files] == ["brief.txt", "result.md"]
+    assert files[1]["file"]["url"] == "/api/workbench/chats/chat%2Fone/files/other%20folder/result.md"
+
+
 def test_global_search_times_out_and_ignores_stale_requests():
     root = Path(__file__).resolve().parent.parent
     source = (root / "src" / "webui" / "frontend" / "shared" / "search" / "overlay.jsx").read_text(
@@ -221,6 +245,38 @@ def test_workbench_chat_group_drop_uses_one_enclosing_frame_without_stacking():
     assert 'className="wbc-chat-group-children"' in rail
     assert "function openGroupMenu(event)" in rail
     assert "function toggleGroupMenu(event)" in rail
+    assert "function revealRailMenu(actions)" in rail
+    assert "revealExpandedGroup" not in rail
+    assert 'var rawChatStatus = String(chat.runStatus || chat.status || "").trim().toLowerCase();' in rail
+    assert '!!chat.awaitingUser || !!chat.pendingQuestion' in rail
+    assert 'var chatStatusTone = chatFailed ? " status-failed"' in rail
+    assert 'chatAttention ? WBC_ICONS.alert' in rail
+    assert 'chatFailed ? WBC_ICONS.errorCircle' in rail
+    assert 'chatCompleted ? WBC_ICONS.check' in rail
+    assert 'var chatStatusLabel = chatFailed' in rail
+    assert 'wbcT("status.failed", "Failed")' in rail
+    assert '!chatStatusLabel && (' in rail
+    assert '{chatStatusLabel && (' in rail
+    assert 'className="wbc-chat-card-status"' in rail
+    assert "+ chatStatusTone}" in rail
+    assert 'menu.scrollIntoView({ block: "nearest", inline: "nearest", behavior: "smooth" })' in rail
+    assert 'visibleGroupRailItems.length ? " has-groups" : ""' in rail
+    assert 'className="wbc-chat-list-primary"' in rail
+    assert "function wbcCycleTopbarSessionTab(direction)" in source
+    assert "function wbcHandleHorizontalWheelGesture(event, gesture, onCycle)" in source
+    assert "Math.abs(deltaX) <= Math.abs(deltaY) * 1.15" in source
+    assert "Math.abs(gesture.delta) < 44" in source
+    assert "gesture.lockedUntil = now + 420" in source
+    assert "gesture.waitingForIdle = true" in source
+    assert "idleFor < 180 || now < gesture.lockedUntil" in source
+    assert "lastEventAt: 0" in source
+    assert "waitingForIdle: false" in source
+    assert "function handleConversationHorizontalWheel(event)" in source
+    assert 'onWheel={handleConversationHorizontalWheel}' in source
+    assert "horizontalSessionWheelRef.current" in source
+    assert "wbcCycleTopbarSessionTab" in source
+    assert 'className="wbc-chat-list-group-region"' in rail
+    assert rail.index('className="wbc-chat-list-primary"') < rail.index('className="wbc-chat-list-group-region"')
     assert "onContextMenu={openGroupMenu}" in rail
     assert "onClick={toggleGroupMenu}" in rail
     assert "setMenuId(groupMenuId)" in rail
@@ -232,6 +288,35 @@ def test_workbench_chat_group_drop_uses_one_enclosing_frame_without_stacking():
     assert "grid-template-rows: 1fr;" in styles
     assert "grid-template-rows: 0fr;" in styles
     assert ".wbc-chat-group-chevron.expanded svg" in styles
+    assert ".wbc-chat-group-content.expanded:has(.wbc-chat-card.menu-open) > .wbc-chat-group-content-inner {" in styles
+    assert ".wbc-rail .wbc-chat-group:has(.wbc-chat-card.menu-open) {" in styles
+    assert ".wbc-chat-list.has-groups {" in styles
+    assert ".wbc-rail .wbc-chat-card.status-attention .wbc-chat-card-top b" in styles
+    assert ".wbc-rail .wbc-chat-card.status-failed .wbc-chat-card-top b" in styles
+    assert ".wbc-rail .wbc-chat-card.status-completed .wbc-chat-row-icon" in styles
+    assert ".wbc-chat-card:hover .wbc-chat-card-status," in styles
+    assert ".wbc-chat-card.status-attention .wbc-chat-card-status {" in styles
+    assert ".wbc-chat-card.status-failed .wbc-chat-card-status {" in styles
+    group_region_css = styles.split(".wbc-chat-list-group-region {", 1)[1].split("}", 1)[0]
+    recent_primary_css = styles.split(".wbc-chat-list-primary {", 1)[1].split("}", 1)[0]
+    assert "width: 100%;" in recent_primary_css
+    assert "max-width: 100%;" in recent_primary_css
+    assert "overflow-x: hidden;" in recent_primary_css
+    assert "overscroll-behavior-x: none;" in recent_primary_css
+    assert "min-height: 108px;" in group_region_css
+    assert "max-height: min(44%, 320px);" in group_region_css
+    assert "overflow-y: auto;" in group_region_css
+    expanded_group_region_css = styles.split(
+        ".wbc-chat-list-group-region:has(.wbc-chat-group.expanded) {", 1
+    )[1].split("}", 1)[0]
+    assert "flex-shrink: 0;" in expanded_group_region_css
+    assert "max-height:" not in expanded_group_region_css
+    assert "padding-top: 11px;" in group_region_css
+    assert "calc(100% - 16px) 1px no-repeat" in group_region_css
+    assert group_region_css.count("linear-gradient(") == 1
+    assert "var(--wb-floating-rail-bg)" not in group_region_css
+    assert ".wbc-chat-list.has-groups.menu-active," in styles
+    assert ".wbc-chat-list-group-region:has(.menu-open)" in styles
     assert "WBC_CHAT_GROUP_DRAG_MIME" in source
     assert "function wbcMoveChatOrderBlock(" in source
     assert 'dragKind: "group"' in rail
@@ -240,8 +325,16 @@ def test_workbench_chat_group_drop_uses_one_enclosing_frame_without_stacking():
     assert 'draggable="true"' in rail.split("function renderGroupFrame", 1)[1]
     assert "commitGroupOrder(order" in rail
     assert ".wbc-chat-group.dragging {" in styles
-    assert '{group.chatIds.length + (groupDropReady ? 1 : 0)}' in rail
-    assert '<span className="wbc-chat-group-icon" aria-hidden="true">2</span>' in rail
+    assert rail.count('{group.chatIds.length + (groupDropReady ? 1 : 0)}') == 1
+    assert '<span className="wbc-chat-group-leading-chevron expanded" aria-hidden="true">{WBC_ICONS.chevronRight}</span>' in rail
+    assert '<span className="wbc-chat-group-count">{group.chatIds.length + (groupDropReady ? 1 : 0)}</span>' in rail
+    assert '<span className="wbc-chat-group-count">2</span>' in rail
+    assert 'className="wbc-chat-group-icon"' not in rail
+    group_children_css = styles.split(".wbc-rail .wbc-chat-group-children {", 1)[1].split("}", 1)[0]
+    assert "margin-left: 0;" in group_children_css
+    assert "padding: 1px 6px;" in group_children_css
+    assert "border-left: 0;" in group_children_css
+    assert '<span className="wbc-chat-row-icon" aria-hidden="true">{WBC_ICONS.file}</span>' in rail.split("function renderDropClone", 1)[1]
     assert 'wbcT("workbenchChat.groupCount", "{count} chats"' not in rail
     assert ".wbc-chat-group-chevron:focus-visible" in styles
     assert "font-variant-numeric: tabular-nums;" in styles
@@ -275,6 +368,23 @@ def test_workbench_chat_group_drop_uses_one_enclosing_frame_without_stacking():
     assert "border-color:" in child_active_css
     assert "inset 3px 0 0" not in child_active_css
     assert "stack" not in styles.split(".wbc-chat-group {", 1)[1].split("/* ---- main column ---- */", 1)[0].lower()
+    rail_group_css = styles.split(".wbc-rail .wbc-chat-group {", 1)[1].split("}", 1)[0]
+    rail_group_head_css = styles.split(".wbc-rail .wbc-chat-group-head {", 1)[1].split("}", 1)[0]
+    rail_children_css = styles.split(".wbc-rail .wbc-chat-group-children {", 1)[1].split("}", 1)[0]
+    rail_child_hover_css = styles.split(
+        ".wbc-rail .wbc-chat-group .wbc-chat-group-child:hover,", 1
+    )[1].split("}", 1)[0]
+    rail_collapsed_group_css = styles.split(".wbc-rail .wbc-chat-group.collapsed {", 1)[1].split("}", 1)[0]
+    assert "padding: 5px 0;" in rail_group_css
+    assert "var(--wb-card-bg) 42%" in rail_group_css
+    assert "gap: 0;" in rail_collapsed_group_css
+    assert "padding: 0 10px 0 8px;" in rail_group_head_css
+    assert ".wbc-rail .wbc-chat-group.expanded .wbc-chat-group-head:hover {" in styles
+    assert ".wbc-rail .wbc-chat-group-head:hover {" not in styles
+    assert "margin-left: 0;" in rail_children_css
+    assert "padding: 1px 6px;" in rail_children_css
+    assert "border-left: 0;" in rail_children_css
+    assert "transform: none;" in rail_child_hover_css
 
 
 def test_overflowing_chat_card_and_topbar_tab_text_scrolls_on_hover():
@@ -381,7 +491,7 @@ def test_workbench_chat_cards_are_borderless_and_compact_overview_is_flat():
     assert "outline: 0;" in focus_chat_css
 
 
-def test_workbench_chat_inputs_are_borderless():
+def test_workbench_chat_search_and_custom_background_composer_stay_distinct():
     root = Path(__file__).resolve().parent.parent
     styles = (root / "src" / "webui" / "frontend" / "workbench.css").read_text(
         encoding="utf-8"
@@ -390,15 +500,16 @@ def test_workbench_chat_inputs_are_borderless():
     search_css = styles.split(".wbc-search input {", 1)[1].split("}", 1)[0]
     search_focus_css = styles.split(".wbc-search input:focus {", 1)[1].split("}", 1)[0]
     composer_css = styles.split(".wbc-composer-box {", 1)[1].split("}", 1)[0]
-    assert "border: 0;" in search_css
-    assert "box-shadow: var(--wbc-control-shadow);" in search_css
-    assert "border-color:" not in search_focus_css
-    assert "border: 0;" in composer_css
-    assert "box-shadow: var(--wbc-control-shadow);" in composer_css
+    assert "border: 1px solid" in search_css
+    assert "box-shadow: none;" in search_css
+    assert "border-color:" in search_focus_css
+    assert "border: 1px solid color-mix(in srgb, var(--wb-line-2) 64%, transparent);" in composer_css
+    assert "background: color-mix(in srgb, var(--wb-card-bg) 72%, transparent);" in composer_css
+    assert "backdrop-filter: blur(18px) saturate(120%) contrast(102%);" in composer_css
     assert ".wbc-composer-box:focus-within {" not in styles
 
 
-def test_main_chat_composer_uses_a_glass_dock_without_changing_the_input_card():
+def test_main_chat_composer_uses_a_glass_dock_and_readable_input_card():
     root = Path(__file__).resolve().parent.parent
     styles = (root / "src" / "webui" / "frontend" / "workbench.css").read_text(
         encoding="utf-8"
@@ -418,10 +529,29 @@ def test_main_chat_composer_uses_a_glass_dock_without_changing_the_input_card():
     assert "backdrop-filter: blur(32px) saturate(170%) contrast(102%);" in page_glass_css
     assert "linear-gradient(to top, #000 0%, #000 82%, transparent 100%)" in page_glass_css
     assert ".wbc-main > .wbc-composer::before {" not in styles
-    assert "background: var(--wb-card-bg);" in input_css
+    assert "background: color-mix(in srgb, var(--wb-card-bg) 72%, transparent);" in input_css
+    assert "border: 1px solid color-mix(in srgb, var(--wb-line-2) 64%, transparent);" in input_css
+    assert "backdrop-filter: blur(18px) saturate(120%) contrast(102%);" in input_css
     assert "border-radius: 14px;" in input_css
     assert "padding: 10px 12px 8px;" in input_css
     assert "bottom: calc(var(--wbc-thread-inset-bottom) - 12px);" in scroll_css
+
+
+def test_split_chat_composers_align_with_the_floating_workspace_rail():
+    root = Path(__file__).resolve().parent.parent
+    styles = (root / "src" / "webui" / "frontend" / "workbench.css").read_text(
+        encoding="utf-8"
+    )
+
+    rail_css = styles.split(
+        ".workbench-grid.integrated-sidebars .wbc-rail.workbench-integrated-rail {", 1
+    )[1].split("}", 1)[0]
+    composer_css = styles.split(
+        ".workbench-grid.integrated-sidebars.is-chat .wbc-composer {", 1
+    )[1].split("}", 1)[0]
+
+    assert "margin: 70px 4px 12px 12px;" in rail_css
+    assert "padding-bottom: 12px;" in composer_css
 
 
 def test_hidden_chat_sidebar_slightly_widens_and_centers_the_conversation_lane():
@@ -516,7 +646,7 @@ def test_global_topbar_is_frosted_and_conversation_header_panel_is_removed():
     assert "--wbc-thread-inset-top: 76px;" in thread_stage_css
 
 
-def test_workbench_chat_rail_keeps_its_own_fixed_header_surface():
+def test_workbench_chat_rail_uses_the_shared_physical_card_and_fixed_header():
     root = Path(__file__).resolve().parent.parent
     styles = (root / "src" / "webui" / "frontend" / "workbench.css").read_text(
         encoding="utf-8"
@@ -528,16 +658,17 @@ def test_workbench_chat_rail_keeps_its_own_fixed_header_surface():
     rail_css = styles.split("\n.wbc-rail {", 1)[1].split("}", 1)[0]
     rail_glass_css = styles.split(".wbc-rail-glass {", 1)[1].split("}", 1)[0]
     rail_glass_surface_css = styles.split(".wbc-rail-glass::before {", 1)[1].split("}", 1)[0]
-    rail_toolbar_css = styles.split(".wbc-rail-toolbar {", 1)[1].split("}", 1)[0]
-    new_chat_css = styles.split(".wbc-new-chat-btn {", 1)[1].split("}", 1)[0]
+    nav_head_css = styles.split(".wbc-nav-card-head {", 1)[1].split("}", 1)[0]
+    new_chat_css = styles.split(".wbc-project-new-chat {", 1)[1].split("}", 1)[0]
     search_input_css = styles.split(".wbc-search input {", 1)[1].split("}", 1)[0]
     chat_list_css = styles.split(".wbc-chat-list {", 1)[1].split("}", 1)[0]
 
     assert 'className="wbc-rail-glass"' in source
     assert 'className="wbc-top-glass"' not in source
-    assert "--wbc-rail-overlay-height: calc(48px * var(--wb-ui-font-scale, 1));" in rail_css
-    assert "--wbc-rail-content-inset: calc(var(--wbc-rail-overlay-height) + 8px);" in rail_css
-    assert "padding: 8px 12px;" in rail_glass_css
+    assert "--wbc-rail-overlay-height: 56px;" in rail_css
+    assert "--wbc-rail-content-inset: calc(var(--wbc-rail-overlay-height) + 6px);" in rail_css
+    assert "inset: 70px 8px auto;" in rail_glass_css
+    assert "padding: 0;" in rail_glass_css
     page_css = styles.split(".wbc-page {", 1)[1].split("}", 1)[0]
     page_glass_css = styles.split(".wbc-page::before {", 1)[1].split("}", 1)[0]
     assert "background: transparent;" in rail_css
@@ -554,28 +685,47 @@ def test_workbench_chat_rail_keeps_its_own_fixed_header_surface():
     assert "mask-composite: add;" in page_glass_css
     assert "isolation: isolate;" in rail_css
     assert "background: transparent;" in rail_glass_css
-    assert "background: color-mix(in srgb, var(--wb-topbar-bg) 58%, transparent);" in rail_glass_surface_css
-    assert "backdrop-filter: blur(32px) saturate(170%) contrast(102%);" in rail_glass_surface_css
-    assert "mask-image: linear-gradient(to right" in rail_glass_surface_css
-    assert ".wbc-rail::before {" not in styles
-    assert "display: flex;" in rail_toolbar_css
-    assert "align-items: center;" in rail_toolbar_css
-    assert "gap: 8px;" in rail_toolbar_css
+    assert "content: none;" in rail_glass_surface_css
+    assert 'className={"wbc-rail workbench-integrated-rail" + (collapsed ? " is-collapsed" : "")}' in source
+    shared_chat_rail_css = styles.split(
+        ".workbench-grid.integrated-sidebars .wbc-rail.workbench-integrated-rail {", 1
+    )[1].split("}", 1)[0]
+    assert "height: calc(100% - 82px);" in shared_chat_rail_css
+    assert "max-height: calc(100% - 82px);" in shared_chat_rail_css
+    assert "margin: 70px 4px 12px 12px;" in shared_chat_rail_css
+    assert "padding: 0;" in shared_chat_rail_css
+    shared_chat_surface_css = styles.split(
+        ".workbench-grid.integrated-sidebars .wbc-rail.workbench-integrated-rail::before {", 1
+    )[1].split("}", 1)[0]
+    assert "content: none;" in shared_chat_surface_css
+    shared_chat_glass_css = styles.split(
+        ".workbench-grid.integrated-sidebars .wbc-rail.workbench-integrated-rail .wbc-rail-glass {", 1
+    )[1].split("}", 1)[0]
+    assert "position: relative;" in shared_chat_glass_css
+    assert "inset: auto;" in shared_chat_glass_css
+    assert "height: 56px;" in shared_chat_glass_css
+    assert "display: flex;" in nav_head_css
+    assert "align-items: center;" in nav_head_css
+    assert "gap: 6px;" in nav_head_css
     assert "width: 32px;" in new_chat_css
     assert "height: 32px;" in new_chat_css
-    assert 'className="workbench-icon-btn wbc-new-chat-btn"' in source
+    assert 'className="wbc-project-new-chat"' in source
+    assert 'className="wbc-chat-nav-title"' not in source
+    assert 'className="wbc-rail-filter"' not in source
+    assert 'className="wbc-rail-toolbar"' not in source
+    assert 'className="wbc-module-nav"' not in source
     assert 'aria-label={wbcT("workbenchChat.newChat"' in source
     rail_markup = source.split('<div className="wbc-rail-glass">', 1)[1].split(
         "{menuId &&", 1
     )[0]
     assert 'workbenchChat.railTitle' not in rail_markup
     assert '<span>{wbcT("workbenchChat.newChat"' not in rail_markup
-    assert "height: 32px;" in search_input_css
+    assert "height: 38px;" in search_input_css
     assert "border-right: 0;" in rail_css
     assert ".wbc-rail::after {" not in styles
     assert "position: relative;" in chat_list_css
     assert "z-index: 21;" in chat_list_css
-    assert "padding: calc(58px + var(--wbc-rail-content-inset)) 0 8px;" in chat_list_css
+    assert "padding: calc(70px + var(--wbc-rail-content-inset)) 10px 18px;" in chat_list_css
 
 
 def test_collapsed_right_sidebar_restore_control_lives_in_the_global_topbar():
@@ -820,7 +970,8 @@ def test_workbench_side_question_opens_the_existing_conversation_ui_in_a_split()
     assert ".wbc-side-agent-split-resizer" in styles
     assert "body.wbc-resizing-side-agent .wbc-page" in styles
     # Pointer movement stays out of React while the grid remains live. Heavy
-    # content observers pause during the gesture and refresh once on pointerup.
+    # renderer observers pause during the gesture and refresh on pointerup;
+    # the native browser alone keeps its coalesced bounds stream live.
     resizer = source.split("function WbcSideAgentSplitResizer", 1)[1].split(
         "function WbcSplitGripBar", 1
     )[0]
@@ -868,7 +1019,15 @@ def test_workbench_side_question_opens_the_existing_conversation_ui_in_a_split()
     )
     assert 'root.addEventListener("workbench:split-resize-end", resizeChart)' in chart_mount
     assert 'root.document.body.classList.contains("wbc-resizing-side-agent")' in chart_mount
-    assert '!document.body.classList.contains("wbc-resizing-side-agent")' in browser_viewport
+    browser_resize_observer = browser_viewport.split(
+        'const ro = typeof ResizeObserver !== "undefined"', 1
+    )[1].split("if (ro && node)", 1)[0]
+    assert 'if (!splitEntranceActive) scheduleBounds();' in browser_resize_observer
+    assert "wbc-resizing-side-agent" not in browser_resize_observer
+    assert 'window.addEventListener("workbench:split-resize-end", onSplitResizeEnd);' in browser_viewport
+    assert 'lastBoundsRef.current = "";' in browser_viewport.split(
+        "function onSplitResizeEnd()", 1
+    )[1].split("}", 1)[0]
     # A minimum-width chat split owns a shrinkable, border-box composer.
     split_composer_css = styles.split(
         ".wbc-chat-split > .wbc-composer,", 1
@@ -886,8 +1045,13 @@ def test_workbench_side_question_opens_the_existing_conversation_ui_in_a_split()
     foreground_composer_css = styles.split(
         ".wbc-chat-split > .wbc-composer {", 1
     )[1].split("}", 1)[0]
-    assert "position: relative;" in foreground_composer_css
+    assert "position: absolute;" in foreground_composer_css
     assert "z-index: 24;" in foreground_composer_css
+    assert "inset: auto 0 0;" in foreground_composer_css
+    split_thread_css = styles.split(
+        ".wbc-chat-split-stage .wbc-thread {", 1
+    )[1].split("}", 1)[0]
+    assert "padding: 4px 18px var(--wbc-thread-inset-bottom);" in split_thread_css
     split_message_css = styles.split(
         ".wbc-chat-split-stage .wbc-thread-item,", 1
     )[1].split("}", 1)[0]
@@ -1771,8 +1935,9 @@ def test_electron_browser_chat_overlay_floats_above_native_page():
     assert "ensureChatOverlayView()" in main
     assert "parent.addChildView(view)" in main
     assert "container && container.contentView ? container.contentView : container" in main
-    assert "syncChatOverlay(this.ownerWindow()?.contentView || null" in main
-    assert "syncChatOverlay(win.contentView" in main
+    assert "const parent = this.ownerWindow()?.contentView || null" in main
+    assert "this.syncChatOverlay(parent, true);" in main
+    assert "this.syncChatOverlay(win.contentView, true);" in main
     assert "Failed to attach browser chat overlay" in main
     assert "const bottomOffset = 56" in main
     assert "this.bounds.height - height - bottomOffset" in main
@@ -3712,6 +3877,24 @@ def test_workbench_permission_prompt_renders_every_scoped_option():
     assert "white-space: normal;" in option_css
 
 
+def test_workbench_split_chat_renders_and_answers_pending_question():
+    root = Path(__file__).resolve().parents[1]
+    source = (root / "src" / "webui" / "frontend" / "workbench-chat.jsx").read_text(
+        encoding="utf-8"
+    )
+    split_chat = source.split("function WbcChatSplit({", 1)[1].split(
+        "function WbcSideAgentSplitResizer", 1
+    )[0]
+
+    assert "function answerPendingQuestion(questionId, optionText, resumeMode)" in split_chat
+    assert "var current = chatIdRef.current;" in split_chat
+    assert "WorkbenchChatModel.answerChat(current, questionId, answer" in split_chat
+    assert "message.questionPrompt" in split_chat
+    assert "chat.pendingQuestion" in split_chat
+    assert "<WbcQuestionPrompt" in split_chat
+    assert "onAnswer={answerPendingQuestion}" in split_chat
+
+
 def test_workbench_context_tab_has_live_session_inbox_card():
     root = Path(__file__).resolve().parents[1]
     source = (root / "src" / "webui" / "frontend" / "workbench-chat.jsx").read_text(
@@ -3971,12 +4154,390 @@ def test_workbench_chat_loading_is_centered_in_the_rail():
         encoding="utf-8"
     )
 
-    assert '"wbc-chat-list" + (loading ? " is-loading" : "")' in source
+    assert '"wbc-chat-list workbench-integrated-rail-body" + (loading ? " is-loading" : "")' in source
     assert 'className="workbench-muted wbc-rail-loading" role="status"' in source
-    assert "!loading && railItems.map" in source
+    assert '!loading && renderRailSection("recent"' in source
+    assert "!loading && visibleGroupRailItems.length > 0" in source
+    assert 'renderRailSection("groups"' in source
     loading_styles = styles.split(".wbc-chat-list.is-loading {", 1)[1].split("}", 1)[0]
     assert "align-items: center;" in loading_styles
     assert "justify-content: center;" in loading_styles
+
+
+def test_every_workspace_sidebar_card_can_swipe_between_module_tabs():
+    root = Path(__file__).resolve().parent.parent
+    source = (root / "src" / "webui" / "frontend" / "workbench.jsx").read_text(
+        encoding="utf-8"
+    )
+
+    grid_markup = source.split('className={"workbench-grid integrated-sidebars"', 1)[1]
+    assert "function handleSidebarModuleWheel(event)" in source
+    sidebar_wheel = source.split("function handleSidebarModuleWheel(event) {", 1)[1].split(
+        "function toggleWorkspaceSidebar()", 1
+    )[0]
+    assert 'target.closest(".workbench-integrated-rail")' in sidebar_wheel
+    assert 'var moduleOrder = ["schedule", "task", "chat", "knowledge", "memory"];' in sidebar_wheel
+    assert "Math.abs(deltaX) <= Math.abs(deltaY) * 1.15" in sidebar_wheel
+    assert "Math.abs(gesture.delta) < 44" in sidebar_wheel
+    assert "gesture.lockedUntil = now + 420" in sidebar_wheel
+    assert "handleOpenPage(moduleOrder[nextIndex])" in sidebar_wheel
+    assert "onWheel={handleSidebarModuleWheel}" in grid_markup
+
+
+def test_sidebar_account_card_has_balanced_vertical_spacing():
+    root = Path(__file__).resolve().parent.parent
+    styles = (root / "src" / "webui" / "frontend" / "workbench.css").read_text(
+        encoding="utf-8"
+    )
+
+    account_css = styles.split(".workbench-rail-account {", 1)[1].split("}", 1)[0]
+    assert "transform: translateY(5px);" in account_css
+    collapsed_account_css = styles.split(
+        ".workbench-grid.integrated-sidebars .workbench-integrated-rail.is-collapsed .workbench-rail-account {",
+        1,
+    )[1].split("}", 1)[0]
+    assert "transform: translateY(4px);" in collapsed_account_css
+    collapsed_button_css = styles.split(
+        ".workbench-grid.integrated-sidebars .workbench-integrated-rail.is-collapsed .workbench-rail-account-button {",
+        1,
+    )[1].split("}", 1)[0]
+    assert "grid-template-columns: 32px minmax(0, 0fr) 0fr;" in collapsed_button_css
+    assert "justify-content: center;" not in collapsed_button_css
+    assert "justify-items: center;" not in collapsed_button_css
+    assert "padding: 3px 4px;" in collapsed_button_css
+    assert ".workbench-rail-account-button .workbench-account-avatar {" in styles
+    base_avatar_css = styles.split(
+        ".workbench-rail-account-button .workbench-account-avatar {",
+        1,
+    )[1].split("}", 1)[0]
+    assert "transform: translateX(0);" in base_avatar_css
+    assert "transition: transform var(--wb-sidebar-motion-duration)" in base_avatar_css
+    collapsed_avatar_css = styles.split(
+        ".workbench-grid.integrated-sidebars .workbench-integrated-rail.is-collapsed .workbench-rail-account-button .workbench-account-avatar {",
+        1,
+    )[1].split("}", 1)[0]
+    assert "transform: translateX(2px);" in collapsed_avatar_css
+
+
+def test_sidebar_account_menu_keeps_codex_and_custom_model_limits_independent():
+    root = Path(__file__).resolve().parent.parent
+    source = (root / "src" / "webui" / "frontend" / "workbench.jsx").read_text(
+        encoding="utf-8"
+    )
+
+    account = source.split("function WorkbenchRailAccount(", 1)[1].split(
+        "function WorkbenchSidebarDock(", 1
+    )[0]
+    quota_loader = account.split("function fetchCodexQuotaSummary() {", 1)[1].split(
+        "function formatTimeDiff(", 1
+    )[0]
+    assert 'fetch("/api/settings/openai-oauth/limits")' in quota_loader
+    assert 'fetch("/api/settings/models")' in quota_loader
+    assert 'primary.provider !== "codex_oauth"' in quota_loader
+    assert "codexQuotaState.primary && codexQuotaState.connected && codexQuotaState.windows.length > 0" in account
+    assert "codexQuotaState.windows.map" in account
+    assert 'fetch("/api/budget/status")' in account
+    assert "budgetState && budgetState.monthly_budget > 0" in account
+    assert 'className="wb-budget-progress-bar"' in account
+    config_store = (root / "src" / "cyrene" / "runtime" / "config_store.py").read_text(
+        encoding="utf-8"
+    )
+    assert '"budget_enabled": False' in config_store
+    assert '"budget_monthly": 50.0' in config_store
+    assert '"codex_budget_enabled": True' in config_store
+
+
+def test_workbench_integrates_module_switching_into_each_workspace_sidebar():
+    root = Path(__file__).resolve().parent.parent
+    source = (root / "src" / "webui" / "frontend" / "workbench.jsx").read_text(
+        encoding="utf-8"
+    )
+    chat = (root / "src" / "webui" / "frontend" / "workbench-chat.jsx").read_text(
+        encoding="utf-8"
+    )
+    library = (root / "src" / "webui" / "frontend" / "workbench-library.jsx").read_text(
+        encoding="utf-8"
+    )
+    schedule = (root / "src" / "webui" / "frontend" / "workbench-schedule.jsx").read_text(
+        encoding="utf-8"
+    )
+    memory = (root / "src" / "webui" / "frontend" / "workbench-memory.jsx").read_text(
+        encoding="utf-8"
+    )
+    styles = (root / "src" / "webui" / "frontend" / "workbench.css").read_text(
+        encoding="utf-8"
+    )
+
+    grid_markup = source.split('className={"workbench-grid integrated-sidebars"', 1)[1]
+    assert "<WorkbenchModuleRail" not in grid_markup
+    assert "function WorkbenchSidebarDock(" in source
+    module_dock = source.split("function WorkbenchSidebarDock(", 1)[1].split(
+        "// Temporarily keep sign-out", 1
+    )[0]
+    for module_id in ("task", "chat", "knowledge", "schedule", "memory"):
+        assert f'id: "{module_id}"' in module_dock
+    dock_item_positions = [
+        module_dock.index(f'id: "{module_id}"')
+        for module_id in ("schedule", "task", "chat", "knowledge", "memory")
+    ]
+    assert dock_item_positions == sorted(dock_item_positions)
+    assert "function renderSidebarDock()" in source
+    assert "var [railCollapsed, setRailCollapsed] = useWorkbenchState" in source
+    assert "function toggleWorkspaceSidebar()" in source
+    assert 'localStorage.setItem("wb-rail-collapsed", next ? "1" : "0")' in source
+    assert '(railCollapsed ? " rail-collapsed" : "")' in source
+    assert "moduleDock: isChat ? renderSidebarDock() : null" in source
+    assert "moduleDock: isKnowledge ? renderSidebarDock() : null" in source
+    assert "moduleDock: isSchedule ? renderSidebarDock() : null" in source
+    assert "moduleDock: isMemory ? renderSidebarDock() : null" in source
+    assert "moduleDock={!isModulePage ? renderSidebarDock() : null}" in source
+    assert "navCollapsed: railCollapsed" in source
+    assert "sidebarCollapsed: railCollapsed" in source
+    assert "collapsed={railCollapsed}" in source
+    assert 'className="wbc-module-nav"' not in chat
+    assert "{moduleDock}" in chat
+    assert "props.moduleDock" in library
+    assert "props.moduleDock" in schedule
+    assert "props.moduleDock" in memory
+    assert ".workbench-grid.integrated-sidebars {" in styles
+    assert ".workbench-sidebar-dock-nav {" in styles
+    assert ".workbench-sidebar-dock::before {" in styles
+    dock_separator = styles.split(".workbench-sidebar-dock::before {", 1)[1].split("}", 1)[0]
+    assert "content: none;" in dock_separator
+    assert ".workbench-integrated-rail {" in styles
+    integrated_grid_css = styles.split(".workbench-grid.integrated-sidebars {", 1)[1].split("}", 1)[0]
+    integrated_rail_css = styles.split(".workbench-integrated-rail {", 1)[1].split("}", 1)[0]
+    assert "--wb-rail-w: 300px;" in integrated_grid_css
+    assert "--wb-sidebar-dock-height: 120px;" in integrated_grid_css
+    assert "--wb-sidebar-motion-duration: 440ms;" in integrated_grid_css
+    assert "--wb-sidebar-motion-ease: cubic-bezier(.22, 1.14, .36, 1);" in integrated_grid_css
+    assert "--wb-floating-rail-border:" in integrated_grid_css
+    assert "--wb-floating-rail-radius: 18px;" in integrated_grid_css
+    assert "--wb-floating-rail-bg:" in integrated_grid_css
+    assert "--wb-floating-rail-shadow:" in integrated_grid_css
+    assert "--wb-floating-control-border:" in integrated_grid_css
+    assert "--wb-floating-control-radius: 12px;" in integrated_grid_css
+    assert "--wb-floating-control-bg:" in integrated_grid_css
+    assert "--wb-floating-control-shadow:" in integrated_grid_css
+    assert "flex: 0 0 calc(var(--wb-rail-w) - 16px);" in integrated_rail_css
+    assert "width: calc(var(--wb-rail-w) - 16px);" in integrated_rail_css
+    assert "margin: 12px 4px 12px 12px;" in integrated_rail_css
+    assert "border: var(--wb-floating-rail-border);" in integrated_rail_css
+    assert "border-radius: var(--wb-floating-rail-radius);" in integrated_rail_css
+    assert "background: var(--wb-floating-rail-bg);" in integrated_rail_css
+    assert "box-shadow: var(--wb-floating-rail-shadow);" in integrated_rail_css
+    assert "color-mix(in srgb, var(--wb-card-bg) 88%, var(--wb-surface))" in integrated_grid_css
+    assert ".workbench-grid.integrated-sidebars.rail-collapsed {" in styles
+    collapsed_grid_css = styles.split(
+        ".workbench-grid.integrated-sidebars.rail-collapsed {", 1
+    )[1].split("}", 1)[0]
+    assert "--wb-rail-w: 64px;" in collapsed_grid_css
+    assert ".workbench-grid.integrated-sidebars .workbench-integrated-rail.is-collapsed {" in styles
+    collapsed_rail_css = styles.split(
+        ".workbench-grid.integrated-sidebars .workbench-integrated-rail.is-collapsed {", 1
+    )[1].split("}", 1)[0]
+    assert "flex-basis: 48px;" in collapsed_rail_css
+    assert "width: 48px;" in collapsed_rail_css
+    assert "@keyframes wb-sidebar-dock-stack-in" not in styles
+    assert "@keyframes wb-sidebar-dock-row-in" not in styles
+    assert ".workbench-grid.integrated-sidebars .workbench-integrated-rail-head {" in styles
+    shared_head_css = styles.split(
+        ".workbench-grid.integrated-sidebars .workbench-integrated-rail-head {", 1
+    )[1].split("}", 1)[0]
+    assert "flex: 0 0 56px;" in shared_head_css
+    assert "height: 56px;" in shared_head_css
+    assert "min-height: 56px;" in shared_head_css
+    assert "padding: 0 12px;" in shared_head_css
+    assert ".workbench-integrated-rail-body {" in styles
+    shared_body_css = styles.split(".workbench-integrated-rail-body {", 1)[1].split("}", 1)[0]
+    assert "flex: 1 1 auto;" in shared_body_css
+    assert "overflow-y: auto;" in shared_body_css
+    assert 'className="workbench-rail-head workbench-integrated-rail-head"' in source
+    assert 'className="workbench-task-list workbench-integrated-rail-body"' in source
+    assert "workbench-integrated-rail-head workbench-integrated-rail-search-head" in chat
+    assert "wbc-chat-list workbench-integrated-rail-body" in chat
+    assert "wb-lib-sidebar-head workbench-integrated-rail-head" in library
+    assert "wb-lib-side-scroll workbench-integrated-rail-body" in library
+    assert "wb-sched-rail-head workbench-integrated-rail-head" in schedule
+    assert "wb-sched-rail-scroll workbench-integrated-rail-body" in schedule
+    assert "wb-mem-rail-head workbench-integrated-rail-head" in memory
+    assert "wb-mem-rail-scroll workbench-integrated-rail-body" in memory
+    dock_css = styles.split(".workbench-sidebar-dock {", 1)[1].split("}", 1)[0]
+    dock_nav_css = styles.split(".workbench-sidebar-dock-nav {", 1)[1].split("}", 1)[0]
+    dock_button_css = styles.split(".workbench-sidebar-dock-nav button {", 1)[1].split("}", 1)[0]
+    dock_hover_css = styles.split(
+        ".workbench-grid.integrated-sidebars .workbench-sidebar-dock-nav button:hover {",
+        1,
+    )[1].split("}", 1)[0]
+    dock_active_css = styles.split(
+        ".workbench-grid.integrated-sidebars .workbench-sidebar-dock-nav button.active {",
+        1,
+    )[1].split("}", 1)[0]
+    account_button_css = styles.split(".workbench-rail-account-button {", 1)[1].split("}", 1)[0]
+    assert "grid-template-rows: 56px 46px;" in dock_css
+    assert "height: var(--wb-sidebar-dock-height);" in dock_css
+    assert "min-height: var(--wb-sidebar-dock-height);" in dock_css
+    assert "margin: auto 14px 12px;" in dock_css
+    assert "height: 56px;" in dock_nav_css
+    assert "grid-row: 1;" in dock_nav_css
+    assert "--wb-dock-nav-bg: color-mix(in srgb, var(--wb-card-bg) 78%, var(--wb-control-bg));" in dock_nav_css
+    assert "border: 1px solid color-mix(in srgb, var(--wb-line-2) 58%, transparent);" in dock_nav_css
+    assert "border-radius: 15px;" in dock_nav_css
+    assert "background: var(--wb-dock-nav-bg);" in dock_nav_css
+    assert "height: 48px;" in dock_button_css
+    assert ".workbench-grid.integrated-sidebars .workbench-sidebar-dock-nav button {" in styles
+    assert "color: var(--wb-faint);" in dock_button_css
+    assert "transform: translateY(-1px);" in dock_hover_css
+    assert "var(--wb-dock-nav-bg)" in dock_hover_css
+    assert "background: var(--wb-active-bg);" in dock_active_css
+    assert "color: var(--wb-accent-strong);" in dock_active_css
+    dock_icon_css = styles.split(
+        ".workbench-grid.integrated-sidebars .workbench-sidebar-dock-nav button svg {",
+        1,
+    )[1].split("}", 1)[0]
+    dock_label_css = styles.split(
+        ".workbench-grid.integrated-sidebars .workbench-sidebar-dock-nav button b {",
+        1,
+    )[1].split("}", 1)[0]
+    assert "width: 18px;" in dock_icon_css
+    assert "stroke-width: 2;" in dock_icon_css
+    assert "font-size: calc(10px * var(--wb-ui-font-scale, 1));" in dock_label_css
+    assert "font-weight: 680;" in dock_label_css
+    assert "height: 46px;" in account_button_css
+    assert "grid-template-rows: 48px;" in dock_nav_css
+    assert "grid-template-columns var(--wb-sidebar-motion-duration) var(--wb-sidebar-motion-ease)" in dock_nav_css
+    collapsed_dock_nav_css = styles.split(
+        ".workbench-grid.integrated-sidebars .workbench-integrated-rail.is-collapsed .workbench-sidebar-dock-nav {",
+        1,
+    )[1].split("}", 1)[0]
+    assert "grid-template-columns: repeat(5, minmax(0, 0fr));" in collapsed_dock_nav_css
+    assert "grid-template-rows: 36px;" in collapsed_dock_nav_css
+    for index, y in enumerate((0, 38, 76, 114, 152), start=1):
+        row_rule = styles.split(
+            f".workbench-grid.integrated-sidebars .workbench-integrated-rail.is-collapsed .workbench-sidebar-dock-nav button:nth-child({index}) {{",
+            1,
+        )[1].split("}", 1)[0]
+        assert f"transform: translateY({y}px);" in row_rule
+    account_row_css = styles.split(".workbench-rail-account {", 1)[1].split("}", 1)[0]
+    assert "grid-row: 2;" in account_row_css
+    assert "height var(--wb-sidebar-motion-duration) var(--wb-sidebar-motion-ease)," in account_row_css
+    assert "transform var(--wb-sidebar-motion-duration) var(--wb-sidebar-motion-ease);" in account_row_css
+    assert "grid-template-columns var(--wb-sidebar-motion-duration) var(--wb-sidebar-motion-ease)" in account_button_css
+    collapsed_account_button_css = styles.split(
+        ".workbench-grid.integrated-sidebars .workbench-integrated-rail.is-collapsed .workbench-rail-account-button {",
+        1,
+    )[1].split("}", 1)[0]
+    assert "width: 100%;" in collapsed_account_button_css
+    assert "grid-template-columns: 32px minmax(0, 0fr) 0fr;" in collapsed_account_button_css
+    assert "padding: 3px 4px;" in collapsed_account_button_css
+    assert "function WorkbenchRailAccount(" in source
+    assert "<WorkbenchRailAccount" in module_dock
+    assert 'className="workbench-rail-account-button"' in source
+    account_name_css = styles.split(".workbench-rail-account-summary b {", 1)[1].split("}", 1)[0]
+    account_model_css = styles.split(".workbench-rail-account-summary small {", 2)[2].split("}", 1)[0]
+    assert "font-size: calc(14px * var(--wb-ui-font-scale, 1));" in account_name_css
+    assert "font-size: calc(11.5px * var(--wb-ui-font-scale, 1));" in account_model_css
+    assert 'className="workbench-account-menu workbench-module-account-menu"' in source
+    assert 't("settings.codexQuota")' in source
+    assert 't("rail.settings")' in source
+    assert 't("rail.profile")' in source
+    assert ".workbench-rail-account {" in styles
+    assert ".workbench-module-account-menu {" in styles
+    raised_menu_css = styles.split(
+        ".workbench-grid.integrated-sidebars .workbench-integrated-rail:has(.workbench-module-account-menu) {",
+        1,
+    )[1].split("}", 1)[0]
+    assert "z-index: 90;" in raised_menu_css
+    assert "overflow: visible;" in raised_menu_css
+    project_menu_styles = styles.split(".workbench-top-project-menu {", 1)[1].split("}", 1)[0]
+    account_menu_styles = styles.split(".workbench-module-account-menu {", 1)[1].split("}", 1)[0]
+    assert "background: var(--wb-card-bg-strong);" in project_menu_styles
+    assert "background: var(--wb-card-bg-strong);" in account_menu_styles
+    assert "backdrop-filter: none;" in project_menu_styles
+    assert "backdrop-filter: none;" in account_menu_styles
+    assert ".workbench-top-project-menu-list:has(.workbench-top-project-row.menu-open) {" in styles
+    assert ".workbench-top-project-row:nth-last-child(-n + 2) .workbench-top-project-actions {" in styles
+    project_actions_markup = source.split('className="workbench-top-project-actions"', 1)[1].split("</div>", 1)[0]
+    assert project_actions_markup.count("<svg") == 2
+    assert '<span>{t("rail.editProject")}</span>' in project_actions_markup
+    assert '<span>{t("rail.deleteProject")}</span>' in project_actions_markup
+    active_chat_css = styles.split(
+        ".wbc-rail .wbc-chat-card.active,",
+        1,
+    )[1].split("}", 1)[0]
+    assert "background: var(--wb-active-bg);" in active_chat_css
+    assert "color: var(--wb-accent-strong);" in active_chat_css
+    project_name_styles = styles.split(".workbench-top-project-copy b {", 1)[1].split("}", 1)[0]
+    project_path_styles = styles.rsplit(".workbench-top-project-copy small {", 1)[1].split("}", 1)[0]
+    assert "font-size: calc(14px * var(--wb-ui-font-scale, 1));" in project_name_styles
+    assert "font-size: calc(11.5px * var(--wb-ui-font-scale, 1));" in project_path_styles
+    project_switcher_styles = styles.split(".workbench-project-switcher-btn {", 1)[1].split("}", 1)[0]
+    project_chevron_styles = styles.split(".workbench-project-switcher-chevron {", 1)[1].split("}", 1)[0]
+    assert "width: 150px;" in project_switcher_styles
+    assert "flex: 0 1 150px;" in project_switcher_styles
+    assert "margin-left: auto;" in project_chevron_styles
+    assert 'html[data-platform="darwin"] .workbench-project-switcher-btn {' in styles
+    assert "margin-left: -3px;" in styles
+    search_head_css = styles.split(
+        ".workbench-grid.integrated-sidebars .workbench-integrated-rail-search-head {",
+        1,
+    )[1].split("}", 1)[0]
+    assert "padding-inline: 12px;" in search_head_css
+    assert ".wb-board-tool-btn," in styles
+    assert ".wb-mem-searchbox," in styles
+    assert ".wb-sched-viewseg," in styles
+    assert "border: var(--wb-floating-control-border);" in styles
+    assert "background: var(--wb-floating-control-bg);" in styles
+    assert ".workbench-grid.integrated-sidebars .wb-sched-viewseg button.on {" in styles
+    integrated_grid = styles.split(".workbench-grid.integrated-sidebars.is-chat,", 1)[1].split("}", 1)[0]
+    assert "grid-template-columns: minmax(0, 1fr);" in integrated_grid
+
+
+def test_chat_rail_show_all_expands_recent_items_without_removed_filter_state():
+    root = Path(__file__).resolve().parent.parent
+    source = (root / "src" / "webui" / "frontend" / "workbench-chat.jsx").read_text(
+        encoding="utf-8"
+    )
+
+    assert 'var [showAllRecent, setShowAllRecent] = useWbcState(false);' in source
+    assert "showAllRecent\n    ? recentRailItems\n    : recentRailItems.slice(0, recentOverviewLimit)" in source
+    assert "setShowAllRecent(true);" in source
+    assert "setRailFilter" not in source
+
+
+def test_active_module_dock_item_is_not_a_toggle_back_to_tasks():
+    root = Path(__file__).resolve().parent.parent
+    source = (root / "src" / "webui" / "frontend" / "workbench.jsx").read_text(
+        encoding="utf-8"
+    )
+
+    handler = source.split("function handleOpenPage(page) {", 1)[1].split(
+        "function toggleWorkspaceSidebar()", 1
+    )[0]
+    assert 'if (page === "task") {' in handler
+    assert "if (!fullPage) return;" in handler
+    assert "if (fullPage === page) return;" in handler
+    assert "setFullPage(page);" in handler
+    assert "prev === page ? null : page" not in handler
+
+
+def test_knowledge_sidebar_is_persistent_at_compact_desktop_widths():
+    root = Path(__file__).resolve().parent.parent
+    source = (root / "src" / "webui" / "frontend" / "workbench-library.jsx").read_text(
+        encoding="utf-8"
+    )
+    styles = (root / "src" / "webui" / "frontend" / "workbench-library.css").read_text(
+        encoding="utf-8"
+    )
+
+    assert 'className: "wb-lib-sidebar workbench-integrated-rail" + (props.sidebarCollapsed ? " is-collapsed" : "")' in source
+    assert "props.moduleDock" in source
+    assert "sidebarOpenState" not in source
+    assert 'className: "wb-lib-side-close"' not in source
+    assert 'className: "wb-lib-sidebar-toggle"' not in source
+    compact_styles = styles.split("@media (max-width: 1180px) {", 1)[1].split("}", 1)[0]
+    assert "position: absolute" not in compact_styles
+    assert "translateX" not in compact_styles
 
 
 def test_workbench_chat_plan_confirmation_can_continue_in_auto_mode():
@@ -5863,6 +6424,25 @@ def test_workbench_memory_history_tab_renders_events_not_hardcoded():
     assert "action_label" in source
 
 
+def test_workbench_memory_combines_overview_into_source_card():
+    root = Path(__file__).resolve().parent.parent
+    source = (root / "src" / "webui" / "frontend" / "workbench-memory.jsx").read_text(encoding="utf-8")
+    css = (root / "src" / "webui" / "frontend" / "workbench.css").read_text(encoding="utf-8")
+
+    rail_block = source.split("// ── category rail ──", 1)[1].split("// ── memory card list ──", 1)[0]
+    assert rail_block.count('h("div", { className: "wb-mem-card" }') == 1
+    assert 't("memory.overview", "Memory overview")' not in rail_block
+    assert 'h(Donut, { segments: sources, total: overview.total || 0, t: t })' in rail_block
+    assert 'className: "wb-mem-source-overview"' in rail_block
+    assert rail_block.index('className: "wb-mem-source-legend"') < rail_block.index('className: "wb-mem-source-overview"')
+    assert ".wb-mem-source-overview {" in css
+    source_body_css = css.split(".wb-mem-source-body {", 1)[1].split("}", 1)[0]
+    source_overview_css = css.split(".wb-mem-source-overview {", 1)[1].split("}", 1)[0]
+    assert "grid-template-columns: 78px minmax(0, 1fr);" in source_body_css
+    assert "grid-column: 1 / -1;" in source_overview_css
+    assert "border-top: 1px solid var(--wb-line);" in source_overview_css
+
+
 def test_workbench_memory_detail_wraps_long_content_without_horizontal_overflow():
     root = Path(__file__).resolve().parent.parent
     css = (root / "src" / "webui" / "frontend" / "workbench.css").read_text(encoding="utf-8")
@@ -5889,7 +6469,7 @@ def test_workbench_skill_learning_uses_actionable_candidate_status_only():
 
     assert 'activeCandidate ? h("div", { className: "wb-learning-review-pill "' in source
     assert "candidateNextStepText(activeCandidate, t)" in source
-    assert 'activePanel === "learning" ? null : rail' in source
+    assert '\n      rail,\n      main,' in source
     assert 'onExit: function () { setActivePanel(""); }' in source
     assert "不是可复用的多工具流程" not in translations
     assert '"memory.learning.noRepeatYet": "尚未发现重复"' in translations

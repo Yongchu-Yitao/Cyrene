@@ -6,6 +6,116 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 
 
+def test_browser_tab_picker_floats_in_a_native_view_without_obscuring_the_page():
+    chat = (ROOT / "src/webui/frontend/workbench-chat.jsx").read_text(
+        encoding="utf-8"
+    )
+    main = (ROOT / "electron/main.js").read_text(encoding="utf-8")
+    preload = (ROOT / "electron/preload.js").read_text(encoding="utf-8")
+    package = (ROOT / "electron/package.json").read_text(encoding="utf-8")
+
+    picker = chat.split("function setMaximizedBrowserPicker", 1)[1].split(
+        "function selectMaximizedBrowserTab", 1
+    )[0]
+    split = chat.split("function WbcBrowserSplit(", 1)[1].split(
+        "function WbcSubagentsSplitHost", 1
+    )[0]
+
+    assert "browserBridge.setTabPicker" in picker
+    assert "workbench:browser-obscured" not in picker
+    assert "screenshot" not in picker
+    assert "bridge.setTabPicker" in split
+    assert "workbench:browser-obscured" not in split
+    assert "screenshot" not in split
+    assert 'effectiveMode === "maximized" && !hasNativeTabPicker && maximizedPickerOpen' in chat
+    assert "!hasNativeTabPicker && pickerOpen && <div" in split
+    assert "const BROWSER_TAB_PICKER_HTML" in main
+    native_view = main.split("  ensureTabPickerView() {", 1)[1].split(
+        "pushTabPickerState()", 1
+    )[0]
+    assert "new WebContentsView" in native_view
+    assert "parent.addChildView(view)" in main.split("syncTabPicker(", 1)[1]
+    assert "this.syncTabPicker(win.contentView, true);" in main
+    assert "setTabPicker: (info) => ipcRenderer.invoke('browser:set-tab-picker'" in preload
+    assert '"browser-tab-picker-preload.js"' in package
+
+
+def test_native_browser_tab_picker_has_motion_and_reduced_motion_support():
+    chat = (ROOT / "src/webui/frontend/workbench-chat.jsx").read_text(
+        encoding="utf-8"
+    )
+    main = (ROOT / "electron/main.js").read_text(encoding="utf-8")
+    picker_html = main.split("const BROWSER_TAB_PICKER_HTML", 1)[1].split(
+        "function normalizeBrowserSessionId", 1
+    )[0]
+    picker_bounds = main.split("tabPickerBounds()", 1)[1].split(
+        "trackTabPickerWindow", 1
+    )[0]
+
+    assert "body.open #menu" in picker_html
+    assert "animation: picker-in 220ms" in picker_html
+    assert "animation: picker-out 150ms" in picker_html
+    assert "transform: translate3d" in picker_html
+    assert "prefers-reduced-motion: reduce" in picker_html
+    assert "view.setBounds(bounds)" in main
+    assert "const verticalLift = 60" in picker_bounds
+    assert "surface.y - verticalLift" in picker_bounds
+    assert "variant === 'maximized' ? 116 : 12" in picker_bounds
+    assert "button:focus-visible { outline: none; }" in picker_html
+    assert ".row:focus-within" in picker_html
+    assert "var(--focus" not in picker_html
+    assert 'focus: color("--wb-accent"' not in chat
+
+
+def test_native_browser_tab_picker_title_clicks_are_debounced_in_both_hosts():
+    chat = (ROOT / "src/webui/frontend/workbench-chat.jsx").read_text(
+        encoding="utf-8"
+    )
+    maximized = chat.split("function WbcBrowserFloatingSurface(", 1)[1].split(
+        "function wbcNavigationPreview", 1
+    )[0]
+    split = chat.split("function WbcBrowserSplit(", 1)[1].split(
+        "function WbcSubagentsSplitHost", 1
+    )[0]
+
+    assert "WBC_BROWSER_TAB_PICKER_TOGGLE_DEBOUNCE_MS = 280" in chat
+    assert "wbcBrowserTabPickerToggleIsDebounced" in chat
+    assert "wbcBrowserTabPickerToggleIsDebounced(maximizedPickerToggleAtRef)" in maximized
+    assert "wbcBrowserTabPickerToggleIsDebounced(browserPickerToggleAtRef)" in split
+
+
+def test_native_browser_tab_picker_dismisses_and_syncs_actions_to_both_hosts():
+    chat = (ROOT / "src/webui/frontend/workbench-chat.jsx").read_text(
+        encoding="utf-8"
+    )
+    main = (ROOT / "electron/main.js").read_text(encoding="utf-8")
+    picker_preload = (ROOT / "electron/browser-tab-picker-preload.js").read_text(
+        encoding="utf-8"
+    )
+    picker_html = main.split("const BROWSER_TAB_PICKER_HTML", 1)[1].split(
+        "function normalizeBrowserSessionId", 1
+    )[0]
+    split = chat.split("function WbcBrowserSplit(", 1)[1].split(
+        "function WbcSubagentsSplitHost", 1
+    )[0]
+
+    assert "if (this.tabPickerState.visible) this.dismissTabPicker(true);" in main
+    assert "this._tabPickerWindowBlurHandler" in main
+    assert "String(input && input.key || '') === 'Escape'" in main
+    assert "window.addEventListener('blur'" not in picker_html
+    assert "browser-tab-picker:hidden-ready" in main
+    assert "browser-tab-picker:action" in picker_preload
+    assert "browser-tab-picker:hidden-ready" in picker_preload
+    assert "browser-tab-picker:ready" in picker_preload
+    assert "browserBridge.onTabPickerAction" in chat
+    assert "bridge.onTabPickerAction" in split
+    assert 'action.type === "select"' in split
+    assert 'action.type === "close"' in split
+    assert 'document.addEventListener("pointerdown", closeOnOutsidePointer);' in chat
+    assert 'document.addEventListener("pointerdown", closeBrowserPicker);' in split
+    assert 'window.addEventListener("keydown", closeBrowserPicker);' in split
+
+
 def test_composer_command_and_permission_menus_close_on_outside_pointerdown():
     chat = (ROOT / "src/webui/frontend/workbench-chat.jsx").read_text(
         encoding="utf-8"

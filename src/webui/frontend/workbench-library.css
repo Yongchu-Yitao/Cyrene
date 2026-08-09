@@ -851,9 +851,6 @@
 
 @media (max-width: 1180px) {
   .wb-lib-page { --lib-detail: 290px; }
-  .wb-lib-sidebar { position: absolute; z-index: 410; inset: 0 auto 0 0; width: 230px; transform: translateX(-100%); box-shadow: 18px 0 48px rgba(0,0,0,.22); transition: transform .18s ease; }
-  .wb-lib-sidebar.open { transform: translateX(0); }
-  .wb-lib-side-close, .wb-lib-sidebar-toggle { display: grid; }
 }
 
 @media (max-width: 980px) {
@@ -893,7 +890,6 @@
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .wb-lib-sidebar { transition: none; }
   .wb-lib-spinner { animation-duration: 1.4s; }
 }
 

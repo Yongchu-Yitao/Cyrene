@@ -1,622 +1,418 @@
-# Design QA
+**Comparison Target**
 
-## Comparison target
+- Source visual truth: `/var/folders/zm/qgh_rgw903j0b9t01yg2l0mc0000gn/T/codex-clipboard-e8510588-92f5-4e3c-bcff-063b312dfd9d.png`
+- Additional issue references:
+  - `/var/folders/zm/qgh_rgw903j0b9t01yg2l0mc0000gn/T/codex-clipboard-f4c7a555-5a2c-4f59-bbc6-45d13ba6e8dc.png` (excess rail whitespace)
+  - `/var/folders/zm/qgh_rgw903j0b9t01yg2l0mc0000gn/T/codex-clipboard-8a5f68fc-e8d9-45c4-8b5f-f0a5a7cf4779.png` (broken create-group preview)
+  - `/var/folders/zm/qgh_rgw903j0b9t01yg2l0mc0000gn/T/codex-clipboard-a80fe01d-107f-47de-b62f-ed88aca53fef.png` (chat-only module switcher)
+  - Follow-up report: the global module rail initially omitted the former project rail's account, quota, profile, and settings surface.
+  - Follow-up visual report: project and account popovers allowed underlying rail text to show through.
+  - Follow-up visual report: the project menu's title, project names, and workspace paths were undersized at the live desktop scale.
+  - Follow-up interaction report: the Knowledge category sidebar collapsed into a temporary overlay at the live compact desktop width.
+  - `/var/folders/zm/qgh_rgw903j0b9t01yg2l0mc0000gn/T/codex-clipboard-c5eceb9b-839e-43f5-b003-38ca58c16285.png` through `/var/folders/zm/qgh_rgw903j0b9t01yg2l0mc0000gn/T/codex-clipboard-435a0cff-b6fb-4bea-b94e-86b8f2c69cbb.png` (page-specific rail colors and dock geometry remained visibly inconsistent).
+  - Final follow-up report: the outer shell matched, but Task, Chat, Knowledge, Schedule, and Memory still used visibly different header heights, typography, action geometry, and body insets.
+  - `/var/folders/zm/qgh_rgw903j0b9t01yg2l0mc0000gn/T/codex-clipboard-53364df7-158c-4da2-a5d0-ce77c9b1065a.png` and `/var/folders/zm/qgh_rgw903j0b9t01yg2l0mc0000gn/T/codex-clipboard-6b04eedb-be82-4384-94d1-f16639a241be.png` (Chat and Knowledge docks still differed in vertical geometry and inactive icon color).
+  - Final interaction requirement: sidebar collapse is one workspace-wide state; collapsing any module must keep every other module collapsed, with one continuous elastic transition.
+  - `/var/folders/zm/qgh_rgw903j0b9t01yg2l0mc0000gn/T/codex-clipboard-c76c131f-651e-45a6-9a43-b6c15a41de92.png` (nested header actions shifted the expand control off the common center axis; its bordered surface also differed from Dock buttons, and Dock keyframes replayed on module navigation).
+  - `/var/folders/zm/qgh_rgw903j0b9t01yg2l0mc0000gn/T/codex-clipboard-5be8c237-0abb-480d-8325-a900f4fee0d0.png` (account and module-switcher order should be reversed).
+- Follow-up visual report: `/var/folders/zm/qgh_rgw903j0b9t01yg2l0mc0000gn/T/codex-clipboard-a3f7c8a2-b37e-4ba7-a7e1-d4439485a92e.png` (the global vertical module rail wastes the full-height column).
+- Follow-up visual report: `/var/folders/zm/qgh_rgw903j0b9t01yg2l0mc0000gn/T/codex-clipboard-e8510cd1-ab43-46fd-ac8a-e10db5a1ee31.png` (the integrated footer needs a visible boundary from sidebar content).
+- Final implementation screenshot: `/Users/syw/Documents/playground/Cyrene/.codex/audits/project-chat-navigation/38-consistency-fixed/sidebar-comparison.png`
+- Account menu evidence: `/Users/syw/Documents/playground/Cyrene/.codex/audits/project-chat-navigation/20-unified-account-menu.png`
+- Opaque enlarged project menu: `/Users/syw/Documents/playground/Cyrene/.codex/audits/project-chat-navigation/22-opaque-project-menu.png`
+- Opaque account menu: `/Users/syw/Documents/playground/Cyrene/.codex/audits/project-chat-navigation/23-opaque-account-menu.png`
+- Persistent Knowledge sidebar: `/Users/syw/Documents/playground/Cyrene/.codex/audits/project-chat-navigation/24-persistent-knowledge-sidebar.png`
+- Integrated account/menu evidence: `/Users/syw/Documents/playground/Cyrene/.codex/audits/project-chat-navigation/25-integrated-chat-account.png`
+- Footer separator evidence: `/Users/syw/Documents/playground/Cyrene/.codex/audits/project-chat-navigation/26-integrated-sidebar-separator.png`
+- Unified sidebar-shell evidence:
+  - `/Users/syw/Documents/playground/Cyrene/.codex/audits/project-chat-navigation/30-unified-shell-knowledge.png`
+  - `/Users/syw/Documents/playground/Cyrene/.codex/audits/project-chat-navigation/31-unified-shell-schedule.png`
+  - `/Users/syw/Documents/playground/Cyrene/.codex/audits/project-chat-navigation/32-unified-shell-memory.png`
+- Final five-page footer evidence: `/Users/syw/Documents/playground/Cyrene/.codex/audits/project-chat-navigation/qa/footer-unification/side-by-side-all-pages.png`
+- Unified account-menu evidence: `/Users/syw/Documents/playground/Cyrene/.codex/audits/project-chat-navigation/35-unified-footer-account-menu.png`
+- Shared three-zone sidebar evidence:
+  - `/Users/syw/Documents/playground/Cyrene/.codex/audits/project-chat-navigation/38-consistency-fixed/01-chat.png`
+  - `/Users/syw/Documents/playground/Cyrene/.codex/audits/project-chat-navigation/38-consistency-fixed/02-task.png`
+  - `/Users/syw/Documents/playground/Cyrene/.codex/audits/project-chat-navigation/38-consistency-fixed/03-knowledge.png`
+  - `/Users/syw/Documents/playground/Cyrene/.codex/audits/project-chat-navigation/38-consistency-fixed/04-schedule.png`
+  - `/Users/syw/Documents/playground/Cyrene/.codex/audits/project-chat-navigation/38-consistency-fixed/05-memory.png`
+- Opaque account-menu recheck: `/Users/syw/Documents/playground/Cyrene/.codex/audits/project-chat-navigation/38-consistency-fixed/06-account-menu.png`
+- Dock inheritance comparison (reported mismatch above, corrected pair below): `/Users/syw/Documents/playground/Cyrene/.codex/audits/project-chat-navigation/39-dock-isolated/source-vs-fixed.png`
+- Final five-page dock comparison: `/Users/syw/Documents/playground/Cyrene/.codex/audits/project-chat-navigation/39-dock-isolated/all-five-docks.png`
+- Shared collapsed-state evidence:
+  - `/Users/syw/Documents/playground/Cyrene/.codex/audits/project-chat-navigation/39-dock-isolated/08-knowledge-collapsed.png`
+  - `/Users/syw/Documents/playground/Cyrene/.codex/audits/project-chat-navigation/39-dock-isolated/12-chat-collapsed.png`
+  - `/Users/syw/Documents/playground/Cyrene/.codex/audits/project-chat-navigation/39-dock-isolated/11-collapsed-account-menu.png`
+- Final aligned/reordered states:
+  - `/Users/syw/Documents/playground/Cyrene/.codex/audits/project-chat-navigation/39-dock-isolated/13-aligned-swapped-collapsed.png`
+  - `/Users/syw/Documents/playground/Cyrene/.codex/audits/project-chat-navigation/39-dock-isolated/14-swapped-expanded.png`
+- Header-control and enlarged-switcher states:
+  - `/Users/syw/Documents/playground/Cyrene/.codex/audits/project-chat-navigation/39-dock-isolated/15-memory-switcher-polish.png`
+  - `/Users/syw/Documents/playground/Cyrene/.codex/audits/project-chat-navigation/39-dock-isolated/16-task-controls.png`
+  - `/Users/syw/Documents/playground/Cyrene/.codex/audits/project-chat-navigation/39-dock-isolated/17-schedule-controls.png`
+- Selected-row and Account-layer comparisons:
+  - `/Users/syw/Documents/playground/Cyrene/.codex/audits/project-chat-navigation/39-dock-isolated/18-chat-active-comparison.png`
+  - `/Users/syw/Documents/playground/Cyrene/.codex/audits/project-chat-navigation/39-dock-isolated/19-account-layer-comparison.png`
+  - `/Users/syw/Documents/playground/Cyrene/.codex/audits/project-chat-navigation/39-dock-isolated/20-final-chat.png`
+- Dock-surface, project-width, and card-spacing comparisons:
+  - `/Users/syw/Documents/playground/Cyrene/.codex/audits/project-chat-navigation/39-dock-isolated/21-dock-soft-surface-comparison.png`
+  - `/Users/syw/Documents/playground/Cyrene/.codex/audits/project-chat-navigation/39-dock-isolated/22-project-width-comparison.png`
+  - `/Users/syw/Documents/playground/Cyrene/.codex/audits/project-chat-navigation/39-dock-isolated/22-spacing-comparison.png`
 
-- Source visual truth: `/var/folders/zm/qgh_rgw903j0b9t01yg2l0mc0000gn/T/codex-clipboard-14ed3d86-23aa-41b3-b3c6-f0d960b11d6e.png` — fixed bottom strip obscuring the end of the conversation list.
-- Browser-rendered implementation: `/Users/syw/Documents/playground/Cyrene/implementation-chat-list-bottom-bar-removed.png`.
-- Combined comparison inputs:
-  - `/Users/syw/Documents/playground/Cyrene/design-qa-bottom-bar-full-comparison.png`
-  - `/Users/syw/Documents/playground/Cyrene/design-qa-bottom-bar-focused-comparison.png`
+**Normalization**
 
-## Viewport and normalization
+- Browser viewport / implementation pixels: `842 × 863`, CSS viewport `842 × 863`, device scale factor `1`.
+- Source pixels: `712 × 1174`; normalized to `356 × 587` to account for the source's approximately 2× capture density.
+- State: dark theme, Cyrene selected, Chat active, project menu closed, chat group collapsed.
+- Combined comparison input: `/Users/syw/Documents/playground/Cyrene/.codex/audits/project-chat-navigation/qa/side-by-side-integrated-final.png`. The left side is the normalized visual target; the right side is the final implementation's integrated floating-sidebar region.
+- Footer consistency comparison: `/Users/syw/Documents/playground/Cyrene/.codex/audits/project-chat-navigation/qa/footer-unification/side-by-side-all-pages.png`; source row and implementation row cover Task, Chat, Knowledge, Schedule, and Memory at matched page states. Latest implementation captures use a `1280 × 720` CSS viewport at device scale factor `1`.
 
-- Browser viewport: 1280 × 720 CSS px, device scale factor 1.
-- Implementation capture: 1280 × 720 px.
-- Source capture: 454 × 62 px at approximately 2× density.
-- The implementation’s 230 × 31 CSS-pixel rail-bottom crop was normalized to 454 × 62 px for a direct focused comparison.
-- State: light theme, populated and scrollable conversation list at the viewport bottom.
+**Findings**
 
-## Findings
+- No actionable P0/P1/P2 mismatch remains.
+- Fonts and typography: the implementation uses the existing Workbench font stack and optical weights. Section headings, row titles, timestamps, and count badges preserve the source hierarchy. Truncation is intentional only where the live title exceeds the available 300 px rail width.
+- Spacing and layout rhythm: the search/header block now uses a fixed 100 px overlay instead of scaling its blank inset with UI text size. Ten recent items fill the overview before the group section, while the compact account/module dock uses the previously idle bottom area of each sidebar.
+- Colors and visual tokens: active mint rows, line color, radius, and shadow use existing Workbench tokens. The shared card background is now an opaque color mix of the card and surface tokens, preserving the glass-like tone without changing color over different page backdrops. The topbar project selector keeps the original lightweight Cyrene brand-button treatment.
+- Image and icon fidelity: the real Cyrene logo asset is retained. Existing product SVG iconography is reused consistently; no raster placeholders or improvised decorative assets were introduced.
+- Copy and content: Chinese labels now cover 全部、最近、对话组、搜索当前项目、需确认 and the overview expansion affordance.
+- The separate full-height module rail was removed. Task, Chat, Knowledge, Schedule, Memory, and Profile now share one compact bottom dock inside their own floating sidebar card, so module switching does not consume a second page column.
+- The dock starts with a persistent account row. Its floating menu restores identity/model context, conditional Codex quota and local budget data, Settings, and Profile; the menu opens upward inside the card and remains fully opaque.
+- Project and account popovers now use the theme's fully opaque strong-card token; their elevation still comes from border and shadow, while the floating directory card itself remains translucent.
+- Project menu typography now uses a clearer 13.5/14/11.5 px hierarchy for section label, project name, and workspace path, with the create action raised to 12.5 px and rows expanded to 54 px.
+- The Knowledge category sidebar is now persistent at compact desktop widths: its close/reopen controls and click-to-dismiss behavior were removed, and the shared dock is attached beneath the category list in the same floating card.
+- The former footer separator has been removed. Module switching now sits in its own rounded control surface, keeping the footer visually grouped without introducing a hard horizontal rule.
+- The switcher's outer surface now mixes the card and control tokens instead of using the near-black control color directly. It reads as a softly inset layer of the floating card in both themes, while Active and Hover states retain their existing contrast.
+- The topbar reserves a 252–268 px project track and a 168 px selector target, leaving enough room for the native macOS traffic-light inset, project icon, full project name, and chevron without collapsing the label to a single glyph.
+- Floating sidebar cards retain their shared width but now use 12 px top, bottom, and left insets. The compensating 4 px right margin keeps the existing 300 px layout track and every module's card geometry compatible.
+- Chat navigation now uses one compact top row: search, a 32 px new-chat control with a 14 px icon, and the collapse control. The redundant Chat title/icon and filter select were removed.
+- Every workspace now consumes the same 300 px sidebar track and renders the same 284 px visible floating shell. Border, 18 px radius, stable card tone, shadow, and blur are shared tokens instead of page-specific approximations.
+- The bottom dock now has one fixed 120 px contract on every expanded sidebar: identical 14 px horizontal inset, a 56 px enclosed module switcher, 4 px gap, and a 46 px account row. The former Chat-only margin override was removed.
+- Every module sidebar now uses the same three-zone skeleton rather than merely sharing material tokens: a fixed 56 px header, one flexible scroll body, and the fixed 120 px account/module dock. Page-specific header padding and body ownership no longer change the card's vertical rhythm.
+- Header titles share the same 17 px optical scale and weight; Task and Memory creation controls share the same 32 px action contract. Chat intentionally retains the requested title-free search header, but occupies the same 56 px header geometry.
+- Task, Knowledge, and Memory bodies now share a 10 px content inset. Schedule keeps its calendar grid's intrinsic spacing inside the same shared scrolling body.
+- The Chat directory now uses the actual shared floating-card element rather than a visually equivalent pseudo-element. Its card, account row, and navigation row therefore use the same box model and exact coordinates as every other module.
+- Dock button colors are now scoped above page-level button inheritance. Inactive icons consistently resolve to `rgb(121, 133, 147)` and active icons to `rgb(235, 239, 243)` on Task, Chat, Knowledge, Schedule, and Memory.
+- Sidebar collapse is driven by the single existing `railCollapsed` state and now has one visual contract on every module: a 48 px floating card with the expand control, account avatar, and five 36 px module buttons. The layout uses a 440 ms spring-like cubic-bezier transition, staged content fades, and a reduced-motion fallback.
+- In collapsed mode the expand control, account avatar, and all five module buttons now share the exact `x=14`, `width=36`, `center-x=32` axis at the 1280 × 720 QA viewport. The expand control also uses the same borderless neutral/hover treatment as the Dock buttons.
+- Module buttons no longer run mount-time keyframe animations, so changing module while collapsed does not replay a flash. The card and page tracks retain the continuous 440 ms elastic width transition.
+- The Dock order is now module navigation first and Account last in both modes. Expanded geometry is a rounded 56 px navigation surface followed by a 46 px account row; collapsed geometry is a rounded 196 px vertical module stack followed by the 36 px account button.
+- Header create/back/collapse controls share Chat's compact 32 px button treatment across Task, Schedule, and Memory. The enlarged switcher uses 18 px icons, 10 px labels, a subtle lift on hover, and a softly outlined active state.
+- Active chat rows now reuse the switcher's active surface, accent outline, and soft elevation, so selection reads consistently without changing row geometry or drag targets.
+- When the collapsed Account menu opens into the conversation lane, the entire floating rail is lifted above the composer stacking context and temporarily allows overflow. The opaque menu can no longer be covered by the message input.
 
-- No remaining P0/P1/P2 findings.
-- Fonts and typography: conversation-title and timestamp typography are unchanged.
-- Spacing and layout rhythm: removed only the rail container’s fixed 14 px bottom padding. The list’s internal 8 px scroll-content padding remains, preserving comfortable spacing without creating a fixed obstruction.
-- Colors and visual tokens: glass material, feathering, card colors, shadows, and active state remain unchanged.
-- Image quality and assets: no images or icons were modified.
-- Copy and content: no copy changed.
-- Bottom reach: the conversation list now ends at the same y-coordinate as the rail (`720px`), leaving a measured fixed bottom gap of `0px`.
+**Focused Region Evidence**
 
-## Interaction and runtime checks
+- The five-page footer composite is the focused comparison for rail color, footer boundary, account-row baseline, navigation-row height, active state, and bottom inset. All implementation cards now sample the same footer surface color (`rgb(36, 43, 59)`) at the same coordinate.
+- The latest five-page composite is the focused comparison for the complete card: all five cards begin at the same x/y coordinate, have the same 284 px width and bottom edge, align their header baseline at 56 px, hand off to a single scroll body, and begin the account/module dock at the same y coordinate.
+- Create-group preview was checked at component level: its temporary frame now reuses the final group header structure (chevron, folder, count), and the dragged clone includes the same file-icon column as normal rows.
+- Primary interactions checked in the in-app browser: project menu open/close, switch to Australia and restore Cyrene, All/Groups filtering, group expand/collapse, chat sidebar collapse/restore, navigation across Task/Chat/Knowledge/Schedule/Memory/Profile, account menu open/close, Settings overlay launch, and Profile navigation. The integrated account/module dock remained present on every page. Chat cards retain `draggable="true"`. No runtime or visible page error surfaced during these interactions.
 
-- Verified computed rail bottom padding is `0px`.
-- Verified the list remains independently scrollable and retains `8px` internal bottom padding.
-- Verified rail and list bounding boxes both end at y = 720 in the browser viewport.
-- Browser warning/error log check returned no entries.
+**Comparison History**
 
-## Comparison history
+1. Earlier result: separate project/chat surfaces and nested chat cards. Fix: merged project context into the chat navigator, then moved project selection to the global Cyrene button and flattened rows.
+2. Earlier P2: 280 px compact rail caused unnecessary title truncation and a native blue focus ring. Fix: increased the compact rail to 300 px and added the product focus-visible treatment. Post-fix evidence: `10-final-qa.png`.
+3. Earlier P2: font-scale-dependent header inset created excessive blank space; create-group preview used the old two-column markup, squeezing its title and misaligning the dragged clone. Fix: fixed the header overlay to 100 px, increased the overview fill to ten rows, rebuilt the preview with the final group header, and restored the clone's file-icon grid column. Post-fix evidence: `12-density-fixed.png` and source-level preview checks.
+4. Earlier P2: the five-module switcher existed only inside Chat and consumed the card footer. Fix: extracted one global vertical `WorkbenchModuleRail`, removed the chat-only switcher, and verified the same rail on Knowledge, Schedule, Memory, Task, and Chat. Post-fix evidence: `14-unified-knowledge.png` through `19-final-unified-workbench.png`.
+5. Earlier P1: removing the legacy project rail also removed the only route to account identity, quota/budget status, Settings, and Profile. Fix: added a persistent bottom account anchor to the global module rail and reused the existing quota/budget data sources and destination handlers. Post-fix evidence: `20-unified-account-menu.png` and `21-final-unified-account.png`.
+6. Earlier P2: the two action popovers inherited translucent glass treatment, so labels underneath competed with menu content. Fix: changed only those popover surfaces to the opaque strong-card token and removed their backdrop filter.
+7. Earlier P2: project menu typography was too small relative to the rest of the Workbench. Fix: increased the full menu hierarchy and row height while retaining the reference width and truncation behavior.
+8. Earlier P1: Knowledge categories became a dismissible overlay below 1180 px, contradicting the persistent global-navigation model. Fix: kept the sidebar in normal layout flow at all supported desktop widths and removed its close/reopen state.
+9. Earlier P2: after integrating account and module switching into the card footer, the footer could visually blend into long sidebar content. Fix: added a centered, low-contrast gradient separator above the account row on every workspace sidebar; its softened ends avoid the later reported hard-cut appearance.
+10. Earlier P2: the global vertical module rail solved cross-page switching but consumed a mostly empty full-height column. Fix: removed the rendered rail and integrated the shared account/module dock into every page's own floating sidebar card, preserving page-specific navigation above it.
+11. Earlier P2: page-specific rail widths and surfaces made module switching feel like changing layouts. Fix: standardized all floating sidebars on one 300/284 px geometry and one shared material token set, including compact desktop breakpoints.
+12. Earlier P2: the Knowledge stylesheet overrode the common rail color after load, translucent mixing produced different tones over page backdrops, and Chat retained larger dock margins. Fix: raised the shared shell selector specificity, mixed the shared rail color against the stable Workbench surface, and locked every expanded footer to one 112 px grid. Post-fix evidence: `qa/footer-unification/side-by-side-all-pages.png` and `35-unified-footer-account-menu.png`.
+13. Earlier P2: the shell and dock were consistent, but each page still authored its own header height, title size, action treatment, scroll ownership, and body padding. Fix: introduced shared `workbench-integrated-rail-head`, `workbench-integrated-rail-body`, and primary-action contracts; moved Schedule and Memory headers outside their scroll containers; and aligned Chat's search header to the same geometry. Post-fix evidence: `38-consistency-fixed/sidebar-comparison.png`.
+14. Earlier P2: Chat's card was still painted by a pseudo-element, so its dock used a full-height rail box while Knowledge inherited `color: inherit` from its page stylesheet. Fix: made Chat itself the shared physical card and raised the dock-state selector above page-local button rules. Post-fix evidence: `39-dock-isolated/source-vs-fixed.png` and `39-dock-isolated/all-five-docks.png`.
+15. Earlier P1: all modules received the same collapse boolean, but only Chat implemented a collapsed layout; switching pages therefore appeared to lose the collapsed state. Fix: added one generic 48 px collapsed-card contract, shared task/profile grid tracks, vertically stacked dock controls, a right-opening account menu, a 440 ms spring transition, staged content/Dock fades, and reduced-motion handling. Post-fix evidence: `39-dock-isolated/08-knowledge-collapsed.png`, `11-collapsed-account-menu.png`, and `12-chat-collapsed.png`.
+16. Earlier P2: Task/Memory nested their collapse control beside a zero-width bordered primary action, shifting it one pixel at CSS scale (two pixels in the user's 2× capture); the expand control had a unique dark bordered surface, and Dock keyframes replayed whenever a page mounted. Fix: absolutely centered the nested action container, fully removed collapsed primary/back controls from layout, gave the expand control the shared 36 px Dock-button treatment, and removed mount-time Dock keyframes while retaining track-level elastic transitions. Post-fix evidence: `39-dock-isolated/13-aligned-swapped-collapsed.png`.
+17. Earlier P2: Account appeared above module navigation in both expanded and collapsed cards. Fix: reversed the shared Dock grid order without changing JSX or account behavior; navigation now occupies row 1 and Account row 2 in both layouts. Post-fix evidence: `39-dock-isolated/13-aligned-swapped-collapsed.png` and `14-swapped-expanded.png`.
+18. Earlier P2: the removed footer divider left the module row visually unbounded. Fix: enclosed the shared switcher in one rounded control surface and increased its height to 56 px, with larger icons and a more deliberate hover/active treatment.
+19. Earlier P2: selected chat rows used a flat dark tint unrelated to the module switcher. Fix: reused the same active background, accent outline, and soft elevation while keeping the row's drag and menu behavior intact.
+20. Earlier P1: in collapsed Chat, the Account menu opened into the main lane underneath the composer stacking context. Fix: raise the complete floating rail only while the account popover exists and allow its overflow, so the opaque menu remains above the input surface.
+21. Earlier P2: the enclosed module switcher used the raw control background, creating a near-black slab against the blue-gray floating card. Fix: derive a shared Dock surface from 78% card color and 22% control color, soften its border, and reuse that surface as the Hover blend base.
+22. Earlier P2: the topbar's 188 px project track could not fit both the macOS traffic-light inset and the Cyrene label, so the selector collapsed to `C…`. Fix: increase the shared project track to 252–268 px, give the selector a 168 px target, and allow Session tabs to consume the remaining flexible space.
+23. Earlier P2: floating cards used 12 px vertical insets but only 8 px on the left. Fix: move the unchanged-width card four pixels right and compensate on its unused right margin, producing equal 12 px top, bottom, and left spacing without changing content width.
+24. Runtime QA found that `查看全部` still called the removed `setRailFilter` state. Fix: give the overview its own expansion state so the control now reveals every recent chat without changing the simplified rail structure.
 
-- Earlier pass: P2 fixed 14 px rail padding created an opaque horizontal strip and visually clipped the final conversation card.
-- Fix: changed `.wbc-rail` padding from `0 12px 14px` to `0 12px` while preserving the list’s scrollable content padding.
-- Post-fix evidence: `implementation-chat-list-bottom-bar-removed.png` and both combined comparison images. No actionable P0/P1/P2 findings remain.
+**Implementation Checklist**
 
-## Focused comparison evidence
+- [x] One global project selector in the original Cyrene button style.
+- [x] One floating chat directory card with flat rows and grouped sections.
+- [x] Existing chat drag, reorder, grouping, rename, dissolve, pin, and context-menu paths preserved.
+- [x] One shared bottom module dock integrated into every workspace sidebar.
+- [x] Persistent account row with identity, conditional quota/budget, Settings, and Profile.
+- [x] Rounded module-switcher enclosure without a footer divider.
+- [x] Compact single-row Chat header without the redundant title or filter.
+- [x] Identical floating-card width, color, radius, border, shadow, and blur on every page.
+- [x] Identical account row, enclosed module switcher, horizontal inset, and bottom inset on every page.
+- [x] Identical 56 px header geometry, title typography, scroll-body ownership, and content rhythm across every page.
+- [x] Identical Dock coordinates, inactive/active icon colors, and button dimensions across every page.
+- [x] One persistent collapse state and one animated 48 px collapsed layout across every page.
+- [x] Expand, account, and module controls share one exact center axis; module switching does not replay icon animations.
+- [x] Module navigation is above Account in both expanded and collapsed cards.
+- [x] Active chat rows use the same selected-state language as the module switcher.
+- [x] Collapsed Account menus remain above the conversation composer.
+- [x] Responsive 300 px chat directory at compact desktop widths.
+- [x] Frontend build completed.
+- [x] Focused regression suite passed (`241 passed`).
 
-- Overall rendered state: `design-qa-bottom-bar-full-comparison.png`.
-- Exact rail-bottom region before and after: `design-qa-bottom-bar-focused-comparison.png`.
+**Follow-up Polish**
 
-## Follow-up polish
-
-- None required for the requested scope.
-
-archived result: passed
-
----
-
-# Design QA — chat sidebar centering
-
-## Comparison target
-
-- Source visual truth: `/var/folders/zm/qgh_rgw903j0b9t01yg2l0mc0000gn/T/codex-clipboard-bd72287d-6f97-4d31-a4e7-d9e8031a1428.png`.
-- Browser-rendered open state: `/Users/syw/Documents/playground/Cyrene/implementation-chat-sidebar-open.png`.
-- Browser-rendered collapsed state: `/Users/syw/Documents/playground/Cyrene/implementation-chat-sidebar-closed-centered.png`.
-- Browser-rendered reopened state: `/Users/syw/Documents/playground/Cyrene/implementation-chat-sidebar-reopened.png`.
-- Combined comparison input: `/Users/syw/Documents/playground/Cyrene/design-qa-chat-sidebar-centering-comparison.png`.
-
-## Viewport and normalization
-
-- Browser viewport: 1920 × 1280 CSS px, light theme, populated conversation.
-- Browser captures: 1726 × 1280 px; source capture: 2414 × 1602 px.
-- The source and implementation have different host-window crops, so exact layout behavior was validated with browser geometry in CSS pixels rather than inferred from raster scaling.
-- State sequence: right sidebar open → collapsed → reopened.
-
-## Findings
-
-- No remaining P0/P1/P2 findings.
-- Fonts and typography: unchanged from the existing Cyrene conversation UI.
-- Spacing and layout rhythm: the 1276 px conversation stage and composer expand by a controlled 96 px to 1372 px. The resulting lane leaves equal 127 px margins inside the 1626 px main area, closely matching the user-marked target region.
-- Colors and visual tokens: unchanged; existing glass, surfaces, shadows, and semantic colors are preserved.
-- Image quality and assets: no assets were added, replaced, scaled, or recropped.
-- Copy and content: unchanged.
-- Motion: the sidebar grid track now animates continuously between 350 px and 0 px while both content lanes share a 420 ms overshooting cubic-bezier transition for coordinated translation and stretch. Reduced-motion users receive no transition.
-
-## Interaction and runtime checks
-
-- Sidebar collapse and restore controls were both exercised in the rendered app.
-- Open geometry: main, transcript, and composer width = 1276 px; transcript/composer x = 294 px.
-- Collapsed geometry: main width = 1626 px; transcript/composer width = 1372 px; transcript/composer x = 421 px, leaving 127 px on each side.
-- Reopened geometry returned exactly to the original 1276 px width and x = 294 px position.
-- Close-animation sample: the side track measured 0.77 px before reaching 0 px; transcript/composer measured 1369.08 px before reaching 1372 px.
-- Open-animation sample: the side track measured 348.66 px before reaching 350 px; transcript/composer measured 1280.14 px before reaching 1276 px. Its right edge remained within the animated content lane instead of jumping to the 1920 px window edge.
-- Browser warning/error log check returned no entries.
-- Automated frontend suite: 164 tests passed.
-
-## Comparison history
-
-- Initial issue: removing the right sidebar let the middle grid track grow by 350 px, stretching messages and the composer across the reclaimed area.
-- Fix: animate the sidebar's grid track instead of removing it with `display: none`; use 96 px of the reclaimed space to widen the lane, centre the remaining width symmetrically, and animate width plus translation with a lightly overshooting easing curve.
-- Post-fix evidence: the collapsed screenshot and measured geometry show the wider lane centred with equal 127 px margins. The reopened state returns to the original geometry with no drift.
-
-## Focused comparison evidence
-
-- The combined comparison shows the source visual, implementation with the sidebar open, and implementation after collapse in one artifact.
-- No additional crop was needed because the affected message and composer edges are clearly visible in the full-height comparison, and the browser geometry provides exact edge measurements.
-
-## Follow-up polish
-
-- None required for the requested scope.
-
-final result: passed
-
-# Design QA — resource lists, shared splits, and map detail polish
-
-## Comparison target
-
-- Resource-list and split behavior follows the supplied Workbench sidebar references, including `/var/folders/zm/qgh_rgw903j0b9t01yg2l0mc0000gn/T/codex-clipboard-b155224d-265d-4887-a8d1-b32e66d08668.png` and `/var/folders/zm/qgh_rgw903j0b9t01yg2l0mc0000gn/T/codex-clipboard-97f3eefa-785d-4e17-8c93-d857479a1f38.png`.
-- Rendered map evidence: `/Users/syw/Documents/playground/Cyrene/.codex-qa/map-vector-markers.png`.
-- Rendered picker evidence: `/Users/syw/Documents/playground/Cyrene/.codex-qa/map-picker-menu.png`.
-
-## Findings
-
-- No remaining P0/P1/P2 findings.
-- Map, Browser, Viewer, Artifact, Diff, and Side-question entries use compact list rows and open in the shared resizable right split; Subagents open the split directly; Branches remain inline in the conversation panel.
-- Map markers use Leaflet vector layers, eliminating missing marker image assets. A `ResizeObserver` keeps tiles aligned throughout split-width animation and manual resizing.
-- Resource pickers render in normal split flow above embedded map/browser surfaces, so their content cannot be occluded. All shared split menus use the same clearly visible 340 ms reveal-and-settle animation and respect reduced-motion preferences.
-- Map popup notes normalize persisted escaped line breaks, run through the shared sanitized Markdown renderer, and retain a safe fallback for bold, inline code, links, and line breaks.
-
-## Interaction and runtime checks
-
-- Opened the Map list, selected a place, opened the shared split, switched between map resources, and expanded/collapsed the picker.
-- Confirmed vector markers and complete tile coverage after split entry and width settlement.
-- Confirmed picker items remain above the map and use the same animated entry used by other split selectors.
-- JSX compilation succeeded; frontend regression suite: 181 tests passed; `git diff --check` passed.
-
-final result: passed
-
----
-
-# Design QA — resizable side-conversation split
-
-## Comparison target
-
-- Source visual truth: `/var/folders/zm/qgh_rgw903j0b9t01yg2l0mc0000gn/T/codex-clipboard-a1284d75-c0ed-40cb-a42f-33d21e192f45.png`.
-- Electron-rendered implementation: `/var/folders/zm/qgh_rgw903j0b9t01yg2l0mc0000gn/T/com.openai.sky.CUAService/Electron Screenshot 2026-08-02 at 6.42.29 PM.jpeg`.
-- Focused implementation crop: `/Users/syw/Documents/playground/Cyrene/.codex-qa/side-agent-header-final.png`.
-- Combined focused comparison: `/Users/syw/Documents/playground/Cyrene/.codex-qa/side-agent-header-comparison.png`.
-
-## Viewport and normalization
-
-- Electron viewport and implementation capture: 1152 × 768 CSS px at device scale factor 1, light theme.
-- Source header capture: 1140 × 156 px at approximately 2× density.
-- The implementation header was cropped from the rendered split pane at 572 × 78 CSS px, normalized to 1140 × 156 px, and placed beside the source for direct comparison.
-- State: populated parent conversation, Side Question list expanded, selected side conversation open, split widened by dragging its left edge.
-
-## Findings
-
-- No remaining P0/P1/P2 findings.
-- Fonts and typography: the label and active side-question title retain the source hierarchy and compact optical weight; long titles truncate rather than wrap the header.
-- Spacing and layout rhythm: the header is now a quiet inset floating card with a 14 px radius and restrained 12 px outer margin. The side conversation occupies the right grid track, while the main conversation remains a separate, non-overlapped column.
-- Colors and visual tokens: the card, border, hover states, menu, and shadow use existing Workbench surface and line tokens. The elevation is intentionally subtle.
-- Image quality and asset fidelity: no raster assets were added; existing Workbench icon-library glyphs are reused for disclosure and close controls.
-- Copy and content: the active side-question title is complete, the source conversation content remains intact, and the selector lists every side conversation associated with the active parent session.
-- Motion and resize: opening stages a right-edge slide-in on the next animation frame while the existing page grid transition expands the right track. Dragging the split's left edge disables grid easing during the gesture, updates the main/split allocation continuously, and persists the selected width.
-
-## Interaction and runtime checks
-
-- Opened the Side Question accordion and confirmed it contains only the side-question list.
-- Selected the list item and confirmed the pre-release side-conversation thread and compact composer opened in the right split.
-- Opened the floating header selector and confirmed the current session's side conversations are exposed as listbox options.
-- Dragged the split boundary left and confirmed the split widened while the main conversation narrowed without overlap.
-- Confirmed the main composer retained its compact resting height before and after opening/resizing the split.
-- JSX compilation succeeded; frontend regression suite: 176 tests passed; `git diff --check` passed.
-
-## Comparison history
-
-- Earlier P1: embedding the split inside a new centre wrapper caused the main composer to inherit an unstable scroll height. Fix: restore the main conversation as the page grid child and enforce a deterministic empty-composer height.
-- Earlier P2: an absolute wide overlay covered the main conversation. Fix: bind split width to the right grid track so additional width pushes the main column instead of overlapping it.
-- Earlier P2: the split mounted directly in its final transform state, so the entrance motion did not run. Fix: stage the `open` class on the next animation frame and retain the pane through the 420 ms exit transition.
-- Final refinement: replaced the flat header with a rounded floating selector card and added a persistent, keyboard-accessible drag boundary.
-
-## Focused comparison evidence
-
-- `/Users/syw/Documents/playground/Cyrene/.codex-qa/side-agent-header-comparison.png` places the source and implementation header at equal pixel dimensions. The implementation intentionally adds the requested rounded floating-card treatment and selector affordance.
-- The full implementation capture verifies the wider split/main-column relationship and bottom composer containment, which are not visible in the narrow source crop.
-
-## Follow-up polish
-
-- None required for the requested scope.
+- P3: If a future tooltip component becomes available, replace native `title` hints on compact module buttons with the shared tooltip for richer keyboard timing and placement.
 
 final result: passed
 
----
+## Project/chat navigation unfinished fixes — 2026-08-10
 
-# Design QA — compact Side Question composer
+**Comparison Target**
 
-## Comparison target
+- Source visual truth:
+  - `/var/folders/zm/qgh_rgw903j0b9t01yg2l0mc0000gn/T/codex-clipboard-967316b1-1938-475d-822f-0abc4707b5b1.png`
+  - `/var/folders/zm/qgh_rgw903j0b9t01yg2l0mc0000gn/T/codex-clipboard-661f0f0b-8c41-4c7a-a607-ed1fcc4524f8.png`
+  - `/var/folders/zm/qgh_rgw903j0b9t01yg2l0mc0000gn/T/codex-clipboard-ab7d1390-6e3c-4fa1-bc9d-bfd911408608.png`
+  - `/var/folders/zm/qgh_rgw903j0b9t01yg2l0mc0000gn/T/codex-clipboard-3313d022-8d42-4810-be22-efd37add77e0.png`
+  - `/var/folders/zm/qgh_rgw903j0b9t01yg2l0mc0000gn/T/codex-clipboard-7c551317-edaf-42c8-9457-7f2e7ed7a647.png`
+- Browser-rendered implementation: `/Users/syw/Documents/playground/Cyrene/.codex/audits/project-chat-navigation/40-unfinished-fixes/final-sidebar-full.png`
+- Open project-menu implementation: `/Users/syw/Documents/playground/Cyrene/.codex/audits/project-chat-navigation/40-unfinished-fixes/project-menu-full.png`
+- Combined focused comparison: `/Users/syw/Documents/playground/Cyrene/.codex/audits/project-chat-navigation/40-unfinished-fixes/combined-comparison.png`
 
-- Source visual truth: `/var/folders/zm/qgh_rgw903j0b9t01yg2l0mc0000gn/T/codex-clipboard-55598003-3170-4a8c-92d4-69e4b59a0b81.png`.
-- Electron-rendered implementation: `/Users/syw/Documents/playground/Cyrene/implementation-side-question-compact-final.jpg`.
-- Focused bottom-dock comparison: `/Users/syw/Documents/playground/Cyrene/comparison-side-question-composer-final.png`.
+**Normalization**
 
-## Viewport and normalization
+- Browser viewport and implementation pixels: `1280 × 720` CSS px / `1280 × 720` px, device density `1`.
+- Chat-list source: `564 × 1056` px at 2× density, normalized to `282 × 528` px; implementation crop: `284 × 528` px.
+- Account source: `518 × 110` px at 2× density, normalized to `259 × 55` px; implementation crop: `272 × 62` px.
+- Project-row source: `546 × 138` px at 2× density, normalized to `273 × 69` px; implementation crop: `286 × 95` px.
+- State: dark theme, Cyrene project selected, expanded Chat sidebar; project selector and its final-row action menu were also checked open.
 
-- Source capture: 560 × 1174 px, light theme, approximately 280 CSS px sidebar width, Side Question expanded while its Agent is running.
-- Implementation capture: 1152 × 768 CSS px at device scale factor 1, light theme, approximately 273 CSS px sidebar width, Side Question expanded after the run completed.
-- The focused source and implementation composer crops were normalized to 560 px width and placed on equal 560 × 287 px comparison panels. The run state changes the label and button color only; both states use the same compact composer geometry.
+**Findings**
 
-## Findings
+- No actionable P0/P1/P2 mismatch remains.
+- Fonts and typography: the docked account name is `14 px` at weight `720`; its plan/model line is `11.5 px`. Both remain readable and preserve the source hierarchy.
+- Spacing and layout rhythm: Recent and Chat Groups are separated by a soft, inset gradient divider. The group region remains independently scrollable and reserved on short viewports.
+- Colors and visual tokens: completed conversations retain the healthy green state, the live awaiting-user conversation renders amber, and failed conversations use the existing red semantic token. Normal idle conversations retain the neutral file treatment.
+- Image and icon fidelity: the existing icon set is reused. Completed, awaiting-user, and failed outcomes map to check, alert, and circled-error icons. The project action menu displays its edit SVG and paints above the picker/list instead of being clipped.
+- Copy and content: account name/model, Recent, Chat Groups, project name/path, `编辑项目`, and `需确认` remain present. No user copy was removed.
+- Primary interactions tested: open/close project selector, open the bottom project row's action menu, and reload the Chat view with a persisted awaiting-user conversation.
+- Console errors checked: none.
 
-- No remaining P0/P1/P2 findings.
-- Fonts and typography: the compact composer now uses 12 px type with a 1.45 line height and a short running-state label (`Agent 正在运行…`), preventing the placeholder from wrapping into an oversized two-line block.
-- Spacing and layout rhythm: the composer is a dedicated inset dock with 8–10 px horizontal spacing, an 18 px internal bottom inset, a separate 12 px panel safe edge, a 32 px textarea minimum, a 32 px action button, and an 11 px radius. The message thread remains the flexible region and the composer no longer consumes the remaining transcript height.
-- Colors and visual tokens: the input border, divider, muted disabled copy, semantic stop color, and restrained shadow all use existing Workbench tokens.
-- Image quality and asset fidelity: no raster assets changed; attachment, send, and stop controls continue to use the existing application icon set.
-- Copy and content: the normal prompt remains `针对选中的文字提问…`; the running state now communicates status without implying that the disabled field accepts guidance.
-- Containment: the panel, Side Question body, and composer host all explicitly constrain overflow and width. The focused comparison shows a visible bottom inset instead of the input surface colliding with the outer rounded card edge.
+**Comparison History**
 
-## Interaction and runtime checks
+1. Earlier P1: the sidebar read only the persisted `status`, while the lightweight list API exposes the latest run outcome as `runStatus`; completed and awaiting-user rows therefore fell back to neutral file icons.
+2. Fix: prefer `runStatus`, retain `status` as the legacy fallback, and also treat a non-empty `pendingQuestion` as requiring attention.
+3. Post-fix evidence: the final sidebar capture shows green checks for completed rows and an amber alert/title/`需确认` treatment for `sycanmore 是什么`. The project-menu capture shows the final-row menu and edit icon fully visible.
 
-- Reloaded the Electron app, reopened Side Question, and verified the picker, transcript, normal composer, attachment button, and send button remained visible and aligned.
-- Verified the accordion still expands and collapses normally after the layout change.
-- JSX compilation succeeded; frontend regression suite: 173 tests passed; `git diff --check` passed.
-- Added a regression assertion for compact textarea height, the side-panel clipping boundary, and the dedicated running placeholder.
+**Implementation Checklist**
 
-## Comparison history
-
-- Initial P2: the shared main-composer sizing produced a tall textarea, large rounded surface, and action row that visually overflowed the bottom of the narrow sidebar card.
-- First fix: added a Side Question-specific inset dock, reduced textarea/action dimensions, clipped both panel layers, shortened the running label, and tightened message/heartbeat spacing.
-- Follow-up P2 from the short-window capture: the generic flush-body height still consumed the card's last pixels, and the dock background was too close to the input surface to make the remaining inset visible.
-- Final fix: assigned Side Question its own `100dvh`-based height budget, reserved a 12 px outer safe edge, increased the dock's bottom inset to 18 px, removed its shadow, and separated the dock and input surfaces with a quiet neutral tint.
-- Post-fix evidence: `/Users/syw/Documents/playground/Cyrene/comparison-side-question-composer-final.png`.
-
-## Focused comparison evidence
-
-- A focused crop was required because the reported issue concerns the final 100–140 CSS px at the bottom of a narrow sidebar and is not reliably judgeable in a whole-window screenshot.
+- [x] Verify enlarged account typography.
+- [x] Verify project action menu stacking and SVG icon rendering.
+- [x] Verify Recent/Chat Groups divider.
+- [x] Connect chat-list semantic states to the list API's run outcome.
+- [x] Preserve legacy payload fallback and pending-question behavior.
+- [x] Frontend build completed.
+- [x] Focused frontend/backend regression selection passed (`2 passed`).
 
 final result: passed
 
 ---
 
-# Design QA — readable Overview and Context sections
+## Dock weight, collapse alignment, and macOS selector spacing — 2026-08-09
 
-## Comparison target
+**Comparison Target**
 
-- Source visual truth: `/var/folders/zm/qgh_rgw903j0b9t01yg2l0mc0000gn/T/codex-clipboard-61e4a833-caa6-4e51-b4b8-893006482284.png`.
-- Supplemental Context source: `/var/folders/zm/qgh_rgw903j0b9t01yg2l0mc0000gn/T/codex-clipboard-7ee7f26a-7c1d-4929-a947-f46b1f9c07a9.png`.
-- Rendered Overview: `/Users/syw/Documents/playground/Cyrene/implementation-chat-sidebar-readable-overview.jpg`.
-- Rendered Context: `/Users/syw/Documents/playground/Cyrene/implementation-chat-sidebar-readable-context.jpg`.
-- Combined focused comparisons: `/Users/syw/Documents/playground/Cyrene/comparison-overview-fonts-separators.png` and `/Users/syw/Documents/playground/Cyrene/comparison-context-fonts-separators.png`.
+- Dock weight reference: `/var/folders/zm/qgh_rgw903j0b9t01yg2l0mc0000gn/T/codex-clipboard-468c22bf-b885-4d16-9e91-07a8dcfc006d.png`.
+- Collapse-control alignment reference: `/var/folders/zm/qgh_rgw903j0b9t01yg2l0mc0000gn/T/codex-clipboard-93387901-d5df-42da-8768-c96f3009f3fd.png`.
+- macOS project-selector spacing reference: `/var/folders/zm/qgh_rgw903j0b9t01yg2l0mc0000gn/T/codex-clipboard-e05b534c-c936-40f0-be6a-a5251b052c62.png`.
+- Browser-rendered implementation: `/Users/syw/Documents/playground/Cyrene/.codex/audits/project-chat-navigation/39-dock-isolated/24-dock-bold-and-aligned.png`.
+- Combined comparison input: `/Users/syw/Documents/playground/Cyrene/.codex/audits/project-chat-navigation/39-dock-isolated/24-dock-weight-alignment-comparison.png`.
 
-## Viewport and normalization
+**Findings**
 
-- Electron viewport: 1152 × 768 CSS px at device scale factor 1, light theme, floating sidebar at 280 CSS px wide.
-- Source Overview: 570 × 868 px; implementation full views: 1152 × 768 px.
-- The implementation panel was cropped at its rendered 280 px width and normalized to the source width for the combined comparison. The source is a focused high-density crop while the implementation is a whole-window 1× capture, so the comparison is used for hierarchy, relative type scale, spacing, and separators rather than pixel-perfect outer height.
-- States checked: Overview expanded with complete session and token data; Context expanded with three context groups, Inbox, tool-package, and statistics sections.
+- No actionable P0/P1/P2 mismatch remains.
+- All five Dock icons now compute to a `2 px` stroke instead of `1.7 px`; labels use weight `680` instead of `620`. Geometry and selected-state backgrounds are unchanged.
+- Rendered Task, Chat, and Knowledge collapse controls now share identical coordinates (`x: 251`, `y: 83`), dimensions (`32 × 32 px`), and header insets (`12 px` top/right). The Chat search header no longer uses a divergent `10 px` horizontal inset.
+- The macOS project selector keeps its `150 px` width and receives a platform-only `5 px` rightward optical correction (`margin-left: -3px` versus the shared `-8px` brand compensation). Web spacing remains unchanged.
+- Existing Dock navigation, module switching, collapse animation, and project-menu behavior are unchanged.
 
-## Findings
+**Implementation Checklist**
 
-- No remaining P0/P1/P2 findings.
-- Fonts and typography: metadata and context rows now use the sidebar scale token rather than fixed 9.5–11 px overrides. Labels render at 12–13 px, primary values at 13–15.5 px, and context totals at 18–19 px, preserving a clear label/value hierarchy without truncating the model, session ID, or token values.
-- Spacing and layout rhythm: Overview is divided into session identity, token totals, and context-usage bands. Context is divided into composition, Agent Inbox, used tool packages, and conversation statistics, with subordinate system/temporary/message groups separated inside the composition block.
-- Colors and visual tokens: separators use the existing `--wb-line` token with stronger but still quiet opacity. Text continues to use the established text, muted, faint, and semantic context-color tokens.
-- Image quality and asset fidelity: no raster or illustrative assets were introduced or changed; existing SVG/icon-library glyphs remain sharp and neutral in expanded state.
-- Copy and content: the complete session metadata, input/output/total token values, cache hit rate, compression threshold, context split, group totals, Inbox status, tool-package status, message count, and last-update fields remain present.
-
-## Interaction and runtime checks
-
-- Reloaded the real Electron application and expanded Overview and Context independently.
-- Confirmed the accordion rows remain full-width, the card remains resizable from its edge, and expanded content scrolls within the floating card.
-- JSX compilation succeeded.
-- Frontend regression suite: 172 tests passed.
-- `git diff --check` passed.
-
-## Comparison history
-
-- Initial P2: fixed small text overrides made detailed Overview and Context content visually recede, while weak separators made distinct information groups read as one dense block.
-- Fix: moved detailed text to scale-aware 12–19 px tiers, increased row height and group spacing, and strengthened separators at both primary and nested section boundaries.
-- Post-fix evidence: the two combined comparisons above show the larger metadata/value hierarchy and clear visual breaks without changing the workbench visual language.
-
-## Focused comparison evidence
-
-- Focused panel crops were required because the relevant 12–19 px type and 1 px section rules are too small to judge reliably from the whole 1152 × 768 application view.
+- [x] Increase icon stroke and label weight across all five Dock items.
+- [x] Align Task, Chat, and Knowledge collapse-control positions.
+- [x] Correct macOS project-selector optical centering without changing web layout.
+- [x] Frontend build completed.
+- [x] Focused regression suite passed (`241 passed`).
 
 final result: passed
 
 ---
 
-# Design QA — title-free Overview and complete Context
+## Floating toolbar controls and project selector balance — 2026-08-09
 
-## Comparison target
+**Comparison Target**
 
-- Source visual truth: `/var/folders/zm/qgh_rgw903j0b9t01yg2l0mc0000gn/T/codex-clipboard-c06e4069-928e-4fd1-9e3a-1adc1381c8e7.png`.
-- Browser-rendered Overview: `/Users/syw/Documents/playground/Cyrene/implementation-chat-sidebar-overview-complete.jpg`.
-- Browser-rendered Context: `/Users/syw/Documents/playground/Cyrene/implementation-chat-sidebar-context-complete.jpg`.
-- Focused Overview comparison: `/Users/syw/Documents/playground/Cyrene/design-qa-sidebar-overview-comparison.png`.
-- Focused Context crop: `/Users/syw/Documents/playground/Cyrene/implementation-chat-sidebar-context-panel.png`.
+- Source controls: `/var/folders/zm/qgh_rgw903j0b9t01yg2l0mc0000gn/T/codex-clipboard-38fa1245-637b-494f-91ea-7978cbb52e03.png`, `/var/folders/zm/qgh_rgw903j0b9t01yg2l0mc0000gn/T/codex-clipboard-fbabdf11-d501-40fa-8b1e-41f8329cfe0a.png`, and `/var/folders/zm/qgh_rgw903j0b9t01yg2l0mc0000gn/T/codex-clipboard-bf016ba6-a5b7-4db6-ad4a-335ffdc68b0a.png`.
+- Project-selector correction target: `/var/folders/zm/qgh_rgw903j0b9t01yg2l0mc0000gn/T/codex-clipboard-a9ca2ec4-b851-4b69-a906-471e51579ff7.png`.
+- Browser-rendered implementations: `/Users/syw/Documents/playground/Cyrene/.codex/audits/project-chat-navigation/39-dock-isolated/23-task-toolbar-floating-controls.png`, `/Users/syw/Documents/playground/Cyrene/.codex/audits/project-chat-navigation/39-dock-isolated/23-memory-toolbar-floating-controls.png`, `/Users/syw/Documents/playground/Cyrene/.codex/audits/project-chat-navigation/39-dock-isolated/23-schedule-toolbar-floating-controls-final.png`, and `/Users/syw/Documents/playground/Cyrene/.codex/audits/project-chat-navigation/39-dock-isolated/23-project-selector-balanced.png`.
+- Combined comparison input: `/Users/syw/Documents/playground/Cyrene/.codex/audits/project-chat-navigation/39-dock-isolated/23-floating-controls-comparison.png`.
 
-## Viewport and state
+**Normalization**
 
-- Desktop Electron viewport: 1152 × 768 px, dark theme.
-- Verified the expanded Overview and Context states in the running Cyrene application after a full reload.
-- The Overview comparison normalizes the focused implementation crop to the source width so information hierarchy and separator rhythm can be inspected directly.
+- Browser viewport: `1280 × 720` CSS px, Cyrene selected, expanded sidebar.
+- State: task sort/default, memory default filters, schedule day view; hover checked on task sorting; both dark and light theme materials checked.
+- Project selector: `150 px` wide with an `8 px` trailing chevron inset. The web track is `174 px`; the macOS track is `236 px`, compensating for the `70 px` traffic-light reservation so the left and right optical gaps are both approximately `8 px`.
 
-## Findings
+**Findings**
 
-- No remaining P0/P1/P2 findings.
-- Redundant visible headings such as “会话信息”, “上下文占用”, and “对话上下文” are removed; section boundaries are communicated by full-width quiet separators.
-- Overview retains the status, message count, creation time, model, and session ID, and restores input, output, total-token, and cache-hit metrics.
-- Both context bars remain intentional: the first shows utilization against the context window and compaction threshold; the second shows the token composition.
-- Context restores the full system-prefix, temporary-injection, and conversation-message breakdowns, including their child rows and token counts.
-- The idle Inbox state, unused tool-package state, message count, and last-updated time are restored as persistent information sections without adding redundant visible section titles.
-- Quick actions remain removed, matching the user's earlier explicit request.
+- No actionable P0/P1/P2 mismatch remains.
+- Task sort, Memory search/filters, and Schedule Today/navigation/view controls now share one floating-control surface token contract: the same card-derived background, border, 12 px radius, inset highlight, and soft elevation.
+- Selected filters and schedule views use the same restrained accent tint as the floating card selection system. Primary create actions remain clearly emphasized but share the same radius and shadow material.
+- Schedule control heights were normalized to `32–34 px`; the segmented control no longer sits visibly taller than the neighboring buttons.
+- Hover raises a control by `1 px` while increasing border contrast and elevation; keyboard focus and existing click behavior are unchanged.
+- Light-theme computed surfaces match the floating rail surface; dark-theme controls no longer appear as disconnected near-black blocks.
+- The project label remains complete at `150 px`, and `margin-left: auto` anchors the chevron to the selector's far edge.
 
-## Interaction and runtime checks
+**Implementation Checklist**
 
-- Expanded Overview and confirmed all restored fields through the Electron accessibility tree and rendered screenshot.
-- Expanded Context and confirmed all detailed token groups, Inbox state, tool-package state, and chat statistics.
-- JSX compilation succeeded.
-- Frontend regression suite: 174 tests passed.
-- `git diff --check` passed.
+- [x] Shared floating-control design tokens added alongside the floating-rail tokens.
+- [x] Task sorting and primary creation controls unified.
+- [x] Memory search and all filter controls unified.
+- [x] Schedule navigation, segmented view switcher, and Add control unified.
+- [x] Dark theme, light theme, default, selected, focus, and hover states checked.
+- [x] Project selector narrowed and chevron right-aligned.
+- [x] Web and macOS topbar tracks separately balanced.
+- [x] Frontend build completed.
+- [x] Schedule day/week switching, task sort toggling, and Memory filter opening verified in the rendered app.
+- [x] Focused regression suite passed (`241 passed`).
+
+final result: passed
+
+## Memory overview/source card merge — 2026-08-09
+
+**Comparison Target**
+
+- Source visual truth: `/var/folders/zm/qgh_rgw903j0b9t01yg2l0mc0000gn/T/codex-clipboard-f9a87ae9-5118-4991-9919-6ddb79acac7d.png`
+- Browser-rendered implementation: `/Users/syw/Documents/playground/Cyrene/.codex/memory-page-scrolled.jpg`
+- Focused implementation crop: `/Users/syw/Documents/playground/Cyrene/.codex/audits/memory-card-merge/implementation.png`
+- Combined comparison input: `/Users/syw/Documents/playground/Cyrene/.codex/audits/memory-card-merge/source-vs-implementation.png`
+
+**Normalization**
+
+- Browser viewport: `1280 × 720` CSS px at device scale factor `2`; browser screenshot: `1280 × 720` px.
+- Source pixels: `550 × 954`; normalized comparison copy: `437 × 758`.
+- Implementation card: `262 × 379` CSS px; focused crop: `262 × 379` px.
+- State: dark theme, Cyrene project selected, Memory active, memory sidebar scrolled until the complete summary card was visible.
+
+**Findings**
+
+- No actionable P0/P1/P2 mismatch remains.
+- Fonts and typography: existing Workbench type tokens and numerical emphasis are preserved; total count remains the strongest value inside the donut.
+- Spacing and layout rhythm: the former overview card is removed. The source legend stays intact, and the remaining overview rows follow it in the same card with a subtle separator.
+- Colors and visual tokens: existing memory source tones, card surface, border, radius, and theme behavior are unchanged.
+- Image and icon fidelity: no image assets or icons were added or replaced; the existing SVG donut remains sharp and uses the live source distribution.
+- Copy and content: `记忆来源`, all five source labels and percentages, `近期新增`, `被引用次数`, and `最后更新` are present. `记忆概览` and its duplicate outer card are absent. The donut center explicitly renders the overview total (`57 条`).
+- Primary interactions tested: navigated from Chat to Memory and scrolled the integrated Memory sidebar. The card remained inside the existing scroll region and the module dock stayed usable.
+- Console errors checked: none.
+
+**Comparison History**
+
+1. Source state: total, recent additions, citations, and last update occupied a separate overview card above the source card.
+2. Final state: total moved into the donut center; the other three overview values moved below the source legend inside the sole remaining card. Post-fix evidence is the combined comparison input above.
+
+**Implementation Checklist**
+
+- [x] Remove the separate overview card.
+- [x] Use the overview total in the donut center, including the zero-data state.
+- [x] Add recent additions, citations, and last update below the source rows.
+- [x] Preserve existing source percentages, theme tokens, and responsive sidebar behavior.
+- [x] Frontend build completed.
+- [x] Focused merge-card regression test passed.
 
 final result: passed
 
 ---
 
-# Design QA — immersive maximized browser restored
+## Memory source card height compression — 2026-08-09
 
-## Comparison target
+**Comparison Target**
 
-- Source visual truth: `/var/folders/zm/qgh_rgw903j0b9t01yg2l0mc0000gn/T/codex-clipboard-c646d002-719a-4089-a1b5-7bab39711c04.png`.
-- Electron implementation capture: `/Users/syw/Documents/playground/Cyrene/implementation-browser-maximized-restored.jpg`.
-- Combined reference/implementation comparison: `/Users/syw/Documents/playground/Cyrene/design-qa-browser-maximized-comparison.png`.
+- Source visual truth: `/var/folders/zm/qgh_rgw903j0b9t01yg2l0mc0000gn/T/codex-clipboard-8f3ee8a4-5bb2-4387-bff5-74c7a53416e7.png`
+- Browser-rendered implementation: `/Users/syw/Documents/playground/Cyrene/.codex/memory-page-compact.jpg`
+- Focused implementation crop: `/Users/syw/Documents/playground/Cyrene/.codex/audits/memory-card-compact/implementation.png`
+- Combined comparison input: `/Users/syw/Documents/playground/Cyrene/.codex/audits/memory-card-compact/source-vs-implementation.png`
 
-## Viewport and state
+**Normalization**
 
-- Source capture: 2400 × 1600 px, dark theme, Bilibili loaded in the dedicated maximized browser shell.
-- Electron capture: 1230 × 768 px, dark theme, the same Bilibili homepage state after a PiP-to-maximized transition.
-- The comparison normalizes both captures to a 1.6:1 top-aligned frame so the browser header, tab strip, navigation row, page viewport, and floating Agent composer can be judged directly.
+- Browser viewport: `908 × 863` CSS px at device scale factor `2`; browser screenshot: `908 × 863` px.
+- Source pixels: `552 × 784`; normalized comparison copy: `276 × 392`.
+- Implementation card: `262 × 266.6` CSS px; focused crop: `262 × 266` px.
+- Previous implementation card height: `378.6` CSS px. Final reduction: approximately `112` CSS px / `29.6%`.
+- State: dark theme, Cyrene project selected, Memory active, expanded sidebar.
 
-## Findings
+**Findings**
 
-- No remaining P0/P1/P2 findings.
-- Maximized mode again covers the complete application window; the workbench top bar, project rail, conversation rail, and right conversation panel are no longer visible behind or beside it.
-- The dedicated browser title bar, traffic lights, green Browser pill, page title, restore/minimize controls, tab strip, navigation row, page viewport, and compact bottom Agent composer match the original presentation hierarchy.
-- The regression was caused by the conversation-centering animation keeping `transform` and `will-change: transform` on the browser's ancestor. The maximized state now releases that containing block without changing ordinary conversation centering or PiP behavior.
-- Target-frame measurement now uses the document viewport for maximized mode, so the prepared transition frame and committed native view share the same full-window bounds.
+- No actionable P0/P1/P2 mismatch remains.
+- Fonts and typography: existing Workbench font family, weights, and numerical hierarchy are unchanged. Every legend row remains one line at the tested UI scale, including `Agent 记录`.
+- Spacing and layout rhythm: the donut and five-row legend now share one two-column band. The overview rows span both columns below them, with reduced but still readable row spacing. The card height decreased from `378.6` to `266.6` CSS px.
+- Colors and visual tokens: source colors, card surface, border, divider, and semantic text colors are unchanged.
+- Image and icon fidelity: the existing SVG donut is reused at its original `78 × 78` CSS size; no assets were added or approximated.
+- Copy and content: all source labels, percentages, the total count, and the three overview rows remain present and unchanged.
+- Primary interactions tested: project selection, navigation to Memory, and sidebar rendering after reload. The card remains within the existing scroll region and the fixed module dock is unaffected.
+- Console errors checked: none.
 
-## Interaction and runtime checks
+**Comparison History**
 
-- Opened a live Bilibili browser session in the local Electron build.
-- Verified PiP → maximized produces the immersive full-window shell.
-- Verified maximized → PiP restores successfully and retains the loaded Bilibili page.
-- Preserved the existing transition-ready handshake, drag-preview cancellation fallback, forced compositor resize pulse, serialized page zoom, and high-resolution CDP screenshot path.
-- JSX compilation succeeded.
-- Frontend/browser regression suite: 174 tests passed.
-- `git diff --check` passed.
+1. Earlier P2: donut, legend, and overview rows were three vertically stacked sections, producing a `378.6` px card.
+2. Fix: placed the donut and legend side by side, reduced legend gap from `7` to `5` px, and reduced overview row padding from `5` to `4` px.
+3. Post-fix evidence: the combined comparison input shows the same information in a `266.6` px card without wrapping or clipping.
 
-final result: passed
+**Implementation Checklist**
 
----
-
-# Design QA — floating conversation panel
-
-## Comparison target
-
-- Selected reference: `/var/folders/zm/qgh_rgw903j0b9t01yg2l0mc0000gn/T/codex-clipboard-7ba9eeb2-27da-41f3-903f-5a49f15686ec.png`.
-- Rendered overview: `/Users/syw/Documents/playground/Cyrene/implementation-chat-sidebar-floating-overview.png`.
-- Rendered context: `/Users/syw/Documents/playground/Cyrene/implementation-chat-sidebar-floating-context.png`.
-- Rendered artifacts: `/Users/syw/Documents/playground/Cyrene/implementation-chat-sidebar-floating-artifacts.png`.
-- Focused side-by-side comparison: `/Users/syw/Documents/playground/Cyrene/design-qa-chat-sidebar-floating-focused-comparison.png`.
-
-## Viewport and state
-
-- Desktop Electron viewport: 1152 × 768 px, dark theme.
-- Verified the collapsed state plus expanded Overview, Context, and Artifacts states in the running Cyrene application.
-- The focused comparison normalizes the rendered panel crop to the reference width for direct inspection of hierarchy, alignment, borders, and density.
-
-## Findings
-
-- No remaining P0/P1/P2 findings.
-- The panel now has one outer rounded boundary; the accordion no longer reserves a 12 px footer strip, eliminating the duplicate lower edge.
-- Expanded content uses a centered, equal-width column with symmetric 16 px horizontal padding.
-- Overview has a compact two-column key/value rhythm, a quiet section divider, and no quick actions.
-- Context is a single flat composition summary. Empty inbox and unused tool-package sections are hidden; duplicate chat statistics were removed.
-- Artifact rows use a 42 px compact list row with a lightweight file glyph, truncated metadata, and 24 px actions instead of a nested elevated card.
-- Plan, subagent, branch, file, and context content share the same title scale, separator strength, row density, and responsive 320 px behavior.
-- Accordion icons retain the same neutral color in collapsed and expanded states.
-
-## Interaction and runtime checks
-
-- Verified every visible accordion row starts collapsed after reload and toggles independently.
-- Verified only Overview and Context are always present; Artifacts appeared only in a conversation that contained an artifact.
-- Verified the card-edge resize affordance remains available without a full-height visible drag line.
-- JSX compilation succeeded.
-- Frontend regression suite: 174 tests passed.
-- `git diff --check` passed.
+- [x] Keep the donut fully legible.
+- [x] Keep all five source rows on one line.
+- [x] Preserve the full-width overview rows and divider.
+- [x] Reduce height without changing data or behavior.
+- [x] Frontend build completed.
+- [x] Focused regression test passed (`1 passed`).
 
 final result: passed
 
 ---
 
-# Design QA — selected conversation without side stripe
+## Native browser tab picker and split live resize — 2026-08-10
 
-## Comparison target
+**Comparison Target**
 
-- Source visual truth: `/var/folders/zm/qgh_rgw903j0b9t01yg2l0mc0000gn/T/codex-clipboard-34f0329a-8c8f-4a1c-a2c8-0338fe2aaf15.png`.
-- Browser-rendered implementation: `/Users/syw/Documents/playground/Cyrene/implementation-selected-chat-no-stripe.png`.
-- Focused before/after comparison: `/Users/syw/Documents/playground/Cyrene/design-qa-selected-chat-no-stripe-comparison.png`.
+- Source visual truth (reported stale split bounds): `/var/folders/zm/qgh_rgw903j0b9t01yg2l0mc0000gn/T/codex-clipboard-51d608b9-6658-469c-afb8-45475f4bd235.png`
+- Browser-rendered Electron implementation: `/Users/syw/Documents/playground/Cyrene/.codex/audits/browser-split-live-resize/after-fixed.png`
+- Native tab-picker open state: `/Users/syw/Documents/playground/Cyrene/.codex/audits/browser-split-live-resize/tab-picker-open.png`
+- Combined comparison input: `/Users/syw/Documents/playground/Cyrene/.codex/audits/browser-split-live-resize/source-vs-fixed.png`
 
-## Viewport and state
+**Normalization**
 
-- Browser viewport and implementation capture: 1280 × 720 CSS px at device scale factor 1, dark theme, selected conversation visible.
-- Source capture: 410 × 180 px, dark theme, selected conversation inside an expanded group.
-- Focused comparison was normalized to two 416 × 152 px panels. The implementation crop shows the same selected-conversation surface treatment; the grouped child adds the new subtle outline and elevation defined by the same active-state rule.
+- Source pixels: `1052 × 1470`; implementation viewport: `1152 × 768` px.
+- The comparison input normalizes both images to `768 px` high and places the reported state beside the fixed Electron state.
+- State: dark theme, Bilibili active in a right-side browser split, expanded Workbench rail, native `WebContentsView` page attached below the browser chrome.
 
-## Findings
+**Findings**
 
-- No remaining P0/P1/P2 findings.
-- The solid left accent stripe is removed.
-- Selection is now communicated across the whole card through a 12% accent-tinted surface, a low-contrast accent border, and soft elevation. This keeps the state legible without pulling the eye to one edge.
-- Fonts and typography are unchanged; title and preview hierarchy remain consistent.
-- Spacing, padding, radius, truncation, icons, copy, and card dimensions remain unchanged because the base child now reserves a transparent 1 px border.
-- Colors continue to use existing Cyrene tokens and remain distinct from the lighter group-frame surface.
-- No raster assets or image quality were affected.
+- No actionable P0/P1/P2 mismatch remains.
+- The native Bilibili page is clipped to the browser split and its left edge remains aligned with the split chrome; it no longer retains a stale width that overlays the conversation column.
+- The browser-specific `ResizeObserver` now continues publishing bounds during `wbc-resizing-side-agent`. Other expensive renderer observers retain their existing pause-and-refresh behavior.
+- Main-process bounds writes remain coalesced by the existing trailing timer, avoiding unbounded native-view work while preserving live visual tracking.
+- `workbench:split-resize-end` clears the browser bounds signature and schedules a final deterministic sync, so the last pointer position is committed even when the final coalesced frame would otherwise be identical.
+- The native tab picker is lifted by `60 px`, keeps the compact dark surface from the reference, and uses a neutral focus inset instead of a theme-color outline.
+- Title toggles are guarded by a `280 ms` debounce in both maximized and split hosts. Re-clicking the open title was exercised in Electron and the picker remained closed instead of collapsing and reopening.
+- Picker actions remain keyboard reachable; Escape, renderer outside-pointer, owner-window blur, page focus, selection, and close paths remain available.
+- No image or icon assets were approximated or replaced; the implementation uses the existing Bilibili favicon and Workbench browser icon system.
 
-## Interaction and runtime checks
+**Regression Scope**
 
-- Verified the selected conversation state in the rendered desktop rail.
-- Browser warning/error log check returned no entries.
-- JSX compilation succeeded.
-- Frontend regression suite: 167 tests passed.
-- `git diff --check` passed.
-
-## Comparison history
-
-- Initial P2: the inset 3 px accent edge read as a heavy vertical stripe and made the selected state visually lopsided.
-- Fix: removed the inset edge and replaced it with a full-card border, tint, and elevation; reserved the border in the base child state to prevent layout movement.
-- Post-fix evidence: `/Users/syw/Documents/playground/Cyrene/design-qa-selected-chat-no-stripe-comparison.png`.
-
-## Focused comparison evidence
-
-- The focused comparison is required because the changed edge treatment is too small to judge reliably in the full 1280 × 720 capture.
+- [x] Native browser only is exempted from the resize pause class.
+- [x] Chart, PDF, map, navigation, and other heavy observers are unchanged.
+- [x] Existing main-process `32 ms` bounds coalescing is preserved.
+- [x] Final split-resize settle is explicit and scoped to browser viewport bounds.
+- [x] Tab picker position, neutral focus, action synchronization, reduced motion, and title debounce are covered by regression contracts.
+- [x] Frontend build and Electron syntax check completed.
+- [x] Complete Python regression suite passed (`1866 passed`).
+- [x] Source and implementation were reviewed together in the combined comparison input.
 
 final result: passed
-
----
-
-# Design QA — conversation grouping and card menu
-
-## Comparison target
-
-- Source visual truth: `/var/folders/zm/qgh_rgw903j0b9t01yg2l0mc0000gn/T/codex-clipboard-f9ea455d-ecf1-4c9b-9a6c-9198d1683220.png`.
-- Browser-rendered implementation: `/Users/syw/Documents/playground/Cyrene/implementation-chat-menu.png`.
-- Combined full-view comparison: `/Users/syw/Documents/playground/Cyrene/design-qa-chat-menu-click-comparison.png`.
-
-## Viewport and state
-
-- Browser implementation capture: 676 × 863 px, dark theme, populated conversation list, selected conversation menu open.
-- Source capture: 426 × 414 px, light theme, cropped to the selected conversation and its menu.
-- The comparison evaluates hierarchy, menu placement, spacing, affordances, and click behavior; colors intentionally follow the active application theme.
-
-## Findings
-
-- No remaining P0/P1/P2 findings.
-- The menu preserves the selected card as its visual anchor and presents the same four actions in the same order as the source.
-- The full-screen dismiss scrim no longer intercepts pointer events intended for the open card menu.
-- The group frame now uses a lightly tinted mixed surface, while child cards keep an explicit card surface. Active children add a restrained accent tint, outline, and elevation, preventing the child and group backgrounds from visually merging.
-- Conversation grouping, adding a conversation to an existing group, dragging a child out, and automatic dissolution at one remaining child retain their existing interaction affordances.
-
-## Interaction and runtime checks
-
-- Opened the menu from the card's visible “more actions” button.
-- Clicked `重命名对话`; the rename dialog opened successfully, then was cancelled without changing data.
-- Repeated the menu path from a right-click entry point; the same action remained clickable.
-- Browser warning/error log check returned no entries.
-- JSX compilation succeeded.
-- Frontend regression suite: 167 tests passed.
-- `git diff --check` passed.
-
-## Comparison history
-
-- Initial issue: the full-viewport outside-click scrim rendered above the conversation list's stacking context, so menu items looked visible but received no click.
-- Fix: lift the list only while a menu is open, disable pointer events on the rest of the list, and re-enable them solely on the open card or group.
-- Post-fix evidence: the browser-rendered menu and the successful rename-dialog click path above.
-
-## Focused comparison evidence
-
-- A separate crop was not required: the source itself is a focused menu crop, and the combined comparison keeps both menus large enough to inspect action order, spacing, and anchoring.
-
-final result: passed
-
----
-
-# Design QA — compact Overview hierarchy and Context empty states
-
-## Comparison target
-
-- Overview source visual truth: `/var/folders/zm/qgh_rgw903j0b9t01yg2l0mc0000gn/T/codex-clipboard-0ad07985-2b0b-408c-9c30-7f56a581c3db.png`.
-- Context empty-state source: `/var/folders/zm/qgh_rgw903j0b9t01yg2l0mc0000gn/T/codex-clipboard-05f0404d-6483-4052-be67-56b3dfe0b921.png`.
-- Rendered Overview: `/Users/syw/Documents/playground/Cyrene/implementation-chat-sidebar-overview-final.jpg`.
-- Rendered Context: `/Users/syw/Documents/playground/Cyrene/implementation-chat-sidebar-context-final.jpg`.
-- Focused side-by-side evidence: `/Users/syw/Documents/playground/Cyrene/comparison-overview-final.png` and `/Users/syw/Documents/playground/Cyrene/comparison-context-empty-final.png`.
-
-## Viewport and normalization
-
-- Electron viewport: 1152 × 768 CSS px at device scale factor 1, light theme, 280 CSS px floating sidebar.
-- Source captures: 568 × 850 px for Overview and 604 × 312 px for the Context empty states.
-- Implementation full views: 1152 × 768 px. Focused panel crops were normalized to 560 px width, producing 560 × 960 px and 560 × 460 px comparison panels.
-- States: Overview expanded with populated usage metrics; Context expanded and scrolled to the empty Inbox/tool-package modules; all other tabs collapsed.
-
-## Findings
-
-- No remaining P0/P1/P2 findings.
-- Fonts and typography: status, model, and session-ID rows now share the same 25–26 px row rhythm and label/value alignment. Numeric emphasis remains constrained to the compact fact and usage strips.
-- Spacing and layout rhythm: model and session ID sit above the message/created strip; cache hit rate sits above input/output/total usage; the duplicated Overview context breakdown is removed. Section dividers and 7 px radii remain consistent.
-- Colors and visual tokens: expanded tabs no longer receive an accent-tinted selection surface; disclosure is communicated by the chevron and visible content. Cache progress and context occupancy use the existing semantic green and Workbench neutral track tokens.
-- Image quality and asset fidelity: no imagery changed. Existing icon-library glyphs remain neutral and unchanged between collapsed and expanded states.
-- Copy and content: cache hit percentage and progress remain visible; Context retains its full detailed breakdown. Empty Inbox and tool-package modules now use paired labels/status pills with concise supporting text rather than orphaned right-aligned status text.
-
-## Interaction and runtime checks
-
-- Reloaded the real Electron app, selected a populated conversation, expanded Overview, then expanded and scrolled Context.
-- Confirmed the Overview context breakdown is absent while the full Context tab breakdown remains present.
-- Confirmed the cache progress exposes a semantic progressbar with value 95.
-- Confirmed the expanded-tab styling is deliberately subtle and accordion disclosure still works.
-- JSX compilation succeeded; frontend regression suite: 172 tests passed; `git diff --check` passed.
-
-## Comparison history
-
-- Initial P2: Overview used uneven vertical gaps, duplicated the detailed context composition, and emphasized the selected tab with an unnecessary tinted row.
-- Initial P2: empty Inbox/tool-package sections presented detached status and body lines without a shared information hierarchy.
-- Fixes: normalized the identity rows, reordered identity/facts and cache/token blocks, removed compact-mode context composition, neutralized expanded-row fill, and introduced paired compact empty-module headers.
-- Post-fix evidence: the two focused side-by-side comparisons above show balanced row spacing, reduced duplication, a retained cache visualization, and structured empty states.
-
-## Focused comparison evidence
-
-- Focused crops were required because the changes concern 1 px dividers, subtle selection fills, 11–14 px type, and compact 5 px progress tracks that are not reliably judgeable in a whole-window capture.
-
-final result: passed
-
----
-
-# Design QA — compact Tab context-menu actions
-
-## Comparison target
-
-- Source visual truth: `/var/folders/zm/qgh_rgw903j0b9t01yg2l0mc0000gn/T/codex-clipboard-445d2623-d00e-4104-8f33-1963a65c3698.png`.
-- Latest pre-fix implementation capture supplied by the user: `/var/folders/zm/qgh_rgw903j0b9t01yg2l0mc0000gn/T/codex-clipboard-9ca97457-ae2f-4b61-8463-3f37a6d8e2e9.png`.
-- Focused combined comparison: `/Users/syw/Documents/playground/Cyrene/.codex-qa/tab-menu-reference-comparison-latest.png`.
-- Post-fix browser-rendered implementation screenshot: unavailable; the selected in-app browser blocked the local Cyrene URL before rendering.
-
-## Viewport and normalization
-
-- Source capture: 572 × 394 px; latest pre-fix implementation capture: 732 × 710 px.
-- Both captures were normalized to 700 px height and placed side by side for the focused comparison.
-- State: dark-theme completed Session with one file resource and no available pause/stop control.
-
-## Findings and comparison history
-
-- Latest P2: stacked dividers and boxed rows gave every section equal visual weight. Fix: the two activity-menu separators were removed and sections are now grouped through whitespace and small labels.
-- Latest P2: status content consumed too much vertical space. Fix: overall status and Main Agent status now use compact two-column rows, reducing the menu width to 340 px and its vertical footprint.
-- Latest P2: the full-width primary action plus a two-row utility block made the lower half feel like four nested cards. Fix: “Open Session” remains the single emphasized action while Pin, Copy, and Remove now share one bordered three-column utility row; the destructive control keeps its semantic red border and label.
-- Earlier P2: the visible scrollbar competed with the menu content. Fix: the Tab context menu hides scrollbar chrome while preserving wheel and trackpad scrolling.
-- Fonts and typography: existing Cyrene type tokens are retained; the hierarchy now uses 14 px headings, 12 px resource/primary labels, and 11 px secondary actions.
-- Spacing and layout rhythm: the menu uses a 340 px content frame, a 4/8 px spacing rhythm, compact two-column activity rows, a lightweight resource row, and one-line utility actions.
-- Colors and visual tokens: all surfaces, borders, hover states, and semantic danger color use existing Workbench tokens.
-- Image quality and asset fidelity: the reference contains only interface icons; the implementation reuses the menu's existing icon assets and does not add raster imagery.
-- Copy and content: all existing actions remain available; only the fallback destructive label is shortened to “Remove”.
-
-## Interaction and runtime checks
-
-- JSX compilation succeeded.
-- 25 focused Session-tab tests passed, including action grouping, button borders, scrollbar hiding, keyboard menu items, and resource actions.
-- Local visual verification was attempted in the required in-app browser, but localhost access was blocked before a rendered capture, interaction check, or console-log check could be completed.
-
-## Focused comparison evidence
-
-- The combined pre-fix comparison clearly exposes the over-tall status block, divider-heavy grouping, and stacked card treatment that the latest code corrects.
-- A post-fix focused comparison is still required before visual QA can pass.
-
-## Remaining blocker
-
-- Capture the revised open Tab context menu in the running Cyrene/Electron surface and compare it with the source at the same state.
-
-final result: blocked
-
----
-
-# Design QA — live browser preview in Tab context menu
-
-## Comparison target
-
-- Source visual truth: `/var/folders/zm/qgh_rgw903j0b9t01yg2l0mc0000gn/T/codex-clipboard-dbeda8c6-2f48-4dd4-b4b1-4a63fea59d72.png`.
-- Historical implementation reference: `v0.7.0-beta.11` browser-preview markup and styles.
-- Post-fix implementation screenshot: unavailable; Cyrene is hosting the current Codex task and the desktop-control surface excludes controlling its own host application. The selected in-app browser also blocked the loopback URL before rendering.
-
-## Viewport and normalization
-
-- Source capture: 680 × 470 px, approximately 2× desktop density.
-- Intended implementation state: 360 CSS px Tab context menu, completed Agent activity, active browser resource, light theme.
-- No density-normalized implementation comparison was possible without a rendered capture.
-
-## Findings and comparison history
-
-- P2 fixed in code: the compact browser resource row did not expose the browser image. The pre-release preview structure is restored with title, URL, and current browser screenshot.
-- P2 fixed in code: the browser resource was a one-time snapshot. It now refreshes every 1200 ms while the menu stays open, skips overlapping capture requests, and stops polling when the menu closes.
-- P2 fixed in code: the gap below the browser area did not match the lower action-group rhythm. The browser-to-Open Session gap and Open Session-to-utility gap are both 8 px.
-- Fonts and typography: existing Workbench type sizes and truncation behavior are retained.
-- Colors and visual tokens: the existing menu surface, border, hover, and dark-mode tokens are retained.
-- Image quality and asset fidelity: the preview uses the real browser screenshot returned by the Electron bridge rather than a placeholder asset.
-- Copy and content: the live page title and URL replace the generic Browser-only row while all existing actions remain unchanged.
-
-## Interaction and runtime checks
-
-- Frontend build succeeded.
-- 26 focused Session-tab tests passed, including live-preview polling, preview-image rendering, resource opening, and equal action-group spacing.
-- A same-state rendered screenshot and console-log check remain unavailable because the current task is running inside the application being changed.
-
-## Remaining blocker
-
-- Reopen the revised Tab context menu in Cyrene with an active browser session and capture the same completed state for the final visual comparison.
-
-final result: blocked

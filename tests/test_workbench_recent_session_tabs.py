@@ -411,8 +411,11 @@ def test_topbar_activity_controls_hover_preview_and_overflow_are_separate():
         ".workbench-session-overflow-list.has-regular.has-exceptions .workbench-session-overflow-group.exceptional {",
         1,
     )[1].split("}", 1)[0]
-    assert "min-height: 92px" in exceptional_css
-    assert "max-height: min(170px, 42%)" in exceptional_css
+    assert "height: auto" in exceptional_css
+    assert "min-height: 0" in exceptional_css
+    assert "max-height: 190px" in exceptional_css
+    assert "flex: 0 0 auto" in exceptional_css
+    assert "var height = Math.min(500, window.innerHeight - 16)" in shell
     assert ".workbench-session-tab-more" in css
     inactive_tab_css = css.split(
         ".workbench-session-tab-group .workbench-session-tab {", 1

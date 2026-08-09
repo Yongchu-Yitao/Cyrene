@@ -1077,6 +1077,32 @@ def register_task_session_routes(
         # Snapshot task-meta before any mutation so we can later detect what the
         # agent changed mid-run via set_task_goal and avoid clobbering it.
         task_meta_before = _workbench_capture_task_meta(session)
+        should_generate_title = bool(
+            user_input
+            and not session.get("titleLocked")
+            and not session.get("titleNamingStatus")
+            and _workbench_is_default_title(session.get("title"))
+        )
+        if should_generate_title:
+            from cyrene.workbench.session_naming import generate_session_title
+
+            session["titleNamingStatus"] = "pending"
+            session["titleNamingStartedAt"] = _utc_now_iso()
+            try:
+                generated_title = await generate_session_title(user_input, limit=80)
+            except Exception:
+                logger.warning(
+                    "Workbench task session naming failed for %s",
+                    session_id,
+                    exc_info=True,
+                )
+                generated_title = ""
+            if generated_title and not session.get("titleLocked"):
+                session["title"] = generated_title
+                session["titleNamingStatus"] = "generated"
+                session["titleGeneratedAt"] = _utc_now_iso()
+            else:
+                session["titleNamingStatus"] = "failed"
         # A slash command or attachment-only message is already a concrete action —
         # skip classification and treat it as a direct instruction.
         if command or (not user_input and attachments):
@@ -1145,6 +1171,9 @@ def register_task_session_routes(
                 "modelSelectionId",
                 "model",
                 "reasoningEffort",
+                "titleNamingStatus",
+                "titleNamingStartedAt",
+                "titleGeneratedAt",
             ):
                 if field in session:
                     latest_session[field] = session[field]

@@ -1070,6 +1070,46 @@ function wbcBrowserWindowTitle(browserState) {
   return wbcT("workbenchChat.browserWindowTitle", "Browser");
 }
 
+var WBC_BROWSER_TAB_PICKER_TOGGLE_DEBOUNCE_MS = 280;
+
+function wbcBrowserTabPickerToggleIsDebounced(lastToggleAtRef) {
+  var now = Date.now();
+  var lastToggleAt = Number(lastToggleAtRef && lastToggleAtRef.current || 0);
+  if (lastToggleAt && now - lastToggleAt < WBC_BROWSER_TAB_PICKER_TOGGLE_DEBOUNCE_MS) return true;
+  if (lastToggleAtRef) lastToggleAtRef.current = now;
+  return false;
+}
+
+function wbcBrowserTabPickerPayload(browserSessionId, visible, variant) {
+  var paletteNode = document.querySelector(".workbench-shell") || document.documentElement;
+  var rootStyles = getComputedStyle(paletteNode);
+  function color(name, fallback) {
+    return String(rootStyles.getPropertyValue(name) || "").trim() || fallback;
+  }
+  return {
+    sessionId: String(browserSessionId || ""),
+    visible: visible === true,
+    variant: variant === "split" ? "split" : "maximized",
+    labels: {
+      tabs: wbcT("workbenchChat.browserTabs", "Browser tabs"),
+      browser: wbcT("workbenchChat.browserWindowTitle", "Browser"),
+      reload: wbcT("browser.context.reload", "Reload"),
+      mute: wbcT("browser.context.mute", "Mute"),
+      unmute: wbcT("browser.context.unmute", "Unmute"),
+      close: wbcT("browser.context.closeTab", "Close tab"),
+    },
+    colors: {
+      line: color("--wb-line-2", "#d8dce4"),
+      panel: color("--wb-card-bg-strong", "#ffffff"),
+      text: color("--wb-text", "#17191d"),
+      muted: color("--wb-muted", "#6f737b"),
+      faint: color("--wb-faint", "#9297a1"),
+      hover: color("--wb-control-hover-bg", "#f3f4f6"),
+      selected: color("--wb-card-bg", "#f7f7f8"),
+    },
+  };
+}
+
 function wbcClampBrowserWindowFrame(frame, areaWidth, areaHeight, minWidth, minHeight) {
   var aw = Math.max(0, Number(areaWidth) || 0);
   var ah = Math.max(0, Number(areaHeight) || 0);
@@ -1292,6 +1332,53 @@ function wbcConversationTabAtPoint(clientX, clientY, ownerSessionId) {
   return null;
 }
 
+function wbcCycleTopbarSessionTab(direction) {
+  var tabs = Array.prototype.slice.call(document.querySelectorAll(
+    '.workbench-session-tab[data-session-id]'
+  )).filter(function (tab) {
+    var rect = tab.getBoundingClientRect();
+    return rect.width > 0 && rect.height > 0;
+  });
+  if (tabs.length < 2) return false;
+  var activeIndex = tabs.findIndex(function (tab) {
+    return tab.getAttribute("aria-current") === "page" || tab.classList.contains("active");
+  });
+  var step = Number(direction) < 0 ? -1 : 1;
+  var nextIndex = ((activeIndex < 0 ? 0 : activeIndex) + step + tabs.length) % tabs.length;
+  tabs[nextIndex].click();
+  return true;
+}
+
+function wbcHandleHorizontalWheelGesture(event, gesture, onCycle) {
+  var deltaX = Number(event.deltaX || 0);
+  var deltaY = Number(event.deltaY || 0);
+  if (Math.abs(deltaX) < 2 || Math.abs(deltaX) <= Math.abs(deltaY) * 1.15) return false;
+  event.preventDefault();
+  var now = Date.now();
+  var idleFor = now - Number(gesture.lastEventAt || 0);
+  if (gesture.waitingForIdle) {
+    gesture.lastEventAt = now;
+    if (idleFor < 180 || now < gesture.lockedUntil) return true;
+    gesture.waitingForIdle = false;
+    gesture.delta = 0;
+    gesture.direction = 0;
+  } else {
+    gesture.lastEventAt = now;
+  }
+  var direction = deltaX < 0 ? -1 : 1;
+  if (gesture.direction && gesture.direction !== direction) gesture.delta = 0;
+  gesture.direction = direction;
+  if (now < gesture.lockedUntil) return true;
+  gesture.delta += deltaX;
+  if (Math.abs(gesture.delta) < 44) return true;
+  if (onCycle(direction)) {
+    gesture.lockedUntil = now + 420;
+    gesture.waitingForIdle = true;
+  }
+  gesture.delta = 0;
+  return true;
+}
+
 function wbcNotifyResourceShelfPointerDrag(active) {
   window.dispatchEvent(new CustomEvent("cyrene:resource-shelf-drag-state", {
     detail: { active: active === true },
@@ -1357,6 +1444,7 @@ var WBC_ICONS = {
   plus: <svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round"><path d="M12 5v14M5 12h14"/></svg>,
   search: <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.2-3.2"/></svg>,
   alert: <svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round"><path d="M10.3 4 2.5 18a1.5 1.5 0 0 0 1.3 2.3h16.4a1.5 1.5 0 0 0 1.3-2.3L13.7 4a1.5 1.5 0 0 0-3.4 0Z"/><path d="M12 9v4.5M12 17h.01"/></svg>,
+  errorCircle: <svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="8.5"/><path d="m9 9 6 6M15 9l-6 6"/></svg>,
   edit: <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round"><path d="M12 20h9"/><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4Z"/></svg>,
   pin: <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d="M12 17v5"/><path d="M5 17h14"/><path d="M17 3a1 1 0 0 1 1 1v4.6a2 2 0 0 0 .6 1.4l1.7 1.7A1 1 0 0 1 19.6 13H4.4a1 1 0 0 1-.7-1.7l1.7-1.7A2 2 0 0 0 6 8.2V4a1 1 0 0 1 1-1Z"/></svg>,
   dots: <svg viewBox="0 0 24 24" width="17" height="17" fill="currentColor"><circle cx="5.5" cy="12" r="1.6"/><circle cx="12" cy="12" r="1.6"/><circle cx="18.5" cy="12" r="1.6"/></svg>,
@@ -2522,7 +2610,7 @@ function wbcResolveRefreshedChatSelection(list, selectId, selectionAtRequest, li
   return chats[0] ? String(chats[0].id || "") : "";
 }
 
-function WorkbenchChatPage({ active, project, newChatRequestId, onOpenTask, onActiveChatChange, onActiveChatIdChange, onChatsChange, pinnedChatIds, onTogglePinnedChat }) {
+function WorkbenchChatPage({ active, project, newChatRequestId, onOpenTask, onActiveChatChange, onActiveChatIdChange, onChatsChange, pinnedChatIds, onTogglePinnedChat, navCollapsed, onToggleNavCollapsed, collapseControl, moduleDock }) {
   window.CyreneUI.require("i18n").use();
   window.CyreneUI.require("data").useVersion();
   var isActive = active !== false;
@@ -4698,6 +4786,7 @@ function WorkbenchChatPage({ active, project, newChatRequestId, onOpenTask, onAc
       ref={pageRef}
       className={"wbc-page"
         + (sideVisible ? "" : " wbc-side-hidden")
+        + (navCollapsed ? " wbc-nav-collapsed" : "")
         + (splitDetailOpen ? " side-agent-split-open" : "")
         + (splitDetailOpen && splitSide === "left" ? " wbc-split-left" : "")
         + (chatSideDropActive ? " wbc-chat-side-drop-active" : "")}
@@ -4755,6 +4844,10 @@ function WorkbenchChatPage({ active, project, newChatRequestId, onOpenTask, onAc
         onToTask={handleToTask}
         toTaskBusy={toTaskBusy}
         onTogglePinned={onTogglePinnedChat}
+        collapsed={navCollapsed}
+        onToggleCollapsed={onToggleNavCollapsed}
+        collapseControl={collapseControl}
+        moduleDock={moduleDock}
       />
       {/* A native browser surface does not participate in the split grid and
           would otherwise cover the newly opened conversation/detail pane.
@@ -5324,8 +5417,9 @@ function wbcBuildChatRailItems(chats, groups) {
   return items;
 }
 
-function WbcRail({ projectId, chats, pinnedChatIds, activeChatId, loading, runningChatIds, onSelect, onCreate, onRename, onDelete, onToTask, toTaskBusy, onTogglePinned }) {
+function WbcRail({ projectId, chats, pinnedChatIds, activeChatId, loading, runningChatIds, onSelect, onCreate, onRename, onDelete, onToTask, toTaskBusy, onTogglePinned, collapsed, onToggleCollapsed, collapseControl, moduleDock }) {
   var [query, setQuery] = useWbcState("");
+  var [showAllRecent, setShowAllRecent] = useWbcState(false);
   var [menuId, setMenuId] = useWbcState("");
   var [renameChat, setRenameChat] = useWbcState(null);
   var [renameGroup, setRenameGroup] = useWbcState(null);
@@ -5359,12 +5453,26 @@ function WbcRail({ projectId, chats, pinnedChatIds, activeChatId, loading, runni
     return [String(chat.id), chat];
   }));
 
+  function revealRailMenu(actions) {
+    if (!actions) return;
+    requestAnimationFrame(function () {
+      requestAnimationFrame(function () {
+        if (!actions.isConnected) return;
+        var menu = actions.querySelector(".wb-card-menu");
+        if (menu) menu.scrollIntoView({ block: "nearest", inline: "nearest", behavior: "smooth" });
+      });
+    });
+  }
+
   useWbcEffect(function () {
     setOrder(wbcLoadChatOrder(projectId, defaultOrder));
     var legacyGroups = wbcLoadChatGroups(projectId, defaultOrder);
     setGroups(legacyGroups);
     setGroupBackendReady(false);
-    setCollapsedGroups({});
+    setCollapsedGroups(legacyGroups.reduce(function (state, group) {
+      state[group.id] = true;
+      return state;
+    }, {}));
     setGroupMetadataPending({});
     groupMetadataRequestRef.current.active = {};
     setDragState(null);
@@ -5390,6 +5498,10 @@ function WbcRail({ projectId, chats, pinnedChatIds, activeChatId, loading, runni
       var authoritative = storeNormalizedGroups(payload.groups || []);
       backendRef.baseGroups = authoritative;
       setGroups(authoritative);
+      setCollapsedGroups(authoritative.reduce(function (state, group) {
+        state[group.id] = true;
+        return state;
+      }, {}));
       setGroupBackendReady(true);
     }).catch(function () {
       // Keep the legacy/last-known browser cache for offline startup. The next
@@ -5417,6 +5529,14 @@ function WbcRail({ projectId, chats, pinnedChatIds, activeChatId, loading, runni
   var railItems = useWbcMemo(function () {
     return wbcBuildChatRailItems(filtered, groups);
   }, [filtered, groups]);
+  var pinnedChatIdSet = new Set((Array.isArray(pinnedChatIds) ? pinnedChatIds : []).map(function (id) { return String(id || ""); }));
+  var pinnedRailItems = railItems.filter(function (item) {
+    return item.kind === "chat" && pinnedChatIdSet.has(String(item.chat && item.chat.id || ""));
+  });
+  var recentRailItems = railItems.filter(function (item) {
+    return item.kind === "chat" && !pinnedChatIdSet.has(String(item.chat && item.chat.id || ""));
+  });
+  var groupRailItems = railItems.filter(function (item) { return item.kind === "group"; });
   var groupMetadataRefreshKey = groups.map(function (group) {
     return [
       group.id,
@@ -5744,6 +5864,7 @@ function WbcRail({ projectId, chats, pinnedChatIds, activeChatId, loading, runni
     return (
       <div className="wbc-chat-card wbc-chat-group-drop-clone" aria-hidden="true">
         <span className="wbc-chat-card-top">
+          <span className="wbc-chat-row-icon" aria-hidden="true">{WBC_ICONS.file}</span>
           <span className="wbc-chat-card-title">
             <b><WbcHoverMarquee text={chat.title || wbcT("workbenchChat.newChat", "New chat")} /></b>
           </span>
@@ -5761,6 +5882,19 @@ function WbcRail({ projectId, chats, pinnedChatIds, activeChatId, loading, runni
     options = options || {};
     var active = chat.id === activeChatId;
     var chatRunning = !!(runningChatIds && runningChatIds[chat.id]) || chat.status === "running";
+    /* The lightweight list payload keeps the persisted lifecycle in `status`
+       and exposes the latest run outcome in `runStatus`.  The rail is showing
+       the outcome of the conversation, so prefer that derived value; falling
+       back preserves compatibility with cached/legacy payloads. */
+    var rawChatStatus = String(chat.runStatus || chat.status || "").trim().toLowerCase();
+    var chatFailed = !!chat.failed || !!chat.error || ["error", "failed", "failure"].indexOf(rawChatStatus) >= 0;
+    var chatAttention = !!chat.awaitingUser || !!chat.pendingQuestion || ["awaiting_user", "needs_input", "waiting_input", "requires_confirmation", "blocked"].indexOf(rawChatStatus) >= 0;
+    var chatCompleted = ["completed", "complete", "done", "success", "succeeded"].indexOf(rawChatStatus) >= 0;
+    var chatStatusTone = chatFailed ? " status-failed" : chatAttention ? " status-attention" : chatCompleted ? " status-completed" : chatRunning ? " status-running" : "";
+    var chatStatusIcon = chatFailed ? WBC_ICONS.errorCircle : chatAttention ? WBC_ICONS.alert : chatCompleted ? WBC_ICONS.check : WBC_ICONS.file;
+    var chatStatusLabel = chatFailed
+      ? wbcT("status.failed", "Failed")
+      : chatAttention ? wbcT("workbenchChat.awaitingUser", "Needs input") : "";
     var isMenuOpen = menuId === chat.id;
     var isPinned = (Array.isArray(pinnedChatIds) ? pinnedChatIds : []).some(function (id) {
       return String(id || "") === String(chat.id || "");
@@ -5779,7 +5913,8 @@ function WbcRail({ projectId, chats, pinnedChatIds, activeChatId, loading, runni
           + (active ? " active" : "")
           + (isMenuOpen ? " menu-open" : "")
           + (isDragging ? " dragging" : "")
-          + (isGroupTarget ? " group-drop-target" : "")}
+          + (isGroupTarget ? " group-drop-target" : "")
+          + chatStatusTone}
         title={wbcT("workbenchChat.dragChat", "Drag to reorder, overlap another chat to group, or drop in the conversation area to open {title}.", {
           title: chat.title || wbcT("workbenchChat.newChat", "New chat"),
         })}
@@ -5924,6 +6059,7 @@ function WbcRail({ projectId, chats, pinnedChatIds, activeChatId, loading, runni
         }}
       >
         <span className="wbc-chat-card-top">
+          <span className="wbc-chat-row-icon" aria-hidden="true">{chatStatusIcon}</span>
           <span className="wbc-chat-card-title">
             <b><WbcHoverMarquee text={chat.title || wbcT("workbenchChat.newChat", "New chat")} /></b>
             {isPinned ? (
@@ -5943,13 +6079,24 @@ function WbcRail({ projectId, chats, pinnedChatIds, activeChatId, loading, runni
             )}
           </span>
           <span className="wbc-chat-card-right">
-            <time className="wbc-chat-card-time">{wbcFormatTime(chat.updatedAt || chat.createdAt)}</time>
+            {!chatStatusLabel && (
+              <time className="wbc-chat-card-time">{wbcFormatTime(chat.updatedAt || chat.createdAt)}</time>
+            )}
+            {chatStatusLabel && (
+              <em className="wbc-chat-card-status">{chatStatusLabel}</em>
+            )}
             <span className="wbc-chat-card-actions">
               <button
                 type="button"
                 className="wb-card-menu-btn"
                 title={wbcT("common.moreActions", "More actions")}
-                onClick={function (e) { e.stopPropagation(); setMenuId(isMenuOpen ? "" : chat.id); }}
+                onClick={function (e) {
+                  e.stopPropagation();
+                  var actions = e.currentTarget.parentElement;
+                  var opening = !isMenuOpen;
+                  setMenuId(isMenuOpen ? "" : chat.id);
+                  if (opening) revealRailMenu(actions);
+                }}
               >
                 {WBC_ICONS.dots}
               </button>
@@ -6016,11 +6163,16 @@ function WbcRail({ projectId, chats, pinnedChatIds, activeChatId, loading, runni
     function openGroupMenu(event) {
       event.preventDefault();
       event.stopPropagation();
+      var actions = event.currentTarget.querySelector(".wbc-chat-group-actions");
       setMenuId(groupMenuId);
+      revealRailMenu(actions);
     }
     function toggleGroupMenu(event) {
       event.stopPropagation();
+      var actions = event.currentTarget.parentElement;
+      var opening = !isMenuOpen;
       setMenuId(isMenuOpen ? "" : groupMenuId);
+      if (opening) revealRailMenu(actions);
     }
     var movingChat = dragState && chatMap.get(String(dragState.movingId));
     var groupDropReady = !!(
@@ -6138,9 +6290,8 @@ function WbcRail({ projectId, chats, pinnedChatIds, activeChatId, loading, runni
             }}
             aria-expanded={!isCollapsed}
           >
-            <span className="wbc-chat-group-icon" aria-hidden="true">
-              {group.chatIds.length + (groupDropReady ? 1 : 0)}
-            </span>
+            <span className={"wbc-chat-group-leading-chevron" + (!isCollapsed ? " expanded" : "")} aria-hidden="true">{WBC_ICONS.chevronRight}</span>
+            <span className="wbc-chat-group-count">{group.chatIds.length + (groupDropReady ? 1 : 0)}</span>
             <b><WbcHoverMarquee text={group.title} /></b>
           </button>
           <span className="wbc-chat-group-actions">
@@ -6169,16 +6320,6 @@ function WbcRail({ projectId, chats, pinnedChatIds, activeChatId, loading, runni
                 </button>
               </div>
             )}
-            <button
-              type="button"
-              className={"wbc-chat-group-chevron" + (!isCollapsed ? " expanded" : "")}
-              aria-label={isCollapsed
-                ? wbcT("workbenchChat.groupExpand", "Expand group")
-                : wbcT("workbenchChat.groupCollapse", "Collapse group")}
-              onClick={function () {
-                setCollapsedGroups(function (current) { return { ...current, [group.id]: !isCollapsed }; });
-              }}
-            >{WBC_ICONS.chevronRight}</button>
           </span>
         </header>
         <div className={"wbc-chat-group-summary" + (groupMetadataPending[group.id] ? " is-updating" : "")}>
@@ -6205,37 +6346,133 @@ function WbcRail({ projectId, chats, pinnedChatIds, activeChatId, loading, runni
     );
   }
 
+  var recentOverviewLimit = 10;
+  var visiblePinnedRailItems = pinnedRailItems;
+  var visibleRecentRailItems = showAllRecent
+    ? recentRailItems
+    : recentRailItems.slice(0, recentOverviewLimit);
+  var visibleGroupRailItems = groupRailItems;
+  var recentOverflowCount = Math.max(0, recentRailItems.length - visibleRecentRailItems.length);
+  var visibleRailItemCount = visiblePinnedRailItems.length + visibleRecentRailItems.length + visibleGroupRailItems.length;
+
+  function renderRailItem(item) {
+    if (item.kind === "group") return renderGroupFrame(item.group, item.chats);
+    var chat = item.chat;
+    var isNewGroupTarget = !!(
+      dragState
+      && dragState.mode === "group"
+      && dragState.targetId === String(chat.id)
+      && !wbcFindChatGroup(groups, chat.id)
+    );
+    if (!isNewGroupTarget) return renderChatCard(chat);
+    var movingChat = chatMap.get(String(dragState.movingId));
+    return (
+      <section
+        key={"drop-group:" + chat.id}
+        className="wbc-chat-group wbc-chat-group-preview drop-ready"
+        onDragOver={function (event) {
+          if (!dragState || !wbcHasChatDrag(event)) return;
+          event.preventDefault();
+          event.stopPropagation();
+          if (event.dataTransfer) event.dataTransfer.dropEffect = "move";
+          updateDragState({
+            movingId: dragState.movingId,
+            targetId: String(chat.id),
+            targetGroupId: "",
+            edge: "center",
+            mode: "group",
+          });
+        }}
+        onDrop={function (event) {
+          if (!dragState || !wbcHasChatDrag(event)) return;
+          event.preventDefault();
+          event.stopPropagation();
+          dropCommittedRef.current = true;
+          commitGroupDrop(dragState.movingId, String(chat.id));
+          setDragState(null);
+        }}
+      >
+        <header className="wbc-chat-group-head">
+          <span className="wbc-chat-group-toggle">
+            <span className="wbc-chat-group-leading-chevron expanded" aria-hidden="true">{WBC_ICONS.chevronRight}</span>
+            <span className="wbc-chat-group-count">2</span>
+            <b>{wbcT("workbenchChat.newGroup", "New chat group")}</b>
+          </span>
+        </header>
+        <div className="wbc-chat-group-children">
+          {renderChatCard(chat, { insideGroup: true })}
+          {renderDropClone(movingChat)}
+        </div>
+        <span className="wbc-chat-group-drop-hint">{WBC_ICONS.copy}{wbcT("workbenchChat.releaseToGroup", "Release to create a chat group")}</span>
+      </section>
+    );
+  }
+
+  function renderRailSection(id, label, icon, items) {
+    if (!items.length) return null;
+    return (
+      <section key={id} className={"wbc-rail-section wbc-rail-section-" + id}>
+        <header className="wbc-rail-section-label">
+          {icon ? <span aria-hidden="true">{icon}</span> : null}
+          <b>{label}</b>
+        </header>
+        <div className="wbc-rail-section-items">
+          {items.map(renderRailItem)}
+        </div>
+      </section>
+    );
+  }
+
   return (
-    <aside className="wbc-rail">
+    <aside className={"wbc-rail workbench-integrated-rail" + (collapsed ? " is-collapsed" : "")}>
       <div className="wbc-rail-glass">
-        <div className="wbc-rail-toolbar">
-          <div className="wbc-search">
-            <span className="wbc-search-icon">{WBC_ICONS.search}</span>
-            <input
-              value={query}
-              onChange={function (e) { setQuery(e.target.value); }}
-              placeholder={wbcT("workbenchChat.search", "Search chats...")}
-            />
+        <div className="wbc-nav-card">
+          <div className="wbc-nav-card-head workbench-integrated-rail-head workbench-integrated-rail-search-head">
+            {!collapsed && (
+              <div className="wbc-search">
+                <span className="wbc-search-icon">{WBC_ICONS.search}</span>
+                <input
+                  value={query}
+                  onChange={function (e) { setQuery(e.target.value); }}
+                  placeholder={wbcT("workbenchChat.searchCurrentProject", "Search current project...")}
+                />
+              </div>
+            )}
+            {!collapsed && (
+              <button
+                type="button"
+                className="wbc-project-new-chat"
+                onClick={onCreate}
+                title={wbcT("workbenchChat.newChat", "New chat")}
+                aria-label={wbcT("workbenchChat.newChat", "New chat")}
+              >{WBC_ICONS.plus}</button>
+            )}
+            {collapseControl || (
+              <button
+                type="button"
+                className="workbench-sidebar-collapse-control"
+                onClick={onToggleCollapsed}
+                title={collapsed ? wbcT("rail.expand", "Expand sidebar") : wbcT("rail.collapse", "Collapse sidebar")}
+                aria-label={collapsed ? wbcT("rail.expand", "Expand sidebar") : wbcT("rail.collapse", "Collapse sidebar")}
+              >{WBC_ICONS.sidebar}</button>
+            )}
           </div>
-          <button
-            type="button"
-            className="workbench-icon-btn wbc-new-chat-btn"
-            onClick={onCreate}
-            title={wbcT("workbenchChat.newChat", "New chat")}
-            aria-label={wbcT("workbenchChat.newChat", "New chat")}
-          >
-            {WBC_ICONS.plus}
-          </button>
+
         </div>
       </div>
       {menuId && <div className="wb-card-menu-scrim" onClick={function () { setMenuId(""); }} />}
       <div
-        className={"wbc-chat-list" + (loading ? " is-loading" : "") + (menuId ? " menu-active" : "")}
+        className={"wbc-chat-list workbench-integrated-rail-body" + (loading ? " is-loading" : "") + (menuId ? " menu-active" : "") + (!loading && visibleGroupRailItems.length ? " has-groups" : "")}
         onDragOver={function (event) {
           if (!dragState || !wbcHasChatRailDrag(event)) return;
           event.preventDefault();
           if (event.dataTransfer) event.dataTransfer.dropEffect = "move";
-          if (event.target === event.currentTarget) {
+          var overPrimarySurface = !!(
+            event.target.closest
+            && event.target.closest(".wbc-chat-list-primary")
+            && !event.target.closest(".wbc-chat-card, .wbc-chat-group, .wbc-rail-show-all")
+          );
+          if (event.target === event.currentTarget || overPrimarySurface) {
             if (dragState.dragKind === "group") {
               var trailingOrder = wbcMoveChatOrderBlock(order, dragState.movingIds, [], "after");
               if (trailingOrder.join("|") !== order.join("|")) setOrder(trailingOrder);
@@ -6265,67 +6502,34 @@ function WbcRail({ projectId, chats, pinnedChatIds, activeChatId, loading, runni
           setDragState(null);
         }}
       >
-        {loading && (
-          <div className="workbench-muted wbc-rail-loading" role="status">
-            {wbcT("workbenchChat.loading", "Loading chats...")}
+        <div className="wbc-chat-list-primary">
+          {loading && (
+            <div className="workbench-muted wbc-rail-loading" role="status">
+              {wbcT("workbenchChat.loading", "Loading chats...")}
+            </div>
+          )}
+          {!loading && visibleRailItemCount === 0 && (
+            <div className="workbench-muted wbc-rail-empty">{query
+              ? wbcT("workbenchChat.noMatches", "No matching chats.")
+              : wbcT("workbenchChat.emptyFilter", "No chats in this section.")}</div>
+          )}
+          {!loading && renderRailSection("pinned", wbcT("workbenchChat.pinnedSection", "Pinned"), WBC_ICONS.pin, visiblePinnedRailItems)}
+          {!loading && renderRailSection("recent", wbcT("workbenchChat.recent", "Recent"), null, visibleRecentRailItems)}
+          {!loading && recentOverflowCount > 0 && (
+            <button type="button" className="wbc-rail-show-all" onClick={function () { setShowAllRecent(true); }}>
+              {wbcT("workbenchChat.showAllRecent", "Show all {count}", { count: recentRailItems.length })}
+              {WBC_ICONS.chevronRight}
+            </button>
+          )}
+        </div>
+        {!loading && visibleGroupRailItems.length > 0 && (
+          <div className="wbc-chat-list-group-region">
+            {renderRailSection("groups", wbcT("workbenchChat.groups", "Chat groups"), null, visibleGroupRailItems)}
           </div>
         )}
-        {!loading && filtered.length === 0 && (
-          <div className="workbench-muted">{query ? wbcT("workbenchChat.noMatches", "No matching chats.") : wbcT("workbenchChat.emptyRail", "No chats yet. Create one from the top right.")}</div>
-        )}
-        {!loading && railItems.map(function (item) {
-          if (item.kind === "group") return renderGroupFrame(item.group, item.chats);
-          var chat = item.chat;
-          var isNewGroupTarget = !!(
-            dragState
-            && dragState.mode === "group"
-            && dragState.targetId === String(chat.id)
-            && !wbcFindChatGroup(groups, chat.id)
-          );
-          if (!isNewGroupTarget) return renderChatCard(chat);
-          var movingChat = chatMap.get(String(dragState.movingId));
-          return (
-            <section
-              key={"drop-group:" + chat.id}
-              className="wbc-chat-group wbc-chat-group-preview drop-ready"
-              onDragOver={function (event) {
-                if (!dragState || !wbcHasChatDrag(event)) return;
-                event.preventDefault();
-                event.stopPropagation();
-                if (event.dataTransfer) event.dataTransfer.dropEffect = "move";
-                updateDragState({
-                  movingId: dragState.movingId,
-                  targetId: String(chat.id),
-                  targetGroupId: "",
-                  edge: "center",
-                  mode: "group",
-                });
-              }}
-              onDrop={function (event) {
-                if (!dragState || !wbcHasChatDrag(event)) return;
-                event.preventDefault();
-                event.stopPropagation();
-                dropCommittedRef.current = true;
-                commitGroupDrop(dragState.movingId, String(chat.id));
-                setDragState(null);
-              }}
-            >
-              <header className="wbc-chat-group-head">
-                <span className="wbc-chat-group-toggle">
-                  <span className="wbc-chat-group-icon" aria-hidden="true">2</span>
-                  <b>{wbcT("workbenchChat.newGroup", "New chat group")}</b>
-                </span>
-              </header>
-              <div className="wbc-chat-group-children">
-                {renderChatCard(chat, { insideGroup: true })}
-                {renderDropClone(movingChat)}
-              </div>
-              <span className="wbc-chat-group-drop-hint">{WBC_ICONS.copy}{wbcT("workbenchChat.releaseToGroup", "Release to create a chat group")}</span>
-            </section>
-          );
-        })}
         <span className="wbc-sr-only" aria-live="polite">{announcement}</span>
       </div>
+      {moduleDock}
       <WbcRenameDialog
         chat={renameChat}
         onClose={function () { setRenameChat(null); }}
@@ -6347,6 +6551,7 @@ function WbcRail({ projectId, chats, pinnedChatIds, activeChatId, loading, runni
 
 function WbcBrowserFloatingSurface({ browserState, browserSessionId, visible, mode, composerDocked, runtime, running, latestAssistantReplyId, latestAssistantReplyText, onSend, onGuidance, onInterrupt, onMinimize, onMaximize, onRestore, onTakeoverComplete }) {
   var shellRef = useWbcRef(null);
+  var maximizedPickerRef = useWbcRef(null);
   var minimizedRef = useWbcRef(null);
   var frameRef = useWbcRef(null);
   var frameSessionRef = useWbcRef("");
@@ -6363,6 +6568,7 @@ function WbcBrowserFloatingSurface({ browserState, browserSessionId, visible, mo
   var modeTransitionRafRef = useWbcRef(0);
   var modeTransitionTimerRef = useWbcRef(null);
   var modeTransitionReadyHandlerRef = useWbcRef(null);
+  var maximizedPickerToggleAtRef = useWbcRef(0);
   var [frame, setFrame] = useWbcState(null);
   var [minimizedFrame, setMinimizedFrame] = useWbcState(null);
   var [nativeBrowserState, setNativeBrowserState] = useWbcState(null);
@@ -6389,6 +6595,7 @@ function WbcBrowserFloatingSurface({ browserState, browserSessionId, visible, mo
   var browserBridge = window.cyrene && window.cyrene.browser;
   var FloatingBrowserIcon = window.CyreneUI.require("browser").Icon;
   var hasNativeChatOverlay = !!(browserBridge && typeof browserBridge.setChatOverlay === "function");
+  var hasNativeTabPicker = !!(browserBridge && typeof browserBridge.setTabPicker === "function");
   var fullscreenSavedReply = !running && !fullscreenSubmitting
     && String(latestAssistantReplyId || "")
     && String(latestAssistantReplyId || "") !== fullscreenReplyBaselineRef.current
@@ -7185,24 +7392,12 @@ function WbcBrowserFloatingSurface({ browserState, browserSessionId, visible, mo
   }
 
   function setMaximizedBrowserPicker(nextOpen) {
-    nextOpen = nextOpen === true;
-    if (nextOpen) {
-      // Mount the menu immediately so the opening animation responds to the
-      // click without waiting for the native page preview capture.
-      setMaximizedPickerOpen(true);
-      window.dispatchEvent(new CustomEvent("workbench:browser-obscured", {
-        detail: {
-          obscured: true,
-          preview: true,
-          sessionId: String(browserSessionId || ""),
-        },
-      }));
-      return;
-    }
-    setMaximizedPickerOpen(false);
-    window.dispatchEvent(new CustomEvent("workbench:browser-obscured", {
-      detail: { obscured: false, sessionId: String(browserSessionId || "") },
-    }));
+    var visible = nextOpen === true;
+    setMaximizedPickerOpen(visible);
+    if (!hasNativeTabPicker) return;
+    browserBridge.setTabPicker(
+      wbcBrowserTabPickerPayload(browserSessionId, visible, "maximized")
+    ).catch(function () { setMaximizedPickerOpen(false); });
   }
 
   function selectMaximizedBrowserTab(tab) {
@@ -7235,21 +7430,44 @@ function WbcBrowserFloatingSurface({ browserState, browserSessionId, visible, mo
   }
 
   useWbcEffect(function () {
-    if (effectiveMode === "maximized") return undefined;
-    setMaximizedPickerOpen(false);
-    window.dispatchEvent(new CustomEvent("workbench:browser-obscured", {
-      detail: { obscured: false, sessionId: String(browserSessionId || "") },
-    }));
-    return undefined;
-  }, [effectiveMode, browserSessionId]);
+    if (!hasNativeTabPicker || typeof browserBridge.onTabPickerAction !== "function") return undefined;
+    return browserBridge.onTabPickerAction(function (action) {
+      if (!action || String(action.sessionId || "") !== String(browserSessionId || "")) return;
+      if (action.variant !== "maximized") return;
+      setMaximizedPickerOpen(action.visible === true);
+    });
+  }, [hasNativeTabPicker, browserSessionId]);
 
   useWbcEffect(function () {
+    if (!maximizedPickerOpen) return undefined;
+    function closeOnOutsidePointer(event) {
+      if (maximizedPickerRef.current && !maximizedPickerRef.current.contains(event.target)) {
+        setMaximizedBrowserPicker(false);
+      }
+    }
+    function closeOnWindowBlur() { setMaximizedBrowserPicker(false); }
+    document.addEventListener("pointerdown", closeOnOutsidePointer);
+    if (!hasNativeTabPicker) window.addEventListener("blur", closeOnWindowBlur);
     return function () {
-      window.dispatchEvent(new CustomEvent("workbench:browser-obscured", {
-        detail: { obscured: false, sessionId: String(browserSessionId || "") },
-      }));
+      document.removeEventListener("pointerdown", closeOnOutsidePointer);
+      if (!hasNativeTabPicker) window.removeEventListener("blur", closeOnWindowBlur);
     };
-  }, [browserSessionId]);
+  }, [maximizedPickerOpen, browserSessionId, hasNativeTabPicker]);
+
+  useWbcEffect(function () {
+    if (effectiveMode === "maximized") return undefined;
+    setMaximizedBrowserPicker(false);
+    return undefined;
+  }, [effectiveMode, browserSessionId, hasNativeTabPicker]);
+
+  useWbcEffect(function () {
+    if (!hasNativeTabPicker) return undefined;
+    return function () {
+      browserBridge.setTabPicker(
+        wbcBrowserTabPickerPayload(browserSessionId, false, "maximized")
+      ).catch(function () {});
+    };
+  }, [hasNativeTabPicker, browserSessionId]);
 
   useWbcEffect(function () {
     var wasVisible = previousVisibleRef.current;
@@ -7319,11 +7537,13 @@ function WbcBrowserFloatingSurface({ browserState, browserSessionId, visible, mo
   useWbcEffect(function () {
     if (effectiveMode !== "maximized") return undefined;
     function onKeyDown(event) {
-      if (event.key === "Escape" && onRestore) onRestore();
+      if (event.key !== "Escape") return;
+      if (maximizedPickerOpen) setMaximizedBrowserPicker(false);
+      else if (onRestore) onRestore();
     }
     window.addEventListener("keydown", onKeyDown);
     return function () { window.removeEventListener("keydown", onKeyDown); };
-  }, [effectiveMode, onRestore]);
+  }, [effectiveMode, onRestore, maximizedPickerOpen]);
 
   useWbcEffect(function () {
     return function () {
@@ -7390,14 +7610,17 @@ function WbcBrowserFloatingSurface({ browserState, browserSessionId, visible, mo
       style={inlineStyle}
       aria-label={wbcT("workbenchChat.browserWindowRegion", "Live browser window")}
     >
-      <div className={effectiveMode === "maximized" ? "wbc-resource-split-picker-wrap wbc-browser-maximized-picker-wrap" : "wbc-browser-pip-head-wrap"}>
+      <div ref={effectiveMode === "maximized" ? maximizedPickerRef : undefined} className={effectiveMode === "maximized" ? "wbc-resource-split-picker-wrap wbc-browser-maximized-picker-wrap" : "wbc-browser-pip-head-wrap"}>
         <div
           className={"wbc-browser-window-bar" + (effectiveMode === "maximized" ? " wbc-browser-maximized-head" : "")}
           onPointerDown={effectiveMode === "pip" ? function (event) { beginInteraction(event, "drag", ""); } : undefined}
           onDoubleClick={effectiveMode === "pip" ? function () { runModeTransition(onMaximize, "maximized"); } : undefined}
         >
           {effectiveMode === "maximized" ? (
-            <button type="button" className="wbc-browser-maximized-picker" onClick={function () { setMaximizedBrowserPicker(!maximizedPickerOpen); }} aria-expanded={maximizedPickerOpen}>
+            <button type="button" className="wbc-browser-maximized-picker" onClick={function () {
+              if (wbcBrowserTabPickerToggleIsDebounced(maximizedPickerToggleAtRef)) return;
+              setMaximizedBrowserPicker(!maximizedPickerOpen);
+            }} aria-expanded={maximizedPickerOpen}>
               <span className="wbc-browser-window-title">
                 <span className="wbc-browser-title-pill">{wbcT("workbenchChat.browserWindowTitle", "Browser")}</span>
                 <strong title={wbcBrowserWindowTitle(displayBrowserState)}>{wbcBrowserPageTitle(displayBrowserState) || wbcT("workbenchChat.browserWindowTitle", "Browser")}</strong>
@@ -7423,13 +7646,13 @@ function WbcBrowserFloatingSurface({ browserState, browserSessionId, visible, mo
             {effectiveMode === "pip" && <button type="button" onClick={onMinimize} title={wbcT("workbenchChat.browserMinimize", "Minimize")} aria-label={wbcT("workbenchChat.browserMinimize", "Minimize")}>{WBC_ICONS.windowMinimize}</button>}
           </div>
         </div>
-        {effectiveMode === "maximized" && (
-          <WbcSplitPickerMenu open={maximizedPickerOpen} className="wbc-side-agent-split-menu wbc-resource-picker-menu wbc-browser-picker-menu wbc-browser-maximized-menu" role="listbox">
+        {effectiveMode === "maximized" && !hasNativeTabPicker && maximizedPickerOpen && (
+          <div className="wbc-side-agent-split-menu wbc-resource-picker-menu wbc-browser-picker-menu wbc-browser-maximized-menu open" role="listbox">
             {displayBrowserTabs.map(function (tab) {
               var selected = String(tab.id || "") === String(displayActiveBrowserTab.id || displayBrowserState.activeTabId || "");
               return <div key={tab.id} className={"wbc-browser-picker-row" + (selected ? " active" : "")} role="option" aria-selected={selected}><button type="button" className="wbc-browser-picker-select" onClick={function () { selectMaximizedBrowserTab(tab); }}><span className="wbc-browser-picker-favicon" aria-hidden="true"><span className="wbc-browser-picker-favicon-fallback">{WBC_SIDE_TAB_ICONS.browser}</span>{tab.favicon ? <img src={tab.favicon} alt="" draggable="false" onError={function (event) { event.currentTarget.hidden = true; }} /> : null}</span><b>{tab.title || tab.url || wbcT("workbenchChat.browserWindowTitle", "Browser")}</b></button><span className="wbc-browser-picker-actions"><button type="button" onClick={function (event) { refreshMaximizedBrowserTab(tab, event); }} aria-label={wbcT("browser.context.reload", "Reload")}>{FloatingBrowserIcon ? <FloatingBrowserIcon name="reload" size={14} /> : WBC_ICONS.retry}</button><button type="button" className={tab.muted ? "active" : ""} onClick={function (event) { toggleMaximizedBrowserMute(tab, event); }} aria-label={tab.muted ? wbcT("browser.context.unmute", "Unmute") : wbcT("browser.context.mute", "Mute")}>{FloatingBrowserIcon ? <FloatingBrowserIcon name={tab.muted ? "muted" : "volume"} size={14} /> : null}</button><button type="button" onClick={function (event) { closeMaximizedBrowserTab(tab, event); }} aria-label={wbcT("browser.context.closeTab", "Close tab")} title={wbcT("browser.context.closeTab", "Close tab")}>{WBC_ICONS.x}</button></span></div>;
             })}
-          </WbcSplitPickerMenu>
+          </div>
         )}
       </div>
       <div className="wbc-browser-window-content">
@@ -7707,6 +7930,13 @@ function WbcMain({ project, chat, chatSummary, loading, runtime, error, errorKin
   // a remove/re-add/restore loop which is especially visible at scrollTop=0.
   var avoidanceApplyingRef = useWbcRef(false);
   var avoidanceApplyingRafRef = useWbcRef(0);
+  var horizontalSessionWheelRef = useWbcRef({
+    delta: 0,
+    direction: 0,
+    lockedUntil: 0,
+    lastEventAt: 0,
+    waitingForIdle: false,
+  });
   var durableMessages = chat && Array.isArray(chat.messages) ? chat.messages : [];
   var runtimeTimeline = wbcRuntimeSegmentMessages(runtime).concat(wbcRuntimeTimelineMessages(runtime));
   var messages = wbcMergeChronologicalMessages(durableMessages, runtimeTimeline);
@@ -8160,6 +8390,17 @@ function WbcMain({ project, chat, chatSummary, loading, runtime, error, errorKin
     if (payload && onOpenDroppedChat) onOpenDroppedChat(payload.id);
   }
 
+  function handleConversationHorizontalWheel(event) {
+    if (event.target && event.target.closest && event.target.closest(
+      "pre, .wbc-table-wrap, .wbc-browser-window, input, textarea, select"
+    )) return;
+    wbcHandleHorizontalWheelGesture(
+      event,
+      horizontalSessionWheelRef.current,
+      wbcCycleTopbarSessionTab
+    );
+  }
+
   if (!project) {
     return <main className="wbc-main"><div className="workbench-empty">{wbcT("workbenchChat.noProject", "Select a project first.")}</div></main>;
   }
@@ -8187,6 +8428,7 @@ function WbcMain({ project, chat, chatSummary, loading, runtime, error, errorKin
         className="wbc-thread"
         ref={scrollRef}
         onScroll={onScroll}
+        onWheel={handleConversationHorizontalWheel}
         onContextMenu={onConversationContextMenu}
       >
         {loading && !chat && (
@@ -10258,10 +10500,31 @@ function WbcBranchTab({ chats, activeChatId, onSelectChat }) {
 
 function wbcChatArtifactFiles(chat) {
   var files = [];
+  var seen = new Set();
+  var seenAgentNames = new Set();
+  function add(file, role) {
+    if (!file) return;
+    var pathKey = String(file.path || "").trim().replace(/\\/g, "/");
+    var key = pathKey || String(file.url || file.id || file.name || "").trim();
+    var agentName = role === "assistant" ? String(file.name || "").trim().toLowerCase() : "";
+    if (file.source === "agent" && agentName && seenAgentNames.has(agentName)) return;
+    if (!key || seen.has(key)) return;
+    seen.add(key);
+    if (agentName) seenAgentNames.add(agentName);
+    files.push({ file: file, role: role });
+  }
   (chat && chat.messages || []).forEach(function (msg) {
     (msg.attachments || []).forEach(function (file) {
-      if (file) files.push({ file: file, role: msg.role });
+      add(file, msg.role);
     });
+  });
+  (chat && chat.files || []).forEach(function (file) {
+    if (!file) return;
+    var path = String(file.path || "").trim().replace(/\\/g, "/");
+    var withUrl = path && !file.url
+      ? { ...file, url: "/api/workbench/chats/" + encodeURIComponent(chat.id) + "/files/" + path.split("/").map(encodeURIComponent).join("/") }
+      : file;
+    add(withUrl, "assistant");
   });
   return files;
 }
@@ -10295,7 +10558,7 @@ function WbcArtifactSplit({ file, items, label, onSelect, onClose, onViewed }) {
   var files = Array.isArray(items) ? items : [];
   var currentKey = wbcArtifactFileKey(file);
   var kind = wbcFileViewKind(file);
-  var splitLabel = label || wbcT("workbenchChat.artifacts", "Artifacts");
+  var splitLabel = label || wbcT("workbenchChat.files", "Files");
 
   useWbcEffect(function () {
     setHtmlMode("rendered");
@@ -10341,8 +10604,8 @@ function WbcArtifactSplit({ file, items, label, onSelect, onClose, onViewed }) {
             type="button"
             className="wbc-side-agent-split-close"
             onClick={onClose}
-            title={wbcT("workbenchChat.closeArtifactPreview", "Close artifact preview")}
-            aria-label={wbcT("workbenchChat.closeArtifactPreview", "Close artifact preview")}
+            title={wbcT("workbenchChat.closeFilePreview", "Close file preview")}
+            aria-label={wbcT("workbenchChat.closeFilePreview", "Close file preview")}
           >{WBC_ICONS.x}</button>
         </span>
         <WbcSplitPickerMenu open={pickerOpen} role="listbox" aria-label={splitLabel}>
@@ -10643,8 +10906,11 @@ function WbcBrowserSplitHost({ tabId, browserState, browserSessionId, width, onS
 
 function WbcBrowserSplit({ active: splitActive = true, tabId, tabs, browserState, browserSessionId, onSelect, onClose, onTakeoverComplete }) {
   var [pickerOpen, setPickerOpen] = useWbcState(false);
+  var browserPickerRef = useWbcRef(null);
+  var browserPickerToggleAtRef = useWbcRef(0);
   var [liveState, setLiveState] = useWbcState(browserState || {});
   var bridge = window.cyrene && window.cyrene.browser;
+  var hasNativeTabPicker = !!(bridge && typeof bridge.setTabPicker === "function");
   var BrowserIcon = window.CyreneUI.require("browser").Icon;
   var stateTabs = liveState && Array.isArray(liveState.tabs) ? liveState.tabs : [];
   var propTabs = Array.isArray(tabs) ? tabs : [];
@@ -10674,34 +10940,57 @@ function WbcBrowserSplit({ active: splitActive = true, tabId, tabs, browserState
   }
 
   function setBrowserPickerOpen(open) {
-    var nextOpen = open === true;
-    if (nextOpen) {
-      // Electron's WebContentsView always composites above renderer DOM. Ask
-      // the viewport to replace it with a same-frame preview before opening
-      // the menu, keeping the webpage visible while the dropdown sits above it.
-      setPickerOpen(true);
-      window.dispatchEvent(new CustomEvent("workbench:browser-obscured", {
-        detail: {
-          obscured: true,
-          preview: true,
-          sessionId: String(browserSessionId || ""),
-        },
-      }));
-      return;
-    }
-    setPickerOpen(false);
-    window.dispatchEvent(new CustomEvent("workbench:browser-obscured", {
-      detail: { obscured: false, sessionId: String(browserSessionId || "") },
-    }));
+    var visible = open === true;
+    setPickerOpen(visible);
+    if (!hasNativeTabPicker) return;
+    bridge.setTabPicker(
+      wbcBrowserTabPickerPayload(browserSessionId, visible, "split")
+    ).catch(function () { setPickerOpen(false); });
   }
 
   useWbcEffect(function () {
+    if (!hasNativeTabPicker || typeof bridge.onTabPickerAction !== "function") return undefined;
+    return bridge.onTabPickerAction(function (action) {
+      if (!action || String(action.sessionId || "") !== String(browserSessionId || "")) return;
+      if (action.variant !== "split") return;
+      setPickerOpen(action.visible === true);
+      if (action.type === "select" && action.activeTabId && onSelect) {
+        onSelect(action.activeTabId);
+      } else if (action.type === "close") {
+        if (!Number(action.tabCount || 0)) {
+          if (onClose) onClose();
+        } else if (action.activeTabId && String(action.tabId || "") === String(active.id || tabId || "") && onSelect) {
+          onSelect(action.activeTabId);
+        }
+      }
+    });
+  }, [hasNativeTabPicker, browserSessionId, active.id, tabId, onSelect, onClose]);
+
+  useWbcEffect(function () {
+    if (!pickerOpen) return undefined;
+    function closeBrowserPicker(event) {
+      if (event && event.type === "keydown" && event.key !== "Escape") return;
+      if (event && event.type === "pointerdown" && browserPickerRef.current && browserPickerRef.current.contains(event.target)) return;
+      setBrowserPickerOpen(false);
+    }
+    document.addEventListener("pointerdown", closeBrowserPicker);
+    window.addEventListener("keydown", closeBrowserPicker);
+    if (!hasNativeTabPicker) window.addEventListener("blur", closeBrowserPicker);
     return function () {
-      window.dispatchEvent(new CustomEvent("workbench:browser-obscured", {
-        detail: { obscured: false, sessionId: String(browserSessionId || "") },
-      }));
+      document.removeEventListener("pointerdown", closeBrowserPicker);
+      window.removeEventListener("keydown", closeBrowserPicker);
+      if (!hasNativeTabPicker) window.removeEventListener("blur", closeBrowserPicker);
     };
-  }, [browserSessionId]);
+  }, [pickerOpen, browserSessionId, hasNativeTabPicker]);
+
+  useWbcEffect(function () {
+    if (!hasNativeTabPicker) return undefined;
+    return function () {
+      bridge.setTabPicker(
+        wbcBrowserTabPickerPayload(browserSessionId, false, "split")
+      ).catch(function () {});
+    };
+  }, [hasNativeTabPicker, browserSessionId]);
 
   function selectTab(tab) {
     if (!tab || !tab.id) return;
@@ -10744,16 +11033,19 @@ function WbcBrowserSplit({ active: splitActive = true, tabId, tabs, browserState
 
   return (
     <aside className="wbc-side-agent-split wbc-browser-split" aria-label={wbcT("chat.side.browser", "Browser")}>
-      <div className="wbc-resource-split-picker-wrap">
+      <div ref={browserPickerRef} className="wbc-resource-split-picker-wrap">
         <header className="wbc-side-agent-split-head">
-          <button type="button" className="wbc-side-agent-split-picker" onClick={function () { setBrowserPickerOpen(!pickerOpen); }} aria-expanded={pickerOpen}>
+          <button type="button" className="wbc-side-agent-split-picker" onClick={function () {
+            if (wbcBrowserTabPickerToggleIsDebounced(browserPickerToggleAtRef)) return;
+            setBrowserPickerOpen(!pickerOpen);
+          }} aria-expanded={pickerOpen}>
             <span className="wbc-side-agent-split-title"><span>{wbcT("chat.side.browser", "Browser")}</span><b>{active.title || active.url || wbcT("chat.side.browser", "Browser")}</b></span><span className="wbc-side-agent-split-picker-chevron" aria-hidden="true">{WBC_ICONS.chevronRight}</span>
           </button>
           <button type="button" className="wbc-browser-split-action" onClick={function (event) { refreshTab(active, event); }} aria-label={wbcT("browser.context.reload", "Reload")} title={wbcT("browser.context.reload", "Reload")}>{BrowserIcon ? <BrowserIcon name="reload" size={15} /> : WBC_ICONS.retry}</button>
           <button type="button" className={"wbc-browser-split-action" + (active.muted ? " active" : "")} onClick={function (event) { toggleMute(active, event); }} aria-label={active.muted ? wbcT("browser.context.unmute", "Unmute") : wbcT("browser.context.mute", "Mute")} title={active.muted ? wbcT("browser.context.unmute", "Unmute") : wbcT("browser.context.mute", "Mute")}>{BrowserIcon ? <BrowserIcon name={active.muted ? "muted" : "volume"} size={15} /> : null}</button>
           <button type="button" className="wbc-side-agent-split-close" onClick={onClose} aria-label={wbcT("workbenchChat.closeBrowser", "Close browser")}>{WBC_ICONS.x}</button>
         </header>
-        <WbcSplitPickerMenu open={pickerOpen} className="wbc-side-agent-split-menu wbc-resource-picker-menu wbc-browser-picker-menu" role="listbox">{liveTabs.map(function (tab) { var selected = String(tab.id || "") === String(active.id || tabId || ""); return <div key={tab.id} className={"wbc-browser-picker-row" + (selected ? " active" : "")} role="option" aria-selected={selected}><button type="button" className="wbc-browser-picker-select" onClick={function () { selectTab(tab); }}><span className="wbc-browser-picker-favicon" aria-hidden="true"><span className="wbc-browser-picker-favicon-fallback">{WBC_SIDE_TAB_ICONS.browser}</span>{tab.favicon ? <img src={tab.favicon} alt="" draggable="false" onError={function (event) { event.currentTarget.hidden = true; }} /> : null}</span><b>{tab.title || tab.url || wbcT("chat.side.browser", "Browser")}</b></button><span className="wbc-browser-picker-actions"><button type="button" onClick={function (event) { refreshTab(tab, event); }} aria-label={wbcT("browser.context.reload", "Reload")} title={wbcT("browser.context.reload", "Reload")}>{BrowserIcon ? <BrowserIcon name="reload" size={14} /> : WBC_ICONS.retry}</button><button type="button" className={tab.muted ? "active" : ""} onClick={function (event) { toggleMute(tab, event); }} aria-label={tab.muted ? wbcT("browser.context.unmute", "Unmute") : wbcT("browser.context.mute", "Mute")} title={tab.muted ? wbcT("browser.context.unmute", "Unmute") : wbcT("browser.context.mute", "Mute")}>{BrowserIcon ? <BrowserIcon name={tab.muted ? "muted" : "volume"} size={14} /> : null}</button><button type="button" onClick={function (event) { closeTab(tab, event); }} aria-label={wbcT("browser.context.closeTab", "Close tab")} title={wbcT("browser.context.closeTab", "Close tab")}>{WBC_ICONS.x}</button></span></div>; })}</WbcSplitPickerMenu>
+        {!hasNativeTabPicker && pickerOpen && <div className="wbc-side-agent-split-menu wbc-resource-picker-menu wbc-browser-picker-menu open" role="listbox">{liveTabs.map(function (tab) { var selected = String(tab.id || "") === String(active.id || tabId || ""); return <div key={tab.id} className={"wbc-browser-picker-row" + (selected ? " active" : "")} role="option" aria-selected={selected}><button type="button" className="wbc-browser-picker-select" onClick={function () { selectTab(tab); }}><span className="wbc-browser-picker-favicon" aria-hidden="true"><span className="wbc-browser-picker-favicon-fallback">{WBC_SIDE_TAB_ICONS.browser}</span>{tab.favicon ? <img src={tab.favicon} alt="" draggable="false" onError={function (event) { event.currentTarget.hidden = true; }} /> : null}</span><b>{tab.title || tab.url || wbcT("chat.side.browser", "Browser")}</b></button><span className="wbc-browser-picker-actions"><button type="button" onClick={function (event) { refreshTab(tab, event); }} aria-label={wbcT("browser.context.reload", "Reload")} title={wbcT("browser.context.reload", "Reload")}>{BrowserIcon ? <BrowserIcon name="reload" size={14} /> : WBC_ICONS.retry}</button><button type="button" className={tab.muted ? "active" : ""} onClick={function (event) { toggleMute(tab, event); }} aria-label={tab.muted ? wbcT("browser.context.unmute", "Unmute") : wbcT("browser.context.mute", "Mute")} title={tab.muted ? wbcT("browser.context.unmute", "Unmute") : wbcT("browser.context.mute", "Mute")}>{BrowserIcon ? <BrowserIcon name={tab.muted ? "muted" : "volume"} size={14} /> : null}</button><button type="button" onClick={function (event) { closeTab(tab, event); }} aria-label={wbcT("browser.context.closeTab", "Close tab")} title={wbcT("browser.context.closeTab", "Close tab")}>{WBC_ICONS.x}</button></span></div>; })}</div>}
       </div>
       <div className="wbc-resource-split-body wbc-browser-split-body">
         {splitActive && window.CyreneUI.require("browser").ViewportPanel ? React.createElement(window.CyreneUI.require("browser").ViewportPanel, { browserState: liveState, browserSessionId: browserSessionId, roundId: liveState && liveState.roundId || browserState && browserState.roundId || "", desiredTabId: active.id || tabId, onClose: onClose, onTakeoverComplete: onTakeoverComplete, zoomEnabled: false, hideTabStrip: true, hideReload: true, hideMute: true, splitChrome: true }) : null}
@@ -10983,6 +11275,53 @@ function WbcChatSplit({ chatId, project, onOpenContent, browserActiveByChat, onC
     setRunning(false);
   }
 
+  // Resume a clarification / permission request in the split conversation
+  // itself. The main thread's answer handler is bound to activeChatId, which
+  // may be a different chat while this pane is open.
+  function answerPendingQuestion(questionId, optionText, resumeMode) {
+    var current = chatIdRef.current;
+    var answer = String(optionText || "").trim();
+    if (!current || !questionId || !answer || running) return;
+    var optimisticAnswer = {
+      id: "chat_split_answer_pending_" + Date.now(),
+      role: "user",
+      content: answer,
+      createdAt: new Date().toISOString(),
+      answerToQuestionId: questionId,
+      optimistic: true,
+    };
+    setError("");
+    setStreamText("");
+    runStartedAtRef.current = Date.now();
+    setRunning(true);
+    setChat(function (prev) {
+      if (!prev || String(prev.id || "") !== String(current)) return prev;
+      return {
+        ...prev,
+        pendingQuestion: null,
+        status: "running",
+        messages: wbcMergeChronologicalMessages(prev.messages || [], [optimisticAnswer]),
+      };
+    });
+    var answerMode = wbcNormalizePermissionMode(
+      resumeMode,
+      chat && chat.permissionMode ? chat.permissionMode : "default"
+    );
+    WorkbenchChatModel.answerChat(current, questionId, answer, { mode: answerMode })
+      .then(function () { return refresh(true); })
+      .catch(function (err) {
+        if (disposedRef.current || String(chatIdRef.current || "") !== String(current)) return;
+        setError(wbcErrorText(err));
+        // Restore the durable pending question so the user can retry.
+        refresh(true).catch(function () {});
+      })
+      .finally(function () {
+        if (disposedRef.current || String(chatIdRef.current || "") !== String(current)) return;
+        setRunning(false);
+        setStreamText("");
+      });
+  }
+
   function openContent(type, payload) {
     setSplitPanelOpen(false);
     if (onOpenContent) onOpenContent(type, payload);
@@ -11065,6 +11404,14 @@ function WbcChatSplit({ chatId, project, onOpenContent, browserActiveByChat, onC
         )}
         {errorText && <div className="wbc-side-agent-error" role="alert">{errorText}</div>}
         {messages.map(function (message) {
+          var isActiveQuestion = !!(
+            message.questionPrompt
+            && chat.pendingQuestion
+            && String(chat.pendingQuestion.id || "") === String(message.questionId || "")
+          );
+          if (isActiveQuestion) {
+            return <WbcThreadItem key={message.id || message.createdAt}><WbcQuestionPrompt pending={chat.pendingQuestion} onAnswer={answerPendingQuestion} busy={running} trace={message.trace} /></WbcThreadItem>;
+          }
           return (
             <WbcThreadItem key={message.id || message.createdAt}>
               {message.role === "user"
@@ -11082,6 +11429,11 @@ function WbcChatSplit({ chatId, project, onOpenContent, browserActiveByChat, onC
           <WbcThreadItem>
             <WbcLiveMessage runtime={{ text: streamText }} onOpenFile={openFile} />
           </WbcThreadItem>
+        )}
+        {chat && chat.pendingQuestion && chat.pendingQuestion.id && !running && !messages.some(function (message) {
+          return message.questionPrompt && String(message.questionId || "") === String(chat.pendingQuestion.id || "");
+        }) && (
+          <WbcThreadItem><WbcQuestionPrompt pending={chat.pendingQuestion} onAnswer={answerPendingQuestion} busy={running} /></WbcThreadItem>
         )}
         </div>
       </div>
@@ -11122,8 +11474,10 @@ function WbcSideAgentSplitResizer({ width, onResize, splitSide }) {
     var nextWidth = startWidth;
 
     // Keep the panels live, but do only the single layout write here. Heavy
-    // observers (charts/PDF/map/browser/navigation) pause while the body class
-    // is present and receive one explicit refresh when the gesture finishes.
+    // renderer observers pause while the body class is present and receive one
+    // explicit refresh when the gesture finishes. The native browser is the
+    // exception: its own ResizeObserver streams coalesced bounds so the page
+    // stays attached to the divider throughout the drag.
     function paint() {
       frame = 0;
       if (page) page.style.setProperty("--wbc-side-track-width", nextWidth + "px");
@@ -11746,7 +12100,7 @@ function WbcSide({
   if (pendingPlan) tabs.push({ id: "plan", label: wbcT("chat.side.plan", "Plan") });
   if (hasSubagents) tabs.push({ id: "subagents", label: wbcT("workbenchChat.subagents", "Subagents") });
   tabs.push({ id: "context", label: wbcT("workbenchChat.context", "Context") });
-  if (hasArtifacts) tabs.push({ id: "artifacts", label: wbcT("workbenchChat.artifacts", "Artifacts") });
+  if (hasArtifacts) tabs.push({ id: "artifacts", label: wbcT("workbenchChat.files", "Files") });
   if (hasWorkspaceChanges) {
     tabs.push({ id: "changes", label: wbcT("workbenchChat.changes", "Changes") });
   }
@@ -13928,12 +14282,12 @@ function WbcArtifactsTab({ chat, onSelectArtifact }) {
               className="wbc-artifact-list-row"
               key={(file.id || file.url || i) + "_" + i}
               onClick={function () { if (onSelectArtifact) onSelectArtifact(file); }}
-              title={wbcT("workbenchChat.openArtifactPreview", "Open artifact preview")}
+              title={wbcT("workbenchChat.openFilePreview", "Open file preview")}
             >
               <span className="wbc-artifact-list-icon" aria-hidden="true">{WBC_ICONS.file}</span>
               <span className="wbc-artifact-list-copy">
                 <b>{file.name || "file"}</b>
-                <small>{item.role === "user" ? wbcT("workbenchChat.userUpload", "User upload") : wbcT("workbenchChat.agentGenerated", "Agent generated")}</small>
+                <small title={file.path || ""}>{file.path || (item.role === "user" ? wbcT("workbenchChat.userUpload", "User upload") : wbcT("workbenchChat.agentGenerated", "Agent generated"))}</small>
               </span>
               <span className="wbc-artifact-list-chevron" aria-hidden="true">{WBC_ICONS.chevronRight}</span>
             </button>

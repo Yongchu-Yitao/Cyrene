@@ -112,7 +112,16 @@ _DEFAULT_SETTINGS: dict = {
     "agent_proactive": True,
     "app_language": "",
     "timezone": "Asia/Shanghai",
-    # Independent from the currency-based API budget and enforced by default.
+    # Custom/API models use a currency budget. Keep the persisted defaults in
+    # sync with the values shown by BudgetPanel so enabling the switch without
+    # editing the amount still creates a real, visible budget.
+    "budget_enabled": False,
+    "budget_monthly": 50.0,
+    "budget_currency": "CNY",
+    "budget_action": "warn",
+    "budget_mode": "normal",
+    "budget_start_day": 1,
+    # Codex OAuth has a separate account quota and enforcement switch.
     "codex_budget_enabled": True,
     # Execution workers are completion-driven. These are wide lease/safety
     # controls, not the main agent's normal tool-round budget.

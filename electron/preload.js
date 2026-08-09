@@ -27,6 +27,7 @@ contextBridge.exposeInMainWorld('cyrene', {
     getState: (sessionId) => ipcRenderer.invoke('browser:get-state', { sessionId: String(sessionId || '') }),
     setBounds: (info) => ipcRenderer.invoke('browser:set-bounds', info || {}),
     setChatOverlay: (info) => ipcRenderer.invoke('browser:set-chat-overlay', info || {}),
+    setTabPicker: (info) => ipcRenderer.invoke('browser:set-tab-picker', info || {}),
     setContext: (info) => ipcRenderer.invoke('browser:set-context', info || {}),
     setObscured: (info) => ipcRenderer.invoke(
       'browser:set-obscured',
@@ -57,6 +58,12 @@ contextBridge.exposeInMainWorld('cyrene', {
       const listener = (_event, action) => callback(action);
       ipcRenderer.on('browser:chat-overlay-action', listener);
       return () => ipcRenderer.removeListener('browser:chat-overlay-action', listener);
+    },
+    onTabPickerAction: (callback) => {
+      if (typeof callback !== 'function') return () => {};
+      const listener = (_event, action) => callback(action);
+      ipcRenderer.on('browser:tab-picker-action', listener);
+      return () => ipcRenderer.removeListener('browser:tab-picker-action', listener);
     },
   },
   quickChat: {

@@ -511,7 +511,8 @@ _NATIVE_TOOL_DEFS: tuple[dict[str, Any], ...] = tuple([{'type': 'function',
                    'Start an independent persistent shell session for long-running work. '
                    'Returns immediately — do not wait for the process. For multi-hour jobs '
                    '(training, builds, experiments), set wake_on_exit=true, tell the user the '
-                   'job is running, then quit: when the shell exits the runtime starts a fresh '
+                   'job is running, then quit: an initial command runs as a one-shot job, and '
+                   'when it completes the runtime starts a fresh '
                    'Workbench turn with the terminal tail so you can continue. The user can '
                    'keep chatting while the shell runs.'
                ),
@@ -524,10 +525,11 @@ _NATIVE_TOOL_DEFS: tuple[dict[str, Any], ...] = tuple([{'type': 'function',
                                              'wake_on_exit': {
                                                  'type': 'boolean',
                                                  'description': (
-                                                     'When true, automatically wake this Workbench chat after the '
-                                                     'shell process exits (success or failure), with the captured '
-                                                     'terminal output. Prefer this over sleeping, polling, or '
-                                                     'blocking for long jobs.'
+                                                     'When true with an initial command, run that command as a '
+                                                     'one-shot background job and automatically wake this Workbench '
+                                                     'chat when it completes (success or failure). Without an initial '
+                                                     'command, wake only after the persistent shell process exits. '
+                                                     'Prefer this over sleeping, polling, or blocking for long jobs.'
                                                  ),
                                              },
                                              'wake_note': {

@@ -18,7 +18,7 @@ ROUTE_DECORATOR = re.compile(
     r"\(\s*[\"']([^\"']+)"
 )
 EXPECTED_ROUTE_CONTRACT_SHA256 = (
-    "8ed65643d33c58377c04e2694c33fd0e6610d3e077dc33431fccf6187f101c8b"
+    "89ebaca9a514afbc64922abd83e2c9ec9ffe6ae7bcbe835730968a9248423e44"
 )
 
 
@@ -52,7 +52,7 @@ def _registered_routes(db_path: Path) -> set[str]:
 def test_route_package_owns_the_complete_public_contract():
     routes = _declared_routes(ROOT / "src" / "route")
 
-    assert len(routes) == 317
+    assert len(routes) == 318
     assert len(routes) == len(set(routes)), "duplicate method/path declaration"
     assert (
         hashlib.sha256("\n".join(sorted(routes)).encode()).hexdigest()
