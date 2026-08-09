@@ -5,6 +5,127 @@
 This English edition preserves the release history of the Chinese changelog.
 The Chinese edition remains the most detailed record for older releases.
 
+## [0.7.0b13] - 2026-08-10
+
+This is the thirteenth `0.7.0` beta and includes every commit and release fix after `v0.7.0-beta.12`. It adds a local knowledge/OCR inference pipeline, native DeepSeek web search, constrained interactive charts and actions, a unified Workbench navigation and sidebar system, richer session activity and split workflows, and reliability fixes for permanent knowledge deletion, background chat merging, long-running jobs, native browser tabs, and live split resizing.
+
+### Release highlights
+
+- **Local knowledge inference can run offline** — local Qwen embeddings, ONNX inference, OCR, structure-aware splitting, model downloads, and coverage reporting remove the hard dependency on remote embedding or vision services.
+- **Native DeepSeek web search** — supported official DeepSeek Pro/V4 candidates prefer versioned Chat Completions with native `web_search`, while preserving source parsing, usage accounting, safe fallback, and credential redaction.
+- **Safe interactive answers** — Markdown now supports `:::chart`, `:::button`, `:::actions`, and `:::grid` with bundled ECharts, bounded payloads, whitelisted bindings, and persistently disabled one-shot actions.
+- **Unified Workbench navigation** — Schedule, Tasks, Chat, Knowledge, and Memory share one floating sidebar, bottom module dock, account surface, collapse state, responsive geometry, and a complete top project switcher.
+- **Accurate session activity** — recent-session tabs distinguish running, awaiting-user, failed, cancelled, and completed states; background completions, reasoning, live user turns, and current selection no longer overwrite one another.
+- **Complete conversation splits** — chats can open in a centered floating panel or replace and restore Browser, Viewer, Map, and Changes splits; pending questions are answerable inside split conversations.
+- **Native browser tab and resize fixes** — the tab list is a native Electron surface with full tab actions and keyboard support; title clicks are debounced, the focus race is removed, and the native page follows split bounds live during dragging.
+- **One-shot naming, generated files, and background jobs** — Chat and Task sessions are named once after their first user message, nested outputs can be indexed and downloaded, and a watched initial shell command reliably wakes the original conversation when it finishes.
+- **Permanent Library deletion stays permanent** — exclusive knowledge rows, chunks, FTS data, relations, and managed files are deleted with the Library item, while corpus data shared by another item is retained.
+- **Clearer appearance and budget controls** — light and dark Workbench backgrounds are independently configurable, the color picker is shared with accent settings, and Codex OAuth quota is separated from custom/API model currency budgets.
+
+### Detailed changes and compatibility notes
+
+#### Local knowledge models, OCR, and ingestion
+
+- Added a local model catalog, observable download state, domestic-mirror priority, fallback sources, and automatic source switching after download failures.
+- Added an ONNX Runtime wrapper for input tensors, attention masks, pooling, normalization, and stable vector output; packaging metadata now includes the new runtime and resources.
+- Local Qwen embeddings work without an endpoint. Remote embedding transports remain supported and normalize provider-specific response shapes into the same vector contract.
+- Added local OCR for clear text images. Short or low-confidence OCR falls back to the existing vision path, reducing remote calls without removing attachment analysis capability.
+- Added a structure-aware splitter that preserves source offsets, heading structure, and fenced code blocks instead of cutting code and citations at arbitrary fixed boundaries.
+- Ingestion now exposes model, phase, progress, error, and completion task state; Knowledge UI surfaces embedding coverage and model mismatch status.
+- Retrieval, knowledge listings, project-memory search, and attachment indexing all consult current embedding-model metadata so stale or incompatible vectors do not count as current coverage.
+- Zotero remains in General integrations, while local embedding and OCR settings live in Models with bilingual download feedback and errors.
+
+#### DeepSeek search, Agent behavior, and renderer contracts
+
+- Added an official DeepSeek search backend that requests native search on eligible V4/Pro candidates, parses answer sources, and records usage through the existing run accounting path.
+- Official DeepSeek candidates prefer versioned endpoints; generic OpenAI-compatible providers keep their existing endpoint order, and stale root affinity cannot override official priority.
+- Native search falls back through the existing search stack on failure. Ineligible candidates are not silently substituted, and errors never expose API keys.
+- Search tools now forward run context so sources, accounting, and diagnostics are attached to the correct session.
+- Added a renderer-contract tool exposed only on the Workbench surface. Interactive rendering constraints are loaded on demand instead of permanently expanding the stable system prompt.
+- Renderer guidance is injected as a tail tool result, preserving the stable prompt/cache prefix and keeping ordinary answers small.
+- The main Agent prompt now requires final deliverable verification; memory guidance exposes selective-save triggers earlier to reduce irrelevant long-term writes.
+- Learned skills require an explicit successful inspection and are no longer considered verified merely because an automatic router returned them.
+
+#### Interactive Markdown, charts, and actions
+
+- Added `:::chart` parsing, validation, and mounting with an offline-bundled ECharts build; common series, axes, legends, tooltips, and responsive resizing are supported without a CDN.
+- Chart specs are bounded by shape, field, nesting depth, and payload size. Bind expressions allow only whitelisted arithmetic and known variables, never arbitrary JavaScript.
+- Interactive blocks remain readable fallbacks while a message streams and mount only after completion, avoiding execution or flicker from partial JSON/directives.
+- Matching directives inside fenced code remain code. Invalid chart specifications fall back to visible source text instead of disappearing.
+- Added `:::button` and `:::actions` with validated action IDs, labels, styles, and disabled state; labels are escaped and unknown actions never enter the click protocol.
+- Successful one-shot button actions are persisted and disabled idempotently. Model-mode actions can explicitly resume the current runtime.
+- Added bounded-depth `:::grid` composition for cards, charts, and actions; invalid nesting and incomplete streaming containers safely fall back.
+- Live replies, background refreshes, and historical replay all use the same completed-message mounting rule.
+
+#### Workbench project navigation and unified sidebars
+
+- Replaced the top brand area with a project switcher showing project icon, name, and path, plus create, edit, and delete actions. Menus near the bottom open upward to avoid clipping.
+- Added a macOS-specific traffic-light track so the project selector and first session tab retain balanced optical spacing without changing Windows/Linux controls.
+- Schedule, Tasks, Chat, Knowledge, and Memory now share `WorkbenchSidebarDock`, including module navigation, account card, collapse control, and motion.
+- Expanded width, 48 px collapsed mode, 56 px header, scrolling body, floating border/radius/shadow, and bottom inset now follow one contract. Collapsed account menus remain above the composer.
+- Horizontal trackpad/wheel gestures switch among the five modules with direction locking, a 44 px threshold, and a 420 ms repeat guard while preserving vertical list scrolling.
+- Clicking the active module no longer toggles back to Tasks. Knowledge keeps a persistent sidebar at compact desktop widths instead of becoming a detached overlay drawer.
+- Chat rail removes duplicate module navigation, title, and filter rows in favor of a fixed search head and shared physical card. “Show all” expands recent chats without obsolete filter state.
+- Recent chats, groups, loading, pinned entries, and search results share stable scroll ownership; stale responses cannot replace a newer chat selection.
+- Task sort, Memory search/filters, Schedule navigation/view controls, and create actions share the same floating-control tokens across themes and interaction states.
+- Memory moves its total into the source donut and merges recent additions, citation count, and last update into the same source card, then compresses the card without removing information.
+- The sidebar account menu loads Codex OAuth quota separately from custom-model and application currency budgets; their switches and progress bars are independent.
+
+#### Session activity, background merging, and conversation splits
+
+- The recent-session reducer tracks parallel runs and distinguishes running, awaiting user, failed, cancelled, and terminal states. Post-completion token accounting no longer revives a finished activity indicator.
+- Task summaries expose compact plan progress. Chat summaries persist run outcomes so failure, cancellation, and awaiting states remain correct after refresh.
+- Overflow groups exceptional or attention-required sessions separately and sorts within each group by time; the menu scrolls internally, has no accent outline, and uses the Cyrene context-menu surface.
+- Hover preview, overflow, pin/remove, and more-actions behavior are separated, and the selected activity tab remains stable across status-driven reorderings.
+- Background completion updates detail cache before clearing runtime. Persisted assistant messages merge reasoning into stale cache without replacing the conversation the user selected later.
+- Hydration retains the live user turn before a runtime placeholder, and `clientRequestId` flows through request and persistence paths to prevent duplicate or mismatched merges.
+- Split grips can open centered floating conversation panels. Each conversation split closes independently, and replacing a resource split remembers and restores the previous Browser/Viewer state.
+- Split Chat renders pending questions and answers them through the current `chatIdRef`; composer geometry aligns with the floating rail and no longer obscures content.
+- Message Viewer actions open the corresponding file split directly. Browser, Map, Artifact, Changes, and Subagent hosts share width, entrance/exit, and restoration semantics.
+
+#### Electron browser tabs, split sizing, and window interaction
+
+- Moved the browser tab picker from a renderer menu into an isolated Electron `WebContentsView`, preventing native pages from covering the menu; added a minimal preload and IPC surface.
+- The picker mirrors tabs, favicons, active/muted state, and theme surfaces, and supports select, reload, mute/unmute, close, arrows, Home/End, and Escape.
+- Maximized and split hosts use separate horizontal insets, height follows the tab count, and the picker is lifted by `60 px` from its former low position.
+- Focus uses a neutral inset line instead of the theme accent; reduced-motion and entrance/exit transitions remain supported.
+- Maximized and split title toggles share a `280 ms` debounce. Removing the picker view's competing self-blur dismissal fixes the collapse-then-reopen race when the open title is clicked.
+- Owner-window blur, page focus, renderer outside-pointer, Escape, selection, and close remain explicit dismissal paths, and focus returns to the main renderer after close.
+- Native browser bounds are no longer paused by `wbc-resizing-side-agent`; the browser `ResizeObserver` streams current rectangles while Electron retains the existing approximately `32 ms` coalesced `setBounds` path.
+- Split-resize end clears the last bounds signature and forces one deterministic final sync. Heavier Chart, PDF, Map, and Navigation observers retain their previous pause behavior.
+- Maximized browser chrome, docking above the composer, topbar overlay capture, and native-view hide/restore ordering were tightened to avoid coverage and flicker.
+- The sidebar browser keeps its resize cursor but no longer injects a synthetic resize handle into the native page.
+
+#### Session naming, generated files, and background shells
+
+- Added `generate_session_title`, which uses a low-thinking secondary model with JSON output to produce a concise same-language title from the first user message.
+- Explicit Chat titles set `titleLocked`. Default titles schedule naming once; manual renames or an already-started naming task cannot be overwritten by a late result.
+- Task sessions perform one naming pass on first dispatch and persist pending/generated/failed status and timestamps; later dispatches keep the title.
+- The legacy Agent session-label refresh is now a compatibility no-op so Workbench and runtime do not schedule duplicate model calls.
+- Public Chat data merges message attachments, historical change sets, and nested `output/` generated files. Delete events remove stale indexed files while retaining MIME type and size for current entries.
+- Added a workspace-bound chat file download route that rejects traversal, missing projects/chats, and absent files.
+- `code.shell.start` now runs an initial `command` plus `wake_on_exit=true` as the shell process itself, so command completion triggers a wake instead of returning to an interactive prompt forever.
+- One-shot jobs use closed stdin, pump stdout and stderr separately, and drain both pumps before building the wake snapshot so fast jobs retain their final output.
+- Persistent-shell compatibility remains: without an initial command, wake occurs when the persistent process exits. Snapshots expose `executionMode`, and hints distinguish both modes.
+- Agent prompts tell long-running jobs to pass the command at start, notify the user, and leave the turn; sleeping, polling, or injecting the job later through `code.shell.send` is explicitly discouraged.
+
+#### Data correctness, settings, and packaging
+
+- Permanent Library deletion removes unshared `kb_documents`, chunks, FTS rows, relations, and managed files so bridge sync and directory scans cannot resurrect the item; shared corpus rows remain intact.
+- Knowledge-item embedding status is calculated against current-model coverage rather than any historical vector.
+- Light and dark Workbench backgrounds can be configured independently. Values are applied as CSS variables before first paint and update live in both Workbench and Quick Chat.
+- Accent and background colors share an accessible HSV/HEX picker with Apply, Reset, Escape, and outside-click behavior; background settings no longer expose a redundant standalone hex input.
+- The composer uses a bordered, blurred glass card to preserve contrast over custom backgrounds; search remains clearly outlined without adding an accent outline to the input card.
+- Custom/API model budgets now have explicit persisted defaults (disabled, `50 CNY`, warn, normal, day 1), while independent Codex OAuth quota enforcement remains enabled by default.
+- Build scripts include the new WebUI entries, renderer modules, local-model dependencies, and Electron picker preload; application icons and packaging resources are updated.
+- README badges, documentation sidebar, WeChat client, WebUI cache keys, Python/UV metadata, Electron/package-lock, and version contracts all use `0.7.0b13` / `0.7.0-beta.13`; the Git tag is `v0.7.0-beta.13`.
+
+#### Regression coverage and release checks
+
+- Added or expanded regression coverage for local models/OCR, DeepSeek search, renderer contracts, charts/buttons/actions/grid, permanent Library deletion, background chat merging, session activity, unified sidebars, project menus, background settings, one-shot shell wake, session naming, generated files, the native tab picker, and live browser bounds.
+- All `33` WebUI JSX entries were rebuilt; Electron main/preload syntax checks passed, the complete Python suite reported `1866 passed`, and version, route, tool-hash, and generated-file contracts were checked separately.
+- The native browser fix was visually reviewed against the reported screenshot in one combined comparison input, and the picker open/second-title-click close path was exercised in Electron.
+
 ## [0.7.0b12] - 2026-08-03
 
 This is the twelfth `0.7.0` beta and includes every change after

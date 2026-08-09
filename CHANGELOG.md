@@ -2,6 +2,127 @@
 
 [中文](CHANGELOG.md) · [English](CHANGELOG.en.md)
 
+## [0.7.0b13] - 2026-08-10
+
+这是 `0.7.0` 的第十三个测试版，完整包含 `v0.7.0-beta.12` 之后的全部提交与发布前修复。本版加入本地知识推理与 OCR 管线、DeepSeek 原生联网搜索、受约束的交互式图表/按钮渲染，重构 Workbench 的项目导航、统一侧栏、会话活动与分屏体验，并修复知识库永久删除、后台聊天合并、长任务唤醒、浏览器 Tab 列表和分屏原生页面实时缩放等可靠性问题。
+
+### 版本摘要
+
+- **本地知识推理链路可离线运行** — 新增本地 Qwen embedding、ONNX 推理、OCR、结构感知切块、模型下载与覆盖状态，知识入库、附件分析和语义检索不再必须依赖远程 embedding/vision 服务。
+- **DeepSeek 原生联网搜索接入 Agent** — 官方 DeepSeek Pro/V4 模型优先使用版本化 Chat Completions 与原生 `web_search`，保留安全降级、来源解析、使用量记录和密钥脱敏。
+- **回答可以呈现安全的交互式内容** — Markdown 新增 `:::chart`、`:::button`、`:::actions` 与 `:::grid`，支持离线 ECharts、受白名单限制的数据绑定和可持久禁用的一次性操作按钮。
+- **Workbench 导航与侧栏统一** — 日程、任务、对话、知识库和记忆共用同一浮动侧栏、底部模块 Dock、账户入口、折叠状态和响应式几何；顶部项目切换器补齐创建、编辑、删除与路径信息。
+- **会话状态更及时、更准确** — 顶部最近会话可展示运行、等待、失败、取消和计划进度；后台完成的回复、reasoning、live user turn、运行结束状态和当前选中会话不再互相覆盖。
+- **分屏与浮动对话更完整** — 对话可以作为居中浮层打开，也可以与 Browser、Viewer、Map、Changes 等资源分屏互换；分屏中的待确认问题可以直接回答，关闭后会恢复原资源。
+- **原生浏览器 Tab 与尺寸同步修复** — Tab 列表改为 Electron 原生浮层，支持选择、刷新、静音、关闭、键盘导航和 reduced motion；标题点击增加防抖并移除焦点竞态，分屏页面在拖动时实时跟随面板边界。
+- **会话命名、生成文件与长任务完善** — Chat/Task 在第一次用户消息后只调用一次次级模型生成标题；嵌套输出文件可索引和下载；带初始命令的 `wake_on_exit` shell 作为一次性后台任务运行并在完成时可靠唤醒原会话。
+- **知识库永久删除不再复活** — 删除 Library 条目时同步清除仅由它引用的知识文档、chunk、FTS、关系和受管文件，同时保留仍被其他条目共享的语料。
+- **外观与预算设置更清晰** — 明暗主题背景可分别自定义，颜色选择器复用于强调色和背景；Codex OAuth 配额与自定义/API 模型货币预算拆分显示和配置。
+
+### 详细变更与兼容说明
+
+#### 本地知识模型、OCR 与入库
+
+- 新增本地模型目录、下载状态、国内镜像优先与备用源切换；下载失败可自动换源，并向设置页和知识库列表暴露可理解的状态。
+- 新增 ONNX Runtime 推理封装，统一输入张量、attention mask、池化、归一化和输出向量格式；PyInstaller 构建规范同步打包新增运行时与资源。
+- Qwen 本地 embedding 可在没有 endpoint 的情况下工作；远程 embedding transport 仍保留，并会把各种供应商返回格式归一化为相同向量契约。
+- 新增本地 OCR：清晰文字图片直接走 OCR；低置信度或文本过短时才回退到 vision 模型，减少远程调用并保留原有附件分析能力。
+- 新增结构感知 splitter，保留源文件字符偏移、标题层级和 fenced code block，避免普通定长切块切断代码或破坏引用定位。
+- 入库流程拆出可观察的 ingest task，记录模型、阶段、进度、错误与完成状态；知识库界面可显示当前 embedding 覆盖率和模型不一致状态。
+- 检索、知识列表、项目记忆搜索和附件索引统一读取当前 embedding 模型元数据，避免不同维度或旧模型向量被当作有效覆盖。
+- 设置页把 Zotero 保留在通用集成，把 embedding/OCR 本地模型配置归入模型区域；中英文说明、下载反馈和错误状态同步补齐。
+
+#### DeepSeek 搜索、Agent 与渲染契约
+
+- 新增官方 DeepSeek 原生搜索 backend：对支持的 V4/Pro candidate 强制声明联网搜索，解析来源与回答，并把使用量写入现有计量路径。
+- 官方 DeepSeek endpoint 优先使用版本化路径；非官方 OpenAI-compatible provider 继续保持通用 endpoint 顺序，旧的 root affinity 不会覆盖官方优先级。
+- 原生搜索失败时按既有策略回退到搜索聚合服务；没有合格官方 candidate 时不会误用另一模型或泄露 API key。
+- 搜索工具把当前 run context 传入 backend，使来源、计费和运行诊断能关联到正确会话。
+- 新增仅对 Workbench surface 暴露的 renderer contract 工具。Agent 需要交互式图表或按钮时按需加载约束，而不是把大段渲染说明永久塞入稳定 system prompt。
+- 渲染契约作为尾部 tool result 注入，保持稳定 prompt/cache 前缀；触发扩展很小，未触发时不增加普通回答负担。
+- 主 Agent prompt 明确要求在交付前验证最终产物；记忆 prompt 提前说明选择性保存触发条件，减少无关内容被写入长期记忆。
+- 学习技能只接受经过显式检查且成功的 candidate，不再从自动路由结果推断为已经验证。
+
+#### 交互式 Markdown、图表和操作按钮
+
+- 新增 `:::chart` 解析、校验和挂载，随应用离线分发 ECharts，不依赖 CDN；支持常用序列、坐标轴、图例、tooltip 和响应式 resize。
+- Chart spec 限制对象形状、字段、深度和总 payload 大小；数据绑定表达式只允许白名单算术和明确变量，不执行任意 JavaScript。
+- 流式输出期间交互 block 只显示可读 fallback，消息完成后才挂载图表或控件，避免半截 JSON/指令造成闪烁或错误执行。
+- fenced code block 内的同名 directive 保持普通代码文本；非法 chart spec 会显示原始规范而不是吞掉内容。
+- 新增 `:::button` 与 `:::actions`，支持 action ID、标签、样式和禁用态；文本经过转义，非法字段或未知操作不会进入点击协议。
+- Button action 由 Workbench 路由持久化为一次性状态，已成功执行的 block 会幂等禁用；model 模式可把明确操作转交当前运行时。
+- 新增 `:::grid` 容器，可在受限深度内组合 card、chart 和 actions；非法嵌套、超深层级和不完整流式内容会安全回退。
+- 聊天消息只在 run 完成后启用交互，背景刷新和历史回放使用同一挂载规则。
+
+#### Workbench 项目导航与统一侧栏
+
+- 顶部品牌区域升级为项目切换器，展示项目图标、名称和路径；菜单支持新建、编辑、删除，最后几行的操作菜单会向上展开，避免被窗口底部裁切。
+- macOS 顶栏单独预留 traffic-light 轨道，项目选择器和首个会话 Tab 保持对称光学间距；Windows/Linux 延续原有窗口控制布局。
+- 日程、任务、对话、知识库、记忆五个页面共享 `WorkbenchSidebarDock`，模块入口、账户卡、折叠按钮和动画不再各自实现。
+- 侧栏展开宽度、48 px 折叠态、56 px header、滚动 body、浮动边框、圆角、阴影和底部留白全部统一；账户菜单在折叠态仍位于 composer 之上。
+- 鼠标/触控板横向滑动侧栏可在五个模块之间切换，包含方向锁、44 px 阈值和 420 ms 防重复窗口，不影响列表纵向滚动。
+- 点击已激活模块不再意外跳回任务页；知识库在紧凑桌面宽度保持持久侧栏，不再切换为脱离布局的覆盖抽屉。
+- Chat rail 移除重复模块导航、标题和筛选行，使用固定搜索头与统一物理卡片；“查看全部”扩展最近对话，不再依赖已删除的 filter state。
+- 最近对话、对话组、加载态、固定项和搜索结果共用稳定 scroll ownership，聊天切换请求会防止较晚返回的旧响应覆盖新选择。
+- Task sort、Memory 搜索/筛选、Schedule Today/前后翻页/视图切换与新增按钮使用同一浮动控件 token，明暗主题、hover、focus 和 selected 状态一致。
+- Memory 将概览总数放入来源 donut，并把近期新增、引用次数和最后更新合并到同一来源卡；随后压缩布局但保留所有信息和百分比。
+- 侧栏账户菜单分别加载 Codex OAuth quota、自定义模型和应用货币预算；两个预算体系不再共享一个开关或进度条。
+
+#### 会话活动、后台合并与分屏对话
+
+- 顶部最近会话 reducer 同时跟踪并行 run，区分 running、awaiting user、failed、cancelled 和 terminal 状态；完成后的 token accounting 不再让已结束会话重新显示为活动。
+- Task 摘要向顶部 Tab 提供紧凑计划进度；Chat 摘要持久化 run outcome，刷新后仍能正确显示失败、取消或等待状态。
+- 会话 overflow 将异常/需关注项分组到底部并在组内按时间排序；菜单独立滚动、无强调色描边，并与 Cyrene 自定义 context menu 表面一致。
+- Hover preview、overflow、pin/remove 和更多操作分离，活动 Tab 在状态更新时保持选择，不会因列表重排跳走。
+- 背景聊天完成时先更新详情缓存再清理 runtime；持久化 assistant 消息会把 reasoning 合并进旧缓存，不覆盖用户已经切换到的新对话。
+- Hydration 保留已经显示的 live user turn，并在 runtime placeholder 到达前维持正确顺序；`clientRequestId` 贯穿请求和持久消息，减少重复或错并。
+- Split grip 可打开居中的浮动对话面板；每个会话分屏可以独立关闭，资源分屏替换时会记住并恢复先前的 Browser/Viewer 等内容。
+- 分屏 Chat 完整渲染 pending question，并通过当前 `chatIdRef` 提交答案；composer 与浮动 rail 对齐，输入区和滚动内容不互相遮挡。
+- 消息内 Viewer 操作可以直接打开对应文件分屏；Browser、Map、Artifact、Changes、Subagents 等 host 共享相同宽度、进入/退出与恢复语义。
+
+#### Electron 浏览器 Tab、分屏尺寸与窗口交互
+
+- 浏览器 Tab picker 从 renderer 菜单升级为独立 Electron `WebContentsView`，避免原生网页覆盖菜单；新增隔离 preload 和最小 IPC surface。
+- 原生 picker 同步当前 Tab、favicon、活动态、静音状态与主题表面，提供选择、刷新、静音/取消静音、关闭、Home/End/方向键和 Escape。
+- 弹层按 maximized/split host 分别计算水平 inset，高度随 Tab 数量增长；位置向上提升 `60 px`，不再贴近页面下方。
+- 焦点态使用中性边线，不再出现主题色描边；保留 reduced-motion 分支和进入/退出动画。
+- Maximized 与 split 标题点击共用 `280 ms` 防抖；移除 picker 自身 blur 的竞争关闭路径，修复点击已展开标题时“先收起再重新展开”。
+- 仍保留 owner window blur、网页 focus、renderer 外部 pointer、Escape、选择与关闭等明确 dismiss 路径，关闭后把焦点还给主 renderer。
+- Native browser viewport 在分屏拖动期间不再被 `wbc-resizing-side-agent` 暂停，ResizeObserver 会持续发送最新矩形；Electron 端继续以现有约 `32 ms` 定时器合并 `setBounds`。
+- 拖动结束会清除最后 bounds signature 并强制一次最终同步，保证原生页面准确贴合最终分隔线；Chart、PDF、Map、Navigation 等较重 observer 仍使用原有暂停策略。
+- Browser 最大化窗口、composer 上方 dock、topbar overlay 截图与原生 view 隐藏顺序得到收紧，避免菜单/浮层被页面盖住或恢复时闪烁。
+- 侧边 Browser 的 resize cursor 保留，但不再向原生页面注入假的拖动 handle。
+
+#### 会话命名、生成文件与后台 Shell
+
+- 新增独立 `generate_session_title`，使用次级低思考模型和 JSON 输出，从第一次用户消息生成同语言、短且无尾部标点的标题。
+- Chat 创建时显式标题会设置 `titleLocked`；默认标题只调度一次异步命名，人工重命名或已开始命名时不会被较晚模型结果覆盖。
+- Task session 在第一次 dispatch 时同步完成一次命名，并持久化 pending/generated/failed 时间与状态；后续 dispatch 保持原题目。
+- 旧 Agent session label refresh 变为兼容 no-op，避免 Workbench 与 runtime 两套命名任务重复调用模型。
+- Chat 公开模型合并消息附件、历史 change set 与嵌套 `output/` 生成文件；删除事件会从索引移除旧文件，MIME 类型与大小一起保存。
+- 新增受工作区边界保护的聊天文件下载路由，拒绝越界路径、缺失项目/聊天和不存在文件。
+- `code.shell.start` 在同时提供初始 `command` 与 `wake_on_exit=true` 时直接启动一次性 shell process，命令结束即触发 wake，不再回到交互 prompt 后永久等待。
+- 一次性 job 使用关闭的 stdin，分别抽取 stdout/stderr，并在构造 wake snapshot 前等待 pump drain，避免快速任务丢失最后几行输出。
+- Persistent shell 行为保持兼容：没有初始命令时仍在 shell process 退出后唤醒；snapshot 新增 `executionMode`，工具提示明确区分两种模式。
+- Agent prompt 要求多小时任务在 start 时传入命令、告知用户后退出当前 turn，禁止 sleep、轮询或先启动再用 `code.shell.send` 注入任务。
+
+#### 数据正确性、设置与打包
+
+- Library 永久删除会清除没有其他引用者的 `kb_documents`、chunks、FTS、relations 和受管文件，阻止 knowledge bridge 或目录扫描重新导入；共享文档保持不动。
+- 知识条目的 embedding status 按当前模型覆盖率计算，避免旧模型已生成向量导致错误“完成”状态。
+- 明暗主题分别支持 Workbench 背景色；设置值在首屏 paint 前应用为 CSS 变量，主 Workbench 和 Quick Chat 都实时监听变化。
+- 强调色与背景色共用可键盘操作的 HSV/HEX picker，支持 Apply、Reset、Escape 和 outside click；背景设置不再暴露多余的独立 hex 输入框。
+- Composer 使用带边框和 blur 的玻璃卡片保持与自定义背景的对比；搜索框仍保留清晰 outline，输入卡片本身不增加主题色描边。
+- 自定义/API 模型预算新增明确默认值（关闭、`50 CNY`、warn、normal、每月 1 日），Codex OAuth 的独立配额 enforcement 继续默认开启。
+- 构建脚本补齐新的 WebUI entry、渲染模块、本地模型依赖和 Electron picker preload；应用图标与打包资源同步更新。
+- README、文档侧栏、WeChat client、WebUI cache key、Python/UV、Electron/package-lock 和版本契约统一升级为 `0.7.0b13` / `0.7.0-beta.13`；Git 发布标签为 `v0.7.0-beta.13`。
+
+#### 回归测试与发布检查
+
+- 新增或扩展回归覆盖：本地模型与 OCR、DeepSeek 搜索、renderer contract、charts/buttons/actions/grid、Library 永久删除、后台 chat 合并、session activity、统一侧栏、项目菜单、背景设置、一次性 shell wake、会话命名、生成文件、原生 Tab picker 和分屏 live bounds。
+- WebUI 的 `33` 个 JSX 入口已重新编译；Electron main/preload 语法检查通过，Python 完整测试套件 `1866 passed`，版本、路由、工具哈希与生成文件契约也已单独校验。
+- 原生浏览器最终状态与问题截图在同一 comparison input 中完成视觉 QA；Tab picker 展开/再次点击关闭也在 Electron 中完成实机检查。
+
 ## [0.7.0b12] - 2026-08-03
 
 这是 `0.7.0` 的第十二个测试版，完整包含 `v0.7.0-beta.11` 之后的全部改动。本版修复移动端控制 Workbench 时，新建或继续发送过消息的对话无法及时出现在桌面端列表，以及 Agent 回复通知可以显示、点击却无法跳转到目标对话的问题。
