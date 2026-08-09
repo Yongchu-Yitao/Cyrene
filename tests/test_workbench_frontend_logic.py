@@ -440,7 +440,7 @@ def test_hidden_chat_sidebar_slightly_widens_and_centers_the_conversation_lane()
     assert "--wbc-side-track-width: var(--wb-right-w, 350px);" in page_css
     assert "grid-template-columns: var(--wbc-rail-width) 0px minmax(var(--wbc-main-min-width), 1fr) var(--wbc-side-track-width);" in page_css
     assert "transition: grid-template-columns 500ms cubic-bezier(.22, 1.16, .36, 1);" in page_css
-    assert "--wbc-collapsed-lane-growth: clamp(64px, 5vw, 96px);" in page_css
+    assert "--wbc-collapsed-lane-growth: clamp(144px, 12vw, 208px);" in page_css
     assert "--wbc-side-track-width: 0px;" in hidden_css
     assert "--wbc-reclaimed-side-width: calc(var(--wb-right-w, 350px) - var(--wbc-collapsed-lane-growth));" in hidden_css
     assert "--wbc-conversation-shift: calc(var(--wbc-reclaimed-side-width) / 2);" in hidden_css
