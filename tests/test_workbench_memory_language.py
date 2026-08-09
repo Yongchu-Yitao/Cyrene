@@ -418,6 +418,8 @@ async def test_search_project_memory_tool_uses_current_project(monkeypatch, tmp_
 
     payload = json.loads(result)
     assert payload["status"] == "success"
+    assert payload["search_mode"] == "keyword"
+    assert payload["uses_embeddings"] is False
     assert payload["count"] == 1
     assert payload["memories"][0]["content"] == "用户偏好使用 pytest 编写回归测试。"
 
@@ -629,6 +631,8 @@ def test_memory_tools_are_registered_with_distinct_contracts():
     assert "session_id" in defs["RecallConversation"]["parameters"]["properties"]
     assert defs["retire_short_term_memory"]["parameters"]["required"] == ["memory_id"]
     assert defs["search_project_memory"]["parameters"]["required"] == ["query"]
+    assert "keyword" in defs["search_project_memory"]["description"].lower()
+    assert "does not use embeddings" in defs["search_project_memory"]["description"].lower()
     assert defs["retire_project_memory"]["parameters"]["required"] == ["memory_id"]
     assert tools.is_tool_allowed_for_actor("retire_short_term_memory", "main")
     assert not tools.is_tool_allowed_for_actor("retire_short_term_memory", "subagent")

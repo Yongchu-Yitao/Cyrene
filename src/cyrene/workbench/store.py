@@ -42,8 +42,8 @@ T = TypeVar("T")
 _SCHEMA_LOCK = threading.Lock()
 _SCHEMA_READY: set[str] = set()
 # A Workbench document is merged with the latest committed value before every
-# write.  Serializing those read/merge/write/export cycles inside this process
-# both reduces SQLite writer contention and preserves commit/export ordering.
+# write. Serialize only the short read/merge/write transactions inside this
+# process; compatibility-export filesystem I/O happens after releasing the lock.
 # Cross-process contention is still handled by SQLite's busy timeout.
 _DOCUMENT_WRITE_LOCK = threading.RLock()
 _COUNTER_FIELDS = {
@@ -338,7 +338,6 @@ def _write_document_locked(
     default_factory: Callable[[], T],
     *,
     legacy_path: Path | None = None,
-    export_path: Path | None = None,
     base_value: Any | None = None,
 ) -> T:
     """Merge and commit a document in one SQLite write transaction."""
@@ -359,14 +358,6 @@ def _write_document_locked(
     finally:
         conn.close()
 
-    # Compatibility/export mirror only. Runtime reads never consult this file
-    # once the SQLite row exists. Re-read while holding the SQLite writer lock
-    # so two processes cannot publish exports in the reverse of commit order.
-    if export_path is not None:
-        try:
-            _export_current_document(db_path, key, export_path)
-        except Exception:
-            logger.exception("Failed to export Workbench document %s to %s", key, export_path)
     return _tracked(merged, key)
 
 
@@ -382,15 +373,22 @@ def write_document(
 ) -> T:
     """Merge and commit one document without racing another local writer."""
     with _DOCUMENT_WRITE_LOCK:
-        return _write_document_locked(
+        result = _write_document_locked(
             db_path,
             key,
             value,
             default_factory,
             legacy_path=legacy_path,
-            export_path=export_path,
             base_value=base_value,
         )
+    # The JSON file is a compatibility mirror, never a runtime read source.
+    # Do not make unrelated document commits wait for full-file serialization.
+    if export_path is not None:
+        try:
+            _export_current_document(db_path, key, export_path)
+        except Exception:
+            logger.exception("Failed to export Workbench document %s to %s", key, export_path)
+    return result
 
 
 def patch_document_fields(
@@ -429,29 +427,44 @@ def patch_document_fields(
         finally:
             conn.close()
 
-        if export_path is not None:
-            try:
-                _export_current_document(db_path, key, export_path)
-            except Exception:
-                logger.exception("Failed to export Workbench document %s to %s", key, export_path)
+    if export_path is not None:
+        try:
+            _export_current_document(db_path, key, export_path)
+        except Exception:
+            logger.exception("Failed to export Workbench document %s to %s", key, export_path)
     return {name: _plain(current.get(name)) for name in updates}
 
 
 def _export_current_document(db_path: str | Path, key: str, export_path: Path) -> None:
-    conn = _connect(db_path)
-    try:
-        conn.execute("BEGIN IMMEDIATE")
-        current = _load_row(conn, key)
-        if current is None:
+    # Never retain a SQLite writer lock while encoding and atomically replacing
+    # a potentially large JSON mirror. If another process commits during the
+    # export, verify the row version and converge to the newest snapshot.
+    for _attempt in range(4):
+        conn = _connect(db_path)
+        try:
+            row = conn.execute(
+                "SELECT payload_json, updated_at FROM workbench_state WHERE key = ?",
+                (key,),
+            ).fetchone()
+        finally:
+            conn.close()
+        marker = None if row is None else str(row[1])
+        if row is None:
             export_path.unlink(missing_ok=True)
         else:
-            atomic_write_json(export_path, current)
-        conn.commit()
-    except Exception:
-        conn.rollback()
-        raise
-    finally:
-        conn.close()
+            atomic_write_json(export_path, json.loads(row[0]))
+
+        verify = _connect(db_path)
+        try:
+            latest = verify.execute(
+                "SELECT updated_at FROM workbench_state WHERE key = ?",
+                (key,),
+            ).fetchone()
+        finally:
+            verify.close()
+        latest_marker = None if latest is None else str(latest[0])
+        if latest_marker == marker:
+            return
 
 
 def delete_document(db_path: str | Path, key: str, *, export_path: Path | None = None) -> None:

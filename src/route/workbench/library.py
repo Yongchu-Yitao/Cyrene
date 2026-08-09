@@ -142,6 +142,51 @@ async def _indexed_item_text(
         return "\n\n".join(parts), truncated
 
 
+async def _item_embedding_status(db_path: str, item_id: str) -> dict[str, Any]:
+    """Return vector coverage for the item's knowledge-document chunks."""
+    from cyrene.knowledge import embeddings
+
+    model, dimensions = embeddings.current_identity()
+    async with aiosqlite.connect(db_path, timeout=30) as db:
+        cursor = await db.execute(
+            """
+            SELECT
+                COUNT(c.id) AS total,
+                SUM(CASE WHEN c.embedding IS NOT NULL THEN 1 ELSE 0 END) AS embedded,
+                SUM(CASE WHEN c.embedding IS NOT NULL
+                    AND c.embedding_model = ?
+                    AND (? = 0 OR c.embedding_dim = ?)
+                    THEN 1 ELSE 0 END) AS compatible
+            FROM (
+                SELECT DISTINCT kb_document_id FROM library_attachments
+                WHERE item_id = ? AND kb_document_id IS NOT NULL
+            ) a
+            LEFT JOIN kb_chunks c ON c.document_id = a.kb_document_id
+            """,
+            (model, dimensions, dimensions, item_id),
+        )
+        row = await cursor.fetchone()
+    total = int((row or [0, 0, 0])[0] or 0)
+    embedded = int((row or [0, 0, 0])[1] or 0)
+    compatible = int((row or [0, 0, 0])[2] or 0)
+    if total and compatible == total:
+        state = "complete"
+    elif compatible:
+        state = "partial"
+    elif embedded:
+        state = "incompatible"
+    else:
+        state = "none"
+    return {
+        "state": state,
+        "total_chunks": total,
+        "embedded_chunks": embedded,
+        "compatible_chunks": compatible,
+        "model": model,
+        "dimensions": dimensions,
+    }
+
+
 async def _upload_one(
     db_path: str, workspace: str, file: UploadFile, item_id: str = ""
 ) -> dict[str, Any]:
@@ -303,6 +348,7 @@ def register_workbench_library_routes(router: APIRouter) -> None:
             indexed_text, truncated = await _indexed_item_text(db_path, item_id)
             item["indexed_text"] = indexed_text
             item["indexed_text_truncated"] = truncated
+            item["embedding_status"] = await _item_embedding_status(db_path, item_id)
             return item
         except Exception:
             logger.exception("Failed to load literature item %s", item_id)

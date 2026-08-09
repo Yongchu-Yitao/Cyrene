@@ -608,11 +608,16 @@ def test_chat_run_outcome_projection_is_persisted_for_list_and_topbar(monkeypatc
 
 def test_session_activity_reducer_tracks_parallel_work_and_resets_between_runs():
     source = (ROOT / "src/webui/frontend/workbench.jsx").read_text(encoding="utf-8")
+    status_helpers = source.split("function wbActivityStatusIsActive", 1)[1].split(
+        "\nfunction wbSessionActivityPhase", 1
+    )[0]
     helper = source.split("function wbArgsPreview", 1)[1].split(
         "\nfunction wbActorLabel", 1
     )[0]
     script = (
-        "function wbArgsPreview"
+        "function wbActivityStatusIsActive"
+        + status_helpers
+        + "function wbArgsPreview"
         + helper
         + """
 let state = {};
@@ -653,17 +658,24 @@ process.stdout.write(JSON.stringify({afterOneFinished, subagentSurvives, termina
 
 def test_session_activity_uses_newer_durable_status_and_maps_terminal_variants():
     source = (ROOT / "src/webui/frontend/workbench.jsx").read_text(encoding="utf-8")
+    terminal_helper = source.split("function wbActivityStatusIsTerminal", 1)[1].split(
+        "\nfunction wbSessionActivityPhase", 1
+    )[0]
     helper = source.split("function wbSessionActivityPhase", 1)[1].split(
         "\nfunction wbLatestRuntimeActivity", 1
     )[0]
     script = (
-        "function wbSessionActivityPhase"
+        "function wbActivityStatusIsTerminal"
+        + terminal_helper
+        + "function wbSessionActivityPhase"
         + helper
         + """
 const completed = wbSessionActivityPhase({kind:"chat", source:{runStatus:"completed", updatedAt:"2026-08-08T10:00:02Z", messageCount:2}}, null, {status:"failed", statusAt:Date.parse("2026-08-08T10:00:01Z"), lastEventAt:Date.parse("2026-08-08T10:00:01Z"), active:true, activeTools:{old:{label:"shell"}}});
+const sameRunLateEvent = wbSessionActivityPhase({kind:"chat", source:{runStatus:"completed", updatedAt:"2026-08-08T10:00:02Z", lastRun:{id:"r1"}, messageCount:2}}, null, {runKey:"r1", status:"running", statusAt:Date.parse("2026-08-08T10:00:03Z"), lastEventAt:Date.parse("2026-08-08T10:00:03Z"), active:true, activeTools:{old:{label:"shell"}}});
+const newerRun = wbSessionActivityPhase({kind:"chat", source:{runStatus:"completed", updatedAt:"2026-08-08T10:00:02Z", lastRun:{id:"r1"}, messageCount:2}}, null, {runKey:"r2", status:"running", statusAt:Date.parse("2026-08-08T10:00:03Z"), lastEventAt:Date.parse("2026-08-08T10:00:03Z"), active:true, activeTools:{next:{label:"shell"}}});
 const cancelled = wbSessionActivityPhase({kind:"chat", source:{runStatus:"cancelled"}}, null, null);
 const awaiting = wbSessionActivityPhase({kind:"chat", source:{runStatus:"awaiting_user"}}, null, null);
-process.stdout.write(JSON.stringify({completed, cancelled, awaiting}));
+process.stdout.write(JSON.stringify({completed, sameRunLateEvent, newerRun, cancelled, awaiting}));
 """
     )
     completed = subprocess.run(
@@ -672,12 +684,30 @@ process.stdout.write(JSON.stringify({completed, cancelled, awaiting}));
     result = json.loads(completed.stdout)
 
     assert result["completed"]["phase"] == "completed"
+    assert result["sameRunLateEvent"]["phase"] == "completed"
+    assert result["sameRunLateEvent"]["active"] is False
+    assert result["newerRun"]["phase"] == "running"
+    assert result["newerRun"]["active"] is True
     assert result["cancelled"]["phase"] == "cancelled"
     assert result["awaiting"] == {
         "phase": "attention",
         "reason": "input",
         "active": False,
     }
+
+
+def test_chat_runtime_broadcasts_terminal_lifecycle_to_topbar():
+    shell = (ROOT / "src/webui/frontend/workbench.jsx").read_text(encoding="utf-8")
+    chat = (ROOT / "src/webui/frontend/workbench-chat.jsx").read_text(encoding="utf-8")
+
+    assert 'new CustomEvent("cyrene:wbc-chat-lifecycle"' in chat
+    assert 'publishLifecycle(chatId, "completed", event)' in chat
+    assert 'publishLifecycle(chatId, "awaiting_user", event)' in chat
+    assert 'publishLifecycle(chatId, "cancelled", event)' in chat
+    assert 'window.addEventListener("cyrene:wbc-chat-lifecycle", onChatLifecycle)' in shell
+    assert 'setInterval(refreshLiveChats, 2500)' in shell
+    assert 'reloadRecentChats(store.projects || [])' in shell
+    assert 'chatRuntimeEngine.subscribeSummary' in shell
 
 
 def test_tab_menus_use_cyrene_context_menu_surface():

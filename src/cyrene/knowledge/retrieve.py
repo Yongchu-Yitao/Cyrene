@@ -18,6 +18,8 @@ async def search_knowledge(
 
     Returns list of dicts with:
     - chunk_id, document_id, document_name, content, score, mode
+    - cosine_similarity: raw cosine similarity when the vector path contributed,
+      otherwise None. ``score`` remains the RRF rank score for compatibility.
     where mode is "fts", "vector", or "hybrid".
     """
     import aiosqlite
@@ -102,15 +104,26 @@ async def search_knowledge(
                 "content": result["content"],
                 "fts_rank": rank,
                 "vector_rank": None,
+                "cosine_similarity": None,
             }
 
     # =========================================================================
     # Vector Path (if configured)
     # =========================================================================
+    vector_compatible = False
     if embeddings.is_configured():
+        corpus = await store.get_corpus_embedding_info(db_path)
+        configured_model, configured_dim = embeddings.current_identity()
+        groups = corpus.get("groups") or []
+        vector_compatible = bool(groups) and all(
+            row.get("model") == configured_model
+            and (not configured_dim or int(row.get("dimensions") or 0) == configured_dim)
+            for row in groups
+        )
+    if vector_compatible:
         try:
             # Embed the query
-            query_embedding = await embeddings.embed_texts([query])
+            query_embedding = await embeddings.embed_texts([query], input_type="query")
             query_vector = query_embedding[0]
             query_dim = len(query_vector)
 
@@ -128,14 +141,14 @@ async def search_knowledge(
                 # Skip if dimensions don't match
                 if len(chunk_vector) != query_dim:
                     continue
-                score = embeddings.cosine(query_vector, chunk_vector)
-                scores.append((score, chunk))
+                cosine_similarity = embeddings.cosine(query_vector, chunk_vector)
+                scores.append((cosine_similarity, chunk))
 
             # Sort by score descending
             scores.sort(reverse=True, key=lambda x: x[0])
 
             # Take top k*4
-            for rank, (score, chunk) in enumerate(scores[: k * 4]):
+            for rank, (cosine_similarity, chunk) in enumerate(scores[: k * 4]):
                 chunk_id = chunk["id"]
                 if chunk_id not in results_by_chunk_id:
                     results_by_chunk_id[chunk_id] = {
@@ -144,9 +157,11 @@ async def search_knowledge(
                         "content": chunk["content"],
                         "fts_rank": None,
                         "vector_rank": rank,
+                        "cosine_similarity": cosine_similarity,
                     }
                 else:
                     results_by_chunk_id[chunk_id]["vector_rank"] = rank
+                    results_by_chunk_id[chunk_id]["cosine_similarity"] = cosine_similarity
         except Exception:
             # Embedding failed; just use FTS results
             pass
@@ -180,6 +195,7 @@ async def search_knowledge(
                 "content": chunk_data["content"],
                 "score": rrf_score,
                 "mode": mode,
+                "cosine_similarity": chunk_data.get("cosine_similarity"),
             }
         )
 
@@ -206,6 +222,7 @@ async def search_knowledge(
                     "content": item["content"],
                     "score": item["score"],
                     "mode": item["mode"],
+                    "cosine_similarity": item.get("cosine_similarity"),
                 }
             )
 

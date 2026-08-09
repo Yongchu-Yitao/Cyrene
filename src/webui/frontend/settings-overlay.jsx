@@ -379,6 +379,8 @@ function SettingsOverlay({
   }
 
   function saveModels() {
+    var embeddingDraft = arguments[0];
+    var onEmbeddingSaved = arguments[1];
     var norm = models.map(function (m, i) { return normalizeModel(m, i, config.base_url || DEFAULT_MODEL_BASE_URL, ""); }).filter(function (m) { return m.model; });
     var normalizedCodex = codexCandidate && codexCandidate.model
       ? normalizeModel(codexCandidate, 0, "", "")
@@ -389,7 +391,7 @@ function SettingsOverlay({
     if (modelsSaving) return;
     setModelsSaving(true);
     setModelsSaved(t("settings.saving"));
-    fetch("/api/settings/models", {
+    var modelRequest = fetch("/api/settings/models", {
       method: "PUT", headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         models: modelSource === "codex" ? [normalizedCodex] : norm,
@@ -404,7 +406,14 @@ function SettingsOverlay({
           max_concurrency: Number(secondaryModel.max_concurrency) || 0,
         } : null,
       }),
-    }).then(readSettingsResponse).then(function (p) {
+    }).then(readSettingsResponse).then(function (p) { return p; });
+    var embeddingRequest = fetch("/api/settings/integrations", {
+      method: "PUT", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ embedding: embeddingDraft }),
+    }).then(readSettingsResponse);
+    return Promise.all([modelRequest, embeddingRequest]).then(function (responses) {
+      var p = responses[0];
+      var integrationPayload = responses[1];
       var fb = p.base_url || config.base_url || DEFAULT_MODEL_BASE_URL;
       setModels(((p.custom_models || norm)).map(function (m, i) { return normalizeModel(m, i, fb, ""); }));
       setModelSource(p.primary_source === "codex" ? "codex" : "custom");
@@ -425,6 +434,7 @@ function SettingsOverlay({
           base_url: p.base_url || previous.base_url,
         };
       });
+      if (onEmbeddingSaved) onEmbeddingSaved(integrationPayload.embedding);
       setModelsSaved(t("settings.saved"));
       setTimeout(function () { setModelsSaved(""); }, 1500);
     }).catch(function (e) {
@@ -557,7 +567,7 @@ function SettingsOverlay({
         // Content area
         React.createElement("div", { className: "settings-overlay-content" },
           tab === "general" && React.createElement(GeneralPanel, { t, lang, setLang, desktopNotifications, toggleDesktopNotifications, mapProvider, setMapProvider, amapKey, setAmapKey, amapKeySaved, setAmapKeySaved, project }),
-          tab === "models" && React.createElement(ModelsPanel, { t, models, setModels, modelSource, setModelSource, codexCandidate, setCodexCandidate, draftModel, setDraftModel, visionModels, setVisionModels, draftVision, setDraftVision, secondaryModel, setSecondaryModel, modelsSaved, modelsSaving, saveModels, config }),
+          tab === "models" && React.createElement(ModelsPanel, { t, models, setModels, modelSource, setModelSource, codexCandidate, setCodexCandidate, draftModel, setDraftModel, visionModels, setVisionModels, draftVision, setDraftVision, secondaryModel, setSecondaryModel, modelsSaved, modelsSaving, saveModels, config, project }),
           tab === "channels" && ChannelsPanel({ t, telegramToken, setTelegramToken, telegramSaved, setTelegramSaved, notifyTelegram, setNotifyTelegram, notifyWechat, setNotifyWechat }),
           tab === "remote" && React.createElement(RemotePanel, { t }),
           tab === "agents" && AgentsPanel({ t, config, setConfig, configLoading, soulDraft, setSoulDraft, soulStatus, saveSoul, agentProactive, setAgentProactive, saveAgents }),
@@ -1515,23 +1525,7 @@ function GeneralPanel(p) {
 
 // ── Models Panel ──
 function EmbeddingSettingsSection(p) {
-  var { t } = p;
-  var [settings, setSettings] = useStateSt({
-    provider: "openai_compatible", base_url: "", model: "", dimensions: 0, api_key_configured: false,
-  });
-  var [apiKey, setApiKey] = useStateSt("");
-  var [status, setStatus] = useStateSt(null);
-  var [busy, setBusy] = useStateSt("");
-
-  useEffectSt(function () {
-    var cancelled = false;
-    fetch("/api/settings/integrations").then(readSettingsResponse).then(function (payload) {
-      if (!cancelled && payload.embedding) setSettings(payload.embedding);
-    }).catch(function (error) {
-      if (!cancelled) setStatus({ kind: "error", text: t("settings.integrationLoadFailed") + ": " + (error.message || "") });
-    });
-    return function () { cancelled = true; };
-  }, []);
+  var { t, settings, setSettings, apiKey, setApiKey, status, setStatus, busy, setBusy } = p;
 
   function draft() {
     var payload = {
@@ -1542,22 +1536,6 @@ function EmbeddingSettingsSection(p) {
     };
     if (apiKey.trim()) payload.api_key = apiKey.trim();
     return payload;
-  }
-
-  function save() {
-    setBusy("save");
-    setStatus({ kind: "info", text: t("settings.saving") });
-    fetch("/api/settings/integrations", {
-      method: "PUT",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ embedding: draft() }),
-    }).then(readSettingsResponse).then(function (payload) {
-      if (payload.embedding) setSettings(payload.embedding);
-      setApiKey("");
-      setStatus({ kind: "success", text: t("settings.saved") });
-    }).catch(function (error) {
-      setStatus({ kind: "error", text: t("settings.error") + ": " + (error.message || "") });
-    }).finally(function () { setBusy(""); });
   }
 
   function test() {
@@ -1601,14 +1579,19 @@ function EmbeddingSettingsSection(p) {
             var provider = e.target.value;
             var nextBase = settings.base_url;
             if (provider === "ollama" && !nextBase) nextBase = "http://127.0.0.1:11434";
-            setSettings({ ...settings, provider: provider, base_url: nextBase });
+            if (provider === "local_onnx") {
+              setSettings({ ...settings, provider: provider, base_url: "", model: "qwen3-embedding-0.6b", dimensions: 1024 });
+            } else {
+              setSettings({ ...settings, provider: provider, base_url: nextBase });
+            }
           },
         },
           React.createElement("option", { value: "openai_compatible" }, t("settings.embeddingOpenAiCompatible")),
           React.createElement("option", { value: "ollama" }, "Ollama"),
+          React.createElement("option", { value: "local_onnx" }, t("settings.embeddingLocalOnnx")),
         ),
       ),
-      FieldRow(t("settings.embeddingBaseUrl"), t("settings.embeddingBaseUrlHint"),
+      settings.provider !== "local_onnx" && FieldRow(t("settings.embeddingBaseUrl"), t("settings.embeddingBaseUrlHint"),
         React.createElement("input", {
           className: "wb-input mono", type: "url", value: settings.base_url,
           placeholder: settings.provider === "ollama" ? "http://127.0.0.1:11434" : "https://api.openai.com/v1",
@@ -1616,7 +1599,7 @@ function EmbeddingSettingsSection(p) {
           onChange: function (e) { setSettings({ ...settings, base_url: e.target.value }); },
         }),
       ),
-      FieldRow(t("settings.embeddingApiKey"), t("settings.embeddingApiKeyHint"),
+      settings.provider !== "local_onnx" && FieldRow(t("settings.embeddingApiKey"), t("settings.embeddingApiKeyHint"),
         React.createElement("div", { className: "wb-integration-control wb-integration-key" },
           React.createElement("input", {
             className: "wb-input mono", type: "password", value: apiKey,
@@ -1630,6 +1613,10 @@ function EmbeddingSettingsSection(p) {
         ),
       ),
       FieldRow(t("settings.embeddingModel"), t("settings.embeddingModelHint"),
+        settings.provider === "local_onnx" ? React.createElement("select", {
+          className: "wb-select mono", value: settings.model,
+          onChange: function (e) { setSettings({ ...settings, model: e.target.value, dimensions: 1024 }); },
+        }, React.createElement("option", { value: "qwen3-embedding-0.6b" }, "Qwen3 Embedding 0.6B")) :
         React.createElement("input", {
           className: "wb-input mono", value: settings.model,
           placeholder: "text-embedding-3-small", "aria-label": t("settings.embeddingModel"),
@@ -1640,6 +1627,7 @@ function EmbeddingSettingsSection(p) {
         React.createElement("input", {
           className: "wb-input mono", type: "number", min: "0", max: "65536", step: "1",
           value: settings.dimensions, "aria-label": t("settings.embeddingDimensions"),
+          readOnly: settings.provider === "local_onnx",
           onChange: function (e) { setSettings({ ...settings, dimensions: e.target.value }); },
         }),
       ),
@@ -1651,7 +1639,6 @@ function EmbeddingSettingsSection(p) {
         }, status.text),
         React.createElement("div", { className: "wb-integration-actions" },
           React.createElement("button", { className: "wb-btn", disabled: !!busy, onClick: test }, busy === "test" ? t("settings.testingConnection") : t("settings.testConnection")),
-          React.createElement("button", { className: "wb-btn primary", disabled: !!busy, onClick: save }, busy === "save" ? t("settings.saving") : t("settings.save")),
         ),
       ),
     ],
@@ -1678,7 +1665,16 @@ function modelCredentialFields(model, update, t) {
 }
 
 function ModelsPanel(p) {
-  var { t, models, setModels, modelSource, setModelSource, codexCandidate, setCodexCandidate, draftModel, setDraftModel, visionModels, setVisionModels, draftVision, setDraftVision, secondaryModel, setSecondaryModel, modelsSaved, modelsSaving, saveModels, config } = p;
+  var { t, models, setModels, modelSource, setModelSource, codexCandidate, setCodexCandidate, draftModel, setDraftModel, visionModels, setVisionModels, draftVision, setDraftVision, secondaryModel, setSecondaryModel, modelsSaved, modelsSaving, saveModels, config, project } = p;
+  var [embeddingSettings, setEmbeddingSettings] = useStateSt({ provider: "openai_compatible", base_url: "", model: "", dimensions: 0, api_key_configured: false });
+  var [embeddingApiKey, setEmbeddingApiKey] = useStateSt("");
+  var [embeddingStatus, setEmbeddingStatus] = useStateSt(null);
+  var [embeddingBusy, setEmbeddingBusy] = useStateSt("");
+  var [localModels, setLocalModels] = useStateSt([]);
+  var [localBusy, setLocalBusy] = useStateSt("");
+  var [corpusEmbedding, setCorpusEmbedding] = useStateSt(null);
+  var savedEmbeddingIdentityRef = useRefSt("");
+  var workspaceId = String(project && (project.id || project.dataKey) || "");
   var savedCodexCandidate = codexCandidate;
   var [codexState, setCodexState] = useStateSt({
     available: true,
@@ -1700,6 +1696,112 @@ function ModelsPanel(p) {
   var primarySourceRef = useRefSt(null);
   var codexCandidateRef = useRefSt(savedCodexCandidate);
   codexCandidateRef.current = codexCandidate;
+
+  function loadLocalModels() {
+    return fetch("/api/settings/local-models/status").then(readSettingsResponse).then(function (payload) {
+      setLocalModels(payload.models || []);
+      return payload.models || [];
+    });
+  }
+
+  function loadCorpusEmbedding() {
+    return fetch("/api/workbench/knowledge/embedding/status?workspace=" + encodeURIComponent(workspaceId))
+      .then(readSettingsResponse).then(function (payload) {
+        setCorpusEmbedding(function (previous) {
+          if (previous && previous.reembed && previous.reembed.running && payload.reembed && !payload.reembed.running) {
+            if (payload.reembed.error) {
+              setEmbeddingStatus({ kind: "error", text: t("settings.reembedFailed") + ": " + payload.reembed.error });
+            } else {
+              setEmbeddingStatus({ kind: "success", text: t("settings.reembedComplete", { count: payload.reembed.updated || 0 }) });
+            }
+          }
+          return payload;
+        });
+        return payload;
+      }).catch(function () {});
+  }
+
+  useEffectSt(function () {
+    var cancelled = false;
+    fetch("/api/settings/integrations").then(readSettingsResponse).then(function (payload) {
+      if (!cancelled && payload.embedding) {
+        setEmbeddingSettings(payload.embedding);
+        savedEmbeddingIdentityRef.current = [payload.embedding.provider, payload.embedding.model].join(":");
+      }
+    }).catch(function (error) {
+      if (!cancelled) setEmbeddingStatus({ kind: "error", text: t("settings.integrationLoadFailed") + ": " + (error.message || "") });
+    });
+    loadLocalModels().catch(function () {});
+    loadCorpusEmbedding();
+    var timer = setInterval(function () {
+      loadLocalModels().then(function (items) {
+        if (!items.some(function (item) { return item.downloading; })) setLocalBusy("");
+      }).catch(function () {});
+      loadCorpusEmbedding();
+    }, 1200);
+    return function () { cancelled = true; clearInterval(timer); };
+  }, []);
+
+  function embeddingDraft() {
+    var payload = {
+      provider: embeddingSettings.provider,
+      base_url: embeddingSettings.base_url,
+      model: embeddingSettings.model,
+      dimensions: Number(embeddingSettings.dimensions) || 0,
+    };
+    if (embeddingApiKey.trim()) payload.api_key = embeddingApiKey.trim();
+    return payload;
+  }
+
+  function saveAllModels() {
+    setEmbeddingStatus(null);
+    saveModels(embeddingDraft(), function (saved) {
+      var previousIdentity = savedEmbeddingIdentityRef.current;
+      if (saved) setEmbeddingSettings(saved);
+      var nextIdentity = saved ? [saved.provider, saved.model].join(":") : "";
+      savedEmbeddingIdentityRef.current = nextIdentity;
+      setEmbeddingApiKey("");
+      setEmbeddingStatus({ kind: "success", text: t("settings.saved") });
+      loadCorpusEmbedding().then(function (coverage) {
+        if (!coverage || !coverage.pending_vectors) return;
+        if (nextIdentity !== "local_onnx:qwen3-embedding-0.6b" || previousIdentity === nextIdentity) return;
+        var feedback = window.CyreneUI && window.CyreneUI.require
+          ? window.CyreneUI.require("feedback")
+          : null;
+        var title = t("settings.reembedPromptTitle");
+        var body = t("settings.reembedPromptBody", { count: coverage.pending_vectors });
+        var confirmed = feedback && typeof feedback.confirmModal === "function"
+          ? feedback.confirmModal({ title: title, body: body, confirmLabel: t("settings.reembed") })
+          : Promise.resolve(window.confirm([title, "", body].join("\n")));
+        confirmed.then(function (ok) { if (ok) reembedKnowledge(); });
+      });
+    });
+  }
+
+  function manageLocalModel(modelId, action) {
+    setLocalBusy(modelId + ":" + action);
+    fetch("/api/settings/local-models/" + encodeURIComponent(modelId) + (action === "download" ? "/download" : ""), {
+      method: action === "download" ? "POST" : "DELETE",
+    }).then(readSettingsResponse).then(function (payload) {
+      setLocalModels(payload.models || []);
+      if (action === "delete") setLocalBusy("");
+    }).catch(function (error) {
+      setLocalBusy("");
+      setEmbeddingStatus({ kind: "error", text: error.message || t("settings.error") });
+    });
+  }
+
+  function reembedKnowledge() {
+    setEmbeddingStatus({ kind: "info", text: t("settings.reembedding") });
+    setCorpusEmbedding(function (previous) {
+      return previous ? { ...previous, reembed: { running: true, error: "" } } : previous;
+    });
+    return fetch("/api/workbench/knowledge/reembed?workspace=" + encodeURIComponent(workspaceId), { method: "POST" })
+      .then(readSettingsResponse).then(function () { return loadCorpusEmbedding(); })
+      .catch(function (error) {
+        setEmbeddingStatus({ kind: "error", text: t("settings.reembedFailed") + ": " + (error.message || "") });
+      });
+  }
 
   useEffectSt(function () {
     if (!primaryMenuOpen) return;
@@ -2054,6 +2156,42 @@ function ModelsPanel(p) {
       ],
     }),
 
+    React.createElement(EmbeddingSettingsSection, {
+      t: t, settings: embeddingSettings, setSettings: setEmbeddingSettings,
+      apiKey: embeddingApiKey, setApiKey: setEmbeddingApiKey,
+      status: embeddingStatus, setStatus: setEmbeddingStatus,
+      busy: embeddingBusy, setBusy: setEmbeddingBusy,
+    }),
+    ModelSettingsSection({
+      title: t("settings.localModels"),
+      description: t("settings.localModelsHint"),
+      children: localModels.map(function (item) {
+        var percent = item.total_bytes ? Math.min(100, Math.round(item.downloaded_bytes * 100 / item.total_bytes)) : 0;
+        var isQwen = item.id === "qwen3-embedding-0.6b";
+        var displayName = t(isQwen ? "settings.localQwenName" : "settings.localOcrName");
+        var displayDescription = t(isQwen ? "settings.localQwenHint" : "settings.localOcrHint");
+        return React.createElement("div", { className: "wb-model-card wb-local-model", key: item.id },
+          React.createElement("div", { className: "wb-local-model-copy" },
+            React.createElement("strong", null, displayName),
+            React.createElement("small", null, displayDescription + (item.runtime ? " · " + String(item.runtime).toUpperCase() : "")),
+            item.downloading && React.createElement("progress", { max: "100", value: percent }),
+            item.error && React.createElement("small", { className: "wb-local-model-error" }, item.error),
+          ),
+          React.createElement("span", { className: "wb-model-status" }, item.ready ? t("settings.localModelReady") : item.downloading ? (percent + "%") : t("settings.localModelNotDownloaded")),
+          React.createElement("button", {
+            className: "wb-btn compact " + (item.ready ? "muted" : "tonal"),
+            disabled: !!localBusy || item.downloading,
+            onClick: function () { manageLocalModel(item.id, item.ready ? "delete" : "download"); },
+          }, item.ready ? t("settings.delete") : item.error ? t("settings.retry") : t("settings.download")),
+        );
+      }).concat(corpusEmbedding && corpusEmbedding.mismatch ? [
+        React.createElement("div", { className: "wb-integration-status error", key: "mismatch" },
+          React.createElement("span", null, t("settings.embeddingMismatch", { count: corpusEmbedding.pending_vectors || 0 })),
+          React.createElement("button", { className: "wb-btn", disabled: corpusEmbedding.reembed && corpusEmbedding.reembed.running, onClick: reembedKnowledge },
+            corpusEmbedding.reembed && corpusEmbedding.reembed.running ? t("settings.reembedding") : t("settings.reembed")),
+        ),
+      ] : []),
+    }),
     React.createElement("div", { className: "wb-save-actions" },
       modelsSaved && React.createElement("span", {
         className: "wb-hint saved" + (modelsSaving ? " is-saving" : ""),
@@ -2063,9 +2201,8 @@ function ModelsPanel(p) {
         modelsSaving && React.createElement("span", { className: "wb-spinner", "aria-hidden": "true" }),
         React.createElement("span", null, modelsSaved),
       ),
-      React.createElement("button", { className: "wb-btn primary", onClick: saveModels, disabled: modelsSaving }, t("settings.saveApply")),
+      React.createElement("button", { className: "wb-btn primary", onClick: saveAllModels, disabled: modelsSaving || !!embeddingBusy }, t("settings.saveApply")),
     ),
-    React.createElement(EmbeddingSettingsSection, { t: t }),
   );
 }
 

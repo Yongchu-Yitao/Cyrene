@@ -33,6 +33,48 @@ globals().update({
 def register_workbench_knowledge_routes(router: APIRouter) -> None:
     """Register workspace-scoped knowledge routes for the Workbench UI."""
     from cyrene.knowledge import store, ingest, retrieve
+    reembed_state: dict[str, dict[str, Any]] = {}
+
+    @router.get("/api/workbench/knowledge/embedding/status")
+    async def wb_embedding_status(workspace: str = ""):
+        db_path = await _ensure_kb_db(workspace)
+        info = await store.get_corpus_embedding_info(db_path)
+        from cyrene.knowledge import embeddings
+
+        model, dimensions = embeddings.current_identity()
+        configured = embeddings.is_configured()
+        coverage = await store.get_embedding_coverage(db_path, model, dimensions)
+        mismatch = bool(coverage["total_chunks"]) and (
+            not configured or bool(coverage["pending_vectors"])
+        )
+        return {
+            **info,
+            **coverage,
+            "configured": configured,
+            "model": model,
+            "dimensions": dimensions,
+            "mismatch": mismatch,
+            "reembed": reembed_state.get(db_path, {"running": False}),
+        }
+
+    @router.post("/api/workbench/knowledge/reembed")
+    async def wb_reembed(workspace: str = ""):
+        db_path = await _ensure_kb_db(workspace)
+        current = reembed_state.get(db_path, {})
+        if current.get("running"):
+            return {"ok": True, "reembed": current}
+
+        async def run() -> None:
+            reembed_state[db_path] = {"running": True, "error": ""}
+            try:
+                result = await ingest.reembed_all(db_path)
+                reembed_state[db_path] = {"running": False, **result, "error": ""}
+            except Exception as exc:
+                logger.exception("Knowledge re-embedding failed for %s", workspace)
+                reembed_state[db_path] = {"running": False, "error": str(exc)}
+
+        asyncio.create_task(run())
+        return {"ok": True, "reembed": {"running": True}}
 
     @router.get("/api/workbench/knowledge/documents")
     async def wb_list_documents(

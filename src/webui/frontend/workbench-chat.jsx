@@ -1695,7 +1695,23 @@ var WorkbenchChatRuntimes = (function () {
   var aborts = {};              // chatId -> AbortController
   var deferredSends = {};       // chatId -> terminal-race guidance promoted to the next normal turn
   var subscribers = new Set();
+  var summarySubscribers = new Set();
   var hooks = null;             // live transcript hooks from the mounted page
+
+  function publishLifecycle(chatId, status, event) {
+    if (!chatId || typeof window === "undefined" || typeof window.dispatchEvent !== "function") return;
+    var payload = event && typeof event === "object" ? event : {};
+    try {
+      window.dispatchEvent(new CustomEvent("cyrene:wbc-chat-lifecycle", {
+        detail: {
+          chatId: String(chatId),
+          status: String(status || "refresh"),
+          runId: String(payload.runId || payload.run_id || ""),
+          timestamp: String(payload.timestamp || new Date().toISOString()),
+        },
+      }));
+    } catch (e) {}
+  }
 
   // `emit` notifies subscribers (the mounted page → React re-render). Reply
   // deltas can arrive many times per second, and each re-render re-parses +
@@ -1707,6 +1723,9 @@ var WorkbenchChatRuntimes = (function () {
   var emitIsRaf = false;
   function emit() {
     subscribers.forEach(function (fn) { try { fn(runtimes); } catch (e) {} });
+  }
+  function emitSummary() {
+    summarySubscribers.forEach(function (fn) { try { fn(runtimes); } catch (e) {} });
   }
   function flushEmit() { emitHandle = 0; emit(); }
   function scheduleEmit() {
@@ -1731,6 +1750,15 @@ var WorkbenchChatRuntimes = (function () {
     return function () { subscribers.delete(fn); };
   }
 
+  // Shell-level consumers need every semantic runtime transition (start/stop,
+  // reasoning phase, tools, finalization), but not each text-only token delta.
+  // This preserves topbar fidelity without repainting the entire workbench on
+  // every animation frame.
+  function subscribeSummary(fn) {
+    summarySubscribers.add(fn);
+    return function () { summarySubscribers.delete(fn); };
+  }
+
   function snapshot() { return runtimes; }
   function get(chatId) { return (chatId && runtimes[chatId]) || null; }
   function isRunning(chatId) { return !!(chatId && runtimes[chatId]); }
@@ -1743,6 +1771,7 @@ var WorkbenchChatRuntimes = (function () {
     Object.keys(runtimes).forEach(function (key) { nextMap[key] = runtimes[key]; });
     if (next) nextMap[chatId] = next; else delete nextMap[chatId];
     runtimes = nextMap;
+    if (!defer || !!current !== !!next) emitSummary();
     // Defer only the high-frequency reply-delta path; everything else (including
     // the delta's terminal siblings reply_done / saved) emits now and cancels any
     // pending coalesced emit so the latest state renders without delay.
@@ -2063,10 +2092,10 @@ var WorkbenchChatRuntimes = (function () {
         });
       },
       onReplyDelta: function (delta) {
-        update(chatId, function (cur) { return cur ? { ...cur, replying: true, text: cur.text + delta, lastEventAt: Date.now() } : null; }, true);
+        update(chatId, function (cur) { return cur ? { ...cur, replying: true, streamDone: false, text: cur.text + delta, lastEventAt: Date.now() } : null; }, true);
       },
       onReplyDone: function (text) {
-        update(chatId, function (cur) { return cur ? { ...cur, text: text || cur.text, lastEventAt: Date.now() } : null; });
+        update(chatId, function (cur) { return cur ? { ...cur, streamDone: true, text: text || cur.text, lastEventAt: Date.now() } : null; });
       },
       onFinalizing: function () {
         update(chatId, function (cur) {
@@ -2096,6 +2125,7 @@ var WorkbenchChatRuntimes = (function () {
           ? event.assistantMessages
           : (event.assistantMessage ? [event.assistantMessage] : []);
         if (savedMessages.length) fire("onAssistantSaved", chatId, savedMessages);
+        publishLifecycle(chatId, "completed", event);
         update(chatId, null);
         fire("onSettled", chatId);
       },
@@ -2110,10 +2140,12 @@ var WorkbenchChatRuntimes = (function () {
         var awaitingMessages = Array.isArray(event.assistantMessages) ? event.assistantMessages : [];
         if (awaitingMessages.length) fire("onAssistantSaved", chatId, awaitingMessages);
         fire("onAwaitingUser", chatId, event.pending_question || null);
+        publishLifecycle(chatId, "awaiting_user", event);
         update(chatId, null);
         fire("onSettled", chatId);
       },
-      onInterrupted: function () {
+      onInterrupted: function (event) {
+        publishLifecycle(chatId, "cancelled", event);
         update(chatId, null);
         fire("onInterrupted", chatId);
       },
@@ -2139,6 +2171,7 @@ var WorkbenchChatRuntimes = (function () {
         // Stream ended without a `saved` / `awaiting` event (interrupted or a
         // transport failure) — drop the runtime and let the page re-pull.
         update(chatId, null);
+        publishLifecycle(chatId, "refresh");
         fire("onResync", chatId);
       }
       // A guidance POST can race the server's finishing window: the UI still
@@ -2447,7 +2480,7 @@ var WorkbenchChatRuntimes = (function () {
   window.CyreneUI.require("events").subscribe(onSseEvent);
 
   return {
-    subscribe: subscribe, snapshot: snapshot, get: get, isRunning: isRunning,
+    subscribe: subscribe, subscribeSummary: subscribeSummary, snapshot: snapshot, get: get, isRunning: isRunning,
     update: update, clear: clear, abort: abort, interrupt: interrupt,
     start: start, reconnect: reconnect, deferSend: deferSend, closeTimeline: closeTimeline, setHooks: setHooks,
   };
@@ -2456,6 +2489,19 @@ var WorkbenchChatRuntimes = (function () {
 // ---------------------------------------------------------------------------
 // Page
 // ---------------------------------------------------------------------------
+
+function wbcRuntimePresenceSnapshot(snapshot) {
+  var presence = {};
+  Object.keys(snapshot || {}).forEach(function (chatId) { presence[chatId] = true; });
+  return presence;
+}
+
+function wbcSameRuntimePresence(left, right) {
+  var leftKeys = Object.keys(left || {});
+  var rightKeys = Object.keys(right || {});
+  if (leftKeys.length !== rightKeys.length) return false;
+  return leftKeys.every(function (chatId) { return !!right[chatId]; });
+}
 
 function wbcResolveRefreshedChatSelection(list, selectId, selectionAtRequest, liveSelectionId) {
   var chats = Array.isArray(list) ? list : [];
@@ -2864,14 +2910,31 @@ function WorkbenchChatPage({ active, project, newChatRequestId, onOpenTask, onAc
   var pageContextPreviewTimerRef = useWbcRef(null);
   var [quickRenameChat, setQuickRenameChat] = useWbcState(null);
   // Streaming runtimes live in the module-level engine so a run survives this
-  // page unmounting when the user switches modules mid-reply. We mirror its
-  // snapshot into local state only to drive re-renders.
+  // page unmounting when the user switches modules mid-reply. Only the active
+  // runtime receives token-level updates; the rail receives a stable presence
+  // map. Thus an old/background run cannot repaint a newly-created conversation.
   var runtimeEngine = WorkbenchChatRuntimes;
-  var [runtimes, setRuntimes] = useWbcState(function () { return runtimeEngine.snapshot(); });
+  var [activeRuntime, setActiveRuntime] = useWbcState(function () {
+    return runtimeEngine.get(activeChatId);
+  });
+  var [runningChatIds, setRunningChatIds] = useWbcState(function () {
+    return wbcRuntimePresenceSnapshot(runtimeEngine.snapshot());
+  });
   useWbcEffect(function () {
-    setRuntimes(runtimeEngine.snapshot());
-    return runtimeEngine.subscribe(function (snap) { setRuntimes(snap); });
+    function applyRuntimeSnapshot(snapshot) {
+      var nextActive = snapshot[activeChatIdRef.current] || null;
+      setActiveRuntime(function (current) { return current === nextActive ? current : nextActive; });
+      var nextPresence = wbcRuntimePresenceSnapshot(snapshot);
+      setRunningChatIds(function (current) {
+        return wbcSameRuntimePresence(current, nextPresence) ? current : nextPresence;
+      });
+    }
+    applyRuntimeSnapshot(runtimeEngine.snapshot());
+    return runtimeEngine.subscribe(applyRuntimeSnapshot);
   }, []);
+  useWbcEffect(function () {
+    setActiveRuntime(runtimeEngine.get(activeChatId));
+  }, [activeChatId]);
 
   useWbcEffect(function () {
     var chatId = String(activeChatId || "");
@@ -4363,7 +4426,6 @@ function WorkbenchChatPage({ active, project, newChatRequestId, onOpenTask, onAc
 
   // The open conversation only renders and controls its own runtime. Other
   // conversations continue streaming in the background.
-  var activeRuntime = runtimes[activeChatId] || null;
   var activeRunning = !!activeRuntime;
   // Effects run after paint, so also guard the render itself against a stale
   // activeChat during the ID -> transcript fetch gap.
@@ -4581,7 +4643,7 @@ function WorkbenchChatPage({ active, project, newChatRequestId, onOpenTask, onAc
         pinnedChatIds={pinnedChatIds}
         activeChatId={activeChatId}
         loading={loading}
-        runningChatIds={runtimes}
+        runningChatIds={runningChatIds}
         onSelect={selectChat}
         onCreate={handleCreateChat}
         onRename={handleRenameChat}
@@ -8867,12 +8929,50 @@ function WbcLiveActivityCard({ activity, active, hasReplyText }) {
   );
 }
 
+var WBC_LIVE_MARKDOWN_INTERVAL_MS = 120;
+
+function wbcUseThrottledLiveText(text, flush) {
+  var source = String(text || "");
+  var [renderedText, setRenderedText] = useWbcState(source);
+  var latestTextRef = useWbcRef(source);
+  var renderTimerRef = useWbcRef(null);
+  var lastRenderAtRef = useWbcRef(source ? Date.now() : 0);
+  latestTextRef.current = source;
+
+  useWbcEffect(function () {
+    if (flush || !source) {
+      if (renderTimerRef.current) clearTimeout(renderTimerRef.current);
+      renderTimerRef.current = null;
+      lastRenderAtRef.current = Date.now();
+      setRenderedText(source);
+      return;
+    }
+    if (renderTimerRef.current) return;
+    var elapsed = Date.now() - Number(lastRenderAtRef.current || 0);
+    var delay = Math.max(0, WBC_LIVE_MARKDOWN_INTERVAL_MS - elapsed);
+    renderTimerRef.current = setTimeout(function () {
+      renderTimerRef.current = null;
+      lastRenderAtRef.current = Date.now();
+      setRenderedText(latestTextRef.current);
+    }, delay);
+  }, [source, flush]);
+
+  useWbcEffect(function () {
+    return function () {
+      if (renderTimerRef.current) clearTimeout(renderTimerRef.current);
+    };
+  }, []);
+  return renderedText;
+}
+
 function WbcLiveMessage({ runtime, onOpenFile }) {
-  // Re-parse the streaming markdown only when the text actually changed — not on
-  // every heartbeat / progress-driven re-render of this card.
+  // Parsing + sanitizing the entire growing reply is linear in its current
+  // length. Throttle that expensive work while keeping the caret and progress
+  // UI live; reply_done always flushes the exact final text immediately.
+  var renderedText = wbcUseThrottledLiveText(runtime.text, !!runtime.streamDone);
   var liveHtml = useWbcMemo(function () {
-    return runtime.text ? wbcRenderMarkdown(runtime.text, { interactive: false }) : "";
-  }, [runtime.text]);
+    return renderedText ? wbcRenderMarkdown(renderedText, { interactive: false }) : "";
+  }, [renderedText]);
   if (!runtime.text) return null;
   return (
     <React.Fragment>
@@ -13147,7 +13247,10 @@ function wbcBlockLabel(block) {
   var id = block.id || "";
   var key = "workbenchChat.ctxBlock." + id;
   var label = wbcT(key, "");
-  if (label) return label;
+  // An empty fallback intentionally asks the i18n layer whether this dynamic
+  // key exists. wbcT returns the key itself when it does not, so never render
+  // that value as user-facing copy.
+  if (label && label !== key) return label;
   // Match known prefixes for a generic label
   if (id.startsWith("history.compacted.")) return wbcT("workbenchChat.ctxBlock.history.compacted", "Compacted history");
   if (id.startsWith("history.deep_reflection.")) return wbcT("workbenchChat.ctxBlock.history.deep_reflection", "Deep reflection");
@@ -13595,15 +13698,15 @@ function WbcInboxCard({ chat, running, hideTitle }) {
                         <b>{wbcInboxEventLabel(item)}</b>
                         <span className={"wbc-inbox-status status-" + status.value}><i aria-hidden="true" />{status.label}</span>
                       </div>
-                      {item.preview && (
-                        <p
-                          className={"wbc-inbox-event-preview" + (item.type === "tool_result" || item.type === "tool_activity" ? " is-tool" : "")}
-                          title={item.preview}
-                        >
-                          {item.preview}
-                        </p>
-                      )}
                       <div className="wbc-inbox-event-meta">
+                        {item.preview && (
+                          <p
+                            className={"wbc-inbox-event-preview" + (item.type === "tool_result" || item.type === "tool_activity" ? " is-tool" : "")}
+                            title={item.preview}
+                          >
+                            {item.preview}
+                          </p>
+                        )}
                         {item.createdAt && <time dateTime={item.createdAt} title={item.createdAt}>{wbcFormatTime(item.createdAt)}</time>}
                       </div>
                     </div>

@@ -205,6 +205,51 @@ async def test_analyze_attachment_reuses_and_invalidates_cache(tmp_path, monkeyp
     assert calls["n"] == 2  # content change busts the cache
 
 
+async def test_analyze_attachment_uses_local_ocr_without_vision_for_clear_text(tmp_path, monkeypatch):
+    from cyrene.knowledge import local_models, ocr
+    from cyrene.runtime import attachments
+
+    image = tmp_path / "clear.png"
+    image.write_bytes(b"image")
+    monkeypatch.setattr(attachments, "ANALYSIS_CACHE_DIR", tmp_path / "cache")
+    monkeypatch.setattr(attachments, "_image_metadata", lambda _path: {"format": "PNG", "width": 10, "height": 10, "mode": "RGB"})
+    monkeypatch.setattr(attachments, "model_supports_multimodal", lambda: False)
+    monkeypatch.setattr(local_models, "is_ready", lambda _model_id: True)
+    monkeypatch.setattr(ocr, "recognize", AsyncMock(return_value="这是一段足够长的本地文字识别结果，用来确认默认附件分析不再请求远程视觉模型。"))
+    vision = AsyncMock(return_value={"vision_text": "should not run"})
+    monkeypatch.setattr(attachments, "_vision_analysis", vision)
+
+    result = await attachments.analyze_attachment(str(image), force_refresh=True)
+
+    assert result["ocr_model"] == "pp-ocrv6-medium"
+    assert result["ocr_chars"] >= 30
+    assert "本地文字识别结果" in result["preview"]
+    vision.assert_not_awaited()
+
+
+async def test_analyze_attachment_keeps_short_ocr_and_falls_back_to_vision(tmp_path, monkeypatch):
+    from cyrene.knowledge import local_models, ocr
+    from cyrene.runtime import attachments
+
+    image = tmp_path / "short.png"
+    image.write_bytes(b"image")
+    monkeypatch.setattr(attachments, "ANALYSIS_CACHE_DIR", tmp_path / "cache")
+    monkeypatch.setattr(attachments, "_image_metadata", lambda _path: {"format": "PNG", "width": 10, "height": 10, "mode": "RGB"})
+    monkeypatch.setattr(attachments, "model_supports_multimodal", lambda: True)
+    monkeypatch.setattr(local_models, "is_ready", lambda _model_id: True)
+    monkeypatch.setattr(ocr, "recognize", AsyncMock(return_value="短文字"))
+    vision = AsyncMock(return_value={"vision_model": "vision-test", "vision_text": "A visual description."})
+    monkeypatch.setattr(attachments, "_vision_analysis", vision)
+
+    result = await attachments.analyze_attachment(str(image), force_refresh=True)
+
+    assert result["ocr_text"] == "短文字"
+    assert result["vision_text"] == "A visual description."
+    assert "OCR text:" in result["preview"]
+    assert "Visual analysis:" in result["preview"]
+    vision.assert_awaited_once()
+
+
 async def test_analyze_attachment_reports_missing_file(tmp_path):
     from cyrene.runtime import attachments
 

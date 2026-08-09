@@ -286,7 +286,8 @@ _NATIVE_TOOL_DEFS: tuple[dict[str, Any], ...] = tuple([{'type': 'function',
   'function': {'name': 'AnalyzeAttachment',
                'description': 'Analyze an uploaded attachment or workspace file. PDFs and Office documents '
                               '(DOCX/PPTX/XLSX, including extensionless uploads) are parsed to text locally. Images '
-                              'return metadata and, when supported, a vision-based description/OCR. Use the exact path '
+                              'run downloaded local PP-OCRv6 first, then fall back to vision when text is insufficient '
+                              'or the prompt needs visual understanding. Use the exact path '
                               'returned by ListKnowledgeDocuments for knowledge-base files.',
                'parameters': {'type': 'object',
                               'properties': {'path': {'type': 'string',
@@ -446,7 +447,9 @@ _NATIVE_TOOL_DEFS: tuple[dict[str, Any], ...] = tuple([{'type': 'function',
                               'required': ['memory_id']}}},
  {'type': 'function',
   'function': {'name': 'search_project_memory',
-               'description': 'Search durable memory belonging to the current Workbench project. Use this for prior '
+               'description': 'Search durable memory belonging to the current Workbench project using keyword and '
+                              'phrase substring matching. This is not semantic or vector search and does not use '
+                              'embeddings. Use this for prior '
                               'project decisions, constraints, working approaches, user preferences, or environment '
                               'facts that may not be present in the automatically injected memory subset. Read-only; '
                               'only works inside a Workbench project task or chat.',
@@ -492,7 +495,8 @@ _NATIVE_TOOL_DEFS: tuple[dict[str, Any], ...] = tuple([{'type': 'function',
  {'type': 'function',
   'function': {'name': 'SearchKnowledge',
                'description': "Search the current Workbench project's knowledge base for the most relevant passages "
-                              'via hybrid keyword+vector retrieval. Use ListKnowledgeDocuments first when the user '
+                              'via hybrid keyword+vector retrieval. Results include the raw cosine similarity when '
+                              'vector retrieval contributes. Use ListKnowledgeDocuments first when the user '
                               'asks what files are available or requests coverage of all files.',
                'parameters': {'type': 'object',
                               'properties': {'query': {'type': 'string',

@@ -22,6 +22,13 @@ pil_mock.Image = MagicMock()
 
 from cyrene.runtime import database as db
 from cyrene.knowledge import store, embeddings
+from cyrene.knowledge.splitter import split_text
+
+
+@pytest.fixture(autouse=True)
+def unconfigured_embeddings(monkeypatch):
+    """Keep FTS-only tests isolated from the user's persisted app settings."""
+    monkeypatch.setattr(embeddings, "is_configured", lambda: False)
 
 
 @pytest.fixture
@@ -141,6 +148,27 @@ class TestDocumentCRUD:
 
         assert "tag1" in updated["tags"]
         assert "tag2" in updated["tags"]
+
+    @pytest.mark.asyncio
+    async def test_replace_chunks_does_not_resurrect_deleted_document(self, temp_db):
+        doc = await store.create_document(temp_db, name="race.md", path="/tmp/race.md")
+        await store.delete_document(temp_db, doc["id"], remove_file=False)
+
+        replaced = await store.replace_chunks(temp_db, doc["id"], [{
+            "content": "must not return", "ordinal": 0,
+        }])
+
+        assert replaced is False
+        assert await store.get_chunks(temp_db, doc["id"]) == []
+
+
+def test_structure_splitter_preserves_offsets_and_code_fences():
+    text = "# Heading\n\nIntro paragraph.\n\n```python\nvalue = 1\nvalue += 2\n```\n\n## Next\n\nBody " * 20
+    chunks = split_text(text, target_chars=180, overlap=30)
+
+    assert len(chunks) > 2
+    assert all(piece == text[start:end] for piece, start, end in chunks)
+    assert all(start < end for _, start, end in chunks)
 
 
 class TestUpsertIdempotency:
@@ -713,6 +741,53 @@ class TestSearch:
 
         results = await search_knowledge(temp_db, "fox")
         assert len(results) > 0
+
+    @pytest.mark.asyncio
+    async def test_vector_search_returns_raw_cosine_similarity(self, temp_db, monkeypatch):
+        """Expose cosine similarity separately from the RRF rank score."""
+        from cyrene.knowledge.retrieve import search_knowledge
+
+        doc = await store.create_document(
+            temp_db,
+            name="vectors.md",
+            path="/tmp/vectors.md",
+        )
+        await store.replace_chunks(
+            temp_db,
+            doc["id"],
+            [
+                {
+                    "ordinal": 0,
+                    "content": "first vector passage",
+                    "embedding": embeddings.pack_vector([1.0, 0.0]),
+                    "embedding_dim": 2,
+                    "embedding_model": "test-model",
+                },
+                {
+                    "ordinal": 1,
+                    "content": "second vector passage",
+                    "embedding": embeddings.pack_vector([0.0, 1.0]),
+                    "embedding_dim": 2,
+                    "embedding_model": "test-model",
+                },
+            ],
+        )
+        monkeypatch.setattr(embeddings, "is_configured", lambda: True)
+        monkeypatch.setattr(embeddings, "current_identity", lambda: ("test-model", 2))
+
+        async def fake_embed_texts(texts, *, input_type="document"):
+            assert texts == ["semantic query"]
+            assert input_type == "query"
+            return [[1.0, 0.0]]
+
+        monkeypatch.setattr(embeddings, "embed_texts", fake_embed_texts)
+
+        results = await search_knowledge(temp_db, "semantic query", k=2)
+
+        assert [item["mode"] for item in results] == ["vector", "vector"]
+        assert results[0]["cosine_similarity"] == pytest.approx(1.0)
+        assert results[1]["cosine_similarity"] == pytest.approx(0.0)
+        assert results[0]["score"] == pytest.approx(1.0 / 60.0)
 
 class TestStats:
     """Test statistics function."""

@@ -291,6 +291,53 @@ def test_workbench_network_error_message_requests_resend():
     assert "Please send this message again." in _workbench_chat_run_error_message(exc, "en")
 
 
+@pytest.mark.parametrize(
+    "base_url",
+    [
+        "https://api.deepseek.com",
+        "https://api.deepseek.com/",
+        "https://api.deepseek.com/v1",
+        "https://API.DEEPSEEK.COM:443/v1/",
+    ],
+)
+def test_official_deepseek_prefers_versioned_chat_completions(base_url):
+    assert cl._normalized_llm_endpoints(base_url) == [
+        "https://api.deepseek.com/v1/chat/completions",
+        "https://api.deepseek.com/chat/completions",
+    ]
+
+
+def test_non_official_provider_keeps_generic_endpoint_order():
+    assert cl._normalized_llm_endpoints("https://api.deepseek.com.example") == [
+        "https://api.deepseek.com.example/chat/completions",
+        "https://api.deepseek.com.example/v1/chat/completions",
+    ]
+
+
+def test_stale_deepseek_root_affinity_does_not_override_versioned_priority(monkeypatch):
+    candidate = {
+        "id": "deepseek",
+        "model": "deepseek-chat",
+        "base_url": "https://api.deepseek.com",
+        "endpoints": cl._normalized_llm_endpoints("https://api.deepseek.com"),
+    }
+    monkeypatch.setattr(cl, "_last_success_map", lambda: {
+        "session:chat-1:primary": {
+            "candidate_id": "deepseek",
+            "model": "deepseek-chat",
+            "base_url": "https://api.deepseek.com",
+            "endpoint": "https://api.deepseek.com/chat/completions",
+        }
+    })
+    monkeypatch.setattr(cl, "_session_model_preferences", lambda: {})
+
+    prioritized = cl._prioritize_last_success([candidate], "primary", "chat-1")
+
+    assert prioritized[0]["endpoints"][0] == (
+        "https://api.deepseek.com/v1/chat/completions"
+    )
+
+
 def test_resolve_llm_candidates_is_the_model_list_in_order(monkeypatch):
     """The model list is the sole source of truth — no phantom env candidate
     prepended, entries kept in their configured order."""

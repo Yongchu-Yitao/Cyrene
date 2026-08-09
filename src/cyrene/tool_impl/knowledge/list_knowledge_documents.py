@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from typing import Any
+from pathlib import Path
 
 from cyrene.tooling.native_definitions import get_native_tool_def
 from cyrene.tooling.runtime_api import logger
@@ -45,7 +46,7 @@ async def _tool_list_knowledge_documents(
                 f"(status={document.get('status') or 'unknown'}, "
                 f"chunks={chunk_count}, size={int(document.get('size') or 0)}, "
                 f"{availability}, id={document.get('id')}, "
-                f"path={document.get('path') or ''})"
+                f"file={Path(str(document.get('path') or '')).name})"
             )
         return "\n".join(lines)
     except Exception as exc:

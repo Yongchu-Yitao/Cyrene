@@ -23,7 +23,7 @@ ANALYSIS_CACHE_DIR = DATA_DIR / "attachment_cache"
 
 # Bump when the parsing/analysis logic changes in a way that should invalidate
 # every previously cached result.
-_ANALYSIS_PARSER_VERSION = "3"
+_ANALYSIS_PARSER_VERSION = "4"
 
 _IMAGE_EXTENSIONS = {".png", ".jpg", ".jpeg", ".webp", ".gif", ".bmp", ".tiff"}
 _PDF_EXTENSIONS = {".pdf"}
@@ -77,6 +77,16 @@ def _vision_model_fingerprint() -> str:
         return ""
 
 
+def _local_ocr_fingerprint() -> str:
+    """Include local OCR availability in attachment-analysis cache identity."""
+    try:
+        from cyrene.knowledge import local_models, ocr
+
+        return f"{ocr.MODEL_ID}:{int(local_models.is_ready(ocr.MODEL_ID))}"
+    except Exception:
+        return "pp-ocrv6-medium:0"
+
+
 def _analysis_cache_key(path: Path, prompt: str) -> str:
     """Cache key from file content, prompt, vision-model config, and parser version.
 
@@ -88,6 +98,7 @@ def _analysis_cache_key(path: Path, prompt: str) -> str:
         _file_content_hash(path),
         prompt or "",
         _vision_model_fingerprint(),
+        _local_ocr_fingerprint(),
     ])
     return hashlib.sha256(parts.encode("utf-8")).hexdigest()
 
@@ -313,9 +324,17 @@ def _build_attachment_preview(result: dict[str, Any]) -> str:
         preview = str(result.get("text_preview") or "").strip()
         return preview or "PDF detected, but no text could be extracted."
     if kind == "image":
-        preview = str(result.get("vision_text") or "").strip()
-        if preview:
-            return preview
+        ocr_text = str(result.get("ocr_text") or "").strip()
+        vision_text = str(result.get("vision_text") or "").strip()
+        if ocr_text and vision_text:
+            return truncate(
+                f"OCR text:\n{ocr_text}\n\nVisual analysis:\n{vision_text}",
+                12000,
+            )
+        if ocr_text:
+            return truncate(f"OCR text:\n{ocr_text}", 12000)
+        if vision_text:
+            return vision_text
         meta = result.get("image_meta", {})
         width = meta.get("width")
         height = meta.get("height")
@@ -443,12 +462,34 @@ async def analyze_attachment(path_str: str, prompt: str = "", force_refresh: boo
         payload["kind"] = "image"
         payload["image_meta"] = _image_metadata(path)
         payload["multimodal_model"] = model_supports_multimodal()
+        recognized = ""
         try:
-            payload.update(await _vision_analysis(path, prompt=prompt))
+            from cyrene.knowledge import local_models, ocr
+
+            payload["local_ocr_available"] = local_models.is_ready(ocr.MODEL_ID)
+            if payload["local_ocr_available"]:
+                recognized = (await ocr.recognize(str(path))).strip()
+                payload["ocr_model"] = ocr.MODEL_ID
+                payload["ocr_text"] = truncate(recognized, 12000)
+                payload["ocr_chars"] = len(recognized)
         except Exception:
-            if payload["multimodal_model"]:
-                raise
-            payload["note"] = "Current model does not appear to support vision input."
+            payload["local_ocr_status"] = "failed"
+
+        # Good OCR is enough for the default text-extraction request. A short
+        # result or an explicit semantic prompt still falls back to vision.
+        needs_vision = len(recognized) < 30 or bool(prompt.strip())
+        if needs_vision:
+            try:
+                payload.update(await _vision_analysis(path, prompt=prompt))
+            except Exception:
+                if payload["multimodal_model"] and not payload.get("ocr_text"):
+                    raise
+                if payload.get("ocr_text"):
+                    payload["note"] = "Local OCR succeeded; visual description was unavailable."
+                else:
+                    payload["note"] = "Current model does not appear to support vision input."
+        elif payload.get("ocr_text"):
+            payload["note"] = "Text extracted with the local OCR model."
     else:
         from cyrene.knowledge.extractors import extract_office_xml_text
 

@@ -77,10 +77,21 @@ def _model() -> str:
 
 def is_configured() -> bool:
     """Check if all embedding configuration is present."""
-    return bool(_base_url() and _model())
+    persisted = _persisted()
+    provider = str(os.environ.get("EMBEDDING_PROVIDER") or persisted.get("provider") or "openai_compatible")
+    return bool(_model() and (provider == "local_onnx" or _base_url()))
 
 
-async def embed_texts(texts: list[str]) -> list[list[float]]:
+def current_identity() -> tuple[str, int]:
+    persisted = _persisted()
+    model = _model()
+    dimensions = int(os.environ.get("EMBEDDING_DIMENSIONS") or persisted.get("dimensions") or 0)
+    if str(persisted.get("provider") or "") == "local_onnx" and not dimensions:
+        dimensions = 1024
+    return model, dimensions
+
+
+async def embed_texts(texts: list[str], *, input_type: str = "document") -> list[list[float]]:
     """Embed a list of texts using the configured embedding API.
 
     Raises an exception if embeddings are not configured or the API call fails.
@@ -95,6 +106,7 @@ async def embed_texts(texts: list[str]) -> list[list[float]]:
         "api_key": _api_key(),
         "model": _model(),
         "dimensions": int(os.environ.get("EMBEDDING_DIMENSIONS") or persisted.get("dimensions") or 0),
+        "input_type": input_type,
     }
     return await embed_texts_with_config(texts, config)
 

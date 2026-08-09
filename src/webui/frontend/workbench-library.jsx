@@ -897,6 +897,16 @@
     var attachment = Array.isArray(item.attachments) && item.attachments[0];
     var relations = Array.isArray(item.relations) ? item.relations : [];
     var annotations = Array.isArray(item.annotations) ? item.annotations : [];
+    var embedding = item.embedding_status || {};
+    var embeddingLabel = {
+      complete: L("library.embeddingComplete", "Vectorized"),
+      partial: L("library.embeddingPartial", "Partially vectorized"),
+      incompatible: L("library.embeddingIncompatible", "Vectors use another model"),
+      none: L("library.embeddingNone", "Not vectorized"),
+    }[embedding.state] || L("library.embeddingNone", "Not vectorized");
+    var embeddingValue = embedding.state === "partial"
+      ? embeddingLabel + " · " + Number(embedding.compatible_chunks || 0) + "/" + Number(embedding.total_chunks || 0)
+      : embeddingLabel;
     return h("aside", { className: "wb-lib-right" + (props.open ? " open" : "") },
       h("nav", { className: "wb-lib-right-tabs" },
         [{ id: "detail", label: "详情" }, { id: "content", label: "内容" }, { id: "related", label: "关联" }].map(function (tab) { return h("button", { key: tab.id, type: "button", className: props.tab === tab.id ? "active" : "", onClick: function () { props.onTab(tab.id); if (tab.id === "content" && props.onContentViewed) props.onContentViewed(); } }, tab.label); }),
@@ -919,7 +929,8 @@
           h("section", null, h("h3", null, "文件信息"), h("div", { className: "wb-lib-right-card" },
             h(MetaLine, { label: "文件大小", value: formatBytes(attachment && attachment.size) }), h(MetaLine, { label: "页数", value: attachment && attachment.page_count }),
             h(MetaLine, { label: "创建时间", value: formatDate(item.created_at, true) }), h(MetaLine, { label: "修改时间", value: formatDate(item.updated_at, true) }),
-            h(MetaLine, { label: "来源", value: item.provider === "zotero" ? "Zotero" : (item.provider || "Cyrene") }))),
+            h(MetaLine, { label: "来源", value: item.provider === "zotero" ? "Zotero" : (item.provider || "Cyrene") }),
+            embedding.state && h(MetaLine, { label: L("library.embeddingStatus", "Vector status"), value: embeddingValue }))),
           h(CollectionMembership, { item: item, collections: props.collections, onUpdate: props.onCollectionsUpdate }),
           h("section", null, h("div", { className: "wb-lib-right-section-head" }, h("h3", null, "引用格式"), h(CitationCopyControl, { citation: props.citation, bibtex: props.bibtex, onCopy: props.onCopyCitation })), h("div", { className: "wb-lib-right-card wb-lib-right-citation" }, props.citationLoading ? h(Spinner) : (props.citation || "暂无可用引用。"))),
           h("section", null, h("h3", null, "关联条目"), h("div", { className: "wb-lib-right-card wb-lib-right-relations" }, relations.slice(0, 3).map(function (relation, index) { return h("p", { key: relation.id || index }, (index + 1) + ". ", relation.other_title || relation.title || relation.target_title || "关联条目"); }), !relations.length && h("p", { className: "wb-lib-muted" }, "暂无关联条目"))),
@@ -1262,7 +1273,7 @@
 
     useEffect(function () {
       if (!client || !selectedId) { setDetail(null); return; }
-      var seq = ++detailSeq.current; setDetailLoading(true);
+      var seq = ++detailSeq.current; setDetail(null); setDetailLoading(true);
       client.detail(selectedId).then(function (payload) { if (seq === detailSeq.current) { setDetail(payload.item || payload); setDetailLoading(false); } }, function (err) { if (seq === detailSeq.current) { setDetailLoading(false); Toast(String(err.message || err), "error"); } });
     }, [client, selectedId]);
 

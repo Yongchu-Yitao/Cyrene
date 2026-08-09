@@ -120,6 +120,53 @@ def test_embedding_probe_requires_endpoint_and_model(integration_store):
         integration_settings.merged_test_config("embedding", {})
 
 
+def test_local_qwen_embedding_does_not_require_endpoint(integration_store):
+    integration_settings, settings, _ = integration_store
+    settings["embedding"] = {
+        "provider": "local_onnx",
+        "base_url": "",
+        "api_key": "",
+        "model": "qwen3-embedding-0.6b",
+        "dimensions": 1024,
+    }
+
+    config = integration_settings.merged_test_config("embedding", {})
+
+    assert config["provider"] == "local_onnx"
+    assert config["base_url"] == ""
+    assert config["dimensions"] == 1024
+
+
+@pytest.mark.asyncio
+async def test_embedding_transport_normalizes_vectors(monkeypatch):
+    from cyrene.knowledge import embedding_client
+
+    class FakeResponse:
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            return {"data": [{"index": 0, "embedding": [3.0, 4.0]}]}
+
+    class FakeClient:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return False
+
+        async def post(self, *args, **kwargs):
+            return FakeResponse()
+
+    monkeypatch.setattr(embedding_client.httpx, "AsyncClient", lambda: FakeClient())
+    vectors = await embedding_client.embed_texts_with_config(["hello"], {
+        "provider": "openai_compatible", "base_url": "https://example.test/v1",
+        "model": "embed", "dimensions": 0,
+    })
+
+    assert vectors[0] == pytest.approx([0.6, 0.8])
+
+
 @pytest.mark.asyncio
 async def test_ollama_embedding_request_and_response(monkeypatch):
     from cyrene.knowledge import embeddings
@@ -159,7 +206,7 @@ async def test_ollama_embedding_request_and_response(monkeypatch):
         "dimensions": 2,
     })
 
-    assert result == [[0.25, 0.75]]
+    assert result[0] == pytest.approx([0.316227766, 0.948683298])
     assert captured["endpoint"] == "http://127.0.0.1:11434/api/embed"
     assert captured["json"]["dimensions"] == 2
     assert "Authorization" not in captured["headers"]
@@ -214,6 +261,8 @@ def test_settings_ui_keeps_zotero_in_general_and_embedding_in_models():
     assert 'fetch("/api/settings/integrations/test"' in source
     assert 'value: "openai_compatible"' in source
     assert 'value: "ollama"' in source
+    assert 'value: "local_onnx"' in source
+    assert 'qwen3-embedding-0.6b' in source
     assert 'type: "password"' in source
     assert 'settings.zoteroCopyAttachments' in source
     assert 'function importFromZotero()' in source
@@ -224,7 +273,15 @@ def test_settings_ui_keeps_zotero_in_general_and_embedding_in_models():
     assert 'settings.zoteroIntegration' in general_panel
     assert 'settings.embeddingIntegration' not in general_panel
     assert 'function EmbeddingSettingsSection(p)' in models_panel
-    assert 'React.createElement(EmbeddingSettingsSection, { t: t })' in models_panel
+    assert 'React.createElement(EmbeddingSettingsSection, {' in models_panel
+    assert 'settings.localModels' in models_panel
+    assert 'saveAllModels' in models_panel
+    assert 'settings.reembedPromptTitle' in models_panel
+    assert 'coverage.pending_vectors' in models_panel
+    assert '"/api/workbench/knowledge/reembed?workspace="' in models_panel
+    embedding_section = models_panel.split("function EmbeddingSettingsSection(p) {", 1)[1].split("function modelCredentialFields", 1)[0]
+    assert 'onClick: save' not in embedding_section
     assert translations.count('"settings.embeddingIntegration"') == 2
+    assert translations.count('"settings.reembedPromptTitle"') == 2
     assert translations.count('"settings.zoteroIntegration"') == 2
     assert translations.count('"settings.zoteroImportAction"') == 2

@@ -28,10 +28,20 @@ async def embed_texts_with_config(
         dimensions = int(config.get("dimensions") or 0)
     except (TypeError, ValueError) as exc:
         raise RuntimeError("Invalid embedding dimensions") from exc
-    if provider not in {"openai_compatible", "ollama"}:
+    if provider not in {"openai_compatible", "ollama", "local_onnx"}:
         raise RuntimeError("Unsupported embedding provider")
     if dimensions < 0 or dimensions > 65_536:
         raise RuntimeError("Invalid embedding dimensions")
+    if provider == "local_onnx":
+        if model != "qwen3-embedding-0.6b":
+            raise RuntimeError("Unsupported local embedding model")
+        from cyrene.knowledge.local_onnx import embed_texts
+
+        result_vectors = await embed_texts(
+            texts, query=str(config.get("input_type") or "") == "query"
+        )
+        return _normalize_vectors(result_vectors, len(texts))
+
     if not base_url or not model:
         raise RuntimeError("Embeddings not configured")
 
@@ -82,9 +92,14 @@ async def embed_texts_with_config(
             if isinstance(item.get("embedding"), list)
         ]
 
-    if len(result_vectors) != len(texts):
+    return _normalize_vectors(result_vectors, len(texts))
+
+
+def _normalize_vectors(result_vectors: list[list[float]], expected: int) -> list[list[float]]:
+    """Validate and L2-normalize provider output before persistence/search."""
+    if len(result_vectors) != expected:
         raise RuntimeError(
-            f"Expected {len(texts)} embeddings, got {len(result_vectors)}"
+            f"Expected {expected} embeddings, got {len(result_vectors)}"
         )
 
     vector_size = len(result_vectors[0]) if result_vectors else 0
@@ -104,4 +119,10 @@ async def embed_texts_with_config(
     ):
         raise RuntimeError("Embedding provider returned an invalid vector")
 
-    return result_vectors
+    normalized = []
+    for vector in result_vectors:
+        norm = math.sqrt(sum(float(value) * float(value) for value in vector))
+        if norm <= 0:
+            raise RuntimeError("Embedding provider returned a zero vector")
+        normalized.append([float(value) / norm for value in vector])
+    return normalized

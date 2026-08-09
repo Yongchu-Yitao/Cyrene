@@ -339,6 +339,12 @@ async def delete_document(db_path: str, doc_id: str, *, remove_file: bool = True
 
     Optionally delete the on-disk file.
     """
+    # Stop fire-and-forget indexers before the authoritative transaction.  The
+    # existence check in replace_chunks remains the final race guard.
+    from cyrene.knowledge import ingest
+
+    await ingest.cancel_pending_tasks(doc_id)
+
     # Get the document to find its path
     doc = await get_document(db_path, doc_id)
     if not doc:
@@ -699,12 +705,17 @@ async def replace_chunks(
     db_path: str,
     doc_id: str,
     chunks: list[dict],
-) -> None:
+) -> bool:
     """Replace all chunks for a document in a transaction.
 
     Deletes old chunks and FTS entries, then inserts new chunks and FTS entries.
     """
     async with aiosqlite.connect(db_path, timeout=30) as db:
+        cursor = await db.execute(
+            "SELECT 1 FROM kb_documents WHERE id = ? LIMIT 1", (doc_id,)
+        )
+        if await cursor.fetchone() is None:
+            return False
         # Delete old FTS entries
         await db.execute(
             "DELETE FROM kb_chunks_fts WHERE document_id = ?",
@@ -751,6 +762,96 @@ async def replace_chunks(
                 (chunk.get("content", ""), chunk_id, doc_id),
             )
 
+        await db.commit()
+        return True
+
+
+async def reusable_embeddings(
+    db_path: str,
+    model: str,
+    dimensions: int = 0,
+) -> dict[str, dict[str, Any]]:
+    """Return one normalized vector per content fingerprint for a model."""
+    result: dict[str, dict[str, Any]] = {}
+    if not model:
+        return result
+    async with aiosqlite.connect(db_path, timeout=30) as db:
+        db.row_factory = aiosqlite.Row
+        query = (
+            "SELECT content, embedding, embedding_dim FROM kb_chunks "
+            "WHERE embedding IS NOT NULL AND embedding_model = ?"
+        )
+        params: list[Any] = [model]
+        if dimensions > 0:
+            query += " AND embedding_dim = ?"
+            params.append(dimensions)
+        cursor = await db.execute(query, params)
+        for row in await cursor.fetchall():
+            fingerprint = hashlib.sha256(row["content"].encode("utf-8")).hexdigest()
+            result.setdefault(fingerprint, {
+                "embedding": row["embedding"],
+                "embedding_dim": int(row["embedding_dim"] or 0),
+            })
+    return result
+
+
+async def get_corpus_embedding_info(db_path: str) -> dict[str, Any]:
+    """Summarize vector identity for consistency checks and settings UI."""
+    async with aiosqlite.connect(db_path, timeout=30) as db:
+        db.row_factory = aiosqlite.Row
+        cursor = await db.execute(
+            "SELECT embedding_model AS model, embedding_dim AS dimensions, COUNT(*) AS count "
+            "FROM kb_chunks WHERE embedding IS NOT NULL "
+            "GROUP BY embedding_model, embedding_dim ORDER BY count DESC"
+        )
+        rows = [dict(row) for row in await cursor.fetchall()]
+    return {"vectors": sum(int(row["count"]) for row in rows), "groups": rows}
+
+
+async def get_embedding_coverage(
+    db_path: str,
+    model: str,
+    dimensions: int = 0,
+) -> dict[str, int]:
+    """Count chunks that are ready or still need vectors for one model identity."""
+    async with aiosqlite.connect(db_path, timeout=30) as db:
+        cursor = await db.execute(
+            """
+            SELECT
+                COUNT(*) AS total,
+                SUM(
+                    CASE WHEN embedding IS NOT NULL
+                        AND embedding_model = ?
+                        AND (? = 0 OR embedding_dim = ?)
+                    THEN 1 ELSE 0 END
+                ) AS compatible
+            FROM kb_chunks
+            """,
+            (model, dimensions, dimensions),
+        )
+        row = await cursor.fetchone()
+    total = int((row or [0, 0])[0] or 0)
+    compatible = int((row or [0, 0])[1] or 0)
+    return {
+        "total_chunks": total,
+        "compatible_vectors": compatible,
+        "pending_vectors": max(0, total - compatible),
+    }
+
+
+async def update_chunk_embeddings(
+    db_path: str,
+    updates: list[dict[str, Any]],
+) -> None:
+    """Update vectors without repeating extraction or chunking."""
+    async with aiosqlite.connect(db_path, timeout=30) as db:
+        await db.executemany(
+            "UPDATE kb_chunks SET embedding = ?, embedding_dim = ?, embedding_model = ? WHERE id = ?",
+            [
+                (item["embedding"], item["embedding_dim"], item["embedding_model"], item["id"])
+                for item in updates
+            ],
+        )
         await db.commit()
 
 
@@ -801,6 +902,16 @@ async def iter_embedded_chunks(
         cursor = await db.execute(query, params)
         rows = await cursor.fetchall()
         return [_row_to_chunk(row) for row in rows]
+
+
+async def iter_all_chunks(db_path: str) -> list[dict]:
+    """Get every chunk in stable document/ordinal order."""
+    async with aiosqlite.connect(db_path, timeout=30) as db:
+        db.row_factory = aiosqlite.Row
+        cursor = await db.execute(
+            "SELECT * FROM kb_chunks ORDER BY document_id, ordinal"
+        )
+        return [_row_to_chunk(row) for row in await cursor.fetchall()]
 
 
 async def create_relation(

@@ -19,7 +19,7 @@ async def _tool_search_project_memory(
     _db_path: str,
     _notify_state: dict[str, bool] | None,
 ) -> str:
-    """Search durable memory scoped to the current Workbench project."""
+    """Search durable memory using keyword matching within one project."""
     from cyrene.agent.context import get_current_session_id
 
     query = str(args.get("query", "") or "").strip()
@@ -57,6 +57,8 @@ async def _tool_search_project_memory(
     )
     return json_result({
         "status": "success",
+        "search_mode": "keyword",
+        "uses_embeddings": False,
         "query": query,
         "category": category,
         "source": source,

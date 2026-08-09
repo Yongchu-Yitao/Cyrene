@@ -1133,6 +1133,30 @@ def register_settings_routes(router: APIRouter, bot: Any, db_path: str) -> None:
 
         return public_settings()
 
+    @router.get("/api/settings/local-models/status")
+    async def api_local_models_status():
+        from cyrene.knowledge.local_models import status
+
+        return status()
+
+    @router.post("/api/settings/local-models/{model_id}/download")
+    async def api_download_local_model(model_id: str):
+        from cyrene.knowledge.local_models import start_download
+
+        try:
+            return {"ok": True, **start_download(model_id)}
+        except ValueError as exc:
+            return JSONResponse({"error": str(exc)}, status_code=404)
+
+    @router.delete("/api/settings/local-models/{model_id}")
+    async def api_delete_local_model(model_id: str):
+        from cyrene.knowledge.local_models import delete_model
+
+        try:
+            return {"ok": True, **(await delete_model(model_id))}
+        except ValueError as exc:
+            return JSONResponse({"error": str(exc)}, status_code=404)
+
     @router.put("/api/settings/integrations")
     async def api_update_integration_settings(request: Request):
         from cyrene.runtime.integration_settings import update_settings

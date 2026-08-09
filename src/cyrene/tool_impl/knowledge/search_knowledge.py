@@ -35,8 +35,13 @@ async def _tool_search_knowledge(args: dict[str, Any], _bot: Any, _chat_id: int,
         for i, result in enumerate(results, start=1):
             doc_name = result.get("document_name", "Unknown")
             content = result.get("content", "")[:400]
-            score = result.get("score", 0)
-            output_lines.append(f"[{i}. {doc_name}] (score: {score:.2f})\n{content}\n")
+            cosine_similarity = result.get("cosine_similarity")
+            similarity_text = (
+                f" (cosine_similarity: {float(cosine_similarity):.6f})"
+                if cosine_similarity is not None
+                else ""
+            )
+            output_lines.append(f"[{i}. {doc_name}]{similarity_text}\n{content}\n")
         return "\n".join(output_lines)
     except Exception as e:
         logger.debug(f"Knowledge base search failed: {e}")

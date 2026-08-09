@@ -399,6 +399,42 @@ class TestKnowledgeToolSearchKnowledge:
         assert isinstance(result, str)
         # Should find the document
         assert "test.md" in result or "Found" in result
+        assert "retrieval_mode" not in result
+        assert "rrf_rank_score" not in result
+        assert "cosine_similarity" not in result
+
+    @pytest.mark.asyncio
+    async def test_search_knowledge_tool_exposes_only_vector_cosine(self, monkeypatch):
+        from cyrene.knowledge import retrieve
+        from cyrene.tool_impl.knowledge.search_knowledge import _tool_search_knowledge
+        from cyrene.workbench import context
+
+        async def fake_ensure(_session_id):
+            return "kb.db"
+
+        async def fake_search(_db_path, _query, *, k):
+            return [{
+                "document_name": "vector.md",
+                "content": "Relevant passage",
+                "score": 1.0 / 60.0,
+                "mode": "vector",
+                "cosine_similarity": 0.81234567,
+            }]
+
+        monkeypatch.setattr(context, "ensure_knowledge_db_for_session", fake_ensure)
+        monkeypatch.setattr(retrieve, "search_knowledge", fake_search)
+
+        result = await _tool_search_knowledge(
+            {"query": "semantic query", "k": 1},
+            _bot=None,
+            _chat_id=-1,
+            _db_path="ignored.db",
+            _notify_state=None,
+        )
+
+        assert "cosine_similarity: 0.812346" in result
+        assert "retrieval_mode" not in result
+        assert "rrf_rank_score" not in result
 
 
 class TestKnowledgeToolListDocuments:
@@ -446,4 +482,5 @@ class TestKnowledgeToolListDocuments:
         assert "searchable.md" in result
         assert "empty.pdf" in result
         assert "1 searchable and 1 without searchable text" in result
-        assert "path=/tmp/searchable.md" in result
+        assert "file=searchable.md" in result
+        assert "/tmp/searchable.md" not in result

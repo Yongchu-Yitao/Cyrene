@@ -194,7 +194,13 @@ def _prioritize_last_success(
             and _base_root(candidate.get("base_url") or "") == _base_root(affinity.get("base_url") or "")
         ):
             preferred_endpoint = str(affinity.get("endpoint") or "")
-            if preferred_endpoint in endpoints:
+            if (
+                preferred_endpoint in endpoints
+                and not (
+                    _is_official_deepseek_base_url(candidate.get("base_url") or "")
+                    and preferred_endpoint == "https://api.deepseek.com/chat/completions"
+                )
+            ):
                 endpoints.remove(preferred_endpoint)
                 endpoints.insert(0, preferred_endpoint)
         if (
@@ -390,8 +396,28 @@ def _claim_model_notice(
 # ---------------------------------------------------------------------------
 
 
+def _is_official_deepseek_base_url(base_url: str) -> bool:
+    normalized_base = str(base_url or "").strip().rstrip("/")
+    return normalized_base.lower() in {
+        "https://api.deepseek.com",
+        "https://api.deepseek.com:443",
+        "https://api.deepseek.com/v1",
+        "https://api.deepseek.com:443/v1",
+    }
+
+
 def _normalized_llm_endpoints(base_url: str) -> list[str]:
     normalized_base = str(base_url or DEFAULT_OPENAI_BASE_URL).strip().rstrip("/") or DEFAULT_OPENAI_BASE_URL
+    if _is_official_deepseek_base_url(normalized_base):
+        # The OpenAI-compatible /v1 route has proved more reliable in
+        # production than DeepSeek's documented unversioned alias. Try it
+        # first so a broken alias cannot consume the transport timeout before
+        # the working route is attempted.
+        origin = "https://api.deepseek.com"
+        return [
+            f"{origin}/v1/chat/completions",
+            f"{origin}/chat/completions",
+        ]
     endpoints = [f"{normalized_base}/chat/completions"]
     if not normalized_base.endswith("/v1"):
         endpoints.append(f"{normalized_base}/v1/chat/completions")

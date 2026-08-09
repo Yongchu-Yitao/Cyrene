@@ -17,7 +17,7 @@ from cyrene.runtime import config_store
 
 DEFAULT_ZOTERO_URL = "http://127.0.0.1:23119/api"
 DEFAULT_OLLAMA_URL = "http://127.0.0.1:11434"
-EMBEDDING_PROVIDERS = frozenset({"openai_compatible", "ollama"})
+EMBEDDING_PROVIDERS = frozenset({"openai_compatible", "ollama", "local_onnx"})
 
 
 def _clean_url(value: Any, *, default: str = "") -> str:
@@ -73,7 +73,7 @@ def normalize_embedding(raw: Any = None, *, include_legacy: bool = True) -> dict
 
     return {
         "provider": provider,
-        "base_url": _clean_url(
+        "base_url": "" if provider == "local_onnx" else _clean_url(
             source.get("base_url") or legacy_base_url,
             default=default_base_url,
         ),
@@ -156,7 +156,7 @@ def merged_test_config(service: str, draft: Any = None) -> dict[str, Any]:
         if not str(source.get("api_key") or "").strip():
             merged["api_key"] = current["api_key"]
         normalized = normalize_embedding(merged, include_legacy=False)
-        if not normalized["base_url"] or not normalized["model"]:
+        if not normalized["model"] or (normalized["provider"] != "local_onnx" and not normalized["base_url"]):
             raise ValueError("embedding base URL and model are required")
         return normalized
     raise ValueError("unknown integration service")

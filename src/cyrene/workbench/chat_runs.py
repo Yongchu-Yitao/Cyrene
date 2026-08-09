@@ -67,8 +67,12 @@ _DURABLE_RETENTION_DAYS = 7
 # High-frequency model deltas stay individually cursor-addressable, but their
 # SQLite work is grouped into one connection/transaction. This removes database
 # backpressure from the upstream token loop without changing replay semantics.
-_DURABLE_EVENT_BATCH_INTERVAL_SECONDS = 0.05
-_DURABLE_EVENT_BATCH_MAX = 128
+# Streaming deltas are still delivered to attached clients immediately. Their
+# durable copies can share a slightly wider transaction window, substantially
+# reducing SQLite writer pressure during fast token streams while terminal
+# events continue to force an immediate flush.
+_DURABLE_EVENT_BATCH_INTERVAL_SECONDS = 0.2
+_DURABLE_EVENT_BATCH_MAX = 512
 _BATCHABLE_DURABLE_EVENT_TYPES = frozenset({"reasoning_delta", "reply_delta"})
 
 # Event types that suppress the synthesized reply (the agent already streamed a

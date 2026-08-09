@@ -108,6 +108,54 @@ async def test_library_crud_filters_stats_and_project_isolation(library_db, tmp_
 
 
 @pytest.mark.asyncio
+async def test_library_item_embedding_status_tracks_current_model_coverage(
+    library_db, monkeypatch
+):
+    from cyrene.knowledge import embeddings
+
+    monkeypatch.setattr(embeddings, "current_identity", lambda: ("current", 3))
+    item = await library.create_item(library_db, {"title": "Vector status"})
+    document = await store.create_document(
+        library_db, name="vector.md", path="/tmp/vector.md", kind="code"
+    )
+    await store.replace_chunks(library_db, document["id"], [
+        {"id": "chunk-a", "ordinal": 0, "content": "alpha"},
+        {"id": "chunk-b", "ordinal": 1, "content": "beta"},
+    ])
+    await library.add_attachment(
+        library_db, item["id"], {"kb_document_id": document["id"]}
+    )
+
+    status = await library_routes._item_embedding_status(library_db, item["id"])
+    assert status["state"] == "none"
+    assert status["total_chunks"] == 2
+
+    await store.update_chunk_embeddings(library_db, [{
+        "id": "chunk-a", "embedding": b"a", "embedding_dim": 3,
+        "embedding_model": "current",
+    }])
+    status = await library_routes._item_embedding_status(library_db, item["id"])
+    assert status["state"] == "partial"
+    assert status["compatible_chunks"] == 1
+
+    await store.update_chunk_embeddings(library_db, [{
+        "id": "chunk-b", "embedding": b"b", "embedding_dim": 3,
+        "embedding_model": "current",
+    }])
+    assert (
+        await library_routes._item_embedding_status(library_db, item["id"])
+    )["state"] == "complete"
+
+    await store.update_chunk_embeddings(library_db, [
+        {"id": "chunk-a", "embedding": b"a", "embedding_dim": 2, "embedding_model": "old"},
+        {"id": "chunk-b", "embedding": b"b", "embedding_dim": 2, "embedding_model": "old"},
+    ])
+    assert (
+        await library_routes._item_embedding_status(library_db, item["id"])
+    )["state"] == "incompatible"
+
+
+@pytest.mark.asyncio
 async def test_library_batch_delete_supports_trash_and_permanent_removal(library_db):
     first = await library.create_item(library_db, {"title": "First"})
     second = await library.create_item(library_db, {"title": "Second"})

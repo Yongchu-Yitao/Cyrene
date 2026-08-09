@@ -335,6 +335,12 @@ def test_chat_sidebar_context_is_flat_and_overview_is_integrated():
     assert "WbcSortableCardStack" not in context_source
     context_css = styles.split(".wbc-context-sections {", 1)[1].split("}", 1)[0]
     assert "flex-direction: column;" in context_css
+    first_tool_package_css = styles.split(
+        ".wbc-context-sections > .workbench-side-section > "
+        ".wbc-tool-pack-row:first-child {",
+        1,
+    )[1].split("}", 1)[0]
+    assert "border-top: 0;" in first_tool_package_css
 
 
 def test_workbench_chat_cards_are_borderless_and_compact_overview_is_flat():
@@ -2265,13 +2271,43 @@ def test_workbench_chat_supports_parallel_conversation_runtimes():
     assert 'window.CyreneUI.chat = window.CyreneUI.register("chat", {' in source
     assert "Runtimes: WorkbenchChatRuntimes" in source
     assert "var runtimeEngine = WorkbenchChatRuntimes;" in source
-    assert "runtimeEngine.subscribe(function (snap) { setRuntimes(snap); })" in source
+    assert "subscribeSummary: subscribeSummary" in source
+    assert "runtimeEngine.subscribe(applyRuntimeSnapshot)" in source
+    assert "runtimeEngine.get(activeChatId)" in source
+    assert "wbcSameRuntimePresence(current, nextPresence)" in source
     assert "runtimeEngine.start(chatId, preparedInput, model)" in source
-    assert "var activeRuntime = runtimes[activeChatId] || null;" in source
+    assert "runningChatIds={runningChatIds}" in source
     assert "if (!chatId || runtimes[chatId]) return null;" in source
     assert "otherRunning" not in source
     assert "workbenchChat.lockedByOther" not in source
     assert "workbenchChat.lockedByOther" not in i18n
+
+
+def test_workbench_runtime_summary_ignores_token_only_updates():
+    result = _run_workbench_runtime_js(
+        """
+(() => {
+  let handlers = null;
+  let summaries = 0;
+  WorkbenchChatRuntimes.subscribeSummary(() => { summaries += 1; });
+  WorkbenchChatRuntimes.start("chat-1", { message: "hello" }, {
+    sendMessage: (_chatId, _input, nextHandlers) => {
+      handlers = nextHandlers;
+      return new Promise(() => {});
+    }
+  });
+  const afterStart = summaries;
+  handlers.onReplyDelta("one");
+  handlers.onReplyDelta("two");
+  handlers.onReplyDone("onetwo");
+  const afterReply = summaries;
+  WorkbenchChatRuntimes.clear("chat-1");
+  return { afterStart, afterReply, afterClear: summaries };
+})()
+"""
+    )
+
+    assert result == {"afterStart": 1, "afterReply": 2, "afterClear": 3}
 
 
 def test_workbench_chat_renders_new_user_turn_before_live_thinking_card():
@@ -3665,8 +3701,11 @@ def test_workbench_context_tab_has_live_session_inbox_card():
         ".wbc-inbox-head,", 1
     )[0]
     inbox_meta_css = css.split(".wbc-inbox-event-meta {", 2)[2].split("}", 1)[0]
+    inbox_meta_time_css = css.split(".wbc-inbox-event-meta time {", 1)[1].split("}", 1)[0]
     assert "padding-bottom: 10px" in inbox_card_css
-    assert "justify-content: flex-end" in inbox_meta_css
+    assert "justify-content: space-between" in inbox_meta_css
+    assert "white-space: nowrap" in inbox_meta_time_css
+    assert inbox_card.index('className={"wbc-inbox-event-preview"') > inbox_card.index('className="wbc-inbox-event-meta"')
     assert ".wbc-inbox-event-meta code" not in css
 
 
@@ -4291,9 +4330,18 @@ def test_workbench_chat_context_and_browser_trace_have_dynamic_i18n_labels():
     # Dynamic context block and tool IDs must resolve through the same
     # translation table as the surrounding labels instead of leaking raw IDs.
     assert 'var key = "workbenchChat.ctxBlock." + id;' in chat
+    assert "if (label && label !== key) return label;" in chat
     assert 'wbcT("toolName." + toolKey, toolKey)' in chat
     assert '"workbenchChat.ctxBlock.skills.learned": "Learned skills"' in i18n
     assert '"workbenchChat.ctxBlock.skills.learned": "已学习技能"' in i18n
+    assert (
+        '"workbenchChat.ctxBlock.client.renderer.workbench": '
+        '"Workbench response format"'
+    ) in i18n
+    assert (
+        '"workbenchChat.ctxBlock.client.renderer.workbench": '
+        '"Workbench 响应格式"'
+    ) in i18n
     assert '"toolName.browser_user_events": "User browser operations"' in i18n
     assert '"toolName.browser_user_events": "用户浏览器操作"' in i18n
     assert '"toolName.browser_upload_files": "Upload files"' in i18n
@@ -5996,7 +6044,9 @@ def test_workbench_live_reply_disables_interactive_markdown_until_done():
 
     live_message = chat.split("function WbcLiveMessage", 1)[1].split("// ---------------------------------------------------------------------------", 1)[0]
     assistant_message = chat.split("function WbcAssistantMessage", 1)[1].split("var WBC_HEARTBEAT_STALL_MS", 1)[0]
-    assert "wbcRenderMarkdown(runtime.text, { interactive: false })" in live_message
+    assert "WBC_LIVE_MARKDOWN_INTERVAL_MS = 120" in chat
+    assert "wbcUseThrottledLiveText(runtime.text, !!runtime.streamDone)" in live_message
+    assert "wbcRenderMarkdown(renderedText, { interactive: false })" in live_message
     assert "wbcRenderMarkdown(msg.content)" in assistant_message
     assert ".wbc-fold > summary:focus-visible" in styles
     assert "@media (prefers-reduced-motion: reduce)" in styles

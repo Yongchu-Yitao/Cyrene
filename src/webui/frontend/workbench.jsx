@@ -339,6 +339,20 @@ function wbSessionPlanProgress(item) {
   };
 }
 
+function wbActivityStatusIsActive(status) {
+  return ["running", "resumed", "planning", "initializing", "finishing", "waiting"].indexOf(
+    String(status || "").toLowerCase()
+  ) >= 0;
+}
+
+function wbActivityStatusIsTerminal(status) {
+  return [
+    "done", "completed", "success", "failed", "error", "timeout", "paused",
+    "blocked", "review", "waiting_for_user", "awaiting_user",
+    "waiting_for_approval", "cancelled", "canceled", "interrupted", "stopped",
+  ].indexOf(String(status || "").toLowerCase()) >= 0;
+}
+
 function wbSessionActivityPhase(item, runtime, live) {
   var source = item && item.source || {};
   function statusIsActive(status) {
@@ -350,10 +364,20 @@ function wbSessionActivityPhase(item, runtime, live) {
   var liveStatusAt = Number(live && live.statusAt) || 0;
   var liveStatusIsFresh = !!(live && live.status) && (!sourceUpdatedAt || liveStatusAt > sourceUpdatedAt);
   var livePresenceIsFresh = !!live && (!sourceUpdatedAt || Number(live.lastEventAt || 0) > sourceUpdatedAt);
-  var raw = String((liveStatusIsFresh && live.status) || source.runStatus || source.status || "idle").toLowerCase();
+  var persistedRaw = String(source.runStatus || source.status || "idle").toLowerCase();
+  var sourceRunKey = String(source.lastRun && source.lastRun.id || "").trim();
+  var liveRunKey = String(live && live.runKey || "").trim();
+  var liveBelongsToNewerRun = !!liveRunKey && (!sourceRunKey || liveRunKey !== sourceRunKey);
+  // Network delivery time can be a few milliseconds later than the durable
+  // completion timestamp. A lingering tool/phase event from the SAME run must
+  // never resurrect a completed, failed, cancelled, or awaiting conversation.
+  // A different run id is still allowed to become live before the next list
+  // summary arrives, preserving instant background-run feedback.
+  var durableTerminalWins = wbActivityStatusIsTerminal(persistedRaw) && !runtime && !liveBelongsToNewerRun;
+  var raw = String((liveStatusIsFresh && !durableTerminalWins && live.status) || persistedRaw).toLowerCase();
   var activeSignal = !!runtime || !!source.agentBusy || !!(live && live.active);
   var hasPendingQuestion = !!(source.pendingQuestion && source.pendingQuestion.id);
-  var livePresenceIsCredible = !!(livePresenceIsFresh && live && (
+  var livePresenceIsCredible = !!(!durableTerminalWins && livePresenceIsFresh && live && (
     live.phaseActive
     || Object.keys(live.activeTools || {}).length
     || Object.keys(live.agents || {}).some(function (key) {
@@ -672,20 +696,6 @@ function wbArgsPreview(args) {
     parts.push(text);
   });
   return parts.join("  ").slice(0, 80);
-}
-
-function wbActivityStatusIsActive(status) {
-  return ["running", "resumed", "planning", "initializing", "finishing", "waiting"].indexOf(
-    String(status || "").toLowerCase()
-  ) >= 0;
-}
-
-function wbActivityStatusIsTerminal(status) {
-  return [
-    "done", "completed", "success", "failed", "error", "timeout", "paused",
-    "blocked", "review", "waiting_for_user", "awaiting_user",
-    "waiting_for_approval", "cancelled", "canceled", "interrupted", "stopped",
-  ].indexOf(String(status || "").toLowerCase()) >= 0;
 }
 
 function wbActivityEventRunKey(data) {
@@ -1249,7 +1259,10 @@ function WorkbenchApp({ theme, actualTheme, onToggleTheme, needsOnboarding }) {
   useWorkbenchEffect(function () {
     if (!chatRuntimeEngine || typeof chatRuntimeEngine.subscribe !== "function") return undefined;
     setChatRuntimes(chatRuntimeEngine.snapshot());
-    return chatRuntimeEngine.subscribe(function (snapshot) { setChatRuntimes(snapshot); });
+    var subscribe = typeof chatRuntimeEngine.subscribeSummary === "function"
+      ? chatRuntimeEngine.subscribeSummary
+      : chatRuntimeEngine.subscribe;
+    return subscribe(function (snapshot) { setChatRuntimes(snapshot); });
   }, [chatRuntimeEngine]);
 
   useWorkbenchEffect(function () {
@@ -1267,7 +1280,25 @@ function WorkbenchApp({ theme, actualTheme, onToggleTheme, needsOnboarding }) {
         return Object.assign({}, previous, { [sessionId]: next });
       });
     }
-    return window.CyreneUI.require("events").subscribe(onActivityEvent);
+    function onChatLifecycle(event) {
+      var detail = event && event.detail || {};
+      var status = String(detail.status || "");
+      var sessionId = String(detail.chatId || detail.sessionId || "");
+      if (!sessionId || !status || status === "refresh") return;
+      onActivityEvent({
+        type: "session_update",
+        session_id: sessionId,
+        runId: String(detail.runId || ""),
+        status: status,
+        timestamp: String(detail.timestamp || new Date().toISOString()),
+      });
+    }
+    var unsubscribe = window.CyreneUI.require("events").subscribe(onActivityEvent);
+    window.addEventListener("cyrene:wbc-chat-lifecycle", onChatLifecycle);
+    return function () {
+      unsubscribe();
+      window.removeEventListener("cyrene:wbc-chat-lifecycle", onChatLifecycle);
+    };
   }, []);
 
   function projectForSession(snapshot, sessionId) {
@@ -1839,10 +1870,15 @@ function WorkbenchApp({ theme, actualTheme, onToggleTheme, needsOnboarding }) {
         refreshTopbarSessions();
       }
     }
+    function onChatLifecycle() {
+      refreshTopbarSessions();
+    }
     var unsubscribe = window.CyreneUI.require("events").subscribe(onRuntimeEvent);
+    window.addEventListener("cyrene:wbc-chat-lifecycle", onChatLifecycle);
     return function () {
       if (timer) clearTimeout(timer);
       unsubscribe();
+      window.removeEventListener("cyrene:wbc-chat-lifecycle", onChatLifecycle);
     };
   }, [recentProjectIds]);
 
@@ -2509,6 +2545,28 @@ function WorkbenchApp({ theme, actualTheme, onToggleTheme, needsOnboarding }) {
       activity: wbSessionActivitySnapshot(item, runtime, sessionActivityLive[item.id], browserState),
     });
   });
+  var liveTopbarChatKey = sessionTabCandidates.filter(function (item) {
+    return item.kind === "chat" && item.activity && item.activity.isLive;
+  }).map(function (item) { return item.id; }).sort().join("|");
+  // Event delivery is the primary path. Poll only while at least one chat is
+  // visibly live so runs completed in another app window also settle quickly,
+  // then stop automatically as soon as the durable terminal summary arrives.
+  useWorkbenchEffect(function () {
+    if (!liveTopbarChatKey) return undefined;
+    var inFlight = false;
+    function refreshLiveChats() {
+      if (document.hidden || inFlight) return;
+      inFlight = true;
+      reloadRecentChats(store.projects || []).finally(function () { inFlight = false; });
+    }
+    var timer = setInterval(refreshLiveChats, 2500);
+    function onVisibility() { if (!document.hidden) refreshLiveChats(); }
+    document.addEventListener("visibilitychange", onVisibility);
+    return function () {
+      clearInterval(timer);
+      document.removeEventListener("visibilitychange", onVisibility);
+    };
+  }, [liveTopbarChatKey, recentProjectIds]);
   var sessionTabLayout = wbVisibleSessionTabs(sessionTabCandidates, activeSessionKey, 3);
   var recentSessionTabs = sessionTabLayout.visible;
   var overflowSessionTabs = sessionTabLayout.overflow;
