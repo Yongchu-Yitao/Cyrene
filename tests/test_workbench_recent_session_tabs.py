@@ -206,8 +206,11 @@ def test_session_tab_context_menu_supports_pinning_resources_and_removal():
     assert "onTogglePinnedSession" in shell
     assert "onRemoveSessionTab" in shell
     assert "onLoadSessionResources" in shell
+    assert "onLoadSessionBrowserPreview" in shell
     assert "bridge.screenshot({" in shell
     assert 'className="workbench-session-browser-preview"' in shell
+    assert 'src={sessionMenu.resources.browser.previewUrl}' in shell
+    assert "setInterval(refreshBrowserPreview, 1200)" in shell
     assert 'className="workbench-session-resource-chevron"' in shell
     assert "function WorkbenchSessionMenuFileName" in shell
     assert "contentWidth - node.clientWidth" in shell
@@ -226,6 +229,21 @@ def test_session_tab_context_menu_supports_pinning_resources_and_removal():
     utility_css = css.rsplit(".workbench-session-utility-actions {", 1)[1].split("}", 1)[0]
     assert "grid-template-columns: repeat(3, minmax(0, 1fr))" in utility_css
     assert "margin-top: 8px" in utility_css
+    browser_preview_css = css.split(
+        ".workbench-account-menu button.workbench-session-browser-preview {", 1
+    )[1].split("}", 1)[0]
+    assert "flex-direction: column" in browser_preview_css
+    assert "margin-bottom: 8px" in browser_preview_css
+    browser_preview_context_css = css.split(
+        ".workbench-account-menu.workbench-session-context-menu > button.workbench-session-browser-preview {",
+        1,
+    )[1].split("}", 1)[0]
+    assert "margin-bottom: 8px" in browser_preview_context_css
+    browser_preview_hover_css = css.split(
+        ".workbench-account-menu.workbench-session-context-menu > button.workbench-session-browser-preview:hover,",
+        1,
+    )[1].split("}", 1)[0]
+    assert "box-shadow: none" in browser_preview_hover_css
     action_button_css = css.split(
         ".workbench-account-menu.workbench-session-context-menu .workbench-session-primary-actions > button,",
         1,
@@ -244,6 +262,13 @@ def test_session_tab_context_menu_supports_pinning_resources_and_removal():
     assert 'className="workbench-session-resource-section"' in shell
     session_menu = shell.split('className="workbench-account-menu workbench-session-menu workbench-session-context-menu"', 1)[1].split("var overflowMenuPortal", 1)[0]
     assert 'className="workbench-session-menu-separator"' not in session_menu
+    adaptive_menu_css = css.split(
+        ".workbench-account-menu.workbench-session-menu {", 1
+    )[1].split("}", 1)[0]
+    assert "height: auto" in adaptive_menu_css
+    assert "max-height: calc(100dvh - 16px)" in adaptive_menu_css
+    assert "max-height: min(440px" not in adaptive_menu_css
+    assert "overflow-y: auto" in adaptive_menu_css
     hidden_scrollbar_css = css.split(
         ".workbench-session-context-menu.workbench-session-menu {", 1
     )[1].split("}", 1)[0]

@@ -694,7 +694,6 @@ class BrowserTabManager {
     this.bounds = { x: 0, y: 0, width: 0, height: 0 };
     this.borderRadius = 0;
     this.pageCornerRadius = 0;
-    this.resizeEdgeHintColor = '#63b38f';
     this.chatOverlayView = null;
     this.chatOverlayParent = null;
     this.chatOverlayState = { visible: false, running: false, showStatus: false };
@@ -1205,32 +1204,18 @@ class BrowserTabManager {
         if (window.__cyreneBrowserUserCaptureInstalled) return true;
         window.__cyreneBrowserUserCaptureInstalled = true;
         const prefix = ${JSON.stringify(BROWSER_USER_EVENT_CONSOLE_PREFIX)};
-        const resizeEdgeHint = document.createElement("div");
-        resizeEdgeHint.setAttribute("data-cyrene-resize-edge-hint", "");
         const resizeEdgeCursorStyle = document.createElement("style");
         resizeEdgeCursorStyle.setAttribute("data-cyrene-resize-edge-cursor", "");
         resizeEdgeCursorStyle.textContent =
           'html[data-cyrene-resize-edge-active], ' +
           'html[data-cyrene-resize-edge-active] * { cursor: col-resize !important; }';
         document.documentElement.appendChild(resizeEdgeCursorStyle);
-        Object.assign(resizeEdgeHint.style, {
-          position: "fixed",
-          zIndex: "2147483647",
-          inset: "0 auto 0 0",
-          width: "2px",
-          pointerEvents: "none",
-          opacity: "0",
-          background: ${JSON.stringify(this.resizeEdgeHintColor)},
-          transition: "opacity 120ms ease",
-        });
-        document.documentElement.appendChild(resizeEdgeHint);
         const resizeEdgePrefix = ${JSON.stringify(BROWSER_RESIZE_EDGE_PREFIX)};
         let resizeEdgeHintEnabled = ${JSON.stringify(this.zoomEnabled === false)};
         let resizeEdgeHintLocal = false;
         let resizeEdgeHintExternal = false;
         const renderResizeEdgeHint = () => {
           const active = resizeEdgeHintEnabled && (resizeEdgeHintLocal || resizeEdgeHintExternal);
-          resizeEdgeHint.style.opacity = active ? "1" : "0";
           document.documentElement.toggleAttribute("data-cyrene-resize-edge-active", active);
         };
         const showResizeEdgeHint = (show) => {
@@ -1240,10 +1225,9 @@ class BrowserTabManager {
           console.info(resizeEdgePrefix + (next ? "in" : "out"));
           renderResizeEdgeHint();
         };
-        window.__cyreneSetResizeEdgeHint = (enabled, color, externalActive) => {
+        window.__cyreneSetResizeEdgeHint = (enabled, externalActive) => {
           resizeEdgeHintEnabled = enabled === true;
           resizeEdgeHintExternal = externalActive === true;
-          if (color) resizeEdgeHint.style.background = String(color);
           if (!resizeEdgeHintEnabled) showResizeEdgeHint(false);
           else renderResizeEdgeHint();
         };
@@ -1351,10 +1335,9 @@ class BrowserTabManager {
   applyResizeEdgeHint(view) {
     if (!view || !view.webContents || view.webContents.isDestroyed()) return;
     const enabled = this.zoomEnabled === false;
-    const color = this.resizeEdgeHintColor;
     const active = this.resizeEdgeHintActive === true;
     view.webContents.executeJavaScript(
-      `window.__cyreneSetResizeEdgeHint && window.__cyreneSetResizeEdgeHint(${JSON.stringify(enabled)}, ${JSON.stringify(color)}, ${JSON.stringify(active)})`,
+      `window.__cyreneSetResizeEdgeHint && window.__cyreneSetResizeEdgeHint(${JSON.stringify(enabled)}, ${JSON.stringify(active)})`,
       true
     ).catch(() => {});
   }
@@ -2124,10 +2107,6 @@ class BrowserTabManager {
     // bounds (visible:false) must not reset the active surface's preference.
     if (Object.prototype.hasOwnProperty.call(info, 'zoomEnabled')) {
       this.zoomEnabled = info.zoomEnabled !== false;
-    }
-    if (Object.prototype.hasOwnProperty.call(info, 'resizeEdgeHintColor')) {
-      const color = String(info.resizeEdgeHintColor || '').trim();
-      if (color) this.resizeEdgeHintColor = color.slice(0, 80);
     }
     if (Object.prototype.hasOwnProperty.call(info, 'resizeEdgeHintActive')) {
       this.resizeEdgeHintActive = info.resizeEdgeHintActive === true;

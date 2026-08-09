@@ -582,3 +582,41 @@ final result: passed
 - Capture the revised open Tab context menu in the running Cyrene/Electron surface and compare it with the source at the same state.
 
 final result: blocked
+
+---
+
+# Design QA — live browser preview in Tab context menu
+
+## Comparison target
+
+- Source visual truth: `/var/folders/zm/qgh_rgw903j0b9t01yg2l0mc0000gn/T/codex-clipboard-dbeda8c6-2f48-4dd4-b4b1-4a63fea59d72.png`.
+- Historical implementation reference: `v0.7.0-beta.11` browser-preview markup and styles.
+- Post-fix implementation screenshot: unavailable; Cyrene is hosting the current Codex task and the desktop-control surface excludes controlling its own host application. The selected in-app browser also blocked the loopback URL before rendering.
+
+## Viewport and normalization
+
+- Source capture: 680 × 470 px, approximately 2× desktop density.
+- Intended implementation state: 360 CSS px Tab context menu, completed Agent activity, active browser resource, light theme.
+- No density-normalized implementation comparison was possible without a rendered capture.
+
+## Findings and comparison history
+
+- P2 fixed in code: the compact browser resource row did not expose the browser image. The pre-release preview structure is restored with title, URL, and current browser screenshot.
+- P2 fixed in code: the browser resource was a one-time snapshot. It now refreshes every 1200 ms while the menu stays open, skips overlapping capture requests, and stops polling when the menu closes.
+- P2 fixed in code: the gap below the browser area did not match the lower action-group rhythm. The browser-to-Open Session gap and Open Session-to-utility gap are both 8 px.
+- Fonts and typography: existing Workbench type sizes and truncation behavior are retained.
+- Colors and visual tokens: the existing menu surface, border, hover, and dark-mode tokens are retained.
+- Image quality and asset fidelity: the preview uses the real browser screenshot returned by the Electron bridge rather than a placeholder asset.
+- Copy and content: the live page title and URL replace the generic Browser-only row while all existing actions remain unchanged.
+
+## Interaction and runtime checks
+
+- Frontend build succeeded.
+- 26 focused Session-tab tests passed, including live-preview polling, preview-image rendering, resource opening, and equal action-group spacing.
+- A same-state rendered screenshot and console-log check remain unavailable because the current task is running inside the application being changed.
+
+## Remaining blocker
+
+- Reopen the revised Tab context menu in Cyrene with an active browser session and capture the same completed state for the final visual comparison.
+
+final result: blocked

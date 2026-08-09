@@ -1124,13 +1124,58 @@ def test_workbench_split_grip_opens_a_centered_floating_conversation_panel():
     assert "background: var(--wb-card-bg);" in floating_card_css
 
 
+def test_each_conversation_split_grip_closes_its_own_conversation():
+    root = Path(__file__).resolve().parent.parent
+    source = (root / "src" / "webui" / "frontend" / "workbench-chat.jsx").read_text(
+        encoding="utf-8"
+    )
+    i18n = (root / "src" / "webui" / "frontend" / "workbench-i18n.jsx").read_text(
+        encoding="utf-8"
+    )
+
+    close_main = source.split("  function closeMainConversationSplit() {", 1)[1].split(
+        "\n  function closeActiveSplit", 1
+    )[0]
+    drag_drop = source.split("    function onDocumentDrop(ev) {", 1)[1].split(
+        "\n    function cleanup", 1
+    )[0]
+    main_grip = source.split('{splitDetailOpen && (\n        <div key="split-main-grip"', 1)[1].split(
+        "\n      )}", 1
+    )[0]
+    chat_split = source.split("function WbcChatSplit({", 1)[1].split(
+        "function WbcSideAgentSplitResizer", 1
+    )[0]
+
+    # Closing A removes A's stored split before the eagerly-updated selection
+    # switches to B, so B remains as the sole visible conversation.
+    assert "delete updated[sourceChatId];" in close_main
+    assert "selectChat(targetChatId);" in close_main
+    assert "closeResourceSplit();" not in close_main
+    assert "onClose={splitChatId ? closeMainConversationSplit : closeActiveSplit}" in main_grip
+    # B keeps its own close callback. Drag-to-rail uses the drag source to make
+    # the same A/B decision instead of closing whichever split is globally active.
+    assert "onClose={onClose}" in chat_split
+    assert "if (fromMainGrip) closeMainConversationSplit();" in drag_drop
+    assert "else closeResourceSplit();" in drag_drop
+
+    # Both physical placements expose one stable, position-independent label.
+    grip_bar = source.split("function WbcSplitGripBar", 1)[1].split(
+        "function WbcSideAgentSplit", 1
+    )[0]
+    assert 'wbcT("workbenchChat.splitMoveOtherSide", "Move split to the other side")' in grip_bar
+    assert '"workbenchChat.splitMoveLeft"' not in i18n
+    assert '"workbenchChat.splitMoveRight"' not in i18n
+    assert i18n.count('"workbenchChat.splitMoveOtherSide"') == 2
+    assert '"workbenchChat.splitMoveOtherSide": "把分屏移动到另一侧"' in i18n
+
+
 def test_floating_conversation_panel_resource_split_replaces_right_and_restores_previous_split():
     root = Path(__file__).resolve().parent.parent
     source = (root / "src" / "webui" / "frontend" / "workbench-chat.jsx").read_text(
         encoding="utf-8"
     )
 
-    begin = source.split("  function beginFloatingPanelSplit(openSplit) {", 1)[1].split(
+    begin = source.split("  function beginFloatingPanelSplit(openSplit, sourceChatId) {", 1)[1].split(
         "\n  function restoreFloatingPanelSplit", 1
     )[0]
     restore = source.split("  function restoreFloatingPanelSplit() {", 1)[1].split(
@@ -1140,23 +1185,39 @@ def test_floating_conversation_panel_resource_split_replaces_right_and_restores_
         "\n\n  return (\n    <div", 1
     )[0]
 
-    # Snapshot the previous content and side before every floating-panel split.
+    split_chat_content = source.split("  function openSplitChatContent(type, payload) {", 1)[1].split(
+        "\n  function renderConversationPanel", 1
+    )[0]
+    chat_split = source.split("function WbcChatSplit({", 1)[1].split(
+        "function WbcSideAgentSplitResizer", 1
+    )[0]
+
+    # Snapshot both the original main conversation and, when different, the
+    # conversation that opened the content split.
     assert "floatingSplitRestoreRef.current = {" in begin
     assert "splitSide: splitSide" in begin
-    assert "sideAgentId: sideAgentSplitByChat[chatId]" in begin
-    assert "artifactKey: artifactSplitByChat[chatId]" in begin
-    assert "change: changeSplitByChat[chatId]" in begin
-    assert "resource: resourceSplitByChat[chatId]" in begin
-    # Whether the conversation started left or right, new content owns the
-    # right track; the existing animated grid moves a right conversation left.
+    assert "activeChatId: activeId" in begin
+    assert "activeSplit: splitStateSnapshot(activeId)" in begin
+    assert "sourceSplit: sourceId === activeId ? null : splitStateSnapshot(sourceId)" in begin
+    # Whether the source conversation started left or right, it owns the left
+    # track and the new content owns the right. Selecting a right-side source
+    # causes the existing grid transition to slide it into the left position.
+    assert "function promoteSourceAndOpenContent()" in begin
+    assert "if (sourceId !== activeId) selectChat(sourceId);" in begin
     assert 'setSplitSideDirect("right");' in begin
     assert "openSplit();" in begin
-    # Closing any temporary content restores every displaced split store and
-    # the original left/right placement.
-    assert "restoreEntry(setSideAgentSplitByChat, snapshot.sideAgentId);" in restore
-    assert "restoreEntry(setArtifactSplitByChat, snapshot.artifactKey);" in restore
-    assert "restoreEntry(setChangeSplitByChat, snapshot.change);" in restore
-    assert "restoreEntry(setResourceSplitByChat, snapshot.resource);" in restore
+    # A split conversation that physically starts on the right first moves its
+    # existing pane to the left, then gets promoted in-place after the shared
+    # grid transition. Reduced-motion users do not wait for an invisible move.
+    assert 'if (sourceId !== activeId && splitSide === "right")' in begin
+    assert 'setSplitSideDirect("left");' in begin
+    assert 'window.matchMedia("(prefers-reduced-motion: reduce)").matches' in begin
+    assert "reducedMotion ? 0 : 500" in begin
+    # Closing temporary content restores both conversations and the original
+    # left/right placement.
+    assert "restoreSplitState(snapshot.activeChatId, snapshot.activeSplit);" in restore
+    assert "restoreSplitState(snapshot.chatId, snapshot.sourceSplit);" in restore
+    assert "selectChat(snapshot.activeChatId);" in restore
     assert 'setSplitSideDirect(snapshot.splitSide === "left" ? "left" : "right");' in restore
     assert source.count("if (restoreFloatingPanelSplit()) return;") >= 5
     assert "if (floating) beginFloatingPanelSplit(openSplit);" in render_panel
@@ -1167,6 +1228,21 @@ def test_floating_conversation_panel_resource_split_replaces_right_and_restores_
     assert "selectArtifact(file)" in render_panel
     assert "selectChange(change)" in render_panel
     assert "selectSideAgent(agentId)" in render_panel
+    # The split conversation's own floating panel exposes the same content
+    # entries instead of swallowing them with placeholder callbacks.
+    assert "beginFloatingPanelSplit(function ()" in split_chat_content
+    assert "}, sourceChatId);" in split_chat_content
+    assert 'type === "artifact"' in split_chat_content
+    assert 'type === "change"' in split_chat_content
+    assert 'type === "viewer"' in split_chat_content
+    assert 'type === "map"' in split_chat_content
+    assert 'type === "browser"' in split_chat_content
+    assert 'onSelectArtifact={function (file) { openContent("artifact", file); }}' in chat_split
+    assert 'onSelectChange={function (change) { openContent("change", change); }}' in chat_split
+    assert 'onSelectMap={function (item) { openContent("map", item); }}' in chat_split
+    assert 'onSelectBrowser={function (tabId) { openContent("browser", tabId); }}' in chat_split
+    assert "browserActiveByChat={browserActiveByChat}" in chat_split
+    assert "browserSuppressed={false}" in chat_split
 
 
 def test_workbench_artifacts_use_the_shared_resizable_split_preview():

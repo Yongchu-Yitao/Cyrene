@@ -183,7 +183,6 @@ function ElectronBrowserViewportPanel({ roundId, browserSessionId, onClose, brow
       // visible surface is authoritative, so let it cancel that stale state
       // and reveal the existing WebContentsView immediately.
       forceVisible: true,
-      resizeEdgeHintColor: getComputedStyle(node).getPropertyValue("--wb-accent").trim() || "#63b38f",
       resizeEdgeHintActive: resizeEdgeHintActiveRef.current,
     };
     const signature = [
@@ -232,7 +231,6 @@ function ElectronBrowserViewportPanel({ roundId, browserSessionId, onClose, brow
       borderRadius: 0,
       pageCornerRadius: pageCornerRadius,
       zoomEnabled: zoomEnabled !== false,
-      resizeEdgeHintColor: getComputedStyle(node).getPropertyValue("--wb-accent").trim() || "#63b38f",
       resizeEdgeHintActive: resizeEdgeHintActiveRef.current,
     };
     lastBoundsRef.current = "";
@@ -292,7 +290,6 @@ function ElectronBrowserViewportPanel({ roundId, browserSessionId, onClose, brow
       borderRadius: borderRadius,
       pageCornerRadius: pageCornerRadius,
       zoomEnabled: zoomEnabled !== false,
-      resizeEdgeHintColor: getComputedStyle(node).getPropertyValue("--wb-accent").trim() || "#63b38f",
       resizeEdgeHintActive: resizeEdgeHintActiveRef.current,
     }).then(function () {
       if (interactionPreviewTokenRef.current !== token) return;
@@ -324,7 +321,6 @@ function ElectronBrowserViewportPanel({ roundId, browserSessionId, onClose, brow
       visible: true,
       transition: "commit",
       zoomEnabled: zoomEnabled !== false,
-      resizeEdgeHintColor: getComputedStyle(surfaceRef.current).getPropertyValue("--wb-accent").trim() || "#63b38f",
     }).then(function () {
       if (interactionPreviewTokenRef.current !== token) return;
       modePreparedRef.current = false;
@@ -368,7 +364,6 @@ function ElectronBrowserViewportPanel({ roundId, browserSessionId, onClose, brow
       visible: true,
       transition: "prepare",
       zoomEnabled: zoomEnabled !== false,
-      resizeEdgeHintColor: getComputedStyle(surfaceRef.current).getPropertyValue("--wb-accent").trim() || "#63b38f",
     }).then(function (result) {
       if (!windowInteractionRef.current
         || interactionPreviewTokenRef.current !== previewToken) return;

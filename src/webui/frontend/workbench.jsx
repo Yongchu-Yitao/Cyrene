@@ -1559,13 +1559,13 @@ function WorkbenchApp({ theme, actualTheme, onToggleTheme, needsOnboarding }) {
     });
   }
 
-  function loadSessionTabResources(item) {
-    if (!item || !item.id) return Promise.resolve({ browser: false, files: [] });
+  function loadSessionTabBrowserPreview(item) {
+    if (!item || !item.id) return Promise.resolve(null);
     var bridge = window.cyrene && window.cyrene.browser;
     var browserStatePromise = item.kind === "chat" && bridge && typeof bridge.getState === "function"
       ? bridge.getState(item.id).catch(function () { return null; })
       : Promise.resolve(null);
-    var browserPreviewPromise = browserStatePromise.then(function (browserState) {
+    return browserStatePromise.then(function (browserState) {
       var hasBrowser = !!(
         browserState
         && Array.isArray(browserState.tabs)
@@ -1593,6 +1593,11 @@ function WorkbenchApp({ theme, actualTheme, onToggleTheme, needsOnboarding }) {
         };
       }).catch(function () { return fallback; });
     });
+  }
+
+  function loadSessionTabResources(item) {
+    if (!item || !item.id) return Promise.resolve({ browser: false, files: [] });
+    var browserPreviewPromise = loadSessionTabBrowserPreview(item);
     var filesPromise = item.kind === "chat"
       ? window.CyreneUI.require("api").json(
         "/api/workbench/chats/" + encodeURIComponent(item.id),
@@ -2638,6 +2643,7 @@ function WorkbenchApp({ theme, actualTheme, onToggleTheme, needsOnboarding }) {
         onTogglePinnedSession={togglePinnedSession}
         onRemoveSessionTab={removeSessionTab}
         onLoadSessionResources={loadSessionTabResources}
+        onLoadSessionBrowserPreview={loadSessionTabBrowserPreview}
         onOpenSessionResource={openSessionTabResource}
         onOpenSession={function (item) {
           if (!item) return;
@@ -3008,7 +3014,7 @@ function WorkbenchSessionActivityPreview({ preview, t }) {
   );
 }
 
-function WorkbenchTopbar({ activePage, taskView, activeTaskId, activeChatId, recentSessions, overflowSessions, pinnedResources, keyboardEnabled, onPinResource, onUnpinResource, onOpenPinnedResource, onOpenSession, onPauseSession, onStopSession, onTogglePinnedSession, onRemoveSessionTab, onLoadSessionResources, onOpenSessionResource, notifications, onReloadNotifications, onOpenNotification, onSearch, onSettings, onNewProject, onNewTask, onOpenPage, theme, actualTheme, onToggleTheme }) {
+function WorkbenchTopbar({ activePage, taskView, activeTaskId, activeChatId, recentSessions, overflowSessions, pinnedResources, keyboardEnabled, onPinResource, onUnpinResource, onOpenPinnedResource, onOpenSession, onPauseSession, onStopSession, onTogglePinnedSession, onRemoveSessionTab, onLoadSessionResources, onLoadSessionBrowserPreview, onOpenSessionResource, notifications, onReloadNotifications, onOpenNotification, onSearch, onSettings, onNewProject, onNewTask, onOpenPage, theme, actualTheme, onToggleTheme }) {
   var { t } = window.CyreneUI.require("i18n").use();
   var dataState = window.CyreneUI.require("data").state;
   var tabs = Array.isArray(recentSessions) ? recentSessions : [];
@@ -3297,6 +3303,40 @@ function WorkbenchTopbar({ activePage, taskView, activeTaskId, activeChatId, rec
   }, [!!sessionMenu, !!resourceMenu, !!overflowMenu, !!hoverPreview]);
 
   useWorkbenchEffect(function () {
+    if (!sessionMenu || !onLoadSessionBrowserPreview) return undefined;
+    var item = sessionMenu.item;
+    var cancelled = false;
+    var inFlight = false;
+    function refreshBrowserPreview() {
+      if (cancelled || inFlight) return;
+      inFlight = true;
+      Promise.resolve(onLoadSessionBrowserPreview(item)).then(function (browser) {
+        if (cancelled) return;
+        setSessionMenu(function (current) {
+          if (!current || current.item.id !== item.id || current.item.kind !== item.kind) return current;
+          var nextBrowser = browser || null;
+          var previous = current.resources && current.resources.browser;
+          if (previous && nextBrowser
+              && previous.previewUrl === nextBrowser.previewUrl
+              && previous.title === nextBrowser.title
+              && previous.url === nextBrowser.url) return current;
+          if (!previous && !nextBrowser) return current;
+          return Object.assign({}, current, {
+            resources: Object.assign({}, current.resources, { browser: nextBrowser }),
+          });
+        });
+      }).catch(function () {}).finally(function () {
+        inFlight = false;
+      });
+    }
+    var timer = setInterval(refreshBrowserPreview, 1200);
+    return function () {
+      cancelled = true;
+      clearInterval(timer);
+    };
+  }, [sessionMenu ? sessionMenu.item.kind + ":" + sessionMenu.item.id : "", !!onLoadSessionBrowserPreview]);
+
+  useWorkbenchEffect(function () {
     return function () {
       if (previewTimerRef.current) clearTimeout(previewTimerRef.current);
     };
@@ -3308,7 +3348,7 @@ function WorkbenchTopbar({ activePage, taskView, activeTaskId, activeChatId, rec
     closeSessionPreview();
     setOverflowMenu(null);
     var menuWidth = 360;
-    var menuHeight = 420;
+    var menuHeight = 440;
     var rect = event.currentTarget && event.currentTarget.getBoundingClientRect ? event.currentTarget.getBoundingClientRect() : null;
     var left = anchored && rect ? rect.right - menuWidth : event.clientX;
     var top = anchored && rect ? rect.bottom + 8 : event.clientY;
@@ -3455,10 +3495,19 @@ function WorkbenchTopbar({ activePage, taskView, activeTaskId, activeChatId, rec
                 <span className="workbench-session-menu-icon" aria-hidden="true">
                   <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" strokeWidth="1.8"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M3 8h18M6 6h.01M9 6h.01"/></svg>
                 </span>
-                <b>{t("workbench.resourceShelf.browser", "Browser")}</b>
-                <small>{sessionMenu.resources.browser.url || sessionMenu.resources.browser.title}</small>
+                <span>
+                  <b>{sessionMenu.resources.browser.title || t("workbench.resourceShelf.browser", "Browser")}</b>
+                  <small>{sessionMenu.resources.browser.url}</small>
+                </span>
                 <svg className="workbench-session-resource-chevron" viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="m6 3.5 4.5 4.5L6 12.5" /></svg>
               </span>
+              {sessionMenu.resources.browser.previewUrl ? (
+                <img src={sessionMenu.resources.browser.previewUrl} alt="" draggable="false" />
+              ) : (
+                <span className="workbench-session-browser-preview-empty">
+                  {t("workbench.sessionMenu.browserPreview", "Browser preview")}
+                </span>
+              )}
             </button>
           ) : null}
           {sessionMenu.resources.files.length ? (

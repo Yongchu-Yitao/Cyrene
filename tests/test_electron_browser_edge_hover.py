@@ -21,7 +21,7 @@ def test_sidebar_browser_never_moves_as_a_resize_handle_hover_effect():
     assert "border-left: 0;" in side_rule
 
 
-def test_sidebar_browser_draws_resize_hint_through_native_page_surface():
+def test_sidebar_browser_keeps_resize_cursor_without_native_page_handle():
     root = Path(__file__).resolve().parent.parent
     main = (root / "electron" / "main.js").read_text(encoding="utf-8")
     viewport = (
@@ -34,15 +34,15 @@ def test_sidebar_browser_draws_resize_hint_through_native_page_surface():
         encoding="utf-8"
     )
 
-    assert 'resizeEdgeHint.setAttribute("data-cyrene-resize-edge-hint", "")' in main
-    assert 'inset: "0 auto 0 0"' in main
-    assert 'width: "2px"' in main
+    assert 'data-cyrene-resize-edge-hint' not in main
+    assert "resizeEdgeHint.style" not in main
     assert 'showResizeEdgeHint(event.clientX < 14);' in main
     assert "cursor: col-resize !important" in main
     assert 'toggleAttribute("data-cyrene-resize-edge-active", active)' in main
     assert "window.__cyreneSetResizeEdgeHint" in main
     assert "resizeEdgeHintEnabled = ${JSON.stringify(this.zoomEnabled === false)}" in main
-    assert 'resizeEdgeHintColor: getComputedStyle(node).getPropertyValue("--wb-accent")' in viewport
+    assert "resizeEdgeHintColor" not in main
+    assert "resizeEdgeHintColor" not in viewport
     assert 'window.dispatchEvent(new CustomEvent("workbench:right-resize-hint"' in workbench
     assert 'window.addEventListener("workbench:right-resize-hint"' in viewport
     assert "resizeEdgeHintActive: resizeEdgeHintActiveRef.current" in viewport
