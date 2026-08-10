@@ -212,6 +212,7 @@ def test_chat_page_blank_area_context_menu_reuses_quick_actions():
         "workbenchChat.rename",
         "workbenchChat.toTask",
         "workbenchChat.compact",
+        "workbenchChat.generateMemory",
         "workbenchChat.delete",
     ):
         assert action in chat.split("function WbcQuickActionItems(", 1)[1].split(
@@ -283,8 +284,143 @@ def test_all_chat_action_menu_items_have_icons():
     quick_actions = chat.split("function WbcQuickActionItems(", 1)[1].split(
         "var WBC_SIDE_CARD_ORDER_PREFIX", 1
     )[0]
-    for icon in ("edit", "task", "compact", "trash"):
+    for icon in ("edit", "task", "compact", "spark", "trash"):
         assert f"WBC_ICONS.{icon}" in quick_actions
+
+    assert quick_actions.index("workbenchChat.compact") < quick_actions.index(
+        "workbenchChat.generateMemory"
+    ) < quick_actions.index("workbenchChat.delete")
+
+
+def test_floating_menus_and_modals_share_the_conversation_surface_tokens():
+    styles = (ROOT / "src/webui/frontend/workbench.css").read_text(encoding="utf-8")
+    library_styles = (ROOT / "src/webui/frontend/workbench-library.css").read_text(
+        encoding="utf-8"
+    )
+
+    shell_tokens = styles.split(".workbench-shell {", 1)[1].split("}", 1)[0]
+    for token in (
+        "--wb-flyout-border:",
+        "--wb-flyout-bg:",
+        "--wb-flyout-radius:",
+        "--wb-flyout-shadow:",
+        "--wb-modal-border:",
+        "--wb-modal-bg:",
+        "--wb-modal-radius:",
+        "--wb-modal-shadow:",
+        "--wb-modal-scrim-bg:",
+        "--wb-modal-scrim-filter:",
+        "--wb-field-border:",
+    ):
+        assert token in shell_tokens
+
+    for selector in (
+        ".wb-card-menu {",
+        ".wb-mem-menu {",
+        ".wb-item-context-menu {",
+        ".wbc-menu {",
+        ".wbc-popmenu {",
+    ):
+        block = styles.split(selector, 1)[1].split("}", 1)[0]
+        assert "var(--wb-flyout-border" in block
+        assert "var(--wb-flyout-bg" in block
+        assert "var(--wb-flyout-radius" in block
+        assert "var(--wb-flyout-shadow" in block
+
+    for selector in (
+        ".workbench-project-edit-modal {",
+        ".workbench-confirm-modal {",
+        ".wbc-rename-dialog {",
+        ".wb-mem-modal {",
+        ".wb-create-modal {",
+    ):
+        block = styles.split(selector, 1)[1].split("}", 1)[0]
+        assert "var(--wb-modal-border" in block
+        assert "var(--wb-modal-bg" in block
+        assert "var(--wb-modal-radius" in block
+        assert "var(--wb-modal-shadow" in block
+
+    for selector in (".wb-lib-dropdown {", ".wb-lib-context-menu {"):
+        block = library_styles.split(selector, 1)[1].split("}", 1)[0]
+        assert "var(--wb-flyout-border" in block
+        assert "var(--wb-flyout-bg" in block
+        assert "var(--wb-flyout-radius" in block
+        assert "var(--wb-flyout-shadow" in block
+
+    library_modal = library_styles.split(".wb-lib-modal {", 1)[1].split("}", 1)[0]
+    assert "var(--wb-modal-border" in library_modal
+    assert "var(--wb-modal-bg" in library_modal
+    assert "var(--wb-modal-radius" in library_modal
+    assert "var(--wb-modal-shadow" in library_modal
+
+
+def test_remaining_live_flyouts_use_shared_tokens_and_legacy_picker_css_is_removed():
+    styles = (ROOT / "src/webui/frontend/workbench.css").read_text(encoding="utf-8")
+
+    for selector in (".wb-accent-popover {", ".wbc-model-menu {", ".wbq-picker {"):
+        block = styles.split(selector, 1)[1].split("}", 1)[0]
+        assert "var(--wb-flyout" in block
+
+    accent_arrow = styles.split(".wb-accent-popover::before {", 1)[1].split("}", 1)[0]
+    assert "var(--wb-flyout-border)" in accent_arrow
+    assert "var(--wb-flyout-bg)" in accent_arrow
+    assert 'html[data-theme="light"] .wbc-model-menu' not in styles
+    assert 'html[data-theme="dark"] .wbc-model-menu' not in styles
+
+    # The retired conversation-rail project picker has no runtime component;
+    # keep only the still-live new-chat control from that old selector family.
+    for retired in (
+        ".wbc-nav-card.picker-open",
+        ".wbc-project-trigger",
+        ".wbc-project-picker",
+        ".wbc-project-avatar",
+        ".wbc-project-active-check",
+    ):
+        assert retired not in styles
+    assert ".wbc-project-new-chat" in styles
+
+
+def test_composer_popmenus_hide_scrollbar_chrome_without_disabling_scrolling():
+    styles = (ROOT / "src/webui/frontend/workbench.css").read_text(encoding="utf-8")
+
+    for selector in (".wb-popmenu {", ".wbc-popmenu {"):
+        block = styles.split(selector, 1)[1].split("}", 1)[0]
+        assert "overflow-y: auto;" in block
+        assert "scrollbar-width: none;" in block
+        assert "-ms-overflow-style: none;" in block
+
+    webkit_rule = styles.split(
+        ".wb-popmenu::-webkit-scrollbar,\n.wbc-popmenu::-webkit-scrollbar {", 1
+    )[1].split("}", 1)[0]
+    assert "display: none;" in webkit_rule
+    assert "width: 0;" in webkit_rule
+    assert "height: 0;" in webkit_rule
+
+
+def test_memory_and_library_flyouts_expose_accessible_state():
+    memory = (ROOT / "src/webui/frontend/workbench-memory.jsx").read_text(
+        encoding="utf-8"
+    )
+    library = (ROOT / "src/webui/frontend/workbench-library.jsx").read_text(
+        encoding="utf-8"
+    )
+    quick_chat = (ROOT / "src/webui/frontend/workbench-quick-chat.jsx").read_text(
+        encoding="utf-8"
+    )
+
+    assert '"aria-modal": "true", "aria-labelledby": titleId' in memory
+    assert 'role: "radiogroup", "aria-label": label' in memory
+    assert '"aria-haspopup": "menu"' in memory
+    assert 'role: "menuitemradio", "aria-checked": value === o.id' in memory
+    assert 'htmlFor: "wb-memory-content"' in memory
+    assert 'htmlFor: "wb-memory-tags"' in memory
+
+    assert 'role: "dialog", "aria-modal": "true", "aria-labelledby": "wb-lib-add-title"' in library
+    assert 'role: "dialog", "aria-modal": "true", "aria-labelledby": "wb-lib-collection-title"' in library
+    assert 'role="dialog" aria-label={quickChatText("选择对话", "Choose conversation")}' in quick_chat
+    assert 'role="group" aria-label={quickChatText("对话列表", "Conversation list")}' in quick_chat
+    assert "aria-pressed={!selectedChatId}" in quick_chat
+    assert "aria-pressed={on}" in quick_chat
 
 
 def test_chat_page_context_menu_preserves_native_browser_surface():
@@ -303,6 +439,62 @@ def test_chat_page_context_menu_preserves_native_browser_surface():
     assert 'wbcNotifyBrowserWindowInteraction(true, "context-menu"' in opener
     assert "detail.fallback" in preview
     assert "browserPreview: true" in preview
+
+
+def test_project_memory_editor_and_manual_chat_trigger_are_wired_end_to_end():
+    shell = (ROOT / "src/webui/frontend/workbench.jsx").read_text(encoding="utf-8")
+    chat = (ROOT / "src/webui/frontend/workbench-chat.jsx").read_text(encoding="utf-8")
+    memory_page = (ROOT / "src/webui/frontend/workbench-memory.jsx").read_text(encoding="utf-8")
+    css = (ROOT / "src/webui/frontend/workbench.css").read_text(encoding="utf-8")
+    i18n = (ROOT / "src/webui/frontend/workbench-i18n.jsx").read_text(encoding="utf-8")
+
+    assert "function WorkbenchProjectMemoryModal(" in shell
+    modal = shell.split("function WorkbenchProjectMemoryModal(", 1)[1].split(
+        "function WorkbenchSidebarCollapseControl", 1
+    )[0]
+    assert '["prompt", "memories", "history"]' not in modal
+    assert '"/memory-prompt?include_memories=false"' in modal
+    assert 'method: "PATCH"' in modal
+    assert '"/memory-prompt/restore"' in modal
+    assert "baseModifiedAt" in modal
+    assert "WorkbenchProjectMemoryItem" not in shell
+    assert "selectedModifiedAt" in modal
+    assert 't("projectMemory.versionSelector")' in modal
+    assert "readOnly={!!selectedVersion}" in modal
+
+    top_actions = shell.split('className="workbench-top-project-actions"', 1)[1].split(
+        "</div>", 1
+    )[0]
+    assert top_actions.index('t("rail.editProject")') < top_actions.index(
+        't("rail.editMemory")'
+    ) < top_actions.index('t("rail.deleteProject")')
+    assert "onEditMemory={setEditMemoryProject}" in shell
+    assert "onEditProjectMemory:" in shell
+    assert "props.onEditProjectMemory" in memory_page
+    assert "props.onEditProjectMemory && !props.sidebarCollapsed" in memory_page
+    assert 'className: "wb-mem-project-memory-btn"' in memory_page
+    assert ".wb-mem-rail.is-collapsed .wb-mem-project-memory-btn" in css
+    assert 't("memory.editProjectMemory"' in memory_page
+    assert ".workbench-project-memory-scrim" in css
+    assert "width: min(900px" in css
+    assert 'className="workbench-project-memory-head-version"' in modal
+    assert 'className="workbench-project-memory-overview"' in modal
+    assert ".workbench-project-memory-head-version" in css
+    assert ".workbench-project-memory-toolbar" not in css
+    assert ".workbench-project-memory-tabs" not in css
+
+    assert 'function generateMemory(chatId)' in chat
+    assert '"/memory-learning"' in chat
+    assert "onGenerateMemory={handleGenerateMemory}" in chat
+    for text in (
+        '"rail.editMemory": "Edit memory"',
+        '"rail.editMemory": "编辑记忆"',
+        '"workbenchChat.generateMemory": "Generate memory"',
+        '"workbenchChat.generateMemory": "生成记忆"',
+        '"memory.editProjectMemory": "Edit project memory"',
+        '"memory.editProjectMemory": "编辑项目记忆"',
+    ):
+        assert text in i18n
     assert 'wbcNotifyBrowserWindowInteraction(false, "context-menu"' in chat
 
 
@@ -340,7 +532,7 @@ process.stdout.write(JSON.stringify(result));
         "left": result["avoided"]["left"],
         "top": result["avoided"]["top"],
         "right": result["avoided"]["left"] + 220,
-        "bottom": result["avoided"]["top"] + 166,
+        "bottom": result["avoided"]["top"] + 206,
     }
     assert (
         avoided["right"] <= 760
@@ -350,7 +542,7 @@ process.stdout.write(JSON.stringify(result));
     )
     assert result["cramped"]["overlapsBrowser"] is True
     assert 8 <= result["cramped"]["left"] <= 972
-    assert 8 <= result["cramped"]["top"] <= 626
+    assert 8 <= result["cramped"]["top"] <= 586
 
 
 def test_knowledge_context_menu_can_show_a_local_file_in_its_folder():

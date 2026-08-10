@@ -106,6 +106,8 @@
     habit: function (s) { return svg({ width: s, height: s }, h("circle", { cx: 12, cy: 12, r: 8 }), h("path", { d: "M12 7.5V12l3 2" })); },
     fact: function (s) { return svg({ width: s, height: s }, h("circle", { cx: 12, cy: 8.2, r: 3.4 }), h("path", { d: "M5.5 19a6.5 6.5 0 0 1 13 0" })); },
     conversation: function (s) { return svg({ width: s, height: s }, h("path", { d: "M20 11.4a6.9 6.9 0 0 1-9.6 6.4L5 19l1.1-4.1A6.9 6.9 0 1 1 20 11.4Z" })); },
+    detail: function (s) { return svg({ width: s, height: s }, h("path", { d: "M6.5 3.5h7.8l3.7 3.7v13.3H6.5Z" }), h("path", { d: "M14 3.5v4h4M9.5 11.5h5M9.5 15.5h5" })); },
+    history: function (s) { return svg({ width: s, height: s }, h("path", { d: "M4.5 9.5V4.8m0 4.7h4.7M5 9a8 8 0 1 1-.6 5.7" }), h("path", { d: "M12 7.5V12l3.1 1.8" })); },
   };
   var CATS = {
     preference: { label: "个人偏好", tone: "rose" },
@@ -204,6 +206,7 @@
     var confState = useState(init.confidence || ""); var confidence = confState[0]; var setConfidence = confState[1];
     var tagsState = useState((init.tags || []).join(", ")); var tags = tagsState[0]; var setTags = tagsState[1];
     var ref = useRef(null);
+    var titleId = "wb-memory-modal-title";
     useEffect(function () { if (ref.current) ref.current.focus(); }, []);
 
     function submit() {
@@ -218,34 +221,42 @@
       props.onSubmit(body);
     }
 
-    var sel = function (value, setter, options) {
-      return h("div", { className: "wb-mem-seg" }, options.map(function (o) {
-        return h("button", { key: o.id, type: "button", className: "wb-mem-seg-btn" + (value === o.id ? " on" : ""), onClick: function () { setter(o.id); } }, o.label);
+    var sel = function (value, setter, options, label) {
+      return h("div", { className: "wb-mem-seg", role: "radiogroup", "aria-label": label, onKeyDown: function (event) {
+        if (["ArrowLeft", "ArrowRight", "Home", "End"].indexOf(event.key) < 0) return;
+        event.preventDefault();
+        var current = options.findIndex(function (option) { return option.id === value; });
+        var next = event.key === "Home" ? 0 : event.key === "End" ? options.length - 1 : (current + (event.key === "ArrowLeft" ? -1 : 1) + options.length) % options.length;
+        setter(options[next].id);
+        var buttons = event.currentTarget.querySelectorAll("button");
+        if (buttons[next]) buttons[next].focus();
+      } }, options.map(function (o) {
+        return h("button", { key: o.id, type: "button", role: "radio", "aria-checked": value === o.id, className: "wb-mem-seg-btn" + (value === o.id ? " on" : ""), onClick: function () { setter(o.id); } }, o.label);
       }));
     };
 
     return h("div", { className: "wb-mem-modal-scrim", onMouseDown: function (e) { if (e.target === e.currentTarget) props.onClose(); } },
-      h("div", { className: "wb-mem-modal", role: "dialog" },
+      h("div", { className: "wb-mem-modal", role: "dialog", "aria-modal": "true", "aria-labelledby": titleId, onKeyDown: function (event) { if (event.key === "Escape" && !props.busy) props.onClose(); } },
         h("div", { className: "wb-mem-modal-head" },
-          h("b", null, props.mode === "edit" ? t("memory.edit", "Edit memory") : t("memory.new", "New memory")),
-          h("button", { type: "button", className: "wb-mem-iconbtn", onClick: props.onClose, title: t("common.close", "Close") },
+          h("b", { id: titleId }, props.mode === "edit" ? t("memory.edit", "Edit memory") : t("memory.new", "New memory")),
+          h("button", { type: "button", className: "wb-mem-iconbtn", onClick: props.onClose, title: t("common.close", "Close"), "aria-label": t("common.close", "Close") },
             svg({ width: 17, height: 17 }, h("path", { d: "m6 6 12 12M18 6 6 18" })))),
         h("div", { className: "wb-mem-modal-body" },
-          h("label", { className: "wb-mem-field-label" }, t("memory.content", "Memory content")),
-          h("textarea", { ref: ref, className: "wb-mem-textarea", value: content, placeholder: t("memory.contentPlaceholder", "Describe this memory…"), onChange: function (e) { setContent(e.target.value); }, rows: 4 }),
+          h("label", { className: "wb-mem-field-label", htmlFor: "wb-memory-content" }, t("memory.content", "Memory content")),
+          h("textarea", { id: "wb-memory-content", ref: ref, className: "wb-mem-textarea", value: content, placeholder: t("memory.contentPlaceholder", "Describe this memory…"), onChange: function (e) { setContent(e.target.value); }, rows: 4 }),
           h("label", { className: "wb-mem-field-label" }, t("memory.type", "Type")),
-          sel(category, setCategory, CAT_ORDER.map(function (c) { return { id: c, label: catLabel(c, t) }; })),
+          sel(category, setCategory, CAT_ORDER.map(function (c) { return { id: c, label: catLabel(c, t) }; }), t("memory.type", "Type")),
           h("label", { className: "wb-mem-field-label" }, t("memory.source", "Source")),
           sel(source, setSource, [
             { id: "manual", label: sourceLabel("manual", t) }, { id: "conversation", label: sourceLabel("conversation", t) },
             { id: "knowledge", label: sourceLabel("knowledge", t) }, { id: "other", label: sourceLabel("other", t) },
-          ]),
+          ], t("memory.source", "Source")),
           h("label", { className: "wb-mem-field-label" }, t("memory.confidence", "Confidence")),
           sel(confidence, setConfidence, [
             { id: "", label: confidenceLabel("auto", t) }, { id: "high", label: confidenceLabel("high", t) }, { id: "medium", label: confidenceLabel("medium", t) }, { id: "low", label: confidenceLabel("low", t) },
-          ]),
-          h("label", { className: "wb-mem-field-label" }, t("memory.tags", "Tags")),
-          h("input", { className: "wb-mem-input", value: tags, placeholder: t("memory.tagsPlaceholder", "Comma-separated, e.g. preferences, communication"), onChange: function (e) { setTags(e.target.value); } })),
+          ], t("memory.confidence", "Confidence")),
+          h("label", { className: "wb-mem-field-label", htmlFor: "wb-memory-tags" }, t("memory.tags", "Tags")),
+          h("input", { id: "wb-memory-tags", className: "wb-mem-input", value: tags, placeholder: t("memory.tagsPlaceholder", "Comma-separated, e.g. preferences, communication"), onChange: function (e) { setTags(e.target.value); } })),
         h("div", { className: "wb-mem-modal-foot" },
           h("button", { type: "button", className: "wb-btn ghost", onClick: props.onClose }, t("common.cancel", "Cancel")),
           h("button", { type: "button", className: "wb-btn primary", onClick: submit, disabled: props.busy }, props.busy ? t("common.saving", "Saving…") : t("common.save", "Save")))));
@@ -258,6 +269,13 @@
       h("div", { className: "wb-mem-meta-val" }, props.children));
   }
 
+  function detailTabIcon(id) {
+    if (id === "cite") return ICON.conversation(17);
+    if (id === "related") return svg({ width: 17, height: 17 }, h("path", { d: "M10 13a4.5 4.5 0 0 0 6.6.3l2.5-2.5a4.5 4.5 0 0 0-6.4-6.4l-1.4 1.4M14 11a4.5 4.5 0 0 0-6.6-.3l-2.5 2.5a4.5 4.5 0 0 0 6.4 6.4l1.4-1.4" }));
+    if (id === "history") return ICON.history(17);
+    return ICON.detail(17);
+  }
+
   function DetailPanel(props) {
     var hookT = useMemoryT();
     var t = props.t || hookT;
@@ -265,10 +283,11 @@
     var tabState = useState("detail"); var tab = tabState[0]; var setTab = tabState[1];
     useEffect(function () { setTab("detail"); }, [m ? m.id : ""]);
     if (!m) {
-      return h("aside", { className: "wb-mem-detail empty" },
-        h("div", { className: "wb-mem-detail-ph" },
-          svg({ width: 34, height: 34, strokeWidth: 1.4 }, h("path", { d: "M12 3.6 14 9.4 20 11l-6 1.6L12 18l-2-5.4L4 11l6-1.6Z" })),
-          h("p", null, t("memory.selectToView", "Select a memory to view details"))));
+      return h("aside", { className: "wb-floating-detail-shell wb-mem-detail", "aria-label": t("memory.details", "Details") },
+        h("div", { className: "wb-floating-detail-card wb-mem-detail-card empty" },
+          h("div", { className: "wb-detail-empty-state wb-mem-detail-ph" },
+            svg({ width: 34, height: 34, strokeWidth: 1.4 }, h("path", { d: "M12 3.6 14 9.4 20 11l-6 1.6L12 18l-2-5.4L4 11l6-1.6Z" })),
+            h("p", null, t("memory.selectToView", "Select a memory to view details")))));
     }
     var meta = catMeta(m.category, t);
     var related = props.related || [];
@@ -285,9 +304,7 @@
         h("p", null, m.content),
         h("div", { className: "wb-mem-hero-actions" },
           h("button", { type: "button", className: "wb-mem-iconbtn", title: t("common.edit", "Edit"), onClick: function () { props.onEdit(m); } },
-            svg({ width: 15, height: 15 }, h("path", { d: "M12 20h9" }), h("path", { d: "M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4Z" }))),
-          h("button", { type: "button", className: "wb-mem-iconbtn", title: t("common.delete", "Delete"), onClick: function () { props.onDelete(m); } },
-            svg({ width: 15, height: 15 }, h("path", { d: "M4 7h16M9 7V5h6v2M6 7l1 13h10l1-13" }))))),
+            svg({ width: 15, height: 15 }, h("path", { d: "M12 20h9" }), h("path", { d: "M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4Z" }))))),
       h("div", { className: "wb-mem-meta" },
         MetaRow({ label: t("memory.type", "Type"), children: h(Chip, { tone: meta.tone }, catLabel(m.category, t)) }),
         MetaRow({ label: t("memory.tags", "Tags"), children: h("div", { className: "wb-mem-tagwrap" },
@@ -347,16 +364,27 @@
                 h("small", null, formatFull(ev.at))));
           }))
         : h("div", { className: "wb-mem-empty-soft" }, h("p", null, t("memory.noHistory", "No edit history"))));
+    var bodies = { detail: detailBody, cite: citeBody, related: relatedBody, history: historyBody };
 
-    return h("aside", { className: "wb-mem-detail" },
-      h("div", { className: "wb-mem-detail-tabs" }, tabs.map(function (t) {
-        return h("button", { key: t.id, type: "button", className: "wb-mem-detail-tab" + (tab === t.id ? " active" : ""), onClick: function () { setTab(t.id); } }, t.label);
-      })),
-      tab === "detail" ? detailBody : tab === "cite" ? citeBody : tab === "related" ? relatedBody : historyBody,
-      h("div", { className: "wb-mem-detail-foot" },
-        h("button", { type: "button", className: "wb-btn ghost", onClick: function () { props.onEdit(m); } }, t("memory.edit", "Edit memory")),
-        h("button", { type: "button", className: "wb-btn ghost", disabled: props.busy, title: m.stale ? t("memory.restoreTitle", "Restore it to inject into the Agent again") : t("memory.staleTitle", "Outdated memories are no longer injected into the Agent, but remain in the record"), onClick: function () { props.onToggleStale(m); } }, m.stale ? t("memory.restore", "Restore") : t("memory.markStale", "Mark outdated")),
-        h("button", { type: "button", className: "wb-btn danger", onClick: function () { props.onDelete(m); } }, t("memory.delete", "Delete memory"))));
+    return h("aside", { className: "wb-floating-detail-shell wb-mem-detail", "aria-label": t("memory.details", "Details") },
+      h("div", { className: "wb-floating-detail-card wb-mem-detail-card" },
+        h("nav", { className: "wb-detail-accordion wb-mem-detail-tabs", "aria-label": t("memory.details", "Details") },
+          h("div", { className: "wb-detail-accordion-head wb-mem-detail-nav-head" },
+            h("span", null, t("memory.detailPanel", "Memory details")),
+            h("button", { type: "button", className: "wb-detail-card-delete", title: t("common.delete", "Delete"), "aria-label": t("memory.delete", "Delete memory"), onClick: function () { props.onDelete(m); } },
+              svg({ width: 15, height: 15 }, h("path", { d: "M4 7h16M9 7V5h6v2M6 7l1 13h10l1-13" })))),
+          h("div", { className: "wb-detail-accordion-list" }, tabs.map(function (item) {
+            return h(React.Fragment, { key: item.id },
+              h("button", { type: "button", className: "wb-detail-accordion-trigger wb-mem-detail-tab" + (tab === item.id ? " active" : ""), "aria-expanded": tab === item.id, onClick: function () { setTab(tab === item.id ? "" : item.id); } },
+                h("span", { className: "wb-detail-accordion-icon wb-mem-detail-tab-icon" }, detailTabIcon(item.id)),
+                h("span", null, item.label),
+                svg({ width: 14, height: 14 }, h("path", { d: "m9 18 6-6-6-6" }))),
+              h("div", { className: "wb-detail-accordion-panel wb-mem-detail-tab-panel" + (tab === item.id ? " open" : ""), "aria-hidden": tab !== item.id },
+                h("div", { className: "wb-detail-accordion-panel-inner" }, bodies[item.id])));
+          }))),
+        h("div", { className: "wb-mem-detail-foot" },
+          h("button", { type: "button", className: "wb-btn ghost", onClick: function () { props.onEdit(m); } }, t("memory.edit", "Edit memory")),
+          h("button", { type: "button", className: "wb-btn ghost", disabled: props.busy, title: m.stale ? t("memory.restoreTitle", "Restore it to inject into the Agent again") : t("memory.staleTitle", "Outdated memories are no longer injected into the Agent, but remain in the record"), onClick: function () { props.onToggleStale(m); } }, m.stale ? t("memory.restore", "Restore") : t("memory.markStale", "Mark outdated")))));
   }
 
   function learningSnapshot(data) {
@@ -572,6 +600,7 @@
     var t = useMemoryT();
     var shotState = useState(0); var shotIndex = shotState[0]; var setShotIndex = shotState[1];
     var imgErrorState = useState(false); var imgError = imgErrorState[0]; var setImgError = imgErrorState[1];
+    var detailOpenState = useState(true); var detailOpen = detailOpenState[0]; var setDetailOpen = detailOpenState[1];
     var learning = props.learning;
     var loading = learning.loading;
     var detailKind = props.detailKind || "chain";
@@ -597,13 +626,26 @@
         if (ok && props.onDeleteSkill) props.onDeleteSkill(skill.id);
       });
     }
+
+    function learningPanelShell(label, body, footer) {
+      return h("aside", { className: "wb-floating-detail-shell wb-mem-detail wb-mem-skill-panel wb-mem-replay-panel", "aria-label": t("memory.learning.detailPanel", "Skill learning details") },
+        h("div", { className: "wb-floating-detail-card wb-mem-detail-card" },
+          h("nav", { className: "wb-detail-accordion wb-mem-detail-tabs", "aria-label": t("memory.learning.detailPanel", "Skill learning details") },
+            h("div", { className: "wb-detail-accordion-head wb-mem-detail-nav-head" }, t("memory.learning.detailPanel", "Skill learning details")),
+            h("div", { className: "wb-detail-accordion-list" },
+              h("button", { type: "button", className: "wb-detail-accordion-trigger wb-mem-detail-tab" + (detailOpen ? " active" : ""), "aria-expanded": detailOpen, onClick: function () { setDetailOpen(!detailOpen); } },
+                h("span", { className: "wb-detail-accordion-icon wb-mem-detail-tab-icon" }, detailTabIcon("detail")),
+                h("span", null, label),
+                svg({ width: 14, height: 14 }, h("path", { d: "m9 18 6-6-6-6" }))),
+              h("div", { className: "wb-detail-accordion-panel wb-mem-detail-tab-panel" + (detailOpen ? " open" : ""), "aria-hidden": !detailOpen },
+                h("div", { className: "wb-detail-accordion-panel-inner" }, body)))),
+          footer));
+    }
     if (detailKind === "skill") {
       var skillSteps = Array.isArray(skill && skill.steps) ? skill.steps : [];
       var trigger = (skill && skill.trigger) || {};
       var examples = Array.isArray(trigger.positive_examples) ? trigger.positive_examples : [];
-      return h("aside", { className: "wb-mem-detail wb-mem-skill-panel wb-mem-replay-panel" },
-        h("div", { className: "wb-mem-detail-tabs" },
-          h("button", { type: "button", className: "wb-mem-detail-tab active" }, t("memory.learning.skillDetails", "Skill details"))),
+      return learningPanelShell(t("memory.learning.skillDetails", "Skill details"),
         !skill ? h("div", { className: "wb-mem-detail-scroll" },
           h("div", { className: "wb-mem-empty-soft" }, t("memory.learning.noSkillSelected", "Select a learned skill to inspect.")),
           learning.error && h("div", { className: "wb-mem-error inline" }, learningErrorText(learning.error, t)))
@@ -678,9 +720,7 @@
           learning.note && h("div", { className: "wb-mem-skill-note" }, learning.note)) : null);
     }
 
-    return h("aside", { className: "wb-mem-detail wb-mem-skill-panel wb-mem-replay-panel" },
-      h("div", { className: "wb-mem-detail-tabs" },
-        h("button", { type: "button", className: "wb-mem-detail-tab active" }, t("memory.learning.detailsTitle", "Details"))),
+    return learningPanelShell(t("memory.learning.detailsTitle", "Details"),
       !chain ? h("div", { className: "wb-mem-detail-scroll" },
         h("div", { className: "wb-mem-empty-soft" }, loading ? t("memory.learning.loadingChains", "Loading tool chains...") : t("memory.learning.selectRound", "Select a round to inspect.")),
         learning.error && h("div", { className: "wb-mem-error inline" }, learningErrorText(learning.error, t)))
@@ -1284,12 +1324,21 @@
     function curLabel(opts, val) { for (var i = 0; i < opts.length; i++) if (opts[i].id === val) return opts[i].label; return opts[0].label; }
 
     function dropdown(key, label, options, value, setter) {
+      var menuId = "wb-memory-" + key + "-menu";
       return h("div", { className: "wb-mem-tool-wrap" },
-        h("button", { type: "button", className: "wb-mem-tool" + (value && value !== "all" ? " on" : ""), onClick: function () { setMenu(menu === key ? "" : key); } },
+        h("button", { type: "button", className: "wb-mem-tool" + (value && value !== "all" ? " on" : ""), "aria-haspopup": "menu", "aria-expanded": menu === key, "aria-controls": menuId, onClick: function () { setMenu(menu === key ? "" : key); } },
           h("span", null, label),
           svg({ width: 13, height: 13, strokeWidth: 2 }, h("path", { d: "m6 9 6 6 6-6" }))),
-        menu === key && h("div", { className: "wb-mem-menu" }, options.map(function (o) {
-          return h("button", { key: o.id, type: "button", className: value === o.id ? "sel" : "", onClick: function () { setter(o.id); setMenu(""); } }, o.label);
+        menu === key && h("div", { id: menuId, className: "wb-mem-menu", role: "menu", onKeyDown: function (event) {
+          if (event.key === "Escape") { setMenu(""); var trigger = event.currentTarget.previousElementSibling; if (trigger) trigger.focus(); return; }
+          if (["ArrowUp", "ArrowDown", "Home", "End"].indexOf(event.key) < 0) return;
+          event.preventDefault();
+          var items = Array.prototype.slice.call(event.currentTarget.querySelectorAll('[role="menuitemradio"]'));
+          var current = items.indexOf(document.activeElement);
+          var next = event.key === "Home" ? 0 : event.key === "End" ? items.length - 1 : (current + (event.key === "ArrowUp" ? -1 : 1) + items.length) % items.length;
+          if (items[next]) items[next].focus();
+        } }, options.map(function (o) {
+          return h("button", { key: o.id, type: "button", role: "menuitemradio", "aria-checked": value === o.id, className: value === o.id ? "sel" : "", onClick: function () { setter(o.id); setMenu(""); } }, o.label);
         })));
     }
 
@@ -1300,6 +1349,13 @@
         h("div", { className: "workbench-integrated-rail-actions" },
           h("button", { type: "button", className: "wb-mem-new-btn workbench-integrated-rail-primary-action", onClick: function () { setModal({ mode: "create", draft: {} }); } },
             svg({ width: 13, height: 13, strokeWidth: 2.4 }, h("path", { d: "M12 5v14M5 12h14" })), h("span", null, t("memory.new", "New memory"))),
+          props.onEditProjectMemory && !props.sidebarCollapsed && h("button", {
+            type: "button",
+            className: "wb-mem-project-memory-btn",
+            onClick: props.onEditProjectMemory,
+            title: t("memory.editProjectMemory", "Edit project memory"),
+            "aria-label": t("memory.editProjectMemory", "Edit project memory"),
+          }, ICON.all(15)),
           props.collapseControl)),
       h("div", { className: "wb-mem-rail-scroll workbench-integrated-rail-body" },
       h("div", { className: "wb-mem-cats" },
@@ -1383,11 +1439,11 @@
       onSelectSkill: selectLearningSkill,
       onExit: function () { setActivePanel(""); },
     }) : h("div", { className: "wb-mem-main" },
-      h("div", { className: "wb-mem-toolbar" },
-        h("div", { className: "wb-mem-searchbox" },
+      h("div", { className: "wb-workbench-filterbar wb-mem-toolbar" },
+        h("div", { className: "wb-workbench-searchbox wb-mem-searchbox" },
           svg({ width: 15, height: 15, strokeWidth: 1.9 }, h("circle", { cx: 11, cy: 11, r: 7 }), h("path", { d: "m20 20-3.2-3.2" })),
           h("input", { type: "text", placeholder: t("memory.searchPlaceholder", "Search memory…"), value: query, onChange: function (e) { setQuery(e.target.value); } })),
-        h("div", { className: "wb-mem-tools" },
+        h("div", { className: "wb-workbench-toolbar-controls wb-mem-tools" },
           dropdown("type", curLabel(typeOptions, activeCat), typeOptions, activeCat, function (value) { setActivePanel(""); setActiveCat(value); }),
           dropdown("source", curLabel(sourceOptions, sourceFilter), sourceOptions, sourceFilter, setSourceFilter),
           dropdown("sort", curLabel(sortOptions, sortKey), sortOptions, sortKey, setSortKey))),

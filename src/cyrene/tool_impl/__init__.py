@@ -32,6 +32,7 @@ NATIVE_TOOL_MODULES = (
     "cyrene.tool_impl.memory.search_project_memory",
     "cyrene.tool_impl.memory.save_project_memory",
     "cyrene.tool_impl.memory.retire_project_memory",
+    "cyrene.tool_impl.memory.trigger_project_memory_learning",
     "cyrene.tool_impl.task.set_task_goal",
     "cyrene.tool_impl.task.update_task_plan",
     "cyrene.tool_impl.knowledge.list_knowledge_documents",

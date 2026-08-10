@@ -23,6 +23,8 @@ contextBridge.exposeInMainWorld('cyrene', {
     if (process.platform !== 'linux') return Promise.resolve(null);
     return ipcRenderer.invoke('dialog:pick-directory');
   },
+  pickBackupSavePath: (options) => ipcRenderer.invoke('dialog:pick-backup-save-path', options || {}),
+  pickBackupFile: (options) => ipcRenderer.invoke('dialog:pick-backup-file', options || {}),
   browser: {
     getState: (sessionId) => ipcRenderer.invoke('browser:get-state', { sessionId: String(sessionId || '') }),
     setBounds: (info) => ipcRenderer.invoke('browser:set-bounds', info || {}),

@@ -1210,6 +1210,7 @@ function WorkbenchApp({ theme, actualTheme, onToggleTheme, needsOnboarding }) {
   var [newChatRequestId, setNewChatRequestId] = useWorkbenchState(0);
   var [mountedPages, setMountedPages] = useWorkbenchState({});
   var [editProject, setEditProject] = useWorkbenchState(null);
+  var [editMemoryProject, setEditMemoryProject] = useWorkbenchState(null);
   var [notifications, setNotifications] = useWorkbenchState({ items: [], counts: { all: 0, mention: 0, comment: 0, system: 0 }, unreadByTab: { all: 0, mention: 0, comment: 0, system: 0 }, unreadCount: 0 });
   var [activeChatId, setActiveChatId] = useWorkbenchState("");
   var [recentChatsByProject, setRecentChatsByProject] = useWorkbenchState({});
@@ -2506,7 +2507,7 @@ function WorkbenchApp({ theme, actualTheme, onToggleTheme, needsOnboarding }) {
 
   function handleSidebarModuleWheel(event) {
     var target = event.target;
-    if (!target || !target.closest || !target.closest(".workbench-integrated-rail")) return;
+    if (!target || !target.closest || !target.closest(".workbench-integrated-rail, .workbench-sidebar-dock.is-persistent")) return;
     var deltaX = Number(event.deltaX || 0);
     var deltaY = Number(event.deltaY || 0);
     if (Math.abs(deltaX) < 2 || Math.abs(deltaX) <= Math.abs(deltaY) * 1.15) return;
@@ -2542,14 +2543,8 @@ function WorkbenchApp({ theme, actualTheme, onToggleTheme, needsOnboarding }) {
     return <WorkbenchSidebarCollapseControl collapsed={railCollapsed} onToggle={toggleWorkspaceSidebar} />;
   }
 
-  function renderSidebarDock() {
-    return (
-      <WorkbenchSidebarDock
-        activePage={fullPage}
-        onOpenPage={handleOpenPage}
-        onSettings={function () { setSettingsTab(""); setSettingsOpen(true); }}
-      />
-    );
+  function renderSidebarDockSlot() {
+    return <div className="workbench-sidebar-dock-slot" aria-hidden="true" />;
   }
 
   // Conversation → task promotion: the chat page returns the refreshed store
@@ -2680,7 +2675,7 @@ function WorkbenchApp({ theme, actualTheme, onToggleTheme, needsOnboarding }) {
         recentSessions={recentSessionTabs}
         overflowSessions={overflowSessionTabs}
         pinnedResources={pinnedResources}
-        keyboardEnabled={!searchOpen && !settingsOpen && !newProjectOpen && !newTaskOpen}
+        keyboardEnabled={!searchOpen && !settingsOpen && !newProjectOpen && !newTaskOpen && !editProject && !editMemoryProject}
         onPinResource={pinTopbarResource}
         onUnpinResource={unpinTopbarResource}
         onOpenPinnedResource={function (resource) {
@@ -2764,6 +2759,7 @@ function WorkbenchApp({ theme, actualTheme, onToggleTheme, needsOnboarding }) {
         onNewProject={createProject}
         onSelectProject={selectProject}
         onEditProject={setEditProject}
+        onEditMemory={setEditMemoryProject}
         onDeleteProject={handleDeleteProject}
         onNewTask={createSession}
         onOpenPage={handleOpenPage}
@@ -2775,6 +2771,13 @@ function WorkbenchApp({ theme, actualTheme, onToggleTheme, needsOnboarding }) {
         <WorkbenchFullPage config={fullPageConfig} onClose={function () { setFullPage(null); }} />
       ) : (
         <div ref={wbApplyStoredRightWidth} className={"workbench-grid integrated-sidebars" + (railCollapsed ? " rail-collapsed" : "") + (isKnowledge ? " is-knowledge" : "") + (isSchedule ? " is-schedule" : "") + (isMemory ? " is-memory" : "") + (isChat ? " is-chat" : "") + (isWelcome ? " is-welcome" : "") + (isProfile ? " is-profile" : "") + (!isModulePage ? (taskView === "board" ? " is-task-board" : " is-task-detail") : "")} onWheel={handleSidebarModuleWheel}>
+          <WorkbenchSidebarDock
+            persistent={true}
+            collapsed={railCollapsed}
+            activePage={fullPage}
+            onOpenPage={handleOpenPage}
+            onSettings={function () { setSettingsTab(""); setSettingsOpen(true); }}
+          />
           {showChatPage && (
             <WorkbenchStableSurface active={isChat}>
               {React.createElement(window.CyreneUI.require("chat").Page || function () { return <div className="workbench-empty">{t("workbench.chatLoading")}</div>; }, {
@@ -2801,7 +2804,7 @@ function WorkbenchApp({ theme, actualTheme, onToggleTheme, needsOnboarding }) {
                 navCollapsed: railCollapsed,
                 onToggleNavCollapsed: toggleWorkspaceSidebar,
                 collapseControl: isChat ? renderSidebarCollapseControl() : null,
-                moduleDock: isChat ? renderSidebarDock() : null,
+                moduleDock: isChat ? renderSidebarDockSlot() : null,
               })}
             </WorkbenchStableSurface>
           )}
@@ -2814,18 +2817,18 @@ function WorkbenchApp({ theme, actualTheme, onToggleTheme, needsOnboarding }) {
                 onNavigate: navigateFromSearch,
                 sidebarCollapsed: railCollapsed,
                 collapseControl: isKnowledge ? renderSidebarCollapseControl() : null,
-                moduleDock: isKnowledge ? renderSidebarDock() : null,
+                moduleDock: isKnowledge ? renderSidebarDockSlot() : null,
               })}
             </WorkbenchStableSurface>
           )}
           {showSchedulePage && (
             <WorkbenchStableSurface active={isSchedule}>
-              {React.createElement(window.CyreneUI.require("schedule").Page || function () { return <div className="workbench-empty">{t("workbench.scheduleLoading")}</div>; }, { active: isSchedule, project: store.activeProject, onBack: function () { setFullPage(null); }, sidebarCollapsed: railCollapsed, collapseControl: isSchedule ? renderSidebarCollapseControl() : null, moduleDock: isSchedule ? renderSidebarDock() : null })}
+              {React.createElement(window.CyreneUI.require("schedule").Page || function () { return <div className="workbench-empty">{t("workbench.scheduleLoading")}</div>; }, { active: isSchedule, project: store.activeProject, onBack: function () { setFullPage(null); }, sidebarCollapsed: railCollapsed, collapseControl: isSchedule ? renderSidebarCollapseControl() : null, moduleDock: isSchedule ? renderSidebarDockSlot() : null })}
             </WorkbenchStableSurface>
           )}
           {showMemoryPage && (
             <WorkbenchStableSurface active={isMemory}>
-              {React.createElement(window.CyreneUI.require("memory").Page || function () { return <div className="workbench-empty">{t("workbench.memoryLoading")}</div>; }, { active: isMemory, project: store.activeProject, onBack: function () { setFullPage(null); }, sidebarCollapsed: railCollapsed, collapseControl: isMemory ? renderSidebarCollapseControl() : null, moduleDock: isMemory ? renderSidebarDock() : null })}
+              {React.createElement(window.CyreneUI.require("memory").Page || function () { return <div className="workbench-empty">{t("workbench.memoryLoading")}</div>; }, { active: isMemory, project: store.activeProject, onBack: function () { setFullPage(null); }, onEditProjectMemory: function () { if (store.activeProject) setEditMemoryProject(store.activeProject); }, sidebarCollapsed: railCollapsed, collapseControl: isMemory ? renderSidebarCollapseControl() : null, moduleDock: isMemory ? renderSidebarDockSlot() : null })}
             </WorkbenchStableSurface>
           )}
           {showWelcomePage && (
@@ -2846,7 +2849,7 @@ function WorkbenchApp({ theme, actualTheme, onToggleTheme, needsOnboarding }) {
           {showProfilePage && (
             <WorkbenchStableSurface active={isProfile}>
               <>
-                <WorkbenchProfileRail collapsed={railCollapsed} collapseControl={isProfile ? renderSidebarCollapseControl() : null} moduleDock={isProfile ? renderSidebarDock() : null} />
+                <WorkbenchProfileRail collapsed={railCollapsed} collapseControl={isProfile ? renderSidebarCollapseControl() : null} moduleDock={isProfile ? renderSidebarDockSlot() : null} />
                 {window.CyreneUI.require("profile").Page
                   ? React.createElement(window.CyreneUI.require("profile").Page, { active: isProfile })
                   : <div className="workbench-empty">…</div>}
@@ -2864,7 +2867,7 @@ function WorkbenchApp({ theme, actualTheme, onToggleTheme, needsOnboarding }) {
             loading={loading}
             collapsed={railCollapsed}
             collapseControl={renderSidebarCollapseControl()}
-            moduleDock={!isModulePage ? renderSidebarDock() : null}
+            moduleDock={!isModulePage ? renderSidebarDockSlot() : null}
           />
           {taskView === "board" ? (
             <TaskBoard
@@ -2963,6 +2966,12 @@ function WorkbenchApp({ theme, actualTheme, onToggleTheme, needsOnboarding }) {
           onSave={function (input) {
             return handleUpdateProject(editProject.id, input).then(function () { setEditProject(null); });
           }}
+        />
+      )}
+      {editMemoryProject && (
+        <WorkbenchProjectMemoryModal
+          project={editMemoryProject}
+          onClose={function () { setEditMemoryProject(null); }}
         />
       )}
       {newTaskOpen && window.CyreneUI.require("create").NewTaskModal && React.createElement(
@@ -3080,7 +3089,7 @@ function WorkbenchSessionActivityPreview({ preview, t }) {
   );
 }
 
-function WorkbenchTopbar({ projects, activeProject, activePage, taskView, activeTaskId, activeChatId, recentSessions, overflowSessions, pinnedResources, keyboardEnabled, onPinResource, onUnpinResource, onOpenPinnedResource, onOpenSession, onPauseSession, onStopSession, onTogglePinnedSession, onRemoveSessionTab, onLoadSessionResources, onLoadSessionBrowserPreview, onOpenSessionResource, notifications, onReloadNotifications, onOpenNotification, onSearch, onSettings, onNewProject, onSelectProject, onEditProject, onDeleteProject, onNewTask, onOpenPage, theme, actualTheme, onToggleTheme }) {
+function WorkbenchTopbar({ projects, activeProject, activePage, taskView, activeTaskId, activeChatId, recentSessions, overflowSessions, pinnedResources, keyboardEnabled, onPinResource, onUnpinResource, onOpenPinnedResource, onOpenSession, onPauseSession, onStopSession, onTogglePinnedSession, onRemoveSessionTab, onLoadSessionResources, onLoadSessionBrowserPreview, onOpenSessionResource, notifications, onReloadNotifications, onOpenNotification, onSearch, onSettings, onNewProject, onSelectProject, onEditProject, onEditMemory, onDeleteProject, onNewTask, onOpenPage, theme, actualTheme, onToggleTheme }) {
   var { t } = window.CyreneUI.require("i18n").use();
   var dataState = window.CyreneUI.require("data").state;
   var tabs = Array.isArray(recentSessions) ? recentSessions : [];
@@ -3432,10 +3441,10 @@ function WorkbenchTopbar({ projects, activeProject, activePage, taskView, active
     event.stopPropagation();
     closeSessionPreview();
     setOverflowMenu(null);
-    var menuWidth = 360;
+    var menuWidth = Math.min(340, Math.max(0, window.innerWidth - 16));
     var menuHeight = 440;
     var rect = event.currentTarget && event.currentTarget.getBoundingClientRect ? event.currentTarget.getBoundingClientRect() : null;
-    var left = anchored && rect ? rect.right - menuWidth : event.clientX;
+    var left = anchored && rect ? rect.left + (rect.width - menuWidth) / 2 : event.clientX;
     var top = anchored && rect ? rect.bottom + 8 : event.clientY;
     left = Math.max(8, Math.min(left, window.innerWidth - menuWidth - 8));
     top = Math.max(8, Math.min(top, window.innerHeight - menuHeight - 8));
@@ -3825,7 +3834,7 @@ function WorkbenchTopbar({ projects, activeProject, activePage, taskView, active
                 var actionsOpen = projectActionId === project.id;
                 return (
                   <div key={project.id} className={"workbench-top-project-row" + (selected ? " active" : "") + (actionsOpen ? " menu-open" : "")}>
-                    <button type="button" className="workbench-top-project-select" role="menuitem" onClick={function () {
+                    <button type="button" className="workbench-top-project-select" role="menuitemradio" aria-checked={selected} onClick={function () {
                       setProjectMenuOpen(false);
                       setProjectActionId("");
                       if (onSelectProject) onSelectProject(project.id);
@@ -3836,7 +3845,6 @@ function WorkbenchTopbar({ projects, activeProject, activePage, taskView, active
                         aria-hidden="true"
                       >{isCyrene ? <span className="brand-mark" /> : WorkbenchModel.initials(project.name)}</span>
                       <span className="workbench-top-project-copy"><b>{project.name}</b><small>{WorkbenchModel.pathLabel(project.workspacePath, project.name)}</small></span>
-                      {selected ? <span className="workbench-top-project-check" aria-hidden="true">✓</span> : null}
                     </button>
                     <button type="button" className="workbench-top-project-more" aria-label={t("rail.projectActions")} onClick={function (event) {
                       event.stopPropagation();
@@ -3849,6 +3857,10 @@ function WorkbenchTopbar({ projects, activeProject, activePage, taskView, active
                         <button type="button" role="menuitem" onClick={function () { setProjectActionId(""); setProjectMenuOpen(false); if (onEditProject) onEditProject(project); }}>
                           <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M12 20h9"/><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4Z"/></svg>
                           <span>{t("rail.editProject")}</span>
+                        </button>
+                        <button type="button" role="menuitem" onClick={function () { setProjectActionId(""); setProjectMenuOpen(false); if (onEditMemory) onEditMemory(project); }}>
+                          <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M12 3 13.7 9.3 20 11l-6.3 1.7L12 19l-1.7-6.3L4 11l6.3-1.7Z"/><path d="M18.5 16.5 19 19l2.5.5L19 20l-.5 2.5L18 20l-2.5-.5L18 19Z"/></svg>
+                          <span>{t("rail.editMemory")}</span>
                         </button>
                         {!isCyrene ? <button type="button" role="menuitem" className="danger" onClick={function () { setProjectActionId(""); setProjectMenuOpen(false); if (onDeleteProject) onDeleteProject(project); }}>
                           <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M3 6h18M8 6V4a1 1 0 0 1 1-1h6a1 1 0 0 1 1 1v2M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/></svg>
@@ -4501,6 +4513,181 @@ function WorkbenchEditProjectModal({ project, onClose, onSave }) {
   );
 }
 
+function wbProjectMemoryDate(value) {
+  if (!value) return "—";
+  var parsed = new Date(value);
+  return isNaN(parsed.getTime()) ? String(value) : parsed.toLocaleString();
+}
+
+function WorkbenchProjectMemoryModal({ project, onClose }) {
+  var { t } = window.CyreneUI.require("i18n").use();
+  var [payload, setPayload] = useWorkbenchState(null);
+  var [draft, setDraft] = useWorkbenchState("");
+  var [selectedModifiedAt, setSelectedModifiedAt] = useWorkbenchState("");
+  var [loading, setLoading] = useWorkbenchState(true);
+  var [busy, setBusy] = useWorkbenchState(false);
+  var [error, setError] = useWorkbenchState("");
+  var draftRef = useWorkbenchRef("");
+  var payloadRef = useWorkbenchRef(null);
+  var selectedModifiedAtRef = useWorkbenchRef("");
+  draftRef.current = draft;
+  payloadRef.current = payload;
+  selectedModifiedAtRef.current = selectedModifiedAt;
+
+  function load(options) {
+    options = options || {};
+    if (!options.background) setLoading(true);
+    return window.CyreneUI.require("api").json(
+      "/api/projects/" + encodeURIComponent(project.id) + "/memory-prompt?include_memories=false",
+      { toast: false }
+    ).then(function (next) {
+      var previousPrompt = String(payloadRef.current && payloadRef.current.current && payloadRef.current.current.prompt || "");
+      var hasLocalEdit = options.keepDraft && draftRef.current.trim() !== previousPrompt.trim();
+      setPayload(next);
+      if (!hasLocalEdit) setDraft(String(next && next.current && next.current.prompt || ""));
+      var nextVersions = next && Array.isArray(next.versions) ? next.versions : [];
+      if (selectedModifiedAtRef.current && !nextVersions.some(function (version) { return version.modifiedAt === selectedModifiedAtRef.current; })) {
+        setSelectedModifiedAt("");
+      }
+      setError("");
+      return next;
+    }).catch(function (err) {
+      setError(wbErrorText(err));
+      return null;
+    }).then(function (value) {
+      if (!options.background) setLoading(false);
+      return value;
+    });
+  }
+
+  useWorkbenchEffect(function () { load(); }, [project.id]);
+  var learningStatus = payload && payload.learningStatus;
+  var learningPhase = String(learningStatus && learningStatus.status || "");
+  useWorkbenchEffect(function () {
+    if (learningPhase !== "queued" && learningPhase !== "running") return undefined;
+    var timer = window.setInterval(function () { load({ background: true, keepDraft: true }); }, 2000);
+    return function () { window.clearInterval(timer); };
+  }, [project.id, learningPhase]);
+
+  var current = payload && payload.current || { prompt: "", modifiedAt: "" };
+  var versions = payload && Array.isArray(payload.versions) ? payload.versions : [];
+  var historicalVersions = versions.filter(function (version) { return version.modifiedAt !== current.modifiedAt; });
+  var selectedVersion = selectedModifiedAt
+    ? versions.find(function (version) { return version.modifiedAt === selectedModifiedAt; }) || null
+    : null;
+  var displayedPrompt = selectedVersion ? String(selectedVersion.prompt || "") : draft;
+  var displayedModel = selectedVersion && selectedVersion.model || {};
+  var displayedTrigger = selectedVersion && selectedVersion.trigger || {};
+  var displayedModifiedAt = selectedVersion ? selectedVersion.modifiedAt : current.modifiedAt;
+  var displayedModifiedBy = selectedVersion ? selectedVersion.modifiedBy : current.modifiedBy;
+  var promptChanged = draft.trim() !== String(current.prompt || "").trim();
+
+  function savePrompt() {
+    if (busy || !promptChanged) return;
+    setBusy(true);
+    setError("");
+    window.CyreneUI.require("api").json(
+      "/api/projects/" + encodeURIComponent(project.id) + "/memory-prompt",
+      {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ prompt: draft, baseModifiedAt: current.modifiedAt || "" }),
+        toast: false,
+      }
+    ).then(function (next) {
+      setPayload(function (previous) { return { ...(previous || {}), ...next }; });
+      setDraft(String(next && next.current && next.current.prompt || ""));
+      setSelectedModifiedAt("");
+      window.CyreneUI.require("feedback").showToast(t("projectMemory.saved"), "success");
+    }).catch(function (err) {
+      setError(wbErrorText(err));
+      if (Number(err && err.status || 0) === 409) load({ keepDraft: true });
+    }).then(function () { setBusy(false); });
+  }
+
+  function restoreVersion(version) {
+    if (busy || !version) return;
+    setBusy(true);
+    setError("");
+    window.CyreneUI.require("api").json(
+      "/api/projects/" + encodeURIComponent(project.id) + "/memory-prompt/restore",
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ modifiedAt: version.modifiedAt, baseModifiedAt: current.modifiedAt || "" }),
+        toast: false,
+      }
+    ).then(function (next) {
+      setPayload(function (previous) { return { ...(previous || {}), ...next }; });
+      setDraft(String(next && next.current && next.current.prompt || ""));
+      setSelectedModifiedAt("");
+      window.CyreneUI.require("feedback").showToast(t("projectMemory.restored"), "success");
+    }).catch(function (err) {
+      setError(wbErrorText(err));
+      if (Number(err && err.status || 0) === 409) load({ keepDraft: true });
+    }).then(function () { setBusy(false); });
+  }
+
+  return (
+    <div className="workbench-modal-scrim workbench-project-memory-scrim" onMouseDown={function (event) { if (event.target === event.currentTarget && !busy) onClose(); }}>
+      <div className="workbench-project-memory-modal" role="dialog" aria-modal="true" aria-label={t("projectMemory.title")}>
+        <div className="workbench-project-edit-head workbench-project-memory-head">
+          <span className="workbench-project-memory-title-copy">
+            <b>{project.name}</b>
+            <p>{selectedVersion ? t("projectMemory.historicalHint") : t("projectMemory.promptHint")}</p>
+            {displayedModifiedAt ? <i>{wbProjectMemoryDate(displayedModifiedAt)} · {displayedModifiedBy === "memory_agent" ? t("projectMemory.byAgent") : t("projectMemory.byUser")}</i> : null}
+          </span>
+          <div className="workbench-project-memory-head-actions">
+            {selectedVersion ? <button type="button" className="wb-btn primary" disabled={busy} onClick={function () { restoreVersion(selectedVersion); }}>{busy ? t("settings.saving") : t("projectMemory.restore")}</button> : <button type="button" className="wb-btn primary" disabled={busy || !promptChanged} onClick={savePrompt}>{busy ? t("settings.saving") : t("common.save")}</button>}
+            <button type="button" className="workbench-icon-btn" disabled={busy} onClick={onClose} title={t("common.close")}>
+              <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><path d="m6 6 12 12M18 6 6 18" /></svg>
+            </button>
+          </div>
+        </div>
+        <div className="workbench-project-memory-overview">
+          <span className="workbench-project-memory-overview-title">
+            <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><rect x="4" y="5" width="16" height="15" rx="2"/><path d="M8 3v4M16 3v4M8 11h8"/></svg>
+            <span><b>{t("projectMemory.overview")}</b><em>{selectedVersion ? t("projectMemory.historyStatus") : current.modifiedAt ? t("projectMemory.currentStatus") : t("projectMemory.unsavedStatus")}</em></span>
+          </span>
+          <span className="workbench-project-memory-overview-metric"><small>{t("projectMemory.versionCount")}</small><b>{versions.length.toLocaleString()}</b></span>
+          <span className="workbench-project-memory-overview-metric"><small>{t("projectMemory.characterCount")}</small><b>{displayedPrompt.length.toLocaleString()}</b></span>
+          <div className="workbench-project-memory-head-version">
+            <label htmlFor="workbench-project-memory-version">{t("projectMemory.versionSelector")}</label>
+            <select id="workbench-project-memory-version" value={selectedModifiedAt} onChange={function (event) { setSelectedModifiedAt(event.target.value); }}>
+              <option value="">{current.modifiedAt ? t("projectMemory.currentOption", { time: wbProjectMemoryDate(current.modifiedAt) }) : t("projectMemory.currentUnsavedOption")}</option>
+              {historicalVersions.map(function (version) {
+                return <option key={version.revisionId || version.modifiedAt} value={version.modifiedAt}>{t("projectMemory.historyOption", { time: wbProjectMemoryDate(version.modifiedAt) })}</option>;
+              })}
+            </select>
+          </div>
+        </div>
+        <div className="workbench-project-memory-body">
+          {loading ? <div className="workbench-project-memory-state"><span className="wbc-spinner" /> {t("common.loading")}</div> : null}
+          {!loading ? (
+            <section className="workbench-project-memory-prompt">
+              <div className="workbench-project-memory-editor">
+                {learningStatus ? <div className={"workbench-project-memory-learning-status " + learningPhase} title={learningStatus.error || ""}>{t("projectMemory.learningStatus." + learningPhase)}</div> : null}
+                {selectedVersion ? <div className="workbench-project-memory-selected-version">
+                  <b>{selectedVersion.changeSummary || t("projectMemory.versionChange")}</b>
+                  <span>{selectedVersion.modifiedBy === "memory_agent" ? t("projectMemory.byAgent") : t("projectMemory.byUser")}</span>
+                  {displayedModel.model ? <span>{t("projectMemory.model")}: {displayedModel.provider ? displayedModel.provider + " · " : ""}{displayedModel.model}{displayedModel.reasoningEffort ? " · " + displayedModel.reasoningEffort : ""}</span> : null}
+                  {displayedTrigger.conversationId ? <span>{t("projectMemory.trigger")}: {displayedTrigger.conversationId}{displayedTrigger.roundId ? " · " + displayedTrigger.roundId : ""}{displayedTrigger.turn ? " · " + t("projectMemory.turn", { turn: displayedTrigger.turn }) : ""}</span> : null}
+                  {selectedVersion.restoredFromModifiedAt ? <span>{t("projectMemory.restoredFrom", { time: wbProjectMemoryDate(selectedVersion.restoredFromModifiedAt) })}</span> : null}
+                </div> : null}
+                <div className="workbench-project-memory-editor-field">
+                  <textarea className={selectedVersion ? "is-historical" : ""} value={displayedPrompt} readOnly={!!selectedVersion} maxLength={16000} onChange={function (event) { if (!selectedVersion) setDraft(event.target.value); }} placeholder={t("projectMemory.promptPlaceholder")} />
+                  <div className="workbench-project-memory-count">{displayedPrompt.length.toLocaleString()} / 16,000</div>
+                </div>
+              </div>
+            </section>
+          ) : null}
+          {error ? <div className="workbench-project-edit-error workbench-project-memory-inline-error">{error}</div> : null}
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function WorkbenchSidebarCollapseControl({ collapsed, onToggle }) {
   var { t } = window.CyreneUI.require("i18n").use();
   var label = collapsed ? t("rail.expand", null, "Expand sidebar") : t("rail.collapse", null, "Collapse sidebar");
@@ -4741,7 +4928,7 @@ function WorkbenchRailAccount({ activePage, onOpenPage, onSettings, docked }) {
   );
 }
 
-function WorkbenchSidebarDock({ activePage, onOpenPage, onSettings }) {
+function WorkbenchSidebarDock({ activePage, onOpenPage, onSettings, collapsed, persistent }) {
   var { t } = window.CyreneUI.require("i18n").use();
   var items = [
     { id: "schedule", label: t("workbench.page.schedule"), icon: (
@@ -4761,7 +4948,7 @@ function WorkbenchSidebarDock({ activePage, onOpenPage, onSettings }) {
     ) },
   ];
   return (
-    <div className="workbench-sidebar-dock">
+    <div className={"workbench-sidebar-dock" + (persistent ? " is-persistent" : "") + (collapsed ? " is-collapsed" : "")}>
       <WorkbenchRailAccount docked={true} activePage={activePage} onOpenPage={onOpenPage} onSettings={onSettings} />
       <nav className="workbench-sidebar-dock-nav" aria-label={t("workbench.navigation", "Workbench navigation")}>
         {items.map(function (item) {
@@ -4800,7 +4987,7 @@ function WorkbenchProfileRail({ collapsed, collapseControl, moduleDock }) {
 // Temporarily keep sign-out unavailable until the authentication flow is ready.
 var WB_ACCOUNT_LOGOUT_VISIBLE = false;
 
-function ProjectRail({ projects, activeProjectId, activePage, collapsed, onToggleCollapse, onSelectProject, onCreateProject, onEditProject, onDeleteProject, onOpenPage, onSettings }) {
+function ProjectRail({ projects, activeProjectId, activePage, collapsed, onToggleCollapse, onSelectProject, onCreateProject, onEditProject, onEditMemory, onDeleteProject, onOpenPage, onSettings }) {
   var { t } = window.CyreneUI.require("i18n").use();
   var dataStore = window.CyreneUI.require("data");
   dataStore.useVersion();
@@ -5031,6 +5218,7 @@ function ProjectRail({ projects, activeProjectId, activePage, collapsed, onToggl
               {menuOpen && (
                 <div className="workbench-project-menu">
                   <button type="button" onClick={function () { setMenuProjectId(""); onEditProject(project); }}>{t("rail.editProject")}</button>
+                  <button type="button" onClick={function () { setMenuProjectId(""); if (onEditMemory) onEditMemory(project); }}>{t("rail.editMemory")}</button>
                   {project.dataKey !== "default" && (
                     <button type="button" className="danger" onClick={function () { setMenuProjectId(""); onDeleteProject(project); }}>{t("rail.deleteProject")}</button>
                   )}

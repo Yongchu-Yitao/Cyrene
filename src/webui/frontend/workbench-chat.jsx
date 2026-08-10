@@ -99,13 +99,24 @@ function wbcChatSideZoneRect() {
   var pr = page.getBoundingClientRect();
   if (!pr.width) return null;
   var side = document.querySelector(".wbc-side");
-  if (side) {
+  // A collapsed side panel keeps a narrow off-canvas box during its close
+  // transition. Its rect can therefore have a non-zero width even though it
+  // is not a usable drop target. Only reuse the real side track while it is
+  // visible and intersects the page; otherwise reserve an in-page edge band.
+  var sideHidden = page.classList.contains("wbc-side-hidden");
+  if (side && !sideHidden) {
     var sr = side.getBoundingClientRect();
-    if (sr.width > 0) {
+    if (sr.width > 0 && sr.left < pr.right && sr.right > pr.left) {
       return { left: sr.left, top: pr.top, right: sr.right, bottom: pr.bottom };
     }
   }
-  var zoneWidth = Math.max(300, Math.min(340, Math.round(pr.width * 0.32)));
+  var previewWidth = Number.parseFloat(
+    window.getComputedStyle(page).getPropertyValue("--wbc-chat-side-preview-width")
+  );
+  var zoneWidth = Number.isFinite(previewWidth) && previewWidth > 0
+    ? Math.round(previewWidth)
+    : Math.max(300, Math.min(340, Math.round(pr.width * 0.32)));
+  zoneWidth = Math.max(1, Math.min(zoneWidth, Math.round(pr.width)));
   return {
     left: pr.right - zoneWidth,
     top: pr.top,
@@ -520,6 +531,12 @@ var WorkbenchChatModel = (function () {
     });
   }
 
+  function generateMemory(chatId) {
+    return apiJson("/api/workbench/chats/" + encodeURIComponent(chatId) + "/memory-learning", {
+      method: "POST",
+    });
+  }
+
   function interrupt(chatId) {
     return fetch("/api/chat/interrupt?session_id=" + encodeURIComponent(chatId), { method: "POST" })
       .then(function (response) {
@@ -695,6 +712,7 @@ var WorkbenchChatModel = (function () {
     deleteChat: deleteChat,
     toTask: toTask,
     compactChat: compactChat,
+    generateMemory: generateMemory,
     interrupt: interrupt,
     uploadFiles: uploadFiles,
     sendMessage: sendMessage,
@@ -1372,7 +1390,7 @@ function wbcPageContextMenuPlacement(clientX, clientY, avoidRect) {
   var margin = 8;
   var gap = 8;
   var width = 220;
-  var height = 166;
+  var height = 206;
   var viewportWidth = Math.max(width + (margin * 2), Number(window.innerWidth) || 0);
   var viewportHeight = Math.max(height + (margin * 2), Number(window.innerHeight) || 0);
   function clamp(left, top) {
@@ -2962,6 +2980,12 @@ function WorkbenchChatPage({ active, project, newChatRequestId, onOpenTask, onAc
     var zones = document.createElement("div");
     zones.className = "wbc-split-drop-zones";
     zones.setAttribute("role", "presentation");
+    // A conversation keeps the width of the pane under its own grip while
+    // moving between sides. The main pane and split pane are often different
+    // widths, so the landing highlight must not always borrow the split
+    // track's width.
+    if (panelW) zones.style.setProperty("--wbc-split-drop-width", panelW + "px");
+    zones.setAttribute("data-conversation-side", previewConversationSide);
     zones.innerHTML = ""
       + '<div class="wbc-split-drop-zone wbc-split-drop-left" data-zone="left">'
       + '<span class="wbc-chat-side-drop-hint" role="status">' + wbcEscapeHtml(wbcT("workbenchChat.splitDropLeft", "Release to move the split to the left side")) + '</span>'
@@ -3033,6 +3057,7 @@ function WorkbenchChatPage({ active, project, newChatRequestId, onOpenTask, onAc
         // main grip the split anchor is the opposite side, so merely starting
         // a drag over the main pane can no longer exchange the two panes.
         previewConversationSide = zone;
+        zones.setAttribute("data-conversation-side", previewConversationSide);
         setSplitSideDirect(wbcSplitSideForDraggedConversation(zone, fromMainGrip));
       }
     }
@@ -3159,6 +3184,7 @@ function WorkbenchChatPage({ active, project, newChatRequestId, onOpenTask, onAc
   // True while the backend reads the whole conversation and synthesizes a task.
   var [toTaskBusy, setToTaskBusy] = useWbcState(false);
   var [compactBusy, setCompactBusy] = useWbcState(false);
+  var [memoryLearningBusy, setMemoryLearningBusy] = useWbcState(false);
   var [pageContextMenu, setPageContextMenu] = useWbcState(null);
   var pageContextMenuRef = useWbcRef(null);
   var pendingPageContextMenuRef = useWbcRef(null);
@@ -4458,7 +4484,6 @@ function WorkbenchChatPage({ active, project, newChatRequestId, onOpenTask, onAc
   var pageRef = useWbcRef(null);
   var [chatDragSession, setChatDragSession] = useWbcState(false);
   var [chatSideDropActive, setChatSideDropActive] = useWbcState(false);
-  var chatSideDropClearTimerRef = useWbcRef(null);
 
   useWbcEffect(function () {
     function onDocumentDragStart(event) {
@@ -4467,15 +4492,28 @@ function WorkbenchChatPage({ active, project, newChatRequestId, onOpenTask, onAc
       if (!wbcHasChatDrag(event)) return;
       setChatDragSession(true);
     }
+    // Derive the preview from the pointer's page-level position. The right
+    // target and main grid both move when the preview reserves its split
+    // track; relying on the target element's dragleave would interpret that
+    // layout motion as the pointer leaving and expand the composer again.
+    function onDocumentChatDragOver(event) {
+      if (!wbcHasChatDrag(event)) return;
+      var inside = wbcChatSideDropZone(event);
+      setChatSideDropActive(function (current) {
+        return current === inside ? current : inside;
+      });
+    }
     function onDocumentDragEnd() {
       setChatDragSession(false);
       setChatSideDropActive(false);
     }
     document.addEventListener("dragstart", onDocumentDragStart);
+    document.addEventListener("dragover", onDocumentChatDragOver, true);
     document.addEventListener("dragend", onDocumentDragEnd);
     document.addEventListener("drop", onDocumentDragEnd);
     return function () {
       document.removeEventListener("dragstart", onDocumentDragStart);
+      document.removeEventListener("dragover", onDocumentChatDragOver, true);
       document.removeEventListener("dragend", onDocumentDragEnd);
       document.removeEventListener("drop", onDocumentDragEnd);
     };
@@ -4483,36 +4521,16 @@ function WorkbenchChatPage({ active, project, newChatRequestId, onOpenTask, onAc
 
   function handleSideLayerDragOver(event) {
     if (!wbcHasChatDrag(event)) return;
-    if (chatSideDropClearTimerRef.current) {
-      clearTimeout(chatSideDropClearTimerRef.current);
-      chatSideDropClearTimerRef.current = null;
-    }
     event.preventDefault();
     event.stopPropagation();
     if (event.dataTransfer) event.dataTransfer.dropEffect = "move";
     setChatSideDropActive(true);
   }
 
-  function handleSideLayerDragLeave(event) {
-    if (event.currentTarget.contains(event.relatedTarget)) return;
-    // Dragleave fires between element transitions with a null relatedTarget,
-    // so clearing immediately would fight the dragover highlight. Defer the
-    // clear; an in-zone dragover cancels it.
-    if (chatSideDropClearTimerRef.current) clearTimeout(chatSideDropClearTimerRef.current);
-    chatSideDropClearTimerRef.current = setTimeout(function () {
-      setChatSideDropActive(false);
-      chatSideDropClearTimerRef.current = null;
-    }, 200);
-  }
-
   function handleSideLayerDrop(event) {
     if (!wbcHasChatDrag(event)) return;
     event.preventDefault();
     event.stopPropagation();
-    if (chatSideDropClearTimerRef.current) {
-      clearTimeout(chatSideDropClearTimerRef.current);
-      chatSideDropClearTimerRef.current = null;
-    }
     setChatSideDropActive(false);
     setChatDragSession(false);
     var payload = wbcReadChatDrag(event);
@@ -4942,6 +4960,26 @@ function WorkbenchChatPage({ active, project, newChatRequestId, onOpenTask, onAc
     });
   }
 
+  function handleGenerateMemory() {
+    if (!activeChat || activeChat.legacy || memoryLearningBusy) return;
+    setMemoryLearningBusy(true);
+    setError("");
+    model.generateMemory(activeChat.id).then(function (payload) {
+      var duplicate = payload && payload.status === "deduplicated";
+      window.CyreneUI.require("feedback").showToast(
+        duplicate
+          ? wbcT("workbenchChat.memoryLearningDeduplicated", "This conversation context has already been submitted for learning.")
+          : wbcT("workbenchChat.memoryLearningQueued", "Project memory learning started."),
+        duplicate ? "warning" : "success"
+      );
+    }).catch(function (err) {
+      setError(wbcErrorText(err));
+      window.CyreneUI.require("feedback").showToast(wbcErrorText(err), "error");
+    }).then(function () {
+      setMemoryLearningBusy(false);
+    });
+  }
+
   function onToggleSide() { setSideVisible(function (v) { return !v; }); }
 
   useWbcEffect(function () {
@@ -5162,11 +5200,15 @@ function WorkbenchChatPage({ active, project, newChatRequestId, onOpenTask, onAc
         + (splitDetailOpen ? " side-agent-split-open" : "")
         + (splitDetailOpen && splitSide === "left" ? " wbc-split-left" : "")
         + (chatSideDropActive ? " wbc-chat-side-drop-active" : "")}
-      style={splitDetailOpen ? { "--wbc-side-track-width": sideAgentSplitWidth + "px" } : undefined}
+      style={{
+        "--wbc-chat-side-preview-width": sideAgentSplitWidth + "px",
+        ...(splitDetailOpen ? { "--wbc-side-track-width": sideAgentSplitWidth + "px" } : {}),
+      }}
       data-active-chat-id={activeChatId || ""}
       data-project-id={projectId || ""}
     >
       {chatFileDropActive && <WorkbenchFileDropOverlay key="file-drop-overlay" label={wbcT("workbenchChat.dropToAttach", "Release to add files to the message input")} />}
+      <div className="wbc-glass-junction" aria-hidden="true" />
       {chatDragSession && (function () {
         var zone = wbcChatSideZoneRect();
         if (!zone) return null;
@@ -5178,14 +5220,11 @@ function WorkbenchChatPage({ active, project, newChatRequestId, onOpenTask, onAc
             className={"wbc-chat-side-drop-layer" + (chatSideDropActive ? " active" : "")}
             style={{ left: left + "px", width: (zone.right - zone.left) + "px" }}
             onDragOver={handleSideLayerDragOver}
-            onDragLeave={handleSideLayerDragLeave}
             onDrop={handleSideLayerDrop}
           >
-            {chatSideDropActive && (
-              <span className="wbc-chat-side-drop-hint" role="status">
-                {wbcT("workbenchChat.dropToOpenSide", "Release to open in the side panel")}
-              </span>
-            )}
+            <span className="wbc-chat-side-drop-hint" role="status">
+              {wbcT("workbenchChat.dropToOpenSide", "Release to open in the side panel")}
+            </span>
           </div>
         );
       })()}
@@ -5299,6 +5338,8 @@ function WorkbenchChatPage({ active, project, newChatRequestId, onOpenTask, onAc
               toTaskBusy={toTaskBusy}
               onCompact={handleCompact}
               compactBusy={compactBusy}
+              onGenerateMemory={handleGenerateMemory}
+              memoryLearningBusy={memoryLearningBusy}
             />
           </div>
         </div>
@@ -6024,6 +6065,8 @@ function WbcRail({ projectId, chats, pinnedChatIds, activeChatId, loading, runni
   var railRef = useWbcRef(null);
   var trackRef = useWbcRef(null);
   var trackMeasuredExpandedRef = useWbcRef(false);
+  var railDragWasActiveRef = useWbcRef(false);
+  var railDragImageCleanupRef = useWbcRef(null);
   var previewCloseTimerRef = useWbcRef(null);
   var dragOriginOrderRef = useWbcRef([]);
   var orderRef = useWbcRef(order);
@@ -6070,6 +6113,10 @@ function WbcRail({ projectId, chats, pinnedChatIds, activeChatId, loading, runni
 
   useWbcEffect(function () {
     return function () { cancelPreviewClose(); };
+  }, []);
+
+  useWbcEffect(function () {
+    return function () { clearRailDragImage(); };
   }, []);
 
   useWbcLayoutEffect(function () {
@@ -6560,20 +6607,115 @@ function WbcRail({ projectId, chats, pinnedChatIds, activeChatId, loading, runni
     return ratio >= 0.22 && ratio <= 0.78 ? "group" : "reorder";
   }
 
+  function chatRailVisualState(chat) {
+    var running = wbcConversationTrackIsRunning(chat, runningChatIds);
+    var rawStatus = String(chat.runStatus || chat.status || "").trim().toLowerCase();
+    var failed = !!chat.failed || !!chat.error || ["error", "failed", "failure", "timeout"].indexOf(rawStatus) >= 0;
+    var attention = !!chat.awaitingUser || !!chat.pendingQuestion || [
+      "awaiting_user", "waiting_for_user", "waiting_for_approval", "needs_input",
+      "waiting_input", "requires_confirmation", "blocked", "review",
+    ].indexOf(rawStatus) >= 0;
+    var completed = ["completed", "complete", "done", "success", "succeeded"].indexOf(rawStatus) >= 0;
+    return {
+      running: running,
+      tone: failed ? " status-failed" : attention ? " status-attention" : completed ? " status-completed" : running ? " status-running" : "",
+      icon: failed ? WBC_ICONS.errorCircle : attention ? WBC_ICONS.alert : completed ? WBC_ICONS.check : WBC_ICONS.file,
+      label: failed
+        ? wbcT("status.failed", "Failed")
+        : attention ? wbcT("workbenchChat.awaitingUser", "Needs input") : "",
+    };
+  }
+
+  function prepareRailDragImage(root, transfer, clientX, clientY) {
+    if (!root || !root.querySelectorAll || !transfer) return;
+    if (railDragImageCleanupRef.current) railDragImageCleanupRef.current();
+    /* Native drag-image capture timing differs across Chromium platforms.
+       Hide that native image and move a real DOM clone with the pointer so the
+       complete card surface and its status icon remain deterministic. */
+    var rect = root.getBoundingClientRect();
+    var host = document.createElement("div");
+    host.className = "wbc-rail wbc-native-chat-drag-image";
+    host.setAttribute("aria-hidden", "true");
+    host.style.position = "fixed";
+    host.style.left = rect.left + "px";
+    host.style.top = rect.top + "px";
+    host.style.width = rect.width + "px";
+    host.style.height = rect.height + "px";
+    host.style.display = "block";
+    host.style.padding = "0";
+    host.style.overflow = "visible";
+    host.style.isolation = "auto";
+    host.style.background = "transparent";
+    host.style.pointerEvents = "none";
+    host.style.zIndex = "2147483647";
+    var sourceStyle = window.getComputedStyle(root);
+    for (var index = 0; index < sourceStyle.length; index += 1) {
+      var property = sourceStyle[index];
+      if (property.indexOf("--") === 0) {
+        host.style.setProperty(property, sourceStyle.getPropertyValue(property));
+      }
+    }
+    var clone = root.cloneNode(true);
+    clone.classList.remove("track-marker-ready", "dragging");
+    clone.querySelectorAll(".track-marker-ready").forEach(function (card) {
+      card.classList.remove("track-marker-ready");
+    });
+    clone.querySelectorAll(".wbc-chat-row-icon").forEach(function (icon) {
+      icon.style.opacity = "1";
+    });
+    clone.style.width = rect.width + "px";
+    clone.style.height = rect.height + "px";
+    clone.style.margin = "0";
+    clone.style.opacity = "1";
+    clone.style.transform = "none";
+    host.appendChild(clone);
+    document.body.appendChild(host);
+    var grabX = Math.max(0, Math.min(rect.width, clientX - rect.left));
+    var grabY = Math.max(0, Math.min(rect.height, clientY - rect.top));
+    function moveDragImage(event) {
+      var x = Number(event && event.clientX);
+      var y = Number(event && event.clientY);
+      if (!Number.isFinite(x) || !Number.isFinite(y) || (x === 0 && y === 0)) return;
+      host.style.left = (x - grabX) + "px";
+      host.style.top = (y - grabY) + "px";
+    }
+    function finishDragImage() {
+      clearRailDragImage();
+    }
+    document.addEventListener("drag", moveDragImage, true);
+    document.addEventListener("dragover", moveDragImage, true);
+    document.addEventListener("drop", finishDragImage, true);
+    var canvas = document.createElement("canvas");
+    canvas.width = 1;
+    canvas.height = 1;
+    transfer.setDragImage(canvas, 0, 0);
+    railDragImageCleanupRef.current = function () {
+      document.removeEventListener("drag", moveDragImage, true);
+      document.removeEventListener("dragover", moveDragImage, true);
+      document.removeEventListener("drop", finishDragImage, true);
+      host.remove();
+      railDragImageCleanupRef.current = null;
+    };
+  }
+
+  function clearRailDragImage() {
+    if (railDragImageCleanupRef.current) railDragImageCleanupRef.current();
+  }
+
   function renderDropClone(chat) {
     if (!chat) return null;
-    var chatRunning = !!(runningChatIds && runningChatIds[chat.id]) || chat.status === "running";
+    var visualState = chatRailVisualState(chat);
     return (
-      <div className="wbc-chat-card wbc-chat-group-drop-clone" aria-hidden="true">
+      <div className={"wbc-chat-card wbc-chat-group-drop-clone" + visualState.tone} aria-hidden="true">
         <span className="wbc-chat-card-top">
-          <span className="wbc-chat-row-icon" aria-hidden="true">{WBC_ICONS.file}</span>
+          <span className="wbc-chat-row-icon" aria-hidden="true">{visualState.icon}</span>
           <span className="wbc-chat-card-title">
             <b><WbcHoverMarquee text={chat.title || wbcT("workbenchChat.newChat", "New chat")} /></b>
           </span>
           <time className="wbc-chat-card-time">{wbcFormatTime(chat.updatedAt || chat.createdAt)}</time>
         </span>
         <span className="wbc-chat-card-preview">
-          {chatRunning ? <i className="wbc-running-dot" /> : null}
+          {visualState.running ? <i className="wbc-running-dot" /> : null}
           <WbcHoverMarquee text={chat.preview || wbcT("workbenchChat.noMessages", "No messages yet")} />
         </span>
       </div>
@@ -6583,24 +6725,18 @@ function WbcRail({ projectId, chats, pinnedChatIds, activeChatId, loading, runni
   function renderChatCard(chat, options) {
     options = options || {};
     var active = chat.id === activeChatId;
-    var chatRunning = !!(runningChatIds && runningChatIds[chat.id]) || chat.status === "running";
-    /* The lightweight list payload keeps the persisted lifecycle in `status`
-       and exposes the latest run outcome in `runStatus`.  The rail is showing
-       the outcome of the conversation, so prefer that derived value; falling
-       back preserves compatibility with cached/legacy payloads. */
-    var rawChatStatus = String(chat.runStatus || chat.status || "").trim().toLowerCase();
-    var chatFailed = !!chat.failed || !!chat.error || ["error", "failed", "failure"].indexOf(rawChatStatus) >= 0;
-    var chatAttention = !!chat.awaitingUser || !!chat.pendingQuestion || ["awaiting_user", "needs_input", "waiting_input", "requires_confirmation", "blocked"].indexOf(rawChatStatus) >= 0;
-    var chatCompleted = ["completed", "complete", "done", "success", "succeeded"].indexOf(rawChatStatus) >= 0;
-    var chatStatusTone = chatFailed ? " status-failed" : chatAttention ? " status-attention" : chatCompleted ? " status-completed" : chatRunning ? " status-running" : "";
-    var chatStatusIcon = chatFailed ? WBC_ICONS.errorCircle : chatAttention ? WBC_ICONS.alert : chatCompleted ? WBC_ICONS.check : WBC_ICONS.file;
-    var chatStatusLabel = chatFailed
-      ? wbcT("status.failed", "Failed")
-      : chatAttention ? wbcT("workbenchChat.awaitingUser", "Needs input") : "";
+    /* Keep real rows and drag-preview clones on one status mapping so a chat
+       cannot change icon merely because it is being grouped. */
+    var visualState = chatRailVisualState(chat);
+    var chatRunning = visualState.running;
+    var chatStatusTone = visualState.tone;
+    var chatStatusIcon = visualState.icon;
+    var chatStatusLabel = visualState.label;
     var chatTrackState = wbcConversationTrackState(chat, runningChatIds, newResultChatIds);
     var chatTrackGeometry = trackGeometryByChatId[String(chat.id)] || null;
     var chatTrackMarkerReady = !!(
-      chatTrackState
+      !dragState
+      && chatTrackState
       && chatTrackGeometry
       && Number.isFinite(Number(chatTrackGeometry.position))
       && Number.isFinite(Number(chatTrackGeometry.expandedX))
@@ -6657,12 +6793,12 @@ function WbcRail({ projectId, chats, pinnedChatIds, activeChatId, loading, runni
           suppressClickRef.current = id;
           setMenuId("");
           wbcSetChatDrag(event, chat);
-          var cardRect = event.currentTarget.getBoundingClientRect();
           if (event.dataTransfer) {
-            event.dataTransfer.setDragImage(
+            prepareRailDragImage(
               event.currentTarget,
-              Math.max(0, Math.min(cardRect.width, event.clientX - cardRect.left)),
-              Math.max(0, Math.min(cardRect.height, event.clientY - cardRect.top))
+              event.dataTransfer,
+              event.clientX,
+              event.clientY
             );
           }
           var sourceGroup = wbcFindChatGroup(groups, id);
@@ -6761,6 +6897,7 @@ function WbcRail({ projectId, chats, pinnedChatIds, activeChatId, loading, runni
           setDragState(null);
         }}
         onDragEnd={function () {
+          clearRailDragImage();
           if (!dropCommittedRef.current) setOrder(dragOriginOrderRef.current);
           dropCommittedRef.current = false;
           setDragState(null);
@@ -6971,12 +7108,12 @@ function WbcRail({ projectId, chats, pinnedChatIds, activeChatId, loading, runni
               setMenuId("");
               wbcSetChatGroupDrag(event, group, projectId);
               var frame = event.currentTarget.closest(".wbc-chat-group") || event.currentTarget;
-              var frameRect = frame.getBoundingClientRect();
               if (event.dataTransfer) {
-                event.dataTransfer.setDragImage(
+                prepareRailDragImage(
                   frame,
-                  Math.max(0, Math.min(frameRect.width, event.clientX - frameRect.left)),
-                  Math.max(0, Math.min(frameRect.height, event.clientY - frameRect.top))
+                  event.dataTransfer,
+                  event.clientX,
+                  event.clientY
                 );
               }
               setDragState({
@@ -6992,6 +7129,7 @@ function WbcRail({ projectId, chats, pinnedChatIds, activeChatId, loading, runni
               });
             }}
             onDragEnd={function () {
+              clearRailDragImage();
               if (!dropCommittedRef.current) setOrder(dragOriginOrderRef.current);
               dropCommittedRef.current = false;
               setDragState(null);
@@ -7072,6 +7210,23 @@ function WbcRail({ projectId, chats, pinnedChatIds, activeChatId, loading, runni
       return String(item.group && item.group.id || "") + ":" + (collapsedGroups[item.group && item.group.id] ? "closed" : "open");
     }).join(","),
   ].join("|");
+  /* Group-drop previews temporarily replace one flat row with a taller group
+     frame. Suspend the floating status layer while that preview is visible;
+     the cards keep showing their own status icons, and the dependency below
+     remeasures the overlay as soon as the real list is restored. */
+  var railDragActive = !!dragState;
+
+  useWbcLayoutEffect(function () {
+    if (railDragActive) {
+      railDragWasActiveRef.current = true;
+      return;
+    }
+    if (!railDragWasActiveRef.current) return;
+    railDragWasActiveRef.current = false;
+    /* Do not paint the pre-drag overlay coordinates for a frame while the
+       restored flat list is waiting for its next measurement. */
+    setTrackGeometryByChatId({});
+  }, [railDragActive, projectId]);
 
   useWbcLayoutEffect(function () {
     trackMeasuredExpandedRef.current = false;
@@ -7089,7 +7244,7 @@ function WbcRail({ projectId, chats, pinnedChatIds, activeChatId, loading, runni
        ResizeObserver fires while the hidden list is becoming visible; using
        those transient rectangles rewrites `top` for one paint and makes the
        marker flash before its transform animation can take over. */
-    if (renderedRailMotionPhase) return undefined;
+    if (renderedRailMotionPhase || railDragActive) return undefined;
     if (collapsed && trackMeasuredExpandedRef.current) return undefined;
     if (!collapsed) trackMeasuredExpandedRef.current = true;
     var rail = railRef.current;
@@ -7159,7 +7314,7 @@ function WbcRail({ projectId, chats, pinnedChatIds, activeChatId, loading, runni
       window.removeEventListener("resize", measure);
       if (observer) observer.disconnect();
     };
-  }, [collapsed, projectId, visibleTrackLayoutKey, renderedRailMotionPhase]);
+  }, [collapsed, projectId, visibleTrackLayoutKey, renderedRailMotionPhase, railDragActive]);
 
   var statusTrackItems = wbcConversationTrackPositions(orderedChats.map(function (chat, index) {
     return {
@@ -7346,7 +7501,7 @@ function WbcRail({ projectId, chats, pinnedChatIds, activeChatId, loading, runni
         <span className="wbc-sr-only" aria-live="polite">{announcement}</span>
       </div>
       <div ref={trackRef} className="wbc-conversation-status-track" role="navigation" aria-label={wbcT("workbenchChat.track.label", "Conversation status map")}>
-        {statusTrackItems.map(function (item) {
+        {!railDragActive && statusTrackItems.map(function (item) {
           var chat = item.chat;
           var previewOpen = previewChatId === String(chat.id);
           var answerState = previewAnswerState.chatId === String(chat.id)
@@ -9415,17 +9570,6 @@ function WbcMain({ project, chat, chatSummary, loading, runtime, error, errorKin
           </button>
         </div>
       )}
-      {showScrollToBottom && (
-        <button
-          type="button"
-          className="wbc-scroll-to-bottom"
-          onClick={scrollToConversationBottom}
-          title={wbcT("workbenchChat.navigation.backToBottom", "Back to latest message")}
-          aria-label={wbcT("workbenchChat.navigation.backToBottom", "Back to latest message")}
-        >
-          <span aria-hidden="true">{WBC_ICONS.chevronsRight}</span>
-        </button>
-      )}
       <div className="wbc-browser-movement-region">
         <WbcBrowserFloatingSurface
           browserState={browserState}
@@ -9454,6 +9598,17 @@ function WbcMain({ project, chat, chatSummary, loading, runtime, error, errorKin
         running={running}
         error={error}
         errorKind={errorKind}
+        topOverlay={showScrollToBottom ? (
+          <button
+            type="button"
+            className="wbc-scroll-to-bottom"
+            onClick={scrollToConversationBottom}
+            title={wbcT("workbenchChat.navigation.backToBottom", "Back to latest message")}
+            aria-label={wbcT("workbenchChat.navigation.backToBottom", "Back to latest message")}
+          >
+            <span aria-hidden="true">{WBC_ICONS.chevronsRight}</span>
+          </button>
+        ) : null}
         onSend={onSend}
         onGuidance={onGuidance}
         onInterrupt={onInterrupt}
@@ -10291,7 +10446,7 @@ function wbcSaveWorkspaceOverride(key, path, ns) {
   } catch (e) {}
 }
 
-function WbcComposer({ chat, project, runtime, running, onSend, onGuidance, onInterrupt, draftNamespace, autoFocus, clearOnSend, error, errorKind, compact, placeholder, runningPlaceholder, hideDisclaimer }) {
+function WbcComposer({ chat, project, runtime, running, onSend, onGuidance, onInterrupt, draftNamespace, autoFocus, clearOnSend, error, errorKind, compact, placeholder, runningPlaceholder, hideDisclaimer, topOverlay }) {
   var model = WorkbenchChatModel;
   var chatId = chat ? chat.id : "";
   var projectId = (project && project.id) || "";
@@ -10864,6 +11019,7 @@ function WbcComposer({ chat, project, runtime, running, onSend, onGuidance, onIn
     return (
       <div className={"wbc-composer" + (compact ? " compact" : "")}>
         <div className="wbc-composer-box wbc-composer-readonly">
+          {topOverlay}
           {wbcT("workbenchChat.legacyReadonly", "This is an archived legacy session — read-only. Start a new chat to continue the topic.")}
         </div>
       </div>
@@ -10882,6 +11038,7 @@ function WbcComposer({ chat, project, runtime, running, onSend, onGuidance, onIn
         </div>
       )}
       <div className="wbc-composer-box">
+        {topOverlay}
         {attachments.length > 0 && (
           <div className="wbc-attach-row">
             {attachments.map(function (file, i) {
@@ -14351,7 +14508,7 @@ function WbcOverviewUsage({ usage }) {
   );
 }
 
-function WbcQuickActionItems({ chat, menu, onBeforeAction, onRename, onDelete, onToTask, toTaskBusy, onCompact, compactBusy }) {
+function WbcQuickActionItems({ chat, menu, onBeforeAction, onRename, onDelete, onToTask, toTaskBusy, onCompact, compactBusy, onGenerateMemory, memoryLearningBusy }) {
   function run(action) {
     return function () {
       if (onBeforeAction) onBeforeAction();
@@ -14367,6 +14524,12 @@ function WbcQuickActionItems({ chat, menu, onBeforeAction, onRename, onDelete, o
         <button type="button" role={role} disabled={compactBusy} onClick={run(onCompact)}>
           {compactBusy ? <span className="wbc-spinner" aria-hidden="true"></span> : WBC_ICONS.compact}
           <span>{wbcT(compactBusy ? "workbenchChat.compactBusy" : "workbenchChat.compact", compactBusy ? "Compressing…" : "Compress chat")}</span>
+        </button>
+      )}
+      {!chat.legacy && onGenerateMemory && (
+        <button type="button" role={role} disabled={memoryLearningBusy} onClick={run(onGenerateMemory)}>
+          {memoryLearningBusy ? <span className="wbc-spinner" aria-hidden="true"></span> : WBC_ICONS.spark}
+          <span>{wbcT(memoryLearningBusy ? "workbenchChat.generateMemoryBusy" : "workbenchChat.generateMemory", memoryLearningBusy ? "Starting memory learning…" : "Generate memory")}</span>
         </button>
       )}
       <button type="button" role={role} className="danger" onClick={run(onDelete)}>{WBC_ICONS.trash}<span>{wbcT("workbenchChat.delete", "Delete chat")}</span></button>

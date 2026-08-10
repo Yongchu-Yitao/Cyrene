@@ -586,11 +586,14 @@
             h(MetaLine, { label: L("library.language", "Language"), value: item.language, showEmpty: true }), h(MetaLine, { label: L("library.addedAt", "Added"), value: formatDate(item.added_at || item.created_at, true), showEmpty: true }),
             h(MetaLine, { label: L("library.updated", "Updated"), value: formatDate(item.updated_at, true), showEmpty: true }),
             h(MetaLine, { label: L("library.attachment", "Attachment"), value: attachment && (attachment.filename || attachment.name), showEmpty: true }))),
-      h("div", { className: "wb-lib-work-cards", role: "region", tabIndex: 0, "aria-label": L("library.summaryNotesTags", "Summary, notes and tags") },
-        h("section", { className: "wb-lib-work-card" }, h("h3", null, L("library.abstract", "Abstract")), h("p", null, item.abstract || L("library.noAbstract", "No abstract available"))),
-        h("section", { className: "wb-lib-work-card" }, h("div", { className: "wb-lib-work-head" }, h("h3", null, L("library.notes", "Notes")), h("button", { type: "button", onClick: function () { props.onTab("notes"); } }, icon("plus", 14), " ", L("library.addNote", "Add note"))),
-          notes.length ? h(React.Fragment, null, h("p", null, notes[0].content || notes[0].text || ""), h("small", null, notes[0].author || L("common.me", "Me"), " · ", formatDate(notes[0].updated_at || notes[0].created_at))) : h("p", { className: "wb-lib-muted" }, L("library.noNotes", "No notes yet."))),
-        h("section", { className: "wb-lib-work-card" }, h("h3", null, L("library.tags", "Tags")), h("div", { className: "wb-lib-tag-list" }, itemTags(item).map(function (tag) { return h("span", { key: tag }, tag); }), h("button", { type: "button", onClick: function () { props.onTab("tags"); } }, icon("plus", 14), " ", L("library.addTag", "Add tag"))))));
+      h("div", { className: "wb-lib-work-pane" },
+        props.navigation,
+        props.tab === "info" ? h("div", { className: "wb-lib-work-cards", role: "region", tabIndex: 0, "aria-label": L("library.summaryNotesTags", "Summary, notes and tags") },
+          h("section", { className: "wb-lib-work-card" }, h("h3", null, L("library.abstract", "Abstract")), h("p", null, item.abstract || L("library.noAbstract", "No abstract available"))),
+          h("section", { className: "wb-lib-work-card" }, h("div", { className: "wb-lib-work-head" }, h("h3", null, L("library.notes", "Notes")), h("button", { type: "button", onClick: function () { props.onTab("notes"); } }, icon("plus", 14), " ", L("library.addNote", "Add note"))),
+            notes.length ? h(React.Fragment, null, h("p", null, notes[0].content || notes[0].text || ""), h("small", null, notes[0].author || L("common.me", "Me"), " · ", formatDate(notes[0].updated_at || notes[0].created_at))) : h("p", { className: "wb-lib-muted" }, L("library.noNotes", "No notes yet."))),
+          h("section", { className: "wb-lib-work-card" }, h("h3", null, L("library.tags", "Tags")), h("div", { className: "wb-lib-tag-list" }, itemTags(item).map(function (tag) { return h("span", { key: tag }, tag); }), h("button", { type: "button", onClick: function () { props.onTab("tags"); } }, icon("plus", 14), " ", L("library.addTag", "Add tag"))))) :
+          h("div", { className: "wb-lib-work-pane-body" }, props.activeContent)));
   }
 
   function NotesWorkspace(props) {
@@ -668,8 +671,8 @@
     var panelHeight = heightState[0]; var setPanelHeight = heightState[1];
     var resizeRef = useRef(null);
     var tabs = [
-      { id: "info", label: "信息" }, { id: "notes", label: "笔记" }, { id: "tags", label: "标签" },
-      { id: "relations", label: "关联" }, { id: "attachments", label: "附件" }, { id: "citation", label: "引用" },
+      { id: "info", label: L("library.info", "信息") }, { id: "notes", label: L("library.notes", "笔记") }, { id: "tags", label: L("library.tags", "标签") },
+      { id: "relations", label: L("library.relations", "关联") }, { id: "attachments", label: L("library.attachments", "附件") }, { id: "citation", label: L("library.citation", "引用") },
     ];
 
     function heightBounds(handle) {
@@ -739,7 +742,13 @@
         onKeyDown: resizeWithKeyboard,
         onDoubleClick: resetHeight,
       }, icon("menu", 15)),
-      h("nav", { className: "wb-lib-work-tabs", "aria-label": "文献详情标签" },
+      h("div", { className: "wb-lib-work-body info" }, props.loading ? h(StatePanel, { loading: true, title: "正在加载文献详情…" }) : h(InfoWorkspace, {
+        item: props.item,
+        rawUrl: props.rawUrl,
+        onUpdate: props.onUpdate,
+        onTab: props.onTab,
+        tab: props.tab,
+        navigation: h("nav", { className: "wb-lib-work-tabs", "aria-label": "文献详情标签" },
         tabs.map(function (tab) {
           return h("button", {
             key: tab.id,
@@ -749,13 +758,12 @@
           }, tab.label);
         }),
         h("button", { type: "button", className: "wb-lib-work-tabs-more", title: "更多", "aria-label": "更多" }, icon("menu", 17))),
-      h("div", { className: "wb-lib-work-body" + (props.tab === "info" ? " info" : "") }, props.loading ? h(StatePanel, { loading: true, title: "正在加载文献详情…" }) :
-        props.tab === "info" ? h(InfoWorkspace, { item: props.item, rawUrl: props.rawUrl, onUpdate: props.onUpdate, onTab: props.onTab }) :
-          props.tab === "notes" ? h(NotesWorkspace, { item: props.item, onAdd: props.onAddNote }) :
-            props.tab === "tags" ? h(TagsWorkspace, { item: props.item, onUpdate: props.onUpdate }) :
-              props.tab === "relations" ? h(RelationsWorkspace, { item: props.item }) :
-                props.tab === "attachments" ? h(AttachmentsWorkspace, { item: props.item, rawUrl: props.rawUrl }) :
-                  h(CitationWorkspace, props.citationProps)));
+        activeContent: props.tab === "notes" ? h(NotesWorkspace, { item: props.item, onAdd: props.onAddNote }) :
+          props.tab === "tags" ? h(TagsWorkspace, { item: props.item, onUpdate: props.onUpdate }) :
+            props.tab === "relations" ? h(RelationsWorkspace, { item: props.item }) :
+              props.tab === "attachments" ? h(AttachmentsWorkspace, { item: props.item, rawUrl: props.rawUrl }) :
+                props.tab === "citation" ? h(CitationWorkspace, props.citationProps) : null,
+      })));
   }
 
   function RightMetadataEditor(props) {
@@ -892,10 +900,11 @@
     useEffect(function () {
       if (scrollRef.current) scrollRef.current.scrollTop = 0;
     }, [props.item && props.item.id, props.tab]);
-    if (!props.item) return h("aside", { className: "wb-lib-right empty" }, h("div", null, icon("panel", 34), h("p", null, "选择一个知识条目查看详情")));
+    if (!props.item) return h("aside", { className: "wb-floating-detail-shell wb-lib-right empty" },
+      h("div", { className: "wb-floating-detail-card wb-lib-right-panel-card empty" },
+        h("div", { className: "wb-detail-empty-state wb-lib-right-placeholder" }, icon("panel", 34), h("p", null, L("library.selectToView", "Select a knowledge item to view details")))));
     var item = props.item;
     var attachment = Array.isArray(item.attachments) && item.attachments[0];
-    var relations = Array.isArray(item.relations) ? item.relations : [];
     var annotations = Array.isArray(item.annotations) ? item.annotations : [];
     var embedding = item.embedding_status || {};
     var embeddingLabel = {
@@ -907,37 +916,60 @@
     var embeddingValue = embedding.state === "partial"
       ? embeddingLabel + " · " + Number(embedding.compatible_chunks || 0) + "/" + Number(embedding.total_chunks || 0)
       : embeddingLabel;
-    return h("aside", { className: "wb-lib-right" + (props.open ? " open" : "") },
-      h("nav", { className: "wb-lib-right-tabs" },
-        [{ id: "detail", label: "详情" }, { id: "content", label: "内容" }, { id: "related", label: "关联" }].map(function (tab) { return h("button", { key: tab.id, type: "button", className: props.tab === tab.id ? "active" : "", onClick: function () { props.onTab(tab.id); if (tab.id === "content" && props.onContentViewed) props.onContentViewed(); } }, tab.label); }),
-        h("button", { type: "button", className: "wb-lib-right-delete", disabled: !props.onDelete, onClick: props.onDelete, title: "移至回收站", "aria-label": "移至回收站" }, icon("trash", 15)),
-        h("button", { type: "button", className: "wb-lib-right-close", onClick: props.onClose, title: "关闭详情" }, icon("close", 15))),
-      h("div", {
-        className: "wb-lib-right-scroll",
-        ref: scrollRef,
-        onScroll: function () {
-          if (props.tab === "content" && props.onContentViewed) props.onContentViewed();
-        },
-        onWheelCapture: function () {
-          if (props.tab === "content" && props.onContentViewed) props.onContentViewed();
-        },
+    function panelBody(tabId) { return h("div", {
+      className: "wb-lib-right-scroll",
+      ref: props.tab === tabId ? scrollRef : null,
+      onScroll: function () {
+        if (tabId === "content" && props.onContentViewed) props.onContentViewed();
       },
-        h("header", { className: "wb-lib-right-head" }, h(PdfMark, { item: item }), h("b", { title: itemTitle(item) }, itemTitle(item)), hasAttachment(item) && h("a", { href: props.rawUrl, target: "_blank", rel: "noreferrer", title: "查看附件" }, icon("eye", 17))),
-        props.tab === "detail" && editing && h(RightMetadataEditor, { item: item, onSave: props.onUpdate, onCancel: function () { setEditing(false); } }),
-        props.tab === "detail" && !editing && h(React.Fragment, null,
-          h("p", { className: "wb-lib-right-abstract" }, item.abstract || "无摘要信息"),
-          h("section", null, h("h3", null, "文件信息"), h("div", { className: "wb-lib-right-card" },
-            h(MetaLine, { label: "文件大小", value: formatBytes(attachment && attachment.size) }), h(MetaLine, { label: "页数", value: attachment && attachment.page_count }),
-            h(MetaLine, { label: "创建时间", value: formatDate(item.created_at, true) }), h(MetaLine, { label: "修改时间", value: formatDate(item.updated_at, true) }),
-            h(MetaLine, { label: "来源", value: item.provider === "zotero" ? "Zotero" : (item.provider || "Cyrene") }),
-            embedding.state && h(MetaLine, { label: L("library.embeddingStatus", "Vector status"), value: embeddingValue }))),
-          h(CollectionMembership, { item: item, collections: props.collections, onUpdate: props.onCollectionsUpdate }),
-          h("section", null, h("div", { className: "wb-lib-right-section-head" }, h("h3", null, "引用格式"), h(CitationCopyControl, { citation: props.citation, bibtex: props.bibtex, onCopy: props.onCopyCitation })), h("div", { className: "wb-lib-right-card wb-lib-right-citation" }, props.citationLoading ? h(Spinner) : (props.citation || "暂无可用引用。"))),
-          h("section", null, h("h3", null, "关联条目"), h("div", { className: "wb-lib-right-card wb-lib-right-relations" }, relations.slice(0, 3).map(function (relation, index) { return h("p", { key: relation.id || index }, (index + 1) + ". ", relation.other_title || relation.title || relation.target_title || "关联条目"); }), !relations.length && h("p", { className: "wb-lib-muted" }, "暂无关联条目"))),
-          h("button", { type: "button", className: "wb-lib-right-edit-button", onClick: function () { setEditing(true); } }, icon("note", 15), "编辑信息")),
-        props.tab === "content" && h(ContentPreview, { item: item, rawUrl: props.rawUrl, annotations: annotations, onViewed: props.onContentViewed }),
-        props.tab === "related" && h(RelationsWorkspace, { item: item })),
-      h("button", { type: "button", className: "wb-lib-detail-fab", onClick: props.onClose, title: "关闭详情" }, icon("panel", 17)));
+      onWheelCapture: function () {
+        if (tabId === "content" && props.onContentViewed) props.onContentViewed();
+      },
+    },
+      h("header", { className: "wb-lib-right-head" }, h(PdfMark, { item: item }), h("b", { title: itemTitle(item) }, itemTitle(item)), hasAttachment(item) && h("a", { href: props.rawUrl, target: "_blank", rel: "noreferrer", title: "查看附件" }, icon("eye", 17))),
+      tabId === "detail" && editing && h(RightMetadataEditor, { item: item, onSave: props.onUpdate, onCancel: function () { setEditing(false); } }),
+      tabId === "detail" && !editing && h(React.Fragment, null,
+        h("p", { className: "wb-lib-right-abstract" }, item.abstract || "无摘要信息"),
+        h("section", null, h("h3", null, "文件信息"), h("div", { className: "wb-lib-right-card" },
+          h(MetaLine, { label: "文件大小", value: formatBytes(attachment && attachment.size) }), h(MetaLine, { label: "页数", value: attachment && attachment.page_count }),
+          h(MetaLine, { label: "创建时间", value: formatDate(item.created_at, true) }), h(MetaLine, { label: "修改时间", value: formatDate(item.updated_at, true) }),
+          h(MetaLine, { label: "来源", value: item.provider === "zotero" ? "Zotero" : (item.provider || "Cyrene") }),
+          embedding.state && h(MetaLine, { label: L("library.embeddingStatus", "Vector status"), value: embeddingValue }))),
+        h(CollectionMembership, { item: item, collections: props.collections, onUpdate: props.onCollectionsUpdate }),
+        h("button", { type: "button", className: "wb-lib-right-edit-button", onClick: function () { setEditing(true); } }, icon("note", 15), "编辑信息")),
+      tabId === "content" && h(ContentPreview, { item: item, rawUrl: props.rawUrl, annotations: annotations, onViewed: props.onContentViewed }),
+      tabId === "notes" && h(NotesWorkspace, { item: item, onAdd: props.onAddNote }),
+      tabId === "tags" && h(TagsWorkspace, { item: item, onUpdate: props.onUpdate }),
+      tabId === "related" && h(RelationsWorkspace, { item: item }),
+      tabId === "attachments" && h(AttachmentsWorkspace, { item: item, rawUrl: props.rawUrl }),
+      tabId === "citation" && h(CitationWorkspace, props.citationProps)); }
+    return h("aside", { className: "wb-floating-detail-shell wb-lib-right" + (props.open ? " open" : ""), "aria-label": L("library.detailPanel", "Knowledge details") },
+      h("div", { className: "wb-floating-detail-card wb-lib-right-panel-card" },
+        h("nav", { className: "wb-detail-accordion wb-lib-right-tabs", "aria-label": L("library.detailPanel", "Knowledge details") },
+          h("div", { className: "wb-detail-accordion-head wb-lib-right-tabs-head" },
+            h("span", null, L("library.detailPanel", "Knowledge details")),
+            h("div", null,
+              h("button", { type: "button", className: "wb-detail-card-delete wb-lib-right-delete", disabled: !props.onDelete, onClick: props.onDelete, title: L("library.moveToTrash", "Move to trash"), "aria-label": L("library.moveToTrash", "Move to trash") }, icon("trash", 15)),
+              h("button", { type: "button", className: "wb-lib-right-close", onClick: props.onClose, title: L("common.close", "Close"), "aria-label": L("common.close", "Close") }, icon("close", 15)))),
+          h("div", { className: "wb-detail-accordion-list wb-lib-right-tab-list" },
+            [
+              { id: "detail", label: L("library.info", "Information"), icon: "note" },
+              { id: "content", label: L("library.content", "Content"), icon: "file" },
+              { id: "notes", label: L("library.notes", "Notes"), icon: "note" },
+              { id: "tags", label: L("library.tags", "Tags"), icon: "tag" },
+              { id: "related", label: L("library.relations", "Relations"), icon: "link" },
+              { id: "attachments", label: L("library.attachments", "Attachments"), icon: "file" },
+              { id: "citation", label: L("library.citation", "Citation"), icon: "copy" },
+            ].map(function (tab) {
+              return h(React.Fragment, { key: tab.id },
+                h("button", { type: "button", className: "wb-detail-accordion-trigger" + (props.tab === tab.id ? " active" : ""), "aria-expanded": props.tab === tab.id, onClick: function () { var next = props.tab === tab.id ? "" : tab.id; props.onTab(next); if (next === "content" && props.onContentViewed) props.onContentViewed(); } },
+                  h("span", { className: "wb-detail-accordion-icon wb-lib-right-tab-icon" }, icon(tab.icon, 17)),
+                  h("span", null, tab.label),
+                  icon("chevron", 14)),
+                h("div", { className: "wb-detail-accordion-panel wb-lib-right-tab-panel" + (props.tab === tab.id ? " open" : ""), "aria-hidden": props.tab !== tab.id },
+                  h("div", { className: "wb-detail-accordion-panel-inner" }, panelBody(tab.id))));
+            }))),
+        h("button", { type: "button", className: "wb-lib-detail-fab", onClick: props.onClose, title: "关闭详情" }, icon("panel", 17))));
   }
 
   function LibraryPdfPreview(props) {
@@ -1109,8 +1141,8 @@
       var creators = form.authors.split(/[;；\n]+/).map(function (name) { return name.trim(); }).filter(Boolean).map(function (name) { return { name: name, creator_type: "author" }; });
       props.onSave(Object.assign({}, form, { year: form.year ? Number(form.year) : null, creators: creators })).then(function () { setBusy(false); props.onClose(); }, function () { setBusy(false); });
     }
-    return h("div", { className: "wb-lib-modal-layer", role: "presentation", onMouseDown: function (event) { if (event.target === event.currentTarget) props.onClose(); } }, h("form", { className: "wb-lib-modal", onSubmit: submit },
-      h("header", null, h("div", null, h("h2", null, "添加知识条目"), h("p", null, "条目只会添加到当前项目。")), h("button", { type: "button", onClick: props.onClose }, icon("close"))),
+    return h("div", { className: "wb-lib-modal-layer", role: "presentation", onMouseDown: function (event) { if (event.target === event.currentTarget) props.onClose(); } }, h("form", { className: "wb-lib-modal", role: "dialog", "aria-modal": "true", "aria-labelledby": "wb-lib-add-title", onSubmit: submit },
+      h("header", null, h("div", null, h("h2", { id: "wb-lib-add-title" }, "添加知识条目"), h("p", null, "条目只会添加到当前项目。")), h("button", { type: "button", onClick: props.onClose, "aria-label": "关闭" }, icon("close"))),
       h("label", null, "标题", h("input", { required: true, autoFocus: true, value: form.title, onChange: function (event) { field("title", event.target.value); }, placeholder: "知识标题" })),
       h("label", null, "作者或贡献者", h("textarea", { value: form.authors, onChange: function (event) { field("authors", event.target.value); }, placeholder: "多人可用分号分隔" })),
       h("div", { className: "wb-lib-modal-grid" }, h("label", null, "年份", h("input", { type: "number", min: 0, max: 9999, value: form.year, onChange: function (event) { field("year", event.target.value); } })), h("label", null, "条目类型", h("select", { value: form.item_type, onChange: function (event) { field("item_type", event.target.value); } }, h("option", { value: "document" }, "普通知识条目"), h("option", { value: "webpage" }, "网页"), h("option", { value: "journalArticle" }, "期刊文章"), h("option", { value: "conferencePaper" }, "会议论文"), h("option", { value: "book" }, "图书"), h("option", { value: "thesis" }, "学位论文"), h("option", { value: "report" }, "报告")))),
@@ -1133,8 +1165,8 @@
       }, function () { setBusy(false); });
     }
     return h("div", { className: "wb-lib-modal-layer", role: "presentation", onMouseDown: function (event) { if (event.target === event.currentTarget) props.onClose(); } },
-      h("form", { className: "wb-lib-modal wb-lib-collection-modal", onSubmit: submit },
-        h("header", null, h("div", null, h("h2", null, "新建收藏夹"), h("p", null, "收藏夹仅保存在当前项目的知识库中。")), h("button", { type: "button", onClick: props.onClose }, icon("close"))),
+      h("form", { className: "wb-lib-modal wb-lib-collection-modal", role: "dialog", "aria-modal": "true", "aria-labelledby": "wb-lib-collection-title", onSubmit: submit },
+        h("header", null, h("div", null, h("h2", { id: "wb-lib-collection-title" }, "新建收藏夹"), h("p", null, "收藏夹仅保存在当前项目的知识库中。")), h("button", { type: "button", onClick: props.onClose, "aria-label": "关闭" }, icon("close"))),
         h("label", null, "名称", h("input", { required: true, autoFocus: true, value: name, onChange: function (event) { setName(event.target.value); }, placeholder: "例如：论文综述" })),
         h("footer", null,
           h("button", { type: "button", className: "wb-lib-secondary", disabled: busy, onClick: props.onClose }, "取消"),
@@ -1151,7 +1183,14 @@
     var sortState = useState("updated_at"); var sort = sortState[0]; var setSort = sortState[1];
     var orderState = useState("desc"); var order = orderState[0]; var setOrder = orderState[1];
     var filterState = useState({ file_type: "", item_type: "", status: "", year: "" }); var filters = filterState[0]; var setFilters = filterState[1];
-    var viewState = useState("table"); var view = viewState[0]; var setView = viewState[1];
+    var viewState = useState(function () {
+      try {
+        var savedView = window.localStorage.getItem("cyrene.library.viewMode");
+        return savedView === "grid" || savedView === "table" ? savedView : "table";
+      } catch (_) {
+        return "table";
+      }
+    }); var view = viewState[0]; var setView = viewState[1];
     var dataState = useState({ items: [], total: 0, stats: {}, collections: [], tags: [] }); var data = dataState[0]; var setData = dataState[1];
     var loadingState = useState(false); var loading = loadingState[0]; var setLoading = loadingState[1];
     var loadingMoreState = useState(false); var loadingMore = loadingMoreState[0]; var setLoadingMore = loadingMoreState[1];
@@ -1163,7 +1202,6 @@
     var batchDeletingState = useState(false); var batchDeleting = batchDeletingState[0]; var setBatchDeleting = batchDeletingState[1];
     var menuState = useState(""); var menu = menuState[0]; var setMenu = menuState[1];
     var contextMenuState = useState(null); var contextMenu = contextMenuState[0]; var setContextMenu = contextMenuState[1];
-    var workTabState = useState("info"); var workTab = workTabState[0]; var setWorkTab = workTabState[1];
     var rightTabState = useState("detail"); var rightTab = rightTabState[0]; var setRightTab = rightTabState[1];
     var rightOpenState = useState(true); var rightOpen = rightOpenState[0]; var setRightOpen = rightOpenState[1];
     var manualState = useState(false); var manualOpen = manualState[0]; var setManualOpen = manualState[1];
@@ -1176,6 +1214,9 @@
     var readMarksRef = useRef({});
 
     useEffect(function () { var timer = setTimeout(function () { setDebouncedQuery(query.trim()); }, 240); return function () { clearTimeout(timer); }; }, [query]);
+    useEffect(function () {
+      try { window.localStorage.setItem("cyrene.library.viewMode", view); } catch (_) {}
+    }, [view]);
     useEffect(function () {
       if (!contextMenu) return undefined;
       function closeContextMenu() { setContextMenu(null); }
@@ -1279,7 +1320,7 @@
     var listItem = useMemo(function () { return data.items.find(function (item) { return String(item.id) === String(selectedId); }) || null; }, [data.items, selectedId]);
     var selectedItem = detail ? Object.assign({}, listItem || {}, detail) : listItem;
 
-    function select(id) { setSelectedId(String(id)); setWorkTab("info"); setRightOpen(true); }
+    function select(id) { setSelectedId(String(id)); setRightTab("detail"); setRightOpen(true); }
     function replaceItem(item) {
       if (!item) return;
       setData(function (prev) { return Object.assign({}, prev, { items: prev.items.map(function (old) { return String(old.id) === String(item.id) ? Object.assign({}, old, item) : old; }) }); });
@@ -1477,7 +1518,7 @@
       client.citation(selectedId, nextStyle).then(function (payload) { setCitation({ style: nextStyle, text: payload.citation || "", bibtex: payload.bibtex || "", citekey: payload.citekey || "", loading: false, error: "" }); }, function (err) { setCitation({ style: nextStyle, text: "", bibtex: "", citekey: "", loading: false, error: String(err.message || err) }); });
     }
     useEffect(function () { setCitation({ style: "ieee", text: "", bibtex: "", citekey: "", loading: false, error: "" }); if (client && selectedId) loadCitation("ieee"); }, [client, selectedId]);
-    useEffect(function () { if (workTab === "citation" && selectedId && !citation.text && !citation.loading && !citation.error) loadCitation(citation.style); }, [workTab]);
+    useEffect(function () { if (rightTab === "citation" && selectedId && !citation.text && !citation.loading && !citation.error) loadCitation(citation.style); }, [rightTab]);
     function copyCitation(format) {
       var value = format === "bibtex" ? citation.bibtex : citation.text;
       if (!value) return;
@@ -1486,6 +1527,8 @@
 
     var scopeTitle = scope.type === "all" ? L("library.title", "Knowledge base") : scope.type === "unclassified" ? L("library.unclassified", "Untagged") : scope.type === "recent_added" ? L("library.recentAdded", "Recently added") : scope.type === "recent_read" ? L("library.recentRead", "Recently read") : scope.type === "starred" ? L("library.starredKnowledge", "Starred knowledge") : scope.type === "trash" ? L("library.trash", "Trash") : (scope.label || L("library.title", "Knowledge base"));
     var activeFilters = [filters.file_type, filters.item_type, filters.status, filters.year].filter(Boolean).length;
+    var sortOptions = [{ id: "updated_at", label: L("library.sortUpdated", "Recently updated") }, { id: "created_at", label: L("library.sortAdded", "Recently added") }, { id: "title", label: L("library.sortTitle", "Title") }, { id: "year", label: L("library.sortYear", "Year") }];
+    var activeSortLabel = (sortOptions.find(function (option) { return option.id === sort; }) || sortOptions[0]).label;
     var citationProps = { style: citation.style, citation: citation.text, bibtex: citation.bibtex, citekey: citation.citekey, loading: citation.loading, error: citation.error, onStyle: loadCitation, onCopy: copyCitation, onRetry: function () { loadCitation(citation.style); } };
     var contextMenuPortal = contextMenu && typeof ReactDOM !== "undefined"
       ? ReactDOM.createPortal(h("div", { className: "wb-lib-context-layer", style: contextMenu.portalTheme },
@@ -1516,24 +1559,25 @@
       h("input", { ref: fileRef, className: "wb-lib-file-input", type: "file", multiple: true, onChange: function (event) { handleFiles(event.target.files); } }),
       h(LibrarySidebar, { onBack: props.onBack, stats: data.stats, collections: data.collections, tags: data.tags, scope: scope, onCreateCollection: function () { setCollectionModalOpen(true); }, onScope: function (next) { setScope(next); setSelectedId(""); setChecked([]); }, sidebarCollapsed: props.sidebarCollapsed, collapseControl: props.collapseControl, moduleDock: props.moduleDock }),
       h("main", { className: "wb-lib-main" },
+        h("div", { className: "wb-workbench-filterbar wb-lib-commandbar" },
         h("header", { className: "wb-lib-main-head" },
           h("div", { className: "wb-lib-heading" }, scope.type !== "all" && h("h2", null, scopeTitle), h("span", null, L("library.count", "{count} items", { count: Number(data.total || 0).toLocaleString() }))),
           h("div", { className: "wb-lib-head-actions" },
-            h("div", { className: "wb-lib-menu-wrap" }, h("button", { type: "button", className: "wb-lib-primary", onClick: function () { setMenu(menu === "add" ? "" : "add"); } }, icon("plus", 16), " ", L("library.addItem", "Add item")), h(Dropdown, { open: menu === "add", onClose: function () { setMenu(""); } }, h("button", { type: "button", onClick: function () { setMenu(""); setManualOpen(true); } }, icon("note", 16), h("span", null, h("b", null, L("library.manualAdd", "Add manually")), h("small", null, L("library.createItem", "Create a knowledge item")))), h("button", { type: "button", onClick: function () { setMenu(""); fileRef.current && fileRef.current.click(); } }, icon("upload", 16), h("span", null, h("b", null, L("library.uploadFile", "Upload file")), h("small", null, L("library.uploadTypes", "Documents, images, audio and video")))))),
-            h("button", { type: "button", className: "wb-lib-head-button", disabled: uploading, onClick: function () { fileRef.current && fileRef.current.click(); } }, uploading ? h(Spinner) : icon("upload", 16), uploading ? L("library.importing", "Importing") : L("library.import", "Import")),
-            h("button", { type: "button", className: "wb-lib-head-button", onClick: exportItems, disabled: !data.items.length }, icon("download", 16), L("library.export", "Export")))),
+            h("div", { className: "wb-lib-menu-wrap" }, h("button", { type: "button", className: "wb-lib-primary", title: L("library.addItem", "Add item"), "aria-label": L("library.addItem", "Add item"), onClick: function () { setMenu(menu === "add" ? "" : "add"); } }, icon("plus", 16), " ", L("library.addItem", "Add item")), h(Dropdown, { open: menu === "add", onClose: function () { setMenu(""); } }, h("button", { type: "button", onClick: function () { setMenu(""); setManualOpen(true); } }, icon("note", 16), h("span", null, h("b", null, L("library.manualAdd", "Add manually")), h("small", null, L("library.createItem", "Create a knowledge item")))), h("button", { type: "button", onClick: function () { setMenu(""); fileRef.current && fileRef.current.click(); } }, icon("upload", 16), h("span", null, h("b", null, L("library.uploadFile", "Upload file")), h("small", null, L("library.uploadTypes", "Documents, images, audio and video")))))),
+            h("button", { type: "button", className: "wb-lib-head-button", title: uploading ? L("library.importing", "Importing") : L("library.import", "Import"), "aria-label": uploading ? L("library.importing", "Importing") : L("library.import", "Import"), disabled: uploading, onClick: function () { fileRef.current && fileRef.current.click(); } }, uploading ? h(Spinner) : icon("upload", 16), uploading ? L("library.importing", "Importing") : L("library.import", "Import")),
+            h("button", { type: "button", className: "wb-lib-head-button", title: L("library.export", "Export"), "aria-label": L("library.export", "Export"), onClick: exportItems, disabled: !data.items.length }, icon("download", 16), L("library.export", "Export")))),
         h("div", { className: "wb-lib-toolbar" },
-          h("label", { className: "wb-lib-search" }, icon("search", 17), h("input", { value: query, onChange: function (event) { setQuery(event.target.value); }, placeholder: L("library.searchPlaceholder", "Search this project's knowledge base…") }), query && h("button", { type: "button", onClick: function () { setQuery(""); }, title: L("library.clearSearch", "Clear search") }, icon("close", 13))),
-          h("div", { className: "wb-lib-tools" },
-            h("div", { className: "wb-lib-menu-wrap" }, h("button", { type: "button", className: "wb-lib-tool" + (activeFilters ? " active" : ""), onClick: function () { setMenu(menu === "filter" ? "" : "filter"); } }, icon("filter", 16), L("library.filter", "Filter"), activeFilters ? h("small", null, activeFilters) : null), h(Dropdown, { open: menu === "filter", onClose: function () { setMenu(""); }, className: "filter" },
+          h("label", { className: "wb-workbench-searchbox wb-lib-search" }, icon("search", 17), h("input", { value: query, onChange: function (event) { setQuery(event.target.value); }, placeholder: L("library.searchPlaceholder", "Search this project's knowledge base…") }), query && h("button", { type: "button", onClick: function () { setQuery(""); }, title: L("library.clearSearch", "Clear search") }, icon("close", 13))),
+          h("div", { className: "wb-workbench-toolbar-controls wb-lib-tools" },
+            h("div", { className: "wb-lib-menu-wrap" }, h("button", { type: "button", className: "wb-workbench-filter-tool wb-lib-tool" + (activeFilters ? " active" : ""), onClick: function () { setMenu(menu === "filter" ? "" : "filter"); } }, h("span", null, activeFilters ? L("library.filter", "Filter") : L("library.allFilters", "All types")), activeFilters ? h("small", null, activeFilters) : null, icon("chevron", 13)), h(Dropdown, { open: menu === "filter", onClose: function () { setMenu(""); }, className: "filter" },
               h("label", null, L("library.filterFileType", "File type"), h("select", { value: filters.file_type, onChange: function (event) { setFilters(Object.assign({}, filters, { file_type: event.target.value })); } }, h("option", { value: "" }, L("library.allFileTypes", "All file types")), h("option", { value: "pdf" }, "PDF"), h("option", { value: "document" }, L("library.fileType.document", "Documents and text")), h("option", { value: "spreadsheet" }, L("library.fileType.spreadsheet", "Spreadsheets")), h("option", { value: "presentation" }, L("library.fileType.presentation", "Presentations")), h("option", { value: "image" }, L("library.fileType.image", "Images")), h("option", { value: "audio" }, L("library.fileType.audio", "Audio")), h("option", { value: "video" }, L("library.fileType.video", "Video")), h("option", { value: "link" }, L("library.fileType.link", "Web pages and links")), h("option", { value: "other" }, L("library.fileType.other", "Other files")))),
               h("label", null, L("library.bibliographyType", "Bibliography type"), h("select", { value: filters.item_type, onChange: function (event) { setFilters(Object.assign({}, filters, { item_type: event.target.value })); } }, h("option", { value: "" }, L("library.allBibliographyTypes", "All bibliography types")), h("option", { value: "document" }, L("library.knowledgeItem", "Knowledge item")), h("option", { value: "webpage" }, L("library.webpage", "Web page")), h("option", { value: "journalArticle" }, L("library.journalArticle", "Journal article")), h("option", { value: "conferencePaper" }, L("library.conferencePaper", "Conference paper")), h("option", { value: "book" }, L("library.book", "Book")), h("option", { value: "thesis" }, L("library.thesis", "Thesis")), h("option", { value: "report" }, L("library.report", "Report")))),
               h("label", null, L("library.readingStatus", "Reading status"), h("select", { value: filters.status, onChange: function (event) { setFilters(Object.assign({}, filters, { status: event.target.value })); } }, h("option", { value: "" }, L("library.allStatuses", "All statuses")), h("option", { value: "unread" }, L("library.unread", "Unread")), h("option", { value: "reading" }, L("library.reading", "Reading")), h("option", { value: "read" }, L("library.read", "Read")))),
               h("label", null, L("library.year", "Year"), h("input", { type: "number", value: filters.year, onChange: function (event) { setFilters(Object.assign({}, filters, { year: event.target.value })); }, placeholder: L("library.yearPlaceholder", "e.g. 2025") })),
               activeFilters > 0 && h("button", { type: "button", className: "wb-lib-clear-filter", onClick: function () { setFilters({ file_type: "", item_type: "", status: "", year: "" }); } }, L("library.clearFilters", "Clear filters")))),
-            h("div", { className: "wb-lib-menu-wrap" }, h("button", { type: "button", className: "wb-lib-tool", onClick: function () { setMenu(menu === "sort" ? "" : "sort"); } }, icon("sort", 16), L("library.sort", "Sort")), h(Dropdown, { open: menu === "sort", onClose: function () { setMenu(""); }, className: "sort" }, [{ id: "updated_at", label: L("library.sortUpdated", "Recently updated") }, { id: "created_at", label: L("library.sortAdded", "Recently added") }, { id: "title", label: L("library.sortTitle", "Title") }, { id: "year", label: L("library.sortYear", "Year") }].map(function (option) { return h("button", { key: option.id, type: "button", className: sort === option.id ? "selected" : "", onClick: function () { setSort(option.id); setMenu(""); } }, option.label, sort === option.id && icon("check", 14)); }), h("button", { type: "button", onClick: function () { setOrder(order === "desc" ? "asc" : "desc"); setMenu(""); } }, order === "desc" ? L("library.desc", "Descending") : L("library.asc", "Ascending")))),
+            h("div", { className: "wb-lib-menu-wrap" }, h("button", { type: "button", className: "wb-workbench-filter-tool wb-lib-tool active", onClick: function () { setMenu(menu === "sort" ? "" : "sort"); } }, h("span", null, activeSortLabel), icon("chevron", 13)), h(Dropdown, { open: menu === "sort", onClose: function () { setMenu(""); }, className: "sort" }, sortOptions.map(function (option) { return h("button", { key: option.id, type: "button", className: sort === option.id ? "selected" : "", onClick: function () { setSort(option.id); setMenu(""); } }, option.label, sort === option.id && icon("check", 14)); }), h("button", { type: "button", onClick: function () { setOrder(order === "desc" ? "asc" : "desc"); setMenu(""); } }, order === "desc" ? L("library.desc", "Descending") : L("library.asc", "Ascending")))),
             h("div", { className: "wb-lib-view-toggle" }, h("button", { type: "button", className: view === "table" ? "active" : "", onClick: function () { setView("table"); }, title: L("library.tableView", "Table view") }, icon("list", 16)), h("button", { type: "button", className: view === "grid" ? "active" : "", onClick: function () { setView("grid"); }, title: L("library.cardView", "Card view") }, icon("grid", 16))),
-            !rightOpen && selectedItem && h("button", { type: "button", className: "wb-lib-tool compact", onClick: function () { setRightOpen(true); }, title: L("library.openDetails", "Open details") }, icon("panel", 16)))),
+            !rightOpen && selectedItem && h("button", { type: "button", className: "wb-lib-tool compact", onClick: function () { setRightOpen(true); }, title: L("library.openDetails", "Open details") }, icon("panel", 16))))),
         checked.length > 0 && h("div", { className: "wb-lib-batch" },
           h("b", null, L("library.selectedCount", "{count} selected", { count: checked.length })),
           h("div", { className: "wb-lib-batch-actions" },
@@ -1542,14 +1586,13 @@
               batchDeleting ? L("library.deleting", "Deleting…") : (scope.type === "trash" ? L("library.permanentDelete", "Delete permanently") : L("library.moveToTrash", "Move to trash"))),
             h("button", { type: "button", disabled: batchDeleting, onClick: function () { setChecked([]); } }, L("library.cancelSelection", "Cancel selection")))),
         error && h("div", { className: "wb-lib-error" }, h("span", null, error), h("button", { type: "button", onClick: function () { reload(); } }, icon("restore", 14), " ", L("library.retry", "Retry"))),
-        h("section", { className: "wb-lib-results" + (selectedItem ? " with-workspace" : "") },
+        h("section", { className: "wb-lib-results" },
           loading && !data.items.length ? h(StatePanel, { loading: true, title: L("library.loading", "Loading knowledge base…") }) : !data.items.length ? h(StatePanel, { title: query || activeFilters || scope.type !== "all" ? L("library.noMatch", "No matching knowledge") : L("library.noItems", "This project has no knowledge items yet"), body: query || activeFilters || scope.type !== "all" ? L("library.emptyHint", "Try adjusting your search, categories or filters.") : L("library.importHint", "Upload documents, images, audio or video, or import RIS, BibTeX and Zotero references."), action: query || activeFilters || scope.type !== "all" ? function () { setQuery(""); setFilters({ file_type: "", item_type: "", status: "", year: "" }); setScope({ type: "all" }); } : function () { fileRef.current && fileRef.current.click(); }, actionLabel: query || activeFilters || scope.type !== "all" ? L("library.clearConditions", "Clear conditions") : L("library.importFirstItem", "Import the first item"), actionIcon: query || activeFilters || scope.type !== "all" ? "restore" : "upload" }) :
             view === "table" ? h("div", { className: "wb-lib-table", role: "table" }, h(TableHead, { allSelected: data.items.length > 0 && checked.length === data.items.length, onToggleAll: toggleAll }), h("div", { className: "wb-lib-table-body" }, data.items.map(function (item) { return h(LibraryRow, { key: item.id, item: item, active: String(item.id) === String(selectedId), checked: checked.indexOf(String(item.id)) >= 0, trash: scope.type === "trash", onSelect: select, onContextMenu: openItemContextMenu, onToggle: toggleChecked, onStar: toggleStar, onRestore: restore, onDragStart: scope.type === "trash" ? null : startLibraryItemDrag, onDragEnd: endLibraryItemDrag }); }))) :
               h("div", { className: "wb-lib-card-grid" }, data.items.map(function (item) { return h(LibraryCard, { key: item.id, item: item, active: String(item.id) === String(selectedId), checked: checked.indexOf(String(item.id)) >= 0, onSelect: select, onContextMenu: openItemContextMenu, onToggle: toggleChecked, onStar: toggleStar, onDragStart: scope.type === "trash" ? null : startLibraryItemDrag, onDragEnd: endLibraryItemDrag }); })),
           data.items.length < data.total && h("button", { type: "button", className: "wb-lib-load-more", disabled: loadingMore, onClick: loadMore }, loadingMore ? h(Spinner) : null, loadingMore ? L("library.loadingMore", "Loading…") : L("library.loadMore", "Load more ({shown} / {total})", { shown: data.items.length, total: data.total })),
-          loading && data.items.length > 0 && h("div", { className: "wb-lib-loading-bar" }, h(Spinner), " ", L("library.updating", "Updating…"))),
-        selectedItem && h(ItemWorkspace, { item: selectedItem, loading: detailLoading, tab: workTab, onTab: setWorkTab, onUpdate: updateSelected, onAddNote: addNote, rawUrl: client.rawUrl(selectedId), citationProps: citationProps })),
-      h(RightPanel, { item: selectedItem, open: rightOpen, onClose: function () { setRightOpen(false); }, tab: rightTab, onTab: setRightTab, onContentViewed: function () { markSelectedRead(selectedId); }, rawUrl: selectedId ? client.rawUrl(selectedId) : "", collections: data.collections, onCollectionsUpdate: updateSelectedCollections, citation: citation.text, bibtex: citation.bibtex, citationLoading: citation.loading, onCopyCitation: copyCitation, onUpdate: updateSelected, onDelete: scope.type !== "trash" ? removeSelected : null }),
+          loading && data.items.length > 0 && h("div", { className: "wb-lib-loading-bar" }, h(Spinner), " ", L("library.updating", "Updating…")))),
+      h(RightPanel, { item: selectedItem, open: rightOpen, onClose: function () { setRightOpen(false); }, tab: rightTab, onTab: setRightTab, onContentViewed: function () { markSelectedRead(selectedId); }, rawUrl: selectedId ? client.rawUrl(selectedId) : "", collections: data.collections, onCollectionsUpdate: updateSelectedCollections, citation: citation.text, bibtex: citation.bibtex, citationLoading: citation.loading, citationProps: citationProps, onCopyCitation: copyCitation, onAddNote: addNote, onUpdate: updateSelected, onDelete: scope.type !== "trash" ? removeSelected : null }),
       contextMenuPortal,
       manualOpen && h(ManualItemModal, { onClose: function () { setManualOpen(false); }, onSave: createItem }),
       collectionModalOpen && h(CollectionModal, { onClose: function () { setCollectionModalOpen(false); }, onSave: createCollection }));

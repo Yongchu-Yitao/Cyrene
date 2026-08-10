@@ -861,7 +861,14 @@ async def create_proactive_chat(
         return None
 
     title = "Proactive work" if str(lang or "").lower() == "en" else "主动工作"
-    chat = _new_chat(project_id, title, str(model or ""))
+    from cyrene.workbench.project_memory_prompt import current_snapshot
+
+    chat = _new_chat(
+        project_id,
+        title,
+        str(model or ""),
+        project_memory_snapshot=current_snapshot(project_id),
+    )
     if chat_id:
         chat["id"] = str(chat_id)
     chat["proactive"] = True
@@ -908,10 +915,16 @@ async def create_proactive_chat(
     return result
 
 
-def _new_chat(project_id: str, title: str = "", model: str = "") -> dict[str, Any]:
+def _new_chat(
+    project_id: str,
+    title: str = "",
+    model: str = "",
+    *,
+    project_memory_snapshot: dict[str, Any] | None = None,
+) -> dict[str, Any]:
     now = _utc_now_iso()
     supplied_title = str(title or "").strip()
-    return {
+    chat = {
         "id": _short_id("wbchat"),
         "projectId": str(project_id or ""),
         "kind": "chat",
@@ -923,7 +936,43 @@ def _new_chat(project_id: str, title: str = "", model: str = "") -> dict[str, An
         "createdAt": now,
         "updatedAt": now,
         "messages": [],
+        "completedTurnCount": 0,
     }
+    if project_memory_snapshot is not None:
+        chat["projectMemorySnapshot"] = {
+            "prompt": str(project_memory_snapshot.get("prompt") or ""),
+            "modifiedAt": str(project_memory_snapshot.get("modifiedAt") or ""),
+            "hash": str(project_memory_snapshot.get("hash") or ""),
+        }
+    return chat
+
+
+def _completed_turn_count(chat: dict[str, Any]) -> int:
+    """Return durable completed user→final-assistant exchanges for one chat."""
+    stored = chat.get("completedTurnCount")
+    if isinstance(stored, int) and not isinstance(stored, bool) and stored >= 0:
+        return stored
+    return sum(
+        1
+        for message in chat.get("messages") or []
+        if isinstance(message, dict)
+        and str(message.get("role") or "") == "assistant"
+        and "processingDurationMs" in message
+        and not bool(message.get("systemInitiated"))
+    )
+
+
+def _next_completed_turn_count(
+    chat: dict[str, Any],
+    *,
+    retry: bool = False,
+    command: str = "",
+    is_side_agent: bool = False,
+) -> int:
+    count = _completed_turn_count(chat)
+    if not retry and not command and not is_side_agent:
+        count += 1
+    return count
 
 
 def _find_chat(payload: dict[str, Any], chat_id: str) -> dict[str, Any] | None:
@@ -931,6 +980,17 @@ def _find_chat(payload: dict[str, Any], chat_id: str) -> dict[str, Any] | None:
         if str(chat.get("id") or "") == chat_id:
             return chat
     return None
+
+
+def get_workbench_chat(chat_id: str) -> dict[str, Any] | None:
+    """Return a defensive snapshot of one persisted Workbench conversation."""
+    chat = _find_chat(_read_chats_store(), str(chat_id or ""))
+    return copy.deepcopy(chat) if chat is not None else None
+
+
+def completed_turn_count(chat: dict[str, Any]) -> int:
+    """Public boundary for counting completed conversation turns."""
+    return _completed_turn_count(chat)
 
 
 _FORK_METADATA_FIELDS = ("forkedFromChatId", "forkedAtMessageId", "forkMessage")
@@ -1058,6 +1118,10 @@ def _public_chat_light(chat: dict[str, Any]) -> dict[str, Any]:
         "lastModel": chat.get("lastModel") or "",
         "modelSelectionId": chat.get("modelSelectionId") or "",
         "reasoningEffort": chat.get("reasoningEffort") or "",
+        "completedTurnCount": _completed_turn_count(chat),
+        "projectMemoryEnabled": isinstance(chat.get("projectMemorySnapshot"), dict),
+        "projectMemoryModifiedAt": str((chat.get("projectMemorySnapshot") or {}).get("modifiedAt") or ""),
+        "projectMemoryHash": str((chat.get("projectMemorySnapshot") or {}).get("hash") or ""),
         "permissionMode": chat.get("permissionMode") or "default",
         "createdAt": chat.get("createdAt"),
         "updatedAt": chat.get("updatedAt"),
@@ -2568,6 +2632,8 @@ async def dispatch_shell_wake_run(wake: dict[str, Any], *, bot: Any, db_path: st
             state_ids_before.add(mid)
 
     async def _run_agent() -> str:
+        from cyrene.workbench.project_memory_prompt import build_main_agent_suffix
+
         return await run_agent(
             user_message=prompt,
             bot=bot,
@@ -2582,6 +2648,11 @@ async def dispatch_shell_wake_run(wake: dict[str, Any], *, bot: Any, db_path: st
                 "This turn was triggered by an automatic shell-exit wake. "
                 "Inspect the provided terminal output, continue the prior work, "
                 "and do not wait for the same process again."
+            ),
+            final_system_extra=build_main_agent_suffix(
+                chat.get("projectMemorySnapshot")
+                if isinstance(chat.get("projectMemorySnapshot"), dict)
+                else None
             ),
         )
 

@@ -68,6 +68,7 @@ from cyrene.tooling import (
     get_wire_tool_execution_metadata,
     resolve_wire_call,
 )
+from cyrene.tooling.mcp_content import build_mcp_observation_message
 from cyrene.workbench.inbox import current_workbench_inbox
 
 logger = logging.getLogger(__name__)
@@ -931,6 +932,7 @@ async def _run_main_agent_impl(
             pending_reflection_tool_calls: list[tuple[dict[str, Any], dict[str, Any]]] = []
             inbox_batch_args: dict[str, dict[str, Any]] = {}
             published_tool_starts: set[str] = set()
+            mcp_observations: list[dict[str, Any]] = []
             tool_batch_id = f"batch_{uuid4().hex}"
             if runtime_inbox is not None and not guidance_supersedes_batch:
                 inbox_calls: list[tuple[Any, ...]] = []
@@ -1083,10 +1085,22 @@ async def _run_main_agent_impl(
                 if round_id:
                     tool_entry["round_id"] = round_id
                 messages.append(tool_entry)
+                observation = build_mcp_observation_message(
+                    result,
+                    tool_name=str(tool_name or ""),
+                )
+                if observation is not None:
+                    if round_id:
+                        observation["round_id"] = round_id
+                    mcp_observations.append(observation)
                 if _tool_result_requests_user_input(str(result)):
                     awaiting_user = True
                 if capability_id == "subagent.spawn" and _wire_result_succeeded(result):
                     spawned = True
+            # Keep the assistant -> N tool-results protocol sequence contiguous.
+            # Multimodal observations follow the complete tool batch as a
+            # model-only user message and are omitted from persisted history.
+            messages.extend(mcp_observations)
             await _inject_runtime_guidance(messages)
             if pending_reflection_tool_calls:
                 _ensure_message_identity(messages)

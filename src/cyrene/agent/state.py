@@ -6,6 +6,7 @@ import from it without circular-dependency risk.
 """
 
 import asyncio
+import copy
 import json
 import logging
 from dataclasses import dataclass, field
@@ -58,6 +59,9 @@ class SessionContext:
     pending_distill_task: asyncio.Task | None = None
     main_inbox_worker: asyncio.Task | None = None
     active_task: asyncio.Task | None = None
+    last_main_model_messages: list[dict[str, Any]] = field(default_factory=list)
+    last_main_model_identity: dict[str, str] = field(default_factory=dict)
+    last_main_model_round_id: str = ""
 
 # Per‑session identifier carried by ContextVar — set at entry to run_agent()
 _current_session_id: ContextVar[str] = ContextVar("_current_session_id", default="")
@@ -365,6 +369,63 @@ def _llm_phase_name(tools: list | None) -> str:
     return "phase2" if tools else "no_tools"
 
 
+def _record_last_main_model_context(
+    messages: list[dict[str, Any]],
+    response: Any,
+    *,
+    secondary: bool,
+) -> None:
+    """Keep the exact provider-normalized main-Agent exchange in memory.
+
+    Memory learning reads this snapshot directly while the run is active and a
+    completed copy is persisted by the Workbench chat finalizer.  Tool schemas
+    are deliberately excluded because the Memory Agent receives no tools.
+    """
+    if secondary or _current_agent_id.get() != "main" or not isinstance(response, dict):
+        return
+    from cyrene.model_runtime.client import (
+        sanitize_messages_for_llm,
+        model_candidate_identity_for_response,
+    )
+
+    normalized = sanitize_messages_for_llm(
+        copy.deepcopy(messages),
+        materialize_internal_media=False,
+    )
+    assistant: dict[str, Any] = {
+        "role": "assistant",
+        "content": response.get("content") or "",
+    }
+    for key in ("reasoning_content", "tool_calls"):
+        if response.get(key):
+            assistant[key] = copy.deepcopy(response[key])
+    normalized.extend(sanitize_messages_for_llm([assistant]))
+    session_id = _current_session_id.get()
+    ctx = _ensure_session(session_id)
+    ctx.last_main_model_messages = normalized
+    actual_identity = response.get("_candidate_identity")
+    ctx.last_main_model_identity = (
+        dict(actual_identity)
+        if isinstance(actual_identity, dict)
+        else model_candidate_identity_for_response(
+            session_id, str(response.get("model") or "")
+        )
+    )
+    ctx.last_main_model_round_id = _current_round_id.get()
+
+
+def get_last_main_model_context(session_id: str = "") -> dict[str, Any] | None:
+    """Return a defensive copy of the latest exact main-model exchange."""
+    ctx = _ensure_session(str(session_id or ""))
+    if not ctx.last_main_model_messages:
+        return None
+    return {
+        "messages": copy.deepcopy(ctx.last_main_model_messages),
+        "model": dict(ctx.last_main_model_identity),
+        "roundId": str(ctx.last_main_model_round_id or ""),
+    }
+
+
 async def _call_llm(
     messages: list[dict],
     tools: list | None = None,
@@ -386,7 +447,7 @@ async def _call_llm(
         if stream_writer is not None and str(event.get("type") or "").startswith("reasoning_"):
             await stream_writer(event)
 
-    return await _unified_call_llm(
+    response = await _unified_call_llm(
         messages,
         tools=tools,
         max_tokens=max_tokens,
@@ -400,6 +461,8 @@ async def _call_llm(
         round_id=_current_round_id.get(),
         session_id=_current_session_id.get(),
     )
+    _record_last_main_model_context(messages, response, secondary=secondary)
+    return response
 
 
 async def _call_llm_stream(
@@ -411,7 +474,7 @@ async def _call_llm_stream(
 ) -> dict[str, Any]:
     from cyrene.call_llm import call_llm as _unified_call_llm
 
-    return await _unified_call_llm(
+    response = await _unified_call_llm(
         messages,
         max_tokens=max_tokens,
         model_type="secondary" if secondary else "primary",
@@ -423,6 +486,8 @@ async def _call_llm_stream(
         round_id=_current_round_id.get(),
         session_id=_current_session_id.get(),
     )
+    _record_last_main_model_context(messages, response, secondary=secondary)
+    return response
 
 
 # ---------------------------------------------------------------------------

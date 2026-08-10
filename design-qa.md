@@ -161,6 +161,125 @@
 - P3: If a future tooltip component becomes available, replace native `title` hints on compact module buttons with the shared tooltip for richer keyboard timing and placement.
 
 final result: passed
+
+---
+
+# Settings Controls / Primary Actions / Backup Flow Design QA — 2026-08-11
+
+- Settings control reference: `/var/folders/zm/qgh_rgw903j0b9t01yg2l0mc0000gn/T/codex-clipboard-80a06dc2-cb29-42c9-a86d-2a70915a5473.png`
+- Memory material reference: `/var/folders/zm/qgh_rgw903j0b9t01yg2l0mc0000gn/T/codex-clipboard-a7521d56-9ce6-4b01-95a9-59d203fcbb4d.png`
+- Primary-action reference: `/var/folders/zm/qgh_rgw903j0b9t01yg2l0mc0000gn/T/codex-clipboard-ae5d548d-1457-4b9f-a94b-29401d90e7d9.png`
+- Button-label correction: `/var/folders/zm/qgh_rgw903j0b9t01yg2l0mc0000gn/T/codex-clipboard-d4f92371-3bb9-44ed-a391-787795972919.png`
+- Data-path reference: `/var/folders/zm/qgh_rgw903j0b9t01yg2l0mc0000gn/T/codex-clipboard-5c7f5d6b-01d6-44f6-bdef-60106acdc5c9.png`
+- Session-export reference: `/var/folders/zm/qgh_rgw903j0b9t01yg2l0mc0000gn/T/codex-clipboard-d1f16ff0-b04c-49ff-9ed9-a254778f9334.png`
+- Backup-flow reference: `/var/folders/zm/qgh_rgw903j0b9t01yg2l0mc0000gn/T/codex-clipboard-07d24fe1-dfb2-4fb3-bd2d-e8f946402a16.png`
+- Density-removal reference: `/var/folders/zm/qgh_rgw903j0b9t01yg2l0mc0000gn/T/codex-clipboard-facb7907-c4d1-47d7-939f-7c6e5ad04fda.png`
+- Final Settings surface: `/Users/syw/Documents/playground/Cyrene/output/settings-memory-style-controls-final.png`
+
+## Findings
+
+No actionable P0, P1, or P2 mismatch remains for the requested Settings and primary-action refresh.
+
+- Text inputs, password and number fields, text areas, selects, segmented choices, switches, and standard buttons share the Memory toolbar's 12 px glass material, border, inset highlight, hover, and focus behavior.
+- Primary actions across Settings, Schedule, Tasks, Memory, and Knowledge use the same accent-tinted glass surface. Labels retain the normal foreground color; destructive actions remain red.
+- Data paths use wider read-only fields with safe truncation and a full-width responsive fallback. Session export uses a wider select and a compact content-width format selector.
+- Comfortable density is now the only presentation mode. Legacy compact preferences are cleared on startup and ignored by the main and Quick Chat surfaces.
+- Backup creation opens a native save-location picker, while Restore Backup opens a native ZIP-file picker. Cancelling either picker leaves data unchanged.
+- English and Simplified Chinese labels cover the new picker titles, restore action, unsupported-surface message, and existing success/error states.
+
+## Verification
+
+- Frontend production build: passed during implementation.
+- Focused frontend and shared-detail regressions: passed during implementation.
+- Electron visual check of the Settings surface: passed.
+- Release-level verification is recorded in the `0.7.0` release handoff.
+
+final result: passed
+
+---
+
+# Detail Divider / Library Inspector Consolidation Design QA — 2026-08-11
+
+- Detail-divider reference: `/var/folders/zm/qgh_rgw903j0b9t01yg2l0mc0000gn/T/codex-clipboard-6874debc-c214-4d78-9d2f-9162da89c9a3.png`
+- Library navigation reference: `/var/folders/zm/qgh_rgw903j0b9t01yg2l0mc0000gn/T/codex-clipboard-16e8df7e-fdb7-4420-864b-e8f48cf488c5.png`
+- Legacy workspace correction reference: `/var/folders/zm/qgh_rgw903j0b9t01yg2l0mc0000gn/T/codex-clipboard-c980f424-9284-4a31-8f8d-578dba623eb5.png`
+- Knowledge-control reference: `/var/folders/zm/qgh_rgw903j0b9t01yg2l0mc0000gn/T/codex-clipboard-f9c0cf8b-e3a8-405f-bce5-3dee06741dff.png`
+- Memory-control reference: `/var/folders/zm/qgh_rgw903j0b9t01yg2l0mc0000gn/T/codex-clipboard-c4dbf0cf-c482-4918-9927-07ecde99c695.png`
+- Dark glass-boundary reference: `/var/folders/zm/qgh_rgw903j0b9t01yg2l0mc0000gn/T/codex-clipboard-532bf06d-57bf-4a84-90c3-1da4fbba2550.png`
+- Narrow-toolbar reference: `/var/folders/zm/qgh_rgw903j0b9t01yg2l0mc0000gn/T/codex-clipboard-bb31a84f-e738-44a1-979a-7fc2fd5c8a9a.png`
+- Responsive-card references: `/var/folders/zm/qgh_rgw903j0b9t01yg2l0mc0000gn/T/codex-clipboard-d99f3597-a61c-4836-96a0-53109179048e.png`, `/var/folders/zm/qgh_rgw903j0b9t01yg2l0mc0000gn/T/codex-clipboard-3ec1ae5e-8c69-429d-9cd6-4d5b6ecfa8db.png`
+- Final responsive grid: `/Users/syw/Documents/playground/Cyrene/output/knowledge-responsive-grid-dark-final.png`
+- Browser viewport: `1280 × 720` CSS px, dark theme.
+
+## Findings
+
+No actionable P0, P1, or P2 mismatch remains for the requested changes.
+
+- Expanded floating-detail content now ends with one shared divider before the following accordion tab; the next trigger suppresses its own top border to prevent a double line.
+- The legacy bottom split workspace is no longer rendered when a library item is selected.
+- Information, Content, Notes, Tags, Relations, Attachments, and Citation are consolidated into the existing floating inspector on the far right.
+- The main result list now retains its full available height while all selected-item operations live in the inspector accordion.
+- Information no longer duplicates Citation and Relations content because those now have dedicated accordion sections.
+- The Knowledge search field now matches Memory's 400 px desktop target, 38 px height, 10 px radius, 13 px input type, 13 px horizontal padding, control background, and focus treatment.
+- Knowledge filter and sort controls now reuse Memory's height, radius, border, fill, weight, spacing, and active-sort accent treatment; the list/grid switch remains a compact paired control in the same 38 px system.
+- Knowledge controls now participate in the exact integrated-sidebar floating material used by Memory, including its 12 px radius, card-mixed dark fill, translucent border, inset highlight, hover lift, and focus treatment.
+- The shared dark toolbar glass uses a much lighter 18% → 5% surface tint and reduced saturation, removing the visible rectangular boundary against the main canvas.
+- The Knowledge search column can contract to 160 px, keeping filter, sort, and both view buttons visible alongside the right inspector.
+- Card view now uses an auto-fill 240 px grid without a forced single-column mobile override, producing two columns in compact content widths and three or more as space increases.
+- List/card view mode persists through reloads and project changes via `cyrene.library.viewMode`.
+- New navigation labels are available in both English and Simplified Chinese.
+
+## Verification
+
+- Frontend production build: passed.
+- Focused detail-divider and library-layout regression tests: `2 passed`.
+- `git diff --check`: passed.
+- Live Electron verification: three columns rendered at the current desktop width; card mode remained active after a full window reload.
+
+final result: passed
+
+---
+
+# Floating Detail Accordion Design QA — 2026-08-10
+
+- Source visual truth:
+  - `/var/folders/zm/qgh_rgw903j0b9t01yg2l0mc0000gn/T/codex-clipboard-e7e0cbb8-7ffb-472b-8b02-cf5d36a24134.png` (memory accordion and motion target)
+  - `/var/folders/zm/qgh_rgw903j0b9t01yg2l0mc0000gn/T/codex-clipboard-1a7df242-25be-44de-b738-8819693d27d2.png` (knowledge detail content)
+  - `/var/folders/zm/qgh_rgw903j0b9t01yg2l0mc0000gn/T/codex-clipboard-38eef362-9e81-470a-a4a6-9a0259e49d52.png` (schedule empty detail)
+  - `/var/folders/zm/qgh_rgw903j0b9t01yg2l0mc0000gn/T/codex-clipboard-25cdc763-b239-4fa6-a0cb-34c13f37f66d.png` (skill-learning detail content)
+- Browser-rendered implementations:
+  - `/Users/syw/Documents/playground/Cyrene/output/detail-accordion-library.png`
+  - `/Users/syw/Documents/playground/Cyrene/output/detail-accordion-schedule.png`
+  - `/Users/syw/Documents/playground/Cyrene/output/detail-accordion-skill.png`
+- Browser viewport: `1280 × 720` CSS px, dark theme, Cyrene project.
+
+## Findings
+
+No actionable P0, P1, or P2 mismatch remains for the requested detail-panel redesign.
+
+- Memory, Knowledge, Schedule, and Skill Learning now use the same 18 px floating glass card, 12 px outer inset, border, shadow, and backdrop blur.
+- The old left divider and docked tab strip are gone. Detail sections are vertical accordion rows with consistent icon, label, chevron, selected surface, and separator geometry.
+- Accordion bodies remain mounted and animate between `0fr` and `1fr` over 180 ms with the conversation-panel easing; opacity, vertical offset, and chevron rotation transition in concert. Reduced-motion users receive an immediate state change.
+- Empty Schedule detail preserves its centered calendar prompt inside the same floating card.
+- Skill Learning preserves screenshot/file content, behavior metrics, duplicate detection, and the bottom Save/Delete actions while adopting the shared card and accordion.
+- English and Simplified Chinese labels cover all new panel headings and section names.
+- Memory and Skill Learning collapse interactions were exercised in the in-app browser. Knowledge item selection and Schedule empty state were also checked. Browser console errors: none.
+
+## Comparison history
+
+1. The initial horizontal tabs were replaced by conversation-style vertical rows after the interaction target was clarified.
+2. Panels initially unmounted on selection, preventing a closing transition. They now remain mounted and animate closed.
+3. A flex override collapsed content immediately despite the grid transition. The shared panel now owns natural-height grid animation, matching the conversation panel's timing and easing.
+4. Skill Learning retained the legacy docked detail strip. It now calls the same shared floating-card and accordion structure as the other inspectors.
+
+## Verification
+
+- Frontend production build: passed.
+- Focused regression tests: `2 passed`.
+- `git diff --check`: passed.
+- In-app browser navigation, selection, accordion collapse, localization, and console check: passed.
+
+final result: passed
 ## Project/chat navigation unfinished fixes — 2026-08-10
 
 **Comparison Target**
@@ -460,5 +579,195 @@ final result: passed
 - Delayed-morph browser evidence: the rail reached its settled `284px` width at the 479 ms sample; the dot remained at opacity `1` and the glyph at `0` through the 535 ms sample. The crossfade was visible from 555–636 ms and completed before the expanding phase cleared. Position stayed fixed at `(42, 467)` throughout the hold and morph.
 - The focused comparison uses the current dark theme against light-theme source captures; color differences are expected token/theme behavior. Structure, status color semantics, rail endpoints, icon alignment, and collapsed spatial mapping remain consistent with the source.
 - No actionable P0/P1/P2 mismatch remains.
+
+final result: passed
+
+---
+
+# Project Memory Panel Design QA
+
+- Source visual truth: `/var/folders/zm/qgh_rgw903j0b9t01yg2l0mc0000gn/T/codex-clipboard-eb21b449-b97c-4592-9e05-573e2b37ea83.png`
+- Rejected flat layout evidence: `/var/folders/zm/qgh_rgw903j0b9t01yg2l0mc0000gn/T/codex-clipboard-4e0843ad-e30c-443d-9b29-651f2c870f7a.png`
+- Structure reference: `/var/folders/zm/qgh_rgw903j0b9t01yg2l0mc0000gn/T/codex-clipboard-2fa510af-c773-4bdb-8f97-43256bdb24d8.png`
+- Implementation screenshot: `/Users/syw/Documents/playground/Cyrene/output/project-memory-title-balanced-spacing.png`
+- Memory-page entry screenshot: `/Users/syw/Documents/playground/Cyrene/output/project-memory-page-entry-1512x949.png`
+- Collapsed-memory-rail screenshot: `/Users/syw/Documents/playground/Cyrene/output/project-memory-collapsed-no-memory-button.png`
+- Viewport/state: 1512×949 CSS px, DPR 1, dark theme, project `Cyrene`, current version selected.
+
+## Findings
+
+No actionable P0/P1/P2 differences remain.
+
+- Fonts and typography: existing Noto Sans SC/Workbench typography retains the source hierarchy, compact labels, and readable muted text.
+- Spacing and layout rhythm: the compact 900×620 modal keeps one visual surface. The 76px title bar carries only the project name, a one-line description of the memory agent's function, save/restore action, and close action; the two-line copy group is optically lowered by 2px so its top and bottom clearances are balanced. A dedicated full-width version-overview region follows with status, version count, character count, and the version selector; its bottom-to-editor gap is tightened to 8px. The remaining body is the Prompt workspace. There is no footer or nested card.
+- Colors and visual tokens: surface, inset-control, border, muted-text, and green accent tokens track the source's dark blue/green palette. Contrast remains legible.
+- Image and asset fidelity: the target is application chrome and contains no raster illustration or custom imagery to reproduce. The new Memory-page entry reuses the product's existing sparkle icon rather than introducing an unrelated asset.
+- Copy and content: labels are memory-specific and preserve the source's concise Chinese control language.
+
+Intentional semantic difference: the reference is a narrow conversation inspector; the memory editor borrows its typography, compact metrics, and dividers without copying its enclosing card structure.
+
+## Interaction and runtime evidence
+
+- Opened the Memory page and confirmed the compact `编辑项目记忆` entry between `新建记忆` and the sidebar-collapse control.
+- Collapsed the Memory rail and confirmed `编辑项目记忆` is removed from both the rendered controls and accessibility tree; only the rail expand control remains.
+- Opened the shared project-memory editor from the Memory-page entry.
+- Confirmed the title bar shows only the project name plus the concise one-line function description, save action, and close action; the version selector sits at the right of the distinct full-width overview region, and the body contains only the Prompt workspace and character count.
+- Confirmed all three regions share the same modal background and the two horizontal separators are absent; only the overview's vertical metric separators remain.
+- Confirmed the current empty project renders `当前版本 · 尚未保存`; version history is intentionally populated only after the first project Prompt save or Memory Agent update.
+- Confirmed the duplicate “所有记忆” and separate “版本记录” controls are absent.
+- Verified the modal at 1512×949 without horizontal overflow.
+
+## Comparison history
+
+1. The first selector-based pass was functionally correct but visually flat: the full-width selector and oversized dark textarea had weak hierarchy (P1).
+2. A two-column inspector interpretation still introduced nested cards and too many enclosing borders (P1).
+3. Flattened the body to one toolbar plus one direct editing surface.
+4. Moved the complete Prompt identity and version control into the title bar, then restored the requested version overview as its own full-width region while reducing the modal from 1040×760 to 900×620. Rebuilt, restarted Electron, and recaptured the live UI. The current build has no raw `Not Found` error and no P0/P1/P2 issue remains.
+
+Focused-region comparison was not needed after the normalized full-view comparison because the feature has no dense iconography or imagery, and the title-bar controls and Prompt field remain clearly readable at 1512×949.
+
+## Follow-up polish
+
+No blocking polish remains. A future P3 option is to add a short textual label beside the compact Memory-page sparkle entry when that rail is widened substantially.
+
+final result: passed
+
+---
+
+# Task Board Floating Rail Design QA
+
+- Source visual truth: `/var/folders/zm/qgh_rgw903j0b9t01yg2l0mc0000gn/T/codex-clipboard-84c13068-c65c-4f26-a06e-013a096ff190.png`
+- Column-width refinement reference: `/var/folders/zm/qgh_rgw903j0b9t01yg2l0mc0000gn/T/codex-clipboard-e559cb53-3ce1-4510-a2c8-0cab69cec684.png`
+- Implementation screenshot: `/Users/syw/Documents/playground/Cyrene/output/playwright/task-board-floating-final.png`
+- Scrolled-state screenshot: `/Users/syw/Documents/playground/Cyrene/output/playwright/task-board-floating-scrolled.png`
+- Side-by-side evidence: `/Users/syw/Documents/playground/Cyrene/output/playwright/task-board-floating-comparison.png`
+- Viewport: 1990 × 1248 CSS px, dark theme, task board, default horizontal position.
+- Density normalization: source 3024 × 1898 px was resized to 1990 × 1248 px; implementation is 1990 × 1248 px at the browser viewport's native capture density.
+
+## Findings
+
+No actionable P0, P1, or P2 differences remain for the requested change.
+
+- Fonts and typography: existing Manrope/Noto Sans SC hierarchy, weights, wrapping, and truncation are preserved.
+- Spacing and layout rhythm: the rail retains its 284 × 1166 px rendered geometry. The board occupies the full 1990 px canvas, begins its first column at x=322, and each column is exactly 340 px wide.
+- Colors and visual tokens: task and memory rails both reuse the composer's resolved surface color, retaining 6% transparency for the shared `blur(32px) saturate(170%) contrast(102%)` backdrop treatment without allowing blue board columns to tint the card.
+- Image and icon fidelity: no raster assets or iconography changed.
+- Copy and content: labels, task data, empty-state copy, and actions are unchanged.
+- Interaction: a horizontal gesture moved the board to `scrollLeft=202`; the first column moved from x=322 to x=120, visibly passing behind the rail. The scrollbar resolves to `scrollbar-width: none` while scrolling remains available.
+
+Focused-region comparison was unnecessary because the requested changes are macro layout, material layering, and column geometry. Exact computed measurements supplement the full-view and scrolled-state visual evidence.
+
+## Comparison history
+
+1. The first selector did not cross the state-preserving `display: contents` wrapper, stacking the rail and board vertically (P1). The corrected selector now positions both surfaces from y=58 with the rail absolutely above the board.
+2. The first material pass scoped a new background to the task board (P2 consistency issue). It was replaced by the shared composer-surface color recipe. Task and memory computed styles now match exactly.
+3. Columns were widened from approximately 320 px to 340 px, and the minimum scroll canvas was updated so they no longer compress to fit.
+
+## Verification
+
+- `npm run build`: passed.
+- Primary interactions: task navigation, memory navigation, horizontal board scrolling, and return to the initial scroll position.
+- Browser console warnings/errors: none.
+
+## Follow-up polish
+
+None required for this scope.
+
+final result: passed
+
+---
+
+# Knowledge Toolbar / Dark Glass Design QA — 2026-08-10
+
+- Memory toolbar reference: `/var/folders/zm/qgh_rgw903j0b9t01yg2l0mc0000gn/T/codex-clipboard-c36b8236-1c73-4f92-a2a9-e858efab0196.png`
+- Previous Knowledge toolbar: `/var/folders/zm/qgh_rgw903j0b9t01yg2l0mc0000gn/T/codex-clipboard-465c3d96-96c2-4416-b193-a8f9af21f55c.png`
+- Dark-glass issue reference: `/var/folders/zm/qgh_rgw903j0b9t01yg2l0mc0000gn/T/codex-clipboard-a12f8c8b-7c9a-48a8-a9ce-e32d1e4023aa.png`
+- Final Knowledge implementation: `/Users/syw/Documents/playground/Cyrene/output/library-toolbar-memory-style.png`
+- Final Memory dark-mode implementation: `/Users/syw/Documents/playground/Cyrene/output/memory-toolbar-dark-glass-fixed.png`
+- Browser viewport: `1280 × 720` CSS px, dark theme.
+
+## Findings
+
+No actionable P0, P1, or P2 mismatch remains.
+
+- Memory and Knowledge now share the same filter-bar, search-field, and control-group base classes.
+- Knowledge retains its count and Add/Import/Export row, while its search row now matches Memory's 66 px rhythm, 38 px controls, 10 px radii, glass fade, and spacing.
+- Filter and sort controls now expose useful current-state labels (`全部类型`, `最近更新`) and retain their existing dropdown behavior.
+- The dark Memory toolbar previously rendered both the legacy glass pseudo-element and the new shared glass pseudo-element. Removing the duplicate layer eliminated the rectangular edge buildup without weakening the individual control surfaces.
+- Filter and sort menus open and close correctly. Browser console errors: none.
+
+## Verification
+
+- Frontend production build: passed.
+- `git diff --check`: passed.
+- Full frontend-logic test file: `228 passed`, with three unrelated existing failures in chat drag cleanup and persistent Dock selector expectations.
+- In-app browser visual comparison and primary toolbar interactions: passed.
+
+final result: passed
+
+---
+
+# Adaptive Detail Card / Transparent Expanded Tab Design QA — 2026-08-11
+
+- Collapsed-height reference: `/var/folders/zm/qgh_rgw903j0b9t01yg2l0mc0000gn/T/codex-clipboard-761a0cb6-5443-450a-82a9-035d53801ff0.png`
+- Transparent expanded-tab reference: `/var/folders/zm/qgh_rgw903j0b9t01yg2l0mc0000gn/T/codex-clipboard-9e401fa6-5bd5-4b84-a425-2b3827ff11d4.png`
+- Final collapsed implementation: `/Users/syw/Documents/playground/Cyrene/output/detail-card-auto-height-collapsed-final.png`
+- Final expanded implementation: `/Users/syw/Documents/playground/Cyrene/output/detail-tab-transparent-expanded-final.png`
+- Browser viewport: `1280 × 720` CSS px, dark theme.
+
+## Findings
+
+No actionable P0, P1, or P2 difference remains for the requested change.
+
+- The shared floating detail card now uses intrinsic height and remains capped by the viewport, so all-collapsed cards stop immediately after the final tab while long expanded content keeps its internal scrolling behavior.
+- Browser measurement confirmed the Knowledge card shrinks from `638 px` expanded to `195 px` collapsed.
+- Expanded accordion rows retain the existing chevron/content animation but resolve to a fully transparent background (`rgba(0, 0, 0, 0)`).
+- Focus no longer adds a colored browser outline after click, keeping the expanded row visually identical to the surrounding card surface.
+- The shared rules cover Memory, Schedule, Skill Learning, and Knowledge detail panels; app-specific height overrides now also use intrinsic height.
+
+## Verification
+
+- Frontend production build: passed.
+- Focused accordion regression test: `1 passed`.
+- `git diff --check`: passed.
+- In-app browser comparison of collapsed and expanded states: passed.
+- Browser console errors: none.
+
+final result: passed
+
+---
+
+# Unified Detail Inspector / Knowledge Command Bar Design QA — 2026-08-11
+
+- Delete-position references: `/var/folders/zm/qgh_rgw903j0b9t01yg2l0mc0000gn/T/codex-clipboard-ee6d7737-b532-40ff-896e-b196ed4565f4.png`, `/var/folders/zm/qgh_rgw903j0b9t01yg2l0mc0000gn/T/codex-clipboard-f046de4f-9152-4dc7-8142-4b87f3dee8f6.png`
+- Bottom-tab reference: `/var/folders/zm/qgh_rgw903j0b9t01yg2l0mc0000gn/T/codex-clipboard-758c99c9-fdaa-4696-a648-19915e9a8945.png`
+- Empty-state references: `/var/folders/zm/qgh_rgw903j0b9t01yg2l0mc0000gn/T/codex-clipboard-99514511-502d-45a0-851c-d38d2be307b0.png`, `/var/folders/zm/qgh_rgw903j0b9t01yg2l0mc0000gn/T/codex-clipboard-a557413e-b407-4ec1-b2d7-a2858a73da0c.png`
+- Toolbar references: `/var/folders/zm/qgh_rgw903j0b9t01yg2l0mc0000gn/T/codex-clipboard-13941a6b-e53c-40ff-9a27-2ca1eb4b2d56.png`, `/var/folders/zm/qgh_rgw903j0b9t01yg2l0mc0000gn/T/codex-clipboard-eb918732-73b7-465f-b376-1e53073161c3.png`
+- Final Knowledge empty state and command bar: `/Users/syw/Documents/playground/Cyrene/output/knowledge-commandbar-two-row-final.png`
+- Final polished Knowledge command bar: `/Users/syw/Documents/playground/Cyrene/output/knowledge-commandbar-two-row-polished.png`
+- Final Knowledge expanded inspector: `/Users/syw/Documents/playground/Cyrene/output/knowledge-detail-final-complete.png`
+- Final Memory empty state: `/Users/syw/Documents/playground/Cyrene/output/memory-empty-state-unified-final.png`
+- Final Memory expanded inspector: `/Users/syw/Documents/playground/Cyrene/output/memory-tabs-icons-delete-final.png`
+- Browser viewport: `1280 × 720` CSS px, dark theme.
+
+## Findings
+
+No actionable P0, P1, or P2 mismatch remains.
+
+- Memory and Knowledge inspectors now consume the same shared width token and render matching `326 × 160 px` empty cards at this viewport.
+- Both empty states share the same icon box, vertical centering, gap, padding, 13 px type, 620 weight, and line height.
+- Both delete controls occupy the same persistent top-right header slot and use the same danger-red treatment in expanded and collapsed states.
+- Expanded content scrolls inside its own panel; every later accordion tab remains visible at the bottom of the card.
+- Accordion labels are reduced to 12 px. Memory Detail uses a folded-document icon and History uses a counter-clockwise clock icon.
+- The Knowledge command area is a balanced two-row grid: count plus item actions above, search plus filters/sort/view controls below. No actions are clipped at 1280 px.
+- The final polish aligns both rows to a 38 px control system, tightens the overall region to 112 px, increases action-group spacing, and adds a responsive three-row fallback below 760 px.
+
+## Verification
+
+- Frontend production build: passed.
+- Focused shared-detail regression test: `1 passed`.
+- `git diff --check`: passed.
+- In-app browser checks for Memory and Knowledge empty, expanded, and collapsed states: passed.
+- Browser console errors: none.
 
 final result: passed

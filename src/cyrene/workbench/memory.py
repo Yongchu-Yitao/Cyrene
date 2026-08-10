@@ -388,12 +388,12 @@ def _recent_added(entries: list[dict], days: int = 7) -> int:
     return count
 
 
-def _build_payload(workspace_id: str | None) -> dict:
+def _build_payload(workspace_id: str | None, *, include_hidden: bool = False) -> dict:
     """Assemble the full memory state (items + sidebar aggregates) for a workspace."""
     entries = _load(workspace_id)
     visible_entries = [
         e for e in entries
-        if isinstance(e, dict) and _is_user_visible_entry(e)
+        if isinstance(e, dict) and (include_hidden or _is_user_visible_entry(e))
     ]
     memories = [_serialize(e) for e in visible_entries]
     memories.sort(key=lambda m: m["updated_at"], reverse=True)
@@ -405,10 +405,18 @@ def _build_payload(workspace_id: str | None) -> dict:
         cat_counts[m["category"]] = cat_counts.get(m["category"], 0) + 1
         src_counts[m["source"]] = src_counts.get(m["source"], 0) + 1
 
+    category_order = [
+        *_CATEGORY_ORDER,
+        *(["task_report", "reflection"] if include_hidden else []),
+    ]
     categories = [{"id": "all", "label": "全部记忆", "count": total}]
     categories += [
-        {"id": c, "label": _CATEGORY_LABELS[c], "count": cat_counts[c]}
-        for c in _CATEGORY_ORDER
+        {
+            "id": c,
+            "label": _CATEGORY_LABELS.get(c) or _HIDDEN_CATEGORY_LABELS[c],
+            "count": cat_counts.get(c, 0),
+        }
+        for c in category_order
     ]
     sources = [
         {
@@ -434,9 +442,9 @@ def _build_payload(workspace_id: str | None) -> dict:
     }
 
 
-def build_memory_payload(workspace_id: str | None) -> dict:
+def build_memory_payload(workspace_id: str | None, *, include_hidden: bool = False) -> dict:
     """Public read model for memory tool adapters."""
-    return _build_payload(workspace_id)
+    return _build_payload(workspace_id, include_hidden=include_hidden)
 
 
 def _normalize_tags(value: Any) -> list[str]:

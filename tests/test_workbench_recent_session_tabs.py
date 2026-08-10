@@ -379,6 +379,12 @@ def test_topbar_activity_controls_hover_preview_and_overflow_are_separate():
 
     assert 'className="workbench-session-tab-more"' in shell
     assert "openSessionMenu(event, item, activity, true)" in shell
+    session_menu_opener = shell.split("function openSessionMenu(", 1)[1].split(
+        "function closeSessionMenu", 1
+    )[0]
+    assert "Math.min(340, Math.max(0, window.innerWidth - 16))" in session_menu_opener
+    assert "rect.left + (rect.width - menuWidth) / 2" in session_menu_opener
+    assert "rect.right - menuWidth" not in session_menu_opener
     assert "onClick={function () { if (onOpenSession) onOpenSession(item); }}" in shell
     assert "scheduleSessionPreview(event, item, activity, false)" in shell
     assert "scheduleSessionPreview(event, item, activity, true)" in shell

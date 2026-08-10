@@ -18,9 +18,14 @@ def register_backup_routes(router: APIRouter, bot: Any, db_path: str) -> None:
         return {"ok": True, "backups": list_backups()}
 
     @router.post("/api/backup/export")
-    async def api_backup_export():
+    async def api_backup_export(request: Request):
         from cyrene.runtime.backup import export_backup
-        result = await export_backup()
+        try:
+            body = await request.json()
+        except Exception:
+            body = {}
+        target_path = str(body.get("path") or "").strip()
+        result = await export_backup(target_path=target_path or None)
         return result
 
     @router.post("/api/backup/restore")

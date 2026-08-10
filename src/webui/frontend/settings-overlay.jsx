@@ -265,9 +265,23 @@ function SettingsOverlay({
   var [resetting, setResetting] = useStateSt(false);
   var [backupList, setBackupList] = useStateSt([]);
   var [backupMsg, setBackupMsg] = useStateSt("");
-  var [exportSid, setExportSid] = useStateSt("");
+  var [exportSids, setExportSids] = useStateSt([]);
+  var [workbenchExportSessions, setWorkbenchExportSessions] = useStateSt([]);
   var [exportFmt, setExportFmt] = useStateSt("markdown");
   var [exportMsg, setExportMsg] = useStateSt("");
+
+  useEffectSt(function () {
+    var cancelled = false;
+    fetch("/api/workbench/chats").then(function (response) {
+      if (!response.ok) throw new Error("failed to load conversations");
+      return response.json();
+    }).then(function (payload) {
+      if (!cancelled) setWorkbenchExportSessions(Array.isArray(payload.chats) ? payload.chats : []);
+    }).catch(function () {
+      if (!cancelled) setWorkbenchExportSessions([]);
+    });
+    return function () { cancelled = true; };
+  }, []);
 
   // ── Tweak helpers ──
   var [tweaks, setTweaks] = useStateSt(function () {
@@ -277,7 +291,6 @@ function SettingsOverlay({
       backgroundLight: readTweak("backgroundLight", null),
       backgroundDark: readTweak("backgroundDark", null),
       textSize: readTweak("textSize", "default"),
-      density: readTweak("density", "cozy"),
       animatePulse: readTweak("animatePulse", true),
     };
   });
@@ -291,7 +304,6 @@ function SettingsOverlay({
   function setTweak(key, val) {
     setTweaks(function (prev) { return { ...prev, [key]: val }; });
     try { localStorage.setItem("cyrene-tweak-" + key, JSON.stringify(val)); } catch (e) {}
-    if (key === "density") document.documentElement.dataset.density = val;
     if (key === "textSize") document.documentElement.dataset.textSize = val || "default";
     if (key === "animatePulse") document.documentElement.dataset.animPulse = val ? "on" : "off";
     window.dispatchEvent(new Event("cyrene-tweak-" + key + "-change"));
@@ -317,7 +329,8 @@ function SettingsOverlay({
 
   // Load settings
   useEffectSt(function () {
-    document.documentElement.dataset.density = tweaks.density;
+    document.documentElement.dataset.density = "cozy";
+    try { localStorage.removeItem("cyrene-tweak-density"); } catch (e) {}
     document.documentElement.dataset.textSize = tweaks.textSize || "default";
     document.documentElement.dataset.animPulse = tweaks.animatePulse ? "on" : "off";
 
@@ -532,18 +545,17 @@ function SettingsOverlay({
     className: "settings-overlay",
     onClick: function (e) { if (e.target === e.currentTarget) onClose && onClose(); },
   },
-    React.createElement("div", { className: "settings-overlay-panel", onClick: function (e) { e.stopPropagation(); } },
-      // Header
-      React.createElement("div", { className: "settings-overlay-header" },
-        React.createElement("span", { className: "settings-overlay-icon" }, SettingsTabIcon("general")),
-        React.createElement("strong", null, t("nav.settings")),
-        React.createElement("button", { className: "settings-overlay-close", onClick: onClose }, "ESC"),
-      ),
-
+    React.createElement("div", {
+      className: "settings-overlay-panel",
+      role: "dialog",
+      "aria-modal": "true",
+      "aria-label": t("nav.settings"),
+      onClick: function (e) { e.stopPropagation(); },
+    },
       // Body: sidebar + content
       React.createElement("div", { className: "settings-overlay-body" },
         // Sidebar tabs
-        React.createElement("div", { className: "settings-overlay-nav" },
+        React.createElement("nav", { className: "settings-overlay-nav", "aria-label": t("nav.settings") },
           SETTINGS_TAB_GROUPS.map(function (ids, groupIndex) {
             return React.createElement("div", {
               key: ids.join("-"),
@@ -555,7 +567,9 @@ function SettingsOverlay({
                 if (!item) return null;
                 return React.createElement("button", {
                   key: item.id,
+                  type: "button",
                   className: "settings-overlay-tab" + (tab === item.id ? " active" : ""),
+                  "aria-current": tab === item.id ? "page" : undefined,
                   onClick: function () { setTab(item.id); },
                 },
                   React.createElement("span", { className: "settings-overlay-tab-icon" }, SettingsTabIcon(item.id)),
@@ -567,7 +581,7 @@ function SettingsOverlay({
         ),
 
         // Content area
-        React.createElement("div", { className: "settings-overlay-content" },
+        React.createElement("main", { className: "settings-overlay-content", key: tab },
           tab === "general" && React.createElement(GeneralPanel, { t, lang, setLang, desktopNotifications, toggleDesktopNotifications, mapProvider, setMapProvider, amapKey, setAmapKey, amapKeySaved, setAmapKeySaved, project }),
           tab === "models" && React.createElement(ModelsPanel, { t, models, setModels, modelSource, setModelSource, codexCandidate, setCodexCandidate, draftModel, setDraftModel, visionModels, setVisionModels, draftVision, setDraftVision, secondaryModel, setSecondaryModel, modelsSaved, modelsSaving, saveModels, config, project }),
           tab === "channels" && ChannelsPanel({ t, telegramToken, setTelegramToken, telegramSaved, setTelegramSaved, notifyTelegram, setNotifyTelegram, notifyWechat, setNotifyWechat }),
@@ -577,7 +591,7 @@ function SettingsOverlay({
           tab === "capabilities" && CapabilitiesPanel({ t, mcpConfigs, setMcpConfigs, mcpServers, toolGroups, toolsSaved, saveToolGroup, newMcpServer, setNewMcpServer, mcpSaved, saveMcp }),
           tab === "skills" && React.createElement(SkillsPanel, { t }),
           tab === "shortcuts" && React.createElement(ShortcutsPanel, { t }),
-          tab === "data" && DataPanel({ t, redactSecrets, saveRedactSecrets, config, configLoading, resetStatus, setResetStatus, resetting, setResetting, backupList, backupMsg, setBackupMsg, loadBackups, exportSid, setExportSid, exportFmt, setExportFmt, exportMsg, setExportMsg, formatBytes, formatDate }),
+          tab === "data" && DataPanel({ t, redactSecrets, saveRedactSecrets, config, configLoading, resetStatus, setResetStatus, resetting, setResetting, backupList, backupMsg, setBackupMsg, loadBackups, exportSids, setExportSids, workbenchExportSessions, exportFmt, setExportFmt, exportMsg, setExportMsg, formatBytes, formatDate }),
           tab === "budget" && React.createElement(BudgetPanel, { t, config }),
           tab === "about" && AboutPanel({ t, config }),
         ),
@@ -2890,12 +2904,6 @@ function AppearancePanel(p) {
         React.createElement("button", { className: "wb-seg-btn" + (tweaks.textSize === "large" ? " active" : ""), onClick: function () { setTweak("textSize", "large"); } }, React.createElement("span", { className: "wb-text-size-sample large" }, "A"), " ", t("settings.large")),
       ),
     ),
-    FieldRow(t("settings.density"), t("settings.densityHint"),
-      React.createElement("div", { className: "wb-seg" },
-        React.createElement("button", { className: "wb-seg-btn" + (tweaks.density === "cozy" ? " active" : ""), onClick: function () { setTweak("density", "cozy"); } }, t("settings.cozy")),
-        React.createElement("button", { className: "wb-seg-btn" + (tweaks.density === "compact" ? " active" : ""), onClick: function () { setTweak("density", "compact"); } }, t("settings.compact")),
-      ),
-    ),
     FieldRow(t("settings.pulseAnimation"), t("settings.pulseAnimationHint"), Toggle(tweaks.animatePulse, function () { setTweak("animatePulse", !tweaks.animatePulse); })),
   );
 }
@@ -2992,10 +3000,17 @@ function CapabilitiesPanel(p) {
 
 // ── Data Panel ──
 function DataPanel(p) {
-  var { t, redactSecrets, saveRedactSecrets, config, configLoading, resetStatus, setResetStatus, resetting, setResetting, backupList, backupMsg, setBackupMsg, loadBackups, exportSid, setExportSid, exportFmt, setExportFmt, exportMsg, setExportMsg, formatBytes, formatDate } = p;
+  var { t, redactSecrets, saveRedactSecrets, config, configLoading, resetStatus, setResetStatus, resetting, setResetting, backupList, backupMsg, setBackupMsg, loadBackups, exportSids, setExportSids, workbenchExportSessions, exportFmt, setExportFmt, exportMsg, setExportMsg, formatBytes, formatDate } = p;
 
   var dataStore = window.CyreneUI.require("data");
   var dataState = dataStore.state;
+  var seenExportSessions = {};
+  var exportSessions = (workbenchExportSessions || []).concat(dataState.sessions || []).filter(function (session) {
+    var id = String(session && session.id || "");
+    if (!id || seenExportSessions[id]) return false;
+    seenExportSessions[id] = true;
+    return true;
+  });
 
   function clearSession() {
     fetch("/api/chat/clear", { method: "POST" }).then(function () { dataStore.refreshSessions(); }).catch(function () {});
@@ -3010,6 +3025,72 @@ function DataPanel(p) {
         window.location.reload();
       } else { setResetStatus(t("settings.resetAppDataFailed")); setResetting(false); }
     }).catch(function (e) { setResetStatus(t("settings.resetAppDataFailed") + ": " + e.message); setResetting(false); });
+  }
+
+  function backupDefaultName() {
+    var now = new Date();
+    function pad(value) { return String(value).padStart(2, "0"); }
+    return "cyrene_backup_" + now.getFullYear() + pad(now.getMonth() + 1) + pad(now.getDate()) + "_" + pad(now.getHours()) + pad(now.getMinutes()) + pad(now.getSeconds()) + ".zip";
+  }
+
+  async function createBackup() {
+    var bridge = window.cyrene;
+    if (!bridge || typeof bridge.pickBackupSavePath !== "function") {
+      setBackupMsg(t("settings.backupPickerUnavailable"));
+      return;
+    }
+    try {
+      var selection = await bridge.pickBackupSavePath({ title: t("settings.backupChooseSaveTitle"), defaultName: backupDefaultName() });
+      if (!selection || selection.cancelled || !selection.path) return;
+      setBackupMsg(t("settings.backupExporting"));
+      var response = await fetch("/api/backup/export", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ path: selection.path }) });
+      var result = await response.json();
+      if (!result.ok) throw new Error(result.error || t("settings.failed"));
+      setBackupMsg(t("settings.backupExported", { n: result.entries.length, size: formatBytes(result.size) }));
+      loadBackups();
+    } catch (e) {
+      setBackupMsg(t("settings.failed") + ": " + e.message);
+    }
+  }
+
+  async function restoreBackup() {
+    var bridge = window.cyrene;
+    if (!bridge || typeof bridge.pickBackupFile !== "function") {
+      setBackupMsg(t("settings.backupPickerUnavailable"));
+      return;
+    }
+    try {
+      var selection = await bridge.pickBackupFile({ title: t("settings.backupChooseFileTitle") });
+      if (!selection || selection.cancelled || !selection.path) return;
+      var response = await fetch("/api/backup/restore", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ path: selection.path }) });
+      var result = await response.json();
+      if (!result.ok) throw new Error(result.error || (result.errors || []).join(";") || t("settings.backupRestoreFailed"));
+      setBackupMsg(t("settings.backupRestored", { n: result.restored.length }) + " " + t("settings.backupRestartRequired"));
+    } catch (e) {
+      setBackupMsg(t("settings.backupRestoreFailed") + ": " + e.message);
+    }
+  }
+
+  function toggleExportSession(sessionId) {
+    var id = String(sessionId || "");
+    setExportSids(exportSids.indexOf(id) >= 0
+      ? exportSids.filter(function (value) { return value !== id; })
+      : exportSids.concat(id));
+    setExportMsg("");
+  }
+
+  function exportSelectedSessions() {
+    if (!exportSids.length) return;
+    exportSids.forEach(function (sessionId) {
+      var url = "/api/sessions/" + encodeURIComponent(sessionId) + "/export?format=" + exportFmt;
+      var a = document.createElement("a");
+      a.href = url;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+    });
+    setExportMsg(t("settings.sessionExportStarted", { n: exportSids.length }));
+    setTimeout(function () { setExportMsg(""); }, 3000);
   }
 
   return React.createElement("div", { className: "settings-panel" },
@@ -3033,29 +3114,17 @@ function DataPanel(p) {
 
     // Path info
     SectionBlock(t("settings.pathInfo"), null,
-      FieldRow(t("settings.baseDir"), null, React.createElement("input", { className: "wb-input mono", value: configLoading ? t("settings.pathLoading") : config.base_dir, readOnly: true })),
-      FieldRow(t("settings.dataDir"), null, React.createElement("input", { className: "wb-input mono", value: configLoading ? t("settings.pathLoading") : config.data_dir, readOnly: true })),
-      FieldRow(t("settings.workspaceDir"), null, React.createElement("input", { className: "wb-input mono", value: configLoading ? t("settings.pathLoading") : config.workspace_dir, readOnly: true })),
-      FieldRow(t("settings.soulPath"), null, React.createElement("input", { className: "wb-input mono", value: configLoading ? t("settings.pathLoading") : config.soul_path, readOnly: true })),
+      FieldRow(t("settings.baseDir"), null, React.createElement("input", { className: "wb-input mono wb-path-display", value: configLoading ? t("settings.pathLoading") : config.base_dir, readOnly: true })),
+      FieldRow(t("settings.dataDir"), null, React.createElement("input", { className: "wb-input mono wb-path-display", value: configLoading ? t("settings.pathLoading") : config.data_dir, readOnly: true })),
+      FieldRow(t("settings.workspaceDir"), null, React.createElement("input", { className: "wb-input mono wb-path-display", value: configLoading ? t("settings.pathLoading") : config.workspace_dir, readOnly: true })),
+      FieldRow(t("settings.soulPath"), null, React.createElement("input", { className: "wb-input mono wb-path-display", value: configLoading ? t("settings.pathLoading") : config.soul_path, readOnly: true })),
     ),
 
     // Backup
-    SectionBlock(t("settings.backup"), null,
+    SectionBlock(t("settings.backup"), t("settings.backupHint"),
       React.createElement("div", { className: "wb-inline-row" },
-        React.createElement("button", { className: "wb-btn primary", onClick: function () {
-          setBackupMsg(t("settings.backupExporting"));
-          fetch("/api/backup/export", { method: "POST" }).then(function (r) { return r.json(); }).then(function (d) {
-            if (d.ok) { setBackupMsg(t("settings.backupExported", { n: d.entries.length, size: formatBytes(d.size) })); loadBackups(); }
-            else throw new Error(d.error);
-          }).catch(function (e) { setBackupMsg(t("settings.failed") + ": " + e.message); });
-        } }, t("settings.backupExportBtn")),
-        React.createElement("button", { className: "wb-btn", onClick: function () {
-          if (!backupList.length) { setBackupMsg(t("settings.backupNoBackups")); return; }
-          var last = backupList[0];
-          fetch("/api/backup/restore", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ path: last.path }) })
-            .then(function (r) { return r.json(); }).then(function (d) { if (d.ok) setBackupMsg(t("settings.backupRestored", { n: d.restored.length }) + " " + t("settings.backupRestartRequired")); else throw new Error(d.error || (d.errors || []).join("; ")); })
-            .catch(function (e) { setBackupMsg(t("settings.backupRestoreFailed") + ": " + e.message); });
-        } }, t("settings.backupRestoreBtn")),
+        React.createElement("button", { className: "wb-btn primary", onClick: createBackup }, t("settings.backupExportBtn")),
+        React.createElement("button", { className: "wb-btn", onClick: restoreBackup }, t("settings.backupRestoreBtn")),
       ),
       backupMsg && React.createElement("p", { className: "wb-hint" }, backupMsg),
       backupList.map(function (b) {
@@ -3067,12 +3136,22 @@ function DataPanel(p) {
     ),
 
     // Session export
-    SectionBlock(t("settings.sessionExport"), null,
-      dataState.sessions && dataState.sessions.length > 0 ? React.createElement("div", { className: "wb-export-area" },
-        React.createElement("select", { className: "wb-select", value: exportSid, onChange: function (e) { setExportSid(e.target.value); setExportMsg(""); }, style: { maxWidth: 300 } },
-          React.createElement("option", { value: "" }, t("settings.sessionExportSelectPlaceholder")),
-          dataState.sessions.map(function (s) {
-            return React.createElement("option", { key: s.id, value: s.id }, s.title || s.id);
+    SectionBlock(t("settings.sessionExport"), t("settings.sessionExportHint"),
+      exportSessions.length > 0 ? React.createElement("div", { className: "wb-export-area" },
+        React.createElement("div", { className: "wb-export-session-toolbar" },
+          React.createElement("span", null, t("settings.sessionExportSelected", { n: exportSids.length })),
+          React.createElement("div", { className: "wb-inline-row" },
+            React.createElement("button", { type: "button", className: "wb-btn muted", onClick: function () { setExportSids(exportSessions.map(function (s) { return s.id; })); setExportMsg(""); } }, t("settings.selectAll")),
+            React.createElement("button", { type: "button", className: "wb-btn muted", disabled: !exportSids.length, onClick: function () { setExportSids([]); setExportMsg(""); } }, t("settings.clearSelection")),
+          ),
+        ),
+        React.createElement("div", { className: "wb-export-session-list", role: "group", "aria-label": t("settings.sessionExportSelectLabel") },
+          exportSessions.map(function (s) {
+            var selected = exportSids.indexOf(s.id) >= 0;
+            return React.createElement("label", { className: "wb-export-session-option" + (selected ? " selected" : ""), key: s.id },
+              React.createElement("input", { type: "checkbox", checked: selected, onChange: function () { toggleExportSession(s.id); } }),
+              React.createElement("span", null, s.title || s.id),
+            );
           }),
         ),
         React.createElement("div", { className: "wb-seg" },
@@ -3080,12 +3159,7 @@ function DataPanel(p) {
           React.createElement("button", { className: "wb-seg-btn" + (exportFmt === "json" ? " active" : ""), onClick: function () { setExportFmt("json"); } }, "JSON"),
         ),
         React.createElement("div", { className: "wb-inline-row" },
-          React.createElement("button", { className: "wb-btn primary", disabled: !exportSid, onClick: function () {
-            if (!exportSid) return;
-            var url = "/api/sessions/" + encodeURIComponent(exportSid) + "/export?format=" + exportFmt;
-            var a = document.createElement("a"); a.href = url; document.body.appendChild(a); a.click(); document.body.removeChild(a);
-            setExportMsg("✓"); setTimeout(function () { setExportMsg(""); }, 2000);
-          } }, t("settings.sessionExportBtn")),
+          React.createElement("button", { className: "wb-btn primary", disabled: !exportSids.length, onClick: exportSelectedSessions }, t("settings.sessionExportBtn")),
           exportMsg && React.createElement("span", { className: "wb-hint" }, exportMsg),
         ),
       ) : React.createElement("p", { className: "wb-hint" }, t("settings.sessionExportNoSessions")),

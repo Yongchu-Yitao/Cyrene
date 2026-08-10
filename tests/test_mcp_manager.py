@@ -93,6 +93,22 @@ def test_get_server_status_with_no_config():
     assert status == [], f"Expected empty status, got {status}"
 
 
+def test_stdio_tool_timeout_defaults_to_and_is_capped_at_120_seconds():
+    from cyrene.tooling.backends.mcp_manager import MCPServerConnection
+
+    default = MCPServerConnection("default", "stdio", {})
+    configured_lower = MCPServerConnection(
+        "lower", "stdio", {"timeout_seconds": 45}
+    )
+    configured_higher = MCPServerConnection(
+        "higher", "stdio", {"timeout_seconds": 600}
+    )
+
+    assert default.tool_timeout_seconds() == 120.0
+    assert configured_lower.tool_timeout_seconds() == 45.0
+    assert configured_higher.tool_timeout_seconds() == 120.0
+
+
 def test_mcp_tool_def_conversion():
     """Verify the MCP Tool → Cyrene tool def format conversion."""
     import sys

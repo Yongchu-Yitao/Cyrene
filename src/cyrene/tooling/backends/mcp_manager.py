@@ -44,6 +44,13 @@ _BLOCKED_EXECUTABLES = frozenset({
 logger = logging.getLogger(__name__)
 
 _MCP_SERVERS_FILE = DATA_DIR / "mcp_servers.json"
+_DEFAULT_STARTUP_TIMEOUT_SECONDS = 120.0
+_DEFAULT_TOOL_TIMEOUT_SECONDS = 120.0
+_MIN_TIMEOUT_SECONDS = 1.0
+_MAX_STARTUP_TIMEOUT_SECONDS = 300.0
+_MAX_TOOL_TIMEOUT_SECONDS = 120.0
+_DEFAULT_STDIO_STREAM_LIMIT_BYTES = 20 * 1024 * 1024
+_MAX_STDIO_STREAM_LIMIT_BYTES = 64 * 1024 * 1024
 
 # ---------------------------------------------------------------------------
 # Module-level singleton
@@ -157,7 +164,48 @@ class MCPServerConnection:
         self._process: asyncio.subprocess.Process | None = None
         self._ctx_stack: Any = None
         self._tools: list[dict[str, Any]] = []
+        # The raw stdio transport has one response stream. Serialize requests
+        # so concurrent Agent tool calls cannot consume one another's replies.
+        self._rpc_lock = asyncio.Lock()
         self.status = "disconnected"
+
+    def _bounded_config_number(
+        self,
+        key: str,
+        default: float,
+        *,
+        minimum: float,
+        maximum: float,
+    ) -> float:
+        try:
+            value = float(self.config.get(key, default))
+        except (TypeError, ValueError):
+            value = default
+        return min(maximum, max(minimum, value))
+
+    def startup_timeout_seconds(self) -> float:
+        return self._bounded_config_number(
+            "startup_timeout_seconds",
+            _DEFAULT_STARTUP_TIMEOUT_SECONDS,
+            minimum=_MIN_TIMEOUT_SECONDS,
+            maximum=_MAX_STARTUP_TIMEOUT_SECONDS,
+        )
+
+    def tool_timeout_seconds(self) -> float:
+        return self._bounded_config_number(
+            "timeout_seconds",
+            _DEFAULT_TOOL_TIMEOUT_SECONDS,
+            minimum=_MIN_TIMEOUT_SECONDS,
+            maximum=_MAX_TOOL_TIMEOUT_SECONDS,
+        )
+
+    def stdio_stream_limit_bytes(self) -> int:
+        return int(self._bounded_config_number(
+            "max_response_bytes",
+            _DEFAULT_STDIO_STREAM_LIMIT_BYTES,
+            minimum=64 * 1024,
+            maximum=_MAX_STDIO_STREAM_LIMIT_BYTES,
+        ))
 
     async def connect(self) -> None:
         """Connect to the MCP server and discover tools."""
@@ -186,7 +234,7 @@ class MCPServerConnection:
                 "protocolVersion": "2024-11-05",
                 "capabilities": {},
                 "clientInfo": {"name": "cyrene", "version": get_version()},
-            })
+            }, timeout=self.startup_timeout_seconds())
             # Send initialized notification
             notif = json.dumps({"jsonrpc": "2.0", "method": "notifications/initialized"}) + "\n"
             if self._process and self._process.stdin:
@@ -244,11 +292,18 @@ class MCPServerConnection:
             stderr=asyncio.subprocess.DEVNULL,
             cwd=_cwd,
             env=_env,
+            limit=self.stdio_stream_limit_bytes(),
         )
 
         logger.info("MCP server '%s' subprocess started (pid=%s)", self.name, self._process.pid)
 
-    async def _json_rpc_request(self, method: str, params: dict | None = None) -> dict:
+    async def _json_rpc_request(
+        self,
+        method: str,
+        params: dict | None = None,
+        *,
+        timeout: float | None = None,
+    ) -> dict:
         """Send a JSON-RPC request to the subprocess and return the result."""
         import uuid as _uuid
         req_id = _uuid.uuid4().hex[:8]
@@ -263,17 +318,55 @@ class MCPServerConnection:
         if self._process is None or self._process.stdin is None or self._process.stdout is None:
             raise RuntimeError(f"MCP server '{self.name}' not running")
 
+        request_timeout = timeout or self.tool_timeout_seconds()
         payload = (json.dumps(request) + "\n").encode("utf-8")
-        self._process.stdin.write(payload)
-        await self._process.stdin.drain()
+        async with self._rpc_lock:
+            self._process.stdin.write(payload)
+            await self._process.stdin.drain()
 
-        # Read response line
-        line = await asyncio.wait_for(self._process.stdout.readline(), timeout=15.0)
-        response = json.loads(line.decode("utf-8").strip())
-
-        if "error" in response:
-            raise RuntimeError(f"MCP server '{self.name}' error: {response['error']}")
-        return response.get("result", {})
+            loop = asyncio.get_running_loop()
+            deadline = loop.time() + request_timeout
+            while True:
+                remaining = deadline - loop.time()
+                if remaining <= 0:
+                    raise asyncio.TimeoutError(
+                        f"MCP server '{self.name}' request '{method}' timed out "
+                        f"after {request_timeout:g} seconds"
+                    )
+                line = await asyncio.wait_for(
+                    self._process.stdout.readline(),
+                    timeout=remaining,
+                )
+                if not line:
+                    return_code = self._process.returncode
+                    raise RuntimeError(
+                        f"MCP server '{self.name}' closed stdout"
+                        + (
+                            f" (exit code {return_code})"
+                            if return_code is not None
+                            else ""
+                        )
+                    )
+                try:
+                    response = json.loads(line.decode("utf-8").strip())
+                except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+                    raise RuntimeError(
+                        f"MCP server '{self.name}' returned invalid JSON-RPC"
+                    ) from exc
+                # Server notifications have no id. Ignore them while waiting
+                # for the response paired with this request.
+                if "id" not in response:
+                    continue
+                if str(response.get("id")) != str(req_id):
+                    raise RuntimeError(
+                        f"MCP server '{self.name}' returned response id "
+                        f"{response.get('id')!r}; expected {req_id!r}"
+                    )
+                if "error" in response:
+                    raise RuntimeError(
+                        f"MCP server '{self.name}' error: {response['error']}"
+                    )
+                return response.get("result", {})
 
     async def _connect_sse(self) -> None:
         """Connect via SSE transport."""
@@ -290,8 +383,23 @@ class MCPServerConnection:
     async def _refresh_tools(self) -> None:
         """Fetch and cache tool definitions from the server via JSON-RPC."""
         try:
-            result = await self._json_rpc_request("tools/list")
-            raw_tools = result.get("tools", [])
+            if self.transport == "stdio":
+                result = await self._json_rpc_request(
+                    "tools/list",
+                    timeout=self.startup_timeout_seconds(),
+                )
+                raw_tools = result.get("tools", [])
+            else:
+                if self._session is None:
+                    raise RuntimeError(f"MCP server '{self.name}' is not connected")
+                result = await asyncio.wait_for(
+                    self._session.list_tools(),
+                    timeout=self.startup_timeout_seconds(),
+                )
+                raw_tools = [
+                    item.model_dump(by_alias=True, exclude_none=True)
+                    for item in result.tools
+                ]
             self._tools = [
                 {
                     "type": "function",
@@ -317,20 +425,18 @@ class MCPServerConnection:
         return any(td["function"]["name"] == name for td in self._tools)
 
     async def call_tool(self, name: str, arguments: dict[str, Any]) -> str:
-        """Call a tool on this server and return the text result."""
+        """Call a tool and serialize supported MCP content for the Agent loop."""
+        from cyrene.tooling.mcp_content import serialize_mcp_content_blocks
+
         if self.transport == "stdio":
             # Raw JSON-RPC for stdio
             result = await self._json_rpc_request("tools/call", {
                 "name": name,
                 "arguments": arguments or {},
-            })
+            }, timeout=self.tool_timeout_seconds())
             content_items = result.get("content", [])
-            parts: list[str] = []
             is_error = result.get("isError", False)
-            for item in content_items:
-                if item.get("type") == "text" and item.get("text"):
-                    parts.append(item["text"])
-            text = "\n".join(parts) if parts else f"(Tool '{name}' returned no text content)"
+            text = serialize_mcp_content_blocks(name, content_items)
             if is_error:
                 raise RuntimeError(text)
             return text
@@ -338,18 +444,18 @@ class MCPServerConnection:
             # SSE transport uses the MCP SDK session
             if self._session is None:
                 raise RuntimeError(f"MCP server '{self.name}' is not connected")
-            from mcp.types import TextContent
             result = await asyncio.wait_for(
                 self._session.call_tool(name, arguments or {}),
                 timeout=30.0,
             )
+            content_items = [
+                item.model_dump(by_alias=True, exclude_none=True)
+                for item in result.content
+            ]
+            text = serialize_mcp_content_blocks(name, content_items)
             if result.isError:
-                error_text = " | ".join(
-                    item.text for item in result.content if isinstance(item, TextContent)
-                ) or f"Tool '{name}' returned an error"
-                raise RuntimeError(error_text)
-            parts = [item.text for item in result.content if isinstance(item, TextContent) and item.text]
-            return "\n".join(parts) if parts else f"(Tool '{name}' returned no text content)"
+                raise RuntimeError(text)
+            return text
 
     async def disconnect(self) -> None:
         """Disconnect from the server and clean up resources."""
@@ -462,6 +568,17 @@ class MCPManager:
             if conn.has_tool(name):
                 return await conn.call_tool(name, arguments)
         raise ValueError(f"MCP tool '{name}' not found on any connected server")
+
+    def get_tool_timeout(self, name: str) -> float:
+        """Return the configured wall-clock timeout for the server owning a tool."""
+        for conn in self._servers.values():
+            if conn.has_tool(name):
+                return (
+                    conn.tool_timeout_seconds()
+                    if conn.transport == "stdio"
+                    else 30.0
+                )
+        return _DEFAULT_TOOL_TIMEOUT_SECONDS
 
     def get_server_status(self) -> list[dict[str, Any]]:
         """Return status for all configured servers."""

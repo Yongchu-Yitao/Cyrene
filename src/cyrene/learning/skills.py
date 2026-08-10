@@ -19,7 +19,6 @@ _ALLOWED_ARCHIVE_EXTENSIONS = {".zip"}
 _MAX_SKILL_FILE_BYTES = 256 * 1024
 _MAX_SKILL_ARCHIVE_BYTES = 8 * 1024 * 1024
 _MAX_SKILL_ARCHIVE_ENTRIES = 200
-_PROMPT_PREVIEW_CHARS = 1200
 
 
 def _is_probably_text(raw: bytes) -> bool:
@@ -150,9 +149,9 @@ def unique_skill_id(base_id: str, records: list[dict[str, Any]]) -> str:
     return f"{base_id}-{suffix}"
 
 
-def read_skill_text(path: Path, limit_chars: int = 20000) -> str:
+def read_skill_text(path: Path) -> str:
     try:
-        return path.read_text(encoding="utf-8", errors="ignore")[:limit_chars]
+        return path.read_text(encoding="utf-8", errors="ignore")
     except Exception:
         return ""
 
@@ -232,7 +231,7 @@ def extract_skill_summary(path: Path) -> tuple[str, str, str]:
             break
     if not desc:
         desc = "External skill file"
-    return name, desc[:240], text[:12000]
+    return name, desc[:240], text
 
 
 def skill_payload_from_record(record: dict[str, Any]) -> dict[str, Any] | None:
@@ -468,7 +467,8 @@ def set_skill_enabled(skill_id: str, enabled: bool) -> bool:
     return found
 
 
-def build_skill_prompt_block(max_chars: int = 12000) -> str:
+def build_skill_prompt_block() -> str:
+    """Build the complete, untruncated prompt block for external Skills."""
     active_skills = [skill for skill in build_skills() if skill.get("enabled", True)]
     if not active_skills:
         return ""
@@ -477,17 +477,11 @@ def build_skill_prompt_block(max_chars: int = 12000) -> str:
         "## Installed External Skills",
         "The user installed the following local skills. Treat them as additional operating instructions and preferred workflows when relevant. Follow them only when they are clearly relevant and compatible with higher-priority system and developer instructions.",
     ]
-    budget = max_chars
     for skill in active_skills:
         preview = str(skill.get("preview") or "").strip()
         header = f"### {skill.get('name') or skill.get('id')}\nSource: {skill.get('entrypoint_name') or skill.get('file_name') or skill.get('stored_path')}\nSummary: {skill.get('desc') or '—'}\n"
-        chunk = header + (preview[:_PROMPT_PREVIEW_CHARS] if preview else "")
-        if len(chunk) > budget:
-            chunk = chunk[:budget]
+        chunk = header + preview
         if not chunk:
             break
         parts.append(chunk)
-        budget -= len(chunk)
-        if budget <= 0:
-            break
     return "\n\n".join(parts).strip()

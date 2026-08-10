@@ -828,9 +828,9 @@ def test_library_frontend_uses_project_api_and_clears_filtered_selection():
     assert "wb-lib-card-foot" in source
     assert 'className: "wb-lib-check wb-lib-card-check"' in source
     assert "onToggle: toggleChecked" in source
-    assert "grid-template-columns: repeat(auto-fill, minmax(280px, 1fr))" in styles
+    assert "grid-template-columns: repeat(auto-fill, minmax(240px, 1fr))" in styles
     assert "overflow-wrap: anywhere" in styles
-    assert ".wb-lib-view-toggle button { width: 40px; height: 100%; display: grid; place-items: center;" in styles
+    assert ".wb-lib-view-toggle button { width: 38px; height: 100%; display: grid; place-items: center;" in styles
     assert ".wb-lib-view-toggle svg { display: block; }" in styles
     assert "inset: 1px 6px" in styles
     assert ".wb-lib-row > * { position: relative; z-index: 1; }" in styles
@@ -842,7 +842,8 @@ def test_library_frontend_uses_project_api_and_clears_filtered_selection():
     assert "background: var(--wb-shell-bg)" in styles
     assert "background: var(--wb-task-rail-bg)" in styles
     assert "background: var(--wb-main-bg, var(--wb-surface))" in styles
-    assert "background: var(--wb-right-bg)" in styles
+    assert ".wb-lib-right-panel-card" in styles
+    assert ".wb-lib-right {" in styles and "background: transparent" in styles
     assert "#ee4caa" not in styles
     assert "cyrene.library.workspaceHeight" in source
     assert 'role: "separator"' in source
@@ -859,7 +860,7 @@ def test_library_frontend_uses_project_api_and_clears_filtered_selection():
         '"aria-label": L("library.summaryNotesTags", "Summary, notes and tags")'
         in source
     )
-    assert 'props.tab === "info" ? " info" : ""' in source
+    assert 'className: "wb-lib-work-body info"' in source
     assert ".wb-lib-work-body.info { overflow: hidden; padding: 0; }" in styles
     assert "border-right: 1px solid var(--wb-line)" in styles
     assert "overscroll-behavior: contain" in styles

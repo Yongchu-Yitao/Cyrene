@@ -41,6 +41,7 @@ from route.workbench.knowledge import register_workbench_knowledge_routes
 from route.workbench.library import register_workbench_library_routes
 from route.workbench.memory import register_workbench_memory_routes
 from route.workbench.projects import register_project_routes
+from route.workbench.project_memory import register_project_memory_routes
 from route.workbench.schedule import register_workbench_schedule_routes
 from route.workbench.task_sessions import register_task_session_routes
 
@@ -98,6 +99,7 @@ def register_routes(app: FastAPI, bot: Any, db_path: str) -> None:
     register_workbench_knowledge_routes(router)
     register_workbench_library_routes(router)
     register_workbench_memory_routes(router, db_path)
+    register_project_memory_routes(router, db_path)
     register_workbench_schedule_routes(router, db_path)
     chat_control_adapter = register_workbench_chat_routes(router, bot, db_path)
     project_control_adapter = _register_shared_adapter(

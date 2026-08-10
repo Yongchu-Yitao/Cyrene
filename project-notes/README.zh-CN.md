@@ -23,6 +23,7 @@
 
 ## 进行中 / 规划
 
+- [Workbench 项目级 Memory Agent Handoff](project-memory-agent-handoff.zh-CN.md)
 - [Research Workbench 路线图](research-workbench-roadmap.md)
 - [更广泛的产品 / 架构工作 Handoff](architecture-followups-handoff.zh-CN.md)(目录迁移后的后续改进)
 

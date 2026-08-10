@@ -170,6 +170,14 @@ def register_project_routes(
         if doomed_project:
             doomed_data_key = _workbench_project_data_key(doomed_project)
             doomed_memory_key = _workbench_project_memory_key(doomed_project)
+            from cyrene.workbench.chat import _read_chats_store
+            doomed_chat_ids = [
+                str(item.get("id") or "")
+                for item in (_read_chats_store().get("chats") or [])
+                if isinstance(item, dict)
+                and str(item.get("projectId") or "") == project_id
+                and str(item.get("id") or "")
+            ]
             for s in (doomed_project.get("sessions") or []):
                 sid = str(s.get("id") or "").strip()
                 if sid:
@@ -187,10 +195,16 @@ def register_project_routes(
                 try:
                     from cyrene.config import get_knowledge_db_path
                     from route.workbench.memory import delete_workspace_memory
+                    from cyrene.workbench.project_memory_prompt import (
+                        cancel_project_jobs,
+                        delete_project_memory,
+                    )
 
                     # Knowledge db is keyed on the project id (memory key).
                     _remove_path(get_knowledge_db_path(doomed_memory_key))
                     delete_workspace_memory(doomed_memory_key)
+                    await cancel_project_jobs(project_id)
+                    delete_project_memory(project_id, doomed_chat_ids)
                     import aiosqlite
                     async with aiosqlite.connect(_db_path) as db:
                         await db.execute(

@@ -73,6 +73,7 @@ CAPABILITY_BINDINGS: dict[str, tuple[tuple[str, str], ...]] = {
         ("memory.project.search", "search_project_memory"),
         ("memory.project.save", "save_project_memory"),
         ("memory.project.retire", "retire_project_memory"),
+        ("memory.project.learn", "trigger_project_memory_learning"),
     ),
     "knowledge_tools": (
         ("knowledge.list_documents", "ListKnowledgeDocuments"),

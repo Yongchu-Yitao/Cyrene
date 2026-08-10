@@ -84,6 +84,7 @@ from cyrene.runtime.settings_store import (
     is_tool_pack_enabled,
 )
 from cyrene.tooling import execute_wire_tool, get_main_wire_tool_defs
+from cyrene.tooling.mcp_content import build_mcp_observation_message
 from cyrene.runtime.task_lifecycle import cancel_and_wait, track_task
 
 logger = logging.getLogger(__name__)
@@ -227,6 +228,7 @@ async def _run_execution_agent_locked(task: str, bot: Any, chat_id: int, db_path
         if not tool_calls:
             return assistant_text(response) or "Done."
 
+        mcp_observations: list[dict[str, Any]] = []
         for tc in tool_calls:
             call_id = tc["id"]
             fn = tc["function"]
@@ -245,6 +247,13 @@ async def _run_execution_agent_locked(task: str, bot: Any, chat_id: int, db_path
             except Exception as e:
                 result = f"Tool {name} failed: {e}"
             messages.append({"role": "tool", "tool_call_id": call_id, "content": truncate(result)})
+            observation = build_mcp_observation_message(
+                result,
+                tool_name=str(name or ""),
+            )
+            if observation is not None:
+                mcp_observations.append(observation)
+        messages.extend(mcp_observations)
 
     return final_text
 
@@ -271,6 +280,7 @@ async def run_agent(
     fixed_ephemeral_system: str = "",
     volatile_ephemeral_system: str = "",
     static_system_extra: str = "",
+    final_system_extra: str = "",
     response_capabilities: tuple[str, ...] | frozenset[str] = (),
 ) -> str:
     """Main entry point. Runs the main agent loop with stable tool gateways.
@@ -289,6 +299,9 @@ async def run_agent(
     ahead of every volatile block. Use it for instructions that never change
     between runs so they stay in the cache-stable prefix; use ``ephemeral_system``
     for anything that varies per run.
+
+    ``final_system_extra`` is reserved for a conversation-frozen Workbench
+    project-memory block and is appended after every other system fragment.
 
     ``response_capabilities`` declares stable client rendering features. It
     participates in the wire-bundle cache key; Workbench uses
@@ -319,6 +332,7 @@ async def run_agent(
                     fixed_ephemeral_system=fixed_ephemeral_system,
                     volatile_ephemeral_system=volatile_ephemeral_system,
                     static_system_extra=static_system_extra,
+                    final_system_extra=final_system_extra,
                 )
             finally:
                 if ctx.active_task is current_task:
@@ -385,6 +399,7 @@ async def _run_chat_agent(
     fixed_ephemeral_system: str = "",
     volatile_ephemeral_system: str = "",
     static_system_extra: str = "",
+    final_system_extra: str = "",
     forced_round_id: str = "",
     history_override: list[dict[str, Any]] | None = None,
     persist_base_messages: list[dict[str, Any]] | None = None,
@@ -976,6 +991,9 @@ async def _run_chat_agent(
                 temporal_context,
                 conversation_identity,
                 pinned_resource_context,
+                # Conversation-frozen project memory is deliberately last in
+                # the last system message before the current user turn.
+                final_system_extra,
             )
             if part
         )

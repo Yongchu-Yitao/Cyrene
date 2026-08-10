@@ -180,7 +180,29 @@ def register_session_routes(router: APIRouter, bot: Any, db_path: str) -> None:
                 if assistant_body:
                     messages.append({"role": "assistant", "content": assistant_body, "time": ts})
         else:
-            return JSONResponse({"error": "unknown session id"}, status_code=400)
+            from cyrene.workbench.chat import get_workbench_chat
+
+            chat = await asyncio.to_thread(get_workbench_chat, session_id)
+            if not chat:
+                return JSONResponse({"error": "unknown session id"}, status_code=400)
+            session_title = str(chat.get("title") or "conversation")
+            created_at = str(chat.get("createdAt") or "")
+            updated_at = str(chat.get("updatedAt") or created_at)
+            messages = []
+            for message in chat.get("messages") or []:
+                if not isinstance(message, dict):
+                    continue
+                role = str(message.get("role") or "").strip()
+                if role not in ("user", "assistant") or message.get("hidden_from_ui"):
+                    continue
+                content = str(message.get("content") or "").strip()
+                if not content:
+                    continue
+                messages.append({
+                    "role": role,
+                    "content": content,
+                    "time": str(message.get("createdAt") or message.get("created_at") or ""),
+                })
 
         safe_title = re.sub(r"[^\w\-. ]+", "_", session_title or session_id, flags=re.ASCII)[:60].strip("_. ") or "session"
 

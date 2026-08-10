@@ -71,9 +71,6 @@ function WorkbenchRoot() {
   var [darkBackground, setDarkBackground] = useStateBootstrap(function () {
     return readWorkbenchTweak("backgroundDark", null);
   });
-  var [density, setDensity] = useStateBootstrap(function () {
-    return readWorkbenchTweak("density", "cozy");
-  });
   var [textSize, setTextSize] = useStateBootstrap(function () {
     return readWorkbenchTweak("textSize", "default");
   });
@@ -106,15 +103,14 @@ function WorkbenchRoot() {
   }, [themeMode, actualTheme]);
 
   useEffectBootstrap(function () {
-    var nextDensity = density || "cozy";
     var nextTextSize = textSize || "default";
     try {
-      localStorage.setItem("cyrene-tweak-density", JSON.stringify(nextDensity));
+      localStorage.removeItem("cyrene-tweak-density");
       localStorage.setItem("cyrene-tweak-textSize", JSON.stringify(nextTextSize));
     } catch (error) {}
-    document.documentElement.dataset.density = nextDensity;
+    document.documentElement.dataset.density = "cozy";
     document.documentElement.dataset.textSize = nextTextSize;
-  }, [density, textSize]);
+  }, [textSize]);
 
   useEffectBootstrap(function () {
     applyWorkbenchAccent(accent);
@@ -137,9 +133,6 @@ function WorkbenchRoot() {
     function onDarkBackground() {
       setDarkBackground(readWorkbenchTweak("backgroundDark", null));
     }
-    function onDensity() {
-      setDensity(readWorkbenchTweak("density", "cozy"));
-    }
     function onTextSize() {
       setTextSize(readWorkbenchTweak("textSize", "default"));
     }
@@ -147,14 +140,12 @@ function WorkbenchRoot() {
     window.addEventListener("cyrene-tweak-accent-change", onAccent);
     window.addEventListener("cyrene-tweak-backgroundLight-change", onLightBackground);
     window.addEventListener("cyrene-tweak-backgroundDark-change", onDarkBackground);
-    window.addEventListener("cyrene-tweak-density-change", onDensity);
     window.addEventListener("cyrene-tweak-textSize-change", onTextSize);
     return function () {
       window.removeEventListener("cyrene-tweak-theme-change", onTheme);
       window.removeEventListener("cyrene-tweak-accent-change", onAccent);
       window.removeEventListener("cyrene-tweak-backgroundLight-change", onLightBackground);
       window.removeEventListener("cyrene-tweak-backgroundDark-change", onDarkBackground);
-      window.removeEventListener("cyrene-tweak-density-change", onDensity);
       window.removeEventListener("cyrene-tweak-textSize-change", onTextSize);
     };
   }, []);

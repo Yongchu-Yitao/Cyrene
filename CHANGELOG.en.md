@@ -5,6 +5,99 @@
 This English edition preserves the release history of the Chinese changelog.
 The Chinese edition remains the most detailed record for older releases.
 
+## [0.7.0] - 2026-08-11
+
+`0.7.0` brings together every user-facing change since `0.6.17`, including all fourteen beta releases and the final stabilization work. This section intentionally describes features and experience changes only; the original beta release records remain below.
+
+### Knowledge, literature, and local search
+
+- Added a project-isolated Knowledge and literature workspace for files, papers, collections, tags, notes, attachments, relations, reading status, favorites, and citekeys.
+- Added imports for regular files, PDFs, CSL JSON, RIS, BibTeX, and Zotero libraries, including metadata, collections, notes, annotations, attachments, and deletion state.
+- Added IEEE, APA, MLA, Chicago, and BibTeX citations with direct plain-text or BibTeX copy actions.
+- Added table and card views. Narrow windows retain two columns, wide windows add three or more, and the chosen view persists.
+- Card titles, descriptions, tags, type, size, and updated time now wrap or truncate safely without overflowing neighboring cards.
+- Added safe previews or open actions for images, audio, video, PDF, Markdown, HTML, and other attachments, with reading-state updates.
+- Added local Qwen embeddings, hybrid keyword/vector ranking, OCR, structure-aware content processing, model downloads, and embedding coverage status.
+- Knowledge search, attachment analysis, project memory, and Agent evidence gathering now share project material and rely less on remote embedding or vision services.
+- Permanent deletion removes exclusive indexes, relations, and managed files while preserving shared content, and deleted items no longer reappear after sync.
+- The Knowledge command area is now a responsive two-row layout so search, filters, view controls, and add/import/export actions remain visible in narrow windows.
+- Item-level top navigation has moved into the right detail workspace, leaving more width for the library itself.
+
+### Memory, project memory, and Skill Learning
+
+- Memory now exposes type, tags, source, created and updated time, confidence, reference count, content, citations, related memories, and history.
+- Added a project-specific memory prompt with versions, editing, restore, automatic learning, and learning from completed conversations.
+- The main Agent can learn durable project knowledge from stable conclusions, user habits, successful work, recovered failures, and explicit corrections.
+- Skill Learning details include behavioral steps, user actions, success rate, repeat detection, screenshots or artifacts, and Save as Skill.
+- Memory, Knowledge, Schedule, and Skill Learning details now share one floating-glass card instead of edge-attached split panels.
+- All four detail surfaces share expandable vertical tabs, matching expand/collapse motion, adaptive height, bottom tab placement, and content scrolling.
+- Expanded tabs remain transparent instead of showing a heavy selected fill, and content is separated from lower tabs by a clear divider.
+- Delete actions are red and fixed to the top-right corner with matching position, sizing, and spacing across Memory and Knowledge.
+- Knowledge and Memory empty states now use matching icon treatment, typography, placement, and card dimensions.
+
+### Agent, task, and conversation workflows
+
+- Proactive Agent runs prioritize grounded, verifiable work instead of social greetings while respecting project scope and the user's language.
+- Long Agent runs no longer stop at a fixed tool-round limit and can continue until completion, cancellation, or an unrecoverable error, with progress and completion notifications.
+- Added planning, step progress, pending questions, guidance, interrupt, resume, cancel, and wake-on-shell-exit workflows.
+- Added project chat groups with drag-to-group, rename, move in or out, dissolve, and selective access to completed peer-conversation context.
+- Chats and tasks receive a one-time generated title after the first message; per-session model, reasoning effort, and permission choices persist.
+- Recent-session tabs accurately show running, awaiting, failed, cancelled, planning, and completed state without background replies overwriting the current selection.
+- Chats can open as floating panels or alongside Browser, files, Maps, and Changes; split resources can be swapped and restored, and pending questions can be answered in place.
+- Answers can include safe charts, buttons, action groups, and grids, with one-shot actions remaining disabled after use.
+- Generated images and attachments appear as draggable preview cards with view, open, download, and Knowledge actions; nested generated files can also be indexed and downloaded.
+- Chat lists support drag and keyboard sorting, drop-to-open, branch source metadata, and cleanup of orphaned branch information.
+- Added an interactive CLI for creating, selecting, and continuing Workbench chats with attachments, context, approvals, and run recovery.
+- The top bar retains up to three work tabs and adds a persistent resource Shelf for files, Knowledge items, selected text, and browser pages.
+- Tool results and final replies now prevent internal protocol markup from leaking into streaming UI or saved messages.
+
+### Models, search, and tools
+
+- Added OpenAI account login for Codex OAuth models without copying an API key, plus available-model, reasoning-effort, and quota displays.
+- Codex OAuth supports native image input and isolated image generation, while custom OpenAI-compatible models retain separate configuration and credentials.
+- Custom and Codex model sources are stored independently, so switching sources does not overwrite the other configuration.
+- Official DeepSeek Pro/V4 models support native web search, source presentation, safe fallback, usage accounting, and secret redaction.
+- Expanded compatibility with structured arguments, legacy function calls, Hermes/Qwen XML, streamed objects, fenced JSON, and common local-model tool formats.
+- Agent tools are progressively grouped into code, browser, desktop, memory, knowledge, task, entity, map, subagent, delivery, skills, and integrations; Settings package toggles control availability.
+- The conversation Context panel lists only tool packages actually used in that run, with complete English and Chinese names and descriptions.
+- Entity queries now include type, title, full ID, and content rather than degrading to type and title only.
+
+### Remote control, mobile, and notifications
+
+- Added encrypted Cyrene-to-Cyrene pairing, trusted devices, scoped grants, revocation, auditing, and replay protection.
+- Added LAN, WSS Relay, and Tailscale connections with clearer messages for incompatible peers, port conflicts, and missing grants.
+- Trusted devices can manage authorized projects, chats, tasks, approvals, artifacts, settings, models, skills, attachments, Maps, Changes, and Shell sessions.
+- Remote Harness can discover and invoke explicitly granted capabilities on another device without creating a second remote Agent conversation.
+- Large attachments and artifacts use chunked transfer with live progress; remote Shell supports incremental reads, writes, interrupt, and continued use.
+- Mobile-created or updated chats refresh in the correct desktop project, and notifications can navigate to a target conversation that is not yet in the local list.
+- Notifications return to the relevant project, chat, task, or resource, while background views refresh less often to reduce resource use.
+
+### Workbench and interface experience
+
+- Schedule, Tasks, Chat, Knowledge, and Memory now share a floating sidebar, bottom module Dock, account entry, collapsed state, and responsive geometry.
+- The project switcher supports create, edit, delete, path information, project search, and context entry points.
+- Search fields, inputs, selects, segmented controls, switches, filters, and view toggles now use the same glass treatment as Memory.
+- Add, Save, Import, Test Connection, and calendar New actions use accent glass while button labels retain the normal foreground color.
+- Dark mode has revised glass surfaces, borders, shadows, and background blending to reduce harsh or glowing edges.
+- The task-detail rail owns real layout space instead of covering content, keeps consistent width at compact sizes, and precisely centers its collapsed control.
+- The no-task state is now a complete card with icon, guidance, and New Task action; long lists still scroll while hiding visual scrollbars.
+- The conversation-side menu is consolidated into one vertical card; Detail and History icons were redesigned and tab type and spacing are more compact.
+- Native browser tabs support create, select, reload, mute, close, and keyboard use, and native pages follow split resizing live.
+- Conversation images, Knowledge cards, detail panels, and Settings controls improve keyboard focus, reduced motion, large text, bilingual wrapping, and narrow-screen behavior.
+- Bundled Manrope, Noto Sans SC, and IBM Plex Mono fonts provide consistent English, Chinese, and monospace typography.
+
+### Settings, data, and desktop releases
+
+- All Settings inputs, selectors, segmented controls, switches, and buttons now use the shared glass style, with wider path fields and conversation selection areas.
+- Removed the density setting. The interface always uses comfortable density, clears old compact preferences, and no longer allows changing it.
+- Create Backup now asks for a destination; Restore Backup lets the user choose any `.zip` backup and explains that a restart is required.
+- Backup/restore and conversation export include explanatory copy. Conversation export loads the complete Workbench conversation list, supports multi-select and select-all, and downloads Markdown or JSON.
+- Light and dark backgrounds can be customized separately, while accent and background colors share a consistent picker experience.
+- Codex quota is separated from currency budgets for custom/API models.
+- Installation-level local key protection improves configuration reliability between development and installed builds, and sensitive logs can be redacted before storage.
+- Linux gains a more compatible rendering path plus AppImage, Debian `.deb`, and Red Hat/Fedora `.rpm` packages; Windows startup, model components, and event-loop compatibility are improved.
+- Improved reliability across conversations, databases, Knowledge sync, background work, caching, update checks, and cross-platform releases.
+
 ## [0.7.0b14] - 2026-08-10
 
 This is the fourteenth `0.7.0` beta and includes every code change after `v0.7.0-beta.13`. It focuses on the Workbench task-detail rail: the expanded rail now owns a dedicated grid lane instead of covering the task canvas, the no-task experience is a complete actionable empty state, task-list scrollbars are visually suppressed without removing scrolling, collapsed headers align precisely, and bilingual copy plus structural regression contracts cover the full change. Before release, the complete `query_entities` output path was also re-inspected and exercised, and an explicit `content` regression contract was added so entity queries cannot silently regress to type-and-title-only output.

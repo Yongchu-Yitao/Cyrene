@@ -72,7 +72,7 @@ function quickChatApplyTheme() {
 }
 
 function quickChatApplyPresentation() {
-  document.documentElement.dataset.density = quickChatReadTweak("density", "cozy") || "cozy";
+  document.documentElement.dataset.density = "cozy";
   document.documentElement.dataset.textSize = quickChatReadTweak("textSize", "default") || "default";
   var root = document.documentElement.style;
   [
@@ -337,12 +337,11 @@ function QuickChatApp() {
       if (!e || !e.key) { onChange(); return; }
       if (e.key === "cyrene-tweak-theme" || e.key === "cyrene-theme-mode") quickChatApplyTheme();
       else if (e.key === "cyrene-tweak-accent") quickChatApplyAccent();
-      else if (e.key === "cyrene-tweak-density" || e.key === "cyrene-tweak-textSize" || e.key === "cyrene-tweak-backgroundLight" || e.key === "cyrene-tweak-backgroundDark") quickChatApplyPresentation();
+      else if (e.key === "cyrene-tweak-textSize" || e.key === "cyrene-tweak-backgroundLight" || e.key === "cyrene-tweak-backgroundDark") quickChatApplyPresentation();
     }
     window.addEventListener("storage", onStorage);
     window.addEventListener("cyrene-tweak-accent-change", onChange);
     window.addEventListener("cyrene-tweak-theme-change", onChange);
-    window.addEventListener("cyrene-tweak-density-change", onChange);
     window.addEventListener("cyrene-tweak-textSize-change", onChange);
     window.addEventListener("cyrene-tweak-backgroundLight-change", onChange);
     window.addEventListener("cyrene-tweak-backgroundDark-change", onChange);
@@ -356,7 +355,6 @@ function QuickChatApp() {
       window.removeEventListener("storage", onStorage);
       window.removeEventListener("cyrene-tweak-accent-change", onChange);
       window.removeEventListener("cyrene-tweak-theme-change", onChange);
-      window.removeEventListener("cyrene-tweak-density-change", onChange);
       window.removeEventListener("cyrene-tweak-textSize-change", onChange);
       window.removeEventListener("cyrene-tweak-backgroundLight-change", onChange);
       window.removeEventListener("cyrene-tweak-backgroundDark-change", onChange);
@@ -724,7 +722,7 @@ function QuickChatPicker({ targets, defaultProject, selectedChatId, search, onSe
   return (
     <>
       <div className="wbq-picker-backdrop" onClick={onClose}></div>
-      <div className="wbq-picker" role="listbox">
+      <div className="wbq-picker" role="dialog" aria-label={quickChatText("选择对话", "Choose conversation")}>
         <input
           ref={searchRef}
           className="wbq-picker-search"
@@ -732,9 +730,10 @@ function QuickChatPicker({ targets, defaultProject, selectedChatId, search, onSe
           onChange={onSearchChange}
           placeholder={quickChatText("搜索对话、项目…", "Search chats, projects…")}
         />
-        <div className="wbq-picker-list">
+        <div className="wbq-picker-list" role="group" aria-label={quickChatText("对话列表", "Conversation list")}>
           <button
             type="button"
+            aria-pressed={!selectedChatId}
             className={"wbq-picker-item" + (!selectedChatId ? " active" : "")}
             onClick={function () { onSelect(null); }}
           >
@@ -749,6 +748,7 @@ function QuickChatPicker({ targets, defaultProject, selectedChatId, search, onSe
               <button
                 key={item.chatId}
                 type="button"
+                aria-pressed={on}
                 className={"wbq-picker-item" + (on ? " active" : "") + (item.running ? " is-running" : "")}
                 disabled={item.running}
                 onClick={function () { if (!item.running) onSelect(item); }}

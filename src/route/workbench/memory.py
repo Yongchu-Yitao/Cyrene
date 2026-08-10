@@ -26,8 +26,10 @@ def register_workbench_memory_routes(router: APIRouter, db_path: str = "") -> No
         configure_store(db_path)
 
     @router.get("/api/workbench/memory")
-    async def wb_list_memory(workspace: str = "default"):
+    async def wb_list_memory(workspace: str = "default", include_hidden: bool = False):
         try:
+            if include_hidden:
+                return _build_payload(workspace, include_hidden=True)
             return _build_payload(workspace)
         except Exception:  # noqa: BLE001
             logger.exception("Failed to list Workbench memory for %s", workspace)
@@ -109,7 +111,7 @@ def register_workbench_memory_routes(router: APIRouter, db_path: str = "") -> No
                 target["content"] = content
             if "category" in body:
                 cat = str(body.get("category") or "").strip().lower()
-                if cat in _CATEGORY_LABELS:
+                if cat in _CATEGORY_LABELS or cat in _HIDDEN_CATEGORIES:
                     target["category"] = cat
                     target["type"] = cat
             if "source" in body:

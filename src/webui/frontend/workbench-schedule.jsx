@@ -613,27 +613,13 @@
 
     var tabs = isTask ? [{ id: "detail", label: T("schedule.detail") }, { id: "runs", label: T("schedule.runHistory") }] : [{ id: "detail", label: T("schedule.detail") }];
 
-    return React.createElement(
-      "aside", { className: "wb-sched-detail" },
-      React.createElement(
-        "div", { className: "wb-sched-detail-tabs" },
-        tabs.map(function (it) {
-          return React.createElement("button", {
-            key: it.id, type: "button", className: tab === it.id ? "active" : "",
-            onClick: function () { setTab(it.id); },
-          }, it.label);
-        }),
-        React.createElement("button", { type: "button", className: "wb-sched-detail-close", onClick: props.onClose, title: T("common.close") }, "×")
-      ),
-      React.createElement(
-        "div", { className: "wb-sched-detail-head" },
-        React.createElement("span", { className: "wb-sched-detail-dot cat-" + ev.category }),
-        React.createElement("b", { className: "wb-sched-detail-title", title: ev.title }, ev.title)
-      ),
-      React.createElement(
-        "div", { className: "wb-sched-detail-body" },
-        tab === "detail" && React.createElement(
+    var detailContent = React.createElement(
           React.Fragment, null,
+          React.createElement(
+            "div", { className: "wb-sched-detail-head" },
+            React.createElement("span", { className: "wb-sched-detail-dot cat-" + ev.category }),
+            React.createElement("b", { className: "wb-sched-detail-title", title: ev.title }, ev.title)
+          ),
           React.createElement(
             "div", { className: "wb-sched-detail-meta" },
             React.createElement(MetaRow, { icon: svg(["M12 7v5l3 2", React.createElement("circle", { key: "c", cx: 12, cy: 12, r: 9 })]), value: detailTimeText(ev) }),
@@ -679,8 +665,48 @@
             React.createElement("button", { type: "button", className: "wb-btn", onClick: function () { props.onEdit(ev); } }, T("schedule.edit")),
             React.createElement("button", { type: "button", className: "wb-btn danger", onClick: function () { props.onDelete(ev); } }, T("schedule.delete"))
           )
-        ),
-        tab === "runs" && React.createElement(RunsTab, { runs: props.runs, loading: props.runsLoading })
+        );
+    var tabBodies = {
+      detail: detailContent,
+      runs: React.createElement(RunsTab, { runs: props.runs, loading: props.runsLoading }),
+    };
+
+    return React.createElement(
+      "aside", { className: "wb-floating-detail-shell wb-sched-detail", "aria-label": T("schedule.detailPanel") },
+      React.createElement(
+        "div", { className: "wb-floating-detail-card wb-sched-detail-card" },
+        React.createElement(
+          "nav", { className: "wb-detail-accordion wb-sched-detail-tabs", "aria-label": T("schedule.detailPanel") },
+          React.createElement(
+            "div", { className: "wb-detail-accordion-head wb-sched-detail-tabs-head" },
+            React.createElement("span", null, T("schedule.detailPanel")),
+            React.createElement("button", { type: "button", className: "wb-sched-detail-close", onClick: props.onClose, title: T("common.close"), "aria-label": T("common.close") }, "×")
+          ),
+          React.createElement(
+            "div", { className: "wb-detail-accordion-list" },
+            tabs.map(function (it) {
+              return React.createElement(
+                React.Fragment, { key: it.id },
+                React.createElement(
+                  "button", {
+                    type: "button",
+                    className: "wb-detail-accordion-trigger" + (tab === it.id ? " active" : ""),
+                    "aria-expanded": tab === it.id,
+                    onClick: function () { setTab(tab === it.id ? "" : it.id); },
+                  },
+                  React.createElement("span", { className: "wb-detail-accordion-icon" }, it.id === "runs" ? svg(["M12 7v5l3 2", React.createElement("circle", { key: "c", cx: 12, cy: 12, r: 9 })]) : svg([React.createElement("rect", { key: "r", x: 5, y: 4, width: 14, height: 16, rx: 2 }), "M9 8h6M9 12h6M9 16h4"])),
+                  React.createElement("span", null, it.label),
+                  svg(["m9 18 6-6-6-6"], { width: 14, height: 14 })
+                ),
+                React.createElement(
+                  "div", { className: "wb-detail-accordion-panel" + (tab === it.id ? " open" : ""), "aria-hidden": tab !== it.id },
+                  React.createElement("div", { className: "wb-detail-accordion-panel-inner" },
+                    React.createElement("div", { className: "wb-sched-detail-body" }, tabBodies[it.id]))
+                )
+              );
+            })
+          )
+        )
       )
     );
   }
@@ -1266,10 +1292,12 @@
           onDelete: function (ev) { return ev.source === "task" ? removeTask(ev) : removeEntity(ev); },
         })
         : React.createElement(
-          "aside", { className: "wb-sched-detail empty" },
-          React.createElement("div", { className: "wb-sched-detail-placeholder" },
-            svg(["M3 4.5h18M8 2.5v4M16 2.5v4", React.createElement("rect", { key: "r", x: 3, y: 4.5, width: 18, height: 17, rx: 2.5 })], { width: 34, height: 34, strokeWidth: 1.3 }),
-            React.createElement("p", null, T("schedule.selectEvent"))
+          "aside", { className: "wb-floating-detail-shell wb-sched-detail empty" },
+          React.createElement("div", { className: "wb-floating-detail-card wb-sched-detail-card empty" },
+            React.createElement("div", { className: "wb-sched-detail-placeholder" },
+              svg(["M3 4.5h18M8 2.5v4M16 2.5v4", React.createElement("rect", { key: "r", x: 3, y: 4.5, width: 18, height: 17, rx: 2.5 })], { width: 34, height: 34, strokeWidth: 1.3 }),
+              React.createElement("p", null, T("schedule.selectEvent"))
+            )
           )
         ),
       contextMenu && React.createElement(

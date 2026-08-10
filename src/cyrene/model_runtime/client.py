@@ -15,6 +15,7 @@ import time as _time
 import uuid
 import weakref
 from typing import Any, Callable, Awaitable
+from urllib.parse import urlsplit, urlunsplit
 
 import httpx
 
@@ -496,6 +497,22 @@ def _base_root(url: str) -> str:
     return normalized.lower()
 
 
+def _public_base_url(url: str) -> str:
+    """Return an origin identity without userinfo, path, query, or fragments."""
+    raw = str(url or "").strip()
+    if not raw:
+        return ""
+    try:
+        parsed = urlsplit(raw)
+        hostname = parsed.hostname or ""
+        if ":" in hostname and not hostname.startswith("["):
+            hostname = f"[{hostname}]"
+        netloc = hostname + (f":{parsed.port}" if parsed.port else "")
+        return urlunsplit((parsed.scheme, netloc, "", "", "")).rstrip("/")
+    except (ValueError, TypeError):
+        return ""
+
+
 def _inherit_sibling_keys(candidates: list[dict[str, Any]]) -> list[dict[str, Any]]:
     """Keyless candidates inherit the key of the first same-endpoint candidate
     that has one ("…/v1" 与不带 /v1 视为同端点)。跨提供商不继承；本地端点可以
@@ -538,6 +555,62 @@ def _resolve_llm_candidates() -> list[dict[str, Any]]:
         candidates.append(candidate)
 
     return _inherit_sibling_keys(candidates)
+
+
+def model_candidate_identity_for_response(
+    session_id: str,
+    model_name: str,
+) -> dict[str, str]:
+    """Return a secret-free identity for the candidate that produced a reply.
+
+    The response protocol carries the actual model name but not the configured
+    candidate id.  Prefer the conversation's explicit candidate when it still
+    matches, then the session-prioritized candidate chain.
+    """
+    model = str(model_name or "").strip()
+    candidates = _prioritize_last_success(
+        _resolve_llm_candidates(), "primary", str(session_id or "")
+    )
+    match = next(
+        (candidate for candidate in candidates if str(candidate.get("model") or "") == model),
+        candidates[0] if candidates and not model else None,
+    )
+    if match is None:
+        return {"candidateId": "", "provider": "", "model": model, "baseUrl": "", "reasoningEffort": ""}
+    return {
+        "candidateId": str(match.get("id") or ""),
+        "provider": str(match.get("provider") or "openai_compatible"),
+        "model": str(match.get("model") or model),
+        "baseUrl": _public_base_url(match.get("base_url") or ""),
+        "reasoningEffort": str(match.get("reasoning_effort") or "").strip().lower(),
+    }
+
+
+def resolve_exact_model_candidate(identity: dict[str, Any]) -> dict[str, Any] | None:
+    """Resolve one prior candidate identity without allowing model fallback."""
+    candidate_id = str(identity.get("candidateId") or "").strip()
+    provider = str(identity.get("provider") or "").strip()
+    model = str(identity.get("model") or "").strip()
+    base_url = str(identity.get("baseUrl") or "").strip()
+    matches = []
+    for candidate in _resolve_llm_candidates():
+        if candidate_id and str(candidate.get("id") or "") != candidate_id:
+            continue
+        if provider and str(candidate.get("provider") or "") != provider:
+            continue
+        if model and str(candidate.get("model") or "") != model:
+            continue
+        if base_url and _base_root(
+            _public_base_url(candidate.get("base_url") or "")
+        ) != _base_root(base_url):
+            continue
+        matches.append(dict(candidate))
+    if len(matches) != 1:
+        return None
+    effort = str(identity.get("reasoningEffort") or "").strip().lower()
+    if effort:
+        matches[0]["reasoning_effort"] = effort
+    return matches[0]
 
 
 def _resolve_secondary_candidates() -> list[dict[str, Any]]:
@@ -636,6 +709,8 @@ _INTERNAL_MSG_KEYS = frozenset({
     "report_title", "deep_reflection_record", "reflection_id",
     "subagent_flow_snapshot", "proactive",
     "runtime_guidance",
+    "ephemeral_model_observation",
+    "_candidate_identity",
     # Per-response metadata we attach to the returned message for callers to
     # inspect (e.g. detecting a max_tokens truncation), but which must not be
     # echoed back upstream when the message is replayed in history.
@@ -653,11 +728,52 @@ def _strip_internal_fields(message: dict) -> dict:
     return {k: v for k, v in message.items() if k not in _INTERNAL_MSG_KEYS}
 
 
-def _sanitize_messages_for_llm(messages: list[dict]) -> list[dict]:
-    """Ensure valid tool_calls/tool message pairing with unique tool_call_ids."""
+def _materialize_internal_content(message: dict[str, Any]) -> dict[str, Any]:
+    """Resolve transient local media references only for the provider request."""
+    content = message.get("content")
+    if not isinstance(content, list):
+        return message
+    from cyrene.tooling.mcp_content import (
+        MCP_IMAGE_BLOCK_TYPE,
+        materialize_model_content_block,
+    )
+
+    if not any(
+        isinstance(block, dict) and block.get("type") == MCP_IMAGE_BLOCK_TYPE
+        for block in content
+    ):
+        return message
+    prepared = dict(message)
+    prepared["content"] = [
+        materialize_model_content_block(block)
+        if isinstance(block, dict)
+        else {"type": "text", "text": str(block)}
+        for block in content
+    ]
+    return prepared
+
+
+def sanitize_messages_for_llm(
+    messages: list[dict],
+    *,
+    materialize_internal_media: bool = True,
+) -> list[dict]:
+    """Normalize model messages without leaking internal transport metadata.
+
+    Local media artifacts are encoded only for an actual provider request.
+    Callers preparing a durable replay snapshot can keep the managed local
+    references by setting ``materialize_internal_media=False``.
+    """
     import uuid as _uuid
 
-    messages = [_strip_internal_fields(m) for m in strip_context_metadata(messages)]
+    messages = [
+        (
+            _materialize_internal_content(_strip_internal_fields(m))
+            if materialize_internal_media
+            else _strip_internal_fields(m)
+        )
+        for m in strip_context_metadata(messages)
+    ]
     seen_ids: set[str] = set()
     result: list[dict[str, Any]] = []
     i = 0
@@ -718,6 +834,11 @@ def _sanitize_messages_for_llm(messages: list[dict]) -> list[dict]:
     return result
 
 
+# Backward-compatible alias for integrations that imported the historical
+# private helper. Application code should use the public name above.
+_sanitize_messages_for_llm = sanitize_messages_for_llm
+
+
 # ---------------------------------------------------------------------------
 # Payload building
 # ---------------------------------------------------------------------------
@@ -754,8 +875,20 @@ def _message_token_estimate(message: dict[str, Any]) -> int:
         total += _approx_token_count(content)
     elif isinstance(content, list):
         for block in content:
-            if isinstance(block, dict) and block.get("type") == "text":
+            if not isinstance(block, dict):
+                continue
+            block_type = block.get("type")
+            if block_type == "text":
                 total += _approx_token_count(block.get("text") or "")
+            elif block_type in {"image_url", "cyrene_mcp_image_file"}:
+                try:
+                    width = max(0, int(block.get("width") or 0))
+                    height = max(0, int(block.get("height") or 0))
+                except (TypeError, ValueError):
+                    width = height = 0
+                # Provider-specific image accounting varies. Use a bounded,
+                # conservative estimate for local context gating.
+                total += min(4096, max(1024, (width * height + 1023) // 1024))
     else:
         total += _approx_token_count(content or "")
     total += _approx_token_count(message.get("role") or "")
@@ -802,7 +935,7 @@ def _build_payload(
 ) -> dict[str, Any]:
     payload: dict[str, Any] = {
         "model": model,
-        "messages": _sanitize_messages_for_llm(messages),
+        "messages": sanitize_messages_for_llm(messages),
     }
     if max_tokens is not None:
         payload["max_tokens"] = max_tokens
@@ -1326,7 +1459,7 @@ async def _publish_llm_event(
         "model": model,
         "provider": str(provider or ""),
         "tools": [t.get("function", {}).get("name") for t in (tools or [])],
-        "messages": _sanitize_messages_for_llm(messages),
+        "messages": sanitize_messages_for_llm(messages),
         "context_trace": summarize_context_trace(messages),
         "response": response,
         "usage": response.get("usage") or {},
@@ -1967,6 +2100,17 @@ async def call_llm(
                         if return_text:
                             return msg.get("content", "")
                         msg["model"] = model
+                        # Secret-free identity of the candidate that actually
+                        # produced this response. Consumers such as the
+                        # Workbench Memory Agent must not infer it from a model
+                        # name shared by several providers/candidates.
+                        msg["_candidate_identity"] = {
+                            "candidateId": str(candidate.get("id") or ""),
+                            "provider": provider,
+                            "model": model,
+                            "baseUrl": _public_base_url(candidate.get("base_url") or ""),
+                            "reasoningEffort": str(candidate.get("reasoning_effort") or "").strip().lower(),
+                        }
                         return msg
 
                     except httpx.HTTPError as exc:

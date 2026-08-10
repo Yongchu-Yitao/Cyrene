@@ -264,11 +264,24 @@ class MemoryCreateBody(APIBody):
 
 class MemoryUpdateBody(APIBody):
     content: str | None = Field(default=None, min_length=1, max_length=200_000)
-    category: Literal["preference", "project", "habit", "fact", "conversation"] | None = None
+    category: Literal[
+        "preference", "project", "habit", "fact", "conversation",
+        "task_report", "reflection",
+    ] | None = None
     source: Literal["conversation", "knowledge", "manual", "agent", "other"] | None = None
     confidence: Literal["", "high", "medium", "low"] | None = None
     tags: list[Any] | str | None = None
     stale: bool | None = None
+
+
+class ProjectMemoryPromptUpdateBody(APIBody):
+    prompt: str = Field(default="", max_length=16_000)
+    baseModifiedAt: str = Field(default="", max_length=100)
+
+
+class ProjectMemoryPromptRestoreBody(APIBody):
+    modifiedAt: str = Field(min_length=1, max_length=100)
+    baseModifiedAt: str = Field(default="", max_length=100)
 
 
 class ScheduleCreateBody(APIBody):

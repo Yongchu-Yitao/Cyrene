@@ -24,15 +24,42 @@ every test so one test can never poison the next.
 """
 
 import asyncio
+import importlib
 import sys
 from pathlib import Path
 
 import pytest
+import PIL as _REAL_PIL
 
 # Tests import ``cyrene`` from the in-repo ``src/`` tree; make sure it is on the
 # path before any cyrene import happens (mirrors the shim at the top of
 # ``tests/test_runtime_fixes.py``).
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
+
+_REAL_PIL_IMAGE = importlib.import_module("PIL.Image")
+
+
+@pytest.fixture
+def real_pillow_modules():
+    """Temporarily undo legacy module-level Pillow shims for image tests."""
+    previous_modules = {name: sys.modules.get(name) for name in ("PIL", "PIL.Image")}
+    previous_image_attr = getattr(_REAL_PIL, "Image", None)
+    sys.modules["PIL"] = _REAL_PIL
+    sys.modules["PIL.Image"] = _REAL_PIL_IMAGE
+    _REAL_PIL.Image = _REAL_PIL_IMAGE
+    from cyrene.tooling import mcp_content
+    previous_mcp_image = mcp_content.Image
+    mcp_content.Image = _REAL_PIL_IMAGE
+    try:
+        yield _REAL_PIL_IMAGE
+    finally:
+        mcp_content.Image = previous_mcp_image
+        _REAL_PIL.Image = previous_image_attr
+        for name, previous in previous_modules.items():
+            if previous is None:
+                sys.modules.pop(name, None)
+            else:
+                sys.modules[name] = previous
 
 
 @pytest.fixture(autouse=True)

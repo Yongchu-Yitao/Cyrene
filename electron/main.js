@@ -5009,6 +5009,31 @@ if (!gotSingleInstanceLock) {
       }
       return { path: result.filePaths[0] };
     });
+    ipcMain.handle('dialog:pick-backup-save-path', async (event, info) => {
+      const owner = BrowserWindow.fromWebContents(event.sender);
+      const requestedName = path.basename(String(info && info.defaultName || '').trim()) || 'cyrene_backup.zip';
+      const result = await dialog.showSaveDialog(owner || mainWindow, {
+        title: String(info && info.title || 'Save Cyrene backup'),
+        defaultPath: path.join(app.getPath('documents'), requestedName),
+        filters: [{ name: 'Cyrene backup', extensions: ['zip'] }],
+        properties: ['createDirectory', 'showOverwriteConfirmation'],
+      });
+      if (result.canceled || !result.filePath) return { path: '', cancelled: true };
+      const selectedPath = result.filePath.toLowerCase().endsWith('.zip')
+        ? result.filePath
+        : result.filePath + '.zip';
+      return { path: selectedPath };
+    });
+    ipcMain.handle('dialog:pick-backup-file', async (event, info) => {
+      const owner = BrowserWindow.fromWebContents(event.sender);
+      const result = await dialog.showOpenDialog(owner || mainWindow, {
+        title: String(info && info.title || 'Choose a Cyrene backup'),
+        filters: [{ name: 'Cyrene backup', extensions: ['zip'] }],
+        properties: ['openFile'],
+      });
+      if (result.canceled || !result.filePaths.length) return { path: '', cancelled: true };
+      return { path: result.filePaths[0] };
+    });
     ipcMain.handle('browser:get-state', (_event, info) => handleBrowserRpc('state', {}, info || {}));
     ipcMain.handle('browser:set-bounds', (_event, info) => handleBrowserRpc('setBounds', info || {}, info || {}));
     ipcMain.handle('browser:set-chat-overlay', (_event, info) => handleBrowserRpc('setChatOverlay', info || {}, info || {}));

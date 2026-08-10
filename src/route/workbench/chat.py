@@ -321,9 +321,17 @@ def register_workbench_chat_routes(
         if not project:
             return JSONResponse({"error": "project not found"}, status_code=404)
 
+        from cyrene.workbench.project_memory_prompt import current_snapshot
+        memory_snapshot = await asyncio.to_thread(current_snapshot, project_id)
+
         def create_and_persist() -> dict[str, Any]:
             payload = _read_chats_store()
-            chat = _new_chat(project_id, str(body.get("title") or ""), R._get_model())
+            chat = _new_chat(
+                project_id,
+                str(body.get("title") or ""),
+                R._get_model(),
+                project_memory_snapshot=memory_snapshot,
+            )
             payload.setdefault("chats", []).insert(0, chat)
             _write_chats_store(payload)
             return chat
@@ -388,6 +396,11 @@ def register_workbench_chat_routes(
                 str(parent.get("projectId") or ""),
                 title or "侧边提问",
                 str(parent.get("model") or ""),
+                project_memory_snapshot=(
+                    dict(parent.get("projectMemorySnapshot") or {})
+                    if isinstance(parent.get("projectMemorySnapshot"), dict)
+                    else None
+                ),
             )
             agent["kind"] = "side-agent"
             agent["parentChatId"] = chat_id
@@ -1079,6 +1092,19 @@ def register_workbench_chat_routes(
                     "Failed to close Electron browser for chat %s",
                     removed_chat_id,
                 )
+            try:
+                from cyrene.workbench.project_memory_prompt import (
+                    cancel_chat_jobs,
+                    delete_chat_context,
+                )
+
+                await cancel_chat_jobs(removed_chat_id)
+                await asyncio.to_thread(delete_chat_context, removed_chat_id)
+            except Exception:
+                logger.exception(
+                    "Failed to delete project-memory context for chat %s",
+                    removed_chat_id,
+                )
         return {"ok": True}
 
     async def _workbench_chat_send_impl(
@@ -1135,6 +1161,7 @@ def register_workbench_chat_routes(
         if not chat:
             return JSONResponse({"error": "chat not found"}, status_code=404)
         is_side_agent = str(chat.get("kind") or "") == "side-agent"
+        completed_turn_count_before = _completed_turn_count(chat)
         parent_chat = (
             _find_chat(payload, str(chat.get("parentChatId") or ""))
             if is_side_agent
@@ -1399,6 +1426,8 @@ def register_workbench_chat_routes(
                 state_ids_before.add(mid)
 
         async def _run() -> str:
+            from cyrene.workbench.project_memory_prompt import build_main_agent_suffix
+
             return await run_agent(
                 user_message=agent_message,
                 bot=bot,
@@ -1410,6 +1439,12 @@ def register_workbench_chat_routes(
                 public_user_message=message or None,
                 public_attachments=public_attachments or None,
                 workspace_dir=workspace_dir,
+                final_system_extra=build_main_agent_suffix(
+                    chat.get("projectMemorySnapshot")
+                    if isinstance(chat.get("projectMemorySnapshot"), dict)
+                    else None,
+                    include_trigger=not is_side_agent,
+                ),
                 response_capabilities=("interactive_blocks",),
             )
 
@@ -1445,6 +1480,13 @@ def register_workbench_chat_routes(
             fresh_chat["lastModel"] = model_name
             saved_messages = [*timeline_entries, assistant_entry]
             _merge_chat_messages_chronologically(fresh_chat, saved_messages)
+            completed_turn_count = _next_completed_turn_count(
+                {"completedTurnCount": completed_turn_count_before},
+                retry=retry,
+                command=command,
+                is_side_agent=is_side_agent,
+            )
+            fresh_chat["completedTurnCount"] = completed_turn_count
             fresh_chat["status"] = "idle"
             fresh_chat.pop("pendingQuestion", None)
             fresh_chat["updatedAt"] = assistant_entry["createdAt"]
@@ -1476,38 +1518,38 @@ def register_workbench_chat_routes(
             return {
                 "assistantMessage": assistant_entry,
                 "assistantMessages": saved_messages,
+                "completedTurnCount": completed_turn_count,
             }
 
         async def _finalize_async(reply_text: str) -> dict[str, Any]:
             finalized = await asyncio.to_thread(_finalize, reply_text)
-            if finalized and not command and not retry and not is_side_agent:
-                # schedule_capture needs the running event loop, unlike the
-                # storage/archive work intentionally performed above in a thread.
-                from cyrene.workbench.memory import build_verified_tool_evidence
+            if finalized and not is_side_agent:
+                from cyrene.workbench.project_memory_prompt import (
+                    completed_context_snapshot,
+                    schedule_learning,
+                    should_auto_trigger,
+                )
 
-                state_messages = await asyncio.to_thread(
-                    _session_state_messages, chat_id
-                )
-                round_id = next(
-                    (
-                        str(item.get("round_id") or "").strip()
-                        for item in reversed(state_messages)
-                        if isinstance(item, dict)
-                        and str(item.get("round_id") or "").strip()
-                    ),
-                    "",
-                )
-                R.schedule_capture(
+                turn_count = int(finalized.get("completedTurnCount") or 0)
+                snapshot = await asyncio.to_thread(
+                    completed_context_snapshot,
+                    chat_id,
                     project_id,
-                    message,
-                    str(reply_text or ""),
-                    verified_evidence=build_verified_tool_evidence(
-                        state_messages,
-                        state_ids_before,
-                    ),
-                    session_id=chat_id,
-                    round_id=round_id,
+                    completed_turn_count=turn_count,
+                    final_assistant_text=str(reply_text or ""),
                 )
+                if (
+                    snapshot
+                    and not command
+                    and not retry
+                    and should_auto_trigger(turn_count)
+                ):
+                    schedule_learning(
+                        project_id,
+                        snapshot,
+                        source="conversation_auto",
+                        reason=f"completed_turn_{turn_count}",
+                    )
             return finalized
 
         def _restore_retry_state() -> None:
@@ -2030,7 +2072,16 @@ def register_workbench_chat_routes(
         R = _routes()
         project_id = str(chat.get("projectId") or "")
         now = _utc_now_iso()
-        new_chat = _new_chat(project_id, str(chat.get("title") or ""), str(chat.get("model") or R._get_model()))
+        new_chat = _new_chat(
+            project_id,
+            str(chat.get("title") or ""),
+            str(chat.get("model") or R._get_model()),
+            project_memory_snapshot=(
+                dict(chat.get("projectMemorySnapshot") or {})
+                if isinstance(chat.get("projectMemorySnapshot"), dict)
+                else None
+            ),
+        )
         new_chat["forkedFromChatId"] = chat_id
         new_chat["forkedAtMessageId"] = message_id
         # Immutable divergence snippet — the edited prompt that started this
@@ -2060,6 +2111,7 @@ def register_workbench_chat_routes(
             if orig.get("agentAttachments"):
                 edited_entry["agentAttachments"] = orig["agentAttachments"]
         new_chat["messages"] = prefix + [edited_entry]
+        new_chat["completedTurnCount"] = _completed_turn_count({"messages": prefix})
         new_chat["updatedAt"] = now
 
         payload.setdefault("chats", []).insert(0, new_chat)
@@ -2294,6 +2346,7 @@ def register_workbench_chat_routes(
         chat = _find_chat(payload, chat_id)
         if not chat:
             return JSONResponse({"error": "chat not found"}, status_code=404)
+        is_side_agent = str(chat.get("kind") or "") == "side-agent"
         stored_mode = str(chat.get("permissionMode") or "").strip().lower()
         if requested_mode:
             mode = requested_mode if requested_mode in PERMISSION_MODES else "default"
@@ -2450,6 +2503,11 @@ def register_workbench_chat_routes(
             assistant_entry["attachments"] = files
         saved_messages = [*timeline_entries, assistant_entry]
         _merge_chat_messages_chronologically(fresh_chat, saved_messages)
+        completed_turn_count = _next_completed_turn_count(
+            fresh_chat,
+            is_side_agent=is_side_agent,
+        )
+        fresh_chat["completedTurnCount"] = completed_turn_count
         fresh_chat["lastModel"] = model_name
         fresh_chat["status"] = "idle"
         fresh_chat.pop("pendingQuestion", None)
@@ -2467,8 +2525,27 @@ def register_workbench_chat_routes(
             )
         except Exception:
             logger.exception("Failed to archive workbench conversation %s", chat_id)
-        if project_id:
-            R.schedule_capture(project_id, answer_text, str(reply or ""))
+        if project_id and not is_side_agent:
+            from cyrene.workbench.project_memory_prompt import (
+                completed_context_snapshot,
+                schedule_learning,
+                should_auto_trigger,
+            )
+
+            snapshot = await asyncio.to_thread(
+                completed_context_snapshot,
+                chat_id,
+                project_id,
+                completed_turn_count=completed_turn_count,
+                final_assistant_text=str(reply or ""),
+            )
+            if snapshot and should_auto_trigger(completed_turn_count):
+                schedule_learning(
+                    project_id,
+                    snapshot,
+                    source="conversation_auto",
+                    reason=f"completed_turn_{completed_turn_count}",
+                )
         return {
             "ok": True,
             "awaitingUser": False,
