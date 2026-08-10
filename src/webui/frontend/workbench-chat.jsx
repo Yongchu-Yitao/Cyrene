@@ -114,6 +114,139 @@ function wbcChatSideZoneRect() {
   };
 }
 
+// A newly mounted split host normally begins one track-width offscreen and
+// glides into place. During a shared-element handoff that entrance must not
+// become the View Transition's destination geometry: the conversation should
+// morph to the settled split rectangle, not to the host's transient offscreen
+// frame and then continue sliding after the handoff. Keep the final geometry
+// pinned until the View Transition finishes; React adopts the same `open`
+// class on its next frame.
+function wbcPinSplitMotionOpen(host) {
+  if (!host) return;
+  host.classList.add("open");
+  host.style.transition = "none";
+  host.style.transform = "translateX(0)";
+  host.style.opacity = "1";
+  // Force the settled rectangle into the new View Transition snapshot.
+  host.getBoundingClientRect();
+}
+
+function wbcReleasePinnedSplitMotion(host) {
+  if (!host) return;
+  host.style.removeProperty("transition");
+  host.style.removeProperty("transform");
+  host.style.removeProperty("opacity");
+}
+
+// Width swapping is part of the shared-element handoff, not a second grid
+// animation. Freeze the page grid while Chromium captures both endpoints so
+// the destination rectangle is already settled and equal to the source.
+function wbcPinPageSplitLayout(page) {
+  if (!page) return;
+  page.style.transition = "none";
+  page.getBoundingClientRect();
+}
+
+function wbcReleasePinnedPageSplitLayout(page) {
+  if (!page) return;
+  page.style.removeProperty("transition");
+}
+
+// `cloneNode` copies markup but not the live viewport state of scrollable
+// descendants. Preserve it explicitly so a lifted conversation shows the
+// messages currently under the user's pointer instead of jumping to the first
+// message in that session.
+function wbcClonePaneWithLiveState(panel) {
+  var clone = panel.cloneNode(true);
+  var sourceNodes = [panel].concat(Array.prototype.slice.call(panel.querySelectorAll("*")));
+  var cloneNodes = [clone].concat(Array.prototype.slice.call(clone.querySelectorAll("*")));
+  var viewportState = [];
+  for (var i = 0; i < sourceNodes.length && i < cloneNodes.length; i++) {
+    var source = sourceNodes[i];
+    var target = cloneNodes[i];
+    var scrollTop = Number(source.scrollTop) || 0;
+    var scrollLeft = Number(source.scrollLeft) || 0;
+    if (scrollTop || scrollLeft) {
+      viewportState.push({ target: target, scrollTop: scrollTop, scrollLeft: scrollLeft });
+    }
+    // Property state is not always reflected in cloned attributes either
+    // (notably an unsent composer draft), so keep the visible control state.
+    try {
+      if ("value" in source && "value" in target) target.value = source.value;
+      if ("checked" in source && "checked" in target) target.checked = source.checked;
+    } catch (e) {}
+  }
+  return {
+    clone: clone,
+    restoreViewport: function () {
+      for (var j = 0; j < viewportState.length; j++) {
+        viewportState[j].target.scrollTop = viewportState[j].scrollTop;
+        viewportState[j].target.scrollLeft = viewportState[j].scrollLeft;
+      }
+    },
+  };
+}
+
+// Preserve the visible transcript position when the same conversation changes
+// React owners (split pane <-> main pane). A raw scrollTop is insufficient
+// because the two panes have different widths and therefore different text
+// wrapping/heights. Anchor by direct thread-item index and its visual offset.
+function wbcCaptureConversationViewport(pane) {
+  var thread = pane && pane.querySelector ? pane.querySelector(".wbc-thread") : null;
+  if (!thread) return null;
+  var maxScroll = Math.max(0, thread.scrollHeight - thread.clientHeight);
+  var items = Array.prototype.slice.call(
+    thread.querySelectorAll(":scope > [data-wbc-thread-item]")
+  );
+  var threadRect = thread.getBoundingClientRect();
+  var anchorIndex = -1;
+  var anchorOffset = 0;
+  for (var i = 0; i < items.length; i++) {
+    var itemRect = items[i].getBoundingClientRect();
+    if (itemRect.bottom > threadRect.top + 1) {
+      anchorIndex = i;
+      anchorOffset = itemRect.top - threadRect.top;
+      break;
+    }
+  }
+  return {
+    atBottom: maxScroll - thread.scrollTop < 80,
+    progress: maxScroll ? thread.scrollTop / maxScroll : 0,
+    anchorIndex: anchorIndex,
+    anchorOffset: anchorOffset,
+    scrollLeft: Number(thread.scrollLeft) || 0,
+  };
+}
+
+function wbcRestoreConversationViewport(pane, viewport) {
+  if (!pane || !viewport) return;
+  var thread = pane.querySelector(".wbc-thread");
+  if (!thread) return;
+  if (viewport.atBottom) {
+    thread.scrollTop = thread.scrollHeight;
+  } else {
+    var items = thread.querySelectorAll(":scope > [data-wbc-thread-item]");
+    var anchor = viewport.anchorIndex >= 0 ? items[viewport.anchorIndex] : null;
+    if (anchor) {
+      var currentOffset = anchor.getBoundingClientRect().top - thread.getBoundingClientRect().top;
+      thread.scrollTop += currentOffset - viewport.anchorOffset;
+    } else {
+      var maxScroll = Math.max(0, thread.scrollHeight - thread.clientHeight);
+      thread.scrollTop = maxScroll * Math.max(0, Math.min(1, viewport.progress || 0));
+    }
+  }
+  thread.scrollLeft = viewport.scrollLeft;
+}
+
+// `splitSide` describes where the secondary split is anchored, while the drop
+// zones describe where the conversation being dragged should land. Those are
+// identical for the split grip and opposite for the main-conversation grip.
+function wbcSplitSideForDraggedConversation(conversationSide, fromMainGrip) {
+  var side = conversationSide === "left" ? "left" : "right";
+  if (!fromMainGrip) return side;
+  return side === "left" ? "right" : "left";
+}
+
 function wbcChatSideDropZone(event) {
   if (event.clientX == null || event.clientY == null) return false;
   var zone = wbcChatSideZoneRect();
@@ -2740,15 +2873,22 @@ function WorkbenchChatPage({ active, project, newChatRequestId, onOpenTask, onAc
     var panelH = 0;
     var cardW = 0;
     var cardH = 0;
+    var restoreGhostViewport = null;
     // Each conversation grip declares which pane it owns. Do not infer the
     // source from a page-wide query: several split hosts can briefly coexist
     // during their closing animation, which made both grips clone the same
     // conversation. For the split grip, walk up from that exact handle so its
     // own live pane is always the ghost source.
     var fromMainGrip = dragSource === "main";
+    // Remember the side occupied by the conversation under this exact grip.
+    // The midpoint dead band below keeps that side stable until the pointer
+    // has genuinely crossed into the opposite half.
+    var previewConversationSide = fromMainGrip
+      ? (splitSide === "left" ? "right" : "left")
+      : (splitSide === "left" ? "left" : "right");
     var dragHandle = event.currentTarget;
     var panel = fromMainGrip
-      ? page.querySelector(".wbc-main")
+      ? page.querySelector(":scope > .wbc-main")
       : (dragHandle && dragHandle.closest
         ? dragHandle.closest(".wbc-side-agent-split")
         : null);
@@ -2756,7 +2896,9 @@ function WorkbenchChatPage({ active, project, newChatRequestId, onOpenTask, onAc
       var panelRect = panel.getBoundingClientRect();
       // The clone keeps the panel's own padding (top bar clearance + grip
       // band), so the lifted ghost mirrors the real panel one-to-one.
-      var clone = panel.cloneNode(true);
+      var clonedPane = wbcClonePaneWithLiveState(panel);
+      var clone = clonedPane.clone;
+      restoreGhostViewport = clonedPane.restoreViewport;
       clone.style.border = "0";
       clone.style.boxShadow = "none";
       ghost.appendChild(clone);
@@ -2785,8 +2927,10 @@ function WorkbenchChatPage({ active, project, newChatRequestId, onOpenTask, onAc
     var railCard = liftChatId
       ? page.querySelector('.wbc-chat-card[data-chat-id="' + liftChatId + '"]')
       : null;
-    if (!railCard) railCard = page.querySelector(".wbc-chat-card.active");
-    if (!railCard) railCard = page.querySelector(".wbc-chat-card");
+    // Never substitute another rail conversation for a known chat id. If the
+    // matching card is outside the rendered recent list, keep the pane-shaped
+    // ghost instead of showing the active/first session under the wrong grip.
+    if (!railCard && !splitChatId && !fromMainGrip) railCard = page.querySelector(".wbc-chat-card.active");
     if (railCard) {
       var cardRect = railCard.getBoundingClientRect();
       var cardClone = railCard.cloneNode(true);
@@ -2811,6 +2955,7 @@ function WorkbenchChatPage({ active, project, newChatRequestId, onOpenTask, onAc
       }
     }
     document.body.appendChild(ghost);
+    if (restoreGhostViewport) restoreGhostViewport();
     // The zones are pure visual (never hit-testable): an interactive overlay
     // covering the drag source would make Chromium cancel the drag. Zone
     // detection happens on document-level dragover/drop via pointer position.
@@ -2841,7 +2986,11 @@ function WorkbenchChatPage({ active, project, newChatRequestId, onOpenTask, onAc
       if (!page) return "";
       var pr = page.getBoundingClientRect();
       if (!pr.width) return "";
-      return clientX < pr.left + pr.width / 2 ? "left" : "right";
+      var midpoint = pr.left + pr.width / 2;
+      var swapThreshold = 24;
+      if (clientX < midpoint - swapThreshold) return "left";
+      if (clientX > midpoint + swapThreshold) return "right";
+      return previewConversationSide;
     }
     function setActive(zone) {
       ghost.classList.toggle("card", zone === "rail");
@@ -2880,10 +3029,11 @@ function WorkbenchChatPage({ active, project, newChatRequestId, onOpenTask, onAc
       if (ev.dataTransfer) ev.dataTransfer.dropEffect = "move";
       setActive(zone);
       if (zone !== "rail") {
-        // Live preview: crossing the midline glides the split to that side
-        // immediately (elastic grid animation pushing the main conversation
-        // to the other side); releasing anywhere keeps the last position.
-        setSplitSideDirect(zone === "left" ? "left" : "right");
+        // Live preview follows the conversation under this handle. For the
+        // main grip the split anchor is the opposite side, so merely starting
+        // a drag over the main pane can no longer exchange the two panes.
+        previewConversationSide = zone;
+        setSplitSideDirect(wbcSplitSideForDraggedConversation(zone, fromMainGrip));
       }
     }
     function onDocumentDrop(ev) {
@@ -2906,7 +3056,8 @@ function WorkbenchChatPage({ active, project, newChatRequestId, onOpenTask, onAc
         }
         return;
       }
-      setSplitSideDirect(zone === "left" ? "left" : "right");
+      previewConversationSide = zone;
+      setSplitSideDirect(wbcSplitSideForDraggedConversation(zone, fromMainGrip));
     }
     function cleanup() {
       if (splitOverlayCleanupRef.current !== cleanup) return;
@@ -3967,6 +4118,9 @@ function WorkbenchChatPage({ active, project, newChatRequestId, onOpenTask, onAc
     var activeId = String(activeChatIdRef.current || "");
     var sourceId = String(sourceChatId || activeId);
     if (!activeId || !sourceId || typeof openSplit !== "function") return;
+    var page = pageRef.current;
+    var currentMainPane = page && page.querySelector(":scope > .wbc-main");
+    var currentMainRect = currentMainPane && currentMainPane.getBoundingClientRect();
     var sourceChat = sourceChatSnapshot && String(sourceChatSnapshot.id || "") === sourceId
       ? sourceChatSnapshot
       : (chatCache.details[sourceId] || null);
@@ -3980,16 +4134,22 @@ function WorkbenchChatPage({ active, project, newChatRequestId, onOpenTask, onAc
           ? activeChat
           : (chatCache.details[activeId] || null),
         splitSide: splitSide,
+        // Opening a resource swaps the two track widths as well as their
+        // contents. The promoted conversation therefore keeps the exact same
+        // rectangle and can travel as one rigid pane instead of being scaled
+        // or reflowed during the handoff. Closing restores this width.
+        splitWidth: sideAgentSplitWidth,
+        promotedResourceWidth: Math.round((currentMainRect && currentMainRect.width) || sideAgentSplitWidth),
         activeSplit: splitStateSnapshot(activeId),
         sourceSplit: sourceId === activeId ? null : splitStateSnapshot(sourceId),
       };
     }
     setFloatingConversationPanelOpen(false);
     // The conversation that opened the resource becomes the left pane while
-    // the resource owns the right track. The shared-element handoff below
-    // moves and resizes it directly from its current split rectangle to the
-    // final main rectangle — there is deliberately no narrow left-side
-    // intermediate layout, because that second geometry caused a width snap.
+    // the resource owns the right track. Swap the track widths in the same
+    // atomic commit: the source and destination conversation rectangles then
+    // have identical dimensions, so the shared layer performs only a rigid
+    // horizontal translation of the complete conversation UI.
     function commitPromotion() {
       if (sourceId !== activeId) {
         // The split conversation already owns a complete, live transcript.
@@ -4002,6 +4162,10 @@ function WorkbenchChatPage({ active, project, newChatRequestId, onOpenTask, onAc
           setChatLoading(false);
         }
         selectChat(sourceId);
+        setSideAgentSplitWidth(wbcClampSideSplitWidthForPage(
+          floatingSplitRestoreRef.current.promotedResourceWidth,
+          pageRef.current
+        ));
       }
       setSplitSideDirect("right");
       openSplit();
@@ -4032,26 +4196,32 @@ function WorkbenchChatPage({ active, project, newChatRequestId, onOpenTask, onAc
       }
 
       // The conversation changes React owners here (split pane -> main pane).
-      // Give both snapshots one shared transition identity so Chromium morphs
-      // the current split rectangle directly into its final left-hand geometry
-      // instead of exposing the unmount/remount boundary as a flash.
+      // Give both complete panes one shared transition identity. Their widths
+      // are swapped with the resource track in commitPromotion, so Chromium
+      // translates this snapshot without resizing or reflowing it.
       var transitionName = "wbc-promoted-conversation";
       var displacedName = "wbc-displaced-conversation";
       var resourceName = "wbc-promoted-resource";
       var displacedPane = page && page.querySelector(":scope > .wbc-main");
       var targetPane = null;
       var targetResourcePane = null;
+      var promotedViewport = wbcCaptureConversationViewport(sourcePane);
       sourcePane.style.viewTransitionName = transitionName;
       if (displacedPane) displacedPane.style.viewTransitionName = displacedName;
       document.documentElement.classList.add("wbc-split-view-transition");
       document.documentElement.classList.add("wbc-split-view-transition-opening");
+      wbcPinPageSplitLayout(page);
       function clearTransitionIdentity() {
         sourcePane.style.viewTransitionName = "";
         if (displacedPane) displacedPane.style.viewTransitionName = "";
         if (targetPane) targetPane.style.viewTransitionName = "";
-        if (targetResourcePane) targetResourcePane.style.viewTransitionName = "";
+        if (targetResourcePane) {
+          targetResourcePane.style.viewTransitionName = "";
+          wbcReleasePinnedSplitMotion(targetResourcePane);
+        }
         document.documentElement.classList.remove("wbc-split-view-transition");
         document.documentElement.classList.remove("wbc-split-view-transition-opening");
+        wbcReleasePinnedPageSplitLayout(page);
       }
       try {
         var transition = document.startViewTransition(function () {
@@ -4062,6 +4232,7 @@ function WorkbenchChatPage({ active, project, newChatRequestId, onOpenTask, onAc
           if (displacedPane) displacedPane.style.viewTransitionName = "";
           commitPromotionNow();
           targetPane = pageRef.current && pageRef.current.querySelector(":scope > .wbc-main");
+          wbcRestoreConversationViewport(targetPane, promotedViewport);
           if (targetPane) targetPane.style.viewTransitionName = transitionName;
           var resourceContent = pageRef.current && pageRef.current.querySelector(
             '.wbc-side-agent-split-motion[data-split-open="true"] .wbc-side-agent-split:not(.wbc-chat-split)'
@@ -4069,13 +4240,24 @@ function WorkbenchChatPage({ active, project, newChatRequestId, onOpenTask, onAc
           targetResourcePane = resourceContent && resourceContent.closest(".wbc-side-agent-split-motion");
           if (targetResourcePane) {
             // Resource hosts normally enter on the next animation frame. Make
-            // the final snapshot measurable now; the host's own entered state
-            // adopts the same class on that next frame.
-            targetResourcePane.classList.add("open");
+            // the final snapshot measurable now and suppress that independent
+            // entrance, otherwise the resource is captured one track-width
+            // offscreen and visibly slides again after the handoff.
+            wbcPinSplitMotionOpen(targetResourcePane);
             targetResourcePane.style.viewTransitionName = resourceName;
           }
         });
-        Promise.resolve(transition.finished).catch(function () {}).then(clearTransitionIdentity);
+        // Passive mount effects and transcript measurement can try to restore
+        // the live tail after the atomic owner handoff. Reapply the visual
+        // anchor once the new snapshot is ready and again before its overlay
+        // is removed, so the final live pane cannot reveal another position.
+        Promise.resolve(transition.ready).then(function () {
+          wbcRestoreConversationViewport(targetPane, promotedViewport);
+        }).catch(function () {});
+        Promise.resolve(transition.finished).catch(function () {}).then(function () {
+          wbcRestoreConversationViewport(targetPane, promotedViewport);
+          clearTransitionIdentity();
+        });
       } catch (error) {
         clearTransitionIdentity();
         commitPromotionNow();
@@ -4093,6 +4275,7 @@ function WorkbenchChatPage({ active, project, newChatRequestId, onOpenTask, onAc
     function commitRestore() {
       floatingSplitRestoreRef.current = null;
       restoreSplitState(snapshot.activeChatId, snapshot.activeSplit);
+      setSideAgentSplitWidth(wbcClampSideSplitWidthForPage(snapshot.splitWidth, pageRef.current));
       if (snapshot.chatId !== snapshot.activeChatId) {
         restoreSplitState(snapshot.chatId, snapshot.sourceSplit);
         if (restoredChat) {
@@ -4136,17 +4319,23 @@ function WorkbenchChatPage({ active, project, newChatRequestId, onOpenTask, onAc
     var resourceName = "wbc-promoted-resource";
     var targetPane = null;
     var targetMainPane = null;
+    var restoredViewport = wbcCaptureConversationViewport(sourcePane);
     sourcePane.style.viewTransitionName = transitionName;
     if (sourceResourcePane) sourceResourcePane.style.viewTransitionName = resourceName;
     document.documentElement.classList.add("wbc-split-view-transition");
     document.documentElement.classList.add("wbc-split-view-transition-closing");
+    wbcPinPageSplitLayout(page);
     function clearRestoreTransitionIdentity() {
       sourcePane.style.viewTransitionName = "";
       if (sourceResourcePane) sourceResourcePane.style.viewTransitionName = "";
-      if (targetPane) targetPane.style.viewTransitionName = "";
+      if (targetPane) {
+        targetPane.style.viewTransitionName = "";
+        wbcReleasePinnedSplitMotion(targetPane.closest(".wbc-side-agent-split-motion"));
+      }
       if (targetMainPane) targetMainPane.style.viewTransitionName = "";
       document.documentElement.classList.remove("wbc-split-view-transition");
       document.documentElement.classList.remove("wbc-split-view-transition-closing");
+      wbcReleasePinnedPageSplitLayout(page);
     }
     try {
       var transition = document.startViewTransition(function () {
@@ -4157,12 +4346,23 @@ function WorkbenchChatPage({ active, project, newChatRequestId, onOpenTask, onAc
           '.wbc-side-agent-split-motion[data-split-open="true"] .wbc-chat-split'
         );
         var targetMotion = targetPane && targetPane.closest(".wbc-side-agent-split-motion");
-        if (targetMotion) targetMotion.classList.add("open");
+        // Capture the restored conversation at its settled right-hand
+        // rectangle. Without pinning, the host's own enter transition makes
+        // the shared layer target x=offscreen, so closing is not the inverse
+        // of opening and the pane snaps back after the View Transition.
+        wbcPinSplitMotionOpen(targetMotion);
+        wbcRestoreConversationViewport(targetPane, restoredViewport);
         if (targetPane) targetPane.style.viewTransitionName = transitionName;
         targetMainPane = pageRef.current && pageRef.current.querySelector(":scope > .wbc-main");
         if (targetMainPane) targetMainPane.style.viewTransitionName = displacedName;
       });
-      Promise.resolve(transition.finished).catch(function () {}).then(clearRestoreTransitionIdentity);
+      Promise.resolve(transition.ready).then(function () {
+        wbcRestoreConversationViewport(targetPane, restoredViewport);
+      }).catch(function () {});
+      Promise.resolve(transition.finished).catch(function () {}).then(function () {
+        wbcRestoreConversationViewport(targetPane, restoredViewport);
+        clearRestoreTransitionIdentity();
+      });
     } catch (error) {
       clearRestoreTransitionIdentity();
       commitRestoreNow();
@@ -4831,6 +5031,7 @@ function WorkbenchChatPage({ active, project, newChatRequestId, onOpenTask, onAc
     var snapshot = floatingSplitRestoreRef.current;
     if (!snapshot || snapshot.chatId === String(activeChatId || "")) return;
     floatingSplitRestoreRef.current = null;
+    setSideAgentSplitWidth(wbcClampSideSplitWidthForPage(snapshot.splitWidth, pageRef.current));
     restoreSplitState(snapshot.activeChatId, snapshot.activeSplit);
     if (snapshot.chatId !== snapshot.activeChatId) {
       restoreSplitState(snapshot.chatId, snapshot.sourceSplit);
@@ -5810,10 +6011,15 @@ function WbcRail({ projectId, chats, pinnedChatIds, activeChatId, loading, runni
   var [newResultChatIds, setNewResultChatIds] = useWbcState({});
   var [previewAnswerState, setPreviewAnswerState] = useWbcState({ chatId: "", busy: false, result: "", error: "" });
   var [trackGeometryByChatId, setTrackGeometryByChatId] = useWbcState({});
-  var [railMotionState, setRailMotionState] = useWbcState({ collapsed: !!collapsed, phase: "" });
-  if (railMotionState.collapsed !== !!collapsed) {
-    setRailMotionState({ collapsed: !!collapsed, phase: collapsed ? "collapsing" : "expanding" });
-  }
+  var [railMotionPhase, setRailMotionPhase] = useWbcState("");
+  var railMotionCollapsedRef = useWbcRef(!!collapsed);
+  /* Derive the phase during the first render that sees the new collapsed prop.
+     Waiting for an Effect (or scheduling state while rendering) leaves one
+     paint where `is-collapsed` has gone but `is-status-expanding` has not yet
+     arrived. In that paint the marker snaps to the moving list geometry. */
+  var renderedRailMotionPhase = railMotionCollapsedRef.current !== !!collapsed
+    ? (collapsed ? "collapsing" : "expanding")
+    : railMotionPhase;
   var trackLifecycleRef = useWbcRef({ projectId: "", chats: {} });
   var railRef = useWbcRef(null);
   var trackRef = useWbcRef(null);
@@ -5866,16 +6072,22 @@ function WbcRail({ projectId, chats, pinnedChatIds, activeChatId, loading, runni
     return function () { cancelPreviewClose(); };
   }, []);
 
+  useWbcLayoutEffect(function () {
+    if (railMotionCollapsedRef.current === !!collapsed) return;
+    railMotionCollapsedRef.current = !!collapsed;
+    setRailMotionPhase(collapsed ? "collapsing" : "expanding");
+  }, [collapsed]);
+
   useWbcEffect(function () {
-    if (!railMotionState.phase) return undefined;
-    var phase = railMotionState.phase;
+    if (!railMotionPhase) return undefined;
+    var phase = railMotionPhase;
     var timer = window.setTimeout(function () {
-      setRailMotionState(function (current) {
-        return current.phase === phase ? { ...current, phase: "" } : current;
-      });
-    }, 260);
+      setRailMotionPhase(function (current) { return current === phase ? "" : current; });
+    /* Keep the expanding phase alive through the post-settle hold and the
+       dot-to-glyph crossfade (440ms motion + 70ms hold + 90ms morph). */
+    }, 630);
     return function () { window.clearTimeout(timer); };
-  }, [railMotionState.phase]);
+  }, [railMotionPhase]);
 
   useWbcEffect(function () {
     if (!collapsed) setPreviewChatId("");
@@ -6873,6 +7085,11 @@ function WbcRail({ projectId, chats, pinnedChatIds, activeChatId, loading, runni
      its layout geometry even though it is not painted. Projecting each row
      centre into the track therefore works on initial load and in both states. */
   useWbcLayoutEffect(function () {
+    /* Keep the last settled row geometry for the whole rail transition. A
+       ResizeObserver fires while the hidden list is becoming visible; using
+       those transient rectangles rewrites `top` for one paint and makes the
+       marker flash before its transform animation can take over. */
+    if (renderedRailMotionPhase) return undefined;
     if (collapsed && trackMeasuredExpandedRef.current) return undefined;
     if (!collapsed) trackMeasuredExpandedRef.current = true;
     var rail = railRef.current;
@@ -6894,7 +7111,7 @@ function WbcRail({ projectId, chats, pinnedChatIds, activeChatId, loading, runni
           measured[chatId] = {
             position: ((rect.top + (rect.height / 2) - trackRect.top) / trackRect.height) * 100,
             trackHeight: trackRect.height,
-            expandedX: !collapsed && !railMotionState.phase && iconRect
+            expandedX: !collapsed && !renderedRailMotionPhase && iconRect
               ? iconRect.left + (iconRect.width / 2) - trackRect.left
               : null,
           };
@@ -6942,7 +7159,7 @@ function WbcRail({ projectId, chats, pinnedChatIds, activeChatId, loading, runni
       window.removeEventListener("resize", measure);
       if (observer) observer.disconnect();
     };
-  }, [collapsed, projectId, visibleTrackLayoutKey, railMotionState.phase]);
+  }, [collapsed, projectId, visibleTrackLayoutKey, renderedRailMotionPhase]);
 
   var statusTrackItems = wbcConversationTrackPositions(orderedChats.map(function (chat, index) {
     return {
@@ -7023,7 +7240,7 @@ function WbcRail({ projectId, chats, pinnedChatIds, activeChatId, loading, runni
   return (
     <aside ref={railRef} className={"wbc-rail workbench-integrated-rail"
       + (collapsed ? " is-collapsed" : "")
-      + (railMotionState.phase ? (" is-status-" + railMotionState.phase) : "")}>
+      + (renderedRailMotionPhase ? (" is-status-" + renderedRailMotionPhase) : "")}>
       <div className="wbc-rail-glass">
         <div className="wbc-nav-card">
           <div className="wbc-nav-card-head workbench-integrated-rail-head workbench-integrated-rail-search-head">

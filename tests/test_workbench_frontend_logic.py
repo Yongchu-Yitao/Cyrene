@@ -1117,7 +1117,12 @@ def test_workbench_side_question_opens_the_existing_conversation_ui_in_a_split()
     assert "function zoneAt" in source
     # The ghost is a clone of the real split panel (the lifted dialog); over
     # the conversation rail it switches to the matching rail card clone.
-    assert "panel.cloneNode(true)" in source
+    assert "function wbcClonePaneWithLiveState(panel)" in source
+    assert "var clone = panel.cloneNode(true);" in source
+    assert "var scrollTop = Number(source.scrollTop) || 0;" in source
+    assert "if (scrollTop || scrollLeft)" in source
+    assert "viewportState[j].target.scrollTop = viewportState[j].scrollTop;" in source
+    assert "if (restoreGhostViewport) restoreGhostViewport();" in source
     assert "cardClone" in source
     assert 'data-chat-id={String(chat.id)}' in source
     assert "wbc-split-card-lifted" in styles
@@ -1131,11 +1136,39 @@ def test_workbench_side_question_opens_the_existing_conversation_ui_in_a_split()
     # same conversation.
     assert 'function handleSplitDragStart(event, dragSource)' in source
     assert 'var fromMainGrip = dragSource === "main";' in source
+    assert 'page.querySelector(":scope > .wbc-main")' in source
     assert 'dragHandle.closest(".wbc-side-agent-split")' in source
     assert 'dragSource="main"' in source
     assert 'dragSource="split"' in source
     assert "activeChatIdRef.current" in source
     assert "splitSideAgentId" in source
+    # A drop zone names the dragged conversation's destination. The split
+    # anchor matches it for the split grip and is opposite for the main grip;
+    # this prevents an immediate exchange at drag start. A midpoint dead band
+    # also filters tiny/stale initial drag coordinates.
+    assert "function wbcSplitSideForDraggedConversation(conversationSide, fromMainGrip)" in source
+    assert "setSplitSideDirect(wbcSplitSideForDraggedConversation(zone, fromMainGrip));" in source
+    assert "var swapThreshold = 24;" in source
+    assert "return previewConversationSide;" in source
+    split_side_helper = "function wbcSplitSideForDraggedConversation(" + source.split(
+        "function wbcSplitSideForDraggedConversation(", 1
+    )[1].split("function wbcChatSideDropZone", 1)[0]
+    mapping_script = f"""
+eval({json.dumps(split_side_helper)});
+process.stdout.write(JSON.stringify([
+  wbcSplitSideForDraggedConversation("left", false),
+  wbcSplitSideForDraggedConversation("right", false),
+  wbcSplitSideForDraggedConversation("left", true),
+  wbcSplitSideForDraggedConversation("right", true)
+]));
+"""
+    mapping_result = subprocess.run(
+        ["node", "-e", mapping_script], check=True, capture_output=True, text=True
+    )
+    assert json.loads(mapping_result.stdout) == ["left", "right", "right", "left"]
+    # A missing exact rail card must not silently turn into another session's
+    # card ghost.
+    assert "if (!railCard && !splitChatId && !fromMainGrip)" in source
     assert "wbc-conversation-split" in source
     assert '<div className="wbc-split-panel-grip">' in source
     side_split = source.split("function WbcSideAgentSplit({", 1)[1].split(
@@ -1395,6 +1428,24 @@ def test_floating_conversation_panel_resource_split_replaces_right_and_restores_
     assert "::view-transition-group(wbc-promoted-conversation)" in styles
     assert "animation-duration: 380ms;" in styles
     assert "cubic-bezier(.4, 0, .6, 1)" in styles
+    # The conversation moves as one solid pane. Do not cross-fade its old and
+    # new snapshots, which reads as two different panels replacing each other.
+    solid_pane_styles = styles.split(
+        "/* Move one solid pane instead of cross-fading the source and destination",
+        1,
+    )[1].split("/* The two supporting surfaces are time-reversed as well", 1)[0]
+    promoted_old = solid_pane_styles.split(
+        "html.wbc-split-view-transition::view-transition-old(wbc-promoted-conversation) {",
+        1,
+    )[1].split("}", 1)[0]
+    promoted_new = solid_pane_styles.split(
+        "html.wbc-split-view-transition::view-transition-new(wbc-promoted-conversation) {",
+        1,
+    )[1].split("}", 1)[0]
+    assert "animation-name: none" in promoted_old
+    assert "opacity: 1" in promoted_old
+    assert "animation-name: none" in promoted_new
+    assert "opacity: 0" in promoted_new
     assert "wbc-split-view-transition-opening" in begin
     assert 'var displacedName = "wbc-displaced-conversation";' in begin
     assert 'var resourceName = "wbc-promoted-resource";' in begin
@@ -1419,6 +1470,42 @@ def test_floating_conversation_panel_resource_split_replaces_right_and_restores_
     assert 'sourcePane.style.viewTransitionName = transitionName;' in restore
     assert 'targetPane.style.viewTransitionName = transitionName;' in restore
     assert 'targetMainPane.style.viewTransitionName = displacedName;' in restore
+    # Newly mounted split hosts must be captured at their settled rectangle.
+    # Otherwise the close transition targets the host's offscreen enter frame
+    # and then snaps/slides to the real split position after the handoff.
+    assert "function wbcPinSplitMotionOpen(host)" in source
+    assert "host.style.transition = \"none\";" in source
+    assert "host.style.transform = \"translateX(0)\";" in source
+    assert "wbcPinSplitMotionOpen(targetResourcePane);" in begin
+    assert "wbcPinSplitMotionOpen(targetMotion);" in restore
+    assert "wbcReleasePinnedSplitMotion(targetResourcePane);" in begin
+    assert 'wbcReleasePinnedSplitMotion(targetPane.closest(".wbc-side-agent-split-motion"));' in restore
+    # Preserve the same visible message while the pane changes width/owner.
+    # Copying scrollTop directly would drift because text wraps differently in
+    # the narrow main pane and the wider split pane.
+    assert "function wbcCaptureConversationViewport(pane)" in source
+    assert "function wbcRestoreConversationViewport(pane, viewport)" in source
+    assert 'querySelectorAll(":scope > [data-wbc-thread-item]")' in source
+    assert "anchorOffset: anchorOffset" in source
+    assert "var promotedViewport = wbcCaptureConversationViewport(sourcePane);" in begin
+    assert "wbcRestoreConversationViewport(targetPane, promotedViewport);" in begin
+    assert "var restoredViewport = wbcCaptureConversationViewport(sourcePane);" in restore
+    assert "wbcRestoreConversationViewport(targetPane, restoredViewport);" in restore
+    assert "Promise.resolve(transition.ready)" in begin
+    assert "Promise.resolve(transition.ready)" in restore
+    # Swap the split/resource width with the old main width in the same commit.
+    # This keeps the promoted pane's source and destination rectangles equal,
+    # so the whole transcript + composer translates without scaling/reflow.
+    assert "splitWidth: sideAgentSplitWidth" in begin
+    assert "promotedResourceWidth:" in begin
+    assert "floatingSplitRestoreRef.current.promotedResourceWidth" in begin
+    assert "setSideAgentSplitWidth(wbcClampSideSplitWidthForPage(snapshot.splitWidth" in restore
+    assert "function wbcPinPageSplitLayout(page)" in source
+    assert 'page.style.transition = "none";' in source
+    assert "wbcPinPageSplitLayout(page);" in begin
+    assert "wbcPinPageSplitLayout(page);" in restore
+    assert "wbcReleasePinnedPageSplitLayout(page);" in begin
+    assert "wbcReleasePinnedPageSplitLayout(page);" in restore
     assert 'data-split-open={openKey ? "true" : "false"}' in source
     assert 'data-split-open="true"' in begin
     assert 'data-split-open="true"' in restore
@@ -4039,7 +4126,7 @@ def test_collapsed_chat_rail_measures_expanded_row_centres_for_spatial_mapping()
     assert 'rail.querySelectorAll(".wbc-chat-card[data-chat-id]")' in rail
     assert "rect.top + (rect.height / 2) - trackRect.top" in rail
     assert "trackHeight: trackRect.height" in rail
-    assert "!collapsed && !railMotionState.phase && iconRect" in rail
+    assert "!collapsed && !renderedRailMotionPhase && iconRect" in rail
     assert "iconRect.left + (iconRect.width / 2) - trackRect.left" in rail
     assert "measuredExpandedX != null" in rail
     assert 'rail.addEventListener("scroll", measure, true)' in rail
@@ -4047,8 +4134,9 @@ def test_collapsed_chat_rail_measures_expanded_row_centres_for_spatial_mapping()
     assert "orderedChats.length, trackGeometryByChatId" in rail
     assert "trackMeasuredExpandedRef" in rail
     measurement = rail.split("useWbcLayoutEffect(function () {", 1)[1].split(
-        "}, [collapsed, projectId, visibleTrackLayoutKey, railMotionState.phase]);", 1
+        "}, [collapsed, projectId, visibleTrackLayoutKey, renderedRailMotionPhase]);", 1
     )[0]
+    assert "if (renderedRailMotionPhase) return undefined" in measurement
     assert "if (collapsed && trackMeasuredExpandedRef.current) return undefined" in measurement
     assert "if (!collapsed) trackMeasuredExpandedRef.current = true" in measurement
 
@@ -4088,18 +4176,28 @@ def test_collapsed_chat_rail_measures_expanded_row_centres_for_spatial_mapping()
     collapsing_css = styles.split(
         ".wbc-rail.is-status-collapsing .wbc-conversation-status-anchor {", 1
     )[1].split("}", 1)[0]
-    assert "left 180ms var(--wb-sidebar-motion-ease)" in expanding_css
-    assert "transform 180ms var(--wb-sidebar-motion-ease)" in expanding_css
-    assert "left 180ms var(--wb-sidebar-motion-ease) 60ms" in collapsing_css
-    assert "transform 180ms var(--wb-sidebar-motion-ease) 60ms" in collapsing_css
+    assert "left var(--wb-sidebar-motion-duration) var(--wb-sidebar-motion-ease)" in expanding_css
+    assert "transform var(--wb-sidebar-motion-duration) var(--wb-sidebar-motion-ease)" in expanding_css
+    assert "left 360ms var(--wb-sidebar-motion-ease) 80ms" in collapsing_css
+    assert "transform 360ms var(--wb-sidebar-motion-ease) 80ms" in collapsing_css
     assert "is-status-expanding .wbc-conversation-status-glyph" in styles
-    assert "opacity 90ms ease 130ms" in styles
+    assert "opacity 90ms ease 510ms" in styles
     assert "is-status-collapsing .wbc-conversation-status-glyph" in styles
-    assert 'phase: collapsed ? "collapsing" : "expanding"' in rail
-    assert '}, 260);' in rail
+    assert "railMotionCollapsedRef.current !== !!collapsed" in rail
+    assert 'collapsed ? "collapsing" : "expanding"' in rail
+    assert '}, 630);' in rail
+    reduced_motion_css = styles.split("@media (prefers-reduced-motion: reduce)", 1)[1]
+    assert "transition-delay: 0ms !important" in reduced_motion_css
     assert "wbc-status-enable-interaction 240ms" in collapsed_anchor_css
     assert ".wbc-chat-card.track-marker-ready .wbc-chat-row-icon" in styles
     assert "@keyframes wbc-status-enable-interaction" in styles
+
+    collapsed_list_css = styles.split(
+        ".workbench-grid.integrated-sidebars .wbc-rail.workbench-integrated-rail.is-collapsed .wbc-chat-list {",
+        1,
+    )[1].split("}", 1)[0]
+    assert "width: calc(var(--wb-rail-w-open) - 18px)" in collapsed_list_css
+    assert "align-self: flex-start" in collapsed_list_css
 
 
 def test_status_preview_answers_the_target_background_chat_without_opening_it():

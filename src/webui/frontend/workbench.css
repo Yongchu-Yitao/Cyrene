@@ -15205,6 +15205,15 @@ html[data-theme="dark"] .wb-init-progress-dot { border-color: #46586b; }
   pointer-events: none;
 }
 
+/* The collapsed status track measures the hidden conversation rows. Keep that
+   layout at the expanded content width so titles, status labels, and Grid
+   tracks cannot reflow for one frame when the 48px rail opens. The rail still
+   clips/ignores this surface; only its geometry remains authoritative. */
+.workbench-grid.integrated-sidebars .wbc-rail.workbench-integrated-rail.is-collapsed .wbc-chat-list {
+  width: calc(var(--wb-rail-w-open) - 18px);
+  align-self: flex-start;
+}
+
 .wbc-rail.is-collapsed .wbc-module-nav {
   left: 10px;
   right: 10px;
@@ -16180,10 +16189,10 @@ span.wbc-chat-group-toggle {
 }
 
 /* A conversation opened from the split panel changes React ownership while it
-   travels directly from its current rectangle to the final left/main track.
-   The View Transition API animates position and size as one operation, avoiding
-   the former narrow-left intermediate state and its follow-up width snap. Root
-   snapshots stay still; only the promoted conversation receives motion. */
+   travels directly to the left/main track. JS swaps the two track widths in
+   the same commit, making the source and destination rectangles equal-sized;
+   the View Transition therefore carries the entire pane as a rigid horizontal
+   translation. Root snapshots stay still. */
 html.wbc-split-view-transition::view-transition-old(root),
 html.wbc-split-view-transition::view-transition-new(root) {
   animation: none;
@@ -16196,6 +16205,21 @@ html.wbc-split-view-transition::view-transition-new(wbc-promoted-conversation) {
   /* Symmetric curve: reversing the endpoints produces the same motion path. */
   animation-timing-function: cubic-bezier(.4, 0, .6, 1);
   mix-blend-mode: normal;
+}
+
+/* Move one solid pane instead of cross-fading the source and destination
+   snapshots. The source snapshot is the conversation the user is watching;
+   its transition group carries that whole pane between the two rectangles.
+   The destination DOM is revealed only when the move completes. Applying the
+   same rule in both directions makes close the literal reverse of open. */
+html.wbc-split-view-transition::view-transition-old(wbc-promoted-conversation) {
+  animation-name: none;
+  opacity: 1;
+}
+
+html.wbc-split-view-transition::view-transition-new(wbc-promoted-conversation) {
+  animation-name: none;
+  opacity: 0;
 }
 
 /* The two supporting surfaces are time-reversed as well: opening fades the
@@ -28059,15 +28083,15 @@ html[data-density="compact"] .workbench-shell :where(.wb-budget-model-head, .wb-
 
 .wbc-rail.is-status-expanding .wbc-conversation-status-anchor {
   transition:
-    left 180ms var(--wb-sidebar-motion-ease),
-    transform 180ms var(--wb-sidebar-motion-ease),
+    left var(--wb-sidebar-motion-duration) var(--wb-sidebar-motion-ease),
+    transform var(--wb-sidebar-motion-duration) var(--wb-sidebar-motion-ease),
     opacity 120ms ease;
 }
 
 .wbc-rail.is-status-collapsing .wbc-conversation-status-anchor {
   transition:
-    left 180ms var(--wb-sidebar-motion-ease) 60ms,
-    transform 180ms var(--wb-sidebar-motion-ease) 60ms,
+    left 360ms var(--wb-sidebar-motion-ease) 80ms,
+    transform 360ms var(--wb-sidebar-motion-ease) 80ms,
     opacity 120ms ease;
 }
 
@@ -28148,8 +28172,8 @@ html[data-density="compact"] .workbench-shell :where(.wb-budget-model-head, .wb-
 .workbench-grid.integrated-sidebars .wbc-rail.workbench-integrated-rail.is-status-expanding .wbc-conversation-status-glyph,
 .workbench-grid.integrated-sidebars .wbc-rail.workbench-integrated-rail.is-status-expanding .wbc-conversation-status-dot {
   transition:
-    opacity 90ms ease 130ms,
-    transform 90ms ease 130ms;
+    opacity 90ms ease 510ms,
+    transform 90ms ease 510ms;
 }
 
 .workbench-grid.integrated-sidebars .wbc-rail.workbench-integrated-rail.is-status-collapsing .wbc-conversation-status-glyph,
@@ -28473,7 +28497,9 @@ html[data-density="compact"] .workbench-shell :where(.wb-budget-model-head, .wb-
   .workbench-grid.integrated-sidebars .workbench-sidebar-dock,
   .workbench-grid.integrated-sidebars .workbench-sidebar-dock-nav {
     transition-duration: 1ms !important;
+    transition-delay: 0ms !important;
     animation-duration: 1ms !important;
+    animation-delay: 0ms !important;
   }
 }
 

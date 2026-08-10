@@ -429,6 +429,10 @@ final result: passed
 - Opaque hover-card evidence: `/tmp/cyrene-status-map-qa.4ir2Eq/opaque-hover.png`.
 - Continuous-motion sequence (collapsed, expansion midpoint, expanded): `/tmp/cyrene-status-map-qa.4ir2Eq/motion-sequence.png`.
 - Expansion midpoint evidence: `/tmp/cyrene-status-map-qa.4ir2Eq/motion-expand-mid.png`.
+- First-frame flash fix comparison: `/tmp/cyrene-status-map-qa.4ir2Eq/flash-fixed-comparison.png`.
+- Latest expanded implementation crop: `/tmp/cyrene-status-expanded-final.png` (`320 × 648` px).
+- Latest collapsed implementation crop: `/tmp/cyrene-status-collapsed-final.png` (`82 × 648` px).
+- Latest focused source/implementation comparison input: `/tmp/cyrene-status-map-latest-comparison.png` (`576 × 1296` px).
 
 **Normalization**
 
@@ -445,10 +449,16 @@ final result: passed
 - Hover preview and quick actions remain independent from marker navigation.
 - The hover card uses the opaque `--wb-card-bg-strong` token with no backdrop filter, so underlying transcript content cannot show through in either theme.
 - The status marker is one continuously mounted element. Its expanded endpoint matched the source row icon at `x=42.008, y=400.5` versus `x=42, y=400.5` (0 px Y error).
-- Expansion keeps the dot visible during movement; the attention glyph stays at opacity 0 until the final 110 ms crossfade, preventing a warning triangle from drifting through the list. Collapse reverses the choreography: glyph-to-dot first, then a 340 ms move after a 100 ms delay.
+- Expansion keeps the dot visible during movement; the attention glyph stays at opacity 0 until the final 110 ms crossfade, preventing a warning triangle from drifting through the list. Collapse reverses the choreography: glyph-to-dot first, then a 360 ms move after an 80 ms delay.
 - List scrolling updates the anchor's unanimated `top` immediately. After a 36 px scroll, the 24 ms sample had 0 px Y error and 0.008 px X error; no delayed catch-up remained at the 184 ms sample.
 - Out-of-track rows retain separate expanded and collapsed Y endpoints. Only the computed transform delta animates during rail transitions, so clamping remains continuous without adding scroll latency.
 - Marker hit testing stays disabled until the 440 ms collapse motion completes, and the reduced-motion rule collapses the same transitions to 1 ms.
+- First-frame flash follow-up: the collapsed hidden list previously narrowed from 282 px to 46 px, moving the target row centre from 467 px to 478.469 px before expansion. It now retains the 282 px expanded layout width while remaining invisible and non-interactive; collapsed-hidden and expanded row centres both measure 467 px, so the CSS geometry variables remain unchanged across the opening frame.
+- Second first-frame follow-up: the rail motion phase was previously scheduled from state during render, so `is-collapsed` could disappear before `is-status-expanding` was painted. A `ResizeObserver` then sampled the list's transient entrance rectangle and rewrote the marker endpoint for one frame. The phase is now derived synchronously from the changed `collapsed` prop, retained through the post-settle morph, and row geometry is frozen until the rail transition and icon handoff finish.
+- Post-fix frame evidence: the marker's authored `top` stayed exactly `334px` in every sampled frame. Its centre followed one continuous 440 ms trajectory from `(36, 418.76)` to `(42, 467)`; no transient geometry rewrite or reverse movement remained. The small 0.261 px overshoot is the intentional shared elastic easing and settles continuously to 0 px error.
+- Motion timing now matches the containing rail instead of completing in 180 ms. The yellow dot remains a dot through the 440 ms move, holds for 70 ms after the rail fully settles, and then crossfades to the warning glyph over 90 ms. This avoids both a warning triangle appearing between rows and an immediate shape change at the expansion boundary.
+- Delayed-morph browser evidence: the rail reached its settled `284px` width at the 479 ms sample; the dot remained at opacity `1` and the glyph at `0` through the 535 ms sample. The crossfade was visible from 555–636 ms and completed before the expanding phase cleared. Position stayed fixed at `(42, 467)` throughout the hold and morph.
+- The focused comparison uses the current dark theme against light-theme source captures; color differences are expected token/theme behavior. Structure, status color semantics, rail endpoints, icon alignment, and collapsed spatial mapping remain consistent with the source.
 - No actionable P0/P1/P2 mismatch remains.
 
 final result: passed
