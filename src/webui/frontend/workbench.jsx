@@ -5358,9 +5358,21 @@ function TaskRail({ project, activeSessionId, onSelectSession, onCreateSession, 
         </div>
       </div>
       {menuId && <div className="wb-card-menu-scrim" onClick={function () { setMenuId(""); }} />}
-      {loading && <div className="workbench-muted">{t("rail.loadingTasks")}</div>}
-      {!loading && sessions.length === 0 && <div className="workbench-muted">{t("rail.noTasks")}</div>}
-      <div className="workbench-task-list workbench-integrated-rail-body">
+      <div className={"workbench-task-list workbench-integrated-rail-body" + (!loading && sessions.length === 0 ? " is-empty" : "")}>
+        {loading && <div className="workbench-muted wb-task-rail-loading">{t("rail.loadingTasks")}</div>}
+        {!loading && sessions.length === 0 && (
+          <div className="wb-task-rail-empty">
+            <span className="wb-task-rail-empty-icon" aria-hidden="true">
+              <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+                <rect x="5" y="4" width="14" height="17" rx="2.5"/>
+                <path d="M9 4.5h6M9 9h6M9 13h6"/>
+              </svg>
+            </span>
+            <b>{t("rail.noTasks")}</b>
+            <p>{t("rail.emptyTasksHint", null, "Create your first task to start planning and execution.")}</p>
+            <button type="button" onClick={onCreateSession} disabled={!project}>+ {t("rail.newTask")}</button>
+          </div>
+        )}
         {sessions.map(function (session) {
           var tone = WorkbenchModel.statusTone(session.status);
           var isMenuOpen = menuId === session.id;

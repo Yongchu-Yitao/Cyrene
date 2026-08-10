@@ -4219,6 +4219,73 @@ def test_sidebar_account_card_has_balanced_vertical_spacing():
     assert "transform: translateX(2px);" in collapsed_avatar_css
 
 
+def test_collapsed_workspace_headers_center_their_expand_button_and_hide_task_empty_state():
+    root = Path(__file__).resolve().parent.parent
+    source = (root / "src" / "webui" / "frontend" / "workbench.jsx").read_text(
+        encoding="utf-8"
+    )
+    styles = (root / "src" / "webui" / "frontend" / "workbench.css").read_text(
+        encoding="utf-8"
+    )
+
+    collapsed_head_css = styles.split(
+        ".workbench-grid.integrated-sidebars .workbench-integrated-rail.is-collapsed .workbench-integrated-rail-head {",
+        1,
+    )[1].split("}", 1)[0]
+    assert "justify-content: center;" in collapsed_head_css
+    assert "gap: 0;" in collapsed_head_css
+    assert "padding: 0;" in collapsed_head_css
+    task_rail = source.split("function TaskRail(", 1)[1].split(
+        "function TaskBoard(", 1
+    )[0]
+    assert 'className="wb-task-rail-empty"' in task_rail
+    assert 't("rail.emptyTasksHint"' in task_rail
+    assert task_rail.index('className="wb-task-rail-empty"') > task_rail.index("workbench-integrated-rail-body")
+    collapsed_body_css = styles.split(
+        ".workbench-grid.integrated-sidebars .workbench-integrated-rail.is-collapsed .workbench-integrated-rail-body {",
+        1,
+    )[1].split("}", 1)[0]
+    assert "visibility: hidden;" in collapsed_body_css
+
+
+def test_expanded_task_detail_rail_uses_its_own_lane_and_hides_scrollbar():
+    root = Path(__file__).resolve().parent.parent
+    styles = (root / "src" / "webui" / "frontend" / "workbench.css").read_text(
+        encoding="utf-8"
+    )
+
+    detail_grid_css = styles.split(
+        ".workbench-grid.integrated-sidebars.is-task-detail {", 1
+    )[1].split("}", 1)[0]
+    assert (
+        "grid-template-columns: 300px minmax(420px, 1fr) "
+        "var(--wb-right-w, 350px);" in detail_grid_css
+    )
+    collapsed_detail_grid_css = styles.split(
+        ".workbench-grid.integrated-sidebars.rail-collapsed.is-task-detail {", 1
+    )[1].split("}", 1)[0]
+    assert (
+        "grid-template-columns: 64px minmax(420px, 1fr) "
+        "var(--wb-right-w, 350px);" in collapsed_detail_grid_css
+    )
+    compact_detail_grid_css = styles.rsplit(
+        "@media (max-width: 1320px) {", 1
+    )[1].split("}", 1)[0]
+    assert (
+        "grid-template-columns: 300px minmax(360px, 1fr) "
+        "var(--wb-right-w, 280px);" in compact_detail_grid_css
+    )
+    rail_css = styles.split(
+        ".workbench-grid.integrated-sidebars .workbench-integrated-rail {", 1
+    )[1].split("}", 1)[0]
+    assert "z-index: 21;" in rail_css
+    assert "width: calc(var(--wb-rail-w) - 16px);" in rail_css
+    task_list_css = styles.rsplit(".workbench-task-list {", 1)[1].split("}", 1)[0]
+    assert "overflow-y: auto;" in task_list_css
+    assert "scrollbar-width: none;" in task_list_css
+    assert ".workbench-task-list::-webkit-scrollbar {" in styles
+
+
 def test_sidebar_account_menu_keeps_codex_and_custom_model_limits_independent():
     root = Path(__file__).resolve().parent.parent
     source = (root / "src" / "webui" / "frontend" / "workbench.jsx").read_text(
