@@ -28,10 +28,10 @@ jobs:
   build-macos:
     runs-on: macos-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Setup Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v7
         with:
           python-version: ${{ env.PYTHON_VERSION }}
           cache: "pip"
@@ -40,7 +40,7 @@ jobs:
             uv.lock
 
       - name: Setup Node.js
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v7
         with:
           node-version: "22.12"
           cache: "npm"
@@ -70,7 +70,7 @@ jobs:
         run: dist/Cyrene.app/Contents/MacOS/Cyrene --smoke-test
 
       - name: Upload macOS DMG
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: macos-dmg
           path: dist-electron/Cyrene-*-mac.dmg
@@ -83,10 +83,10 @@ jobs:
   build-windows:
     runs-on: windows-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Setup Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v7
         with:
           python-version: ${{ env.PYTHON_VERSION }}
           cache: "pip"
@@ -95,7 +95,7 @@ jobs:
             uv.lock
 
       - name: Setup Node.js
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v7
         with:
           node-version: "22.12"
           cache: "npm"
@@ -232,7 +232,7 @@ jobs:
           if (-not (Test-Path dist\Cyrene\_internal\codex_cli_bin)) { throw "codex_cli_bin missing from package" }
 
       - name: Upload installer
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: windows-installer
           path: dist-electron/Cyrene-*-win-x64.exe
@@ -251,10 +251,10 @@ jobs:
       # removed from current vcpkg releases.
       VCPKG_BINARY_SOURCES: 'clear;files,${{ github.workspace }}\vcpkg-binary-cache,readwrite'
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Setup Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v7
         with:
           python-version: ${{ env.PYTHON_VERSION }}
           cache: "pip"
@@ -263,7 +263,7 @@ jobs:
             uv.lock
 
       - name: Setup Node.js
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v7
         with:
           node-version: "22.12"
           cache: "npm"
@@ -272,7 +272,7 @@ jobs:
             src/webui/package-lock.json
 
       - name: Restore vcpkg binary cache
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: vcpkg-binary-cache
           key: vcpkg-${{ runner.os }}-${{ runner.arch }}-openssl-arm64-static-md-${{ hashFiles('pyproject.toml', 'uv.lock', '.github/workflows/release.yml') }}
@@ -420,7 +420,7 @@ jobs:
           if (-not (Test-Path dist\Cyrene\_internal\codex_cli_bin)) { throw "codex_cli_bin missing from package" }
 
       - name: Upload installer
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: windows-installer-arm
           path: dist-electron/Cyrene-*-win-arm64.exe
@@ -433,10 +433,10 @@ jobs:
   build-linux:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Setup Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v7
         with:
           python-version: ${{ env.PYTHON_VERSION }}
           cache: "pip"
@@ -445,7 +445,7 @@ jobs:
             uv.lock
 
       - name: Setup Node.js
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v7
         with:
           node-version: "22.12"
           cache: "npm"
@@ -508,7 +508,7 @@ jobs:
           test -f "$CYRENE_USER_DATA_DIR/data/.config_key"
 
       - name: Upload Linux packages
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: linux-packages
           path: |
@@ -528,22 +528,22 @@ jobs:
     needs: [build-macos, build-windows, build-linux]
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Download macOS artifact
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           name: macos-dmg
           path: artifacts
 
       - name: Download Windows x64 artifact
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           name: windows-installer
           path: artifacts
 
       - name: Download Linux artifact
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           name: linux-packages
           path: artifacts
@@ -603,7 +603,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Download Windows ARM64 artifact
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           name: windows-installer-arm
           path: artifacts-arm
