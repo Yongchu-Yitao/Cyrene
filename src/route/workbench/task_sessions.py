@@ -895,7 +895,6 @@ def register_task_session_routes(
                 )
 
         run_started_at = _utc_now_iso()
-        now = run_started_at
         if not is_step_run:
             constraints = _workbench_extract_constraints(user_input)
             merged_constraints = list(session.get("constraints") or [])
