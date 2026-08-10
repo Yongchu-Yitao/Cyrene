@@ -686,7 +686,9 @@ def test_workbench_chat_rail_uses_the_shared_physical_card_and_fixed_header():
     assert "isolation: isolate;" in rail_css
     assert "background: transparent;" in rail_glass_css
     assert "content: none;" in rail_glass_surface_css
-    assert 'className={"wbc-rail workbench-integrated-rail" + (collapsed ? " is-collapsed" : "")}' in source
+    assert 'className={"wbc-rail workbench-integrated-rail"' in source
+    assert '+ (collapsed ? " is-collapsed" : "")' in source
+    assert '+ (renderedRailMotionPhase ? (" is-status-" + renderedRailMotionPhase) : "")' in source
     shared_chat_rail_css = styles.split(
         ".workbench-grid.integrated-sidebars .wbc-rail.workbench-integrated-rail {", 1
     )[1].split("}", 1)[0]

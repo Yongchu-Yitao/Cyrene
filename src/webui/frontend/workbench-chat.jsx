@@ -7097,8 +7097,8 @@ function WbcRail({ projectId, chats, pinnedChatIds, activeChatId, loading, runni
     if (!rail || !track) return undefined;
     var frame = 0;
     function measure() {
-      if (frame) window.cancelAnimationFrame(frame);
-      frame = window.requestAnimationFrame(function () {
+      if (frame) cancelAnimationFrame(frame);
+      frame = requestAnimationFrame(function () {
         frame = 0;
         var trackRect = track.getBoundingClientRect();
         if (trackRect.height <= 0) return;
@@ -7154,7 +7154,7 @@ function WbcRail({ projectId, chats, pinnedChatIds, activeChatId, loading, runni
       });
     }
     return function () {
-      if (frame) window.cancelAnimationFrame(frame);
+      if (frame) cancelAnimationFrame(frame);
       rail.removeEventListener("scroll", measure, true);
       window.removeEventListener("resize", measure);
       if (observer) observer.disconnect();
