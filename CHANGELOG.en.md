@@ -5,6 +5,53 @@
 This English edition preserves the release history of the Chinese changelog.
 The Chinese edition remains the most detailed record for older releases.
 
+## [0.7.0b14] - 2026-08-10
+
+This is the fourteenth `0.7.0` beta and includes every code change after `v0.7.0-beta.13`. It focuses on the Workbench task-detail rail: the expanded rail now owns a dedicated grid lane instead of covering the task canvas, the no-task experience is a complete actionable empty state, task-list scrollbars are visually suppressed without removing scrolling, collapsed headers align precisely, and bilingual copy plus structural regression contracts cover the full change. Before release, the complete `query_entities` output path was also re-inspected and exercised, and an explicit `content` regression contract was added so entity queries cannot silently regress to type-and-title-only output.
+
+### Release highlights
+
+- **The expanded task rail no longer covers task details** — task-detail mode explicitly reserves a `300 px` grid lane for the left rail, allowing the central task canvas to reflow within the remaining width.
+- **Compact desktop widths use the same rail contract** — the responsive branch below `1320 px` also retains a `300 px` rail, eliminating the previous width jump between regular and compact layouts.
+- **An actionable no-task experience** — the former muted text is now a complete card with an icon, title, guidance, and a direct New Task action.
+- **Scrolling remains available without a visible scrollbar** — Firefox and WebKit/Chromium-specific rules reduce visual noise in the narrow rail while preserving long-list scrolling.
+- **Collapsed rail headers are precisely centered** — clearing the inherited flex gap works with the existing centered, zero-padding header contract to keep the expand control optically stable.
+- **Bilingual guidance ships together** — the new `rail.emptyTasksHint` copy is provided in English and Simplified Chinese.
+- **Entity-query completeness is now a release gate** — real `query_entities` tool output must contain each entity's type, title, full ID, and non-empty `content`, rather than testing only that IDs happen to appear.
+
+### Detailed changes and compatibility notes
+
+#### Task-rail empty state
+
+- Loading and empty states now live inside `.workbench-task-list`, sharing the same content boundary, collapse visibility, and scroll ownership as real task cards instead of rendering outside the list.
+- The list receives `is-empty` only after loading has completed and `sessions.length === 0`, preventing the empty card from flashing while tasks are still being fetched.
+- The empty card uses an inline, dependency-free task-list SVG. It is marked `aria-hidden`; the visible heading and button retain the meaningful accessible text.
+- The heading reuses `rail.noTasks`, while the guidance uses the new `rail.emptyTasksHint`. The call retains an English fallback so a downstream translation bundle that lags behind does not render blank guidance.
+- The New Task button reuses the existing `onCreateSession` callback and `rail.newTask` label rather than introducing a second creation path. It remains disabled without a valid project, preventing unscoped task creation.
+- Border, background, text, accent, and hover colors derive from existing Workbench theme tokens, preserving light mode, dark mode, and user-defined background compatibility.
+- The action adds explicit pointer, hover, and disabled feedback. Guidance uses a constrained width and `1.55` line height so both English and Chinese wrapping remain stable in the narrow rail.
+- Loading copy receives dedicated padding and type sizing instead of relying on incidental spacing outside the list container.
+
+#### Layout, responsiveness, and scrolling
+
+- `.workbench-grid.integrated-sidebars.is-task-detail` now uses `300px minmax(420px, 1fr) var(--wb-right-w, 350px)`: the left rail occupies a real column, the central detail canvas keeps its `420 px` minimum, and the right panel continues to honor its configurable width.
+- The `@media (max-width: 1320px)` branch now uses `300px minmax(360px, 1fr) var(--wb-right-w, 280px)`, compressing the central and right areas at compact widths without toggling the task rail between `280 px` and `300 px`.
+- Collapsed task-detail mode retains the existing `64 px` rail lane, so the expanded-layout fix does not alter collapsed width, the central minimum, or right-panel sizing contracts.
+- Task lists retain `overflow-y: auto`, so long lists are not clipped. Firefox uses `scrollbar-width: none`, while Chromium/WebKit use a zero-sized scrollbar pseudo-element to hide the visual track.
+- Empty lists use a top-aligned flex container. The guidance remains naturally connected to the rail header rather than drifting to an unpredictable vertical center in tall windows.
+- Collapsed headers explicitly set `gap: 0` in addition to their existing centered alignment and zero padding, preventing a shared header gap from offsetting the single expand control.
+
+#### Regression coverage and release consistency
+
+- A structural contract verifies that the empty state is nested inside the integrated rail body and that collapsed bodies stay hidden, preventing the empty card or copy from leaking into collapsed rails.
+- A header contract requires centered alignment, zero gap, and zero padding together, protecting the expand button from later shared-style regressions.
+- Grid assertions cover regular expanded mode, compact expanded mode below `1320 px`, and the existing `64 px` collapsed mode across the task rail, center canvas, and right panel.
+- Regression coverage confirms the rail retains its existing z-index and internal width calculation; the fix changes grid allocation without altering the floating border and inset geometry.
+- Scroll contracts lock the list's vertical scrolling, Firefox scrollbar suppression, and the WebKit scrollbar pseudo-element so future visual cleanup cannot accidentally remove real scrolling.
+- The entity-tool regression queries two real rows with the same title and different `content`, then independently asserts both full UUIDs, both content bodies, and the `[type] title` structure in the exact text exposed to the assistant.
+- Tool registration continues to resolve `cyrene.tool_impl.entity.query_entities`; the store selects complete entity rows, `_row_to_entity` retains `content`, and the formatter appends each non-empty body. The new end-to-end contract fails if any layer drops that field.
+- README badges, the documentation sidebar, WeChat client, WebUI cache keys, Python/UV metadata, Electron package/lock, and version contracts now consistently use `0.7.0b14` / `0.7.0-beta.14`; the Git release tag is `v0.7.0-beta.14`.
+
 ## [0.7.0b13] - 2026-08-10
 
 This is the thirteenth `0.7.0` beta and includes every commit and release fix after `v0.7.0-beta.12`. It adds a local knowledge/OCR inference pipeline, native DeepSeek web search, constrained interactive charts and actions, a unified Workbench navigation and sidebar system, richer session activity and split workflows, and reliability fixes for permanent knowledge deletion, background chat merging, long-running jobs, native browser tabs, and live split resizing.

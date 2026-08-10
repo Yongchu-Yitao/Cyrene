@@ -40,6 +40,9 @@ async def test_entity_tools_expose_ids_and_support_safe_delete_resolution(tmp_pa
     queried = await _tool_query_entities({"q": "用户本人照片识别"}, None, 0, db_path, None)
     assert duplicate_a["id"] in queried
     assert duplicate_b["id"] in queried
+    assert duplicate_a["content"] in queried
+    assert duplicate_b["content"] in queried
+    assert f"[fact] {duplicate_a['title']}" in queried
 
     tracked = await _tool_track_entity(
         {"type": "fact", "title": "新建实体", "content": "完整 ID 返回"},
