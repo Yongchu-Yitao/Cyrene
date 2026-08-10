@@ -99,7 +99,7 @@ def test_chat_rail_order_helpers_keep_new_chats_first_and_move_existing_chats():
     )[1].split("function wbcLoadChatOrder", 1)[0]
     helper_source += "function wbcMoveChatOrder(" + source.split(
         "function wbcMoveChatOrder(", 1
-    )[1].split("function WbcRail", 1)[0]
+    )[1].split("function wbcNormalizeChatGroups", 1)[0]
     script = f"""
 eval({json.dumps(helper_source)});
 const defaults = ["new", "alpha", "beta", "gamma"];
@@ -148,7 +148,7 @@ def test_chat_rail_group_helpers_create_extend_and_normalize_groups():
     )
     helper_source = "function wbcNormalizeChatGroups(" + source.split(
         "function wbcNormalizeChatGroups(", 1
-    )[1].split("function WbcRail", 1)[0]
+    )[1].split("function wbcConversationTrackRawStatus", 1)[0]
     script = f"""
 function wbcT(_key, fallback) {{ return fallback; }}
 eval({json.dumps(helper_source)});
@@ -1125,7 +1125,15 @@ def test_workbench_side_question_opens_the_existing_conversation_ui_in_a_split()
     # (rail chat dragged onto the side). Side questions belong to the content
     # tabs and, like artifact/change/map/browser/subagents, render only the
     # main-conversation grip with no duplicate handle.
-    assert 'closest(".wbc-split-main-grip")' in source
+    # Each handle identifies its own conversation explicitly. The split-side
+    # ghost is cloned from the exact pane containing that handle, so a stale
+    # closing host elsewhere on the page cannot make both handles lift the
+    # same conversation.
+    assert 'function handleSplitDragStart(event, dragSource)' in source
+    assert 'var fromMainGrip = dragSource === "main";' in source
+    assert 'dragHandle.closest(".wbc-side-agent-split")' in source
+    assert 'dragSource="main"' in source
+    assert 'dragSource="split"' in source
     assert "activeChatIdRef.current" in source
     assert "splitSideAgentId" in source
     assert "wbc-conversation-split" in source
@@ -1176,7 +1184,7 @@ def test_workbench_side_question_opens_the_existing_conversation_ui_in_a_split()
         "function WbcSideAgentSplit", 1
     )[0]
     assert 'draggable="true"' in grip_bar
-    assert "onDragStart" in grip_bar
+    assert "onSplitDragStart(event, dragSource)" in grip_bar
     assert "onDragEnd" in grip_bar
     assert "onClick" in grip_bar
     assert "onDragPanel" not in grip_bar
@@ -3877,6 +3885,168 @@ def test_workbench_permission_prompt_renders_every_scoped_option():
     assert "white-space: normal;" in option_css
 
 
+def test_collapsed_chat_rail_maps_actionable_conversation_states():
+    root = Path(__file__).resolve().parents[1]
+    source = (root / "src" / "webui" / "frontend" / "workbench-chat.jsx").read_text(
+        encoding="utf-8"
+    )
+    styles = (root / "src" / "webui" / "frontend" / "workbench.css").read_text(
+        encoding="utf-8"
+    )
+    i18n = (root / "src" / "webui" / "frontend" / "workbench-i18n.jsx").read_text(
+        encoding="utf-8"
+    )
+
+    rail = source.split("function WbcRail(", 1)[1].split(
+        "// Conversation main (column 3)", 1
+    )[0]
+    assert "function wbcConversationTrackState(" in source
+    assert 'kind: "running"' in source
+    assert 'kind: "attention"' in source
+    assert 'kind: "result"' in source
+    assert 'kind: "failed"' in source
+    assert "previous[chatId].running" in rail
+    assert "current[chatId].completed" in rail
+    assert 'chatId !== String(activeChatId || "")' in rail
+    assert 'role="navigation"' in rail
+    assert 'className="wbc-conversation-status-track"' in rail
+    assert "onMouseEnter={function () { openStatusPreview(chat.id); }}" in rail
+    assert "onSelect(chat.id);" in rail
+    assert "onToggleCollapsed" not in rail.split('className="wbc-conversation-status-track"', 1)[1]
+    assert "answerFromStatusPreview(chat" in rail
+    assert "runtimeEngine.get(chat.id)" in rail
+
+    assert ".wbc-conversation-status-track" in styles
+    assert ".wbc-conversation-status-preview" in styles
+    preview_css = styles.split(".wbc-conversation-status-preview {", 1)[1].split("}", 1)[0]
+    assert "background: var(--wb-card-bg-strong, var(--wb-card-bg));" in preview_css
+    assert "transparent" not in preview_css.split("background:", 1)[1].split(";", 1)[0]
+    assert "backdrop-filter" not in preview_css
+    assert "bottom: 270px;" in styles
+    assert "pointer-events: auto;" in styles
+    assert "width: 32px;" in styles
+    assert '"workbenchChat.track.running"' in i18n
+    assert '"workbenchChat.track.attention"' in i18n
+    assert '"workbenchChat.track.result"' in i18n
+    assert '"workbenchChat.track.failed"' in i18n
+
+
+def test_collapsed_chat_rail_status_positions_preserve_order_and_bounds():
+    root = Path(__file__).resolve().parents[1]
+    source = (root / "src" / "webui" / "frontend" / "workbench-chat.jsx").read_text(
+        encoding="utf-8"
+    )
+    helper = source.split("function wbcConversationTrackPositions", 1)[1].split(
+        "\nfunction wbcConversationTrackRuntimeText", 1
+    )[0]
+    script = (
+        "function wbcConversationTrackPositions"
+        + helper
+        + """
+const positioned = wbcConversationTrackPositions([
+  {index: 0, id: "a"},
+  {index: 1, id: "b"},
+  {index: 2, id: "c"},
+  {index: 9, id: "d"}
+], 10);
+process.stdout.write(JSON.stringify(positioned));
+"""
+    )
+    result = subprocess.run(
+        ["node", "-e", script],
+        check=True,
+        capture_output=True,
+        text=True,
+        cwd=root,
+    )
+    positioned = json.loads(result.stdout)
+    positions = [item["position"] for item in positioned]
+    assert positions == sorted(positions)
+    assert positions[0] >= 6
+    assert positions[-1] <= 94
+    assert all(right > left for left, right in zip(positions, positions[1:]))
+
+    measured_script = (
+        "function wbcConversationTrackPositions"
+        + helper
+        + """
+const positioned = wbcConversationTrackPositions([
+  {index: 5, chat: {id: "attention"}}
+], 10, {attention: 75.5});
+process.stdout.write(JSON.stringify(positioned));
+"""
+    )
+    measured_result = subprocess.run(
+        ["node", "-e", measured_script],
+        check=True,
+        capture_output=True,
+        text=True,
+        cwd=root,
+    )
+    assert json.loads(measured_result.stdout)[0]["position"] == 75.5
+
+
+def test_collapsed_chat_rail_measures_expanded_row_centres_for_spatial_mapping():
+    root = Path(__file__).resolve().parents[1]
+    source = (root / "src" / "webui" / "frontend" / "workbench-chat.jsx").read_text(
+        encoding="utf-8"
+    )
+    rail = source.split("function WbcRail(", 1)[1].split(
+        "// Conversation main (column 3)", 1
+    )[0]
+
+    assert "trackPositionByChatId" in rail
+    assert "useWbcLayoutEffect" in rail
+    assert 'rail.querySelectorAll(".wbc-chat-card[data-chat-id]")' in rail
+    assert "rect.top + (rect.height / 2) - trackRect.top" in rail
+    assert 'rail.addEventListener("scroll", measure, true)' in rail
+    assert "new ResizeObserver(measure)" in rail
+    assert "orderedChats.length, trackPositionByChatId" in rail
+    assert "trackMeasuredExpandedRef" in rail
+    measurement = rail.split("useWbcLayoutEffect(function () {", 1)[1].split(
+        "}, [collapsed, projectId, visibleTrackLayoutKey]);", 1
+    )[0]
+    assert "if (collapsed && trackMeasuredExpandedRef.current) return undefined" in measurement
+    assert "if (!collapsed) trackMeasuredExpandedRef.current = true" in measurement
+
+    styles = (root / "src" / "webui" / "frontend" / "workbench.css").read_text(
+        encoding="utf-8"
+    )
+    base_track = styles.split(".wbc-conversation-status-track {", 1)[1].split("}", 1)[0]
+    collapsed_track = styles.split(
+        ".workbench-grid.integrated-sidebars .wbc-rail.workbench-integrated-rail.is-collapsed .wbc-conversation-status-track {",
+        1,
+    )[1].split("}", 1)[0]
+    assert "visibility: hidden" in base_track
+    assert "top: 62px" in base_track
+    assert "bottom: 270px" in base_track
+    assert "visibility: visible" in collapsed_track
+
+
+def test_status_preview_answers_the_target_background_chat_without_opening_it():
+    root = Path(__file__).resolve().parents[1]
+    source = (root / "src" / "webui" / "frontend" / "workbench-chat.jsx").read_text(
+        encoding="utf-8"
+    )
+    answer = source.split("function answerQuestionForChat", 1)[1].split(
+        "// Regenerate the last assistant reply", 1
+    )[0]
+    preview = source.split("function WbcConversationStatusPreview", 1)[1].split(
+        "function WbcRail", 1
+    )[0]
+
+    assert "model.answerChat(chatId, questionId, optionText" in answer
+    assert "runtimeEngine.update(chatId" in answer
+    assert "setChats(function (previous)" in answer
+    assert "chatCache.details[chatId]" in answer
+    assert "return answerQuestionForChat(chatId" in answer
+    assert "isPermissionQuestionKind(kind)" in preview
+    assert "pending.allowCustom" in preview
+    assert "onAnswer(pending.id, text, resumeMode)" in preview
+    assert 'wbcT("workbenchChat.permissionSession"' in preview
+    assert 'wbcT("workbenchChat.permissionOnce"' in preview
+
+
 def test_workbench_split_chat_renders_and_answers_pending_question():
     root = Path(__file__).resolve().parents[1]
     source = (root / "src" / "webui" / "frontend" / "workbench-chat.jsx").read_text(
@@ -4284,6 +4454,32 @@ def test_expanded_task_detail_rail_uses_its_own_lane_and_hides_scrollbar():
     assert "overflow-y: auto;" in task_list_css
     assert "scrollbar-width: none;" in task_list_css
     assert ".workbench-task-list::-webkit-scrollbar {" in styles
+
+
+def test_task_and_chat_empty_rail_states_center_vertically():
+    root = Path(__file__).resolve().parent.parent
+    styles = (root / "src" / "webui" / "frontend" / "workbench.css").read_text(
+        encoding="utf-8"
+    )
+    chat_source = (
+        root / "src" / "webui" / "frontend" / "workbench-chat.jsx"
+    ).read_text(encoding="utf-8")
+
+    task_empty_css = styles.split(".workbench-task-list.is-empty {", 1)[1].split(
+        "}", 1
+    )[0]
+    assert "flex-direction: column;" in task_empty_css
+    assert "justify-content: center;" in task_empty_css
+    task_card_css = styles.split(".wb-task-rail-empty {", 1)[1].split("}", 1)[0]
+    assert "margin-top: 0;" in task_card_css
+
+    assert '!loading && visibleRailItemCount === 0 ? " is-empty" : ""' in chat_source
+    chat_empty_css = styles.split(
+        ".wbc-chat-list.is-empty .wbc-chat-list-primary {", 1
+    )[1].split("}", 1)[0]
+    assert "display: flex;" in chat_empty_css
+    assert "align-items: center;" in chat_empty_css
+    assert "justify-content: center;" in chat_empty_css
 
 
 def test_sidebar_account_menu_keeps_codex_and_custom_model_limits_independent():

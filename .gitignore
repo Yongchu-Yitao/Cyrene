@@ -74,6 +74,9 @@ src/webui/static/app/index.html
 src/webui/static/app/workbench.css
 src/webui/static/app/workbench-library.css
 src/webui/static/app/shared/
+src/webui/static/app/fonts.css
+src/webui/static/app/assets/
+src/webui/static/app/electron/
 
 # Transient agent/test output written to the repo root
 /animations/

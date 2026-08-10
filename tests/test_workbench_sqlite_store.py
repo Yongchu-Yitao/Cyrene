@@ -189,6 +189,29 @@ def test_notification_append_and_mark_read_do_not_overwrite_each_other(tmp_path:
     assert by_id["notif_new"]["read"] is False
 
 
+def test_remote_entity_deletion_wins_over_stale_local_edit(tmp_path: Path) -> None:
+    db_path = str(tmp_path / "cyrene.runtime.database")
+    initial = {
+        "projects": [{
+            "id": "project_1",
+            "sessions": [{"id": "session_1", "status": "running", "runs": []}],
+        }]
+    }
+    write_document(db_path, "projects", initial, lambda: {"projects": []})
+
+    stale_worker = read_document(db_path, "projects", lambda: {"projects": []})
+    deleting_request = read_document(db_path, "projects", lambda: {"projects": []})
+    deleting_request["projects"][0]["sessions"] = []
+    write_document(db_path, "projects", deleting_request, lambda: {"projects": []})
+
+    stale_worker["projects"][0]["sessions"][0]["status"] = "completed"
+    stale_worker["projects"][0]["sessions"][0]["runs"].append({"id": "run_1"})
+    write_document(db_path, "projects", stale_worker, lambda: {"projects": []})
+
+    persisted = read_document(db_path, "projects", lambda: {"projects": []})
+    assert persisted["projects"][0]["sessions"] == []
+
+
 def test_concurrent_process_counter_increments_use_deltas(tmp_path: Path) -> None:
     db_path = str(tmp_path / "cyrene.runtime.database")
     write_document(

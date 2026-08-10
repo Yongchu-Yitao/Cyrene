@@ -38,5 +38,5 @@ def test_built_search_overlay_assets_match_the_frontend_sources():
     ).read_bytes()
 
     build_source = (WEBUI / "build-jsx.mjs").read_text(encoding="utf-8")
-    assert "frontendRevision(files, cssFiles, indexTemplate)" in build_source
+    assert "frontendRevision(files, cssFiles, assetFiles, indexTemplate)" in build_source
     assert "writeFileSync(INDEX_SOURCE, indexHtml)" not in build_source

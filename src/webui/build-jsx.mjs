@@ -8,7 +8,9 @@ const __dirname = dirname(fileURLToPath(import.meta.url))
 const APP_DIR = resolve(__dirname, 'static/app')
 const OUT_DIR = resolve(APP_DIR, 'compiled')
 const WORKBENCH_DIR = resolve(__dirname, 'frontend')
+const ASSETS_DIR = resolve(WORKBENCH_DIR, 'assets')
 const INDEX_SOURCE = resolve(WORKBENCH_DIR, 'index.html')
+const ELECTRON_MAIN_SOURCE = resolve(__dirname, '../../electron/main.js')
 const PROJECT_FILE = resolve(__dirname, '../../pyproject.toml')
 
 function projectVersion() {
@@ -44,9 +46,22 @@ function collectCss(dir) {
   return files
 }
 
-function frontendRevision(files, cssFiles, indexTemplate) {
+function collectAssets(dir) {
+  const files = []
+  for (const entry of readdirSync(dir)) {
+    const full = join(dir, entry)
+    if (statSync(full).isDirectory()) {
+      files.push(...collectAssets(full))
+    } else {
+      files.push(full)
+    }
+  }
+  return files
+}
+
+function frontendRevision(files, cssFiles, assetFiles, indexTemplate) {
   const hash = createHash('sha256')
-  const sources = [...files, ...cssFiles].sort()
+  const sources = [...files, ...cssFiles, ...assetFiles].sort()
   for (const file of sources) {
     hash.update(relative(WORKBENCH_DIR, file))
     hash.update('\0')
@@ -59,9 +74,20 @@ function frontendRevision(files, cssFiles, indexTemplate) {
   return `${projectVersion()}-${hash.digest('hex').slice(0, 10)}`
 }
 
+function electronOverlayTemplate(electronSource, constantName) {
+  const marker = `const ${constantName} = \``
+  const start = electronSource.indexOf(marker)
+  if (start < 0) throw new Error(`Unable to find ${constantName} in Electron main`)
+  const contentStart = start + marker.length
+  const end = electronSource.indexOf('\`;', contentStart)
+  if (end < 0) throw new Error(`Unable to read ${constantName} from Electron main`)
+  return electronSource.slice(contentStart, end)
+}
+
 async function build() {
   const workbenchFiles = existsSync(WORKBENCH_DIR) ? collect(WORKBENCH_DIR) : []
   const cssFiles = existsSync(WORKBENCH_DIR) ? collectCss(WORKBENCH_DIR) : []
+  const assetFiles = existsSync(ASSETS_DIR) ? collectAssets(ASSETS_DIR) : []
   const files = workbenchFiles
   rmSync(OUT_DIR, { recursive: true, force: true })
   mkdirSync(OUT_DIR, { recursive: true })
@@ -103,13 +129,31 @@ async function build() {
   console.log(`\nDone. ${total} JSX file${total > 1 ? 's' : ''} compiled to ${OUT_DIR}`)
 
   const indexTemplate = readFileSync(INDEX_SOURCE, 'utf8')
-  const revision = frontendRevision(files, cssFiles, indexTemplate)
+  const revision = frontendRevision(files, cssFiles, assetFiles, indexTemplate)
   const indexHtml = indexTemplate.replace(
     /(\?v=)[A-Za-z0-9.+-]+/g,
     `$1${revision}`,
   )
   writeFileSync(join(APP_DIR, 'index.html'), indexHtml)
   console.log(`✓ index.html (${revision})`)
+
+  // Browser chrome overlays run in separate WebContentsViews. Emitting their
+  // existing inline templates as same-origin pages lets them load the exact
+  // same bundled fonts as the main Workbench without weakening local CORS.
+  const electronSource = readFileSync(ELECTRON_MAIN_SOURCE, 'utf8')
+  const overlayDir = join(APP_DIR, 'electron')
+  mkdirSync(overlayDir, { recursive: true })
+  for (const [constantName, outputName] of [
+    ['BROWSER_CHAT_OVERLAY_HTML', 'browser-chat-overlay.html'],
+    ['BROWSER_TAB_PICKER_HTML', 'browser-tab-picker.html'],
+  ]) {
+    const overlayHtml = electronOverlayTemplate(electronSource, constantName).replace(
+      '<head>',
+      `<head><link rel="stylesheet" href="../fonts.css?v=${revision}">`,
+    )
+    writeFileSync(join(overlayDir, outputName), overlayHtml)
+    console.log(`✓ electron/${outputName}`)
+  }
 
   const reactAssets = [
     ['node_modules/react/umd/react.production.min.js', 'react.production.min.js'],
@@ -124,6 +168,16 @@ async function build() {
   // CSS is maintained beside its owning source and copied to the one static
   // output namespace with the same relative path.
   for (const srcPath of cssFiles) {
+    const rel = relative(WORKBENCH_DIR, srcPath)
+    const outPath = join(APP_DIR, rel)
+    mkdirSync(dirname(outPath), { recursive: true })
+    copyFileSync(srcPath, outPath)
+    console.log(`✓ ${rel}`)
+  }
+
+  // Fonts and their licenses are source-owned beside the Workbench and copied
+  // into the same static namespace that PyInstaller packages for every OS.
+  for (const srcPath of assetFiles) {
     const rel = relative(WORKBENCH_DIR, srcPath)
     const outPath = join(APP_DIR, rel)
     mkdirSync(dirname(outPath), { recursive: true })

@@ -370,7 +370,10 @@ def _dependencies_satisfied(plan: list[dict[str, Any]], step: dict[str, Any]) ->
         for item in plan
         if isinstance(item, dict)
     }
-    return all(statuses.get(str(dep)) in {"completed", "done", "skipped"} for dep in (step.get("dependsOn") or []))
+    # Skipping a prerequisite deliberately blocks its dependants in ordinary
+    # execution. Goal-loop must preserve the same meaning instead of silently
+    # treating a skipped prerequisite as successful work.
+    return all(statuses.get(str(dep)) in {"completed", "done"} for dep in (step.get("dependsOn") or []))
 
 
 def _next_step(plan: list[dict[str, Any]]) -> dict[str, Any] | None:
@@ -411,7 +414,7 @@ async def _verify_step(
     project: dict[str, Any],
     step: dict[str, Any],
     agent_reply: str,
-) -> dict[str, Any] | None:
+) -> dict[str, Any]:
     from cyrene.workbench import runtime as R
 
     workspace_path = str(project.get("workspacePath") or "").strip()
@@ -435,11 +438,12 @@ async def _verify_step(
             clean_context=True,
             raise_on_failure=True,
         )
-    except Exception:
+    except Exception as exc:
         logger.warning("Goal-loop step verification unavailable", exc_info=True)
-        return None
+        safe_error = R._workbench_generation_error(exc)
+        raise RuntimeError(f"步骤独立验收暂时不可用：{safe_error.message}") from exc
     if not isinstance(parsed, dict) or not isinstance(parsed.get("passed"), bool):
-        return None
+        raise RuntimeError("步骤独立验收没有返回有效结果。")
     return {
         "passed": bool(parsed["passed"]),
         "evidence": str(parsed.get("evidence") or "").strip(),
@@ -787,6 +791,7 @@ class GoalLoopManager:
                     "本次只是目标循环中的一个有界工作片段。完成当前步骤后可以调用 quit，"
                     "但整个目标是否完成由外部验收器决定。不要擅自结束目标循环。"
                 )
+                execution_error = ""
                 try:
                     if resume_answer:
                         # Resume the agent's suspended round with the user's answer
@@ -813,9 +818,36 @@ class GoalLoopManager:
                         )
                 except asyncio.CancelledError:
                     raise
+                except R._WorkbenchAgentRunError as exc:
+                    if str(exc.code).startswith("budget_"):
+                        current_run = await _get_run_by_id(self.db_path, run_id) or run
+                        paused = await _set_inactive_status(
+                            self.db_path,
+                            current_run,
+                            "paused",
+                            phase="paused",
+                            stop_reason=str(exc.code),
+                            last_error=exc.message,
+                        )
+                        if paused:
+                            await _event(
+                                self.db_path,
+                                run_id,
+                                "budget_blocked",
+                                step_id=step_id,
+                                payload={"code": exc.code, "error": exc.message},
+                            )
+                            await self._sync_projection(
+                                paused,
+                                message=f"预算限制阻止了继续执行，持续任务已暂停：{exc.message}",
+                            )
+                        return
+                    execution_error = exc.message
+                    reply = exc.message
                 except Exception as exc:
                     logger.exception("Goal-loop step execution failed")
-                    reply = f"步骤执行失败：{exc}"
+                    execution_error = f"步骤执行失败：{exc}"
+                    reply = execution_error
 
                 latest_run = await _get_run_by_id(self.db_path, run_id)
                 if not latest_run or str(latest_run.get("status") or "") != "running":
@@ -902,7 +934,42 @@ class GoalLoopManager:
                 workspace_files_after = R._workbench_workspace_file_snapshot(workspace_root)
                 workspace_text_after = R._workbench_workspace_text_snapshot(workspace_root)
                 _, latest_project, latest_session = _read_session(str(run["session_id"]))
-                verification = await _verify_step(latest_session, latest_project, step, display_reply)
+                if execution_error:
+                    verification = {
+                        "passed": False,
+                        "evidence": execution_error,
+                        "retry_guidance": "修复 Agent 执行错误后重新运行本步骤。",
+                    }
+                else:
+                    try:
+                        verification = await _verify_step(
+                            latest_session,
+                            latest_project,
+                            step,
+                            display_reply,
+                        )
+                    except Exception as exc:
+                        paused = await _set_inactive_status(
+                            self.db_path,
+                            latest_run,
+                            "paused",
+                            phase="paused",
+                            stop_reason="step_verification_unavailable",
+                            last_error=str(exc),
+                        )
+                        if paused:
+                            await _event(
+                                self.db_path,
+                                run_id,
+                                "step_verification_unavailable",
+                                step_id=step_id,
+                                payload={"error": str(exc)},
+                            )
+                            await self._sync_projection(
+                                paused,
+                                message=f"步骤独立验收暂时不可用，持续执行已暂停：{exc}",
+                            )
+                        return
                 activity_events = R._collect_run_activity_events(
                     str(run["session_id"]), started_at, R._short_id("run"), workspace_root
                 )
@@ -924,7 +991,7 @@ class GoalLoopManager:
                     "taskId": str(run["session_id"]),
                     "userInput": step_prompt,
                     "agentResponse": display_reply,
-                    "status": "completed",
+                    "status": "failed" if execution_error else "completed",
                     "startedAt": started_at,
                     "endedAt": _utc_iso(),
                     "events": activity_events,
@@ -936,12 +1003,12 @@ class GoalLoopManager:
                     "artifacts": [],
                     "attachments": [],
                     "mode": str(run.get("permission_mode") or "auto"),
-                    "error": None,
+                    "error": execution_error or None,
                     "goalLoopRunId": run_id,
                     "stepVerification": verification,
                 }
 
-                passed = verification is None or bool(verification.get("passed"))
+                passed = bool(verification.get("passed"))
                 step_attempts = 0
 
                 # Generate step outcome before finish_step so it rides inside the
@@ -1346,7 +1413,27 @@ async def resume_after_answer(db_path: str, session_id: str, *, permission_denie
         )
         if paused:
             await _event(db_path, str(run["id"]), "permission_denied")
-            await _publish(paused)
+            manager = _MANAGERS.get(str(db_path))
+            if manager:
+                await manager._sync_projection(
+                    paused,
+                    message="权限请求已拒绝，持续执行已暂停。",
+                )
+            else:
+                def apply(
+                    _payload: dict[str, Any],
+                    _project: dict[str, Any],
+                    session: dict[str, Any],
+                ) -> None:
+                    session["status"] = "paused"
+                    session["goalLoop"] = _public_run(paused)
+                    session["agentReply"] = "权限请求已拒绝，持续执行已暂停。"
+
+                try:
+                    _write_session(session_id, apply)
+                except KeyError:
+                    pass
+                await _publish(paused)
         return
     now = _utc_iso()
     run = await _update_run(

@@ -161,7 +161,6 @@
 - P3: If a future tooltip component becomes available, replace native `title` hints on compact module buttons with the shared tooltip for richer keyboard timing and placement.
 
 final result: passed
-
 ## Project/chat navigation unfinished fixes — 2026-08-10
 
 **Comparison Target**
@@ -414,5 +413,35 @@ final result: passed
 - [x] Frontend build and Electron syntax check completed.
 - [x] Complete Python regression suite passed (`1866 passed`).
 - [x] Source and implementation were reviewed together in the combined comparison input.
+
+final result: passed
+
+## Conversation Status Map — 2026-08-10
+
+**Comparison Target**
+
+- Collapsed-rail source: `/var/folders/zm/qgh_rgw903j0b9t01yg2l0mc0000gn/T/codex-clipboard-2fecfb16-8ae6-4813-8904-636659987927.png`.
+- Hover/interaction source: `/var/folders/zm/qgh_rgw903j0b9t01yg2l0mc0000gn/T/codex-clipboard-54ad9b4f-4b95-4010-b66c-4ebeba7b3191.png`.
+- Reported alignment mismatch: `/var/folders/zm/qgh_rgw903j0b9t01yg2l0mc0000gn/T/codex-clipboard-2e7ad403-4523-48db-bc1e-29e0055ddb33.png` and `/var/folders/zm/qgh_rgw903j0b9t01yg2l0mc0000gn/T/codex-clipboard-c2fa13e6-86f0-45e4-83d0-cc79ce0e9645.png`.
+- Corrected expanded state: `/tmp/cyrene-status-map-qa.4ir2Eq/aligned-expanded.png`.
+- Corrected collapsed state: `/tmp/cyrene-status-map-qa.4ir2Eq/aligned-collapsed.png`.
+- Combined corrected comparison: `/tmp/cyrene-status-map-qa.4ir2Eq/aligned-comparison.png`.
+- Opaque hover-card evidence: `/tmp/cyrene-status-map-qa.4ir2Eq/opaque-hover.png`.
+
+**Normalization**
+
+- Browser viewport: `1280 × 720` CSS px at device pixel ratio 2.
+- State: Chat rail expanded and scrolled to the reported conversation position, then collapsed without changing the list position.
+- The measured centre of the `sycanmore 是什么` row was `411 px`; the collapsed yellow marker centre was `410.9921875 px` (absolute delta `0.0078125 px`).
+
+**Findings**
+
+- The earlier index-based distribution ignored the search header, section heading, real row height, overview limit, and list scroll, so it placed the marker too high.
+- The status map now measures each rendered chat row centre and projects that absolute Y coordinate into the collapsed track. A hidden layout copy remains measurable on initial collapsed load; after an expanded measurement, collapsing preserves that authoritative geometry.
+- Track bounds still clamp markers away from the module dock when a row is outside the collapsed track's usable area.
+- Clicking the yellow marker changed the active Session to `wbchat_6bce4253e2` and the sidebar remained collapsed.
+- Hover preview and quick actions remain independent from marker navigation.
+- The hover card uses the opaque `--wb-card-bg-strong` token with no backdrop filter, so underlying transcript content cannot show through in either theme.
+- No actionable P0/P1/P2 mismatch remains.
 
 final result: passed

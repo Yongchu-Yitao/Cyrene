@@ -11,7 +11,7 @@
   overflow: hidden;
   color: var(--wb-text);
   background: var(--wb-shell-bg);
-  font-family: var(--wb-font, Manrope, Inter, system-ui, sans-serif);
+  font-family: var(--wb-font, var(--sans, system-ui, sans-serif));
   -webkit-font-smoothing: antialiased;
 }
 
@@ -343,7 +343,7 @@
 .wb-lib-dropdown button small { color: var(--wb-muted); font-size: calc(10.5px * var(--wb-ui-font-scale, 1)); }
 .wb-lib-dropdown.sort button { justify-content: space-between; }
 .wb-lib-dropdown.sort button.selected { color: var(--wb-accent); font-weight: 680; }
-.wb-lib-context-layer { position: fixed; inset: 0; z-index: 720; color: var(--wb-text, #1f252d); font-family: var(--wb-font, Manrope, Inter, system-ui, sans-serif); pointer-events: none; }
+.wb-lib-context-layer { position: fixed; inset: 0; z-index: 720; color: var(--wb-text, #1f252d); font-family: var(--wb-font, var(--sans, system-ui, sans-serif)); pointer-events: none; }
 .wb-lib-context-layer *, .wb-lib-context-layer *::before, .wb-lib-context-layer *::after { box-sizing: border-box; }
 .wb-lib-context-scrim { position: absolute; inset: 0; pointer-events: auto; }
 .wb-lib-context-menu {

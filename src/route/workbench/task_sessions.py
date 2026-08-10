@@ -16,6 +16,12 @@ def register_task_session_routes(
     _bot = bot
     _db_path = db_path
 
+    def agent_run_error_response(exc: _WorkbenchAgentRunError) -> JSONResponse:
+        return JSONResponse(
+            {"error": exc.message, "code": exc.code},
+            status_code=exc.status_code,
+        )
+
     def apply_task_model_preference(
         session_id: str,
         body: dict[str, Any],
@@ -403,13 +409,68 @@ def register_task_session_routes(
         project, session = _workbench_find_session(payload, session_id)
         if not session or not project:
             return JSONResponse({"error": "session not found"}, status_code=404)
-        project["sessions"] = [s for s in project.get("sessions", []) if str(s.get("id") or "") != session_id]
-        now = _utc_now_iso()
-        project["updatedAt"] = now
-        if str(payload.get("activeSessionId") or "") == session_id:
-            remaining = project.get("sessions") or []
-            payload["activeSessionId"] = remaining[0]["id"] if remaining else ""
-        _write_workbench_store(payload)
+
+        # Stop every writer before removing the entity. Otherwise a normal Agent
+        # request can finish against its stale snapshot and resurrect the deleted
+        # session through the document store's three-way merge.
+        interrupt_active_run(session_id=session_id)
+        from cyrene.workbench import goal_loop as goal_loop_service
+
+        goal_run = await goal_loop_service._get_run_by_session(_db_path, session_id)
+        if goal_run and str(goal_run.get("status") or "") not in {
+            "review", "completed", "cancelled"
+        }:
+            cancelled = await goal_loop_service._set_inactive_status(
+                _db_path,
+                goal_run,
+                "cancelled",
+                phase="cancelled",
+                stop_reason="session_deleted",
+            )
+            if cancelled:
+                await goal_loop_service._event(
+                    _db_path,
+                    str(goal_run["id"]),
+                    "cancelled",
+                    payload={"reason": "session_deleted"},
+                )
+                await goal_loop_service._publish(cancelled)
+            manager = goal_loop_service._MANAGERS.get(str(_db_path))
+            worker = manager.tasks.get(str(goal_run["id"])) if manager else None
+            if worker is not None and not worker.done():
+                worker.cancel()
+                await asyncio.gather(worker, return_exceptions=True)
+
+        for _attempt in range(100):
+            if not is_session_running(session_id):
+                break
+            await asyncio.sleep(0.05)
+        if is_session_running(session_id):
+            return JSONResponse(
+                {
+                    "error": "任务仍在停止中，请稍后重试删除。",
+                    "code": "session_still_running",
+                },
+                status_code=409,
+            )
+        await clear_session_id(session_id=session_id)
+
+        with _WORKBENCH_STORE_LOCK:
+            payload = _read_workbench_store()
+            project, session = _workbench_find_session(payload, session_id)
+            if not session or not project:
+                return {"ok": True, **payload}
+            project["sessions"] = [
+                item
+                for item in project.get("sessions", [])
+                if str(item.get("id") or "") != session_id
+            ]
+            now = _utc_now_iso()
+            project["updatedAt"] = now
+            if str(payload.get("activeSessionId") or "") == session_id:
+                remaining = project.get("sessions") or []
+                payload["activeSessionId"] = remaining[0]["id"] if remaining else ""
+            _write_workbench_store(payload)
         return {"ok": True, **payload}
 
     @router.post("/api/task-sessions/{session_id}/plan/generate")
@@ -764,11 +825,6 @@ def register_task_session_routes(
         if not user_input and not attachments:
             return JSONResponse({"error": "input is required"}, status_code=400)
 
-        # ── Budget gate ──
-        _bgt = await _check_budget_gate(session_id)
-        if _bgt:
-            return JSONResponse(_bgt, status_code=403)
-
         payload = _read_workbench_store()
         project, session = _workbench_find_session(payload, session_id)
         if not session or not project:
@@ -838,7 +894,8 @@ def register_task_session_routes(
                     status_code=409,
                 )
 
-        now = _utc_now_iso()
+        run_started_at = _utc_now_iso()
+        now = run_started_at
         if not is_step_run:
             constraints = _workbench_extract_constraints(user_input)
             merged_constraints = list(session.get("constraints") or [])
@@ -852,7 +909,7 @@ def register_task_session_routes(
             session["acceptanceCriteria"] = _workbench_acceptance_from_session(session)
         else:
             constraints = []
-        run_start_ts = _utc_now_iso()
+        run_start_ts = run_started_at
         workspace_root = _workbench_workspace_root(project)
         git_status_before = _workbench_git_status_snapshot(workspace_root)
         workspace_files_before = _workbench_workspace_file_snapshot(workspace_root)
@@ -861,13 +918,21 @@ def register_task_session_routes(
             project, session, step_id=step_id if is_step_run else "", workspace_root=workspace_root
         )
         volatile_ephemeral_system = _workbench_compose_volatile_ephemeral_system(project, session)
-        agent_reply = await _workbench_agent_reply(user_input, session, constraints, attachments=attachments, permission_mode=mode, command=command, project_workspace=str(project.get("workspacePath") or ""), ephemeral_system=ephemeral_system, volatile_ephemeral_system=volatile_ephemeral_system, static_system_extra=_workbench_compose_static_system(project, session))
+        agent_error = None
+        try:
+            agent_reply = await _workbench_agent_reply(user_input, session, constraints, attachments=attachments, permission_mode=mode, command=command, project_workspace=str(project.get("workspacePath") or ""), ephemeral_system=ephemeral_system, volatile_ephemeral_system=volatile_ephemeral_system, static_system_extra=_workbench_compose_static_system(project, session))
+        except _WorkbenchAgentRunError as exc:
+            agent_error = exc
+            agent_reply = exc.message
         git_status_after = _workbench_git_status_snapshot(workspace_root)
         workspace_files_after = _workbench_workspace_file_snapshot(workspace_root)
         workspace_text_after = _workbench_workspace_text_snapshot(workspace_root)
         # A run that hit a permission / clarification boundary pauses awaiting the
         # user's answer — surface the question on the card instead of the sentinel.
-        agent_reply, awaiting_user = _workbench_apply_pending(session, session_id, agent_reply)
+        if agent_error is None:
+            agent_reply, awaiting_user = _workbench_apply_pending(session, session_id, agent_reply)
+        else:
+            awaiting_user = False
         if is_step_run and awaiting_user:
             session["pendingPlanStep"] = {
                 "stepId": step_id,
@@ -879,7 +944,7 @@ def register_task_session_routes(
         _workbench_sync_agent_task_meta(session, session_id, task_meta_before)
         session["agentReply"] = agent_reply
         # Generate step outcome for context cascade (best-effort, short timeout).
-        if is_step_run and not awaiting_user and step:
+        if is_step_run and not awaiting_user and agent_error is None and step:
             try:
                 await asyncio.wait_for(
                     _workbench_generate_step_outcome(step, agent_reply, user_input),
@@ -888,13 +953,12 @@ def register_task_session_routes(
             except (asyncio.TimeoutError, Exception):
                 pass
         # Sink durable memories from this exchange into the project's workspace store.
-        if not command and not awaiting_user:
+        if not command and not awaiting_user and agent_error is None:
             schedule_capture(_workbench_project_memory_key(project), user_input, agent_reply)
-        if not is_step_run and not awaiting_user:
+        if agent_error is not None and not is_step_run:
+            session["status"] = "failed"
+        elif not is_step_run and not awaiting_user:
             session["status"] = "planning" if session.get("status") in ("idle", "pending") else session.get("status", "planning")
-        session["updatedAt"] = now
-        project["updatedAt"] = now
-
         normalized_attachments = _workbench_normalize_attachments(attachments)
         public_attachments = [build_public_attachment_payload(item) for item in normalized_attachments]
         run_id = _short_id("run")
@@ -911,22 +975,81 @@ def register_task_session_routes(
             workspace_text_before=workspace_text_before,
             workspace_text_after=workspace_text_after,
         )
+        finished_at = _utc_now_iso()
         if is_step_run and step_id:
             _workbench_apply_step_file_changes(session, step_id, file_changes)
+        if is_step_run and agent_error is not None and step:
+            step["status"] = "failed"
+            step["updatedAt"] = finished_at
+            step["currentAction"] = agent_error.message
+            session["planRevision"] = int(session.get("planRevision") or 0) + 1
+            session["status"] = "failed"
+        elif is_step_run and not awaiting_user and step:
+            step["status"] = "completed"
+            step["completedAt"] = finished_at
+            step["updatedAt"] = finished_at
+            step["currentAction"] = (
+                f"已完成，本步调用工具 {len(tool_call_events)} 次。"
+                if tool_call_events else "已完成该步骤。"
+            )
+            step["toolCalls"] = [
+                {"tool": event["tool"], "argsPreview": event["argsPreview"]}
+                for event in tool_call_events
+            ]
+            started_at = str(step.get("startedAt") or run_started_at)
+            try:
+                duration = round(
+                    (
+                        datetime.fromisoformat(finished_at)
+                        - datetime.fromisoformat(started_at)
+                    ).total_seconds()
+                )
+                if duration >= 1:
+                    step["durationSec"] = duration
+            except (TypeError, ValueError):
+                pass
+            session["planRevision"] = int(session.get("planRevision") or 0) + 1
+            unresolved = [
+                item
+                for item in (session.get("plan") or [])
+                if isinstance(item, dict)
+                and str(item.get("status") or "pending")
+                not in {"completed", "done", "skipped"}
+            ]
+            session["status"] = (
+                "review"
+                if not unresolved
+                else "running"
+                if bool(run_meta.get("continueAll"))
+                else "paused"
+            )
         events = [
-            {"id": _short_id("event"), "type": "UserMessageEvent", "runId": run_id, "createdAt": now, "body": user_input or "[附件]", "attachments": public_attachments},
+            {"id": _short_id("event"), "type": "UserMessageEvent", "runId": run_id, "createdAt": run_started_at, "body": user_input or "[附件]", "attachments": public_attachments},
             *activity_events,
-            {"id": _short_id("event"), "type": "AgentResponseEvent", "runId": run_id, "createdAt": now, "body": agent_reply},
-            {"id": _short_id("event"), "type": "PlanUpdatedEvent", "runId": run_id, "createdAt": now, "stepCount": len(session.get("plan") or [])},
+            {"id": _short_id("event"), "type": "AgentErrorEvent" if agent_error else "AgentResponseEvent", "runId": run_id, "createdAt": finished_at, "body": agent_reply},
+            {"id": _short_id("event"), "type": "PlanUpdatedEvent", "runId": run_id, "createdAt": finished_at, "stepCount": len(session.get("plan") or [])},
         ]
+        if is_step_run and not awaiting_user and step:
+            events.append({
+                "id": _short_id("event"),
+                "type": "ExecutionFailed" if agent_error else "ExecutionFinished",
+                "runId": run_id,
+                "stepId": step_id,
+                "createdAt": finished_at,
+                "body": (
+                    f"步骤「{step.get('title') or step_id}」执行失败：{agent_error.message}"
+                    if agent_error
+                    else f"步骤「{step.get('title') or step_id}」执行完成。"
+                ),
+            })
         run = {
             "id": run_id,
             "taskId": session_id,
             "userInput": user_input,
             "agentResponse": agent_reply,
-            "status": "completed",
-            "startedAt": now,
-            "endedAt": now,
+            "status": "failed" if agent_error else "completed",
+            "startedAt": run_started_at,
+            "endedAt": finished_at,
             "contextPackId": _short_id("ctx"),
             "events": events,
             "fileChanges": file_changes,
@@ -934,20 +1057,26 @@ def register_task_session_routes(
             "artifacts": [],
             "attachments": public_attachments,
             "mode": mode,
-            "error": None,
+            "error": agent_error.message if agent_error else None,
         }
         session.setdefault("runs", []).append(run)
         session.setdefault("events", []).extend(events)
-        _workbench_promote_file_artifacts(session, file_changes, now, workspace_root)
-        if not awaiting_user:
+        _workbench_promote_file_artifacts(session, file_changes, finished_at, workspace_root)
+        if not awaiting_user and agent_error is None:
             await _workbench_archive_run_knowledge(
-                project, session, run, workspace_root, now,
+                project, session, run, workspace_root, finished_at,
             )
+        session["updatedAt"] = finished_at
+        project["updatedAt"] = finished_at
         payload["activeSessionId"] = session_id
         _write_workbench_store(payload)
         append_notification(
-            title="任务回复完成",
-            body=f"Agent 已更新任务「{session.get('title') or '未命名任务'}」。",
+            title="任务执行失败" if agent_error else "任务回复完成",
+            body=(
+                f"Agent 执行任务「{session.get('title') or '未命名任务'}」失败：{agent_error.message}"
+                if agent_error
+                else f"Agent 已更新任务「{session.get('title') or '未命名任务'}」。"
+            ),
             tab="comment",
             project_ref=project.get("id"),
             source="task_reply",
@@ -955,6 +1084,8 @@ def register_task_session_routes(
             link_label=str(session.get("title") or ""),
             meta={"sessionId": session_id, "runId": run_id},
         )
+        if agent_error is not None:
+            return agent_run_error_response(agent_error)
         return {"ok": True, "project": project, "session": session, "run": run, **payload}
 
     @router.post("/api/task-sessions/{session_id}/chat")
@@ -994,7 +1125,10 @@ def register_task_session_routes(
         ephemeral_system = (ephemeral_system + "\n\n" + _WORKBENCH_TASK_REPLY_DIRECTIVE).strip()
         volatile_ephemeral_system = _workbench_compose_volatile_ephemeral_system(project, session)
         agent_command = command or "workbench-task-reply"
-        agent_reply = await _workbench_agent_reply(message, session, [], attachments=attachments, permission_mode=mode, command=agent_command, project_workspace=str(project.get("workspacePath") or ""), ephemeral_system=ephemeral_system, volatile_ephemeral_system=volatile_ephemeral_system, static_system_extra=_workbench_compose_static_system(project, session))
+        try:
+            agent_reply = await _workbench_agent_reply(message, session, [], attachments=attachments, permission_mode=mode, command=agent_command, project_workspace=str(project.get("workspacePath") or ""), ephemeral_system=ephemeral_system, volatile_ephemeral_system=volatile_ephemeral_system, static_system_extra=_workbench_compose_static_system(project, session))
+        except _WorkbenchAgentRunError as exc:
+            return agent_run_error_response(exc)
         git_status_after = _workbench_git_status_snapshot(workspace_root)
         workspace_files_after = _workbench_workspace_file_snapshot(workspace_root)
         workspace_text_after = _workbench_workspace_text_snapshot(workspace_root)
@@ -1241,7 +1375,10 @@ def register_task_session_routes(
             ephemeral_system = (ephemeral_system + "\n\n" + _WORKBENCH_TASK_REPLY_DIRECTIVE).strip()
         volatile_ephemeral_system = _workbench_compose_volatile_ephemeral_system(project, session)
         agent_command = command or ("workbench-task-reply" if kind == "answer" else "")
-        agent_reply = await _workbench_agent_reply(user_input, session, [], attachments=attachments, permission_mode=mode, command=agent_command, project_workspace=str(project.get("workspacePath") or ""), ephemeral_system=ephemeral_system, volatile_ephemeral_system=volatile_ephemeral_system, static_system_extra=_workbench_compose_static_system(project, session))
+        try:
+            agent_reply = await _workbench_agent_reply(user_input, session, [], attachments=attachments, permission_mode=mode, command=agent_command, project_workspace=str(project.get("workspacePath") or ""), ephemeral_system=ephemeral_system, volatile_ephemeral_system=volatile_ephemeral_system, static_system_extra=_workbench_compose_static_system(project, session))
+        except _WorkbenchAgentRunError as exc:
+            return agent_run_error_response(exc)
         git_status_after = _workbench_git_status_snapshot(workspace_root)
         workspace_files_after = _workbench_workspace_file_snapshot(workspace_root)
         workspace_text_after = _workbench_workspace_text_snapshot(workspace_root)
@@ -1277,10 +1414,11 @@ def register_task_session_routes(
             workspace_text_before=workspace_text_before,
             workspace_text_after=workspace_text_after,
         )
+        finished_at = _utc_now_iso()
         events = [
-            {"id": _short_id("event"), "type": "UserMessageEvent", "runId": run_id, "createdAt": now, "body": user_input or "[附件]", "attachments": public_attachments},
+            {"id": _short_id("event"), "type": "UserMessageEvent", "runId": run_id, "createdAt": run_start_ts, "body": user_input or "[附件]", "attachments": public_attachments},
             *activity_events,
-            {"id": _short_id("event"), "type": "AgentResponseEvent", "runId": run_id, "createdAt": now, "body": agent_reply},
+            {"id": _short_id("event"), "type": "AgentResponseEvent", "runId": run_id, "createdAt": finished_at, "body": agent_reply},
         ]
         run = {
             "id": run_id,
@@ -1288,8 +1426,8 @@ def register_task_session_routes(
             "userInput": user_input,
             "agentResponse": agent_reply,
             "status": "completed",
-            "startedAt": now,
-            "endedAt": now,
+            "startedAt": run_start_ts,
+            "endedAt": finished_at,
             "contextPackId": _short_id("ctx"),
             "events": events,
             "fileChanges": file_changes,
@@ -1301,13 +1439,13 @@ def register_task_session_routes(
         }
         session.setdefault("runs", []).append(run)
         session.setdefault("events", []).extend(events)
-        _workbench_promote_file_artifacts(session, file_changes, now, workspace_root)
+        _workbench_promote_file_artifacts(session, file_changes, finished_at, workspace_root)
         if not awaiting_user:
             await _workbench_archive_run_knowledge(
-                project, session, run, workspace_root, now,
+                project, session, run, workspace_root, finished_at,
             )
-        session["updatedAt"] = now
-        project["updatedAt"] = now
+        session["updatedAt"] = finished_at
+        project["updatedAt"] = finished_at
         payload["activeSessionId"] = session_id
         _write_workbench_store(payload)
         append_notification(
@@ -1440,10 +1578,11 @@ def register_task_session_routes(
             workspace_text_before=workspace_text_before,
             workspace_text_after=workspace_text_after,
         )
+        finished_at = _utc_now_iso()
         events = [
             {"id": _short_id("event"), "type": "UserMessageEvent", "runId": run_id, "createdAt": now, "body": f"[确认] {answer_text}"},
             *activity_events,
-            {"id": _short_id("event"), "type": "AgentResponseEvent", "runId": run_id, "createdAt": now, "body": agent_reply},
+            {"id": _short_id("event"), "type": "AgentResponseEvent", "runId": run_id, "createdAt": finished_at, "body": agent_reply},
         ]
         run = {
             "id": run_id,
@@ -1451,8 +1590,8 @@ def register_task_session_routes(
             "userInput": answer_text,
             "agentResponse": agent_reply,
             "status": "completed",
-            "startedAt": now,
-            "endedAt": now,
+            "startedAt": run_start_ts,
+            "endedAt": finished_at,
             "contextPackId": _short_id("ctx"),
             "events": events,
             "fileChanges": file_changes,
@@ -1464,7 +1603,7 @@ def register_task_session_routes(
         }
         session.setdefault("runs", []).append(run)
         session.setdefault("events", []).extend(events)
-        _workbench_promote_file_artifacts(session, file_changes, now, workspace_root)
+        _workbench_promote_file_artifacts(session, file_changes, finished_at, workspace_root)
         continue_plan_execution = False
         if pending_plan_step and not awaiting_user:
             pending_step_id = str(pending_plan_step.get("stepId") or "").strip()
@@ -1478,7 +1617,7 @@ def register_task_session_routes(
             )
             if target_step:
                 session["planRevision"] = int(session.get("planRevision") or 0) + 1
-                target_step["updatedAt"] = now
+                target_step["updatedAt"] = finished_at
                 if permission_denied:
                     # The session pauses for user action, but the denied step
                     # remains pending so its command can be edited and retried.
@@ -1497,7 +1636,7 @@ def register_task_session_routes(
                     # gate: if the step isn't really done it fails there and the
                     # runner generates repair steps.
                     target_step["status"] = "completed"
-                    target_step["completedAt"] = now
+                    target_step["completedAt"] = finished_at
                     target_step["currentAction"] = (
                         f"用户已确认；本步完成，调用工具 {len(tool_call_events)} 次。"
                         if tool_call_events else "用户已确认，本步骤完成。"
@@ -1512,7 +1651,7 @@ def register_task_session_routes(
                     session["status"] = "running"
                 else:
                     target_step["status"] = "completed"
-                    target_step["completedAt"] = now
+                    target_step["completedAt"] = finished_at
                     target_step["currentAction"] = (
                         f"已完成，本步调用工具 {len(tool_call_events)} 次。"
                         if tool_call_events else "已完成该步骤。"
@@ -1526,7 +1665,7 @@ def register_task_session_routes(
                         try:
                             seconds = round(
                                 (
-                                    datetime.fromisoformat(now)
+                                    datetime.fromisoformat(finished_at)
                                     - datetime.fromisoformat(str(start_ms))
                                 ).total_seconds()
                             )
@@ -1550,10 +1689,10 @@ def register_task_session_routes(
             session.pop("pendingPlanStep", None)
         if not awaiting_user:
             await _workbench_archive_run_knowledge(
-                project, session, run, workspace_root, now,
+                project, session, run, workspace_root, finished_at,
             )
-        session["updatedAt"] = now
-        project["updatedAt"] = now
+        session["updatedAt"] = finished_at
+        project["updatedAt"] = finished_at
         payload["activeSessionId"] = session_id
         _write_workbench_store(payload)
         if pending_plan_step and bool(pending_plan_step.get("goalLoop")) and not awaiting_user:

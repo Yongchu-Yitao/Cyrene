@@ -453,6 +453,134 @@ def test_workbench_step_run_rejects_unmet_dependencies_before_agent_call(monkeyp
     assert called is False
 
 
+def test_workbench_step_run_commits_completion_and_real_timestamps(monkeypatch, tmp_path):
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+    from cyrene.workbench import runtime as routes
+
+    data_dir = tmp_path / "data"
+    data_dir.mkdir()
+    store_path = data_dir / "workbench_projects.json"
+    store_path.write_text(json.dumps({
+        "projects": [{
+            "id": "project_1",
+            "name": "Cyrene",
+            "workspacePath": str(tmp_path),
+            "sessions": [{
+                "id": "session_1",
+                "projectId": "project_1",
+                "kind": "task",
+                "title": "原子完成",
+                "goal": "完成一个步骤",
+                "status": "running",
+                "planRevision": 2,
+                "planDefinitionRevision": 1,
+                "approvedPlanDefinitionRevision": 1,
+                "plan": [{
+                    "id": "step_a", "title": "A", "status": "running",
+                    "order": 1, "dependsOn": [],
+                    "startedAt": "2026-06-19T00:00:00+00:00",
+                }],
+                "events": [], "runs": [], "artifacts": [],
+                "acceptanceCriteria": [],
+                "createdAt": "2026-06-19T00:00:00+00:00",
+                "updatedAt": "2026-06-19T00:00:00+00:00",
+            }],
+            "createdAt": "2026-06-19T00:00:00+00:00",
+            "updatedAt": "2026-06-19T00:00:00+00:00",
+        }],
+        "activeProjectId": "project_1",
+        "activeSessionId": "session_1",
+    }), encoding="utf-8")
+
+    async def fake_reply(*_args, **_kwargs):
+        await asyncio.sleep(0.01)
+        return "步骤已经真正执行完成"
+
+    async def no_outcome(*_args, **_kwargs):
+        return None
+
+    async def no_archive(*_args, **_kwargs):
+        return None
+
+    monkeypatch.setattr(routes, "DATA_DIR", data_dir)
+    monkeypatch.setattr(routes, "_WORKBENCH_STORE", store_path)
+    monkeypatch.setattr(routes, "_workbench_agent_reply", fake_reply)
+    monkeypatch.setattr(routes, "_workbench_generate_step_outcome", no_outcome)
+    monkeypatch.setattr(routes, "_workbench_archive_run_knowledge", no_archive)
+    monkeypatch.setattr(routes, "schedule_capture", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(routes, "append_notification", lambda **_kwargs: {})
+
+    app = FastAPI()
+    register_routes(app, bot=None, db_path=str(tmp_path / "test.db"))
+    response = TestClient(app).post("/api/task-sessions/session_1/runs", json={
+        "input": "执行 A",
+        "stepId": "step_a",
+        "stepTitle": "A",
+        "action": "spawn_subagent",
+        "planDefinitionRevision": 1,
+    })
+
+    assert response.status_code == 200
+    session = response.json()["session"]
+    run = response.json()["run"]
+    assert session["plan"][0]["status"] == "completed"
+    assert session["status"] == "review"
+    assert run["status"] == "completed"
+    assert run["endedAt"] > run["startedAt"]
+    stored = json.loads(store_path.read_text(encoding="utf-8"))
+    assert stored["projects"][0]["sessions"][0]["plan"][0]["status"] == "completed"
+
+
+def test_workbench_step_run_persists_agent_failure(monkeypatch, tmp_path):
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+    from cyrene.workbench import runtime as routes
+
+    data_dir = tmp_path / "data"
+    data_dir.mkdir()
+    store_path = data_dir / "workbench_projects.json"
+    store_path.write_text(json.dumps({
+        "projects": [{
+            "id": "project_1", "name": "Cyrene", "workspacePath": str(tmp_path),
+            "sessions": [{
+                "id": "session_1", "projectId": "project_1", "kind": "task",
+                "title": "失败落库", "goal": "执行步骤", "status": "running",
+                "planRevision": 1, "planDefinitionRevision": 1,
+                "approvedPlanDefinitionRevision": 1,
+                "plan": [{"id": "step_a", "title": "A", "status": "running", "order": 1, "dependsOn": []}],
+                "events": [], "runs": [], "artifacts": [], "acceptanceCriteria": [],
+                "createdAt": "2026-06-19T00:00:00+00:00", "updatedAt": "2026-06-19T00:00:00+00:00",
+            }],
+            "createdAt": "2026-06-19T00:00:00+00:00", "updatedAt": "2026-06-19T00:00:00+00:00",
+        }],
+        "activeProjectId": "project_1", "activeSessionId": "session_1",
+    }), encoding="utf-8")
+
+    async def failed_reply(*_args, **_kwargs):
+        raise routes._WorkbenchAgentRunError("workbench_agent_run_failed", "Agent 执行失败：boom")
+
+    monkeypatch.setattr(routes, "DATA_DIR", data_dir)
+    monkeypatch.setattr(routes, "_WORKBENCH_STORE", store_path)
+    monkeypatch.setattr(routes, "_workbench_agent_reply", failed_reply)
+    monkeypatch.setattr(routes, "append_notification", lambda **_kwargs: {})
+
+    app = FastAPI()
+    register_routes(app, bot=None, db_path=str(tmp_path / "test.db"))
+    response = TestClient(app).post("/api/task-sessions/session_1/runs", json={
+        "input": "执行 A", "stepId": "step_a", "action": "spawn_subagent",
+        "planDefinitionRevision": 1,
+    })
+
+    assert response.status_code == 502
+    stored = json.loads(store_path.read_text(encoding="utf-8"))
+    session = stored["projects"][0]["sessions"][0]
+    assert session["status"] == "failed"
+    assert session["plan"][0]["status"] == "failed"
+    assert session["runs"][0]["status"] == "failed"
+    assert session["runs"][0]["error"] == "Agent 执行失败：boom"
+
+
 def test_workbench_plan_revision_drops_only_invalid_dependency_edges():
     from cyrene.workbench.runtime import _workbench_new_plan_step, _workbench_reconcile_revised_plan
 

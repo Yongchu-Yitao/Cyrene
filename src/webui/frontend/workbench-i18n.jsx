@@ -1927,6 +1927,20 @@ var WORKBENCH_TRANSLATIONS = {
     "workbenchChat.emptyFilter": "No chats in this section.",
     "workbenchChat.showAllRecent": "Show all {count}",
     "workbenchChat.awaitingUser": "Needs input",
+    "workbenchChat.track.label": "Conversation status map",
+    "workbenchChat.track.running": "Agent running",
+    "workbenchChat.track.runningDetail": "Agent is working in the background.",
+    "workbenchChat.track.attention": "Needs your attention",
+    "workbenchChat.track.attentionDetail": "Open this conversation or respond here to continue.",
+    "workbenchChat.track.result": "New result",
+    "workbenchChat.track.resultDetail": "A background reply is ready.",
+    "workbenchChat.track.failed": "Run failed",
+    "workbenchChat.track.failedDetail": "The latest run stopped with an error. Open the conversation for details.",
+    "workbenchChat.track.sending": "Sending…",
+    "workbenchChat.track.sent": "Sent",
+    "workbenchChat.permissionSession": "Allow for this session",
+    "workbenchChat.permissionOnce": "Allow once",
+    "workbenchChat.sendReply": "Send reply",
     "workbenchChat.unpin": "Unpin chat",
     "workbenchChat.emptyBody": "Chats are bound to the current workspace. The agent can read project context, and work can be converted into a task when needed.",
     "workbenchChat.emptyRail": "No chats yet. Create one from the top right.",
@@ -4310,6 +4324,20 @@ var WORKBENCH_TRANSLATIONS = {
     "workbenchChat.emptyFilter": "这个分类中暂无对话。",
     "workbenchChat.showAllRecent": "查看全部 {count} 个",
     "workbenchChat.awaitingUser": "需确认",
+    "workbenchChat.track.label": "对话状态映射",
+    "workbenchChat.track.running": "Agent 运行中",
+    "workbenchChat.track.runningDetail": "Agent 正在后台处理这个对话。",
+    "workbenchChat.track.attention": "需要你处理",
+    "workbenchChat.track.attentionDetail": "可以打开对话，或在这里直接回复以继续。",
+    "workbenchChat.track.result": "有新结果",
+    "workbenchChat.track.resultDetail": "后台回复已经完成。",
+    "workbenchChat.track.failed": "运行失败",
+    "workbenchChat.track.failedDetail": "最近一次运行发生错误，请打开对话查看详情。",
+    "workbenchChat.track.sending": "正在发送…",
+    "workbenchChat.track.sent": "已发送",
+    "workbenchChat.permissionSession": "本次会话允许",
+    "workbenchChat.permissionOnce": "允许一次",
+    "workbenchChat.sendReply": "发送回复",
     "workbenchChat.unpin": "取消置顶",
     "workbenchChat.emptyBody": "对话与当前工作区绑定，Agent 可以读取项目上下文。需要执行的工作可以随时转为任务。",
     "workbenchChat.emptyRail": "暂无对话，点击右上角新建。",
@@ -4932,6 +4960,7 @@ function setWorkbenchLang(lang) {
   workbenchI18nVersion += 1;
   __workbenchI18nSubscribers.forEach(function (fn) { fn(workbenchI18nVersion); });
   document.documentElement.dataset.workbenchLang = lang;
+  document.documentElement.lang = lang === "zh" ? "zh-CN" : "en";
 }
 
 function useWorkbenchI18n() {
@@ -4961,6 +4990,7 @@ function useWorkbenchI18n() {
     workbenchI18nLang = nav.indexOf("zh") === 0 ? "zh" : "en";
   }
   document.documentElement.dataset.workbenchLang = workbenchI18nLang;
+  document.documentElement.lang = workbenchI18nLang === "zh" ? "zh-CN" : "en";
 })();
 
 function registerWorkbenchTranslations(translations) {

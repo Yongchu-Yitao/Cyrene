@@ -2710,7 +2710,7 @@ function WorkbenchChatPage({ active, project, newChatRequestId, onOpenTask, onAc
   // tracking the gesture (any React re-render here cancels the drag).
   var splitOverlayCleanupRef = useWbcRef(null);
 
-  function handleSplitDragStart(event) {
+  function handleSplitDragStart(event, dragSource) {
     var transfer = event && event.dataTransfer;
     if (!transfer) return;
     wbcSetSplitDrag(event);
@@ -2740,11 +2740,18 @@ function WorkbenchChatPage({ active, project, newChatRequestId, onOpenTask, onAc
     var panelH = 0;
     var cardW = 0;
     var cardH = 0;
-    var fromMainGrip = !!(event.currentTarget && event.currentTarget.closest
-      && event.currentTarget.closest(".wbc-split-main-grip"));
+    // Each conversation grip declares which pane it owns. Do not infer the
+    // source from a page-wide query: several split hosts can briefly coexist
+    // during their closing animation, which made both grips clone the same
+    // conversation. For the split grip, walk up from that exact handle so its
+    // own live pane is always the ghost source.
+    var fromMainGrip = dragSource === "main";
+    var dragHandle = event.currentTarget;
     var panel = fromMainGrip
       ? page.querySelector(".wbc-main")
-      : page.querySelector(".wbc-side-agent-split");
+      : (dragHandle && dragHandle.closest
+        ? dragHandle.closest(".wbc-side-agent-split")
+        : null);
     if (panel) {
       var panelRect = panel.getBoundingClientRect();
       // The clone keeps the panel's own padding (top bar clearance + grip
@@ -4257,10 +4264,11 @@ function WorkbenchChatPage({ active, project, newChatRequestId, onOpenTask, onAc
   // Answer the pending permission / clarification question → resume the round.
   // The server returns the continued reply (append it) or a follow-up question
   // (swap the prompt). Optimistically clears the prompt while resuming.
-  function handleAnswer(questionId, optionText, resumeMode) {
-    var chatId = activeChatId;
-    if (!chatId || !questionId || !optionText) return;
-    setError("");
+  function answerQuestionForChat(chatId, questionId, optionText, resumeMode) {
+    chatId = String(chatId || "");
+    if (!chatId || !questionId || !optionText) return Promise.resolve(null);
+    var targetSummary = chatsRef.current.find(function (chat) { return String(chat && chat.id || "") === chatId; }) || {};
+    if (activeChatIdRef.current === chatId) setError("");
     var optimisticAnswer = {
       id: "answer_pending_" + Date.now(),
       role: "user",
@@ -4269,8 +4277,24 @@ function WorkbenchChatPage({ active, project, newChatRequestId, onOpenTask, onAc
       answerToQuestionId: questionId,
       optimistic: true,
     };
+    setChats(function (previous) {
+      return previous.map(function (chat) {
+        return String(chat && chat.id || "") === chatId
+          ? { ...chat, pendingQuestion: null, status: "running", runStatus: "running" }
+          : chat;
+      });
+    });
+    var cachedTarget = chatCache.details[chatId];
+    if (cachedTarget) {
+      chatCache.details[chatId] = {
+        ...cachedTarget,
+        pendingQuestion: null,
+        status: "running",
+        messages: wbcMergeChronologicalMessages(cachedTarget.messages || [], [optimisticAnswer]),
+      };
+    }
     setActiveChat(function (prev) {
-      if (!prev || prev.id !== chatId) return prev;
+      if (!prev || String(prev.id || "") !== chatId) return prev;
       return {
         ...prev,
         pendingQuestion: null,
@@ -4284,27 +4308,47 @@ function WorkbenchChatPage({ active, project, newChatRequestId, onOpenTask, onAc
     // Without it the resume ran invisibly — an empty thread while the side panel
     // showed a frozen "Replying" — and the composer offered no way to stop it.
     runtimeEngine.update(chatId, { chatId: chatId, text: "", progress: [], activities: [], activitySeq: 0, segments: [], startedAt: Date.now(), lastEventAt: Date.now(), replying: true });
+    var targetPermissionMode = activeChatIdRef.current === chatId && activeChat && activeChat.permissionMode
+      ? activeChat.permissionMode
+      : targetSummary.permissionMode;
     var answerMode = wbcNormalizePermissionMode(
       resumeMode,
-      activeChat && activeChat.permissionMode
-        ? activeChat.permissionMode
+      targetPermissionMode
+        ? targetPermissionMode
         : "default"
     );
-    model.answerChat(chatId, questionId, optionText, { mode: answerMode }).then(function (res) {
+    return model.answerChat(chatId, questionId, optionText, { mode: answerMode }).then(function () {
       runtimeEngine.update(chatId, null);
       // Pull the durable transcript: it now contains the question, this answer,
       // every pre-question tool/intermediate block, and the continued reply.
       return model.getChat(chatId).then(function (chat) {
+        chatCache.details[chatId] = chat;
         if (activeChatIdRef.current === chatId) setActiveChat(chat);
       });
     }).then(function () {
-      refreshChats();
+      return refreshChats();
     }).catch(function (err) {
       runtimeEngine.update(chatId, null);
-      setError(wbcErrorText(err));
+      if (activeChatIdRef.current === chatId) setError(wbcErrorText(err));
       // Restore the prompt so the user can retry.
-      model.getChat(chatId).then(setActiveChat).catch(function () {});
+      return model.getChat(chatId).then(function (chat) {
+        chatCache.details[chatId] = chat;
+        if (activeChatIdRef.current === chatId) setActiveChat(chat);
+      }).catch(function () {}).then(function () {
+        return refreshChats().catch(function () {});
+      }).then(function () { throw err; });
     });
+  }
+
+  function handleAnswer(questionId, optionText, resumeMode) {
+    return answerQuestionForChat(activeChatId, questionId, optionText, resumeMode).catch(function () {
+      // The inline prompt surfaces its error in the conversation itself.
+      return null;
+    });
+  }
+
+  function handleRailAnswer(chatId, questionId, optionText, resumeMode) {
+    return answerQuestionForChat(chatId, questionId, optionText, resumeMode);
   }
 
   // Regenerate the last assistant reply (replays the last user message).
@@ -4820,6 +4864,7 @@ function WorkbenchChatPage({ active, project, newChatRequestId, onOpenTask, onAc
       {splitDetailOpen && (
         <div key="split-main-grip" className="wbc-split-main-grip">
           <WbcSplitGripBar
+            dragSource="main"
             side={splitSide}
             onToggleSide={toggleSplitSide}
             onClose={splitChatId ? closeMainConversationSplit : closeActiveSplit}
@@ -4837,7 +4882,9 @@ function WorkbenchChatPage({ active, project, newChatRequestId, onOpenTask, onAc
         activeChatId={activeChatId}
         loading={loading}
         runningChatIds={runningChatIds}
+        runtimeEngine={runtimeEngine}
         onSelect={selectChat}
+        onAnswer={handleRailAnswer}
         onCreate={handleCreateChat}
         onRename={handleRenameChat}
         onDelete={handleDeleteChat}
@@ -5417,7 +5464,178 @@ function wbcBuildChatRailItems(chats, groups) {
   return items;
 }
 
-function WbcRail({ projectId, chats, pinnedChatIds, activeChatId, loading, runningChatIds, onSelect, onCreate, onRename, onDelete, onToTask, toTaskBusy, onTogglePinned, collapsed, onToggleCollapsed, collapseControl, moduleDock }) {
+function wbcConversationTrackRawStatus(chat) {
+  return String(chat && (chat.runStatus || chat.status) || "").trim().toLowerCase();
+}
+
+function wbcConversationTrackIsRunning(chat, runningChatIds) {
+  var raw = wbcConversationTrackRawStatus(chat);
+  return !!(chat && runningChatIds && runningChatIds[chat.id])
+    || ["running", "resumed", "planning", "initializing", "finishing"].indexOf(raw) >= 0;
+}
+
+function wbcConversationTrackIsCompleted(chat) {
+  return ["completed", "complete", "done", "success", "succeeded"].indexOf(
+    wbcConversationTrackRawStatus(chat)
+  ) >= 0;
+}
+
+function wbcConversationTrackState(chat, runningChatIds, newResultChatIds) {
+  if (!chat || !chat.id) return null;
+  var raw = wbcConversationTrackRawStatus(chat);
+  if (wbcConversationTrackIsRunning(chat, runningChatIds)) {
+    return { kind: "running", urgent: false, label: wbcT("workbenchChat.track.running", "Agent running") };
+  }
+  if (
+    !!chat.failed
+    || !!chat.error
+    || ["error", "failed", "failure", "timeout"].indexOf(raw) >= 0
+  ) return { kind: "failed", urgent: true, label: wbcT("workbenchChat.track.failed", "Run failed") };
+  if (
+    !!chat.awaitingUser
+    || !!chat.pendingQuestion
+    || [
+      "awaiting_user", "waiting_for_user", "waiting_for_approval", "needs_input",
+      "waiting_input", "requires_confirmation", "blocked", "review",
+    ].indexOf(raw) >= 0
+  ) return { kind: "attention", urgent: true, label: wbcT("workbenchChat.track.attention", "Needs your attention") };
+  if (newResultChatIds && newResultChatIds[chat.id]) {
+    return { kind: "result", urgent: true, label: wbcT("workbenchChat.track.result", "New result") };
+  }
+  return null;
+}
+
+function wbcConversationTrackPositions(items, totalCount, measuredPositions) {
+  var list = Array.isArray(items) ? items.map(function (item) { return { ...item }; }) : [];
+  if (!list.length) return list;
+  if (Number(totalCount) <= 1) return list.map(function (item) {
+    var chatId = String(item.chat && item.chat.id || "");
+    var measured = Number(measuredPositions && measuredPositions[chatId]);
+    return { ...item, position: Number.isFinite(measured) ? Math.max(6, Math.min(94, measured)) : 50 };
+  });
+  list.forEach(function (item) {
+    var chatId = String(item.chat && item.chat.id || "");
+    var measured = Number(measuredPositions && measuredPositions[chatId]);
+    item.position = Number.isFinite(measured)
+      ? Math.max(6, Math.min(94, measured))
+      : 6 + (Number(item.index) / Math.max(1, Number(totalCount) - 1)) * 88;
+  });
+  var minimumGap = list.length > 1 ? Math.min(7, 88 / (list.length - 1)) : 0;
+  for (var index = 1; index < list.length; index += 1) {
+    list[index].position = Math.max(list[index].position, list[index - 1].position + minimumGap);
+  }
+  var overflow = list[list.length - 1].position - 94;
+  if (overflow > 0) {
+    list.forEach(function (item) { item.position -= overflow; });
+  }
+  for (var reverse = list.length - 2; reverse >= 0; reverse -= 1) {
+    list[reverse].position = Math.min(list[reverse].position, list[reverse + 1].position - minimumGap);
+  }
+  if (list[0].position < 6) {
+    var underflow = 6 - list[0].position;
+    list.forEach(function (item) { item.position += underflow; });
+  }
+  return list;
+}
+
+function wbcConversationTrackRuntimeText(runtime, chat) {
+  var progress = runtime && Array.isArray(runtime.progress) ? runtime.progress : [];
+  for (var index = progress.length - 1; index >= 0; index -= 1) {
+    var entry = progress[index];
+    if (!entry) continue;
+    if (entry.status === "running" && (entry.text || entry.preview)) {
+      return String(entry.preview || entry.text || "").trim();
+    }
+    if (entry.kind === "phase" && (entry.text || entry.detailKey)) {
+      return String(entry.text || entry.detailKey || "").trim();
+    }
+  }
+  return String(chat && chat.preview || "").trim();
+}
+
+function WbcConversationStatusPreview({ chat, state, runtime, busy, result, error, onAnswer }) {
+  var pending = chat && chat.pendingQuestion || null;
+  var options = pending && Array.isArray(pending.options) ? pending.options : [];
+  var kind = String(pending && pending.kind || "");
+  var isPermission = window.CyreneUI.require("model").isPermissionQuestionKind(kind);
+  var actionOptions = options.length
+    ? options.map(function (option) { return { value: option, label: option }; })
+    : (isPermission ? [
+      { value: "在本次会话同意", label: wbcT("workbenchChat.permissionSession", "Allow for this session") },
+      { value: "同意一次", label: wbcT("workbenchChat.permissionOnce", "Allow once") },
+      { value: "拒绝", label: wbcT("workbenchChat.reject", "Reject") },
+    ] : []);
+  var customState = useWbcState("");
+  var customText = customState[0], setCustomText = customState[1];
+  useWbcEffect(function () { setCustomText(""); }, [chat && chat.id, pending && pending.id]);
+  function submit(answer, resumeMode) {
+    var text = String(answer || "").trim();
+    if (!text || busy || !pending || !onAnswer) return;
+    onAnswer(pending.id, text, resumeMode);
+  }
+  var detail = state.kind === "running"
+    ? (wbcConversationTrackRuntimeText(runtime, chat) || wbcT("workbenchChat.track.runningDetail", "Agent is working in the background."))
+    : state.kind === "attention"
+      ? String(pending && pending.text || wbcT("workbenchChat.track.attentionDetail", "Open this conversation or respond here to continue."))
+      : state.kind === "result"
+        ? String(chat && chat.preview || wbcT("workbenchChat.track.resultDetail", "A background reply is ready."))
+        : wbcT("workbenchChat.track.failedDetail", "The latest run stopped with an error. Open the conversation for details.");
+  return (
+    <div
+      className={"wbc-conversation-status-preview is-" + state.kind}
+      role="dialog"
+      aria-label={state.label + " · " + (chat.title || wbcT("workbenchChat.newChat", "New chat"))}
+      onClick={function (event) { event.stopPropagation(); }}
+      onPointerDown={function (event) { event.stopPropagation(); }}
+    >
+      <span className="wbc-conversation-status-preview-bridge" aria-hidden="true"></span>
+      <header className="wbc-conversation-status-preview-head">
+        <span className="wbc-conversation-status-preview-dot" aria-hidden="true"></span>
+        <b>{state.label}</b>
+      </header>
+      <strong className="wbc-conversation-status-preview-title">{chat.title || wbcT("workbenchChat.newChat", "New chat")}</strong>
+      <p>{detail}</p>
+      {state.kind === "attention" && pending && (
+        <div className="wbc-conversation-status-preview-actions">
+          {actionOptions.map(function (option, index) {
+            var resumeMode = kind === "plan_confirmation" && index === 0 ? "auto" : undefined;
+            return (
+              <button
+                key={index}
+                type="button"
+                className={"wbc-conversation-status-preview-option" + (index === 0 ? " primary" : "")}
+                disabled={busy}
+                onClick={function () { submit(option.value, resumeMode); }}
+              >{option.label}</button>
+            );
+          })}
+          {pending.allowCustom && (
+            <div className="wbc-conversation-status-preview-reply">
+              <input
+                type="text"
+                value={customText}
+                disabled={busy}
+                placeholder={wbcT("workbenchChat.customAnswer", "Or enter a custom reply...")}
+                onChange={function (event) { setCustomText(event.target.value); }}
+                onKeyDown={function (event) {
+                  if (event.key !== "Enter") return;
+                  event.preventDefault();
+                  submit(customText);
+                }}
+              />
+              <button type="button" disabled={busy || !String(customText).trim()} onClick={function () { submit(customText); }} aria-label={wbcT("workbenchChat.sendReply", "Send reply")}>{WBC_ICONS.send}</button>
+            </div>
+          )}
+        </div>
+      )}
+      {busy && <span className="wbc-conversation-status-preview-feedback">{wbcT("workbenchChat.track.sending", "Sending…")}</span>}
+      {!busy && result && <span className="wbc-conversation-status-preview-feedback success">{wbcT("workbenchChat.track.sent", "Sent")}</span>}
+      {!busy && error && <span className="wbc-conversation-status-preview-feedback error" role="alert">{error}</span>}
+    </div>
+  );
+}
+
+function WbcRail({ projectId, chats, pinnedChatIds, activeChatId, loading, runningChatIds, runtimeEngine, onSelect, onAnswer, onCreate, onRename, onDelete, onToTask, toTaskBusy, onTogglePinned, collapsed, onToggleCollapsed, collapseControl, moduleDock }) {
   var [query, setQuery] = useWbcState("");
   var [showAllRecent, setShowAllRecent] = useWbcState(false);
   var [menuId, setMenuId] = useWbcState("");
@@ -5440,6 +5658,15 @@ function WbcRail({ projectId, chats, pinnedChatIds, activeChatId, loading, runni
   var [groupMetadataPending, setGroupMetadataPending] = useWbcState({});
   var [dragState, setDragState] = useWbcState(null);
   var [announcement, setAnnouncement] = useWbcState("");
+  var [previewChatId, setPreviewChatId] = useWbcState("");
+  var [newResultChatIds, setNewResultChatIds] = useWbcState({});
+  var [previewAnswerState, setPreviewAnswerState] = useWbcState({ chatId: "", busy: false, result: "", error: "" });
+  var [trackPositionByChatId, setTrackPositionByChatId] = useWbcState({});
+  var trackLifecycleRef = useWbcRef({ projectId: "", chats: {} });
+  var railRef = useWbcRef(null);
+  var trackRef = useWbcRef(null);
+  var trackMeasuredExpandedRef = useWbcRef(false);
+  var previewCloseTimerRef = useWbcRef(null);
   var dragOriginOrderRef = useWbcRef([]);
   var orderRef = useWbcRef(order);
   var dropCommittedRef = useWbcRef(false);
@@ -5452,6 +5679,106 @@ function WbcRail({ projectId, chats, pinnedChatIds, activeChatId, loading, runni
   var chatMap = new Map((Array.isArray(chats) ? chats : []).map(function (chat) {
     return [String(chat.id), chat];
   }));
+
+  function cancelPreviewClose() {
+    if (!previewCloseTimerRef.current) return;
+    window.clearTimeout(previewCloseTimerRef.current);
+    previewCloseTimerRef.current = null;
+  }
+
+  function openStatusPreview(chatId) {
+    cancelPreviewClose();
+    setPreviewChatId(String(chatId || ""));
+  }
+
+  function closeStatusPreviewSoon() {
+    cancelPreviewClose();
+    previewCloseTimerRef.current = window.setTimeout(function () {
+      previewCloseTimerRef.current = null;
+      setPreviewChatId("");
+    }, 250);
+  }
+
+  function answerFromStatusPreview(chat, questionId, answerText, resumeMode) {
+    if (!chat || !chat.id || !onAnswer || previewAnswerState.busy) return;
+    var chatId = String(chat.id);
+    setPreviewAnswerState({ chatId: chatId, busy: true, result: "", error: "" });
+    Promise.resolve(onAnswer(chatId, questionId, answerText, resumeMode)).then(function () {
+      setPreviewAnswerState({ chatId: chatId, busy: false, result: "sent", error: "" });
+    }).catch(function (err) {
+      setPreviewAnswerState({ chatId: chatId, busy: false, result: "", error: wbcErrorText(err) });
+    });
+  }
+
+  useWbcEffect(function () {
+    return function () { cancelPreviewClose(); };
+  }, []);
+
+  useWbcEffect(function () {
+    if (!collapsed) setPreviewChatId("");
+  }, [collapsed]);
+
+  /* Blue is deliberately ephemeral: it records only an inactive conversation
+     that transitioned from running to completed while this page is alive. */
+  useWbcEffect(function () {
+    var currentProjectId = String(projectId || "");
+    var current = {};
+    (Array.isArray(chats) ? chats : []).forEach(function (chat) {
+      if (!chat || !chat.id) return;
+      current[chat.id] = {
+        running: wbcConversationTrackIsRunning(chat, runningChatIds),
+        completed: wbcConversationTrackIsCompleted(chat),
+      };
+    });
+    var lifecycle = trackLifecycleRef.current;
+    if (lifecycle.projectId !== currentProjectId) {
+      trackLifecycleRef.current = { projectId: currentProjectId, chats: current };
+      setNewResultChatIds({});
+      setPreviewChatId("");
+      return;
+    }
+    var previous = lifecycle.chats || {};
+    trackLifecycleRef.current = { projectId: currentProjectId, chats: current };
+    setNewResultChatIds(function (existing) {
+      var next = {};
+      var changed = false;
+      Object.keys(existing || {}).forEach(function (chatId) {
+        if (current[chatId] && !current[chatId].running && current[chatId].completed && chatId !== String(activeChatId || "")) {
+          next[chatId] = true;
+        } else {
+          changed = true;
+        }
+      });
+      Object.keys(current).forEach(function (chatId) {
+        if (
+          previous[chatId]
+          && previous[chatId].running
+          && !current[chatId].running
+          && current[chatId].completed
+          && chatId !== String(activeChatId || "")
+          && !next[chatId]
+        ) {
+          next[chatId] = true;
+          changed = true;
+        }
+      });
+      var existingKeys = Object.keys(existing || {});
+      var nextKeys = Object.keys(next);
+      if (!changed && existingKeys.length === nextKeys.length) return existing;
+      return next;
+    });
+  }, [projectId, chats, runningChatIds, activeChatId]);
+
+  useWbcEffect(function () {
+    var activeId = String(activeChatId || "");
+    if (!activeId) return;
+    setNewResultChatIds(function (existing) {
+      if (!existing[activeId]) return existing;
+      var next = { ...existing };
+      delete next[activeId];
+      return next;
+    });
+  }, [activeChatId]);
 
   function revealRailMenu(actions) {
     if (!actions) return;
@@ -6354,6 +6681,82 @@ function WbcRail({ projectId, chats, pinnedChatIds, activeChatId, loading, runni
   var visibleGroupRailItems = groupRailItems;
   var recentOverflowCount = Math.max(0, recentRailItems.length - visibleRecentRailItems.length);
   var visibleRailItemCount = visiblePinnedRailItems.length + visibleRecentRailItems.length + visibleGroupRailItems.length;
+  var visibleTrackLayoutKey = [
+    visiblePinnedRailItems.map(function (item) { return String(item.chat && item.chat.id || ""); }).join(","),
+    visibleRecentRailItems.map(function (item) { return String(item.chat && item.chat.id || ""); }).join(","),
+    visibleGroupRailItems.map(function (item) {
+      return String(item.group && item.group.id || "") + ":" + (collapsedGroups[item.group && item.group.id] ? "closed" : "open");
+    }).join(","),
+  ].join("|");
+
+  useWbcLayoutEffect(function () {
+    trackMeasuredExpandedRef.current = false;
+    setTrackPositionByChatId({});
+  }, [projectId]);
+
+  /* Measure the expanded list itself instead of inferring geometry from the
+     conversation index. Search, section headings, row height, groups, scroll,
+     and the overview limit all affect the real Y coordinate. The hidden track
+     keeps its collapsed bounds while expanded, while the collapsed list keeps
+     its layout geometry even though it is not painted. Projecting each row
+     centre into the track therefore works on initial load and in both states. */
+  useWbcLayoutEffect(function () {
+    if (collapsed && trackMeasuredExpandedRef.current) return undefined;
+    if (!collapsed) trackMeasuredExpandedRef.current = true;
+    var rail = railRef.current;
+    var track = trackRef.current;
+    if (!rail || !track) return undefined;
+    var frame = 0;
+    function measure() {
+      if (frame) window.cancelAnimationFrame(frame);
+      frame = window.requestAnimationFrame(function () {
+        frame = 0;
+        var trackRect = track.getBoundingClientRect();
+        if (trackRect.height <= 0) return;
+        var measured = {};
+        rail.querySelectorAll(".wbc-chat-card[data-chat-id]").forEach(function (card) {
+          var rect = card.getBoundingClientRect();
+          var chatId = String(card.getAttribute("data-chat-id") || "");
+          if (!chatId || rect.height <= 0) return;
+          measured[chatId] = ((rect.top + (rect.height / 2) - trackRect.top) / trackRect.height) * 100;
+        });
+        setTrackPositionByChatId(function (current) {
+          var next = { ...current, ...measured };
+          var keys = Object.keys(next);
+          if (
+            keys.length === Object.keys(current).length
+            && keys.every(function (key) { return Math.abs(Number(next[key]) - Number(current[key])) < 0.05; })
+          ) return current;
+          return next;
+        });
+      });
+    }
+    measure();
+    rail.addEventListener("scroll", measure, true);
+    window.addEventListener("resize", measure);
+    var observer = typeof ResizeObserver === "function" ? new ResizeObserver(measure) : null;
+    if (observer) {
+      observer.observe(rail);
+      observer.observe(track);
+      rail.querySelectorAll(".wbc-chat-list, .wbc-chat-list-primary, .wbc-chat-card[data-chat-id]").forEach(function (element) {
+        observer.observe(element);
+      });
+    }
+    return function () {
+      if (frame) window.cancelAnimationFrame(frame);
+      rail.removeEventListener("scroll", measure, true);
+      window.removeEventListener("resize", measure);
+      if (observer) observer.disconnect();
+    };
+  }, [collapsed, projectId, visibleTrackLayoutKey]);
+
+  var statusTrackItems = wbcConversationTrackPositions(orderedChats.map(function (chat, index) {
+    return {
+      chat: chat,
+      index: index,
+      state: wbcConversationTrackState(chat, runningChatIds, newResultChatIds),
+    };
+  }).filter(function (item) { return !!item.state; }), orderedChats.length, trackPositionByChatId);
 
   function renderRailItem(item) {
     if (item.kind === "group") return renderGroupFrame(item.group, item.chats);
@@ -6424,7 +6827,7 @@ function WbcRail({ projectId, chats, pinnedChatIds, activeChatId, loading, runni
   }
 
   return (
-    <aside className={"wbc-rail workbench-integrated-rail" + (collapsed ? " is-collapsed" : "")}>
+    <aside ref={railRef} className={"wbc-rail workbench-integrated-rail" + (collapsed ? " is-collapsed" : "")}>
       <div className="wbc-rail-glass">
         <div className="wbc-nav-card">
           <div className="wbc-nav-card-head workbench-integrated-rail-head workbench-integrated-rail-search-head">
@@ -6462,7 +6865,7 @@ function WbcRail({ projectId, chats, pinnedChatIds, activeChatId, loading, runni
       </div>
       {menuId && <div className="wb-card-menu-scrim" onClick={function () { setMenuId(""); }} />}
       <div
-        className={"wbc-chat-list workbench-integrated-rail-body" + (loading ? " is-loading" : "") + (menuId ? " menu-active" : "") + (!loading && visibleGroupRailItems.length ? " has-groups" : "")}
+        className={"wbc-chat-list workbench-integrated-rail-body" + (loading ? " is-loading" : "") + (!loading && visibleRailItemCount === 0 ? " is-empty" : "") + (menuId ? " menu-active" : "") + (!loading && visibleGroupRailItems.length ? " has-groups" : "")}
         onDragOver={function (event) {
           if (!dragState || !wbcHasChatRailDrag(event)) return;
           event.preventDefault();
@@ -6528,6 +6931,71 @@ function WbcRail({ projectId, chats, pinnedChatIds, activeChatId, loading, runni
           </div>
         )}
         <span className="wbc-sr-only" aria-live="polite">{announcement}</span>
+      </div>
+      <div ref={trackRef} className="wbc-conversation-status-track" role="navigation" aria-label={wbcT("workbenchChat.track.label", "Conversation status map")}>
+        {statusTrackItems.map(function (item) {
+          var chat = item.chat;
+          var previewOpen = previewChatId === String(chat.id);
+          var answerState = previewAnswerState.chatId === String(chat.id)
+            ? previewAnswerState
+            : { busy: false, result: "", error: "" };
+          var alignment = item.position < 24 ? " align-top" : item.position > 76 ? " align-bottom" : " align-center";
+          var title = item.state.label + " · " + (chat.title || wbcT("workbenchChat.newChat", "New chat"));
+          return (
+            <div
+              key={chat.id}
+              className={"wbc-conversation-status-anchor" + alignment + (previewOpen ? " preview-open" : "")}
+              style={{ "--wbc-track-position": item.position + "%" }}
+              onMouseEnter={function () { openStatusPreview(chat.id); }}
+              onMouseLeave={closeStatusPreviewSoon}
+              onFocusCapture={function () { openStatusPreview(chat.id); }}
+              onBlurCapture={function (event) {
+                if (event.currentTarget.contains(event.relatedTarget)) return;
+                closeStatusPreviewSoon();
+              }}
+              onKeyDown={function (event) {
+                if (event.key !== "Escape") return;
+                event.stopPropagation();
+                setPreviewChatId("");
+                if (event.currentTarget.querySelector(".wbc-conversation-status-marker")) {
+                  event.currentTarget.querySelector(".wbc-conversation-status-marker").focus();
+                }
+              }}
+            >
+              <button
+                type="button"
+                className={"wbc-conversation-status-marker is-" + item.state.kind + (item.state.urgent ? " is-urgent" : "")}
+                title={title}
+                aria-label={title}
+                aria-expanded={previewOpen}
+                onClick={function () {
+                  setNewResultChatIds(function (existing) {
+                    if (!existing[chat.id]) return existing;
+                    var next = { ...existing };
+                    delete next[chat.id];
+                    return next;
+                  });
+                  onSelect(chat.id);
+                }}
+              >
+                <span aria-hidden="true"></span>
+              </button>
+              {previewOpen && (
+                <WbcConversationStatusPreview
+                  chat={chat}
+                  state={item.state}
+                  runtime={runtimeEngine && runtimeEngine.get ? runtimeEngine.get(chat.id) : null}
+                  busy={answerState.busy}
+                  result={answerState.result}
+                  error={answerState.error}
+                  onAnswer={function (questionId, answerText, resumeMode) {
+                    answerFromStatusPreview(chat, questionId, answerText, resumeMode);
+                  }}
+                />
+              )}
+            </div>
+          );
+        })}
       </div>
       {moduleDock}
       <WbcRenameDialog
@@ -11337,6 +11805,7 @@ function WbcChatSplit({ chatId, project, onOpenContent, browserActiveByChat, onC
     <aside className="wbc-side-agent-split wbc-chat-split wbc-conversation-split" aria-label={wbcT("workbenchChat.chatSplitLabel", "Chat")}>
       <div className="wbc-split-panel-grip">
         <WbcSplitGripBar
+          dragSource="split"
           side={splitSide}
           onToggleSide={onToggleSide}
           onClose={onClose}
@@ -11551,7 +12020,7 @@ function WbcSideAgentSplitResizer({ width, onResize, splitSide }) {
 // conversation panel, swap the side, or close). Conversation splits (split
 // chats) carry their own grip on the panel's top edge; content splits
 // intentionally carry no grip of their own.
-function WbcSplitGripBar({ side, onToggleSide, onClose, onOpenConversationPanel, onSplitDragStart, onSplitDragEnd }) {
+function WbcSplitGripBar({ dragSource, side, onToggleSide, onClose, onOpenConversationPanel, onSplitDragStart, onSplitDragEnd }) {
   var [menuOpen, setMenuOpen] = useWbcState(false);
   var rootRef = useWbcRef(null);
 
@@ -11589,7 +12058,7 @@ function WbcSplitGripBar({ side, onToggleSide, onClose, onOpenConversationPanel,
         aria-label={wbcT("workbenchChat.detailPanel.move", "Move split panel")}
         title={wbcT("workbenchChat.detailPanel.move", "Move split panel")}
         onClick={function () { setMenuOpen(function (open) { return !open; }); }}
-        onDragStart={function (event) { if (onSplitDragStart) onSplitDragStart(event); }}
+        onDragStart={function (event) { if (onSplitDragStart) onSplitDragStart(event, dragSource); }}
         onDragEnd={function () { if (onSplitDragEnd) onSplitDragEnd(); }}
         onKeyDown={handleKey}
       >

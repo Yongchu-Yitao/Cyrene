@@ -930,6 +930,20 @@ class _WorkbenchGenerationError(RuntimeError):
         self.message = str(message or "未知错误")
 
 
+class _WorkbenchAgentRunError(RuntimeError):
+    """Structured failure from the main Workbench task agent.
+
+    Agent execution must never degrade into an ordinary assistant reply: callers
+    use this exception to persist/return an explicit failed or paused state.
+    """
+
+    def __init__(self, code: str, message: str, *, status_code: int = 502):
+        super().__init__(message)
+        self.code = str(code or "workbench_agent_run_failed")
+        self.message = str(message or "Agent 执行失败。")
+        self.status_code = int(status_code)
+
+
 def _workbench_redact_error_text(value: Any) -> str:
     text = str(value or "")
     text = re.sub(r"(?i)\bBearer\s+\S+", "Bearer <redacted>", text)
@@ -6315,7 +6329,11 @@ async def _workbench_agent_reply(
     # ── Budget gate (checked early, before attachment I/O) ──
     _bgt = await _check_budget_gate(session_id)
     if _bgt:
-        return _bgt
+        raise _WorkbenchAgentRunError(
+            str(_bgt.get("code") or "budget_blocked"),
+            str(_bgt.get("error") or "预算限制阻止了本次执行。"),
+            status_code=403,
+        )
 
     normalized = _workbench_normalize_attachments(attachments)
     public_attachments = [build_public_attachment_payload(item) for item in normalized] or None
@@ -6394,9 +6412,15 @@ async def _workbench_agent_reply(
             static_system_extra=str(static_system_extra or ""),
             response_capabilities=("interactive_blocks",),
         )
-    except Exception:
+    except asyncio.CancelledError:
+        raise
+    except Exception as exc:
         logger.exception("Workbench agent run failed for session %s", session_id)
-        return str(user_input or "").strip()
+        safe_error = _workbench_generation_error(exc)
+        raise _WorkbenchAgentRunError(
+            "workbench_agent_run_failed",
+            f"Agent 执行失败：{safe_error.message}",
+        ) from exc
     finally:
         if attachment_binding is not None:
             attachment_binding.reset()

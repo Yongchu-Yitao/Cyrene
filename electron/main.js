@@ -377,7 +377,7 @@ const BROWSER_CHAT_OVERLAY_HTML = `<!doctype html>
   :root { color-scheme: light dark; }
   * { box-sizing: border-box; }
   html, body { width: 100%; height: 100%; margin: 0; overflow: hidden; background: transparent; }
-  body { display: flex; flex-direction: column; justify-content: flex-end; align-items: center; gap: 6px; padding: 8px 12px 10px; font-family: Inter, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
+  body { display: flex; flex-direction: column; justify-content: flex-end; align-items: center; gap: 6px; padding: 8px 12px 10px; font-family: Manrope, "Noto Sans SC", system-ui, "Segoe UI", sans-serif; font-synthesis-weight: none; }
   #status { display: none; max-width: min(420px, 100%); min-height: 28px; align-items: center; gap: 8px; padding: 5px 11px; border: 1px solid var(--line, #d8dce4); border-radius: 999px; background: var(--panel, rgba(255,255,255,.96)); color: var(--muted, #6f737b); box-shadow: 0 5px 16px rgba(10,18,32,.12); font-size: 11.5px; font-weight: 650; line-height: 1.2; }
   body.has-status #status { display: flex; }
   #status-dot { width: 7px; height: 7px; flex: 0 0 auto; border-radius: 50%; background: var(--green, #1f9d57); animation: pulse 1.45s ease-out infinite; }
@@ -442,7 +442,7 @@ const BROWSER_TAB_PICKER_HTML = `<!doctype html>
   :root { color-scheme: light dark; }
   * { box-sizing: border-box; }
   html, body { width: 100%; height: 100%; margin: 0; overflow: hidden; background: transparent; }
-  body { padding: 6px; font-family: Inter, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
+  body { padding: 6px; font-family: Manrope, "Noto Sans SC", system-ui, "Segoe UI", sans-serif; font-synthesis-weight: none; }
   #menu { width: 100%; height: 100%; display: flex; flex-direction: column; gap: 4px; padding: 7px; overflow: auto; border: 1px solid var(--line, #d8dce4); border-radius: 14px; background: var(--panel, #fff); color: var(--text, #17191d); box-shadow: 0 14px 34px rgba(9,17,30,.18); opacity: 0; transform: translate3d(0,-10px,0) scale(.985); transform-origin: top center; }
   body.open #menu { animation: picker-in 220ms cubic-bezier(.22,1,.36,1) both; }
   body.closing #menu { pointer-events: none; animation: picker-out 150ms cubic-bezier(.4,0,.2,1) both; }
@@ -1937,7 +1937,10 @@ class BrowserTabManager {
     });
     try { view.setBackgroundColor('#00000000'); } catch (_) {}
     view.webContents.on('did-finish-load', () => this.pushChatOverlayState());
-    view.webContents.loadURL(`data:text/html;charset=utf-8,${encodeURIComponent(BROWSER_CHAT_OVERLAY_HTML)}`).catch(() => {});
+    const overlayUrl = backendPort
+      ? `http://127.0.0.1:${backendPort}/static/app/electron/browser-chat-overlay.html`
+      : `data:text/html;charset=utf-8,${encodeURIComponent(BROWSER_CHAT_OVERLAY_HTML)}`;
+    view.webContents.loadURL(overlayUrl).catch(() => {});
     this.chatOverlayView = view;
     return view;
   }
@@ -2094,7 +2097,10 @@ class BrowserTabManager {
       console.warn(`[electron] Browser tab picker failed to load (${code}): ${description}`);
     });
     this.tabPickerView = view;
-    view.webContents.loadURL(`data:text/html;charset=utf-8,${encodeURIComponent(BROWSER_TAB_PICKER_HTML)}`).catch((err) => {
+    const pickerUrl = backendPort
+      ? `http://127.0.0.1:${backendPort}/static/app/electron/browser-tab-picker.html`
+      : `data:text/html;charset=utf-8,${encodeURIComponent(BROWSER_TAB_PICKER_HTML)}`;
+    view.webContents.loadURL(pickerUrl).catch((err) => {
       console.error('[electron] Failed to load browser tab picker:', err);
     });
     return view;

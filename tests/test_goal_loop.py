@@ -507,6 +507,84 @@ async def test_goal_loop_runner_completes_after_independent_verification(monkeyp
     assert session["acceptanceCriteria"][0]["status"] == "passed"
 
 
+@pytest.mark.parametrize(
+    ("failure_kind", "expected_reason"),
+    [
+        ("budget", "budget_monthly_exhausted"),
+        ("verification", "step_verification_unavailable"),
+    ],
+)
+async def test_goal_loop_pauses_when_execution_infrastructure_is_unavailable(
+    monkeypatch, tmp_path, failure_kind, expected_reason
+):
+    from cyrene.workbench import runtime as routes
+    from cyrene.workbench import goal_loop as goal_loop
+
+    data_dir, store_path = _store(tmp_path)
+    db_path = str(tmp_path / "test.db")
+    monkeypatch.setattr(routes, "DATA_DIR", data_dir)
+    monkeypatch.setattr(routes, "_WORKBENCH_STORE", store_path)
+    monkeypatch.setattr(goal_loop, "append_notification", lambda **_kwargs: {})
+    monkeypatch.setattr(routes, "_workbench_git_status_snapshot", lambda _root: {})
+    monkeypatch.setattr(routes, "_workbench_git_status_delta", lambda *_args: [])
+    monkeypatch.setattr(routes, "_collect_run_activity_events", lambda *_args: [])
+
+    async def fake_agent(*_args, **_kwargs):
+        if failure_kind == "budget":
+            raise routes._WorkbenchAgentRunError(
+                "budget_monthly_exhausted",
+                "Monthly budget exhausted",
+                status_code=403,
+            )
+        return "已完成登录接口"
+
+    async def fake_step_verify(*_args, **_kwargs):
+        if failure_kind == "verification":
+            raise RuntimeError("步骤独立验收暂时不可用")
+        raise AssertionError("budget block must stop before verification")
+
+    monkeypatch.setattr(routes, "_workbench_agent_reply", fake_agent)
+    monkeypatch.setattr(goal_loop, "_verify_step", fake_step_verify)
+
+    await goal_loop._ensure_schema(db_path)
+    now = goal_loop._utc_iso()
+    await goal_loop._execute(
+        db_path,
+        """
+        INSERT INTO goal_runs
+        (id, session_id, project_id, objective, status, phase,
+         plan_definition_revision, permission_mode, reflection_mode,
+         max_active_seconds, max_repair_rounds, active_seconds,
+         active_started_at, repair_round, created_at, updated_at)
+        VALUES (?, ?, ?, ?, 'running', 'executing', ?, 'auto', 'standard', 3600, 2, 0, ?, 0, ?, ?)
+        """,
+        ("run_1", "session_1", "project_1", "完成账号登录功能", 3, now, now, now),
+    )
+
+    manager = goal_loop.GoalLoopManager(db_path)
+    await manager._run("run_1")
+
+    run = await goal_loop._get_run_by_id(db_path, "run_1")
+    assert run["status"] == "paused"
+    assert run["stop_reason"] == expected_reason
+    stored = json.loads(store_path.read_text(encoding="utf-8"))
+    session = stored["projects"][0]["sessions"][0]
+    assert session["status"] == "paused"
+    assert session["goalLoop"]["status"] == "paused"
+
+
+def test_goal_loop_skipped_prerequisite_blocks_dependent_step():
+    from cyrene.workbench import goal_loop
+
+    plan = [
+        {"id": "step_a", "status": "skipped", "dependsOn": []},
+        {"id": "step_b", "status": "pending", "dependsOn": ["step_a"]},
+    ]
+
+    assert goal_loop._dependencies_satisfied(plan, plan[1]) is False
+    assert goal_loop._next_step(plan) is None
+
+
 async def test_goal_loop_runner_blocks_after_repeated_step_verification_failure(monkeypatch, tmp_path):
     from cyrene.workbench import runtime as routes
     from cyrene.workbench import goal_loop as goal_loop
@@ -645,6 +723,10 @@ async def test_resume_after_answer_pauses_on_permission_denied(monkeypatch, tmp_
     run = await goal_loop._get_run_by_id(db_path, "run_1")
     assert run["status"] == "paused"
     assert run["stop_reason"] == "permission_denied"
+    stored = json.loads(store_path.read_text(encoding="utf-8"))
+    session = stored["projects"][0]["sessions"][0]
+    assert session["status"] == "paused"
+    assert session["goalLoop"]["status"] == "paused"
 
 
 async def test_begin_async_answer_tags_step_and_resumes_run(monkeypatch, tmp_path):

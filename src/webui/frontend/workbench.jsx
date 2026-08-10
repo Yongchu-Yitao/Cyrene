@@ -5735,32 +5735,15 @@ function useTaskController(session, onRefresh, runtime) {
       .then(function (next) {
         var s2 = sessionFromStore(next, baseSession);
         if (String(s2.status || "") === "waiting_for_user") return next;
-        var returnedPlan = Array.isArray(s2.plan) && s2.plan.length ? s2.plan : basePlan;
-        // Real tool activity from this step's run → show it on the step.
-        var latestRun = (Array.isArray(s2.runs) && s2.runs.length) ? s2.runs[s2.runs.length - 1] : null;
-        var stepToolCalls = (latestRun && Array.isArray(latestRun.toolCalls)) ? latestRun.toolCalls : [];
-        var doneAction = stepToolCalls.length ? ("已完成，本步调用工具 " + stepToolCalls.length + " 次。") : "已完成该步骤。";
-        var completedPlan = model.markStepById(returnedPlan, stepId, "completed", doneAction).map(function (st) {
-          return st && st.id === stepId ? Object.assign({}, st, { toolCalls: stepToolCalls }) : st;
-        });
-        var doneCount = completedPlan.filter(function (item) { return isResolvedStepStatus(item && item.status); }).length;
-        var fullyDone = doneCount >= completedPlan.length && completedPlan.length > 0;
-        var events2 = model.withEvent(s2, "ExecutionFinished", "步骤「" + stepTitle + "」执行完成。", { stepId: step.id || "" });
-        var finalPatch = {
-          status: fullyDone ? "review" : (options.continueAll ? "running" : "paused"),
-          plan: completedPlan,
-          events: events2,
-        };
-        if (options.continueAll && !fullyDone) {
-          finalPatch.agentReply = "步骤「" + stepTitle + "」已完成，继续执行下一步。";
-        }
-        if (fullyDone) {
-          // Don't auto-pass acceptance — those weren't verified. The user
-          // checks each criterion in the 验收标准 panel, or confirms via 标记完成.
-          finalPatch.artifacts = model.ensureArtifacts(s2);
+        // /runs owns the durable run + step transition in one server-side write.
+        // Never issue a second completion PATCH here: losing that request after
+        // the tools already ran used to strand the task in `running` forever.
+        var completedStep = stepById(s2.plan, stepId);
+        if (!completedStep || !isDoneStepStatus(completedStep.status)) {
+          throw new Error("服务端未能提交步骤完成状态，请刷新后重试。");
         }
         if (runtime && runtime.clearAttachments) runtime.clearAttachments();
-        return model.patchSession(sid, finalPatch);
+        return next;
       })
       .then(apply)
       .catch(function (err) {

@@ -18,7 +18,8 @@ def test_launch_screen_is_static_minimal_and_theme_aware():
     assert "window.markCyreneReady" not in index
     assert "launchRequestsInFlight" in index
     assert "launchIdleTimer = window.setTimeout(finishLaunch, 300)" in index
-    assert "launchDeadlineTimer = window.setTimeout(finishLaunch, 20000)" in index
+    assert "launchDeadlineTimer = window.setTimeout(() => finishLaunch(true), 20000)" in index
+    assert "launchFontsPending" in index
     assert "window.fetch = nativeFetch" in index
 
 

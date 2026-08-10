@@ -53,7 +53,7 @@
   --wb-amber: var(--warn);
   --wb-red: var(--err);
   --wb-accent-text: var(--accent-text, #fff);
-  --wb-sans: var(--sans, "Inter", system-ui, -apple-system, sans-serif);
+  --wb-sans: var(--sans, "Manrope", "Noto Sans SC", system-ui, sans-serif);
   --wb-font: var(--wb-sans);
   --wb-notif-pop-bg: #ffffff;
   --wb-notif-pop-border: #d9e0e8;
@@ -74,7 +74,7 @@
   overflow: hidden;
   background: var(--wb-shell-bg);
   color: var(--wb-text);
-  font-family: Manrope, Inter, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  font-family: var(--wb-font);
 }
 
 .workbench-shell button,
@@ -13351,7 +13351,7 @@ html[data-theme="dark"] .wb-local-model > .wb-runtime-badge.is-onnx { color: #7d
 .wb-item-context-layer {
   position: fixed; inset: 0; z-index: 850;
   color: var(--wb-text, #1f252d);
-  font-family: var(--wb-font, Manrope, Inter, system-ui, sans-serif);
+  font-family: var(--wb-font, var(--sans, system-ui, sans-serif));
   pointer-events: none;
 }
 .wb-item-context-layer *,
@@ -15240,6 +15240,16 @@ html[data-theme="dark"] .wb-init-progress-dot { border-color: #46586b; }
   display: flex;
   align-items: center;
   justify-content: center;
+}
+
+.wbc-chat-list.is-empty .wbc-chat-list-primary {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.wbc-chat-list.is-empty .wbc-rail-empty {
+  padding-block: 0;
 }
 
 /* The outside-click scrim sits at z-index 199. Lift the list only while a
@@ -26146,7 +26156,7 @@ html[data-theme="dark"] .wbc-map .leaflet-control-zoom a {
   --wb-ui-panel-pad: 14px;
   --wb-ui-row-pad-y: 8px;
   --wb-ui-gap: 10px;
-  --wb-font: var(--wb-sans, var(--sans, "Inter", system-ui, -apple-system, sans-serif));
+  --wb-font: var(--wb-sans, var(--sans, "Manrope", "Noto Sans SC", system-ui, sans-serif));
   font-size: var(--wb-ui-body-font-size) !important;
 }
 
@@ -27524,7 +27534,8 @@ html[data-density="compact"] .workbench-shell :where(.wb-budget-model-head, .wb-
 
 .workbench-task-list.is-empty {
   display: flex;
-  justify-content: flex-start;
+  flex-direction: column;
+  justify-content: center;
 }
 
 .wb-task-rail-loading {
@@ -27534,7 +27545,7 @@ html[data-density="compact"] .workbench-shell :where(.wb-budget-model-head, .wb-
 
 .wb-task-rail-empty {
   width: 100%;
-  margin-top: 8px;
+  margin-top: 0;
   padding: 24px 16px 20px;
   display: flex;
   flex-direction: column;
@@ -27916,6 +27927,291 @@ html[data-density="compact"] .workbench-shell :where(.wb-budget-model-head, .wb-
   width: 100%;
 }
 
+/* In the collapsed Chat rail, the otherwise quiet centre becomes a spatial
+   status map. It mirrors the current project's conversation order while only
+   surfacing work that is running, actionable, newly completed, or failed. */
+.wbc-conversation-status-track {
+  position: absolute;
+  z-index: 45;
+  top: 62px;
+  right: 0;
+  bottom: 270px;
+  left: 0;
+  display: block;
+  min-height: 82px;
+  visibility: hidden;
+  pointer-events: none;
+}
+
+.workbench-grid.integrated-sidebars .wbc-rail.workbench-integrated-rail.is-collapsed .wbc-conversation-status-track {
+  --wbc-track-blue: #4f83e8;
+  visibility: visible;
+  pointer-events: none;
+}
+
+.workbench-grid.integrated-sidebars .wbc-rail.workbench-integrated-rail.is-collapsed .wbc-conversation-status-track::before {
+  content: "";
+  position: absolute;
+  top: 5px;
+  bottom: 5px;
+  left: 50%;
+  width: 1px;
+  transform: translateX(-50%);
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--wb-line-2) 42%, transparent);
+}
+
+.wbc-conversation-status-anchor {
+  position: absolute;
+  top: var(--wbc-track-position);
+  left: 50%;
+  width: 32px;
+  height: 32px;
+  transform: translate(-50%, -50%);
+  pointer-events: auto;
+}
+
+.wbc-conversation-status-marker {
+  position: relative;
+  z-index: 3;
+  width: 32px;
+  height: 32px;
+  display: grid;
+  place-items: center;
+  padding: 0;
+  border: 0;
+  border-radius: 999px;
+  background: transparent;
+  color: var(--wbc-track-blue);
+  cursor: pointer;
+}
+
+.wbc-conversation-status-marker > span {
+  width: 6px;
+  height: 6px;
+  border-radius: 999px;
+  background: currentColor;
+  box-shadow: 0 0 0 2px var(--wb-floating-rail-bg);
+  transition:
+    width 150ms ease,
+    height 150ms ease,
+    transform 150ms ease,
+    box-shadow 150ms ease;
+}
+
+.wbc-conversation-status-marker.is-urgent > span {
+  width: 10px;
+  height: 10px;
+}
+
+.wbc-conversation-status-marker.is-running { color: var(--wb-green); }
+.wbc-conversation-status-marker.is-attention { color: var(--wb-amber); }
+.wbc-conversation-status-marker.is-result { color: var(--wbc-track-blue); }
+.wbc-conversation-status-marker.is-failed { color: var(--wb-red); }
+
+.wbc-conversation-status-anchor:hover .wbc-conversation-status-marker > span,
+.wbc-conversation-status-anchor:focus-within .wbc-conversation-status-marker > span,
+.wbc-conversation-status-anchor.preview-open .wbc-conversation-status-marker > span {
+  transform: scale(1.24);
+  box-shadow:
+    0 0 0 2px var(--wb-floating-rail-bg),
+    0 0 0 6px color-mix(in srgb, currentColor 16%, transparent);
+}
+
+.wbc-conversation-status-marker:focus-visible {
+  outline: 1px solid color-mix(in srgb, currentColor 68%, transparent);
+  outline-offset: -3px;
+}
+
+.wbc-conversation-status-preview {
+  position: absolute;
+  z-index: 70;
+  left: 42px;
+  width: min(272px, calc(100vw - 104px));
+  box-sizing: border-box;
+  padding: 13px;
+  border: 1px solid color-mix(in srgb, var(--wb-line-2) 76%, transparent);
+  border-radius: 14px;
+  background: var(--wb-card-bg-strong, var(--wb-card-bg));
+  color: var(--wb-text);
+  box-shadow: 0 16px 36px rgba(15, 23, 42, .16);
+  cursor: default;
+  animation: wbc-status-preview-in 160ms cubic-bezier(.2, .8, .2, 1) both;
+}
+
+.wbc-conversation-status-anchor.align-top .wbc-conversation-status-preview { top: -5px; }
+.wbc-conversation-status-anchor.align-center .wbc-conversation-status-preview { top: 50%; transform: translateY(-50%); }
+.wbc-conversation-status-anchor.align-bottom .wbc-conversation-status-preview { bottom: -5px; }
+
+.wbc-conversation-status-preview-bridge {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: -10px;
+  width: 10px;
+}
+
+.wbc-conversation-status-preview-bridge::after {
+  content: "";
+  position: absolute;
+  top: 50%;
+  right: 0;
+  width: 24px;
+  border-top: 1px dashed color-mix(in srgb, currentColor 34%, transparent);
+  pointer-events: none;
+}
+
+.wbc-conversation-status-anchor.align-top .wbc-conversation-status-preview-bridge::after {
+  top: 21px;
+}
+
+.wbc-conversation-status-anchor.align-bottom .wbc-conversation-status-preview-bridge::after {
+  top: auto;
+  bottom: 21px;
+}
+
+.wbc-conversation-status-preview.is-running { color: var(--wb-green); }
+.wbc-conversation-status-preview.is-attention { color: var(--wb-amber); }
+.wbc-conversation-status-preview.is-result { color: var(--wbc-track-blue); }
+.wbc-conversation-status-preview.is-failed { color: var(--wb-red); }
+
+.wbc-conversation-status-preview-head {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  color: currentColor;
+  font-size: calc(11.5px * var(--wb-ui-font-scale, 1));
+}
+
+.wbc-conversation-status-preview-dot {
+  width: 7px;
+  height: 7px;
+  flex: 0 0 7px;
+  border-radius: 999px;
+  background: currentColor;
+}
+
+.wbc-conversation-status-preview-title {
+  display: block;
+  margin-top: 8px;
+  overflow: hidden;
+  color: var(--wb-text);
+  font-size: calc(13px * var(--wb-ui-font-scale, 1));
+  font-weight: 680;
+  line-height: 1.35;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.wbc-conversation-status-preview > p {
+  display: -webkit-box;
+  margin: 5px 0 0;
+  overflow: hidden;
+  color: var(--wb-muted);
+  font-size: calc(11.5px * var(--wb-ui-font-scale, 1));
+  line-height: 1.55;
+  overflow-wrap: anywhere;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 3;
+}
+
+.wbc-conversation-status-preview-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 11px;
+  padding-top: 10px;
+  border-top: 1px solid color-mix(in srgb, var(--wb-line) 76%, transparent);
+}
+
+.wbc-conversation-status-preview-option {
+  min-height: 30px;
+  max-width: 100%;
+  padding: 5px 9px;
+  border: 1px solid color-mix(in srgb, var(--wb-line-2) 76%, transparent);
+  border-radius: 9px;
+  background: var(--wb-control-bg);
+  color: var(--wb-text);
+  font: inherit;
+  font-size: calc(10.5px * var(--wb-ui-font-scale, 1));
+  line-height: 1.35;
+  white-space: normal;
+  cursor: pointer;
+}
+
+.wbc-conversation-status-preview-option:hover:not(:disabled),
+.wbc-conversation-status-preview-option:focus-visible {
+  border-color: color-mix(in srgb, var(--wb-amber) 42%, var(--wb-line-2));
+  background: color-mix(in srgb, var(--wb-amber) 8%, var(--wb-control-bg));
+}
+
+.wbc-conversation-status-preview-option.primary {
+  border-color: color-mix(in srgb, var(--wb-amber) 34%, var(--wb-line));
+  background: color-mix(in srgb, var(--wb-amber) 12%, var(--wb-control-bg));
+  color: color-mix(in srgb, var(--wb-amber) 82%, var(--wb-text));
+  font-weight: 650;
+}
+
+.wbc-conversation-status-preview-option:disabled,
+.wbc-conversation-status-preview-reply button:disabled {
+  cursor: default;
+  opacity: .52;
+}
+
+.wbc-conversation-status-preview-reply {
+  width: 100%;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 32px;
+  gap: 6px;
+}
+
+.wbc-conversation-status-preview-reply input {
+  min-width: 0;
+  height: 32px;
+  box-sizing: border-box;
+  padding: 0 9px;
+  border: 1px solid color-mix(in srgb, var(--wb-line-2) 76%, transparent);
+  border-radius: 9px;
+  outline: 0;
+  background: var(--wb-control-bg);
+  color: var(--wb-text);
+  font: inherit;
+  font-size: calc(11px * var(--wb-ui-font-scale, 1));
+}
+
+.wbc-conversation-status-preview-reply input:focus {
+  border-color: color-mix(in srgb, var(--wb-amber) 48%, var(--wb-line));
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--wb-amber) 10%, transparent);
+}
+
+.wbc-conversation-status-preview-reply button {
+  width: 32px;
+  height: 32px;
+  display: grid;
+  place-items: center;
+  padding: 0;
+  border: 0;
+  border-radius: 9px;
+  background: color-mix(in srgb, var(--wb-green) 18%, var(--wb-control-bg));
+  color: var(--wb-green);
+  cursor: pointer;
+}
+
+.wbc-conversation-status-preview-feedback {
+  display: block;
+  margin-top: 8px;
+  color: var(--wb-muted);
+  font-size: calc(10.5px * var(--wb-ui-font-scale, 1));
+}
+
+.wbc-conversation-status-preview-feedback.success { color: var(--wb-green); }
+.wbc-conversation-status-preview-feedback.error { color: var(--wb-red); }
+
+@keyframes wbc-status-preview-in {
+  from { opacity: 0; translate: -5px 0; }
+  to { opacity: 1; translate: 0 0; }
+}
+
 .workbench-grid.integrated-sidebars .workbench-integrated-rail.is-collapsed > .workbench-sidebar-dock {
   width: auto;
   height: 244px;
@@ -28005,6 +28301,8 @@ html[data-density="compact"] .workbench-shell :where(.wb-budget-model-head, .wb-
   .workbench-grid.integrated-sidebars .wbc-page,
   .workbench-grid.integrated-sidebars .workbench-integrated-rail,
   .workbench-grid.integrated-sidebars .workbench-integrated-rail-body,
+  .wbc-conversation-status-marker > span,
+  .wbc-conversation-status-preview,
   .workbench-grid.integrated-sidebars .workbench-sidebar-dock,
   .workbench-grid.integrated-sidebars .workbench-sidebar-dock-nav {
     transition-duration: 1ms !important;

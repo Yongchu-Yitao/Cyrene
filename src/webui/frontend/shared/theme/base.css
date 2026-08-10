@@ -38,8 +38,8 @@ html[data-theme="dark"] {
   --r-m: 8px;
   --r-l: 12px;
   --r-xl: 16px;
-  --mono: "IBM Plex Mono", ui-monospace, "JetBrains Mono", Menlo, monospace;
-  --sans: "Manrope", "Inter", system-ui, -apple-system, "Segoe UI", sans-serif;
+  --mono: "IBM Plex Mono", ui-monospace, "JetBrains Mono", Menlo, Consolas, monospace;
+  --sans: "Manrope", "Noto Sans SC", system-ui, -apple-system, "Segoe UI", sans-serif;
 }
 
 html[data-theme="light"] {
@@ -113,6 +113,7 @@ body {
   font-size: 16px;
   font-weight: 560;
   line-height: 1.6;
+  font-synthesis-weight: none;
   -webkit-font-smoothing: antialiased;
 }
 

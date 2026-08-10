@@ -1,11 +1,14 @@
 <!DOCTYPE html>
-<html lang="">
+<html lang="en">
 <head>
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
 <base href="/static/app/" />
 <title>Cyrene</title>
-	<style>body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; }</style>
+<link rel="preload" href="assets/fonts/manrope-variable.woff2" as="font" type="font/woff2" crossorigin />
+<link rel="preload" href="assets/fonts/noto-sans-sc-variable.woff2" as="font" type="font/woff2" crossorigin />
+<link rel="stylesheet" href="fonts.css?v=0.7.0b14" />
+	<style>body { font-family: "Manrope", "Noto Sans SC", system-ui, -apple-system, "Segoe UI", sans-serif; }</style>
 <style>
   #cyrene-launch-screen {
     position: fixed;
@@ -31,7 +34,7 @@
     display: flex;
     align-items: center;
     gap: 20px;
-    font-family: Manrope, Inter, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    font-family: "Manrope", "Noto Sans SC", system-ui, -apple-system, "Segoe UI", sans-serif;
   }
   .cyrene-launch-brand img {
     display: block;
@@ -79,10 +82,12 @@
   let launchRequestsInFlight = 0;
   let launchIdleTimer = 0;
   let launchDeadlineTimer = 0;
+  let launchFontsPending = true;
   const nativeFetch = window.fetch.bind(window);
 
-  function finishLaunch() {
+  function finishLaunch(force = false) {
     if (launchFinished) return;
+    if (launchFontsPending && !force) return;
     launchFinished = true;
     window.clearTimeout(launchIdleTimer);
     window.clearTimeout(launchDeadlineTimer);
@@ -118,7 +123,17 @@
     if (launchReadyRequested || launchFinished) return;
     launchReadyRequested = true;
     // A failed or unusually long request must not leave the app inaccessible.
-    launchDeadlineTimer = window.setTimeout(finishLaunch, 20000);
+    launchDeadlineTimer = window.setTimeout(() => finishLaunch(true), 20000);
+    const fontLoads = document.fonts
+      ? [
+          document.fonts.load('560 16px "Manrope"', "Cyrene"),
+          document.fonts.load('560 16px "Noto Sans SC"', "中文"),
+        ]
+      : [];
+    Promise.allSettled(fontLoads).finally(() => {
+      launchFontsPending = false;
+      scheduleLaunchFinish();
+    });
     scheduleLaunchFinish();
   }
   window.addEventListener("cyrene:ready", requestLaunchReady, { once: true });
