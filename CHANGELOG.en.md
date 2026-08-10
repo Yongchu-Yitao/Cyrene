@@ -7,7 +7,7 @@ The Chinese edition remains the most detailed record for older releases.
 
 ## [0.7.0] - 2026-08-11
 
-`0.7.0` brings together every user-facing change since `0.6.17`, including all fourteen beta releases and the final stabilization work. This section intentionally describes features and experience changes only; the original beta release records remain below.
+`0.7.0` is a complete account of every feature and interface change since `0.6.17`. This section covers only user-visible capabilities and experience changes, without development chronology or implementation details.
 
 ### Knowledge, literature, and local search
 
