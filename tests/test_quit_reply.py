@@ -1,6 +1,8 @@
-"""Verify the `quit(reply=...)` mechanism: the model delivers its final answer
-through the quit tool argument so the common "done with an answer" turn skips the
-tools=None reconstruction call (a prompt-cache prefix-root break)."""
+"""Verify that ``quit`` is only a terminal signal.
+
+User-facing answers belong in normal assistant content. Quit arguments may carry
+machine-readable completion metadata for subagents, but never answer text.
+"""
 import json
 import sys
 from pathlib import Path
@@ -18,56 +20,43 @@ def _quit_call(arguments: str) -> dict:
     return {"tool_calls": [{"function": {"name": "quit", "arguments": arguments}}]}
 
 
-def test_quit_reply_extracted_from_arguments():
-    from cyrene.agent.agent import _quit_reply_from_response
+def test_terminal_reply_uses_assistant_content_and_ignores_quit_arguments():
+    from cyrene.agent.agent import _safe_terminal_reply_from_response
 
-    assert _quit_reply_from_response(_quit_call(json.dumps({"reply": "最终答复"}))) == "最终答复"
-    # leading/trailing whitespace is trimmed
-    assert _quit_reply_from_response(_quit_call(json.dumps({"reply": "  hi  "}))) == "hi"
-
-
-def test_quit_reply_absent_or_invalid_returns_empty():
-    from cyrene.agent.agent import _quit_reply_from_response
-
-    # quit without a reply argument -> falls back to reconstruction (empty here)
-    assert _quit_reply_from_response(_quit_call("{}")) == ""
-    # non-quit tool call
-    assert _quit_reply_from_response(
-        {"tool_calls": [{"function": {"name": "use_tools", "arguments": json.dumps({"task": "x"})}}]}
+    response = {
+        "content": "最终答复",
+        **_quit_call(json.dumps({"reply": "不应显示"})),
+    }
+    assert _safe_terminal_reply_from_response(response, []) == "最终答复"
+    assert _safe_terminal_reply_from_response(
+        _quit_call(json.dumps({"reply": "不应显示"})),
+        [],
     ) == ""
-    # malformed JSON arguments must not raise
-    assert _quit_reply_from_response(_quit_call("{bad json")) == ""
-    # no tool calls at all
-    assert _quit_reply_from_response({"content": "hello"}) == ""
-    # reply present but not a string
-    assert _quit_reply_from_response(_quit_call(json.dumps({"reply": 123}))) == ""
 
 
-def test_all_quit_tool_defs_expose_reply_param():
-    """Every quit definition the model can see (phase1 light set, deep-research
-    light set, and the full registry set used in phase2) must carry the optional
-    `reply` string param — otherwise the model cannot deliver its answer through it."""
+def test_all_quit_tool_defs_exclude_reply_param():
+    """Every phase-specific or fixed-wire quit schema excludes answer text."""
     from cyrene.agent.state import _LIGHT_TOOL_DEFS, _DEEP_RESEARCH_LIGHT_TOOL_DEFS
-    from cyrene.tool_legacy import TOOL_DEFS
+    from cyrene.tooling import get_main_wire_tool_defs
 
     def _quit_def(defs):
         return next(d for d in defs if d["function"]["name"] == "quit")
 
-    for defs in (_LIGHT_TOOL_DEFS, _DEEP_RESEARCH_LIGHT_TOOL_DEFS, TOOL_DEFS):
+    for defs in (
+        _LIGHT_TOOL_DEFS,
+        _DEEP_RESEARCH_LIGHT_TOOL_DEFS,
+        get_main_wire_tool_defs(),
+    ):
         props = _quit_def(defs)["function"]["parameters"]["properties"]
-        assert "reply" in props, "quit def is missing the reply param"
-        assert props["reply"]["type"] == "string"
-        # reply is intentionally optional: system-initiated rounds may quit silently.
+        assert "reply" not in props
         assert "required" not in _quit_def(defs)["function"]["parameters"]
 
 
-def test_assistant_text_empty_for_quit_so_reply_is_used():
-    """The wiring assumption: a bare quit call (no content) makes _assistant_text
-    return "", which is what triggers _ensure_text_reply to fall back to the quit
-    reply instead of the model's (absent) prose."""
-    from cyrene.llm import _assistant_text
+def test_assistant_text_reads_normal_content_on_quit_turn():
+    from cyrene.model_runtime.messages import _assistant_text
 
-    assert _assistant_text(_quit_call(json.dumps({"reply": "x"}))) == ""
+    response = {"content": "normal answer", **_quit_call("{}")}
+    assert _assistant_text(response) == "normal answer"
 
 
 def test_delivery_fallback_replaces_bare_done_after_send_file():
@@ -109,18 +98,35 @@ def test_delivery_fallback_ignores_non_delivery_sent_results():
     assert _delivery_fallback_text(messages) == ""
 
 
-def test_streaming_wrapup_uses_quit_reply_before_done_fallback():
-    from cyrene.agent.agent import _wrap_final_text_from_response
+def test_terminal_reply_rejects_dsml_and_legacy_tool_markup():
+    from cyrene.agent.agent import _safe_terminal_reply_from_response
 
-    wrap = _quit_call(json.dumps({"reply": "文件已经发给你了。"}))
+    complete = {
+        "content": (
+            '<｜｜DSML｜｜tool_calls>'
+            '<｜｜DSML｜｜invoke name="WebSearch"/>'
+            '</｜｜DSML｜｜tool_calls>'
+        ),
+        **_quit_call("{}"),
+    }
+    partial = {"content": "准备查询 <｜｜DSML｜｜tool_ca"}
+    legacy = {
+        "content": (
+            "<tool_call><function=WebSearch>"
+            "<parameter=query>Cyrene</parameter></function></tool_call>"
+        ),
+        **_quit_call("{}"),
+    }
 
-    assert _wrap_final_text_from_response(wrap, []) == "文件已经发给你了。"
+    assert _safe_terminal_reply_from_response(complete, []) == ""
+    assert _safe_terminal_reply_from_response(partial, []) == ""
+    assert _safe_terminal_reply_from_response(legacy, []) == ""
 
 
 async def test_streaming_wrapup_prompt_rejects_placeholder_after_delivery(monkeypatch):
     """The WebUI streaming quit path re-synthesizes the final answer; that call
     must carry the same no-placeholder rule as the normal final-answer path."""
-    from cyrene.agent import guidance
+    from cyrene.agent import guidance, replies
 
     seen = {}
 
@@ -129,7 +135,7 @@ async def test_streaming_wrapup_prompt_rejects_placeholder_after_delivery(monkey
         seen["tools"] = tools
         return {"content": "Done."}
 
-    monkeypatch.setattr(guidance, "_call_llm_stream", fake_call_llm_stream)
+    monkeypatch.setattr(replies, "_call_llm_stream", fake_call_llm_stream)
 
     tools = [{"type": "function", "function": {"name": "quit", "parameters": {"type": "object", "properties": {}}}}]
     response = await guidance._final_reply_with_tools(
@@ -147,8 +153,8 @@ async def test_streaming_wrapup_prompt_rejects_placeholder_after_delivery(monkey
     assert "send_file" in final_instruction
 
 
-async def test_quit_reply_is_persisted_as_assistant_content(monkeypatch):
-    """A direct quit(reply=...) answer must be visible in the next LLM history."""
+async def test_quit_turn_persists_normal_assistant_content(monkeypatch):
+    """A terminal answer remains visible in history without a dangling tool call."""
     from cyrene.agent import agent as agent_core
     from cyrene.call_llm import _sanitize_messages_for_llm
 
@@ -156,13 +162,13 @@ async def test_quit_reply_is_persisted_as_assistant_content(monkeypatch):
 
     async def fake_call_llm(messages, tools=None, max_tokens=32000, **kwargs):
         return {
-            "content": "",
+            "content": "上一轮已经回答",
             "tool_calls": [
                 {
                     "id": "q1",
                     "function": {
                         "name": "quit",
-                        "arguments": json.dumps({"reply": "上一轮已经回答"}),
+                        "arguments": "{}",
                     },
                 }
             ],
@@ -172,7 +178,6 @@ async def test_quit_reply_is_persisted_as_assistant_content(monkeypatch):
         saved_messages.append(messages)
 
     monkeypatch.setattr(agent_core, "_call_llm", fake_call_llm)
-    monkeypatch.setattr(agent_core, "get_active_tool_defs", lambda: [])
     monkeypatch.setattr(agent_core, "_save_session_messages", fake_save)
     monkeypatch.setattr(agent_core, "_append_session_message", AsyncMock())
 

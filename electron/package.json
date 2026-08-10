@@ -1,6 +1,6 @@
 {
   "name": "cyrene",
-  "version": "0.6.17",
+  "version": "0.7.0",
   "license": "Apache-2.0",
   "description": "Cyrene AI Agent — self-evolving AI companion",
   "author": {
@@ -30,7 +30,9 @@
       {
         "from": "../dist/Cyrene",
         "to": "python-bundle",
-        "filter": ["**/*"]
+        "filter": [
+          "**/*"
+        ]
       },
       {
         "from": "../build/icon.png",
@@ -68,7 +70,9 @@
     "mac": {
       "category": "public.app-category.productivity",
       "icon": "../build/icon.icns",
-      "target": ["dmg"],
+      "target": [
+        "dmg"
+      ],
       "minimumSystemVersion": "12.0",
       "artifactName": "Cyrene-${version}-mac.${ext}"
     },
@@ -77,7 +81,10 @@
       "target": [
         {
           "target": "nsis",
-          "arch": ["x64", "arm64"]
+          "arch": [
+            "x64",
+            "arm64"
+          ]
         }
       ],
       "artifactName": "Cyrene-${version}-win-${arch}.${ext}"
@@ -91,26 +98,48 @@
       "target": [
         {
           "target": "AppImage",
-          "arch": ["x64"]
+          "arch": [
+            "x64"
+          ]
         },
         {
           "target": "deb",
-          "arch": ["x64"]
+          "arch": [
+            "x64"
+          ]
+        },
+        {
+          "target": "rpm",
+          "arch": [
+            "x64"
+          ]
         }
       ],
       "category": "Utility",
       "artifactName": "Cyrene-${version}-x64.${ext}"
     },
+    "deb": {
+      "afterInstall": "linux-after-install.sh"
+    },
+    "rpm": {
+      "afterInstall": "linux-after-install.sh"
+    },
     "files": [
       "main.js",
+      "browser-input.js",
       "preload.js",
       "browser-chat-overlay-preload.js",
+      "browser-tab-picker-preload.js",
       "app-use.js",
       "package.json"
     ]
   },
   "devDependencies": {
-    "electron": "^35.0.0",
-    "electron-builder": "^25.0.0"
+    "electron": "43.2.0",
+    "electron-builder": "26.15.7"
+  },
+  "allowScripts": {
+    "electron@43.2.0": true,
+    "electron-winstaller@5.4.0": true
   }
 }

@@ -5,7 +5,7 @@ from pathlib import Path
 def test_macos_traffic_lights_are_centered_in_workbench_topbar():
     root = Path(__file__).resolve().parent.parent
     main_source = (root / "electron" / "main.js").read_text(encoding="utf-8")
-    css_source = (root / "src" / "workbench-webui" / "workbench.css").read_text(
+    css_source = (root / "src" / "webui" / "frontend" / "workbench.css").read_text(
         encoding="utf-8"
     )
 
@@ -26,3 +26,9 @@ def test_macos_traffic_lights_are_centered_in_workbench_topbar():
     # Electron's rendered traffic-light image needs a 1px optical correction.
     assert traffic_light_y == (topbar_height - 14) // 2 - 1
     assert "transform: translateY(-1px)" in brand_wordmark.group(1)
+    topbar_styles = css_source.split(".workbench-topbar {", 1)[1].split("}", 1)[0]
+    assert "grid-template-columns: 174px" in topbar_styles
+    darwin_topbar_styles = css_source.split(
+        'html[data-platform="darwin"] .workbench-topbar {', 1
+    )[1].split("}", 1)[0]
+    assert "grid-template-columns: 236px" in darwin_topbar_styles

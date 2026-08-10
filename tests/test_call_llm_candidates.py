@@ -41,6 +41,33 @@ def test_deepseek_legacy_disabled_request_keeps_thinking_enabled():
     )
 
     assert payload["thinking"] == {"type": "enabled"}
+    assert payload["reasoning_effort"] == "high"
+
+
+@pytest.mark.parametrize(
+    ("requested", "expected"),
+    [
+        ("", "high"),
+        ("low", "high"),
+        ("medium", "high"),
+        ("high", "high"),
+        ("xhigh", "max"),
+        ("max", "max"),
+    ],
+)
+def test_deepseek_reasoning_effort_uses_supported_api_values(requested, expected):
+    payload = cl._build_payload(
+        [{"role": "user", "content": "ping"}],
+        tools=None,
+        max_tokens=24,
+        stream=False,
+        model="deepseek-v4-pro",
+        thinking="auto",
+        reasoning_effort=requested,
+    )
+
+    assert payload["thinking"] == {"type": "enabled"}
+    assert payload["reasoning_effort"] == expected
 
 
 def test_generic_model_does_not_receive_deepseek_thinking_extension():
@@ -54,6 +81,7 @@ def test_generic_model_does_not_receive_deepseek_thinking_extension():
     )
 
     assert "thinking" not in payload
+    assert "reasoning_effort" not in payload
 
 
 class _CountingHandler(BaseHTTPRequestHandler):
@@ -253,7 +281,7 @@ async def test_transient_network_disconnect_stops_after_retry_limit(stub_server_
 
 
 def test_workbench_network_error_message_requests_resend():
-    from webui.routes_workbench_chat import _workbench_chat_run_error_message
+    from cyrene.workbench.chat import _workbench_chat_run_error_message
 
     exc = httpx.RemoteProtocolError("Server disconnected without sending a response.")
 
@@ -261,6 +289,53 @@ def test_workbench_network_error_message_requests_resend():
         f"网络连接异常，已自动重试 {cl.NETWORK_RETRY_LIMIT} 次仍未成功。请重新发送这条消息。"
     )
     assert "Please send this message again." in _workbench_chat_run_error_message(exc, "en")
+
+
+@pytest.mark.parametrize(
+    "base_url",
+    [
+        "https://api.deepseek.com",
+        "https://api.deepseek.com/",
+        "https://api.deepseek.com/v1",
+        "https://API.DEEPSEEK.COM:443/v1/",
+    ],
+)
+def test_official_deepseek_prefers_versioned_chat_completions(base_url):
+    assert cl._normalized_llm_endpoints(base_url) == [
+        "https://api.deepseek.com/v1/chat/completions",
+        "https://api.deepseek.com/chat/completions",
+    ]
+
+
+def test_non_official_provider_keeps_generic_endpoint_order():
+    assert cl._normalized_llm_endpoints("https://api.deepseek.com.example") == [
+        "https://api.deepseek.com.example/chat/completions",
+        "https://api.deepseek.com.example/v1/chat/completions",
+    ]
+
+
+def test_stale_deepseek_root_affinity_does_not_override_versioned_priority(monkeypatch):
+    candidate = {
+        "id": "deepseek",
+        "model": "deepseek-chat",
+        "base_url": "https://api.deepseek.com",
+        "endpoints": cl._normalized_llm_endpoints("https://api.deepseek.com"),
+    }
+    monkeypatch.setattr(cl, "_last_success_map", lambda: {
+        "session:chat-1:primary": {
+            "candidate_id": "deepseek",
+            "model": "deepseek-chat",
+            "base_url": "https://api.deepseek.com",
+            "endpoint": "https://api.deepseek.com/chat/completions",
+        }
+    })
+    monkeypatch.setattr(cl, "_session_model_preferences", lambda: {})
+
+    prioritized = cl._prioritize_last_success([candidate], "primary", "chat-1")
+
+    assert prioritized[0]["endpoints"][0] == (
+        "https://api.deepseek.com/v1/chat/completions"
+    )
 
 
 def test_resolve_llm_candidates_is_the_model_list_in_order(monkeypatch):
@@ -329,6 +404,7 @@ async def test_call_llm_returns_empty_when_no_model_configured(monkeypatch):
 
 
 def test_last_success_affinity_is_scoped_to_conversation_and_exact_endpoint():
+    cl._session_model_preference_cache = {}
     cl._last_success_cache = {
         "session:chat_existing:primary": {
             "candidate_id": "backup",
@@ -360,6 +436,30 @@ def test_last_success_affinity_is_scoped_to_conversation_and_exact_endpoint():
     assert ordered[0]["_configured_rank"] == 1
     assert [item["id"] for item in new_chat_order] == ["main", "backup"]
     assert [item["id"] for item in unscoped_order] == ["main", "backup"]
+
+
+def test_explicit_session_model_preference_controls_candidate_and_effort(monkeypatch):
+    writes = []
+    cl._session_model_preference_cache = {}
+    cl._last_success_cache = {}
+    monkeypatch.setattr(cl, "set_setting", lambda key, value: writes.append((key, value)))
+    candidates = [
+        {
+            "id": "main", "model": "main-model", "base_url": "https://main.example/v1",
+            "reasoning_effort": "low", "endpoints": ["https://main.example/v1/chat/completions"],
+        },
+        {
+            "id": "chosen", "model": "chosen-model", "base_url": "https://chosen.example/v1",
+            "reasoning_effort": "medium", "endpoints": ["https://chosen.example/v1/chat/completions"],
+        },
+    ]
+
+    cl.set_session_model_preference("chat_explicit", candidates[1], "high")
+    ordered = cl._prioritize_last_success(candidates, "primary", "chat_explicit")
+
+    assert [item["id"] for item in ordered] == ["chosen", "main"]
+    assert ordered[0]["reasoning_effort"] == "high"
+    assert writes[-1][0] == "llm_session_model_preferences"
 
 
 def test_successful_endpoint_affinity_is_persisted_only_when_changed(monkeypatch):
@@ -499,6 +599,200 @@ async def test_primary_failure_publishes_fallback_ui_event(monkeypatch):
         "session_id": "chat_1", "round_id": "round_1",
         "failed_model": "main", "fallback_model": "backup",
     }]
+
+
+async def test_codex_quota_failure_publishes_actionable_notice_before_fallback(
+    monkeypatch,
+):
+    availability_notices = []
+
+    class FakeCodex:
+        async def quota_available(self):
+            return False
+
+        async def close(self):
+            return None
+
+    class FakeResponse:
+        status_code = 200
+
+        def json(self):
+            return {
+                "choices": [
+                    {"message": {"role": "assistant", "content": "backup"}}
+                ],
+                "usage": {},
+            }
+
+    class FakeClient:
+        async def post(self, _endpoint, json=None, headers=None):
+            return FakeResponse()
+
+    async def capture(**kwargs):
+        availability_notices.append(kwargs)
+
+    import cyrene.model_runtime.codex_provider as codex_provider
+
+    monkeypatch.setattr(codex_provider, "get_codex_provider", lambda: FakeCodex())
+    monkeypatch.setattr(cl, "_get_http_client", lambda _timeout: (FakeClient(), "test", True))
+    monkeypatch.setattr(cl, "_publish_codex_availability_event", capture)
+    monkeypatch.setattr(
+        cl,
+        "get_setting",
+        lambda key, default=None: True if key == "codex_budget_enabled" else default,
+    )
+    candidates = [
+        {
+            "id": "codex",
+            "model": "gpt-5.6-sol",
+            "provider": "codex_oauth",
+            "base_url": "codex://oauth",
+            "api_key": "",
+            "endpoints": ["codex://oauth"],
+        },
+        {
+            "id": "backup",
+            "model": "backup",
+            "provider": "openai_compatible",
+            "base_url": "https://backup/v1",
+            "api_key": "",
+            "endpoints": ["https://backup/v1/chat/completions"],
+        },
+    ]
+
+    result = await cl.call_llm(
+        [{"role": "user", "content": "hi"}],
+        candidates=candidates,
+        publish_events=False,
+        record_usage=False,
+        session_id="chat_codex",
+        round_id="round_codex",
+    )
+
+    assert result["content"] == "backup"
+    assert availability_notices == [
+        {
+            "session_id": "chat_codex",
+            "round_id": "round_codex",
+            "model": "gpt-5.6-sol",
+            "failure_kind": "quota_exhausted",
+        }
+    ]
+
+
+async def test_codex_auth_failure_falls_back_without_arming_cooldown(
+    monkeypatch,
+):
+    class FakeCodex:
+        async def quota_available(self):
+            return True
+
+        async def complete(self, **_kwargs):
+            from cyrene.model_runtime.codex_provider import (
+                CODEX_AUTHENTICATION_EXPIRED,
+                CodexAvailabilityError,
+            )
+
+            raise CodexAvailabilityError(
+                CODEX_AUTHENTICATION_EXPIRED,
+                "Please log in again",
+            )
+
+        async def close(self):
+            return None
+
+    class FakeResponse:
+        status_code = 200
+
+        def json(self):
+            return {
+                "choices": [
+                    {"message": {"role": "assistant", "content": "backup"}}
+                ],
+                "usage": {},
+            }
+
+    class FakeClient:
+        async def post(self, _endpoint, json=None, headers=None):
+            return FakeResponse()
+
+    import cyrene.model_runtime.codex_provider as codex_provider
+
+    async def ignore_notice(**_kwargs):
+        return None
+
+    monkeypatch.setattr(
+        codex_provider,
+        "get_codex_provider",
+        lambda: FakeCodex(),
+    )
+    monkeypatch.setattr(
+        cl,
+        "_get_http_client",
+        lambda _timeout: (FakeClient(), "test", True),
+    )
+    monkeypatch.setattr(
+        cl,
+        "_publish_codex_availability_event",
+        ignore_notice,
+    )
+    candidates = [
+        {
+            "id": "codex",
+            "model": "gpt-5.6-sol",
+            "provider": "codex_oauth",
+            "base_url": "codex://oauth",
+            "api_key": "",
+            "endpoints": ["codex://oauth"],
+        },
+        {
+            "id": "backup",
+            "model": "backup",
+            "provider": "openai_compatible",
+            "base_url": "https://backup/v1",
+            "api_key": "",
+            "endpoints": ["https://backup/v1/chat/completions"],
+        },
+    ]
+
+    result = await cl.call_llm(
+        [{"role": "user", "content": "hi"}],
+        candidates=candidates,
+        publish_events=False,
+        record_usage=False,
+        session_id="chat_auth",
+        round_id="round_auth",
+    )
+
+    assert result["content"] == "backup"
+    assert not cl._candidate_cooling(
+        cl._candidate_key(candidates[0], "chat_auth")
+    )
+
+
+async def test_llm_event_identifies_codex_provider(monkeypatch):
+    published = []
+
+    from cyrene.observability import debug
+
+    async def capture(event, **kwargs):
+        published.append((event, kwargs))
+
+    monkeypatch.setattr(debug, "publish_event", capture)
+
+    await cl._publish_llm_event(
+        "main_agent",
+        "phase1",
+        [{"role": "user", "content": "hi"}],
+        None,
+        {},
+        "gpt-5.6-sol",
+        0,
+        provider="codex_oauth",
+        session_id="chat_codex",
+    )
+
+    assert published[0][0]["provider"] == "codex_oauth"
 
 
 async def test_fallback_ui_event_is_deduplicated_across_calls_in_same_round(monkeypatch):
@@ -673,7 +967,7 @@ async def test_last_success_affinity_does_not_publish_fallback_ui_event(monkeypa
 
 
 async def test_actionable_llm_latency_event_is_persisted(tmp_path):
-    from cyrene.db import record_llm_latency
+    from cyrene.runtime.database import record_llm_latency
 
     db_path = tmp_path / "latency.db"
     await record_llm_latency(

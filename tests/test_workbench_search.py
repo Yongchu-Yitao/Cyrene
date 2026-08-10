@@ -21,8 +21,9 @@ sys.modules["PIL"] = pil_mock
 pil_mock.Image = MagicMock()
 
 from cyrene import config as cyrene_config
-from cyrene import db
-from webui.routes import _search_matches, _search_snippet, _search_workbench_items, register_routes
+from cyrene.runtime import database as db
+from cyrene.workbench.runtime import _search_matches, _search_snippet, _search_workbench_items
+from route.registry import register_routes
 
 
 def test_search_matches_substring():
@@ -66,9 +67,9 @@ def temp_db():
 def search_env(monkeypatch, tmp_path, temp_db):
     """Prepare isolated DATA_DIR / STORE_DIR / WORKSPACE_DIR for search tests."""
     from cyrene import config as cyrene_config
-    from cyrene import io_utils
-    from webui import routes as routes_mod
-    from webui import routes_workbench_chat as chat_mod
+    from cyrene.runtime import io as io_utils
+    from cyrene.workbench import chat as chat_service
+    from cyrene.workbench import runtime as routes_mod
 
     data_dir = tmp_path / "data"
     store_dir = tmp_path / "store"
@@ -82,8 +83,8 @@ def search_env(monkeypatch, tmp_path, temp_db):
     monkeypatch.setattr(cyrene_config, "WORKSPACE_DIR", workspace_dir)
     monkeypatch.setattr(routes_mod, "DATA_DIR", data_dir)
     monkeypatch.setattr(routes_mod, "WORKSPACE_DIR", workspace_dir)
-    monkeypatch.setattr(chat_mod, "DATA_DIR", data_dir)
-    chat_mod._CHATS_STORE = data_dir / "workbench_chats.json"
+    monkeypatch.setattr(chat_service, "DATA_DIR", data_dir)
+    chat_service._CHATS_STORE = data_dir / "workbench_chats.json"
     routes_mod._WORKBENCH_STORE = data_dir / "workbench_projects.json"
     routes_mod._db_path = temp_db
 
@@ -174,6 +175,188 @@ def client(search_env):
     return TestClient(app)
 
 
+def test_side_agents_are_multiple_persistent_sessions_hidden_from_main_chat_list(
+    client, search_env,
+):
+    first = client.post(
+        "/api/workbench/chats/chat_1/side-agents",
+        json={"quote": "First selected passage"},
+    )
+    second = client.post(
+        "/api/workbench/chats/chat_1/side-agents",
+        json={"quote": "Second selected passage"},
+    )
+
+    assert first.status_code == 200
+    assert second.status_code == 200
+    first_agent = first.json()["agent"]
+    second_agent = second.json()["agent"]
+    assert first_agent["id"] != second_agent["id"]
+    assert first_agent["kind"] == "side-agent"
+    assert first_agent["parentChatId"] == "chat_1"
+    assert first_agent["sourceQuote"] == "First selected passage"
+
+    agents = client.get("/api/workbench/chats/chat_1/side-agents").json()["agents"]
+    assert [item["id"] for item in agents] == [
+        first_agent["id"],
+        second_agent["id"],
+    ]
+
+    visible_chats = client.get(
+        "/api/workbench/chats",
+        params={"project": "project_1"},
+    ).json()["chats"]
+    assert [item["id"] for item in visible_chats] == ["chat_1"]
+
+    stored = json.loads(
+        (search_env["data_dir"] / "workbench_chats.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    assert len(stored["chats"]) == 3
+
+
+def test_side_agent_receives_selected_quote_without_polluting_public_question(
+    client, monkeypatch,
+):
+    from cyrene import agent
+
+    captured = {}
+
+    async def fake_run_agent(**kwargs):
+        captured.update(kwargs)
+        return "Side answer"
+
+    monkeypatch.setattr(agent, "run_agent", fake_run_agent)
+    created = client.post(
+        "/api/workbench/chats/chat_1/side-agents",
+        json={"quote": "The selected source text"},
+    ).json()["agent"]
+
+    response = client.post(
+        f"/api/workbench/chats/{created['id']}/messages",
+        json={"message": "What does this mean?"},
+    )
+
+    assert response.status_code == 200
+    assert "<selected_quote>\nThe selected source text\n</selected_quote>" in captured[
+        "user_message"
+    ]
+    assert "<main_conversation>" in captured["user_message"]
+    assert "[1. user]\nhello there" in captured["user_message"]
+    assert "What does this mean?" in captured["user_message"]
+    assert captured["public_user_message"] == "What does this mean?"
+    detail = client.get(f"/api/workbench/chats/{created['id']}").json()["chat"]
+    assert detail["messages"][0]["content"] == "What does this mean?"
+    assert detail["messages"][-1]["content"] == "Side answer"
+
+
+def test_rename_workbench_chat_persists_trimmed_title(client, search_env):
+    response = client.patch(
+        "/api/workbench/chats/chat_1",
+        json={"title": "  Renamed conversation  "},
+    )
+
+    assert response.status_code == 200
+    assert response.json()["chat"]["title"] == "Renamed conversation"
+    stored = json.loads(
+        (search_env["data_dir"] / "workbench_chats.json").read_text(encoding="utf-8")
+    )
+    assert stored["chats"][0]["title"] == "Renamed conversation"
+    assert stored["chats"][0]["titleLocked"] is True
+    assert stored["chats"][0]["updatedAt"] != "2026-01-02T00:00:00+00:00"
+
+
+def test_chat_group_metadata_endpoint_forwards_language_and_title_lock(
+    client, search_env, monkeypatch,
+):
+    from route.workbench import chat as chat_routes
+
+    captured = {}
+
+    async def fake_generate(members, **kwargs):
+        captured["members"] = members
+        captured["kwargs"] = kwargs
+        return {"title": "", "summary": "浏览器操作相关对话", "lang": "zh"}
+
+    monkeypatch.setattr(chat_routes._service, "generate_chat_group_metadata", fake_generate)
+    response = client.post(
+        "/api/workbench/chat-groups/metadata",
+        json={
+            "groupId": "group_1",
+            "members": [
+                {"id": "chat_1", "title": "打开 B 站", "preview": "已打开首页"},
+                {"id": "chat_2", "title": "打开 Google", "preview": "已打开搜索页"},
+            ],
+            "currentTitle": "我的浏览器对话",
+            "titleLocked": True,
+            "lang": "zh",
+        },
+    )
+
+    assert response.status_code == 200
+    assert response.json()["metadata"]["summary"] == "浏览器操作相关对话"
+    assert captured["kwargs"] == {
+        "lang": "zh",
+        "title_locked": True,
+        "current_title": "我的浏览器对话",
+    }
+    assert len(captured["members"]) == 2
+
+
+def test_chat_group_metadata_endpoint_persists_before_returning(
+    client, search_env, monkeypatch,
+):
+    from route.workbench import chat as chat_routes
+    from cyrene.workbench import chat_groups as chat_groups_service
+
+    calls = []
+
+    def fake_context(project_id, group_id, *, signature):
+        calls.append(("context", project_id, group_id, signature))
+        return {
+            "group": {"id": group_id, "title": "新对话组", "titleLocked": False},
+            "members": [
+                {"id": "chat_1", "title": "打开 B 站", "preview": "首页已打开"},
+                {"id": "chat_2", "title": "打开 Google", "preview": "搜索页已打开"},
+            ],
+            "signature": "chat_1|chat_2",
+        }
+
+    async def fake_generate(members, **kwargs):
+        calls.append(("generate", members, kwargs))
+        return {"title": "浏览器操作", "summary": "整理网站访问结果。", "lang": "zh"}
+
+    async def fake_update(project_id, group_id, *, signature, metadata):
+        calls.append(("persist", project_id, group_id, signature, metadata))
+        return {"groups": [{
+            "id": group_id,
+            "title": metadata["title"],
+            "summary": metadata["summary"],
+            "chatIds": ["chat_1", "chat_2"],
+        }]}
+
+    monkeypatch.setattr(chat_groups_service, "get_group_metadata_context", fake_context)
+    monkeypatch.setattr(chat_routes._service, "generate_chat_group_metadata", fake_generate)
+    monkeypatch.setattr(chat_groups_service, "update_group_metadata", fake_update)
+    response = client.post(
+        "/api/workbench/chat-groups/metadata",
+        json={
+            "projectId": "project_1",
+            "groupId": "group_1",
+            "signature": "chat_1|chat_2",
+            "members": [{"id": "ignored_1"}, {"id": "ignored_2"}],
+            "lang": "zh",
+        },
+    )
+
+    assert response.status_code == 200
+    assert [call[0] for call in calls] == ["context", "generate", "persist"]
+    assert calls[1][1][0]["id"] == "chat_1"
+    assert calls[1][2]["current_title"] == "新对话组"
+    assert response.json()["group"]["title"] == "浏览器操作"
+
+
 def test_delete_workbench_legacy_chat_uses_session_delete(client, search_env, monkeypatch):
     routes_mod = search_env["routes_mod"]
     deleted = []
@@ -214,6 +397,22 @@ def test_delete_regular_workbench_chat_still_removes_store(
         (search_env["data_dir"] / "workbench_chats.json").read_text(encoding="utf-8")
     )
     assert payload["chats"] == []
+
+
+def test_interrupt_workbench_chat_settles_persisted_running_status(
+    client, search_env,
+):
+    chats_path = search_env["data_dir"] / "workbench_chats.json"
+    payload = json.loads(chats_path.read_text(encoding="utf-8"))
+    payload["chats"][0]["status"] = "running"
+    chats_path.write_text(json.dumps(payload), encoding="utf-8")
+
+    response = client.post("/api/chat/interrupt?session_id=chat_1")
+
+    assert response.status_code == 200
+    assert response.json()["ok"] is True
+    settled = json.loads(chats_path.read_text(encoding="utf-8"))
+    assert settled["chats"][0]["status"] == "idle"
 
 
 def test_compact_workbench_chat_is_an_explicit_forced_action(
@@ -267,7 +466,7 @@ def test_compact_workbench_chat_returns_running_reason_as_promptable_result(
 
 
 def test_empty_legacy_live_session_is_not_listed(search_env, monkeypatch):
-    from webui import routes_workbench_chat as chat_mod
+    from route.workbench import chat as chat_mod
 
     monkeypatch.setattr(
         search_env["routes_mod"],
@@ -369,7 +568,7 @@ async def test_search_workbench_items_memory(search_env):
 
 @pytest.mark.asyncio
 async def test_search_workbench_items_hides_internal_task_reports(search_env):
-    from cyrene import io_utils
+    from cyrene.runtime import io as io_utils
 
     io_utils.atomic_write_json(
         search_env["store_dir"] / "wb_memory_project_1.json",
@@ -425,7 +624,7 @@ async def test_search_workbench_items_no_query():
 
 @pytest.mark.asyncio
 async def test_search_uses_lightweight_store_without_blocking_event_loop(monkeypatch):
-    from webui import routes as routes_mod
+    from cyrene.workbench import runtime as routes_mod
 
     payload = {
         "projects": [{
@@ -505,14 +704,82 @@ def test_workbench_chat_run_uses_project_workspace(client, search_env, monkeypat
 
     response = client.post(
         "/api/workbench/chats/chat_1/messages",
-        json={"message": "inspect the project"},
+        json={"message": "inspect the project", "clientRequestId": "send_test_1"},
     )
 
     assert response.status_code == 200
-    assert response.json()["assistantMessage"]["content"] == "done"
+    assistant_message = response.json()["assistantMessage"]
+    assert assistant_message["content"] == "done"
+    assert isinstance(assistant_message["processingDurationMs"], int)
+    assert assistant_message["processingDurationMs"] >= 0
+    assert response.json()["userMessage"]["clientRequestId"] == "send_test_1"
     assert captured["workspace_dir"] == str(
         (search_env["data_dir"].parent / "workspace").resolve()
     )
+    chats = json.loads(
+        (search_env["data_dir"] / "workbench_chats.json").read_text(encoding="utf-8")
+    )
+    assert (
+        chats["chats"][0]["messages"][-1]["processingDurationMs"]
+        == assistant_message["processingDurationMs"]
+    )
+    assert chats["chats"][0]["messages"][-2]["clientRequestId"] == "send_test_1"
+
+
+def test_chat_session_is_llm_named_only_after_its_first_message(
+    client, search_env, monkeypatch,
+):
+    from cyrene import agent
+    from cyrene.workbench import session_naming
+
+    calls = []
+
+    async def fake_run_agent(**kwargs):
+        return "done"
+
+    async def fake_generate(message, *, limit=60):
+        calls.append(message)
+        await asyncio.sleep(0)
+        return "检查当前 Session 命名"
+
+    monkeypatch.setattr(agent, "run_agent", fake_run_agent)
+    monkeypatch.setattr(session_naming, "generate_session_title", fake_generate)
+
+    created = client.post(
+        "/api/workbench/chats",
+        json={"projectId": "project_1"},
+    ).json()["chat"]
+    chat_id = created["id"]
+
+    first = client.post(
+        f"/api/workbench/chats/{chat_id}/messages",
+        json={"message": "检查目前 Cyrene 的 session 有没有 LLM 自动命名"},
+    )
+    assert first.status_code == 200
+
+    deadline = time.monotonic() + 1
+    stored_chat = None
+    while time.monotonic() < deadline:
+        payload = json.loads(
+            (search_env["data_dir"] / "workbench_chats.json").read_text(
+                encoding="utf-8"
+            )
+        )
+        stored_chat = next(item for item in payload["chats"] if item["id"] == chat_id)
+        if stored_chat.get("titleNamingStatus") == "generated":
+            break
+        time.sleep(0.01)
+
+    assert stored_chat is not None
+    assert stored_chat["title"] == "检查当前 Session 命名"
+    assert stored_chat["titleNamingStatus"] == "generated"
+
+    second = client.post(
+        f"/api/workbench/chats/{chat_id}/messages",
+        json={"message": "再检查一次"},
+    )
+    assert second.status_code == 200
+    assert calls == ["检查目前 Cyrene 的 session 有没有 LLM 自动命名"]
 
 
 def test_workbench_chat_run_persists_non_git_workspace_diff(
@@ -562,7 +829,7 @@ def test_workbench_chat_persists_intermediate_messages_between_tool_cards(
     client, search_env, monkeypatch,
 ):
     from cyrene import agent
-    from webui import routes_workbench_chat as chat_mod
+    from route.workbench import chat as chat_mod
 
     state_messages = [{"role": "user", "content": "old"}]
 
@@ -675,21 +942,48 @@ def test_workbench_chat_network_failure_requests_resend(client, search_env, monk
     )
 
 
+def test_workbench_chat_codex_quota_error_includes_i18n_metadata(client, search_env, monkeypatch):
+    from cyrene import agent
+    from cyrene.model_runtime.codex_provider import (
+        CODEX_QUOTA_EXHAUSTED,
+        CodexAvailabilityError,
+    )
+
+    async def fake_run_agent(**_kwargs):
+        raise CodexAvailabilityError(
+            CODEX_QUOTA_EXHAUSTED,
+            "Codex quota is exhausted; wait for the quota window to reset",
+        )
+
+    monkeypatch.setattr(agent, "run_agent", fake_run_agent)
+
+    response = client.post(
+        "/api/workbench/chats/chat_1/messages",
+        json={"message": "inspect the project", "stream": True, "lang": "zh"},
+    )
+
+    assert response.status_code == 200
+    events = [json.loads(line) for line in response.text.splitlines() if line.strip()]
+    error = next(event for event in events if event.get("type") == "error")
+    assert error["code"] == CODEX_QUOTA_EXHAUSTED
+    assert error["detail_key"] == "workbenchChat.error.quotaExhausted"
+
+
 def test_workspace_scope_block_uses_runtime_workspace(tmp_path):
     from cyrene.agent.prompts import workspace_scope_block
 
     project_workspace = tmp_path / "project"
     block = workspace_scope_block(project_workspace)
 
-    assert f"Your workspace is at `{project_workspace}`." in block
-    assert "already starts with CWD set to the workspace root" in block
-    assert f"do not prepend `cd {project_workspace}`" in block
+    assert f"Use `{project_workspace}` as the default root" in block
+    assert "already starts at the workspace root" in block
+    assert f"without `cd {project_workspace}`" in block
 
 
 def test_workbench_chat_answer_resumes_in_project_workspace(
     client, search_env, monkeypatch,
 ):
-    from webui import routes as routes_mod
+    from cyrene.workbench import runtime as routes_mod
 
     chats_path = search_env["data_dir"] / "workbench_chats.json"
     chats = json.loads(chats_path.read_text(encoding="utf-8"))
@@ -727,3 +1021,64 @@ def test_workbench_chat_answer_resumes_in_project_workspace(
     stored = json.loads(chats_path.read_text(encoding="utf-8"))["chats"][0]["messages"]
     assert [message["content"] for message in stored[-2:]] == ["continue", "continued"]
     assert stored[-2]["answerToQuestionId"] == "question_1"
+
+
+def test_workbench_chat_answer_can_stream_continuation_events(
+    client, search_env, monkeypatch,
+):
+    from cyrene.agent.context import emit_reply_stream_event, publish_runtime_event
+    from cyrene.workbench import runtime as routes_mod
+
+    chats_path = search_env["data_dir"] / "workbench_chats.json"
+    chats = json.loads(chats_path.read_text(encoding="utf-8"))
+    chats["chats"][0]["pendingQuestion"] = {"id": "question_stream"}
+    chats_path.write_text(json.dumps(chats), encoding="utf-8")
+
+    async def fake_answer_pending(*_args, **_kwargs):
+        await publish_runtime_event({
+            "type": "tool_call_started",
+            "tool_call_id": "tool_stream",
+            "tool": "search_files",
+        })
+        await emit_reply_stream_event({"type": "reply_start"})
+        await emit_reply_stream_event({
+            "type": "reply_delta",
+            "delta": "继续完成",
+        })
+        await emit_reply_stream_event({
+            "type": "reply_done",
+            "response": "继续完成",
+        })
+        return "继续完成"
+
+    monkeypatch.setattr(
+        routes_mod,
+        "_workbench_answer_pending",
+        fake_answer_pending,
+    )
+
+    response = client.post(
+        "/api/workbench/chats/chat_1/answer",
+        json={
+            "question_id": "question_stream",
+            "answer": "允许一次",
+            "stream": True,
+        },
+    )
+
+    assert response.status_code == 200
+    assert response.headers["content-type"].startswith("application/x-ndjson")
+    events = [
+        json.loads(line)
+        for line in response.text.splitlines()
+        if line.strip()
+    ]
+    assert [event["type"] for event in events] == [
+        "tool_call_started",
+        "reply_start",
+        "reply_delta",
+        "reply_done",
+        "reply_done",
+        "saved",
+    ]
+    assert events[-2]["response"] == "继续完成"

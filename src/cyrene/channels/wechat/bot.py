@@ -7,6 +7,7 @@ via long-polling, dispatches to ``run_agent()``, splits long responses.
 import asyncio
 import logging
 
+from cyrene.agent.context import with_run_context
 from cyrene.channels.wechat.client import (
     WECHAT_MAX_LENGTH,
     WeChatAuthError,
@@ -112,6 +113,7 @@ def _format_pending_question_wechat(question: dict) -> str:
     return "\n".join(lines)
 
 
+@with_run_context(conversation_source="wechat")
 async def _handle_message(
     text: str,
     sender: str,
@@ -133,9 +135,8 @@ async def _handle_message(
         get_session_labels,
         run_agent,
     )
-    from cyrene.agent.state import _conversation_source
-    from cyrene.conversations import archive_exchange
-    from cyrene.scheduler import reset_lottery
+    from cyrene.runtime.memory.conversations import archive_exchange
+    from cyrene.runtime.scheduler import reset_lottery
 
     config = client._config
 
@@ -157,13 +158,11 @@ async def _handle_message(
     reset_lottery()
     await client.send_typing(sender)
 
-    _conversation_source.set("wechat")
-
     # Download any attached files and build the attachment context block
     normalized_attachments: list[dict] = []
     if file_items:
         import mimetypes
-        from cyrene.attachments import UPLOADS_DIR, attachment_kind_from_meta, build_public_attachment_payload
+        from cyrene.runtime.attachments import UPLOADS_DIR, attachment_kind_from_meta, build_public_attachment_payload
         for item in file_items:
             result = await client.download_incoming_item(item, UPLOADS_DIR)
             if result:

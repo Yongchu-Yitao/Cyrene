@@ -1,5 +1,8 @@
 # Browser Live View & Login Takeover
 
+[English](browser-live-view.md) ·
+[简体中文](browser-live-view.zh-CN.md)
+
 When the agent uses the browser, the chat UI shows a **live view** of the page —
 what the agent sees and the actions it takes — in the right-hand panel. When the
 agent hits a login wall, CAPTCHA, or 2FA, it can **hand the browser to you**: a real
@@ -48,6 +51,35 @@ interactive tools report that the browser runtime is unavailable.
   browser tabs and profile.
 - All conversation managers intentionally share the same Electron partition, so
   signing in once makes that login available to other conversations.
+
+### Pinned Browser resources
+
+The entire floating Browser titlebar and the minimized Browser control can be
+dragged to the topbar resource shelf. PiP pinning uses direct pointer-to-shelf
+rectangle hit testing, so it remains reliable above Electron's native page;
+drops elsewhere still only move the window. The minimized control displays only
+the current page favicon and immediately falls back to the Browser SVG when the
+favicon fails to load. A click restores PiP, while movement past the drag
+threshold enters the pin interaction. The minimized control shares the PiP
+coordinate commit and transcript-avoidance path, so it can be freely positioned
+inside the conversation area. A body-level fixed drag proxy crosses above the
+conversation header's clipping and stacking contexts on the way to the shelf.
+Pinning
+preserves the original page and owner session; it does not move or duplicate
+the tab. Later Agent turns in every session can discover the pinned Browser
+resource ID.
+
+Dropping the PiP titlebar, minimized favicon button, or pinned Browser chip on
+another conversation creates a new same-URL page in that session's Browser
+manager. This copies the page entry instead of transferring ownership or
+control. Login state remains available through the shared partition, while
+tabs, navigation history, and subsequent operations are independent.
+
+The owner session keeps normal Browser control. Other sessions may pass the
+resource ID only to `browser_snapshot` or `browser_screenshot`. Navigation,
+clicking, typing, reload, history movement, uploads, and all other mutations are
+rejected by the browser execution layer. The topbar context menu can show a
+read-only current-page preview without hiding the original PiP view.
 
 ### Non-Electron Playwright mode
 
@@ -103,6 +135,10 @@ headless, screencast, and locale settings apply to non-Electron Playwright mode;
 | `CYRENE_BROWSER_ACCEPT_LANGUAGE` | `zh-CN,zh;q=0.9,en;q=0.8` | `Accept-Language` header used by the browser session. |
 
 The profile directory is `<DATA_DIR>/browser_profile`.
+
+For Electron development, run `npm run dev` from `electron/`. The Electron
+process starts the Python backend through `src/cyrene/local_cli.py`; successful
+startup prints `UIMODE=workbench` and `PORT=4242`.
 
 ## Permissions
 

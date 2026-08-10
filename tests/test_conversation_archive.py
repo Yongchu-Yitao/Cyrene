@@ -5,7 +5,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from cyrene.agent.prompts import conversation_identity_block
-from cyrene.conversations import (
+from cyrene.runtime.memory.conversations import (
     archive_session_exchange,
     session_conversation_file,
     session_conversations_dir,

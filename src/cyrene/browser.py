@@ -39,7 +39,7 @@ from urllib.parse import urljoin, urlparse
 
 import httpx
 
-from cyrene.app_paths import TEMP_DIR
+from cyrene.runtime.paths import TEMP_DIR
 
 logger = logging.getLogger(__name__)
 
@@ -176,7 +176,13 @@ async def _ssrf_redirect_hook(response: httpx.Response) -> None:
     if 300 <= response.status_code < 400:
         location = response.headers.get("location", "")
         if location:
-            _check_url(urljoin(str(response.url), location))
+            # DNS resolution in _check_url is synchronous on every supported
+            # platform. Keep redirects from briefly blocking the shared agent
+            # event loop.
+            await asyncio.to_thread(
+                _check_url,
+                urljoin(str(response.url), location),
+            )
 
 
 _PLAYWRIGHT_AVAILABLE: bool | None = None
@@ -192,7 +198,7 @@ _CHROME_VERSION_CACHE: str | None = None
 
 def _cfg(key: str, default: str) -> str:
     try:
-        from cyrene.config_store import get_env
+        from cyrene.runtime.config_store import get_env
         return str(get_env(key, default) or default)
     except Exception:
         return default
@@ -309,10 +315,11 @@ async def _electron_browser_rpc(
         raise RuntimeError("Electron browser RPC is unavailable.")
     url = f"http://127.0.0.1:{port}/browser/rpc"
     try:
-        from cyrene.agent.state import _current_round_id, _current_session_id
+        from cyrene.agent.context import current_run_context
 
-        current_session_id = str(_current_session_id.get() or "").strip()
-        current_round_id = str(_current_round_id.get() or "").strip()
+        run_context = current_run_context()
+        current_session_id = run_context.session_id.strip()
+        current_round_id = run_context.round_id.strip()
     except Exception:
         current_session_id = ""
         current_round_id = ""
@@ -367,6 +374,13 @@ _BROWSER_INSPECT_JS = r"""
   const textLimit = Math.max(20, Math.min(500, Number(textArg) || 160));
   const viewportW = window.innerWidth || document.documentElement.clientWidth || 0;
   const viewportH = window.innerHeight || document.documentElement.clientHeight || 0;
+  // data-cyrene-ref is shared with text-links and visible_link_matches, which
+  // number independently. Clear every previous stamp so each snapshot's refs
+  // are unique; stale refs on off-viewport elements made click_ref resolve
+  // the wrong (document-order-first) element.
+  for (const el of document.querySelectorAll('[data-cyrene-ref]')) {
+    el.removeAttribute('data-cyrene-ref');
+  }
   const candidates = [
     ...Array.from(document.querySelectorAll('input,textarea,select,button,a[href],[contenteditable="true"],[role="textbox"],[role="searchbox"],[role="combobox"],[role="button"],[role="link"],[tabindex]')),
     ...Array.from(document.querySelectorAll('summary,label,[role],img,video,section,article,div,span')),
@@ -414,7 +428,10 @@ _BROWSER_INSPECT_JS = r"""
     if (rect.bottom < 0 || rect.right < 0 || rect.top > viewportH || rect.left > viewportW) continue;
     const tag = String(el.tagName || '').toLowerCase();
     const role = roleOf(el, tag);
-    const text = clean(el.innerText || el.textContent || el.getAttribute('value') || el.getAttribute('title') || el.getAttribute('alt'));
+    const inputType = tag === 'input' ? clean(el.getAttribute('type') || 'text', 40).toLowerCase() : '';
+    const text = tag === 'input' || tag === 'textarea'
+      ? (inputType === 'password' ? '' : clean(el.value))
+      : clean(el.innerText || el.textContent || el.getAttribute('value') || el.getAttribute('title') || el.getAttribute('alt'));
     const ariaLabel = clean(el.getAttribute('aria-label') || el.getAttribute('title') || el.getAttribute('alt'));
     const placeholder = clean(el.getAttribute('placeholder'));
     const href = el.href ? String(el.href) : clean(el.getAttribute('href'), 300);
@@ -427,7 +444,7 @@ _BROWSER_INSPECT_JS = r"""
       ref,
       tag,
       role,
-      inputType: tag === 'input' ? clean(el.getAttribute('type') || 'text', 40).toLowerCase() : '',
+      inputType,
       accept: tag === 'input' ? clean(el.getAttribute('accept'), 240) : '',
       multiple: tag === 'input' && el.hasAttribute('multiple'),
       text,
@@ -506,6 +523,9 @@ _BROWSER_TEXT_LINKS_JS = r"""
   const maxLinks = Math.max(1, Math.min(200, Number(maxArg) || 120));
   const textLimit = Math.max(20, Math.min(500, Number(textArg) || 200));
   const clean = (value) => String(value || '').replace(/\s+/g, ' ').trim().slice(0, textLimit);
+  for (const el of document.querySelectorAll('[data-cyrene-ref]')) {
+    el.removeAttribute('data-cyrene-ref');
+  }
   const seen = new Set();
   const links = [];
   for (const el of Array.from(document.querySelectorAll('a[href]'))) {
@@ -535,9 +555,10 @@ _BROWSER_TEXT_LINKS_JS = r"""
 async def _emit_electron_frame(action: str, result: dict[str, Any], *, target: str | None = None, box: Any = None) -> None:
     """Publish the same lightweight browser_frame metadata for Electron tabs."""
     try:
-        from cyrene import debug
-        from cyrene.agent.state import _current_round_id, _current_session_id
+        from cyrene.observability import debug
+        from cyrene.agent.context import current_run_context
 
+        run_context = current_run_context()
         norm_box = None
         if isinstance(box, dict) and box:
             norm_box = {
@@ -548,8 +569,8 @@ async def _emit_electron_frame(action: str, result: dict[str, Any], *, target: s
             }
         await debug.publish_event({
             "type": "browser_frame",
-            "session_id": _current_session_id.get(),
-            "round_id": _current_round_id.get(),
+            "session_id": run_context.session_id,
+            "round_id": run_context.round_id,
             "url": str(result.get("url") or ""),
             "title": str(result.get("title") or ""),
             "action": action,
@@ -840,8 +861,8 @@ class _BrowserSession:
             await self._relaunch(headless=False, url=target)
             self._takeover_active = True
             try:
-                from cyrene.agent.state import _current_session_id
-                self._takeover_session_id = str(_current_session_id.get() or "").strip()
+                from cyrene.agent.context import current_session_id
+                self._takeover_session_id = current_session_id().strip()
             except Exception:
                 self._takeover_session_id = ""
             try:
@@ -878,7 +899,7 @@ class _BrowserSession:
         except Exception:
             logger.debug("auto return-to-headless failed", exc_info=True)
         try:
-            from cyrene import debug
+            from cyrene.observability import debug
             event = {"type": "browser_takeover_cancelled"}
             if self._takeover_session_id:
                 event["session_id"] = self._takeover_session_id
@@ -889,7 +910,7 @@ class _BrowserSession:
     async def _publish_takeover_cancelled(self) -> None:
         self._takeover_active = False
         try:
-            from cyrene import debug
+            from cyrene.observability import debug
             event = {"type": "browser_takeover_cancelled"}
             if self._takeover_session_id:
                 event["session_id"] = self._takeover_session_id
@@ -1076,6 +1097,14 @@ class _BrowserSession:
                     try { normalizedTarget = new URL(target, location.href).href; }
                     catch (_) { return {ok: false, error: 'Invalid target URL.', matches: []}; }
                     const clean = (value, limit = 200) => String(value || '').replace(/\s+/g, ' ').trim().slice(0, limit);
+                    // data-cyrene-ref is a shared namespace with browser_snapshot's
+                    // inspect script, which numbers from 1 independently. Allocate
+                    // past the current max so the two schemes never collide.
+                    let nextRef = 1;
+                    for (const el of document.querySelectorAll('[data-cyrene-ref]')) {
+                        const n = Number(el.getAttribute('data-cyrene-ref') || 0);
+                        if (Number.isInteger(n) && n >= nextRef) nextRef = n + 1;
+                    }
                     const matches = [];
                     for (const el of Array.from(document.querySelectorAll('a[href]'))) {
                         const style = window.getComputedStyle(el);
@@ -1089,7 +1118,8 @@ class _BrowserSession:
                         const text = clean(el.innerText || el.getAttribute('aria-label') || el.getAttribute('title') || imageAlt);
                         let refNumber = Number(el.getAttribute('data-cyrene-ref') || 0);
                         if (!Number.isInteger(refNumber) || refNumber < 1) {
-                            refNumber = document.querySelectorAll('[data-cyrene-ref]').length + matches.length + 1;
+                            refNumber = nextRef;
+                            nextRef += 1;
                             el.setAttribute('data-cyrene-ref', String(refNumber));
                         }
                         matches.push({ref: 'e' + refNumber, text, url: href});
@@ -1496,12 +1526,13 @@ class _BrowserSession:
         shared notification/chat SSE bus.
         """
         try:
-            from cyrene import debug
-            from cyrene.agent.state import _current_round_id, _current_session_id
+            from cyrene.observability import debug
+            from cyrene.agent.context import current_run_context
 
             page = self._page
             if page is None:
                 return
+            run_context = current_run_context()
             norm_box = None
             if isinstance(box, dict) and box:
                 norm_box = {
@@ -1512,8 +1543,8 @@ class _BrowserSession:
                 }
             await debug.publish_event({
                 "type": "browser_frame",
-                "session_id": _current_session_id.get(),
-                "round_id": _current_round_id.get(),
+                "session_id": run_context.session_id,
+                "round_id": run_context.round_id,
                 "url": url or page.url,
                 "title": title,
                 "action": action,
@@ -1771,10 +1802,10 @@ async def end_browser_takeover(url: str = "") -> None:
     """Return the shared session to headless after a login takeover (M3 resume hook)."""
     if electron_browser_available():
         try:
-            from cyrene import debug
-            from cyrene.agent.state import _current_session_id
+            from cyrene.observability import debug
+            from cyrene.agent.context import current_session_id
             event = {"type": "browser_takeover_cancelled"}
-            session_id = str(_current_session_id.get() or "").strip()
+            session_id = current_session_id().strip()
             if session_id:
                 event["session_id"] = session_id
             await debug.publish_event(event)
@@ -1786,10 +1817,10 @@ async def end_browser_takeover(url: str = "") -> None:
         await session.end_takeover(url)
     # Clear the panel's "waiting for login" placeholder so the live view returns.
     try:
-        from cyrene import debug
-        from cyrene.agent.state import _current_session_id
+        from cyrene.observability import debug
+        from cyrene.agent.context import current_session_id
         event = {"type": "browser_takeover_cancelled"}
-        session_id = str(_current_session_id.get() or getattr(session, "_takeover_session_id", "") or "").strip()
+        session_id = str(current_session_id() or getattr(session, "_takeover_session_id", "") or "").strip()
         if session_id:
             event["session_id"] = session_id
         await debug.publish_event(event)
@@ -1924,12 +1955,20 @@ async def _httpx_navigate(
     return result
 
 
-async def screenshot(url: str = "", *, full_page: bool = True) -> dict[str, Any]:
+async def screenshot(
+    url: str = "",
+    *,
+    full_page: bool = True,
+    session_id: str | None = None,
+    read_only: bool = False,
+) -> dict[str, Any]:
     """Screenshot *url* or the current shared browser page.
 
     Returns ``{"ok": True, "path": "/tmp/…png"}`` or ``{"ok": False, "error": "..."}``.
     """
     url = str(url or "").strip()
+    if read_only and url:
+        return {"ok": False, "error": "Read-only browser screenshots cannot navigate."}
     if url:
         url = _normalize_http_url(url)
         try:
@@ -1940,10 +1979,19 @@ async def screenshot(url: str = "", *, full_page: bool = True) -> dict[str, Any]
         try:
             nav = {"ok": True, "title": ""}
             if url:
-                nav = await _electron_browser_rpc("navigate", {"url": url, "maxChars": 0})
+                nav = await _electron_browser_rpc(
+                    "navigate",
+                    {"url": url, "maxChars": 0},
+                    session_id=session_id,
+                )
             if nav.get("ok") is not True:
                 return {"ok": False, "error": str(nav.get("error") or "Electron desktop browser navigation failed.")}
-            result = await _electron_browser_rpc("screenshot", {})
+            result = await _electron_browser_rpc(
+                "screenshot",
+                {},
+                session_id=session_id,
+                round_id="" if read_only else None,
+            )
             if result.get("ok") is not True:
                 return {"ok": False, "error": str(result.get("error") or "Electron desktop browser screenshot failed.")}
             TEMP_DIR.mkdir(parents=True, exist_ok=True)
@@ -1980,11 +2028,22 @@ async def screenshot(url: str = "", *, full_page: bool = True) -> dict[str, Any]
         return {"ok": False, "error": browser_runtime_unavailable_message(exc)}
 
 
-async def inspect_page(*, max_elements: int = 80, text_limit: int = 160) -> dict[str, Any]:
+async def inspect_page(
+    *,
+    max_elements: int = 80,
+    text_limit: int = 160,
+    session_id: str | None = None,
+    read_only: bool = False,
+) -> dict[str, Any]:
     """Return a structured snapshot of visible, actionable elements on the current page."""
     if electron_browser_available():
         try:
-            result = _normalize_browser_result(await _electron_browser_rpc("inspect", {"maxElements": max_elements, "textLimit": text_limit}))
+            result = _normalize_browser_result(await _electron_browser_rpc(
+                "inspect",
+                {"maxElements": max_elements, "textLimit": text_limit},
+                session_id=session_id,
+                round_id="" if read_only else None,
+            ))
             if result.get("ok") is True:
                 result.setdefault(
                     "page_signal",

@@ -23,7 +23,7 @@ def _read_db(path: Path) -> str:
 
 @pytest.fixture
 def backup_sandbox(monkeypatch, tmp_path):
-    from cyrene import backup
+    from cyrene.runtime import backup
 
     base = tmp_path / "runtime"
     data = base / "data"
@@ -37,12 +37,16 @@ def backup_sandbox(monkeypatch, tmp_path):
     managed = [
         (workspace / "conversations", "workspace/conversations"),
         (workspace / "patterns", "workspace/patterns"),
+        (workspace / "plan", "workspace/plan"),
+        (workspace / "deliverables", "workspace/deliverables"),
+        (workspace / "projects", "workspace/projects"),
         (data / "sessions", "data/sessions"),
         (data / "inbox", "data/inbox"),
         (data / "installed_skills", "data/installed_skills"),
         (data / "learned_skill_scripts", "data/learned_skill_scripts"),
         (data / "behavior-media", "data/behavior-media"),
         (data / "webui_uploads", "data/webui_uploads"),
+        (data / "webui_exports", "data/webui_exports"),
     ]
 
     monkeypatch.setattr(backup, "BASE_DIR", base)
@@ -91,7 +95,7 @@ async def test_backup_round_trip_is_exact_and_restores_sqlite_and_config(backup_
     conversations.mkdir()
     (conversations / "old.md").write_text("archived", encoding="utf-8")
     (data / "state.json").write_text('{"state":"old"}', encoding="utf-8")
-    _create_db(store / "cyrene.db", "old-db")
+    _create_db(store / "cyrene.runtime.database", "old-db")
 
     exported = await backup.export_backup()
     assert exported["ok"] is True
@@ -104,16 +108,72 @@ async def test_backup_round_trip_is_exact_and_restores_sqlite_and_config(backup_
 
     (data / "state.json").write_text('{"state":"new"}', encoding="utf-8")
     (conversations / "newer.md").write_text("must disappear", encoding="utf-8")
-    _create_db(store / "cyrene.db", "new-db")
+    _create_db(store / "cyrene.runtime.database", "new-db")
 
     restored = await backup.restore_backup(str(archive))
     assert restored["ok"] is True
     assert restored["restart_required"] is True
     assert (data / "state.json").read_text(encoding="utf-8") == '{"state":"old"}'
-    assert _read_db(store / "cyrene.db") == "old-db"
+    assert _read_db(store / "cyrene.runtime.database") == "old-db"
     assert sorted(path.name for path in conversations.iterdir()) == ["old.md"]
     assert (data / "config.enc").read_bytes() == b"encrypted-on-destination"
     assert env["activated"] == [env["snapshot"]]
+
+
+async def test_backup_restores_chat_exports_and_deliverables_referenced_by_ui(
+    backup_sandbox,
+):
+    env = backup_sandbox
+    backup = env["backup"]
+    exports = env["data"] / "webui_exports"
+    deliverables = env["workspace"] / "deliverables"
+    plans = env["workspace"] / "plan"
+    project_deliverables = (
+        env["workspace"] / "projects" / "project_deadbeef" / "deliverables"
+    )
+    exports.mkdir()
+    deliverables.mkdir()
+    plans.mkdir()
+    project_deliverables.mkdir(parents=True)
+    exported_pdf = exports / "paper_deadbeef.pdf"
+    exported_html = exports / "report_deadbeef.html"
+    deliverable_html = deliverables / "report.html"
+    plan_markdown = plans / "plan_deadbeef.md"
+    project_artifact = project_deliverables / "analysis.html"
+    exported_pdf.write_bytes(b"%PDF-1.4\nbackup fixture\n")
+    exported_html.write_text("<h1>render me</h1>", encoding="utf-8")
+    deliverable_html.write_text("<h1>source</h1>", encoding="utf-8")
+    plan_markdown.write_text("# Persisted plan", encoding="utf-8")
+    project_artifact.write_text("<h1>project artifact</h1>", encoding="utf-8")
+
+    result = await backup.export_backup(include_db=False)
+    assert result["ok"] is True
+    with ZipFile(result["path"]) as archive:
+        names = set(archive.namelist())
+    assert "data/webui_exports/paper_deadbeef.pdf" in names
+    assert "data/webui_exports/report_deadbeef.html" in names
+    assert "workspace/deliverables/report.html" in names
+    assert "workspace/plan/plan_deadbeef.md" in names
+    assert (
+        "workspace/projects/project_deadbeef/deliverables/analysis.html" in names
+    )
+
+    exported_pdf.unlink()
+    exported_html.write_text("<h1>newer, must be rolled back</h1>", encoding="utf-8")
+    deliverable_html.unlink()
+    plan_markdown.unlink()
+    project_artifact.unlink()
+
+    restored = await backup.restore_backup(result["path"])
+    assert restored["ok"] is True
+    assert exported_pdf.read_bytes() == b"%PDF-1.4\nbackup fixture\n"
+    assert exported_html.read_text(encoding="utf-8") == "<h1>render me</h1>"
+    assert deliverable_html.read_text(encoding="utf-8") == "<h1>source</h1>"
+    assert plan_markdown.read_text(encoding="utf-8") == "# Persisted plan"
+    assert (
+        project_artifact.read_text(encoding="utf-8")
+        == "<h1>project artifact</h1>"
+    )
 
 
 async def test_restore_rolls_back_all_path_changes_on_commit_failure(backup_sandbox, monkeypatch):

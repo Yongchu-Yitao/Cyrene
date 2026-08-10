@@ -16,8 +16,8 @@ Covers the fixes for the "send me the file" exchange:
 import pytest
 
 from cyrene.agent.message import _apply_assistant_meta, _assistant_entry_from_response
-from webui.workbench_chat_runs import ChatRun
-from webui.routes_workbench_chat import (
+from cyrene.workbench.chat_runs import ChatRun
+from cyrene.workbench.chat import (
     _extract_exchange_segments,
     _extract_exchange_timeline,
     _last_exchange_model,
@@ -237,7 +237,7 @@ def test_retry_cut_preserves_guidance_added_during_regeneration():
 
 
 def test_live_intermediate_checkpoint_does_not_keep_activity_trace(monkeypatch):
-    from webui import routes_workbench_chat as chat_mod
+    from cyrene.workbench import chat as chat_mod
 
     store = {
         "chats": [{
@@ -467,7 +467,7 @@ async def test_live_preamble_without_message_id_is_published_once(monkeypatch):
     Its fallback id must be stable across scans; otherwise the Workbench shows
     the same assistant block repeatedly while the agent is still running.
     """
-    from webui import routes_workbench_chat as chat_mod
+    from cyrene.workbench import chat as chat_mod
 
     live_messages = [
         {"role": "user", "message_id": "u1", "content": "search"},
@@ -495,7 +495,7 @@ async def test_live_preamble_without_message_id_is_published_once(monkeypatch):
 @pytest.mark.asyncio
 async def test_live_preamble_durable_id_does_not_republish_same_text(monkeypatch):
     """A live preamble can gain message_id after the first scanner tick."""
-    from webui import routes_workbench_chat as chat_mod
+    from cyrene.workbench import chat as chat_mod
 
     live_messages = [
         {"role": "user", "message_id": "u1", "content": "open"},

@@ -10,12 +10,18 @@ def test_math_assets_are_loaded_before_chat_renderers():
 
     assert 'href="katex/katex.min.css"' in html
     assert html.index('src="marked.min.js"') < html.index('src="katex/katex.min.js"')
-    assert html.index('src="katex/katex.min.js"') < html.index('src="math.js"')
-    assert html.index('src="math.js"') < html.index('src="compiled/chat.js')
+    assert html.index('src="katex/katex.min.js"') < html.index(
+        'src="compiled/shared/markdown/math.js'
+    )
+    assert html.index('src="compiled/shared/markdown/math.js') < html.index(
+        'src="compiled/workbench-chat.js'
+    )
 
 
 def test_shared_marked_extension_supports_inline_and_display_delimiters():
-    source = (APP_DIR / "math.js").read_text(encoding="utf-8")
+    source = (
+        APP_DIR.parent.parent / "frontend" / "shared" / "markdown" / "math.jsx"
+    ).read_text(encoding="utf-8")
 
     assert 'name: "mathInline"' in source
     assert 'name: "mathBlock"' in source

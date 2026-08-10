@@ -3,12 +3,12 @@ import pytest
 
 @pytest.mark.asyncio
 async def test_entity_tools_expose_ids_and_support_safe_delete_resolution(tmp_path):
-    from cyrene.db import init_db
-    from cyrene.entities import create_entity, get_entity
-    from cyrene.tool_impl.delete_entity import _tool_delete_entity
-    from cyrene.tool_impl.list_entities import _tool_list_entities
-    from cyrene.tool_impl.query_entities import _tool_query_entities
-    from cyrene.tool_impl.track_entity import _tool_track_entity
+    from cyrene.runtime.database import init_db
+    from cyrene.tool_impl.entity.store import create_entity, get_entity
+    from cyrene.tool_impl.entity.delete_entity import _tool_delete_entity
+    from cyrene.tool_impl.entity.list_entities import _tool_list_entities
+    from cyrene.tool_impl.entity.query_entities import _tool_query_entities
+    from cyrene.tool_impl.entity.track_entity import _tool_track_entity
 
     db_path = str(tmp_path / "entities.db")
     await init_db(db_path)
@@ -40,6 +40,9 @@ async def test_entity_tools_expose_ids_and_support_safe_delete_resolution(tmp_pa
     queried = await _tool_query_entities({"q": "用户本人照片识别"}, None, 0, db_path, None)
     assert duplicate_a["id"] in queried
     assert duplicate_b["id"] in queried
+    assert duplicate_a["content"] in queried
+    assert duplicate_b["content"] in queried
+    assert f"[fact] {duplicate_a['title']}" in queried
 
     tracked = await _tool_track_entity(
         {"type": "fact", "title": "新建实体", "content": "完整 ID 返回"},
@@ -83,3 +86,31 @@ async def test_entity_tools_expose_ids_and_support_safe_delete_resolution(tmp_pa
     )
     assert unique["id"] in deleted_by_title
     assert await get_entity(db_path, unique["id"]) is None
+
+
+@pytest.mark.asyncio
+async def test_background_candidate_keeps_workbench_project_scope(tmp_path):
+    from cyrene.runtime.database import init_db
+    from cyrene.tool_impl.entity.store import (
+        add_candidate,
+        get_entity,
+        process_candidates,
+    )
+
+    db_path = str(tmp_path / "entities.db")
+    await init_db(db_path)
+    candidate_id = await add_candidate(
+        db_path,
+        type="project",
+        title="发布新版本",
+        content="用户决定下周发布新版本。",
+        confidence=0.9,
+        project_id="project_scope_test",
+    )
+
+    promoted = await process_candidates(db_path)
+
+    assert len(promoted) == 1
+    assert promoted[0]["project_id"] == "project_scope_test"
+    assert await get_entity(db_path, promoted[0]["id"]) == promoted[0]
+    assert candidate_id

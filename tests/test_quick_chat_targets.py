@@ -22,16 +22,17 @@ sys.modules["PIL"] = pil_mock
 pil_mock.Image = MagicMock()
 
 from cyrene import config as cyrene_config
-from cyrene import db
-from webui.routes import register_routes
+from cyrene.runtime import database as db
+from route.registry import register_routes
 
 
 @pytest.fixture
 def targets_env(monkeypatch, tmp_path):
-    from cyrene import io_utils
-    from webui import routes as routes_mod
-    from webui import routes_workbench_chat as chat_mod
-    from webui.workbench_chat_runs import ChatRunManager
+    from cyrene.runtime import io as io_utils
+    from cyrene.workbench import chat as chat_service
+    from cyrene.workbench import runtime as routes_mod
+    from route.workbench import chat as chat_mod
+    from cyrene.workbench.chat_runs import ChatRunManager
 
     data_dir = tmp_path / "data"
     store_dir = tmp_path / "store"
@@ -44,8 +45,8 @@ def targets_env(monkeypatch, tmp_path):
     monkeypatch.setattr(cyrene_config, "WORKSPACE_DIR", workspace_dir)
     monkeypatch.setattr(routes_mod, "DATA_DIR", data_dir)
     monkeypatch.setattr(routes_mod, "WORKSPACE_DIR", workspace_dir)
-    monkeypatch.setattr(chat_mod, "DATA_DIR", data_dir)
-    chat_mod._CHATS_STORE = data_dir / "workbench_chats.json"
+    monkeypatch.setattr(chat_service, "DATA_DIR", data_dir)
+    chat_service._CHATS_STORE = data_dir / "workbench_chats.json"
     monkeypatch.setattr(chat_mod, "_CHAT_RUN_MANAGER", ChatRunManager(retention_seconds=0))
     routes_mod._WORKBENCH_STORE = data_dir / "workbench_projects.json"
 
@@ -169,25 +170,24 @@ def test_targets_limit_caps_results(client):
     assert [t["chatId"] for t in payload["targets"]] == ["chat_alpha"]
 
 
-def test_quick_chat_surface_renders_even_in_legacy_ui_mode(targets_env):
-    # The global shortcut is registered regardless of UI mode, so the quick-chat
-    # surface must render in legacy/agent mode too — the spa root must not strip
-    # ?surface= by redirecting it to the legacy shell.
+def test_historical_ui_mode_is_normalized_to_workbench(targets_env):
+    # Historical callers may still pass a legacy ui_mode value to create_app,
+    # but the sole shell and Quick Chat surface must both render Workbench.
     app = FastAPI()
     app.state.ui_mode = "legacy"
     register_routes(app, bot=None, db_path=targets_env["db_path"])
     client = TestClient(app)
 
     plain = client.get("/", follow_redirects=False)
-    assert plain.status_code in (307, 308)
-    assert "shell=legacy" in plain.headers.get("location", "")
+    assert plain.status_code == 200
+    assert "shell=legacy" not in plain.headers.get("location", "")
 
     surfaced = client.get("/?surface=quick-chat", follow_redirects=False)
     assert surfaced.status_code == 200
 
 
 def test_running_status_reflects_run_registry(client, targets_env):
-    from webui.workbench_chat_runs import ChatRun
+    from cyrene.workbench.chat_runs import ChatRun
 
     manager = targets_env["chat_mod"]._CHAT_RUN_MANAGER
     manager.runs["chat_beta"] = ChatRun("chat_beta", {"type": "ack", "chatId": "chat_beta"})

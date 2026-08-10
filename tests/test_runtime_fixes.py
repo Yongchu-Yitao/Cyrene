@@ -7,6 +7,7 @@ from typing import Any
 from unittest.mock import AsyncMock, MagicMock
 
 import httpx
+import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 
@@ -28,15 +29,23 @@ if _pypdf_missing:
 
 def _patch_call_llm(monkeypatch, fake):
     """Patch _call_llm in all sub-modules that import it at module level."""
-    from cyrene.agent import state as _s, agent as _a, coordinator as _c, guidance as _g, session as _se
-    for _mod in (_s, _a, _c, _g, _se):
+    from cyrene.agent import (
+        agent as _a,
+        coordinator as _c,
+        guidance as _g,
+        replies as _r,
+        session as _se,
+        state as _s,
+    )
+    for _mod in (_s, _a, _c, _g, _r, _se):
         if hasattr(_mod, '_call_llm'):
             monkeypatch.setattr(_mod, '_call_llm', fake)
 
 
 def _patch_call_llm_stream(monkeypatch, fake):
-    from cyrene.agent import guidance as _g
-    monkeypatch.setattr(_g, '_call_llm_stream', fake)
+    from cyrene.agent import guidance as _g, replies as _r
+    for _mod in (_g, _r):
+        monkeypatch.setattr(_mod, '_call_llm_stream', fake)
 
 
 def _patch_save_session(monkeypatch, fake):
@@ -85,12 +94,6 @@ def _patch_runtime_context(monkeypatch, *, get_context=None, get_memory_context=
 
 async def test_execution_agent_returns_quit_text(monkeypatch):
     from cyrene import agent
-    from cyrene.agent import state as _agent_state
-    from cyrene.agent import session as _agent_session
-    from cyrene.agent import agent as _agent_core
-    from cyrene.agent import coordinator as _agent_coordinator
-    from cyrene.agent import guidance as _agent_guidance
-    from cyrene.agent import round as _agent_round
 
     async def fake_call_llm(messages, tools=None, max_tokens=32000):
         return {
@@ -105,8 +108,8 @@ async def test_execution_agent_returns_quit_text(monkeypatch):
 
 def test_get_memory_context_includes_short_term_by_default(tmp_path, monkeypatch):
     from cyrene import memory
-    from cyrene import settings_store
-    from cyrene import short_term
+    from cyrene.runtime import settings_store
+    from cyrene.runtime.memory import short_term
 
     short_term.init_short_term(tmp_path)
     short_term.save_entries([
@@ -130,8 +133,8 @@ def test_get_memory_context_includes_short_term_by_default(tmp_path, monkeypatch
 
 def test_get_memory_context_can_skip_short_term(tmp_path, monkeypatch):
     from cyrene import memory
-    from cyrene import settings_store
-    from cyrene import short_term
+    from cyrene.runtime import settings_store
+    from cyrene.runtime.memory import short_term
 
     short_term.init_short_term(tmp_path)
     short_term.save_entries([
@@ -154,14 +157,15 @@ def test_get_memory_context_can_skip_short_term(tmp_path, monkeypatch):
 
 
 def test_agent_module_reexports_memory_helpers():
-    from cyrene import agent, memory, short_term
+    from cyrene import agent, memory
+    from cyrene.runtime.memory import short_term
 
     assert agent.get_context is short_term.get_context
     assert agent.get_memory_context is memory.get_memory_context
 
 
 async def test_execute_tool_awaits_event_publish(monkeypatch):
-    from cyrene import tools
+    from cyrene.tooling import executor as tools
 
     seen = {"published": False}
 
@@ -174,7 +178,7 @@ async def test_execute_tool_awaits_event_publish(monkeypatch):
 
     monkeypatch.setitem(tools.TOOL_HANDLERS, "__test_tool__", fake_handler)
 
-    from cyrene import debug
+    from cyrene.observability import debug
 
     monkeypatch.setattr(debug, "publish_event", fake_publish_event)
     result = await tools._execute_tool("__test_tool__", {}, None, 0, "db.sqlite3", None)
@@ -187,7 +191,8 @@ async def test_execute_tool_awaits_event_publish(monkeypatch):
 
 
 async def test_execute_tool_completion_carries_active_tool_call_id(monkeypatch):
-    from cyrene import debug, tool_executor
+    from cyrene.observability import debug
+    from cyrene.tooling import executor as tool_executor
 
     published = []
 
@@ -231,6 +236,83 @@ async def test_main_agent_publishes_tool_start_with_identity_and_redacted_args(m
     }
 
 
+@pytest.mark.parametrize(
+    ("arguments", "expected_status"),
+    [
+        ({"operation": "discover", "query": "memory"}, "completed"),
+        ({"operation": "invalid"}, "failed"),
+    ],
+)
+async def test_progressive_wire_call_always_publishes_terminal_lifecycle(
+    monkeypatch, arguments, expected_status
+):
+    from cyrene.agent import agent as agent_core
+
+    published = []
+
+    async def capture(event):
+        published.append(event)
+
+    monkeypatch.setattr(agent_core, "_publish_runtime_event", capture)
+
+    result = await agent_core._execute_tool_for_call(
+        "call_gateway_1",
+        "memory_tools",
+        arguments,
+        None,
+        0,
+        "",
+    )
+
+    assert result
+    assert published == [{
+        "type": "tool_call_finished",
+        "tool_call_id": "call_gateway_1",
+        "tool": "memory_tools",
+        "args": arguments,
+        "status": expected_status,
+        "failed": expected_status == "failed",
+    }]
+
+
+@pytest.mark.parametrize(
+    ("failure", "expected_status"),
+    [
+        (RuntimeError("boom"), "failed"),
+        (asyncio.CancelledError(), "cancelled"),
+    ],
+)
+async def test_tool_call_terminal_lifecycle_covers_errors_and_cancellation(
+    monkeypatch, failure, expected_status
+):
+    from cyrene.agent import agent as agent_core
+
+    published = []
+
+    async def fail(*_args, **_kwargs):
+        raise failure
+
+    async def capture(event):
+        published.append(event)
+
+    monkeypatch.setattr(agent_core, "_execute_tool", fail)
+    monkeypatch.setattr(agent_core, "_publish_runtime_event", capture)
+
+    with pytest.raises(type(failure)):
+        await agent_core._execute_tool_for_call(
+            "call_failure_1",
+            "memory_tools",
+            {"operation": "discover"},
+            None,
+            0,
+            "",
+        )
+
+    assert published[-1]["type"] == "tool_call_finished"
+    assert published[-1]["status"] == expected_status
+    assert published[-1]["failed"] is (expected_status == "failed")
+
+
 def test_main_agent_inbox_metadata_includes_visible_tool_arguments():
     from cyrene.agent import agent as agent_core
 
@@ -242,8 +324,8 @@ def test_main_agent_inbox_metadata_includes_visible_tool_arguments():
 
 
 async def test_execute_tool_timeout_becomes_a_structured_tool_result(monkeypatch):
-    from cyrene import debug
-    from cyrene import tool_executor
+    from cyrene.observability import debug
+    from cyrene.tooling import executor as tool_executor
 
     async def never_returns(*_args, **_kwargs):
         await asyncio.Event().wait()
@@ -265,7 +347,7 @@ async def test_execute_tool_timeout_becomes_a_structured_tool_result(monkeypatch
 def test_filesystem_tools_offload_blocking_io_and_bound_scans():
     from pathlib import Path
 
-    root = Path(__file__).resolve().parent.parent / "src" / "cyrene" / "tool_impl"
+    root = Path(__file__).resolve().parent.parent / "src" / "cyrene" / "tool_impl" / "core"
     read_source = (root / "read.py").read_text(encoding="utf-8")
     write_source = (root / "write.py").read_text(encoding="utf-8")
     edit_source = (root / "edit.py").read_text(encoding="utf-8")
@@ -282,7 +364,7 @@ def test_filesystem_tools_offload_blocking_io_and_bound_scans():
     assert "_MAX_FILE_BYTES" in grep_source
 
 
-async def test_tool_loop_limit_persists_final_assistant_message(tmp_path, monkeypatch):
+async def test_tool_loop_continues_until_completion_and_persists_final_message(tmp_path, monkeypatch):
     from cyrene.agent import agent as _agent_core
     from cyrene.agent import state as _agent_state
 
@@ -290,8 +372,6 @@ async def test_tool_loop_limit_persists_final_assistant_message(tmp_path, monkey
     state_file.write_text(json.dumps({"_session_epoch": _agent_state._session_epoch, "messages": []}), encoding="utf-8")
     _patch_state_file(monkeypatch, state_file)
     _patch_data_dir(monkeypatch, tmp_path)
-    monkeypatch.setattr(_agent_core, "_get_max_tool_rounds", lambda: 1)
-
     calls = []
 
     async def fake_call_llm(messages, tools=None, max_tokens=32000, **kwargs):
@@ -306,24 +386,21 @@ async def test_tool_loop_limit_persists_final_assistant_message(tmp_path, monkey
                     "function": {"name": "use_tools", "arguments": "{\"task\":\"check\"}"},
                 }],
             }
-        return {
-            "content": "",
-            "tool_calls": [{
-                "id": "tool1",
-                "function": {"name": "WebSearch", "arguments": "{\"query\":\"x\"}"},
-            }],
-        }
+        if len(calls) <= 17:
+            return {
+                "content": "",
+                "tool_calls": [{
+                    "id": f"tool{len(calls)}",
+                    "function": {"name": "WebSearch", "arguments": "{\"query\":\"x\"}"},
+                }],
+            }
+        return {"content": "final answer from gathered tool results"}
 
     async def fake_execute_tool(*args, **kwargs):
         return "tool result"
 
     _patch_call_llm(monkeypatch, fake_call_llm)
     monkeypatch.setattr(_agent_core, "_execute_tool", fake_execute_tool)
-    monkeypatch.setattr(_agent_core, "get_active_tool_defs", lambda: [
-        {"type": "function", "function": {"name": "WebSearch", "parameters": {}}},
-        {"type": "function", "function": {"name": "quit", "parameters": {}}},
-    ])
-
     result = await _agent_core._run_main_agent(
         "check",
         [],
@@ -339,6 +416,81 @@ async def test_tool_loop_limit_persists_final_assistant_message(tmp_path, monkey
     assert saved["messages"][-1]["role"] == "assistant"
     assert saved["messages"][-1]["content"] == result
     assert saved["messages"][-1]["client_request_id"] == "req_limit"
+    assert len(calls) == 18
+
+
+@pytest.mark.parametrize(
+    ("public_message", "expected_key", "expected_params"),
+    [
+        ("分析 Cyrene 的能耗", "phase.useTools", {"task": "分析 Cyrene 的能耗"}),
+        ("", "phase.useToolsAttachments", None),
+    ],
+)
+async def test_use_tools_phase_hides_internal_attachment_prompt(
+    monkeypatch, public_message, expected_key, expected_params
+):
+    from cyrene.agent import agent as _agent_core
+
+    internal_message = (
+        public_message
+        + "\n[Uploaded attachments]\n"
+        + "The user uploaded the following files into the local workspace-accessible runtime data directory."
+    )
+    responses = iter([
+        {
+            "content": "",
+            "tool_calls": [{
+                "id": "phase1",
+                "function": {"name": "use_tools", "arguments": '{"task":"inspect"}'},
+            }],
+        },
+        {
+            "content": "Attachment inspection completed.",
+            "tool_calls": [{
+                "id": "quit1",
+                "function": {
+                    "name": "quit",
+                    "arguments": "{}",
+                },
+            }],
+        },
+    ])
+    events = []
+
+    async def fake_call_llm(messages, tools=None, max_tokens=32000, **kwargs):
+        return next(responses)
+
+    async def fake_publish_runtime_event(event):
+        events.append(dict(event))
+
+    _patch_call_llm(monkeypatch, fake_call_llm)
+    _patch_append_session(monkeypatch, AsyncMock())
+    _patch_save_session(monkeypatch, AsyncMock())
+    monkeypatch.setattr(_agent_core, "_publish_runtime_event", fake_publish_runtime_event)
+
+    await _agent_core._run_main_agent(
+        internal_message,
+        [],
+        None,
+        0,
+        "db.sqlite3",
+        public_user_message=public_message,
+        public_attachments=[{"name": "energy.png"}],
+    )
+
+    phase_event = next(
+        event
+        for event in events
+        if event.get("from") == "phase1_decision"
+        and event.get("to") == "phase2_execution"
+    )
+    assert phase_event["detail_key"] == expected_key
+    if expected_params is None:
+        assert "detail_params" not in phase_event
+    else:
+        assert phase_event["detail_params"] == expected_params
+    assert "[Uploaded attachments]" not in phase_event["detail"]
+    assert "The user uploaded" not in phase_event["detail"]
 
 
 def test_merge_live_block_preserves_distinct_empty_tool_call_assistants():
@@ -396,13 +548,8 @@ def test_merge_live_block_preserves_distinct_empty_tool_call_assistants():
 
 async def test_subagent_cannot_send_user_visible_message(monkeypatch):
     from cyrene import agent
-    from cyrene.agent import state as _agent_state
     from cyrene.agent import session as _agent_session
-    from cyrene.agent import agent as _agent_core
-    from cyrene.agent import coordinator as _agent_coordinator
-    from cyrene.agent import guidance as _agent_guidance
-    from cyrene.agent import round as _agent_round
-    from cyrene import tools
+    from cyrene.tool_impl.delivery import send_message as tools
 
     called = {"append": False}
 
@@ -423,7 +570,7 @@ async def test_subagent_cannot_send_user_visible_message(monkeypatch):
 
 
 def test_subagent_tool_defs_hide_main_only_tools():
-    from cyrene import tools
+    from cyrene.tooling import catalog as tools
 
     main_defs = {item["function"]["name"] for item in tools.get_active_tool_defs_for_actor("main")}
     sub_defs = {item["function"]["name"] for item in tools.get_active_tool_defs_for_actor("subagent")}
@@ -437,8 +584,8 @@ def test_subagent_tool_defs_hide_main_only_tools():
 
 
 async def test_recall_memory_tool_returns_recent_short_term_entries(tmp_path):
-    from cyrene import short_term
-    from cyrene import tools
+    from cyrene.runtime.memory import short_term
+    from cyrene.tool_impl.memory import recall_memory as tools
 
     short_term.init_short_term(tmp_path)
     short_term.save_entries([
@@ -486,9 +633,97 @@ async def test_recall_memory_tool_returns_recent_short_term_entries(tmp_path):
     assert "soul_memory" not in payload
 
 
+async def test_list_memories_reports_total_and_supports_filters_and_pagination(
+    tmp_path,
+):
+    from cyrene.runtime.memory import short_term
+    from cyrene.tool_impl.memory import list_memories as tools
+
+    short_term.init_short_term(tmp_path)
+    short_term.save_entries([
+        {
+            "content": "user prefers concise replies",
+            "type": "preference",
+            "first_seen": "2026-05-18",
+            "last_mentioned": "2026-05-20",
+            "mention_count": 1,
+        },
+        {
+            "content": "user uses macOS",
+            "type": "fact",
+            "first_seen": "2026-05-16",
+            "last_mentioned": "2026-05-21",
+            "mention_count": 2,
+        },
+        {
+            "content": "superseded preference",
+            "type": "preference",
+            "first_seen": "2026-05-15",
+            "last_mentioned": "2026-05-19",
+            "mention_count": 1,
+            "stale": True,
+            "retired_at": "2026-05-22T10:00:00+08:00",
+            "retire_reason": "corrected",
+        },
+    ])
+
+    result = await tools._tool_list_memories(
+        {"status": "all", "type": "preference", "limit": 1, "offset": 1},
+        None,
+        0,
+        "db.sqlite3",
+        None,
+    )
+    payload = json.loads(result)
+
+    assert payload["total"] == 2
+    assert payload["returned"] == 1
+    assert payload["has_more"] is False
+    assert payload["memories"][0]["status"] == "retired"
+    assert payload["memories"][0]["retire_reason"] == "corrected"
+
+
+async def test_list_memories_defaults_to_all_active_memories(tmp_path):
+    from cyrene.runtime.memory import short_term
+    from cyrene.tool_impl.memory import list_memories as tools
+
+    short_term.init_short_term(tmp_path)
+    short_term.save_entries([
+        {
+            "content": f"memory {index}",
+            "type": "fact",
+            "first_seen": "2026-05-18",
+            "last_mentioned": f"2026-05-{index + 1:02d}",
+        }
+        for index in range(3)
+    ] + [{
+        "content": "retired memory",
+        "type": "fact",
+        "first_seen": "2026-05-01",
+        "last_mentioned": "2026-05-01",
+        "stale": True,
+    }])
+
+    result = await tools._tool_list_memories(
+        {},
+        None,
+        0,
+        "db.sqlite3",
+        None,
+    )
+    payload = json.loads(result)
+
+    assert payload["status"] == "active"
+    assert payload["total"] == 3
+    assert payload["total_by_scope"] == {"short_term": 3, "project": 0}
+    assert payload["returned"] == 3
+    assert payload["has_more"] is False
+
+
 async def test_retire_short_term_memory_tool_marks_entry_stale(tmp_path):
-    from cyrene import short_term
-    from cyrene import tools
+    from cyrene.runtime.memory import short_term
+    from cyrene.tool_impl.memory import recall_memory
+    from cyrene.tool_impl.memory import retire_short_term_memory as tools
 
     short_term.init_short_term(tmp_path)
     short_term.save_entries([
@@ -528,7 +763,7 @@ async def test_retire_short_term_memory_tool_marks_entry_stale(tmp_path):
     assert entries[0]["retire_reason"] == "user corrected this"
     assert "user incorrectly prefers verbose replies" not in short_term.get_context()
 
-    recall_result = await tools._tool_recall_memory(
+    recall_result = await recall_memory._tool_recall_memory(
         {"query": "verbose", "limit": 10},
         None,
         0,
@@ -540,8 +775,8 @@ async def test_retire_short_term_memory_tool_marks_entry_stale(tmp_path):
 
 
 async def test_recall_memory_tool_uses_or_for_multiple_terms(tmp_path):
-    from cyrene import short_term
-    from cyrene import tools
+    from cyrene.runtime.memory import short_term
+    from cyrene.tool_impl.memory import recall_memory as tools
 
     short_term.init_short_term(tmp_path)
     short_term.save_entries([
@@ -569,8 +804,8 @@ async def test_recall_memory_tool_uses_or_for_multiple_terms(tmp_path):
 
 
 async def test_recall_memory_tool_bounds_large_results(tmp_path):
-    from cyrene import short_term
-    from cyrene import tools
+    from cyrene.runtime.memory import short_term
+    from cyrene.tool_impl.memory import recall_memory as tools
 
     short_term.init_short_term(tmp_path)
     short_term.save_entries([
@@ -601,8 +836,8 @@ async def test_recall_memory_tool_bounds_large_results(tmp_path):
 
 
 async def test_recall_conversation_tool_returns_archived_matches(tmp_path, monkeypatch):
-    from cyrene import conversations
-    from cyrene import tools
+    from cyrene.runtime.memory import conversations
+    from cyrene.tool_impl.memory import recall_conversation as tools
 
     conversations_dir = tmp_path / "conversations"
     conversations_dir.mkdir(parents=True, exist_ok=True)
@@ -646,8 +881,8 @@ async def test_recall_conversation_tool_returns_archived_matches(tmp_path, monke
 
 
 async def test_recall_conversation_tool_searches_active_workbench_workspace(tmp_path):
-    from cyrene import conversations
-    from cyrene import tools
+    from cyrene.runtime.memory import conversations
+    from cyrene.tool_impl.memory import recall_conversation as tools
     from cyrene.agent import state as agent_state
 
     workspace = tmp_path / "project"
@@ -698,12 +933,8 @@ async def test_recall_conversation_tool_searches_active_workbench_workspace(tmp_
 
 async def test_run_chat_agent_avoids_duplicate_short_term_memory_in_system_prompt(monkeypatch, tmp_path):
     from cyrene import agent
-    from cyrene.agent import state as _agent_state
     from cyrene.agent import session as _agent_session
     from cyrene.agent import agent as _agent_core
-    from cyrene.agent import coordinator as _agent_coordinator
-    from cyrene.agent import guidance as _agent_guidance
-    from cyrene.agent import round as _agent_round
 
     seen: dict[str, Any] = {}
 
@@ -730,6 +961,45 @@ async def test_run_chat_agent_avoids_duplicate_short_term_memory_in_system_promp
     assert seen["include_short_term"] is False
     assert seen["history"][0]["content"].startswith("[Restored context]")
     assert "stable trait" in seen["system_prompt"]
+
+
+async def test_workbench_renderer_trigger_is_a_small_stable_system_extension(monkeypatch, tmp_path):
+    from cyrene import agent
+    from cyrene.agent import agent as _agent_core
+    from cyrene.agent import session as _agent_session
+    from cyrene.agent import state as _agent_state
+
+    seen: dict[str, Any] = {}
+    _patch_state_file(monkeypatch, tmp_path / "state.json")
+    _patch_data_dir(monkeypatch, tmp_path)
+    monkeypatch.setattr(_agent_session, "_refresh_session_labels", AsyncMock())
+    _patch_runtime_context(
+        monkeypatch,
+        get_context=lambda max_chars=5000: "",
+        get_memory_context=lambda include_short_term=True: "",
+    )
+
+    async def fake_run_main_agent(
+        user_message, history, bot, chat_id, db_path, system_prompt="", **kwargs
+    ):
+        seen["system_prompt"] = system_prompt
+        return "ok"
+
+    monkeypatch.setattr(_agent_core, "_run_main_agent", fake_run_main_agent)
+    token = _agent_state.response_capabilities.set(
+        frozenset({"interactive_blocks"})
+    )
+    try:
+        assert await agent._run_chat_agent(
+            "hello", None, 0, "db.sqlite3"
+        ) == "ok"
+    finally:
+        _agent_state.response_capabilities.reset(token)
+
+    prompt = seen["system_prompt"]
+    assert "call `LoadRendererContract`" in prompt
+    assert ":::chart line" not in prompt
+    assert "action_id:" not in prompt
 
 
 async def test_run_chat_agent_keeps_global_short_term_out_of_workbench_sessions(monkeypatch, tmp_path):
@@ -776,17 +1046,11 @@ async def test_run_chat_agent_keeps_global_short_term_out_of_workbench_sessions(
     assert "stable trait" in seen["system_prompt"]
 
 
-async def test_run_chat_agent_schedules_session_label_refresh_without_blocking_reply(monkeypatch, tmp_path):
+async def test_run_chat_agent_does_not_schedule_hidden_session_naming(monkeypatch, tmp_path):
     from cyrene import agent
-    from cyrene import behavior_learning
-    from cyrene.agent import state as _agent_state
-    from cyrene.agent import session as _agent_session
+    from cyrene.learning import engine as behavior_learning
     from cyrene.agent import agent as _agent_core
-    from cyrene.agent import coordinator as _agent_coordinator
-    from cyrene.agent import guidance as _agent_guidance
-    from cyrene.agent import round as _agent_round
-
-    scheduled: list[tuple[str, str]] = []
+    from cyrene.agent import session as _agent_session
 
     _patch_state_file(monkeypatch, tmp_path / "state.json")
     _patch_data_dir(monkeypatch, tmp_path)
@@ -796,15 +1060,14 @@ async def test_run_chat_agent_schedules_session_label_refresh_without_blocking_r
         return "ok"
 
     monkeypatch.setattr(_agent_core, "_run_main_agent", fake_run_main_agent)
-    monkeypatch.setattr(_agent_coordinator, "_schedule_session_label_refresh", lambda message, round_id: scheduled.append((message, round_id)))
+    hidden_namer = AsyncMock()
+    monkeypatch.setattr(_agent_session, "_refresh_session_labels", hidden_namer)
     monkeypatch.setattr(behavior_learning, "begin_turn", AsyncMock(return_value=None))
 
     result = await asyncio.wait_for(agent._run_chat_agent("hello", None, 0, "db.sqlite3"), timeout=0.1)
 
     assert result == "ok"
-    assert len(scheduled) == 1
-    assert scheduled[0][0] == "hello"
-    assert scheduled[0][1].startswith("round_")
+    hidden_namer.assert_not_awaited()
 
 
 async def test_call_llm_falls_back_to_next_model_candidate(monkeypatch):
@@ -994,7 +1257,7 @@ def test_normalize_dsml_tool_calls_rejects_unknown_tools():
 
 
 async def test_final_reply_retries_visible_dsml_tool_markup(monkeypatch):
-    from cyrene.agent import guidance
+    from cyrene.agent import guidance, replies
 
     calls: list[list[dict]] = []
 
@@ -1013,7 +1276,7 @@ async def test_final_reply_retries_visible_dsml_tool_markup(monkeypatch):
             }
         return {"role": "assistant", "content": "目前没有确认的国泰香港到布拉格直飞结果。"}
 
-    monkeypatch.setattr(guidance, "_call_llm", fake_call_llm)
+    monkeypatch.setattr(replies, "_call_llm", fake_call_llm)
 
     text = await guidance._final_reply_from_history([
         {"role": "user", "content": "查香港到布拉格机票"},
@@ -1022,11 +1285,11 @@ async def test_final_reply_retries_visible_dsml_tool_markup(monkeypatch):
 
     assert text == "目前没有确认的国泰香港到布拉格直飞结果。"
     assert len(calls) == 2
-    assert "DSML/tool-call markup" in calls[1][-1]["content"]
+    assert "textual tool-call markup" in calls[1][-1]["content"]
 
 
 def test_retry_safe_guide_round_id_drops_completed_round_target():
-    from webui import routes
+    from cyrene.workbench import runtime as routes
 
     assert routes._retry_safe_guide_round_id("round_old", retry=True) == ""
     assert routes._retry_safe_guide_round_id(" round_live ", retry=False) == "round_live"
@@ -1072,7 +1335,7 @@ async def test_call_llm_secondary_concurrency_counter(monkeypatch):
 
 
 async def test_run_vision_chat_uses_vision_candidates_after_primary_failure(monkeypatch):
-    from cyrene import attachments as att
+    from cyrene.runtime import attachments as att
     from cyrene import call_llm as cll
 
     attempts: list[tuple[str, str]] = []
@@ -1137,7 +1400,7 @@ async def test_run_vision_chat_uses_vision_candidates_after_primary_failure(monk
 
 
 async def test_chat_with_uploaded_images_falls_back_to_vision_model(monkeypatch, tmp_path):
-    from webui import routes
+    from cyrene.workbench import runtime as routes
 
     image_path = tmp_path / "sample.png"
     image_path.write_bytes(b"fake-image")
@@ -1165,13 +1428,7 @@ async def test_chat_with_uploaded_images_falls_back_to_vision_model(monkeypatch,
 
 async def test_save_session_messages_emits_session_update(tmp_path, monkeypatch):
     from cyrene import agent
-    from cyrene.agent import state as _agent_state
-    from cyrene.agent import session as _agent_session
-    from cyrene.agent import agent as _agent_core
-    from cyrene.agent import coordinator as _agent_coordinator
-    from cyrene.agent import guidance as _agent_guidance
-    from cyrene.agent import round as _agent_round
-    from cyrene import debug
+    from cyrene.observability import debug
 
     seen = []
 
@@ -1196,13 +1453,8 @@ async def test_save_session_messages_emits_session_update(tmp_path, monkeypatch)
 
 async def test_proactive_round_hides_internal_prompt_and_initial_detail(tmp_path, monkeypatch):
     from cyrene import agent
-    from cyrene.agent import state as _agent_state
     from cyrene.agent import session as _agent_session
-    from cyrene.agent import agent as _agent_core
-    from cyrene.agent import coordinator as _agent_coordinator
-    from cyrene.agent import guidance as _agent_guidance
-    from cyrene.agent import round as _agent_round
-    from cyrene import debug
+    from cyrene.observability import debug
 
     events = []
 
@@ -1252,7 +1504,7 @@ async def test_proactive_round_hides_internal_prompt_and_initial_detail(tmp_path
 
 
 def test_build_live_flow_round_skips_input_for_system_initiated_messages():
-    from webui import routes
+    from cyrene.workbench import runtime as routes
 
     raw_msgs = [
         {
@@ -1283,7 +1535,7 @@ def test_build_live_flow_round_skips_input_for_system_initiated_messages():
 
 
 async def test_heartbeat_proactive_check_uses_main_agent_loop(monkeypatch):
-    from cyrene import scheduler
+    from cyrene.runtime import scheduler
 
     seen = {}
 
@@ -1316,14 +1568,18 @@ async def test_heartbeat_proactive_check_uses_main_agent_loop(monkeypatch):
     assert seen["db_path"] == "db.sqlite3"
     assert "scheduler-initiated proactive check-in" in seen["prompt"]
     assert "Recent memories about the user" in seen["prompt"]
-    assert "If you speak, the final reply will be shown directly to the user" in seen["prompt"]
+    assert "autonomous work cycle, not a social check-in" in seen["prompt"]
+    assert "use tools and complete the work now" in seen["prompt"]
+    assert "Never claim or imply that the user just woke up" in seen["prompt"]
+    assert "Trigger: system scheduler; no new user activity" in seen["prompt"]
+    assert "Do not send a greeting, check-in, small talk" in seen["prompt"]
     # A delivered message advances the unanswered streak by exactly one.
     assert scheduler._LOTTERY_STATE["consecutive_unanswered"] == 1
     assert scheduler._LOTTERY_STATE["last_proactive_time"] > 0
 
 
 async def test_heartbeat_proactive_check_stays_silent_when_agent_skips(monkeypatch):
-    from cyrene import scheduler
+    from cyrene.runtime import scheduler
 
     seen = {"notified": False}
 
@@ -1358,9 +1614,10 @@ async def test_heartbeat_proactive_check_stays_silent_when_agent_skips(monkeypat
     assert seen["notified"] is False
     assert scheduler._LOTTERY_STATE["consecutive_unanswered"] == 0
     assert "scheduler-initiated proactive check-in" in seen["prompt"]
-    # The softened prompt still lets the agent bow out via `quit` when reaching
-    # out would feel intrusive.
+    # A work cycle with nothing material to do must bow out silently instead
+    # of manufacturing a social check-in.
     assert "quit" in seen["prompt"].lower()
+    assert "If there is no useful safe action or no material result" in seen["prompt"]
 
 
 async def test_proactive_single_ignored_message_does_not_snowball_into_cooldown(monkeypatch):
@@ -1369,7 +1626,7 @@ async def test_proactive_single_ignored_message_does_not_snowball_into_cooldown(
     accumulate into the cooldown threshold."""
     import time
 
-    from cyrene import scheduler
+    from cyrene.runtime import scheduler
 
     monkeypatch.setattr(scheduler, "OWNER_ID", 7)
     monkeypatch.setattr(scheduler, "_load_lottery_state", lambda: None)
@@ -1410,7 +1667,7 @@ async def test_proactive_cooldown_arms_when_streak_reaches_threshold(monkeypatch
     the next check arms the cooldown instead of sending again."""
     import time
 
-    from cyrene import scheduler
+    from cyrene.runtime import scheduler
 
     sent = {"count": 0}
 
@@ -1453,7 +1710,7 @@ async def test_system_initiated_silent_quit_yields_no_message(tmp_path, monkeypa
     an empty string so the scheduler delivers nothing — never a filler 'Done.'."""
     from cyrene import agent
     from cyrene.agent import session as _agent_session
-    from cyrene import debug
+    from cyrene.observability import debug
 
     async def fake_publish_event(event):
         return None
@@ -1490,11 +1747,11 @@ async def test_system_initiated_silent_quit_yields_no_message(tmp_path, monkeypa
 
 
 async def test_system_initiated_round_cannot_use_ask_user(tmp_path, monkeypatch):
-    """Proactive rounds must neither expose nor execute ask_user."""
+    """Proactive rounds keep the fixed wire schema but must not execute ask_user."""
     from cyrene import agent
     from cyrene.agent import agent as _agent_core
     from cyrene.agent import session as _agent_session
-    from cyrene import debug
+    from cyrene.observability import debug
 
     calls = []
     executed = []
@@ -1508,7 +1765,7 @@ async def test_system_initiated_round_cannot_use_ask_user(tmp_path, monkeypatch)
             for tool in (tools or [])
         }
         calls.append(tool_names)
-        assert "ask_user" not in tool_names
+        assert "ask_user" in tool_names
         if len(calls) == 1:
             return {
                 "content": "",
@@ -1521,7 +1778,7 @@ async def test_system_initiated_round_cannot_use_ask_user(tmp_path, monkeypatch)
                 }],
             }
         if len(calls) == 2:
-            # Simulate a provider/model emitting a tool that was not advertised.
+            # Simulate a model attempting a visible but runtime-forbidden tool.
             return {
                 "content": "",
                 "tool_calls": [{
@@ -1567,7 +1824,7 @@ async def test_system_initiated_round_cannot_use_ask_user(tmp_path, monkeypatch)
 
 
 async def test_tool_executor_rejects_ask_user_for_system_initiated_round(monkeypatch):
-    from cyrene import tool_executor
+    from cyrene.tooling import executor as tool_executor
     from cyrene.agent import state as _agent_state
 
     handler = AsyncMock(return_value="should not run")
@@ -1592,12 +1849,117 @@ async def test_tool_executor_rejects_ask_user_for_system_initiated_round(monkeyp
     handler.assert_not_awaited()
 
 
+async def test_system_initiated_elevation_never_creates_pending_question(
+    tmp_path, monkeypatch
+):
+    from cyrene.agent import context as agent_context
+    from cyrene.agent import session as agent_session
+    from cyrene.tooling.runtime_support import _request_scope_elevation
+
+    state_file = tmp_path / "state.json"
+    _patch_state_file(monkeypatch, state_file)
+    _patch_data_dir(monkeypatch, tmp_path)
+
+    with agent_context.bind_run_context(
+        round_id="round_proactive_permission",
+        session_id="wbchat_proactive_permission",
+        permission_mode="default",
+        assistant_meta={"proactive": True, "system_initiated": True},
+    ):
+        result = await _request_scope_elevation(
+            tool_name="Bash",
+            path_hint="",
+            operation="执行本地进程或 Shell 命令",
+            reason="python3 -c 'print(1)'",
+            permission_kind="process_execution",
+        )
+
+    assert result.startswith("Tool unavailable:")
+    assert agent_session.get_pending_question() == {}
+
+
+async def test_permission_elevation_uses_scoped_choices_without_custom_answer(
+    tmp_path, monkeypatch
+):
+    from cyrene.agent import context as agent_context
+    from cyrene.agent import session as agent_session
+    from cyrene.tooling.runtime_support import _request_scope_elevation
+
+    _patch_state_file(monkeypatch, tmp_path / "state.json")
+    _patch_data_dir(monkeypatch, tmp_path)
+
+    with agent_context.bind_run_context(
+        round_id="round_permission_choices",
+        session_id="wbchat_permission_choices",
+        permission_mode="default",
+    ):
+        result = await _request_scope_elevation(
+            tool_name="Bash",
+            path_hint="",
+            operation="执行本地进程或 Shell 命令",
+            permission_kind="process_execution",
+            options=["旧的工具自定义选项", "拒绝"],
+        )
+        pending = agent_session.get_pending_question()
+    assert json.loads(result)["status"] == "awaiting_user"
+    assert [option["label"] for option in pending["options"]] == [
+        "在本次会话同意",
+        "同意一次",
+        "拒绝",
+    ]
+    assert pending["allow_custom"] is False
+
+
+async def test_heartbeat_agent_suppresses_awaiting_user_sentinel(monkeypatch):
+    from cyrene.agent import coordinator
+
+    async def fake_run_chat_agent(*args, **kwargs):
+        return coordinator._state._AWAITING_USER_SENTINEL
+
+    on_reply = AsyncMock()
+    monkeypatch.setattr(coordinator, "_run_chat_agent", fake_run_chat_agent)
+
+    result = await coordinator.run_heartbeat_agent(
+        "internal proactive instruction",
+        None,
+        0,
+        "db.sqlite3",
+        session_id="wbchat_sentinel_regression",
+        on_reply=on_reply,
+    )
+
+    assert result == ""
+    on_reply.assert_not_awaited()
+
+
+async def test_heartbeat_agent_strips_decorated_awaiting_user_sentinel(monkeypatch):
+    from cyrene.agent import coordinator
+
+    async def fake_run_chat_agent(*args, **kwargs):
+        return "**[[cyrene.awaiting_user]]**"
+
+    on_reply = AsyncMock()
+    monkeypatch.setattr(coordinator, "_run_chat_agent", fake_run_chat_agent)
+
+    result = await coordinator.run_heartbeat_agent(
+        "internal proactive instruction",
+        None,
+        0,
+        "db.sqlite3",
+        session_id="wbchat_decorated_sentinel_regression",
+        on_reply=on_reply,
+    )
+
+    assert result == ""
+    on_reply.assert_not_awaited()
+
+
 def test_assistant_text_ignores_reasoning_when_tool_calls_present():
     """Regression: a turn that emits tool_calls (e.g. ``quit``) with empty
     content must NOT surface ``reasoning_content`` as user-facing text — that
     leaked the model's chain-of-thought into proactive messages. Pure-text
     turns (no tool_calls) still fall back to reasoning for Qwen-style models."""
-    from cyrene.llm import _assistant_text
+    from cyrene.model_runtime.messages import _assistant_text
 
     quit_turn = {
         "role": "assistant",
@@ -1627,7 +1989,7 @@ async def test_system_initiated_quit_does_not_leak_reasoning(tmp_path, monkeypat
     reasoning must never be delivered to the user as the proactive message."""
     from cyrene import agent
     from cyrene.agent import session as _agent_session
-    from cyrene import debug
+    from cyrene.observability import debug
 
     async def fake_publish_event(event):
         return None
@@ -1673,7 +2035,7 @@ def test_last_user_time_prefers_archive_over_state_mtime(tmp_path, monkeypatch):
     otherwise mask genuine user silence and suppress the >72h reach-out."""
     from datetime import datetime, timezone
 
-    from cyrene import scheduler
+    from cyrene.runtime import scheduler
 
     conv_dir = tmp_path / "conversations"
     conv_dir.mkdir()
@@ -1710,7 +2072,7 @@ def test_last_user_time_mtime_fallback_requires_user_spoke_last(tmp_path, monkey
     import os
     from datetime import datetime, timezone
 
-    from cyrene import scheduler
+    from cyrene.runtime import scheduler
 
     conv_dir = tmp_path / "conversations"  # deliberately not created
     state_file = tmp_path / "state.json"
@@ -1746,14 +2108,8 @@ def test_last_user_time_mtime_fallback_requires_user_spoke_last(tmp_path, monkey
 
 async def test_execute_task_fallback_persists_webui_reminder(monkeypatch, tmp_path):
     from cyrene import agent
-    from cyrene.agent import state as _agent_state
-    from cyrene.agent import session as _agent_session
-    from cyrene.agent import agent as _agent_core
-    from cyrene.agent import coordinator as _agent_coordinator
-    from cyrene.agent import guidance as _agent_guidance
-    from cyrene.agent import round as _agent_round
-    from cyrene import debug
-    from cyrene import scheduler
+    from cyrene.observability import debug
+    from cyrene.runtime import scheduler
 
     seen = []
 
@@ -1804,12 +2160,6 @@ async def test_execute_task_fallback_persists_webui_reminder(monkeypatch, tmp_pa
 def test_format_httpx_error_includes_request_response_and_cause():
     import httpx
     from cyrene import agent
-    from cyrene.agent import state as _agent_state
-    from cyrene.agent import session as _agent_session
-    from cyrene.agent import agent as _agent_core
-    from cyrene.agent import coordinator as _agent_coordinator
-    from cyrene.agent import guidance as _agent_guidance
-    from cyrene.agent import round as _agent_round
 
     request = httpx.Request("POST", "https://example.test/v1/chat/completions")
     response = httpx.Response(502, request=request, text='{"error":"upstream exploded"}')
@@ -1827,7 +2177,7 @@ def test_format_httpx_error_includes_request_response_and_cause():
 
 
 async def test_send_agent_message_redirects_main_alias():
-    from cyrene import tools
+    from cyrene.tool_impl.subagent import send_agent_message as tools
 
     result = await tools._tool_send_agent_message(
         {"to": "danny", "content": "final answer"},
@@ -1843,14 +2193,8 @@ async def test_send_agent_message_redirects_main_alias():
 
 async def test_send_agent_message_rejects_cross_round_target():
     from cyrene import agent
-    from cyrene.agent import state as _agent_state
-    from cyrene.agent import session as _agent_session
-    from cyrene.agent import agent as _agent_core
-    from cyrene.agent import coordinator as _agent_coordinator
-    from cyrene.agent import guidance as _agent_guidance
-    from cyrene.agent import round as _agent_round
     from cyrene import subagent
-    from cyrene import tools
+    from cyrene.tool_impl.subagent import send_agent_message as tools
 
     await subagent.clear()
     await subagent.register("alice", "task A", round_id="round_old")
@@ -1873,13 +2217,8 @@ async def test_send_agent_message_rejects_cross_round_target():
 async def test_send_message_tool_persists_intermediate_reply(monkeypatch, tmp_path):
     from cyrene import agent
     from cyrene.agent import state as _agent_state
-    from cyrene.agent import session as _agent_session
-    from cyrene.agent import agent as _agent_core
-    from cyrene.agent import coordinator as _agent_coordinator
-    from cyrene.agent import guidance as _agent_guidance
-    from cyrene.agent import round as _agent_round
-    from cyrene import debug
-    from cyrene import tools
+    from cyrene.observability import debug
+    from cyrene.tool_impl.delivery import send_message as tools
 
     seen = []
 
@@ -1946,14 +2285,8 @@ async def test_send_message_tool_persists_intermediate_reply(monkeypatch, tmp_pa
 
 async def test_send_message_tool_from_scheduler_persists_system_message(monkeypatch, tmp_path):
     from cyrene import agent
-    from cyrene.agent import state as _agent_state
-    from cyrene.agent import session as _agent_session
-    from cyrene.agent import agent as _agent_core
-    from cyrene.agent import coordinator as _agent_coordinator
-    from cyrene.agent import guidance as _agent_guidance
-    from cyrene.agent import round as _agent_round
-    from cyrene import debug
-    from cyrene import tools
+    from cyrene.observability import debug
+    from cyrene.tool_impl.delivery import send_message as tools
 
     seen = []
 
@@ -1962,8 +2295,6 @@ async def test_send_message_tool_from_scheduler_persists_system_message(monkeypa
 
     _patch_state_file(monkeypatch, tmp_path / "state.json")
     _patch_data_dir(monkeypatch, tmp_path)
-    monkeypatch.setattr(tools, "STATE_FILE", tmp_path / "state.json")
-    monkeypatch.setattr(tools, "DATA_DIR", tmp_path)
     monkeypatch.setattr(debug, "publish_event", fake_publish_event)
 
     agent.STATE_FILE.write_text(json.dumps({"messages": []}, ensure_ascii=False), encoding="utf-8")
@@ -1993,10 +2324,12 @@ async def test_send_message_tool_from_scheduler_persists_system_message(monkeypa
 
 
 async def test_schedule_task_once_normalizes_naive_local_time_to_utc(monkeypatch):
-    from datetime import datetime, timezone
-    from cyrene import tools
+    from datetime import datetime, timedelta, timezone
+    from cyrene.tool_impl.task import schedule_task as tools
+    from cyrene.runtime import schedule_spec
 
     seen = {}
+    local_timezone = timezone(timedelta(hours=8))
 
     async def fake_create_task(db_path, chat_id, prompt, schedule_type, schedule_value, next_run, permission_mode="workspace_only", project_id="default"):
         seen["db_path"] = db_path
@@ -2013,11 +2346,12 @@ async def test_schedule_task_once_normalizes_naive_local_time_to_utc(monkeypatch
         @classmethod
         def now(cls, tz=None):
             if tz is None:
-                return cls(2026, 5, 20, 19, 33, 35, tzinfo=timezone.utc).astimezone()
+                return cls(2026, 5, 20, 19, 33, 35, tzinfo=local_timezone)
             return cls(2026, 5, 20, 11, 33, 35, tzinfo=tz)
 
     monkeypatch.setattr(tools.db, "create_task", fake_create_task)
     monkeypatch.setattr(tools, "datetime", _FakeLocalNow)
+    monkeypatch.setattr(schedule_spec, "_local_tzinfo", lambda: local_timezone)
 
     result = await tools._tool_schedule_task(
         {
@@ -2041,9 +2375,9 @@ async def test_schedule_task_once_normalizes_naive_local_time_to_utc(monkeypatch
 async def test_schedule_task_uses_workbench_project_scope(monkeypatch, tmp_path):
     import json
 
-    from cyrene import tools
+    from cyrene.tool_impl.task import schedule_task as tools
     from cyrene.agent import state as agent_state
-    import cyrene.workbench_context as workbench_context
+    import cyrene.workbench.context as workbench_context
 
     seen = {}
 
@@ -2095,14 +2429,8 @@ async def test_schedule_task_uses_workbench_project_scope(monkeypatch, tmp_path)
 
 async def test_ask_user_tool_persists_pending_question(monkeypatch, tmp_path):
     from cyrene import agent
-    from cyrene.agent import state as _agent_state
-    from cyrene.agent import session as _agent_session
-    from cyrene.agent import agent as _agent_core
-    from cyrene.agent import coordinator as _agent_coordinator
-    from cyrene.agent import guidance as _agent_guidance
-    from cyrene.agent import round as _agent_round
-    from cyrene import debug
-    from cyrene import tools
+    from cyrene.observability import debug
+    from cyrene.tool_impl.control import ask_user as tools
 
     seen = []
 
@@ -2154,7 +2482,7 @@ async def test_ask_user_tool_persists_pending_question(monkeypatch, tmp_path):
 
 async def test_permission_pending_question_does_not_persist_chat_message(monkeypatch, tmp_path):
     from cyrene import agent
-    from cyrene import debug
+    from cyrene.observability import debug
 
     seen = []
 
@@ -2196,12 +2524,7 @@ async def test_permission_pending_question_does_not_persist_chat_message(monkeyp
 
 async def test_ask_user_wait_state_does_not_persist_assistant_trace(monkeypatch, tmp_path):
     from cyrene import agent
-    from cyrene.agent import state as _agent_state
     from cyrene.agent import session as _agent_session
-    from cyrene.agent import agent as _agent_core
-    from cyrene.agent import coordinator as _agent_coordinator
-    from cyrene.agent import guidance as _agent_guidance
-    from cyrene.agent import round as _agent_round
 
     _patch_state_file(monkeypatch, tmp_path / "state.json")
     _patch_data_dir(monkeypatch, tmp_path)
@@ -2259,12 +2582,7 @@ async def test_ask_user_wait_state_does_not_persist_assistant_trace(monkeypatch,
 
 async def test_answer_pending_question_resumes_same_round(monkeypatch, tmp_path):
     from cyrene import agent
-    from cyrene.agent import state as _agent_state
-    from cyrene.agent import session as _agent_session
-    from cyrene.agent import agent as _agent_core
     from cyrene.agent import coordinator as _agent_coordinator
-    from cyrene.agent import guidance as _agent_guidance
-    from cyrene.agent import round as _agent_round
 
     seen = {}
 
@@ -2366,8 +2684,8 @@ async def test_answer_permission_question_is_hidden_from_context(monkeypatch, tm
             "text": "申请写入 workspace 外部路径",
             "round_id": "round_1",
             "client_request_id": "req_perm_1",
-            "allow_custom": True,
-            "options": [{"id": "option_1", "label": "仅这次允许"}, {"id": "option_2", "label": "保持仅限 workspace"}],
+            "allow_custom": False,
+            "options": [{"id": "option_1", "label": "在本次会话同意"}, {"id": "option_2", "label": "同意一次"}, {"id": "option_3", "label": "拒绝"}],
             "asked_at": "2026-05-19T03:00:00+00:00",
             "hidden_from_chat": True,
             "hide_answer_in_chat": True,
@@ -2399,6 +2717,7 @@ async def test_answer_permission_question_is_hidden_from_context(monkeypatch, tm
         assistant_message_meta=None,
         lang="",
         command="",
+        permission_mode="default",
     ):
         seen["user_message"] = user_message
         seen["ephemeral_system"] = ephemeral_system
@@ -2408,6 +2727,8 @@ async def test_answer_permission_question_is_hidden_from_context(monkeypatch, tm
         seen["persist_insert_at"] = persist_insert_at
         seen["client_request_id"] = client_request_id
         seen["persist_user_message"] = persist_user_message
+        seen["public_prompt"] = public_prompt
+        seen["permission_mode"] = permission_mode
         return "继续完成后的最终答案"
 
     monkeypatch.setattr(_agent_coordinator, "_run_chat_agent", fake_run_chat_agent)
@@ -2415,11 +2736,12 @@ async def test_answer_permission_question_is_hidden_from_context(monkeypatch, tm
     try:
         result = await agent.answer_pending_question(
             "question_perm_1",
-            "仅这次允许",
+            "同意一次",
             None,
             0,
             "db.sqlite3",
             client_request_id="req_answer_perm_1",
+            permission_mode="auto",
         )
     finally:
         _temporary_full_access.set(False)
@@ -2429,8 +2751,8 @@ async def test_answer_permission_question_is_hidden_from_context(monkeypatch, tm
     assert result == "继续完成后的最终答案"
     assert "pending_question" not in state
     assert seen["user_message"] == "[Internal permission decision received. Continue the same round using the system instruction above.]"
-    assert "仅这次允许" not in seen["user_message"]
-    assert "granted elevated write/delete permission" in seen["ephemeral_system"]
+    assert "同意一次" not in seen["user_message"]
+    assert "granted this exact write/delete permission request once" in seen["ephemeral_system"]
     assert "Permission kind: write_permission_request" in seen["ephemeral_system"]
     assert "Tool: Write" in seen["ephemeral_system"]
     assert seen["forced_round_id"] == "round_1"
@@ -2439,12 +2761,14 @@ async def test_answer_permission_question_is_hidden_from_context(monkeypatch, tm
     assert seen["persist_insert_at"] == 2
     assert seen["client_request_id"] == "req_answer_perm_1"
     assert seen["persist_user_message"] is False
+    assert seen["public_prompt"] == "写到外部路径"
+    assert seen["permission_mode"] == "auto"
 
 
 async def test_bash_destructive_command_requires_confirmation_in_full_access(monkeypatch, tmp_path):
     from cyrene import agent
     from cyrene.agent import state as agent_state
-    from cyrene.tool_impl import bash as bash_tool
+    from cyrene.tool_impl.core import bash as bash_tool
 
     _patch_state_file(monkeypatch, tmp_path / "state.json")
     _patch_data_dir(monkeypatch, tmp_path)
@@ -2487,7 +2811,7 @@ async def test_bash_destructive_command_requires_confirmation_in_full_access(mon
 async def test_send_wechat_file_does_not_prompt_in_full_access(monkeypatch, tmp_path):
     from cyrene import agent
     from cyrene.agent import state as agent_state
-    from cyrene.tool_impl import send_wechat_file as wechat_tool
+    from cyrene.tool_impl.delivery import send_wechat_file as wechat_tool
 
     class FakeWechatBot:
         def __init__(self):
@@ -2537,7 +2861,7 @@ async def test_send_wechat_file_does_not_prompt_in_full_access(monkeypatch, tmp_
 async def test_send_telegram_does_not_prompt_in_full_access(monkeypatch, tmp_path):
     from cyrene import agent
     from cyrene.agent import state as agent_state
-    from cyrene.tool_impl import send_telegram as telegram_tool
+    from cyrene.tool_impl.delivery import send_telegram as telegram_tool
 
     class FakeTelegramBot:
         def __init__(self):
@@ -2577,18 +2901,29 @@ async def test_send_telegram_does_not_prompt_in_full_access(monkeypatch, tmp_pat
 
 async def test_start_shell_allows_external_cwd_in_full_access(monkeypatch, tmp_path):
     from cyrene.agent import state as agent_state
-    from cyrene.tool_impl import start_shell as start_shell_tool
+    from cyrene.tool_impl.code import start_shell as start_shell_tool
 
     outside = tmp_path / "outside"
     outside.mkdir()
     seen = {}
 
-    async def fake_start_shell_session(command, cwd, title, round_id):
+    async def fake_start_shell_session(
+        command,
+        cwd,
+        title,
+        round_id,
+        wake_on_exit=False,
+        wake_chat_id="",
+        wake_note="",
+    ):
         seen.update({
             "command": command,
             "cwd": cwd,
             "title": title,
             "round_id": round_id,
+            "wake_on_exit": wake_on_exit,
+            "wake_chat_id": wake_chat_id,
+            "wake_note": wake_note,
         })
         return {"id": "shell_1", "status": "running", "cwd": cwd, "title": title}
 
@@ -2614,13 +2949,14 @@ async def test_start_shell_allows_external_cwd_in_full_access(monkeypatch, tmp_p
     assert payload["status"] == "running"
     assert payload["cwd"] == str(outside)
     assert seen["cwd"] == str(outside)
+    assert seen["wake_on_exit"] is False
 
 
 async def test_send_wechat_file_uses_auto_review_without_prompt(monkeypatch, tmp_path):
     from cyrene import agent
     from cyrene.agent import auto_review
     from cyrene.agent import state as agent_state
-    from cyrene.tool_impl import send_wechat_file as wechat_tool
+    from cyrene.tool_impl.delivery import send_wechat_file as wechat_tool
 
     class FakeWechatBot:
         async def send_file(self, chat_id, filepath, filename):
@@ -2666,7 +3002,7 @@ async def test_send_wechat_file_uses_auto_review_without_prompt(monkeypatch, tmp
     assert result == "File sent via WeChat: rfi.pdf"
     assert seen["tool_name"] == "send_wechat_file"
     assert seen["operation"] == "外发 WeChat 文件"
-    assert full_access_after_review is True
+    assert full_access_after_review is False
     assert "pending_question" not in saved
 
 
@@ -2674,7 +3010,7 @@ async def test_analyze_attachment_retries_external_path_after_auto_approval(monk
     from cyrene import agent
     from cyrene.agent import auto_review
     from cyrene.agent import state as agent_state
-    from cyrene.tool_impl import analyze_attachment as analyze_tool
+    from cyrene.tool_impl.core import analyze_attachment as analyze_tool
 
     outside = tmp_path / "outside.txt"
     outside.write_text("hello", encoding="utf-8")
@@ -2724,14 +3060,14 @@ async def test_analyze_attachment_retries_external_path_after_auto_approval(monk
     assert seen["review"]["tool_name"] == "AnalyzeAttachment"
     assert seen["path"] == str(outside)
     assert seen["prompt"] == "summarize"
-    assert full_access_after_review is True
+    assert full_access_after_review is False
 
 
 async def test_destructive_confirmation_answer_remembers_single_operation(monkeypatch, tmp_path):
     from cyrene import agent
     from cyrene.agent import coordinator as _agent_coordinator
     from cyrene.agent import state as agent_state
-    from cyrene.tool_legacy import _destructive_operation_fingerprint
+    from cyrene.tooling.runtime_support import _destructive_operation_fingerprint
 
     seen = {}
     fingerprint = _destructive_operation_fingerprint(
@@ -2796,7 +3132,7 @@ async def test_destructive_confirmation_answer_remembers_single_operation(monkey
 async def test_send_message_posts_intermediate_reply_without_permission(monkeypatch, tmp_path):
     from cyrene import agent
     from cyrene.agent import state as agent_state
-    from cyrene.tool_impl import send_message as send_message_tool
+    from cyrene.tool_impl.delivery import send_message as send_message_tool
 
     _patch_state_file(monkeypatch, tmp_path / "state.json")
     _patch_data_dir(monkeypatch, tmp_path)
@@ -2831,7 +3167,7 @@ async def test_send_message_posts_intermediate_reply_without_permission(monkeypa
 
 
 def test_build_current_session_exposes_pending_question(monkeypatch, tmp_path):
-    from webui import routes
+    from cyrene.workbench import runtime as routes
 
     monkeypatch.setattr(routes, "STATE_FILE", tmp_path / "state.json")
     monkeypatch.setattr(routes, "_SERVER_STARTED_AT", 0)
@@ -2866,7 +3202,7 @@ def test_build_current_session_exposes_pending_question(monkeypatch, tmp_path):
 
 
 def test_reply_stream_chunks_reconstructs_original_text():
-    from webui import routes
+    from cyrene.workbench import runtime as routes
 
     text = "第一段先说重点。\n\n第二段补充更多细节，而且这一段稍微长一点，方便验证分块逻辑。"
     chunks = routes._reply_stream_chunks(text, target_chars=12)
@@ -2877,7 +3213,7 @@ def test_reply_stream_chunks_reconstructs_original_text():
 
 
 async def test_stream_reply_payload_emits_ndjson_events():
-    from webui import routes
+    from cyrene.workbench import runtime as routes
 
     response = await routes._stream_reply_payload("你好，世界")
     body = b""
@@ -2978,11 +3314,6 @@ async def test_upstream_stream_emits_reasoning_deltas_before_reply():
 async def test_run_main_agent_chat_only_streams_final_reply(monkeypatch):
     from cyrene import agent
     from cyrene.agent import state as _agent_state
-    from cyrene.agent import session as _agent_session
-    from cyrene.agent import agent as _agent_core
-    from cyrene.agent import coordinator as _agent_coordinator
-    from cyrene.agent import guidance as _agent_guidance
-    from cyrene.agent import round as _agent_round
 
     saved = {}
     streamed = []
@@ -3031,9 +3362,195 @@ async def test_run_main_agent_chat_only_streams_final_reply(monkeypatch):
     assert saved["messages"][-1]["client_request_id"] == "req_stream"
 
 
-async def test_wrap_up_honors_late_tool_call_and_reenters_loop(tmp_path, monkeypatch):
-    """A tool intent the model only surfaces while writing the final answer is
-    executed (re-entering the tool loop) instead of being leaked or discarded."""
+async def test_streaming_phase2_delivers_valid_assistant_content_on_quit(
+    tmp_path, monkeypatch
+):
+    """Normal assistant content on a quit turn is delivered without rebuilding."""
+    from cyrene.agent import agent as _agent_core
+    from cyrene.agent import state as _agent_state
+
+    state_file = tmp_path / "state.json"
+    state_file.write_text(
+        json.dumps({"_session_epoch": _agent_state._session_epoch, "messages": []}),
+        encoding="utf-8",
+    )
+    _patch_state_file(monkeypatch, state_file)
+    _patch_data_dir(monkeypatch, tmp_path)
+
+    calls = []
+    saved = {}
+    streamed = []
+    responses = iter([
+        {
+            "content": "",
+            "tool_calls": [{
+                "id": "phase1",
+                "function": {
+                    "name": "use_tools",
+                    "arguments": json.dumps({"task": "inspect"}),
+                },
+            }],
+        },
+        {
+            "content": "已经完成检查。",
+            "tool_calls": [{
+                "id": "quit1",
+                "function": {
+                    "name": "quit",
+                    "arguments": "{}",
+                },
+            }],
+            "usage": {
+                "prompt_tokens": 1200,
+                "completion_tokens": 20,
+                "total_tokens": 1220,
+            },
+        },
+    ])
+
+    async def fake_call_llm(messages, tools=None, **_kwargs):
+        calls.append(json.dumps(tools, sort_keys=True))
+        return next(responses)
+
+    async def fake_save(messages, **_kwargs):
+        saved["messages"] = list(messages)
+
+    fake_stream = AsyncMock()
+    _patch_call_llm(monkeypatch, fake_call_llm)
+    _patch_call_llm_stream(monkeypatch, fake_stream)
+    _patch_save_session(monkeypatch, fake_save)
+    _patch_append_session(monkeypatch, AsyncMock())
+    monkeypatch.setattr(_agent_core, "_publish_runtime_event", AsyncMock())
+
+    async def collect(event):
+        streamed.append(event)
+
+    writer_token = _agent_state._reply_stream_writer.set(collect)
+    try:
+        result = await _agent_core._run_main_agent(
+            "inspect", [], None, 0, "db.sqlite3",
+            client_request_id="req_direct_quit",
+        )
+    finally:
+        _agent_state._reply_stream_writer.reset(writer_token)
+
+    assert result == "已经完成检查。"
+    assert len(calls) == 2
+    assert calls[0] == calls[1]
+    fake_stream.assert_not_awaited()
+    assert streamed == [
+        {"type": "reply_start"},
+        {"type": "reply_delta", "delta": "已经完成检查。"},
+        {"type": "reply_done", "response": "已经完成检查。"},
+    ]
+    assert saved["messages"][-1]["content"] == "已经完成检查。"
+    assert "tool_calls" not in saved["messages"][-1]
+    assert saved["messages"][-1]["usage"]["prompt_tokens"] == 1200
+
+
+async def test_streaming_phase2_dsml_assistant_content_uses_no_tool_wrapup(
+    tmp_path, monkeypatch
+):
+    """Tool markup on a quit turn is repaired without reopening tools."""
+    from cyrene.agent import agent as _agent_core
+    from cyrene.agent import state as _agent_state
+
+    state_file = tmp_path / "state.json"
+    state_file.write_text(
+        json.dumps({"_session_epoch": _agent_state._session_epoch, "messages": []}),
+        encoding="utf-8",
+    )
+    _patch_state_file(monkeypatch, state_file)
+    _patch_data_dir(monkeypatch, tmp_path)
+
+    dsml = (
+        '<｜｜DSML｜｜tool_calls>'
+        '<｜｜DSML｜｜invoke name="WebSearch"/>'
+        '</｜｜DSML｜｜tool_calls>'
+    )
+    calls = []
+    wrap_tools = []
+    saved = {}
+    streamed = []
+    responses = iter([
+        {
+            "content": "",
+            "tool_calls": [{
+                "id": "phase1",
+                "function": {
+                    "name": "use_tools",
+                    "arguments": json.dumps({"task": "inspect"}),
+                },
+            }],
+        },
+        {
+            "content": dsml,
+            "tool_calls": [{
+                "id": "quit1",
+                "function": {
+                    "name": "quit",
+                    "arguments": "{}",
+                },
+            }],
+        },
+    ])
+
+    async def fake_call_llm(messages, tools=None, **_kwargs):
+        calls.append(json.dumps(tools, sort_keys=True))
+        return next(responses)
+
+    async def fake_call_llm_stream(_messages, max_tokens=None, tools=None):
+        wrap_tools.append(json.dumps(tools, sort_keys=True))
+        await _agent_core._emit_reply_stream_event({"type": "reply_start"})
+        await _agent_core._emit_reply_stream_event({
+            "type": "reply_delta", "delta": "安全的最终答复。",
+        })
+        await _agent_core._emit_reply_stream_event({
+            "type": "reply_done", "response": "安全的最终答复。",
+        })
+        return {
+            "role": "assistant",
+            "content": "安全的最终答复。",
+            "usage": {
+                "prompt_tokens": 1300,
+                "completion_tokens": 20,
+                "total_tokens": 1320,
+            },
+        }
+
+    async def fake_save(messages, **_kwargs):
+        saved["messages"] = list(messages)
+
+    _patch_call_llm(monkeypatch, fake_call_llm)
+    _patch_call_llm_stream(monkeypatch, fake_call_llm_stream)
+    _patch_save_session(monkeypatch, fake_save)
+    _patch_append_session(monkeypatch, AsyncMock())
+    monkeypatch.setattr(_agent_core, "_publish_runtime_event", AsyncMock())
+
+    async def collect(event):
+        streamed.append(event)
+
+    writer_token = _agent_state._reply_stream_writer.set(collect)
+    try:
+        result = await _agent_core._run_main_agent(
+            "inspect", [], None, 0, "db.sqlite3",
+        )
+    finally:
+        _agent_state._reply_stream_writer.reset(writer_token)
+
+    assert result == "安全的最终答复。"
+    assert len(wrap_tools) == 1
+    assert wrap_tools[0] == "null"
+    assert calls[0] == calls[1]
+    assert all("DSML" not in str(event) for event in streamed)
+    assert all(
+        "DSML" not in str(message.get("content") or "")
+        for message in saved["messages"]
+    )
+
+
+async def test_quit_wrap_up_never_reenters_tool_loop(tmp_path, monkeypatch):
+    """Once quit is observed, recovery is no-tool and cannot revive execution."""
     from cyrene.agent import agent as _agent_core
     from cyrene.agent import state as _agent_state
 
@@ -3041,7 +3558,6 @@ async def test_wrap_up_honors_late_tool_call_and_reenters_loop(tmp_path, monkeyp
     state_file.write_text(json.dumps({"_session_epoch": _agent_state._session_epoch, "messages": []}), encoding="utf-8")
     _patch_state_file(monkeypatch, state_file)
     _patch_data_dir(monkeypatch, tmp_path)
-    monkeypatch.setattr(_agent_core, "_get_max_tool_rounds", lambda: 5)
     monkeypatch.setattr(_agent_core, "_publish_runtime_event", AsyncMock())
 
     saved = {}
@@ -3055,21 +3571,21 @@ async def test_wrap_up_honors_late_tool_call_and_reenters_loop(tmp_path, monkeyp
         llm_calls.append(tools)
         if len(llm_calls) == 1:  # decision phase → route into execution
             return {"content": "", "tool_calls": [{"id": "d1", "function": {"name": "use_tools", "arguments": "{\"task\":\"看 github 实现\"}"}}]}
-        # execution phase: the model believes it is done and quits early
-        return {"content": "", "tool_calls": [{"id": "q1", "function": {"name": "quit", "arguments": "{}"}}]}
+        # A malformed terminal batch must not execute the sibling tool.
+        return {
+            "content": "",
+            "tool_calls": [
+                {"id": "wf1", "function": {"name": "WebFetch", "arguments": "{\"url\":\"https://example.com/x\"}"}},
+                {"id": "q1", "function": {"name": "quit", "arguments": "{}"}},
+            ],
+        }
 
     async def fake_call_llm_stream(messages, max_tokens=32000, tools=None):
         stream_calls["n"] += 1
-        if stream_calls["n"] == 1:
-            # while composing the answer the model realizes it must fetch the source
-            await _agent_core._emit_reply_stream_event({"type": "reply_start"})
-            await _agent_core._emit_reply_stream_event({"type": "reply_delta", "delta": "让我核对 GitHub 源。"})
-            return {
-                "role": "assistant", "content": "让我核对 GitHub 源。",
-                "tool_calls": [{"id": "wf1", "type": "function", "function": {"name": "WebFetch", "arguments": "{\"url\":\"https://example.com/x\"}"}}],
-            }
+        assert tools is None
+        await _agent_core._emit_reply_stream_event({"type": "reply_start"})
         await _agent_core._emit_reply_stream_event({"type": "reply_delta", "delta": "已对比完成"})
-        await _agent_core._emit_reply_stream_event({"type": "reply_done", "response": "让我核对 GitHub 源。已对比完成"})
+        await _agent_core._emit_reply_stream_event({"type": "reply_done", "response": "已对比完成"})
         return {"role": "assistant", "content": "已对比完成"}
 
     async def fake_execute_tool(name, args, *rest, **kw):
@@ -3084,11 +3600,6 @@ async def test_wrap_up_honors_late_tool_call_and_reenters_loop(tmp_path, monkeyp
     _patch_save_session(monkeypatch, fake_save)
     _patch_append_session(monkeypatch, AsyncMock())
     monkeypatch.setattr(_agent_core, "_execute_tool", fake_execute_tool)
-    monkeypatch.setattr(_agent_core, "get_active_tool_defs", lambda: [
-        {"type": "function", "function": {"name": "WebFetch", "parameters": {}}},
-        {"type": "function", "function": {"name": "quit", "parameters": {}}},
-    ])
-
     async def collect(event):
         streamed.append(event)
 
@@ -3105,8 +3616,8 @@ async def test_wrap_up_honors_late_tool_call_and_reenters_loop(tmp_path, monkeyp
         _agent_state._reply_stream_writer.reset(writer_token)
 
     assert result == "已对比完成"
-    assert "WebFetch" in executed              # the late tool intent was honored
-    assert stream_calls["n"] == 2              # wrap-up: reopen tools, then finalize
+    assert executed == []
+    assert stream_calls["n"] == 1
     deltas = "".join(e.get("delta", "") for e in streamed if e["type"] == "reply_delta")
     assert "DSML" not in deltas
     assert "已对比完成" in deltas
@@ -3115,13 +3626,7 @@ async def test_wrap_up_honors_late_tool_call_and_reenters_loop(tmp_path, monkeyp
 
 async def test_stream_agent_reply_forwards_live_events_before_completion(monkeypatch):
     from cyrene import agent
-    from cyrene.agent import state as _agent_state
-    from cyrene.agent import session as _agent_session
-    from cyrene.agent import agent as _agent_core
-    from cyrene.agent import coordinator as _agent_coordinator
-    from cyrene.agent import guidance as _agent_guidance
-    from cyrene.agent import round as _agent_round
-    from webui import routes
+    from cyrene.workbench import runtime as routes
 
     seen = {"archived": None}
 
@@ -3158,12 +3663,6 @@ async def test_stream_agent_reply_forwards_live_events_before_completion(monkeyp
 
 def test_flush_intermediate_replies_keeps_messages_for_later_saves():
     from cyrene import agent
-    from cyrene.agent import state as _agent_state
-    from cyrene.agent import session as _agent_session
-    from cyrene.agent import agent as _agent_core
-    from cyrene.agent import coordinator as _agent_coordinator
-    from cyrene.agent import guidance as _agent_guidance
-    from cyrene.agent import round as _agent_round
 
     base_messages = [
         {"role": "system", "content": "sys"},
@@ -3187,7 +3686,7 @@ def test_flush_intermediate_replies_keeps_messages_for_later_saves():
 
 async def test_query_round_tool_reports_live_round():
     from cyrene import subagent
-    from cyrene import tools
+    from cyrene.tool_impl.subagent import query_round as tools
 
     await subagent.clear()
     await subagent.register("alice", "research topic", round_id="round_1")
@@ -3200,15 +3699,11 @@ async def test_query_round_tool_reports_live_round():
 
 async def test_queue_round_guidance_drains_main_inbox_without_subagents(monkeypatch, tmp_path):
     from cyrene import agent
-    from cyrene.agent import state as _agent_state
-    from cyrene.agent import session as _agent_session
-    from cyrene.agent import agent as _agent_core
     from cyrene.agent import coordinator as _agent_coordinator
     from cyrene.agent import guidance as _agent_guidance
-    from cyrene.agent import round as _agent_round
-    from cyrene import debug
-    from cyrene import inbox
-    import cyrene.conversations as conversations
+    from cyrene.observability import debug
+    from cyrene.runtime import inbox
+    import cyrene.runtime.memory.conversations as conversations
 
     ack_text = "收到这条引导了，我会按新的方向继续这一轮。"
 
@@ -3311,14 +3806,9 @@ async def test_queue_round_guidance_drains_main_inbox_without_subagents(monkeypa
 
 async def test_queue_round_guidance_persists_user_message_immediately(monkeypatch, tmp_path):
     from cyrene import agent
-    from cyrene.agent import state as _agent_state
-    from cyrene.agent import session as _agent_session
-    from cyrene.agent import agent as _agent_core
-    from cyrene.agent import coordinator as _agent_coordinator
     from cyrene.agent import guidance as _agent_guidance
-    from cyrene.agent import round as _agent_round
     from cyrene import subagent
-    from cyrene import inbox
+    from cyrene.runtime import inbox
 
     await subagent.clear()
     await subagent.register("alice", "research topic", round_id="round_1")
@@ -3353,16 +3843,12 @@ async def test_queue_round_guidance_persists_user_message_immediately(monkeypatc
 
 async def test_main_inbox_guidance_relays_to_subagents_and_inserts_reply(monkeypatch, tmp_path):
     from cyrene import agent
-    from cyrene.agent import state as _agent_state
-    from cyrene.agent import session as _agent_session
-    from cyrene.agent import agent as _agent_core
     from cyrene.agent import coordinator as _agent_coordinator
     from cyrene.agent import guidance as _agent_guidance
-    from cyrene.agent import round as _agent_round
-    from cyrene import debug
-    from cyrene import inbox
+    from cyrene.observability import debug
+    from cyrene.runtime import inbox
     from cyrene import subagent
-    import cyrene.conversations as conversations
+    import cyrene.runtime.memory.conversations as conversations
 
     ack_text = "收到，我先把这一轮的结论按你这条要求展开。"
 
@@ -3448,15 +3934,11 @@ async def test_main_inbox_guidance_relays_to_subagents_and_inserts_reply(monkeyp
 
 async def test_main_inbox_guidance_failure_inserts_error_reply(monkeypatch, tmp_path):
     from cyrene import agent
-    from cyrene.agent import state as _agent_state
-    from cyrene.agent import session as _agent_session
-    from cyrene.agent import agent as _agent_core
     from cyrene.agent import coordinator as _agent_coordinator
     from cyrene.agent import guidance as _agent_guidance
-    from cyrene.agent import round as _agent_round
-    from cyrene import debug
-    from cyrene import inbox
-    import cyrene.conversations as conversations
+    from cyrene.observability import debug
+    from cyrene.runtime import inbox
+    import cyrene.runtime.memory.conversations as conversations
 
     ack_text = "收到，我会按这个补充要求继续处理。"
 
@@ -3522,16 +4004,12 @@ async def test_main_inbox_guidance_failure_inserts_error_reply(monkeypatch, tmp_
 
 async def test_main_inbox_guidance_continuation_keeps_ack_before_final_reply(monkeypatch, tmp_path):
     from cyrene import agent
-    from cyrene import behavior_learning
-    from cyrene.agent import state as _agent_state
+    from cyrene.learning import engine as behavior_learning
     from cyrene.agent import session as _agent_session
-    from cyrene.agent import agent as _agent_core
-    from cyrene.agent import coordinator as _agent_coordinator
     from cyrene.agent import guidance as _agent_guidance
-    from cyrene.agent import round as _agent_round
-    from cyrene import debug
-    from cyrene import inbox
-    import cyrene.conversations as conversations
+    from cyrene.observability import debug
+    from cyrene.runtime import inbox
+    import cyrene.runtime.memory.conversations as conversations
 
     ack_text = "明白，我按你的新要求重做这一轮的回复。"
 
@@ -3608,13 +4086,9 @@ async def test_main_inbox_guidance_continuation_keeps_ack_before_final_reply(mon
 
 async def test_run_chat_agent_persists_client_request_ids(monkeypatch, tmp_path):
     from cyrene import agent
-    from cyrene.agent import state as _agent_state
     from cyrene.agent import session as _agent_session
     from cyrene.agent import agent as _agent_core
-    from cyrene.agent import coordinator as _agent_coordinator
-    from cyrene.agent import guidance as _agent_guidance
-    from cyrene.agent import round as _agent_round
-    from cyrene import debug
+    from cyrene.observability import debug
 
     _patch_state_file(monkeypatch, tmp_path / "state.json")
     _patch_data_dir(monkeypatch, tmp_path)
@@ -3651,13 +4125,8 @@ async def test_run_chat_agent_persists_client_request_ids(monkeypatch, tmp_path)
 
 async def test_run_chat_agent_history_override_preserves_other_rounds(monkeypatch, tmp_path):
     from cyrene import agent
-    from cyrene.agent import state as _agent_state
     from cyrene.agent import session as _agent_session
     from cyrene.agent import agent as _agent_core
-    from cyrene.agent import coordinator as _agent_coordinator
-    from cyrene.agent import guidance as _agent_guidance
-    from cyrene.agent import round as _agent_round
-    from cyrene import soul
 
     base_messages = [
         {"role": "user", "content": "round one question", "round_id": "round_1"},
@@ -3706,12 +4175,8 @@ async def test_run_chat_agent_history_override_preserves_other_rounds(monkeypatc
 
 async def test_run_chat_agent_persist_insert_at_keeps_later_queued_messages_in_place(monkeypatch, tmp_path):
     from cyrene import agent
-    from cyrene.agent import state as _agent_state
     from cyrene.agent import session as _agent_session
     from cyrene.agent import agent as _agent_core
-    from cyrene.agent import coordinator as _agent_coordinator
-    from cyrene.agent import guidance as _agent_guidance
-    from cyrene.agent import round as _agent_round
 
     base_messages = [
         {"role": "user", "content": "round one question", "round_id": "round_1"},
@@ -3760,13 +4225,8 @@ async def test_run_chat_agent_persist_insert_at_keeps_later_queued_messages_in_p
 
 async def test_run_chat_agent_live_merge_preserves_concurrent_guidance(monkeypatch, tmp_path):
     from cyrene import agent
-    from cyrene.agent import state as _agent_state
     from cyrene.agent import session as _agent_session
     from cyrene.agent import agent as _agent_core
-    from cyrene.agent import coordinator as _agent_coordinator
-    from cyrene.agent import guidance as _agent_guidance
-    from cyrene.agent import round as _agent_round
-    from cyrene import soul
 
     base_messages = [
         {"role": "user", "content": "previous question", "round_id": "round_0"},
@@ -3812,12 +4272,6 @@ async def test_run_chat_agent_live_merge_preserves_concurrent_guidance(monkeypat
 
 async def test_save_session_messages_replaces_live_round_block_without_duplication(monkeypatch, tmp_path):
     from cyrene import agent
-    from cyrene.agent import state as _agent_state
-    from cyrene.agent import session as _agent_session
-    from cyrene.agent import agent as _agent_core
-    from cyrene.agent import coordinator as _agent_coordinator
-    from cyrene.agent import guidance as _agent_guidance
-    from cyrene.agent import round as _agent_round
 
     base_messages = [
         {"role": "user", "content": "previous question", "round_id": "round_0"},
@@ -3871,12 +4325,8 @@ async def test_save_session_messages_replaces_live_round_block_without_duplicati
 
 async def test_run_chat_agent_history_override_visible_reply_update_does_not_duplicate_messages(monkeypatch, tmp_path):
     from cyrene import agent
-    from cyrene.agent import state as _agent_state
     from cyrene.agent import session as _agent_session
     from cyrene.agent import agent as _agent_core
-    from cyrene.agent import coordinator as _agent_coordinator
-    from cyrene.agent import guidance as _agent_guidance
-    from cyrene.agent import round as _agent_round
 
     base_messages = [
         {"role": "user", "content": "round one question", "round_id": "round_1"},
@@ -3924,7 +4374,7 @@ async def test_run_chat_agent_history_override_visible_reply_update_does_not_dup
 
 
 def test_inbox_send_message_is_serialized():
-    from cyrene import inbox
+    from cyrene.runtime import inbox
     import tempfile
 
     with tempfile.TemporaryDirectory() as tmp:
@@ -3945,7 +4395,7 @@ def test_inbox_send_message_is_serialized():
 
 
 async def test_subagent_registry_emits_update_events(monkeypatch):
-    from cyrene import debug
+    from cyrene.observability import debug
     from cyrene import subagent
 
     seen = []
@@ -3975,13 +4425,6 @@ async def test_subagent_registry_emits_update_events(monkeypatch):
 
 
 async def test_run_subagent_persists_quit_tool_messages_before_resume(monkeypatch):
-    from cyrene import agent
-    from cyrene.agent import state as _agent_state
-    from cyrene.agent import session as _agent_session
-    from cyrene.agent import agent as _agent_core
-    from cyrene.agent import coordinator as _agent_coordinator
-    from cyrene.agent import guidance as _agent_guidance
-    from cyrene.agent import round as _agent_round
     from cyrene import subagent
 
     llm_inputs = []
@@ -4029,9 +4472,9 @@ async def test_run_subagent_persists_quit_tool_messages_before_resume(monkeypatc
 
 
 def test_live_flow_contains_tool_nodes_and_comm_edges(tmp_path, monkeypatch):
-    from cyrene import debug
-    from cyrene import inbox
-    from webui import routes
+    from cyrene.observability import debug
+    from cyrene.runtime import inbox
+    from cyrene.workbench import runtime as routes
 
     inbox.INBOX_DIR = tmp_path / "inbox"
     asyncio.run(inbox.send_message("alice", "bob", "chat", "Discuss firewall baselines"))
@@ -4104,8 +4547,8 @@ def test_live_flow_contains_tool_nodes_and_comm_edges(tmp_path, monkeypatch):
 
 
 def test_live_flow_marks_empty_tool_outputs_done(monkeypatch):
-    from cyrene import debug
-    from webui import routes
+    from cyrene.observability import debug
+    from cyrene.workbench import runtime as routes
 
     monkeypatch.setattr(debug, "get_recent_events", lambda limit=200: [])
     raw_msgs = [
@@ -4125,8 +4568,8 @@ def test_live_flow_marks_empty_tool_outputs_done(monkeypatch):
 
 
 def test_live_flow_marks_tool_without_captured_output_done_after_followup(monkeypatch):
-    from cyrene import debug
-    from webui import routes
+    from cyrene.observability import debug
+    from cyrene.workbench import runtime as routes
 
     monkeypatch.setattr(debug, "get_recent_events", lambda limit=200: [])
     raw_msgs = [
@@ -4145,8 +4588,8 @@ def test_live_flow_marks_tool_without_captured_output_done_after_followup(monkey
 
 
 def test_live_flow_marks_recent_overlay_tools_done(monkeypatch):
-    from cyrene import debug
-    from webui import routes
+    from cyrene.observability import debug
+    from cyrene.workbench import runtime as routes
 
     monkeypatch.setattr(debug, "get_recent_events", lambda limit=200: [
         {
@@ -4173,7 +4616,7 @@ def test_live_flow_marks_recent_overlay_tools_done(monkeypatch):
 
 
 def test_build_current_session_uses_live_shell_snapshots(monkeypatch, tmp_path):
-    from webui import routes
+    from cyrene.workbench import runtime as routes
 
     monkeypatch.setattr(routes, "STATE_FILE", tmp_path / "state.json")
     monkeypatch.setattr(routes, "DATA_DIR", tmp_path)
@@ -4209,8 +4652,8 @@ def test_build_current_session_uses_live_shell_snapshots(monkeypatch, tmp_path):
 def test_build_current_session_done_event_clears_recent_activity(monkeypatch, tmp_path):
     from datetime import datetime, timedelta, timezone
 
-    from cyrene import debug
-    from webui import routes
+    from cyrene.observability import debug
+    from cyrene.workbench import runtime as routes
 
     monkeypatch.setattr(routes, "STATE_FILE", tmp_path / "state.json")
     routes.STATE_FILE.write_text(
@@ -4250,11 +4693,11 @@ async def test_compress_old_messages_labels_llm_as_compactor(monkeypatch):
     assert callers == ["compactor"]
 
 
-def test_build_current_session_detects_activity_after_done_event(monkeypatch, tmp_path):
+def test_build_current_session_ignores_completed_llm_accounting_after_done(monkeypatch, tmp_path):
     from datetime import datetime, timedelta, timezone
 
-    from cyrene import debug
-    from webui import routes
+    from cyrene.observability import debug
+    from cyrene.workbench import runtime as routes
 
     monkeypatch.setattr(routes, "STATE_FILE", tmp_path / "state.json")
     routes.STATE_FILE.write_text(
@@ -4269,11 +4712,11 @@ def test_build_current_session_detects_activity_after_done_event(monkeypatch, tm
 
     session = routes._build_current_session()
 
-    assert session["status"] == "running"
+    assert session["status"] == "done"
 
 
 def test_build_sessions_includes_today_archive_when_live_session_exists(tmp_path, monkeypatch):
-    from webui import routes
+    from cyrene.workbench import runtime as routes
 
     monkeypatch.setattr(routes, "CONVERSATIONS_DIR", tmp_path / "conversations")
     monkeypatch.setattr(routes, "STATE_FILE", tmp_path / "state.json")
@@ -4297,7 +4740,7 @@ def test_build_sessions_includes_today_archive_when_live_session_exists(tmp_path
 
 
 def test_build_sessions_skips_archive_copy_of_current_live_session(tmp_path, monkeypatch):
-    from webui import routes
+    from cyrene.workbench import runtime as routes
 
     monkeypatch.setattr(routes, "CONVERSATIONS_DIR", tmp_path / "conversations")
     monkeypatch.setattr(routes, "STATE_FILE", tmp_path / "state.json")
@@ -4334,8 +4777,8 @@ def test_build_sessions_skips_archive_copy_of_current_live_session(tmp_path, mon
 
 
 def test_build_current_session_recovers_subagents_from_state_and_inbox(tmp_path, monkeypatch):
-    from cyrene import inbox
-    from webui import routes
+    from cyrene.runtime import inbox
+    from cyrene.workbench import runtime as routes
 
     monkeypatch.setattr(routes, "STATE_FILE", tmp_path / "state.json")
     monkeypatch.setattr(routes, "DATA_DIR", tmp_path)
@@ -4376,15 +4819,10 @@ def test_build_current_session_recovers_subagents_from_state_and_inbox(tmp_path,
 
 async def test_clear_session_id_removes_live_flow_residue(tmp_path, monkeypatch):
     from cyrene import agent
-    from cyrene.agent import state as _agent_state
     from cyrene.agent import session as _agent_session
-    from cyrene.agent import agent as _agent_core
-    from cyrene.agent import coordinator as _agent_coordinator
-    from cyrene.agent import guidance as _agent_guidance
-    from cyrene.agent import round as _agent_round
-    from cyrene import inbox
+    from cyrene.runtime import inbox
     from cyrene import subagent
-    from webui import routes
+    from cyrene.workbench import runtime as routes
 
     _patch_state_file(monkeypatch, tmp_path / "state.json")
     _patch_data_dir(monkeypatch, tmp_path)
@@ -4425,7 +4863,7 @@ async def test_clear_session_id_removes_live_flow_residue(tmp_path, monkeypatch)
 
 
 def test_build_user_reads_local_username(monkeypatch):
-    from webui import routes
+    from cyrene.workbench import runtime as routes
 
     monkeypatch.setenv("USER", "localtester")
     monkeypatch.delenv("USERNAME", raising=False)
@@ -4440,8 +4878,8 @@ def test_build_user_reads_local_username(monkeypatch):
 
 
 def test_live_flow_staggers_subagents_when_tool_stacks_are_tall(monkeypatch):
-    from cyrene import debug
-    from webui import routes
+    from cyrene.observability import debug
+    from cyrene.workbench import runtime as routes
 
     monkeypatch.setattr(debug, "get_recent_events", lambda limit=200: [])
     raw_msgs = [
@@ -4507,9 +4945,9 @@ def test_live_flow_staggers_subagents_when_tool_stacks_are_tall(monkeypatch):
 
 
 def test_live_flow_stacks_multiple_rounds_and_keeps_comm_edges(tmp_path, monkeypatch):
-    from cyrene import inbox
-    from cyrene import debug
-    from webui import routes
+    from cyrene.runtime import inbox
+    from cyrene.observability import debug
+    from cyrene.workbench import runtime as routes
 
     monkeypatch.setattr(debug, "get_recent_events", lambda limit=200: [])
     monkeypatch.setattr(routes, "DATA_DIR", tmp_path)
@@ -4540,8 +4978,8 @@ def test_live_flow_stacks_multiple_rounds_and_keeps_comm_edges(tmp_path, monkeyp
 
 
 def test_live_flow_prunes_extra_user_only_tail_rounds(monkeypatch):
-    from cyrene import debug
-    from webui import routes
+    from cyrene.observability import debug
+    from cyrene.workbench import runtime as routes
 
     monkeypatch.setattr(debug, "get_recent_events", lambda limit=200: [])
     raw_msgs = [
@@ -4559,8 +4997,8 @@ def test_live_flow_prunes_extra_user_only_tail_rounds(monkeypatch):
 
 
 def test_live_flow_keeps_guided_continuation_inside_same_round(monkeypatch):
-    from cyrene import debug
-    from webui import routes
+    from cyrene.observability import debug
+    from cyrene.workbench import runtime as routes
 
     monkeypatch.setattr(debug, "get_recent_events", lambda limit=200: [])
     raw_msgs = [
@@ -4584,8 +5022,8 @@ def test_live_flow_keeps_guided_continuation_inside_same_round(monkeypatch):
 
 
 def test_live_flow_attaches_live_registry_to_latest_substantive_round(monkeypatch):
-    from cyrene import debug
-    from webui import routes
+    from cyrene.observability import debug
+    from cyrene.workbench import runtime as routes
 
     monkeypatch.setattr(debug, "get_recent_events", lambda limit=200: [])
     raw_msgs = [
@@ -4630,9 +5068,9 @@ def test_live_flow_attaches_live_registry_to_latest_substantive_round(monkeypatc
 
 
 def test_live_flow_filters_comm_edges_by_round_id(tmp_path, monkeypatch):
-    from cyrene import inbox
-    from cyrene import debug
-    from webui import routes
+    from cyrene.runtime import inbox
+    from cyrene.observability import debug
+    from cyrene.workbench import runtime as routes
 
     monkeypatch.setattr(debug, "get_recent_events", lambda limit=200: [])
     monkeypatch.setattr(routes, "DATA_DIR", tmp_path)
@@ -4665,8 +5103,8 @@ def test_live_flow_filters_comm_edges_by_round_id(tmp_path, monkeypatch):
 
 
 def test_live_flow_filters_recent_events_to_current_round(monkeypatch):
-    from cyrene import debug
-    from webui import routes
+    from cyrene.observability import debug
+    from cyrene.workbench import runtime as routes
 
     monkeypatch.setattr(debug, "get_recent_events", lambda limit=200: [
         {
@@ -4705,8 +5143,8 @@ def test_live_flow_filters_recent_events_to_current_round(monkeypatch):
 
 
 def test_live_flow_does_not_merge_stale_subagent_card_into_new_round(monkeypatch):
-    from cyrene import debug
-    from webui import routes
+    from cyrene.observability import debug
+    from cyrene.workbench import runtime as routes
 
     monkeypatch.setattr(debug, "get_recent_events", lambda limit=200: [])
     raw_msgs = [
@@ -4758,7 +5196,7 @@ def test_live_flow_does_not_merge_stale_subagent_card_into_new_round(monkeypatch
 
 
 def test_infer_subagent_entries_prefers_latest_spawn_round_over_stale_registry():
-    from webui import routes
+    from cyrene.workbench import runtime as routes
 
     raw_msgs = [
         {"role": "user", "content": "old", "round_id": "round_old"},
@@ -4792,8 +5230,8 @@ def test_infer_subagent_entries_prefers_latest_spawn_round_over_stale_registry()
 
 
 def test_live_flow_uses_registry_when_state_is_empty(monkeypatch):
-    from cyrene import debug
-    from webui import routes
+    from cyrene.observability import debug
+    from cyrene.workbench import runtime as routes
 
     monkeypatch.setattr(debug, "get_recent_events", lambda limit=200: [
         {"type": "phase_transition", "detail": "Live subagents spawned"},
@@ -4830,7 +5268,7 @@ def test_live_flow_uses_registry_when_state_is_empty(monkeypatch):
 
 
 def test_convert_messages_keeps_assistant_entries_with_thinking_or_tools():
-    from webui import routes
+    from cyrene.workbench import runtime as routes
 
     raw_msgs = [
         {"role": "user", "content": "start"},
@@ -4849,7 +5287,7 @@ def test_convert_messages_keeps_assistant_entries_with_thinking_or_tools():
 
 
 def test_convert_messages_merges_adjacent_trace_only_assistant_entries():
-    from webui import routes
+    from cyrene.workbench import runtime as routes
 
     raw_msgs = [
         {"role": "assistant", "content": "", "reasoning_content": "first pass", "round_id": "round_1"},
@@ -4869,7 +5307,7 @@ def test_convert_messages_merges_adjacent_trace_only_assistant_entries():
 
 
 def test_convert_messages_merges_adjacent_trace_only_entries_with_same_client_request_id():
-    from webui import routes
+    from cyrene.workbench import runtime as routes
 
     raw_msgs = [
         {"role": "assistant", "content": "", "reasoning_content": "first", "round_id": "round_1", "client_request_id": "req_1"},
@@ -4890,7 +5328,7 @@ def test_convert_messages_merges_adjacent_trace_only_entries_with_same_client_re
 
 
 def test_convert_messages_merges_trace_only_assistant_into_following_body_reply():
-    from webui import routes
+    from cyrene.workbench import runtime as routes
 
     raw_msgs = [
         {
@@ -4919,7 +5357,7 @@ def test_convert_messages_merges_trace_only_assistant_into_following_body_reply(
 
 
 def test_convert_messages_collapses_consecutive_duplicate_user_messages():
-    from webui import routes
+    from cyrene.workbench import runtime as routes
 
     raw_msgs = [
         {"role": "user", "content": "介绍你自己和你能做的事", "round_id": "round_1", "client_request_id": "req_1"},
@@ -4936,7 +5374,7 @@ def test_convert_messages_collapses_consecutive_duplicate_user_messages():
 
 
 def test_convert_messages_dedupes_repeated_message_ids_even_when_not_adjacent():
-    from webui import routes
+    from cyrene.workbench import runtime as routes
 
     raw_msgs = [
         {"role": "user", "content": "same prompt", "message_id": "u1", "round_id": "round_1", "client_request_id": "req_1"},
@@ -4951,7 +5389,7 @@ def test_convert_messages_dedupes_repeated_message_ids_even_when_not_adjacent():
 
 
 def test_convert_messages_collapses_repeated_user_bodies_within_one_user_block():
-    from webui import routes
+    from cyrene.workbench import runtime as routes
 
     raw_msgs = [
         {"role": "user", "content": "check", "message_id": "u1"},
@@ -4969,7 +5407,7 @@ def test_convert_messages_collapses_repeated_user_bodies_within_one_user_block()
 
 
 def test_convert_messages_marks_intermediate_replies():
-    from webui import routes
+    from cyrene.workbench import runtime as routes
 
     raw_msgs = [
         {
@@ -4999,12 +5437,8 @@ def test_convert_messages_marks_intermediate_replies():
 
 async def test_run_chat_agent_returns_main_agent_text_directly(monkeypatch, tmp_path):
     from cyrene import agent
-    from cyrene.agent import state as _agent_state
     from cyrene.agent import session as _agent_session
     from cyrene.agent import agent as _agent_core
-    from cyrene.agent import coordinator as _agent_coordinator
-    from cyrene.agent import guidance as _agent_guidance
-    from cyrene.agent import round as _agent_round
 
     _patch_state_file(monkeypatch, tmp_path / "state.json")
     _patch_data_dir(monkeypatch, tmp_path)
@@ -5031,12 +5465,8 @@ async def test_run_chat_agent_returns_main_agent_text_directly(monkeypatch, tmp_
 
 async def test_run_chat_agent_returns_main_text_when_internal_trace_has_no_final_message(monkeypatch, tmp_path):
     from cyrene import agent
-    from cyrene.agent import state as _agent_state
     from cyrene.agent import session as _agent_session
     from cyrene.agent import agent as _agent_core
-    from cyrene.agent import coordinator as _agent_coordinator
-    from cyrene.agent import guidance as _agent_guidance
-    from cyrene.agent import round as _agent_round
 
     _patch_state_file(monkeypatch, tmp_path / "state.json")
     _patch_data_dir(monkeypatch, tmp_path)
@@ -5068,14 +5498,8 @@ async def test_run_chat_agent_returns_main_text_when_internal_trace_has_no_final
 
 
 async def test_tool_bash_returns_early_when_interrupted(monkeypatch):
-    from cyrene import agent
     from cyrene.agent import state as _agent_state
-    from cyrene.agent import session as _agent_session
-    from cyrene.agent import agent as _agent_core
-    from cyrene.agent import coordinator as _agent_coordinator
-    from cyrene.agent import guidance as _agent_guidance
-    from cyrene.agent import round as _agent_round
-    from cyrene import tools
+    from cyrene.tool_impl.core import bash as tools
 
     interrupt_event = asyncio.Event()
     monkeypatch.setattr(_agent_state, "_interrupt_event", interrupt_event)
@@ -5098,12 +5522,6 @@ async def test_tool_bash_returns_early_when_interrupted(monkeypatch):
 
 async def test_interrupt_active_run_clears_after_locked_run_finishes():
     from cyrene import agent
-    from cyrene.agent import state as _agent_state
-    from cyrene.agent import session as _agent_session
-    from cyrene.agent import agent as _agent_core
-    from cyrene.agent import coordinator as _agent_coordinator
-    from cyrene.agent import guidance as _agent_guidance
-    from cyrene.agent import round as _agent_round
 
     agent._interrupt_event.clear()
     locked = asyncio.Event()
@@ -5168,12 +5586,7 @@ async def test_interrupt_active_run_cancels_active_session_task(monkeypatch):
 
 async def test_run_agent_clears_stale_interrupt_before_starting(monkeypatch):
     from cyrene import agent
-    from cyrene.agent import state as _agent_state
-    from cyrene.agent import session as _agent_session
-    from cyrene.agent import agent as _agent_core
     from cyrene.agent import coordinator as _agent_coordinator
-    from cyrene.agent import guidance as _agent_guidance
-    from cyrene.agent import round as _agent_round
 
     seen = {}
 
@@ -5197,12 +5610,7 @@ async def test_run_main_agent_summarizes_and_cancels_subagents_when_monitoring_i
     # in the background" notice — that path was removed).
     from cyrene import agent
     from cyrene.agent import state as _agent_state
-    from cyrene.agent import session as _agent_session
-    from cyrene.agent import agent as _agent_core
-    from cyrene.agent import coordinator as _agent_coordinator
-    from cyrene.agent import guidance as _agent_guidance
-    from cyrene.agent import round as _agent_round
-    from cyrene import inbox
+    from cyrene.runtime import inbox
     from cyrene import subagent
 
     # The monitoring loop waits on the module-level ``_interrupt_event`` (a from-import
@@ -5271,11 +5679,6 @@ async def test_run_main_agent_summarizes_and_cancels_subagents_when_monitoring_i
 async def test_run_main_agent_retries_invalid_phase1_tool_and_returns_model_explanation(monkeypatch):
     from cyrene import agent
     from cyrene.agent import state as _agent_state
-    from cyrene.agent import session as _agent_session
-    from cyrene.agent import agent as _agent_core
-    from cyrene.agent import coordinator as _agent_coordinator
-    from cyrene.agent import guidance as _agent_guidance
-    from cyrene.agent import round as _agent_round
 
     calls = []
     responses = iter([
@@ -5312,14 +5715,8 @@ async def test_run_main_agent_retries_invalid_phase1_tool_and_returns_model_expl
     assert saved
 
 
-async def test_refresh_session_labels_persists_titles(monkeypatch, tmp_path):
+async def test_refresh_session_labels_is_a_compatibility_noop(monkeypatch, tmp_path):
     from cyrene import agent
-    from cyrene.agent import state as _agent_state
-    from cyrene.agent import session as _agent_session
-    from cyrene.agent import agent as _agent_core
-    from cyrene.agent import coordinator as _agent_coordinator
-    from cyrene.agent import guidance as _agent_guidance
-    from cyrene.agent import round as _agent_round
 
     _patch_state_file(monkeypatch, tmp_path / "state.json")
     _patch_data_dir(monkeypatch, tmp_path)
@@ -5329,27 +5726,30 @@ async def test_refresh_session_labels_persists_titles(monkeypatch, tmp_path):
         {"role": "assistant", "content": "ok", "round_id": "round_1"},
     ])
 
-    async def fake_call_llm(messages, tools=None, max_tokens=32000, **kwargs):
-        return {"content": '{"round_title":"加密货币辩论","session_title":"加密货币多代理讨论"}'}
-
-    _patch_call_llm(monkeypatch, fake_call_llm)
+    hidden_namer = AsyncMock()
+    _patch_call_llm(monkeypatch, hidden_namer)
 
     await agent._refresh_session_labels("讨论加密货币辩论结构", "round_1")
     state = json.loads(agent.STATE_FILE.read_text(encoding="utf-8"))
     labels = agent.get_session_labels()
 
-    assert state["session_title"] == "加密货币多代理讨论"
-    assert all(msg.get("round_title") == "加密货币辩论" for msg in state["messages"] if msg.get("round_id") == "round_1")
-    assert labels["round_title"] == "加密货币辩论"
-    assert labels["session_title"] == "加密货币多代理讨论"
+    hidden_namer.assert_not_awaited()
+    assert "session_title" not in state
+    assert all(
+        "round_title" not in msg
+        for msg in state["messages"]
+        if msg.get("round_id") == "round_1"
+    )
+    assert labels["round_title"] == ""
+    assert labels["session_title"] == ""
 
     await agent._save_session_messages(state["messages"])
     preserved = json.loads(agent.STATE_FILE.read_text(encoding="utf-8"))
-    assert preserved["session_title"] == "加密货币多代理讨论"
+    assert "session_title" not in preserved
 
 
 def test_build_current_session_uses_saved_session_and_round_titles(tmp_path, monkeypatch):
-    from webui import routes
+    from cyrene.workbench import runtime as routes
 
     monkeypatch.setattr(routes, "STATE_FILE", tmp_path / "state.json")
     monkeypatch.setattr(routes, "DATA_DIR", tmp_path)
@@ -5375,7 +5775,7 @@ def test_build_current_session_uses_saved_session_and_round_titles(tmp_path, mon
 
 
 def test_build_current_session_uses_latest_round_id_for_chat_sidebar(tmp_path, monkeypatch):
-    from webui import routes
+    from cyrene.workbench import runtime as routes
 
     monkeypatch.setattr(routes, "STATE_FILE", tmp_path / "state.json")
     monkeypatch.setattr(routes, "DATA_DIR", tmp_path)
@@ -5398,7 +5798,7 @@ def test_build_current_session_uses_latest_round_id_for_chat_sidebar(tmp_path, m
 
 
 def test_build_archive_sessions_reads_titles_and_splits_rounds(tmp_path, monkeypatch):
-    from webui import routes
+    from cyrene.workbench import runtime as routes
 
     monkeypatch.setattr(routes, "CONVERSATIONS_DIR", tmp_path / "conversations")
     monkeypatch.setattr(routes, "STATE_FILE", tmp_path / "state.json")
@@ -5433,7 +5833,7 @@ def test_build_archive_sessions_reads_titles_and_splits_rounds(tmp_path, monkeyp
 
 
 def test_build_archive_sessions_splits_multiple_same_day_sessions_by_archive_session_id(tmp_path, monkeypatch):
-    from webui import routes
+    from cyrene.workbench import runtime as routes
 
     monkeypatch.setattr(routes, "CONVERSATIONS_DIR", tmp_path / "conversations")
     monkeypatch.setattr(routes, "STATE_FILE", tmp_path / "state.json")
@@ -5494,8 +5894,8 @@ async def test_stream_agent_reply_surfaces_model_failure_instead_of_done(monkeyp
     """Issue #7: a failing agent run (model timeout/5xx/network) must surface an
     `error` event and publish session status `error` — never get swallowed into a
     silent `done` (the symptom users hit as "模型失败只回 done")."""
-    from webui import routes
-    from cyrene import debug
+    from cyrene.workbench import runtime as routes
+    from cyrene.observability import debug
 
     events = []
 
@@ -5525,8 +5925,8 @@ async def test_stream_agent_reply_surfaces_model_failure_instead_of_done(monkeyp
 async def test_stream_agent_reply_still_publishes_done_on_success(monkeypatch):
     """Regression guard for the issue-#7 finally gating: a successful run must
     still stream the reply and publish session status `done` (and no `error`)."""
-    from webui import routes
-    from cyrene import debug
+    from cyrene.workbench import runtime as routes
+    from cyrene.observability import debug
 
     events = []
 
@@ -5656,7 +6056,6 @@ async def test_streamed_chat_only_final_reply_persists_usage(monkeypatch, tmp_pa
     """Chat-only streaming should persist the usage from the single phase-1 call."""
     from cyrene import agent
     from cyrene.agent import state as _agent_state
-    from cyrene.agent import agent as _agent_core
 
     _patch_state_file(monkeypatch, tmp_path / "state.json")
     _patch_data_dir(monkeypatch, tmp_path)
@@ -5693,3 +6092,26 @@ async def test_streamed_chat_only_final_reply_persists_usage(monkeypatch, tmp_pa
     ]
     assert final_entries, "streamed final reply should be persisted"
     assert final_entries[-1].get("usage", {}).get("total_tokens") == 12
+
+
+def test_recent_main_agent_activity_ignores_completed_accounting_events_and_terminal_phases():
+    from datetime import datetime, timedelta, timezone
+
+    from cyrene.workbench.session_view import has_recent_main_agent_activity
+
+    now = datetime.now(timezone.utc)
+
+    def stamp(offset):
+        return (now + timedelta(seconds=offset)).isoformat()
+
+    assert has_recent_main_agent_activity([
+        {"type": "session_update", "status": "running", "timestamp": stamp(-4)},
+        {"type": "llm_call", "caller": "main_agent", "status": "completed", "timestamp": stamp(-3)},
+        {"type": "phase_transition", "to": "done", "timestamp": stamp(-2)},
+    ], now) is False
+
+    assert has_recent_main_agent_activity([
+        {"type": "tool_call_started", "caller": "main_agent", "tool_call_id": "a", "timestamp": stamp(-4)},
+        {"type": "tool_call_started", "caller": "main_agent", "tool_call_id": "b", "timestamp": stamp(-3)},
+        {"type": "tool_call_finished", "caller": "main_agent", "tool_call_id": "a", "timestamp": stamp(-2)},
+    ], now) is True

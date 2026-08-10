@@ -1,9 +1,13 @@
 import sys
+import hashlib
 import json
 import re
 import sqlite3
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock
+
+from fastapi import APIRouter, FastAPI
+from fastapi.testclient import TestClient
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 
@@ -12,6 +16,72 @@ def _prompt_json(prompt: str, marker: str) -> dict:
     payload = prompt.split(marker, 1)[1].lstrip()
     value, _ = json.JSONDecoder().raw_decode(payload)
     return value
+
+
+def test_behavior_media_route_rebases_restored_path_with_spaces(
+    monkeypatch, tmp_path
+):
+    from cyrene import learning
+    from route import learning as learning_routes
+
+    data_dir = tmp_path / "Application Support" / "Cyrene" / "data"
+    target = data_dir / "behavior-media" / "turn_1" / "capture.png"
+    target.parent.mkdir(parents=True)
+    target.write_bytes(b"\x89PNG\r\n\x1a\n")
+    old_path = (
+        "/Users/old/Library/Application Support/Cyrene/"
+        "data/behavior-media/turn_1/capture.png"
+    )
+
+    async def list_tool_chains(_project="", _limit=500):
+        return [{
+            "chain": [{
+                "tool": "desktop.use",
+                "output_summary": f'{{"path":"{old_path}"}}',
+            }],
+        }]
+
+    monkeypatch.setattr(learning_routes, "DATA_DIR", data_dir)
+    monkeypatch.setattr(learning, "list_tool_chains", list_tool_chains)
+    app = FastAPI()
+    router = APIRouter()
+    learning_routes.register_learning_routes(router, None, "")
+    app.include_router(router)
+
+    response = TestClient(app).get(
+        "/api/tool-chain-media", params={"path": old_path}
+    )
+
+    assert response.status_code == 200
+    assert response.content == b"\x89PNG\r\n\x1a\n"
+
+
+def test_installed_skill_path_rebases_after_portable_restore(
+    monkeypatch, tmp_path
+):
+    from cyrene.learning import skills
+
+    installed_root = tmp_path / "current" / "data" / "installed_skills"
+    skill_dir = installed_root / "demo-skill"
+    skill_dir.mkdir(parents=True)
+    (skill_dir / "SKILL.md").write_text(
+        "---\nname: Demo Skill\ndescription: Restored skill\n---\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(skills, "_SKILLS_DIR", installed_root)
+
+    payload = skills.skill_payload_from_record({
+        "id": "demo-skill",
+        "enabled": True,
+        "stored_path": (
+            "/Users/old/Library/Application Support/Cyrene/"
+            "data/installed_skills/demo-skill"
+        ),
+    })
+
+    assert payload is not None
+    assert payload["name"] == "Demo Skill"
+    assert Path(payload["stored_path"]) == skill_dir
 
 
 async def _fake_llm_json(prompt: str, *, caller: str = "behavior_learning"):
@@ -35,7 +105,7 @@ async def _fake_llm_json(prompt: str, *, caller: str = "behavior_learning"):
 
 
 async def _init_behavior(tmp_path, monkeypatch):
-    from cyrene import behavior_learning as bl
+    from cyrene.learning import engine as bl
 
     await bl.init(tmp_path, tmp_path)
     monkeypatch.setattr(bl, "_call_llm_json", _fake_llm_json)
@@ -323,6 +393,38 @@ async def test_learning_agent_shell_script_is_validated_persisted_and_hash_check
     _, ok, reason = await bl._execute_script_step(steps[0]["implementation_reference"], {})
     assert ok is False
     assert reason == "script_integrity_error"
+
+
+async def test_learned_script_path_rebases_after_portable_restore(
+    tmp_path, monkeypatch
+):
+    bl = await _init_behavior(tmp_path, monkeypatch)
+    script = (
+        tmp_path
+        / "learned_skill_scripts"
+        / "restored-skill"
+        / "run.sh"
+    )
+    script.parent.mkdir(parents=True)
+    source = "#!/bin/sh\nprintf restored\n"
+    script.write_text(source, encoding="utf-8")
+
+    output, ok, reason = await bl._execute_script_step(
+        {
+            "script_path": (
+                "/Users/old/Library/Application Support/Cyrene/"
+                "data/learned_skill_scripts/restored-skill/run.sh"
+            ),
+            "source_sha256": hashlib.sha256(source.encode("utf-8")).hexdigest(),
+            "language": "shell",
+        },
+        {},
+    )
+
+    assert ok is True
+    assert reason == ""
+    assert output == "restored"
+
 
 async def test_behavior_learning_sanitizes_legacy_scheduler_prompts(tmp_path, monkeypatch):
     bl = await _init_behavior(tmp_path, monkeypatch)
@@ -798,7 +900,9 @@ async def test_assignment_agent_receives_complete_purpose_catalog_in_one_call(tm
 
     assert len(assignments) == 3
     assert [item["purpose"] for item in assignments[2]["existing_candidates"]] == ["修复导出逻辑", "整理导出文档"]
-    assert [item["purpose"] for item in assignments[2]["all_historical_purposes"]] == ["查询天气", "修复导出逻辑", "整理导出文档"]
+    # A single-tool lookup is not reusable skill evidence and must not spend a
+    # background LLM call merely to populate the historical purpose catalog.
+    assert [item["purpose"] for item in assignments[2]["all_historical_purposes"]] == ["修复导出逻辑", "整理导出文档"]
     candidates = sorted(await bl.list_skill_candidates(), key=lambda item: item["purpose"])
     assert len(candidates) == 2
     assert next(item for item in candidates if item["purpose"] == "修复导出逻辑")["occurrence_count"] == 2
@@ -872,7 +976,7 @@ def _make_step(tool_name: str) -> dict:
 
 async def test_parameterized_runner_applies_typed_defaults(tmp_path, monkeypatch):
     bl = await _init_behavior(tmp_path, monkeypatch)
-    from cyrene.tool_impl import run_learned_skill as runner
+    from cyrene.tool_impl.skills import run_learned_skill as runner
 
     skill = _make_skill_with_steps([{
         "enabled": True,
@@ -901,7 +1005,7 @@ async def test_parameterized_runner_applies_typed_defaults(tmp_path, monkeypatch
 
 
 def test_parameterized_runner_detects_unsafe_legacy_wrapper():
-    from cyrene.tool_impl import run_learned_skill as runner
+    from cyrene.tool_impl.skills import run_learned_skill as runner
 
     wrapper = {
         "enabled": True,
@@ -913,7 +1017,7 @@ def test_parameterized_runner_detects_unsafe_legacy_wrapper():
 
 async def test_skill_risk_level_inferred_on_creation(tmp_path, monkeypatch):
     """Skills containing high-risk tools must get risk_level='high' at creation time."""
-    from cyrene import behavior_learning as bl
+    from cyrene.learning import engine as bl
 
     # Directly test the helper — no DB needed
     assert bl._infer_skill_risk_level([]) == "none"
@@ -922,6 +1026,11 @@ async def test_skill_risk_level_inferred_on_creation(tmp_path, monkeypatch):
     assert bl._infer_skill_risk_level([_make_step("Write")]) == "high"
     assert bl._infer_skill_risk_level([_make_step("schedule_task")]) == "high"
     assert bl._infer_skill_risk_level([_make_step("start_shell")]) == "high"
+    assert bl._infer_skill_risk_level([_make_step("browser_navigate")]) == "none"
+    assert bl._infer_skill_risk_level([_make_step("browser_click_ref")]) == "none"
+    assert bl._infer_skill_risk_level([_make_step("browser_snapshot")]) == "none"
+    assert bl._infer_skill_risk_level([_make_step("browser_type_ref")]) == "high"
+    assert bl._infer_skill_risk_level([_make_step("browser_upload_files")]) == "high"
     # Mixed: one safe + one risky → high
     assert bl._infer_skill_risk_level([_make_step("read_file"), _make_step("Edit")]) == "high"
     # Disabled risky step should not count
@@ -933,3 +1042,31 @@ async def test_skill_risk_level_inferred_on_creation(tmp_path, monkeypatch):
     assert bl._has_skillworthy_steps([_make_step("ask_user")]) is False
     assert bl._has_auto_replay_blocked_step([_make_step("ask_user")]) is True
     assert bl._has_auto_replay_blocked_step([_make_step("browser.user.navigate")]) is True
+
+
+async def test_browser_learned_skill_replays_and_skips_legacy_progress_step(tmp_path, monkeypatch):
+    bl = await _init_behavior(tmp_path, monkeypatch)
+    from cyrene.tool_impl.skills import run_learned_skill as runner
+
+    skill = _make_skill_with_steps([
+        _make_step("send_message"),
+        _make_step("browser_navigate"),
+        _make_step("browser_click_ref"),
+        _make_step("browser_snapshot"),
+    ], risk_level="high")
+    monkeypatch.setattr(bl, "get_learned_skill_by_name", AsyncMock(return_value=skill))
+    execute = AsyncMock(return_value="ok")
+    monkeypatch.setattr(runner, "_execute_tool", execute)
+    monkeypatch.setattr(bl, "record_manual_skill_run", AsyncMock())
+
+    result = await runner._tool_run_learned_skill(
+        {"name": skill["name"], "params": {}}, MagicMock(), 1, str(tmp_path / "db.sqlite"), None,
+    )
+
+    payload = runner.json.loads(result)
+    assert payload["ok"] is True
+    assert [call.args[0] for call in execute.await_args_list] == [
+        "browser_navigate",
+        "browser_click_ref",
+        "browser_snapshot",
+    ]

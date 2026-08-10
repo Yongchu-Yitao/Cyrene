@@ -1,5 +1,7 @@
 # Development
 
+[English](development.md) · [简体中文](development.zh-CN.md)
+
 ## Debugging
 
 ### Verbose Mode
@@ -7,9 +9,9 @@
 Logs every LLM call (full prompt, tools, response, duration) and context trace to `data/debug_*.jsonl`:
 
 ```bash
-python -m cyrene.local_cli --verbose
+python -m cyrene.runtime.host --verbose
 # or
-python -m cyrene --workbench --verbose
+uv run python -m cyrene --verbose
 ```
 
 ### Debug Logs
@@ -32,9 +34,11 @@ Each log line is a JSON object:
  "duration_ms": 150.2}
 ```
 
-### Context Debugger
+### Context tracing
 
-When `--verbose` is enabled, every LLM call is tagged with `_ctx` provenance metadata describing where each context block came from. These traces are written to the debug JSONL and exposed through the Web UI **Context Debugger** page and the API:
+When `--verbose` is enabled, every LLM call is tagged with `_ctx` provenance
+metadata describing where each context block came from. These traces are
+written to the debug JSONL and exposed through the API:
 
 ```bash
 # List recent events
@@ -50,7 +54,11 @@ Via the CLI:
 cyrene flow --session run_live --round round_xxx --id evt_3b22f9a5c0cb
 ```
 
-### Event Inspection (legacy)
+Context tracing intentionally has no Workbench page after the classic UI
+consolidation; use the API, CLI, or
+`python -m cyrene.observability.context_debug` instead.
+
+### Historical event inspection API
 
 When `--verbose` is enabled, every LLM call and tool call gets a unique `event_id` (e.g., `evt_3b22f9a5c0cb`) that persists to disk. Even after a daemon restart, you can inspect full event details:
 
@@ -62,26 +70,63 @@ curl http://localhost:4242/api/events/list
 curl http://localhost:4242/api/events/evt_3b22f9a5c0cb
 ```
 
-### Web UI Debug
+### Runtime and Workbench inspection
 
-The **Status** page shows live debug logs, system metrics, worker status, and service health. The **Agent Flow** page visualizes every step of the agent's execution as an interactive SVG flowchart.
+Use `cyrene status` for daemon health and metrics. Workbench chat/task details
+show live Agent, Tool, Subagent, permission, and browser execution state;
+`cyrene flow` and the event APIs provide the durable per-round trace.
 
 ## Testing
 
-The project uses `pytest` with async support and a 60-second thread-based timeout to avoid deadlocks.
+The project uses `pytest` with async support and a 60-second thread-based
+timeout to avoid deadlocks. Runtime paths are isolated by test fixtures.
 
 ```bash
-# Fresh dev test setup (installs package + test dependencies)
-uv pip install -e ".[dev]"
+# Fresh locked dev/test setup
+uv sync --all-extras
 
 # Run all tests
-uv run pytest -q
+uv run pytest -q -W error::pytest.PytestUnhandledThreadExceptionWarning
 
 # Run a specific test file
 python -m pytest tests/test_context_trace.py -v
+
+# Topbar tabs, pinned resources, Library drag, export compatibility, and layout
+uv run pytest -q \
+  tests/test_workbench_recent_session_tabs.py \
+  tests/test_workbench_pinned_resources.py \
+  tests/test_workbench_library.py \
+  tests/test_chat_attachment_flow.py \
+  tests/test_electron_titlebar_alignment.py
 ```
 
-Some tests require an LLM endpoint to be configured. Set `OPENAI_API_KEY` and `OPENAI_BASE_URL` before running those tests.
+The normal suite uses fakes/local fixtures and must not require a live LLM
+credential. Live provider/channel checks are separate manual integration tests.
+
+The latest stable working-tree run uses Python `3.12.11`, FastAPI `0.136.1`,
+and Pydantic `2.13.4` from the locked environment and passes all 1,402 tests.
+
+During the documentation audit, the OpenAPI test initially failed because its
+hash had been captured with an ambient Python 3.13.12 environment using FastAPI
+0.115.8 / Pydantic 2.12.5 rather than the versions already recorded in
+`uv.lock`. A direct comparison found ten generator-level differences: four
+upload schemas use `contentMediaType: application/octet-stream` instead of
+`format: binary`, and the standard `ValidationError` schema adds `input` and
+`ctx`. No route or application request model had changed.
+
+The strict 259-operation hash was therefore recaptured in the locked
+environment, and the contract now also asserts the exact FastAPI and Pydantic
+generator versions. No schema field is filtered or ignored. Future dependency
+updates must deliberately update both the version baseline and the reviewed
+hash.
+
+Additional release-relevant checks:
+
+```bash
+node --test electron/app-use.test.js
+python -m compileall -q src
+git diff --check
+```
 
 ## Project Conventions
 
@@ -92,31 +137,65 @@ Some tests require an LLM endpoint to be configured. Set `OPENAI_API_KEY` and `O
 - Type hints for all function signatures
 - Async/await throughout (asyncio)
 
-### Module Pattern
+### Module and Dependency Pattern
 
 Each module has a single responsibility. Cross-module communication uses:
 
 - Function calls for direct imports
-- Event bus (`debug.publish_event` / `debug.subscribe`) for real-time UI updates
-- File-based inbox (`inbox.py`) for inter-agent messaging
+- Event bus (`cyrene.observability.debug`) for real-time UI updates
+- Runtime inbox (`cyrene.runtime.inbox`) for inter-agent messaging
 - SQLite for structured persistence
+
+Canonical implementation packages are `agent`, `workbench`, `model_runtime`,
+`learning`, `runtime`, `observability`, `knowledge`, `channels`, `tooling`, and
+`tool_impl`. Historical imports are maintained in
+`cyrene.runtime.module_compat`; do not add duplicate top-level shim files.
+
+FastAPI adapters belong under `src/route/`. Domain code must not import route or
+Web UI modules.
 
 ### Adding New Tools
 
-1. Create a new module under `cyrene/tool_impl/` (e.g., `my_tool.py`)
+1. Create the module in the matching domain under `cyrene/tool_impl/`
+   (for example `cyrene/tool_impl/knowledge/my_tool.py`)
 2. Export `TOOL_DEF` (dict) and `handler` (async callable)
-3. Register the module in `cyrene/registry_tools.py::_NATIVE_TOOL_MODULES`
-4. Optionally add a UI/settings entry in `src/webui/static/app/settings.jsx`
+3. Add its module path to `cyrene/tool_impl/__init__.py::NATIVE_TOOL_MODULES`
+4. If it is deferred, assign one stable capability ID in
+   `cyrene/tooling/packs.py::CAPABILITY_BINDINGS`; direct tools must be an
+   intentional addition to the fixed wire contract
+5. Add policy metadata/tests and optionally a UI/settings entry
 
 For MCP server support, add servers through the Settings UI or `cyrene mcp add`.
 
 ## CI / Release
 
-The repository uses GitHub Actions for release builds:
+The repository has two GitHub Actions workflows:
 
-- Workflow: `.github/workflows/release.yml`
-- Triggers: version tags (`v*`) or manual dispatch with a choice of default UI (`workbench` or `agent`)
-- Builds: PyInstaller + Electron for macOS, Windows (x64/ARM64), and Linux
-- Smoke test: packaged app `--smoke-test`
+- `.github/workflows/ci.yml` runs for pull requests, pushes to `main`, and
+  manual dispatch. Its Linux jobs sync every locked extra, compile `src`, run
+  the full pytest suite with unhandled thread warnings promoted to errors,
+  build the WebUI, verify `src/webui/static/app` is current, and run Electron
+  App Use tests.
+- `.github/workflows/release.yml` runs for version tags (`v*`) or manual
+  dispatch. The compatibility `ui_mode` input still accepts `workbench` or
+  historical `agent`, but the build normalizes both values to the sole
+  Workbench UI. It builds PyInstaller + Electron artifacts for macOS, Windows
+  (x64/ARM64), and Linux and runs the packaged app `--smoke-test`.
 
-There is currently no continuous-integration test job; run tests locally before tagging a release.
+The PR workflow does not replace real-platform packaged smoke, visual,
+credentialed external-service, upgrade, or installer checks. Complete those
+release gates before tagging. The frozen smoke test imports critical compiled
+dependencies and all historical module aliases.
+
+### Electron Development
+
+```bash
+uv sync --extra dev
+cd electron
+npm install
+npm run dev
+```
+
+Electron directly executes `src/cyrene/local_cli.py`, which bootstraps the
+checkout and delegates to `cyrene.runtime.host`. Keep that physical launcher
+until Electron's process contract changes.

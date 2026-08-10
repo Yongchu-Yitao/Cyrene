@@ -15,15 +15,17 @@ _run_subagent 原本在 agent.py 中，移到此处避免 tools.py 与 agent.py 
 """
 
 import asyncio
+import hashlib
 import inspect
 import json
 import logging
 from contextvars import ContextVar
 import random
+import re
 from datetime import datetime, timezone
 from typing import Any, Awaitable, Callable
 
-from cyrene import debug
+from cyrene.model_runtime.messages import parse_tool_arguments
 from cyrene.config import DATA_DIR
 
 logger = logging.getLogger(__name__)
@@ -34,6 +36,10 @@ WAITING = "waiting"          # 活干完了，等别人消息
 RESUMED = "resumed"          # 等待期间收到新消息，继续干活
 DONE = "done"                # 真正完成
 TIMEOUT = "timeout"          # 超时退出
+INCOMPLETE = "incomplete"    # 安全熔断或无进展，保留部分结果
+EXECUTION_MODE = "execution"
+DISCUSSION_MODE = "discussion"
+_TERMINAL_STATUSES = frozenset({DONE, TIMEOUT, INCOMPLETE})
 _MAX_WAITING_RESULT_CHARS = 6000
 _MAX_FINAL_RESULT_CHARS = 16000
 _MAX_COLLECT_RESULT_CHARS = 12000
@@ -45,8 +51,8 @@ _SUMMARY_AGENT_PREFIX = "agent_summary_"
 
 def _is_deep_research() -> bool:
     try:
-        from cyrene.agent.state import _deep_research_mode
-        return _deep_research_mode.get()
+        from cyrene.agent.context import deep_research_enabled
+        return deep_research_enabled()
     except Exception:
         return False
 
@@ -57,6 +63,7 @@ def _limit(val: int) -> int:
 _registry: dict[str, dict] = {}
 _lock = asyncio.Lock()
 _direct_message_mode: ContextVar[bool] = ContextVar("_direct_message_mode", default=False)
+_discussion_states: dict[str, dict[str, Any]] = {}
 
 # 已生成子 agent 的 asyncio 任务，用于中断时取消
 _subagent_tasks: dict[str, asyncio.Task] = {}
@@ -69,6 +76,33 @@ def _matches_round(entry: dict[str, Any], round_id: str = "", session_id: str = 
     if not round_id:
         return True
     return str(entry.get("round_id", "")) == round_id
+
+
+def _discussion_key(entry: dict[str, Any]) -> str:
+    session_id = str(entry.get("session_id") or "")
+    discussion_id = str(
+        entry.get("discussion_id")
+        or entry.get("round_id")
+        or ""
+    )
+    return f"{session_id}\x1f{discussion_id}"
+
+
+def _matches_discussion(
+    entry: dict[str, Any],
+    *,
+    discussion_id: str = "",
+    session_id: str = "",
+) -> bool:
+    if session_id and str(entry.get("session_id") or "") != session_id:
+        return False
+    if not discussion_id:
+        return True
+    return str(
+        entry.get("discussion_id")
+        or entry.get("round_id")
+        or ""
+    ) == discussion_id
 
 
 async def _publish_registry_event(agent_id: str, *, message: str = "") -> None:
@@ -88,6 +122,10 @@ async def _publish_registry_event(agent_id: str, *, message: str = "") -> None:
         "caller": f"subagent_{agent_id}",
         "task": entry.get("task", ""),
         "status": entry.get("status", ""),
+        "mode": entry.get("mode", EXECUTION_MODE),
+        "outcome": entry.get("outcome", ""),
+        "stop_reason": entry.get("stop_reason", ""),
+        "metrics": dict(entry.get("metrics") or {}),
         "result_preview": str(entry.get("result", "") or "")[:200],
         "message_count": len(entry.get("messages", [])),
         "created_at": entry.get("created_at"),
@@ -98,38 +136,130 @@ async def _publish_registry_event(agent_id: str, *, message: str = "") -> None:
         event["message"] = str(message)[:240]
     session_id = str(entry.get("session_id") or "")
     if session_id:
-        await debug.publish_event(event, session_id=session_id)
-    else:
-        await debug.publish_event(event)
+        event["session_id"] = session_id
+    # Use the run-context publisher so paired controllers receive the same
+    # sub-agent lifecycle that Workbench consumes from SSE. It still publishes
+    # to the ordinary debug event bus when no conversation run is attached.
+    from cyrene.agent.context import publish_runtime_event
+
+    await publish_runtime_event(event)
 
 
-async def register(agent_id: str, task: str, round_id: str = "", role: str = "", session_id: str = "") -> None:
+def _normalize_mode(mode: str = "", role: str = "") -> str:
+    """Return the effective worker mode.
+
+    Moderator/participant roles are intrinsically conversational, so they
+    always use discussion limits even if an older caller omitted ``mode``.
+    """
+    if str(role or "").strip().lower() in {"moderator", "participant"}:
+        return DISCUSSION_MODE
+    normalized = str(mode or "").strip().lower()
+    return DISCUSSION_MODE if normalized == DISCUSSION_MODE else EXECUTION_MODE
+
+
+def _normalize_success_criteria(value: Any) -> list[str]:
+    if not isinstance(value, list):
+        return []
+    criteria: list[str] = []
+    for item in value:
+        text = str(item or "").strip()
+        if text and text not in criteria:
+            criteria.append(text[:500])
+    return criteria[:20]
+
+
+async def register(
+    agent_id: str,
+    task: str,
+    round_id: str = "",
+    role: str = "",
+    session_id: str = "",
+    mode: str = "",
+    success_criteria: list[str] | None = None,
+    discussion_max_messages: int | None = None,
+    discussion_id: str = "",
+) -> bool:
     """注册一个子 agent。
 
     *role* 可选，目前支持 "moderator"（主持人）/ "participant"（参与者），
     用于多 agent 讨论时区分谁负责开场、谁负责等待发言。
     """
-    from cyrene.inbox import clear_inbox
+    from cyrene.runtime.inbox import clear_inbox
 
-    await clear_inbox(agent_id, session_id=session_id)
     async with _lock:
+        existing = _registry.get(agent_id)
+        active_task = _subagent_tasks.get(agent_id)
+        if (
+            existing is not None
+            and str(existing.get("status") or "") not in _TERMINAL_STATUSES
+        ) or (
+            active_task is not None
+            and not active_task.done()
+        ):
+            return False
         now = datetime.now(timezone.utc).isoformat()
         entry = {
             "task": task,
             "status": RUNNING,
+            "mode": _normalize_mode(mode, role),
+            "success_criteria": _normalize_success_criteria(success_criteria),
+            "outcome": "",
+            "stop_reason": "",
             "result": "",
             "messages": [],
+            "delivered_communications": [],
+            "metrics": {
+                "model_turns": 0,
+                "tool_calls": 0,
+                "lease_tool_calls": 0,
+                "no_progress_turns": 0,
+                "prompt_tokens": 0,
+                "completion_tokens": 0,
+                "total_tokens": 0,
+                "estimated_cost_usd": 0.0,
+                "lease_estimated_cost_usd": 0.0,
+                "context_compactions": 0,
+                "discussion_rounds": 0,
+                "discussion_messages": 0,
+            },
             "created_at": now,
             "updated_at": now,
         }
+        if discussion_max_messages is not None:
+            try:
+                entry["discussion_max_messages"] = max(
+                    1,
+                    min(50, int(discussion_max_messages)),
+                )
+            except (TypeError, ValueError):
+                pass
         if round_id:
             entry["round_id"] = round_id
+        if _normalize_mode(mode, role) == DISCUSSION_MODE:
+            entry["discussion_id"] = str(discussion_id or round_id or "").strip()
         if role:
             entry["role"] = role
         if session_id:
             entry["session_id"] = session_id
         _registry[agent_id] = entry
+        if entry["mode"] == DISCUSSION_MODE:
+            state = _discussion_states.setdefault(_discussion_key(entry), {
+                "rounds": 0,
+                "messages_total": 0,
+                "no_new_info_rounds": 0,
+                "current_round_has_new_information": False,
+                "seen_message_fingerprints": [],
+                "participants": [],
+                "moderator_id": "",
+            })
+            participants = state.setdefault("participants", [])
+            if agent_id not in participants:
+                participants.append(agent_id)
+            if role == "moderator":
+                state["moderator_id"] = agent_id
+    await clear_inbox(agent_id, session_id=session_id)
     await _publish_registry_event(agent_id)
+    return True
 
 
 async def save_messages(agent_id: str, messages: list) -> None:
@@ -141,7 +271,7 @@ async def save_messages(agent_id: str, messages: list) -> None:
     await _publish_registry_event(agent_id)
 
 
-async def mark_done(agent_id: str, result: str = "") -> None:
+async def mark_done(agent_id: str, result: str = "", reason: str = "completed") -> None:
     """标记 agent 已完成。
 
     Result 会累加而非覆盖 —— 这样被唤醒的 agent 跑完第二轮再次 mark_done 时，
@@ -149,7 +279,15 @@ async def mark_done(agent_id: str, result: str = "") -> None:
     """
     async with _lock:
         if agent_id in _registry:
+            current = _registry[agent_id]
+            if (
+                current.get("status") == TIMEOUT
+                or str(current.get("outcome") or "") == "cancelled"
+            ):
+                return
             _registry[agent_id]["status"] = DONE
+            _registry[agent_id]["outcome"] = "completed"
+            _registry[agent_id]["stop_reason"] = str(reason or "completed")[:120]
             _registry[agent_id]["updated_at"] = datetime.now(timezone.utc).isoformat()
             existing = _registry[agent_id].get("result", "") or ""
             if result and result != existing:
@@ -165,16 +303,54 @@ async def mark_done(agent_id: str, result: str = "") -> None:
     await _publish_registry_event(agent_id)
 
 
-async def mark_timeout(agent_id: str, result: str = "") -> None:
+async def mark_timeout(
+    agent_id: str,
+    result: str = "",
+    reason: str = "timeout",
+) -> None:
     """Mark an active subagent as settled after a timeout or infrastructure failure."""
     async with _lock:
         if agent_id not in _registry:
             return
+        if str(_registry[agent_id].get("outcome") or "") == "cancelled":
+            return
         _registry[agent_id]["status"] = TIMEOUT
+        _registry[agent_id]["outcome"] = "resource_exhausted"
+        _registry[agent_id]["stop_reason"] = str(reason or "timeout")[:120]
         _registry[agent_id]["updated_at"] = datetime.now(timezone.utc).isoformat()
         if result:
             _registry[agent_id]["result"] = str(result)[:_limit(_MAX_FINAL_RESULT_CHARS)]
     await _publish_registry_event(agent_id)
+
+
+async def mark_incomplete(
+    agent_id: str,
+    result: str = "",
+    reason: str = "incomplete",
+    outcome: str = "partial",
+) -> None:
+    """Settle a worker with an explicit non-success outcome."""
+    async with _lock:
+        if agent_id not in _registry:
+            return
+        current = _registry[agent_id]
+        if (
+            current.get("status") == TIMEOUT
+            or str(current.get("outcome") or "") == "cancelled"
+        ):
+            return
+        _registry[agent_id]["status"] = INCOMPLETE
+        normalized_outcome = str(outcome or "partial").strip().lower()
+        _registry[agent_id]["outcome"] = (
+            normalized_outcome
+            if normalized_outcome in {"partial", "blocked", "resource_exhausted"}
+            else "partial"
+        )
+        _registry[agent_id]["stop_reason"] = str(reason or "incomplete")[:120]
+        _registry[agent_id]["updated_at"] = datetime.now(timezone.utc).isoformat()
+        if result:
+            _registry[agent_id]["result"] = str(result)[:_limit(_MAX_FINAL_RESULT_CHARS)]
+    await _publish_registry_event(agent_id, message=str(reason or "incomplete"))
 
 
 async def reactivate(agent_id: str) -> bool:
@@ -186,8 +362,18 @@ async def reactivate(agent_id: str) -> bool:
         entry = _registry.get(agent_id)
         if entry is None:
             return False
-        if entry["status"] in (DONE, TIMEOUT):
+        if entry["status"] in _TERMINAL_STATUSES:
             entry["status"] = RESUMED
+            entry["outcome"] = ""
+            entry["stop_reason"] = ""
+            if _normalize_mode(
+                str(entry.get("mode") or ""),
+                str(entry.get("role") or ""),
+            ) == EXECUTION_MODE:
+                metrics = entry.setdefault("metrics", {})
+                metrics["lease_tool_calls"] = 0
+                metrics["lease_estimated_cost_usd"] = 0.0
+                metrics["no_progress_turns"] = 0
             entry["updated_at"] = datetime.now(timezone.utc).isoformat()
             should_publish = True
         else:
@@ -225,6 +411,13 @@ async def get_round_id(agent_id: str) -> str:
         return str(entry.get("round_id", "")) if entry else ""
 
 
+async def get_session_id(agent_id: str) -> str:
+    """Return the persisted parent session for message-scope isolation."""
+    async with _lock:
+        entry = _registry.get(agent_id)
+        return str(entry.get("session_id", "")) if entry else ""
+
+
 async def get_role(agent_id: str) -> str:
     """获取 agent 的讨论角色（moderator / participant / 空）。"""
     async with _lock:
@@ -232,13 +425,198 @@ async def get_role(agent_id: str) -> str:
         return str(entry.get("role", "")) if entry else ""
 
 
-async def round_has_moderator(round_id: str = "", exclude: str = "") -> bool:
+async def get_mode(agent_id: str) -> str:
+    """Return the persisted execution/discussion mode for a worker."""
+    async with _lock:
+        entry = _registry.get(agent_id)
+        if not entry:
+            return EXECUTION_MODE
+        return _normalize_mode(str(entry.get("mode") or ""), str(entry.get("role") or ""))
+
+
+async def get_success_criteria(agent_id: str) -> list[str]:
+    async with _lock:
+        entry = _registry.get(agent_id)
+        return _normalize_success_criteria(entry.get("success_criteria") if entry else [])
+
+
+async def get_discussion_max_messages(agent_id: str) -> int | None:
+    async with _lock:
+        entry = _registry.get(agent_id)
+        if not entry or entry.get("discussion_max_messages") is None:
+            return None
+        try:
+            return max(1, min(50, int(entry["discussion_max_messages"])))
+        except (TypeError, ValueError):
+            return None
+
+
+async def get_discussion_id(agent_id: str) -> str:
+    async with _lock:
+        entry = _registry.get(agent_id)
+        if not entry:
+            return ""
+        return str(entry.get("discussion_id") or entry.get("round_id") or "")
+
+
+async def _get_discussion_state(agent_id: str) -> dict[str, Any]:
+    async with _lock:
+        entry = _registry.get(agent_id)
+        if not entry:
+            return {
+                "rounds": 0,
+                "messages_total": 0,
+                "no_new_info_rounds": 0,
+            }
+        state = _discussion_states.get(_discussion_key(entry), {})
+        return {
+            "rounds": int(state.get("rounds") or 0),
+            "messages_total": int(state.get("messages_total") or 0),
+            "no_new_info_rounds": int(state.get("no_new_info_rounds") or 0),
+        }
+
+
+async def _update_metrics(agent_id: str, **updates: Any) -> None:
+    async with _lock:
+        entry = _registry.get(agent_id)
+        if not entry:
+            return
+        metrics = entry.setdefault("metrics", {})
+        for key, value in updates.items():
+            metric_key = str(key)
+            if metric_key.endswith("cost_usd"):
+                try:
+                    metrics[metric_key] = round(max(0.0, float(value)), 8)
+                except (TypeError, ValueError):
+                    continue
+            else:
+                try:
+                    metrics[metric_key] = max(0, int(value))
+                except (TypeError, ValueError):
+                    continue
+        entry["updated_at"] = datetime.now(timezone.utc).isoformat()
+
+
+async def _claim_discussion_message_slot(
+    agent_id: str,
+    *,
+    max_per_agent: int,
+    max_total: int,
+) -> tuple[bool, str]:
+    """Atomically enforce per-agent and round-wide discussion message caps."""
+    async with _lock:
+        entry = _registry.get(agent_id)
+        if not entry:
+            return False, "agent_not_registered"
+        metrics = entry.setdefault("metrics", {})
+        per_agent = int(metrics.get("discussion_messages") or 0)
+        state = _discussion_states.setdefault(_discussion_key(entry), {
+            "rounds": 0,
+            "messages_total": 0,
+            "no_new_info_rounds": 0,
+            "current_round_has_new_information": False,
+            "seen_message_fingerprints": [],
+            "participants": [agent_id],
+            "moderator_id": "",
+        })
+        total = int(state.get("messages_total") or 0)
+        if per_agent >= max_per_agent:
+            return False, "discussion_message_limit_per_agent"
+        if total >= max_total:
+            return False, "discussion_message_limit_total"
+        metrics["discussion_messages"] = per_agent + 1
+        state["messages_total"] = total + 1
+        entry["updated_at"] = datetime.now(timezone.utc).isoformat()
+        return True, ""
+
+
+async def _release_discussion_message_slot(agent_id: str) -> None:
+    async with _lock:
+        entry = _registry.get(agent_id)
+        if not entry:
+            return
+        metrics = entry.setdefault("metrics", {})
+        metrics["discussion_messages"] = max(
+            0,
+            int(metrics.get("discussion_messages") or 0) - 1,
+        )
+        state = _discussion_states.get(_discussion_key(entry))
+        if state is not None:
+            state["messages_total"] = max(
+                0,
+                int(state.get("messages_total") or 0) - 1,
+            )
+
+
+async def _record_discussion_delivery(
+    agent_id: str,
+    content: str,
+) -> dict[str, int]:
+    fingerprint = _message_fingerprint(content)
+    async with _lock:
+        entry = _registry.get(agent_id)
+        if not entry:
+            return {"rounds": 0, "no_new_info_rounds": 0}
+        state = _discussion_states.setdefault(_discussion_key(entry), {
+            "rounds": 0,
+            "messages_total": 0,
+            "no_new_info_rounds": 0,
+            "current_round_has_new_information": False,
+            "seen_message_fingerprints": [],
+            "participants": [agent_id],
+            "moderator_id": "",
+        })
+        seen = state.setdefault("seen_message_fingerprints", [])
+        adds_information = fingerprint not in seen
+        if adds_information:
+            seen.append(fingerprint)
+            if len(seen) > 500:
+                del seen[:-500]
+
+        moderator_id = str(state.get("moderator_id") or "")
+        starts_round = (
+            str(entry.get("role") or "") == "moderator"
+            or not moderator_id
+        )
+        if starts_round:
+            if int(state.get("rounds") or 0) > 0:
+                if bool(state.get("current_round_has_new_information")):
+                    state["no_new_info_rounds"] = 0
+                else:
+                    state["no_new_info_rounds"] = (
+                        int(state.get("no_new_info_rounds") or 0) + 1
+                    )
+            state["rounds"] = int(state.get("rounds") or 0) + 1
+            state["current_round_has_new_information"] = adds_information
+        elif adds_information:
+            state["current_round_has_new_information"] = True
+        return {
+            "rounds": int(state.get("rounds") or 0),
+            "no_new_info_rounds": int(state.get("no_new_info_rounds") or 0),
+        }
+
+
+async def _discussion_message_total(agent_id: str) -> int:
+    return int((await _get_discussion_state(agent_id)).get("messages_total") or 0)
+
+
+async def round_has_moderator(
+    round_id: str = "",
+    exclude: str = "",
+    discussion_id: str = "",
+    session_id: str = "",
+) -> bool:
     """本轮是否存在主持人（除 *exclude* 之外）。"""
     async with _lock:
         return any(
             info.get("role") == "moderator" and aid != exclude
             for aid, info in _registry.items()
             if _matches_round(info, round_id)
+            and _matches_discussion(
+                info,
+                discussion_id=discussion_id,
+                session_id=session_id,
+            )
         )
 
 
@@ -275,7 +653,13 @@ async def set_running(agent_id: str) -> None:
     await _publish_registry_event(agent_id)
 
 
-async def can_receive(agent_id: str, round_id: str = "") -> bool:
+async def can_receive(
+    agent_id: str,
+    round_id: str = "",
+    discussion_id: str = "",
+    session_id: str = "",
+    strict_session: bool = False,
+) -> bool:
     """检查 agent 是否能接收消息。
 
     任何已注册的 agent 都能收 —— 即使是 DONE/TIMEOUT 的也可以，
@@ -283,7 +667,47 @@ async def can_receive(agent_id: str, round_id: str = "") -> bool:
     """
     async with _lock:
         entry = _registry.get(agent_id)
-        return entry is not None and _matches_round(entry, round_id)
+        return (
+            entry is not None
+            and _matches_round(entry, round_id, session_id)
+            and (
+                not strict_session
+                or str(entry.get("session_id") or "") == session_id
+            )
+            and _matches_discussion(
+                entry,
+                discussion_id=discussion_id,
+                session_id=session_id,
+            )
+        )
+
+
+async def list_discussion_peer_ids(agent_id: str) -> list[str]:
+    async with _lock:
+        source = _registry.get(agent_id)
+        if not source:
+            return []
+        discussion_id = str(
+            source.get("discussion_id")
+            or source.get("round_id")
+            or ""
+        )
+        session_id = str(source.get("session_id") or "")
+        return [
+            peer_id
+            for peer_id, info in _registry.items()
+            if peer_id != agent_id
+            and _normalize_mode(
+                str(info.get("mode") or ""),
+                str(info.get("role") or ""),
+            ) == DISCUSSION_MODE
+            and str(info.get("session_id") or "") == session_id
+            and _matches_discussion(
+                info,
+                discussion_id=discussion_id,
+                session_id=session_id,
+            )
+        ]
 
 
 async def all_quiescent(round_id: str = "") -> bool:
@@ -351,22 +775,49 @@ async def get_status(agent_id: str) -> str | None:
         return entry["status"]
 
 
-async def get_context(exclude: str = "", round_id: str = "") -> str:
+async def get_context(
+    exclude: str = "",
+    round_id: str = "",
+    discussion_id: str = "",
+    session_id: str = "",
+    strict_session: bool = False,
+) -> str:
     """格式化注册表为文本，注入 agent context。"""
     async with _lock:
         entries = [
             (aid, info)
             for aid, info in _registry.items()
             if _matches_round(info, round_id)
+            and _normalize_mode(
+                str(info.get("mode") or ""),
+                str(info.get("role") or ""),
+            ) == DISCUSSION_MODE
+            and (
+                not strict_session
+                or str(info.get("session_id") or "") == session_id
+            )
+            and _matches_discussion(
+                info,
+                discussion_id=discussion_id,
+                session_id=session_id,
+            )
         ]
         if not entries:
             return ""
         lines = ["[活跃子 agent]"]
         for aid, info in entries:
             marker = "-> " if aid == exclude else "  "
-            st = {"running": "工作中", "waiting": "活干完了等大家", "resumed": "恢复工作", "done": "已完成", "timeout": "超时"}.get(info["status"], info["status"])
+            st = {
+                "running": "工作中",
+                "waiting": "活干完了等大家",
+                "resumed": "恢复工作",
+                "done": "已完成",
+                "timeout": "超时",
+                "incomplete": "部分完成",
+            }.get(info["status"], info["status"])
             role_tag = {"moderator": "（主持人）", "participant": "（参与者）"}.get(info.get("role", ""), "")
-            lines.append(f"  {marker}{aid}{role_tag}: {info['task'][:50]} [{st}]")
+            mode_tag = "（讨论）" if info.get("mode") == DISCUSSION_MODE and not role_tag else ""
+            lines.append(f"  {marker}{aid}{role_tag}{mode_tag}: {info['task'][:50]} [{st}]")
         return "\n".join(lines)
 
 
@@ -378,10 +829,26 @@ async def clear(round_id: str | None = None, session_id: str = "") -> None:
     async with _lock:
         if not round_id and not session_id:
             _registry.clear()
+            _discussion_states.clear()
             return
-        doomed = [aid for aid, info in _registry.items() if _matches_round(info, round_id, session_id)]
+        doomed = [
+            aid
+            for aid, info in _registry.items()
+            if _matches_round(info, round_id, session_id)
+        ]
         for aid in doomed:
             _registry.pop(aid, None)
+        active_discussion_keys = {
+            _discussion_key(info)
+            for info in _registry.values()
+            if _normalize_mode(
+                str(info.get("mode") or ""),
+                str(info.get("role") or ""),
+            ) == DISCUSSION_MODE
+        }
+        for key in list(_discussion_states):
+            if key not in active_discussion_keys:
+                _discussion_states.pop(key, None)
 
 
 async def collect_results(round_id: str = "") -> str:
@@ -393,17 +860,23 @@ async def collect_results(round_id: str = "") -> str:
                 continue
             task = str(info.get("task", "") or "").strip()
             status = str(info.get("status", "") or "").strip()
+            outcome = str(info.get("outcome", "") or "").strip()
+            stop_reason = str(info.get("stop_reason", "") or "").strip()
             result = info.get("result", "")
             if result:
                 lines.append(
                     f"[{aid}] task: {task or '—'}\n"
                     f"status: {status or 'unknown'}\n"
+                    f"outcome: {outcome or 'unknown'}\n"
+                    f"stop_reason: {stop_reason or '—'}\n"
                     f"result:\n{str(result)[:_limit(_MAX_COLLECT_RESULT_CHARS)]}"
                 )
             else:
                 lines.append(
                     f"[{aid}] task: {task or '—'}\n"
                     f"status: {status or 'unknown'}\n"
+                    f"outcome: {outcome or 'unknown'}\n"
+                    f"stop_reason: {stop_reason or '—'}\n"
                     "result:\n无结果"
                 )
         return "\n\n".join(lines) if lines else "无 subagent 结果。"
@@ -469,10 +942,51 @@ async def get_snapshot(round_id: str = "", session_id: str = "") -> dict:
             snapshot[aid] = {
                 "task": info.get("task", ""),
                 "status": info.get("status", ""),
+                "mode": info.get("mode", EXECUTION_MODE),
+                "success_criteria": list(info.get("success_criteria") or []),
+                "discussion_id": info.get("discussion_id", ""),
+                "discussion_max_messages": info.get("discussion_max_messages"),
+                "outcome": info.get("outcome", ""),
+                "stop_reason": info.get("stop_reason", ""),
+                "metrics": dict(info.get("metrics") or {}),
                 "result": info.get("result", ""),
                 "messages": msgs,
             }
+            if info.get("mode") == DISCUSSION_MODE:
+                state = _discussion_states.get(_discussion_key(info), {})
+                snapshot[aid]["discussion_state"] = {
+                    "rounds": int(state.get("rounds") or 0),
+                    "messages_total": int(state.get("messages_total") or 0),
+                    "no_new_info_rounds": int(
+                        state.get("no_new_info_rounds") or 0
+                    ),
+                }
         return snapshot
+
+
+def registry_snapshot(
+    *,
+    round_id: str = "",
+    session_id: str = "",
+) -> dict[str, dict[str, Any]]:
+    """Return a shallow, read-only-style copy for synchronous UI projections."""
+    return {
+        agent_id: dict(info)
+        for agent_id, info in _registry.items()
+        if _matches_round(info, round_id, session_id)
+    }
+
+
+def active_subagent_task_ids() -> set[str]:
+    return {
+        agent_id
+        for agent_id, task in _subagent_tasks.items()
+        if task is not None and not task.done()
+    }
+
+
+def direct_message_mode_enabled() -> bool:
+    return bool(_direct_message_mode.get())
 
 
 def _flow_message_copy(message: dict[str, Any]) -> dict[str, Any]:
@@ -526,6 +1040,13 @@ async def build_flow_snapshot(round_id: str) -> dict[str, Any]:
         snapshot_agents[agent_id] = {
             "task": info.get("task", ""),
             "status": info.get("status", ""),
+            "mode": info.get("mode", EXECUTION_MODE),
+            "success_criteria": list(info.get("success_criteria") or []),
+            "discussion_id": info.get("discussion_id", ""),
+            "discussion_max_messages": info.get("discussion_max_messages"),
+            "outcome": info.get("outcome", ""),
+            "stop_reason": info.get("stop_reason", ""),
+            "metrics": dict(info.get("metrics") or {}),
             "result": info.get("result", ""),
             "messages": [
                 _flow_message_copy(message)
@@ -650,7 +1171,7 @@ async def build_group_chat_messages(round_id: str) -> dict[str, Any]:
     """Build group-chat-formatted messages for a given round.
 
     Extracts:
-    - ``send_agent_message`` / ``broadcast_agent_message`` tool calls from
+    - ``subagent.send_message`` / ``subagent.broadcast`` module invocations from
       each subagent's message history, formatted as chat entries with
       ``@recipient`` / ``@所有人`` prepended to the body.
     - Each subagent's final ``result`` (when non-trivial).
@@ -743,7 +1264,7 @@ async def build_group_chat_messages(round_id: str) -> dict[str, Any]:
         agent_created = str(info.get("created_at") or now)
         agent_msgs = info.get("messages") or []
 
-        # 1. Extract send_agent_message / broadcast_agent_message tool calls
+        # 1. Extract subagent communication module invocations.
         for msg_idx, msg in enumerate(agent_msgs):
             if not isinstance(msg, dict):
                 continue
@@ -756,13 +1277,29 @@ async def build_group_chat_messages(round_id: str) -> dict[str, Any]:
                 if not isinstance(fn, dict):
                     continue
                 name = str(fn.get("name", "") or "").strip()
-                if name not in ("send_agent_message", "broadcast_agent_message", "send_message_to_user"):
+                try:
+                    args = parse_tool_arguments(fn.get("arguments"))
+                except (TypeError, ValueError):
                     continue
                 try:
-                    args = json.loads(fn.get("arguments", "{}"))
-                except (json.JSONDecodeError, TypeError):
+                    from cyrene.tooling import resolve_wire_call
+
+                    resolution = resolve_wire_call(
+                        name,
+                        args,
+                        actor="subagent",
+                    )
+                    name = resolution.concrete_name
+                    args = resolution.concrete_arguments
+                except Exception:
                     continue
-                # send_message_to_user uses "text"; others use "content"
+                if name not in (
+                    "send_agent_message",
+                    "broadcast_agent_message",
+                    "send_message_to_user",
+                ):
+                    continue
+                # delivery.send_message_to_user uses "text"; peer messages use "content"
                 content = str(args.get("content", "") or args.get("text", "") or "").strip()
                 if not content:
                     continue
@@ -915,12 +1452,13 @@ async def run_summary_subagent(
     subagent transcripts directly — the main agent will synthesise from the
     full raw material without any intermediate compression.
     """
-    from cyrene.agent.state import _call_llm, _current_session_id
-    from cyrene.llm import _assistant_text
+    from cyrene.agent.context import get_current_session_id
+    from cyrene.agent.model_service import call_agent_model
+    from cyrene.model_runtime.messages import assistant_text
 
     summary_agent_id = _summary_agent_id(round_id)
     transcript = await build_round_summary_transcript(round_id=round_id, exclude_ids={summary_agent_id})
-    summary_session_id = _current_session_id.get()
+    summary_session_id = get_current_session_id()
 
     # Deep research: return raw concatenated transcript, no LLM compression
     if _is_deep_research():
@@ -990,7 +1528,7 @@ async def run_summary_subagent(
     await save_messages(summary_agent_id, messages)
 
     try:
-        response = await _call_llm(messages, tools=None, max_tokens=None)
+        response = await call_agent_model(messages, tools=None, max_tokens=None)
         assistant_entry: dict[str, Any] = {"role": "assistant", "content": response.get("content") or ""}
         if response.get("reasoning_content"):
             assistant_entry["reasoning_content"] = response["reasoning_content"]
@@ -998,7 +1536,7 @@ async def run_summary_subagent(
             assistant_entry["usage"] = response["usage"]
         messages.append(assistant_entry)
         await save_messages(summary_agent_id, messages)
-        final_text = _assistant_text(response).strip() or "No summary was produced."
+        final_text = assistant_text(response).strip() or "No summary was produced."
     except Exception as exc:
         logger.exception("Summary sub-agent %s crashed", summary_agent_id)
         final_text = f"Summary sub-agent crashed: {exc}"
@@ -1018,19 +1556,327 @@ def _spawn_subagent_task(coro, agent_id: str) -> asyncio.Task:
     If the coroutine raises before its internal try/except, the exception
     would otherwise be silently lost.
     """
+    existing = _subagent_tasks.get(agent_id)
+    if existing is not None and not existing.done():
+        if inspect.iscoroutine(coro):
+            coro.close()
+        raise RuntimeError(f"Sub-agent '{agent_id}' is already running.")
     task = asyncio.create_task(coro)
     task.add_done_callback(lambda t: _log_task_exception(t, agent_id))
-    task.add_done_callback(lambda t: _subagent_tasks.pop(agent_id, None))
+    task.add_done_callback(
+        lambda t: (
+            _subagent_tasks.pop(agent_id, None)
+            if _subagent_tasks.get(agent_id) is t
+            else None
+        )
+    )
     _subagent_tasks[agent_id] = task
     return task
 
 
+def spawn_subagent_task(coro, agent_id: str) -> asyncio.Task:
+    """Public task-ownership boundary for agent orchestration."""
+    return _spawn_subagent_task(coro, agent_id)
+
+
+def _bounded_int_setting(name: str, default: int, minimum: int, maximum: int) -> int:
+    from cyrene.runtime.settings_store import get as get_setting
+
+    try:
+        value = int(get_setting(name, default) or default)
+    except (TypeError, ValueError):
+        value = default
+    return max(minimum, min(maximum, value))
+
+
+def _bounded_float_setting(
+    name: str,
+    default: float,
+    minimum: float,
+    maximum: float,
+) -> float:
+    from cyrene.runtime.settings_store import get as get_setting
+
+    try:
+        raw = get_setting(name, default)
+        value = float(default if raw is None else raw)
+    except (TypeError, ValueError):
+        value = default
+    return max(minimum, min(maximum, value))
+
+
+def _optional_int_setting(name: str, default: int, maximum: int) -> int:
+    """Read an integer setting where zero explicitly disables the override."""
+    from cyrene.runtime.settings_store import get as get_setting
+
+    try:
+        raw = get_setting(name, default)
+        value = int(default if raw is None else raw)
+    except (TypeError, ValueError):
+        value = default
+    return max(0, min(maximum, value))
+
+
+def _subagent_limits(mode: str) -> dict[str, Any]:
+    if mode == DISCUSSION_MODE:
+        return {
+            "max_rounds": _bounded_int_setting("subagent_discussion_max_rounds", 5, 1, 50),
+            "max_messages_per_agent": _bounded_int_setting(
+                "subagent_discussion_max_messages_per_agent", 4, 1, 50
+            ),
+            "max_total_messages": _bounded_int_setting(
+                "subagent_discussion_max_total_messages", 20, 1, 500
+            ),
+            "max_message_chars": _bounded_int_setting(
+                "subagent_discussion_max_message_chars", 2000, 100, 20000
+            ),
+            "max_wall_seconds": _bounded_int_setting(
+                "subagent_discussion_max_wall_seconds", 600, 30, 86400
+            ),
+            "max_tool_calls": _bounded_int_setting(
+                "subagent_discussion_max_tool_calls", 50, 1, 1000
+            ),
+            "no_new_info_rounds": _bounded_int_setting(
+                "subagent_discussion_no_new_info_rounds", 2, 1, 20
+            ),
+        }
+    return {
+        "max_tool_calls": _bounded_int_setting(
+            "subagent_execution_max_tool_calls", 200, 1, 5000
+        ),
+        "max_wall_seconds": _bounded_int_setting(
+            "subagent_execution_max_wall_seconds", 1800, 30, 86400
+        ),
+        "no_progress_turns": _bounded_int_setting(
+            "subagent_execution_no_progress_turns", 3, 1, 20
+        ),
+        "checkpoint_calls": _bounded_int_setting(
+            "subagent_execution_checkpoint_calls", 20, 1, 500
+        ),
+        "max_cost_usd": _bounded_float_setting(
+            "subagent_execution_max_cost_usd", 5.0, 0.0, 1000.0
+        ),
+        "max_context_tokens": _optional_int_setting(
+            "subagent_execution_max_context_tokens", 0, 4_000_000
+        ),
+    }
+
+
+def _effective_subagent_context_limit(
+    configured_limit: int,
+    *,
+    use_secondary: bool = False,
+) -> int:
+    from cyrene.runtime.config_store import get_current_ctx_limit, get_secondary_model
+
+    if use_secondary:
+        secondary = get_secondary_model() or {}
+        model_limit = max(0, int(secondary.get("ctx_limit") or 0))
+    else:
+        model_limit = max(0, int(get_current_ctx_limit() or 0))
+    configured = max(0, int(configured_limit or 0))
+    if configured and model_limit:
+        return min(configured, model_limit)
+    return configured or model_limit
+
+
+def _compact_subagent_context(
+    messages: list[dict[str, Any]],
+    *,
+    max_context_tokens: int,
+    reserved_tokens: int = 0,
+) -> tuple[list[dict[str, Any]], int, int, bool]:
+    """Mechanically compact a worker history while preserving its task contract."""
+    from cyrene.model_runtime.client import message_token_estimate
+    from cyrene.model_runtime.compaction import compact_messages_for_storage
+
+    reserved = max(0, int(reserved_tokens or 0))
+    before = (
+        sum(message_token_estimate(message) for message in messages)
+        + reserved
+    )
+    if max_context_tokens <= 0 or before <= int(max_context_tokens * 0.60):
+        return messages, before, before, False
+    if not messages:
+        return messages, before, before, False
+
+    system_message = messages[0]
+    system_tokens = message_token_estimate(system_message)
+    tail_limit = max(200, max_context_tokens - reserved - system_tokens)
+    tail = compact_messages_for_storage(
+        list(messages[1:]),
+        ctx_limit=tail_limit,
+    )
+    compacted = [system_message, *tail]
+    after = (
+        sum(message_token_estimate(message) for message in compacted)
+        + reserved
+    )
+    if after > int(max_context_tokens * 0.90):
+        tail = compact_messages_for_storage(
+            list(messages[1:]),
+            ctx_limit=tail_limit,
+            force=True,
+        )
+        compacted = [system_message, *tail]
+        after = (
+            sum(message_token_estimate(message) for message in compacted)
+            + reserved
+        )
+    return compacted, before, after, compacted != messages
+
+
+def _response_usage_cost_usd(response: dict[str, Any]) -> tuple[dict[str, int], float]:
+    from cyrene.model_runtime.pricing import effective_price, estimate_cost, to_usd
+
+    usage = response.get("usage") if isinstance(response.get("usage"), dict) else {}
+    normalized = {
+        "prompt_tokens": max(0, int(usage.get("prompt_tokens") or 0)),
+        "completion_tokens": max(0, int(usage.get("completion_tokens") or 0)),
+        "total_tokens": max(0, int(usage.get("total_tokens") or 0)),
+        "cache_hit_tokens": max(
+            0,
+            int(usage.get("prompt_cache_hit_tokens") or 0),
+        ),
+        "cache_miss_tokens": max(
+            0,
+            int(usage.get("prompt_cache_miss_tokens") or 0),
+        ),
+    }
+    if not normalized["total_tokens"]:
+        normalized["total_tokens"] = (
+            normalized["prompt_tokens"] + normalized["completion_tokens"]
+        )
+    model = str(response.get("model") or "").strip()
+    price = to_usd(effective_price(model))
+    cost = estimate_cost(
+        price,
+        normalized["prompt_tokens"],
+        normalized["completion_tokens"],
+        cache_hit_tokens=normalized["cache_hit_tokens"],
+        cache_miss_tokens=normalized["cache_miss_tokens"],
+    )
+    return normalized, max(0.0, float(cost))
+
+
+def _tool_signature(capability_id: str, arguments: dict[str, Any]) -> str:
+    payload = json.dumps(arguments, ensure_ascii=False, sort_keys=True, separators=(",", ":"), default=str)
+    return hashlib.sha256(f"{capability_id}:{payload}".encode("utf-8")).hexdigest()
+
+
+def _result_fingerprint(result: Any) -> str:
+    normalized = re.sub(r"\s+", " ", str(result or "")).strip()
+    return hashlib.sha256(normalized.encode("utf-8")).hexdigest()
+
+
+def _tool_result_is_progress(
+    capability_id: str,
+    signature: str,
+    result_hash: str,
+    *,
+    seen_signatures: set[str],
+    seen_results: set[str],
+) -> bool:
+    """Treat observation tools as progress only when they add new evidence."""
+    normalized = str(capability_id or "").casefold()
+    observation_markers = (
+        "read", "search", "fetch", "list", "get", "query", "recall",
+        "snapshot", "status", "check", "inspect", "analyze",
+    )
+    if any(marker in normalized for marker in observation_markers):
+        return result_hash not in seen_results
+    return signature not in seen_signatures or result_hash not in seen_results
+
+
+def _message_fingerprint(content: Any) -> str:
+    normalized = re.sub(r"\s+", " ", str(content or "")).strip().casefold()
+    return hashlib.sha256(normalized.encode("utf-8")).hexdigest()
+
+
+def _quit_arguments(response: dict[str, Any]) -> dict[str, Any]:
+    for call in response.get("tool_calls") or []:
+        if str((call.get("function") or {}).get("name") or "") != "quit":
+            continue
+        try:
+            arguments = parse_tool_arguments(
+                (call.get("function") or {}).get("arguments")
+            )
+        except (TypeError, ValueError):
+            return {}
+        return arguments if isinstance(arguments, dict) else {}
+    return {}
+
+
+def _completion_evidence_missing(
+    response: dict[str, Any],
+    success_criteria: list[str],
+) -> list[str]:
+    """Return criteria without a non-empty completion evidence entry."""
+    if not success_criteria:
+        return []
+    arguments = _quit_arguments(response)
+    if str(arguments.get("completion_status") or "").strip().lower() != "completed":
+        return []
+    evidence = arguments.get("criteria_evidence")
+    if not isinstance(evidence, list):
+        return list(success_criteria)
+    covered = {
+        str(item.get("criterion") or "").strip()
+        for item in evidence
+        if isinstance(item, dict)
+        and str(item.get("criterion") or "").strip()
+        and str(item.get("evidence") or "").strip()
+    }
+    return [criterion for criterion in success_criteria if criterion not in covered]
+
+
+def _communication_delivery_succeeded(capability_id: str, result: Any) -> bool:
+    text = str(result or "").strip()
+    if capability_id == "subagent.send_message":
+        return text.startswith("Message sent to ")
+    if capability_id == "subagent.broadcast":
+        match = re.match(r"Broadcast sent to\s+(\d+)/(\d+)\s+peers", text)
+        return bool(match and int(match.group(1)) > 0)
+    return False
+
+
+async def _record_delivered_communication(
+    agent_id: str,
+    *,
+    tool_call_id: str,
+    capability_id: str,
+    arguments: dict[str, Any],
+) -> None:
+    content = str(arguments.get("content") or "").strip()
+    if not content:
+        return
+    target = (
+        "all"
+        if capability_id == "subagent.broadcast"
+        else str(arguments.get("to") or "").strip()
+    )
+    async with _lock:
+        entry = _registry.get(agent_id)
+        if not entry:
+            return
+        deliveries = entry.setdefault("delivered_communications", [])
+        if any(str(item.get("tool_call_id") or "") == tool_call_id for item in deliveries):
+            return
+        deliveries.append({
+            "tool_call_id": tool_call_id,
+            "capability_id": capability_id,
+            "to": target,
+            "content": content,
+        })
+        entry["updated_at"] = datetime.now(timezone.utc).isoformat()
+
+
 async def cancel_subagent_tasks(round_id: str, session_id: str = "") -> None:
-    """Cancel all running subagent tasks for *round_id* and mark them done immediately.
+    """Cancel all running subagent tasks for *round_id* and settle them immediately.
 
     This is called when the user hits "stop" — subagents stop whatever they are
-    doing (the asyncio task is cancelled) and their registry entry flips to
-    ``done`` so the UI updates in real time and the summary phase sees a
+    doing (the asyncio task is cancelled) and their registry entry flips to a
+    terminal incomplete state so the UI and summary phase see a
     consistent snapshot.
     """
     cancelled_ids: list[str] = []
@@ -1040,9 +1886,11 @@ async def cancel_subagent_tasks(round_id: str, session_id: str = "") -> None:
                 continue
             if agent_id.startswith(_SUMMARY_AGENT_PREFIX):
                 continue
-            if info.get("status") in ("done", "timeout"):
+            if info.get("status") in _TERMINAL_STATUSES:
                 continue
-            _registry[agent_id]["status"] = DONE
+            _registry[agent_id]["status"] = INCOMPLETE
+            _registry[agent_id]["outcome"] = "cancelled"
+            _registry[agent_id]["stop_reason"] = "user_cancelled"
             _registry[agent_id]["updated_at"] = datetime.now(timezone.utc).isoformat()
             cancelled_ids.append(agent_id)
 
@@ -1064,9 +1912,11 @@ async def timeout_subagents(agent_ids: list[str], reason: str = "子代理执行
             info = _registry.get(agent_id)
             if not info or agent_id.startswith(_SUMMARY_AGENT_PREFIX):
                 continue
-            if str(info.get("status") or "") in (DONE, TIMEOUT):
+            if str(info.get("status") or "") in _TERMINAL_STATUSES:
                 continue
             info["status"] = TIMEOUT
+            info["outcome"] = "resource_exhausted"
+            info["stop_reason"] = "parent_monitor_deadline"
             info["updated_at"] = datetime.now(timezone.utc).isoformat()
             info["result"] = str(reason)[:_limit(_MAX_FINAL_RESULT_CHARS)]
             ids.append(agent_id)
@@ -1180,49 +2030,81 @@ async def _run_subagent(
     resume_messages: list | None = None,
     use_secondary: bool = False,
     role: str = "",
+    mode: str = "",
+    success_criteria: list[str] | None = None,
 ) -> str:
-    """Run a sub-agent in its own loop.
-
-    Has its own agent loop, inbox checking, and full tool access.
-    Communicates with other agents via inbox.
-
-    If *resume_messages* is provided, the agent picks up from that history
-    instead of starting fresh — used when a DONE agent is woken up to
-    process new inbox messages.
-
-    Uses lazy imports from agent.py to avoid circular dependencies.
-    """
+    """Run a completion-driven execution worker or a bounded discussion peer."""
     from cyrene.agent.prompts import (
-        _MAIN_AGENT_PROMPT, _DEEP_RESEARCH_SUBAGENT_PROMPT,
-        _DECISION_SUBAGENT_PROMPT, _LEARNING_SUBAGENT_PROMPT, _COMPARE_SUBAGENT_PROMPT,
+        COMPARE_SUBAGENT_PROMPT,
+        DECISION_SUBAGENT_PROMPT,
+        DEEP_RESEARCH_SUBAGENT_PROMPT,
+        LEARNING_SUBAGENT_PROMPT,
+        prompt_for_enabled_tool_packs,
         workspace_scope_block,
     )
-    from cyrene.agent.state import (
-        _deep_research_mode, _current_command,
-        _call_llm, _caller_type, _current_agent_id, _current_round_id, _get_max_tool_rounds,
-        _current_session_id, active_workspace_dir,
+    from cyrene.agent.context import (
+        active_workspace_dir,
+        bind_run_context,
+        current_run_context,
     )
-    from cyrene.llm import _assistant_text, _truncate
-    from cyrene.tools import get_active_tool_defs_for_actor, is_tool_allowed_for_actor, _execute_tool
+    from cyrene.agent.model_service import call_agent_model
+    from cyrene.model_runtime.messages import assistant_text, truncate
+    from cyrene.tooling import (
+        execute_wire_tool,
+        get_subagent_wire_tool_defs,
+        resolve_wire_call,
+    )
+    from cyrene.tooling.gateway import (
+        activate_catalog_snapshot,
+        reset_catalog_snapshot,
+    )
 
-    caller_token = _caller_type.set(f"subagent_{agent_id}")
+    parent_context = current_run_context()
+    catalog_snapshot_token = activate_catalog_snapshot("subagent")
     round_id = await get_round_id(agent_id)
-    round_token = _current_round_id.set(round_id) if round_id else None
+    persisted_role = await get_role(agent_id)
+    if not role:
+        role = persisted_role
+    persisted_mode = await get_mode(agent_id)
+    effective_mode = _normalize_mode(mode or persisted_mode, role)
+    discussion_id = await get_discussion_id(agent_id)
+    criteria = _normalize_success_criteria(
+        success_criteria if success_criteria is not None else await get_success_criteria(agent_id)
+    )
+    limits = _subagent_limits(effective_mode)
+    if effective_mode == DISCUSSION_MODE:
+        per_agent_override = await get_discussion_max_messages(agent_id)
+        if per_agent_override is not None:
+            limits["max_messages_per_agent"] = min(
+                limits["max_messages_per_agent"],
+                per_agent_override,
+            )
+    run_binding = bind_run_context(
+        caller=f"subagent_{agent_id}",
+        **({"round_id": round_id} if round_id else {}),
+    )
     dm_token = _direct_message_mode.set(False)
-    _subagent_session_id = _current_session_id.get()
-    from cyrene.inbox import get_inbox_context as _get_inbox_base, mark_all_read as _mark_inbox_read_base
-    _get_inbox = lambda aid: _get_inbox_base(aid, session_id=_subagent_session_id)
-    _mark_inbox_read = lambda aid: _mark_inbox_read_base(aid, session_id=_subagent_session_id)
+    _subagent_session_id = (
+        await get_session_id(agent_id)
+        or parent_context.session_id
+    )
+    from cyrene.runtime.inbox import get_inbox_context as _get_inbox_base, mark_all_read as _mark_inbox_read_base
 
-    cmd = _current_command.get()
+    def _get_inbox(agent_id: str) -> str:
+        return _get_inbox_base(agent_id, session_id=_subagent_session_id)
+
+    async def _mark_inbox_read(agent_id: str) -> None:
+        await _mark_inbox_read_base(agent_id, session_id=_subagent_session_id)
+
+    cmd = parent_context.command
     if cmd == "help-me-decide":
-        extra_prompt = _DECISION_SUBAGENT_PROMPT
+        extra_prompt = DECISION_SUBAGENT_PROMPT
     elif cmd == "learning-plan":
-        extra_prompt = _LEARNING_SUBAGENT_PROMPT
+        extra_prompt = LEARNING_SUBAGENT_PROMPT
     elif cmd == "deep-compare":
-        extra_prompt = _COMPARE_SUBAGENT_PROMPT
-    elif _deep_research_mode.get():
-        extra_prompt = _DEEP_RESEARCH_SUBAGENT_PROMPT
+        extra_prompt = COMPARE_SUBAGENT_PROMPT
+    elif parent_context.deep_research:
+        extra_prompt = DEEP_RESEARCH_SUBAGENT_PROMPT
     else:
         extra_prompt = ""
     now = datetime.now(timezone.utc).astimezone()
@@ -1230,32 +2112,59 @@ async def _run_subagent(
         "## Current Date\n"
         f"- Current local date: {now:%Y-%m-%d} ({now:%A}).\n"
         "- Interpret relative phrases such as today, recently, this week, last week, 最近, 最近一周, 今天, 本周 relative to this date.\n"
-        "- For current weather or travel recommendations, search for current forecast/current conditions. Do not invent or substitute old years unless the user explicitly asks for historical weather."
+        "- When dealing with time-related tasks, search for current forecast/current conditions. Do not invent or substitute old years unless the user explicitly asks for historical weather."
     )
-    subagent_prompt = (
-        _MAIN_AGENT_PROMPT
-        + extra_prompt
-        + """
-
-## Sub-agent Context
-- You are a sub-agent. Complete the assigned task directly.
-- You can use regular work tools plus `send_agent_message` and `broadcast_agent_message` to coordinate with other sub-agents.
-- If you receive a [DIRECT_MESSAGE] from the user via your inbox, this is real-time guidance from the user. The user is steering your work — take it seriously. Use `send_message_to_user` ONCE to: (1) acknowledge the guidance, (2) briefly state what you will do differently. Then immediately continue working with your adjusted approach. Do NOT argue, ask follow-up questions, or chat — act on the guidance. The tool disables after one use.
-- You MUST NOT call `send_message`, `send_telegram`, `ask_user`, `spawn_subagent`, or `query_round`. If your task produced a deliverable file for the user, write it INSIDE the workspace and report its path in your `quit` summary — do NOT try to `send_file` it yourself (only the main agent can deliver files; the main agent will send it after you finish).
-- For normal rounds, report your result via `quit` — the main agent collects it. Do NOT use `send_message_to_user` in normal rounds.
-- Active sub-agents and inbox context may be injected as separate user messages before each turn.
-- Your final text is collected by the parent agent. Do not invent a separate coordinator or try to send the final answer to a non-existent agent such as "main" or "danny".
-
-## Inter-Agent Coordination
-- **One person OR broadcast — never both, never multiple.** Each turn you may send at most ONE communication message, and it must be EITHER a targeted `send_agent_message` to ONE specific agent OR a `broadcast_agent_message` to ALL. Do NOT send multiple individual messages in the same turn. If something concerns everyone, broadcast once. If it concerns one peer, message them directly.
-- **Avoid broadcast when possible.** Broadcast interrupts all peers and fills inboxes with noise. Default to targeted `send_agent_message` — only broadcast when EVERY peer genuinely needs the information (e.g. a shared source URL).
-- **Share findings directly.** When you find something another sub-agent needs, `send_agent_message` them directly with the key info. Keep it brief — a few sentences max.
-- **Ask for help.** If you're stuck or need data another agent may have, just ask via `send_agent_message`. A short question is fine.
-- **Read peer messages.** When another sub-agent sends you something, take a moment to consider it. Respond briefly if needed — remember the one-person-or-broadcast rule applies to your reply too.
-- **No handshake or readiness checks.** NEVER send messages like "ready", "waiting for moderator", "standing by", or "received". These waste tokens. Jump straight into substantive work or content.
-- **Know when to leave.** When your task is done, call `quit` immediately. No farewells, no confirmations, no waiting for permission. If you feel you're done, you're done.
-"""
+    criteria_block = (
+        "\n".join(f"- {item}" for item in criteria)
+        if criteria else
+        "- Complete the assigned task and return the requested result or artifact."
     )
+    mode_block = (
+        f"""## Execution Worker Mode
+- There is no normal model-turn or tool-round limit. Continue while the task is incomplete and the execution lease is making useful progress.
+- Finish as soon as the success criteria are satisfied. More searching or rereading is not inherently better.
+- Use the minimum sufficient tool calls. Do not reread an unchanged file or repeat an equivalent search unless prior evidence shows a concrete reason.
+- The lease checkpoints every {limits["checkpoint_calls"]} tool calls. New evidence, state change, or a completed acceptance item renews it.
+- If a checkpoint shows no progress, change approach. After {limits["no_progress_turns"]} consecutive no-progress tool rounds, return the best partial/blocked result.
+- Absolute safety fuses are {limits["max_tool_calls"]} actual tool calls, {limits["max_wall_seconds"]} seconds, and ¥{limits["max_cost_usd"]:.2f} estimated model cost (0 disables the cost fuse). They are resource guards, never normal completion targets.
+- Context is mechanically compacted before it reaches {limits["max_context_tokens"] or "the active model's configured"} token window; the task contract and recent evidence are retained."""
+        if effective_mode == EXECUTION_MODE else
+        f"""## Discussion Worker Mode
+- Contribute substantive arguments, evidence, or synthesis. Do not perform unbounded execution work.
+- Each communication turn may send at most ONE targeted peer message or ONE broadcast.
+- Runtime limits: at most {limits["max_rounds"]} discussion rounds, {limits["max_messages_per_agent"]} messages from you, {limits["max_total_messages"]} messages across the discussion, {limits["max_message_chars"]} characters per message, and {limits["max_wall_seconds"]} seconds.
+- Do not send greetings, readiness checks, acknowledgements without content, or repeated points.
+- When the topic has enough coverage or a runtime limit is reached, summarize your position and call `quit`."""
+    )
+    peer_block = (
+        """## Peer Communication
+- Use subagent.send_message for one peer or subagent.broadcast for all peers, never both in the same turn.
+- Prefer targeted messages. Broadcast only information every peer genuinely needs.
+- Read substantive peer messages and incorporate relevant evidence."""
+        if effective_mode == DISCUSSION_MODE else
+        """## Peer Communication
+- Execution workers are independent and must not send peer messages or broadcasts.
+- Return findings to the parent in normal assistant content, then call quit."""
+    )
+    subagent_prompt = f"""You are a Cyrene sub-agent with a single assigned responsibility.
+
+## Task Contract
+- Complete only the assigned task. Keep its acceptance criteria in view.
+- Success criteria:
+{criteria_block}
+- Concrete deferred capabilities are behind module gateways. Use operation=discover, then describe, then invoke.
+- You cannot ask the user, spawn subagents, query the parent round, or deliver the parent agent's final answer.
+- If your task produces a file, write it inside the workspace and report the path in normal assistant content.
+- For a normal round, write the complete result in normal assistant content, then call `quit` only as the terminal signal. Do not put the result in quit's arguments. The parent collects the assistant content.
+- If you receive a [DIRECT_MESSAGE] from the user, acknowledge it once through delivery.send_message_to_user when available, then adjust the work immediately.
+- Every tool call must be grounded in the assigned task. Do not fabricate tool success or evidence.
+
+{mode_block}
+
+{peer_block}
+- When done, call `quit` immediately. Do not wait for permission.
+
+{extra_prompt}"""
 
     if role == "moderator":
         subagent_prompt += """
@@ -1263,7 +2172,7 @@ async def _run_subagent(
 You are the **moderator** of this discussion. Your responsibilities:
 1. **Start immediately.** Your FIRST message must announce the topic and kick off the discussion. Do NOT wait for participants to confirm readiness — they are already listening.
 2. **Drive the discussion.** Call on participants by name, pose questions, redirect off-topic threads, and keep things moving.
-3. **Address one participant per turn.** Each turn, talk to ONE specific participant via `send_agent_message`. Do NOT address multiple participants in the same message — if something concerns everyone, use `broadcast_agent_message` instead.
+3. **Address one participant per turn.** Each turn, talk to ONE specific participant via `subagent.send_message`. Do NOT address multiple participants in the same message — if something concerns everyone, use `subagent.broadcast` instead.
 4. **Summarize and close.** When the discussion has covered enough ground, synthesize key points and wrap up.
 
 CRITICAL: Do NOT ask "is everyone ready?" or wait for confirmations. All participants are live and listening from the moment you speak. Begin the discussion in your very first turn.
@@ -1274,21 +2183,44 @@ CRITICAL: Do NOT ask "is everyone ready?" or wait for confirmations. All partici
 You are a **participant** in this discussion. Rules:
 1. **No readiness announcements.** Do NOT send "ready", "waiting", "standing by", or any greeting/confirmation. These are prohibited.
 2. **Respond substantively.** When the moderator or another participant addresses you, reply with actual content — arguments, evidence, opinions. Never reply with just an acknowledgment.
-3. **One person per reply.** Reply to ONE agent per turn via `send_agent_message`. If your point truly concerns everyone, use `broadcast_agent_message` instead. Do not send multiple individual replies.
-4. **Engage proactively.** If you have something relevant to say, speak up via `send_agent_message`. Don't wait to be called on for every point.
+3. **One person per reply.** Reply to ONE agent per turn via `subagent.send_message`. If your point truly concerns everyone, use `subagent.broadcast` instead. Do not send multiple individual replies.
+4. **Engage proactively.** If you have something relevant to say, speak up via `subagent.send_message`. Don't wait to be called on for every point.
 5. **Stay in character.** Focus on delivering value through the substance of your contributions.
 """
 
+    wire_tool_defs = get_subagent_wire_tool_defs()
+    enabled_wire_names = {
+        str((tool_def.get("function") or {}).get("name") or "")
+        for tool_def in wire_tool_defs
+        if str((tool_def.get("function") or {}).get("name") or "").endswith(
+            "_tools"
+        )
+    }
+    subagent_prompt = prompt_for_enabled_tool_packs(
+        subagent_prompt,
+        enabled_wire_names,
+    )
     try:
-        from cyrene.shell_runtime import resolve_shell
+        from cyrene.tooling.backends.shell_runtime import resolve_shell
         _shell_kind = resolve_shell()[0]
     except Exception:
         _shell_kind = "bash"
-    subagent_prompt += "\n\n" + temporal_context + "\n\n" + workspace_scope_block(active_workspace_dir(), shell_kind=_shell_kind)
+    subagent_prompt += (
+        "\n\n"
+        + temporal_context
+        + "\n\n"
+        + prompt_for_enabled_tool_packs(
+            workspace_scope_block(
+                active_workspace_dir(),
+                shell_kind=_shell_kind,
+            ),
+            enabled_wire_names,
+        )
+    )
     workbench_context = ""
     if _subagent_session_id:
         try:
-            from cyrene.workbench_task_context import build_subagent_context, resolve_task_scope
+            from cyrene.workbench.task_context import build_subagent_context, resolve_task_scope
 
             _payload, workbench_project, workbench_session = resolve_task_scope(
                 _subagent_session_id,
@@ -1303,6 +2235,16 @@ You are a **participant** in this discussion. Rules:
     if resume_messages:
         # 被唤醒：从已有历史续跑，注入一条提示让 LLM 知道发生了什么
         messages = list(resume_messages)
+        for index, message in enumerate(messages):
+            if (
+                isinstance(message, dict)
+                and str(message.get("role") or "") == "system"
+            ):
+                messages[index] = {
+                    **message,
+                    "content": subagent_prompt,
+                }
+                break
         messages.append({"role": "user", "content": "[你已被唤醒 — inbox 中有新消息需要处理。处理完后再决定是否 quit。]"})
         if workbench_context:
             messages.append({"role": "user", "content": "[Workbench 任务共享上下文已刷新]\n" + workbench_context})
@@ -1315,18 +2257,133 @@ You are a **participant** in this discussion. Rules:
     await set_running(agent_id)
 
     final_text = ""
-    tool_calls_since_checkpoint = 0
-    _COORDINATION_CHECKPOINT_INTERVAL = 3
+    stop_reason = "completed"
+    incomplete_outcome = ""
+    loop = asyncio.get_running_loop()
+    started_at = loop.time()
+    async with _lock:
+        persisted_metrics = dict((_registry.get(agent_id, {}).get("metrics") or {}))
+    model_turns = int(persisted_metrics.get("model_turns") or 0)
+    total_tool_calls = int(persisted_metrics.get("tool_calls") or 0)
+    tool_calls_used = int(
+        persisted_metrics.get("lease_tool_calls")
+        if persisted_metrics.get("lease_tool_calls") is not None
+        else total_tool_calls
+    )
+    no_progress_turns = int(persisted_metrics.get("no_progress_turns") or 0)
+    prompt_tokens = int(persisted_metrics.get("prompt_tokens") or 0)
+    completion_tokens = int(persisted_metrics.get("completion_tokens") or 0)
+    total_tokens = int(persisted_metrics.get("total_tokens") or 0)
+    estimated_cost_usd = float(persisted_metrics.get("estimated_cost_usd") or 0.0)
+    lease_estimated_cost_usd = float(
+        persisted_metrics.get("lease_estimated_cost_usd") or 0.0
+    )
+    context_compactions = int(persisted_metrics.get("context_compactions") or 0)
+    context_limit = (
+        _effective_subagent_context_limit(
+            limits.get("max_context_tokens", 0),
+            use_secondary=use_secondary,
+        )
+        if effective_mode == EXECUTION_MODE else
+        0
+    )
+    discussion_state = (
+        await _get_discussion_state(agent_id)
+        if effective_mode == DISCUSSION_MODE else
+        {}
+    )
+    discussion_rounds = int(discussion_state.get("rounds") or 0)
+    discussion_messages = int(persisted_metrics.get("discussion_messages") or 0)
+    discussion_no_new_info_rounds = int(
+        discussion_state.get("no_new_info_rounds") or 0
+    )
+    next_checkpoint = limits.get("checkpoint_calls", 0)
+    seen_tool_signatures: set[str] = set()
+    seen_result_fingerprints: set[str] = set()
+    force_finalize_reason = ""
+    finalization_requested = False
+    quit_tool_defs = [
+        tool_def
+        for tool_def in wire_tool_defs
+        if str((tool_def.get("function") or {}).get("name") or "") == "quit"
+    ]
+
+    def _resolved_subagent_call(
+        name: str,
+        args: dict[str, Any],
+    ) -> tuple[str, dict[str, Any]]:
+        try:
+            resolution = resolve_wire_call(name, args, actor="subagent")
+            return resolution.capability_id, resolution.concrete_arguments
+        except Exception:
+            return str(name or ""), dict(args)
 
     async def _save_if_registered() -> None:
         """Keep registry messages resumable after any local history mutation."""
         await save_messages(agent_id, messages)
 
     try:
-        max_rounds = _get_max_tool_rounds()
-        for _round in range(max_rounds):
+        while True:
+            elapsed = loop.time() - started_at
+            if effective_mode == EXECUTION_MODE:
+                if not force_finalize_reason and elapsed >= limits["max_wall_seconds"]:
+                    force_finalize_reason = "execution_wall_time_safety_limit"
+                    incomplete_outcome = "resource_exhausted"
+                if not force_finalize_reason and tool_calls_used >= limits["max_tool_calls"]:
+                    force_finalize_reason = "execution_tool_call_safety_limit"
+                    incomplete_outcome = "resource_exhausted"
+                if (
+                    not force_finalize_reason
+                    and limits["max_cost_usd"] > 0
+                    and lease_estimated_cost_usd * 7.25 >= limits["max_cost_usd"]
+                ):
+                    force_finalize_reason = "execution_cost_safety_limit"
+                    incomplete_outcome = "resource_exhausted"
+                if (
+                    not force_finalize_reason
+                    and no_progress_turns >= limits["no_progress_turns"]
+                ):
+                    force_finalize_reason = "execution_no_progress"
+                    incomplete_outcome = "partial"
+            else:
+                discussion_state = await _get_discussion_state(agent_id)
+                discussion_rounds = int(discussion_state.get("rounds") or 0)
+                discussion_no_new_info_rounds = int(
+                    discussion_state.get("no_new_info_rounds") or 0
+                )
+                if not force_finalize_reason and elapsed >= limits["max_wall_seconds"]:
+                    force_finalize_reason = "discussion_wall_time_limit"
+                if not force_finalize_reason and tool_calls_used >= limits["max_tool_calls"]:
+                    force_finalize_reason = "discussion_tool_call_limit"
+                if not force_finalize_reason and discussion_rounds >= limits["max_rounds"]:
+                    force_finalize_reason = "discussion_round_limit"
+                if (
+                    not force_finalize_reason
+                    and discussion_messages >= limits["max_messages_per_agent"]
+                ):
+                    force_finalize_reason = "discussion_message_limit_per_agent"
+                if (
+                    not force_finalize_reason
+                    and await _discussion_message_total(agent_id) >= limits["max_total_messages"]
+                ):
+                    force_finalize_reason = "discussion_message_limit_total"
+                if (
+                    not force_finalize_reason
+                    and discussion_no_new_info_rounds >= limits["no_new_info_rounds"]
+                ):
+                    force_finalize_reason = "discussion_no_new_information"
+
             # 每次 LLM 调用前注入注册表和 inbox 作为独立消息，保持 messages[0] 稳定
-            registry_ctx = await get_context(exclude=agent_id, round_id=round_id)
+            registry_ctx = (
+                await get_context(
+                    exclude=agent_id,
+                    round_id=round_id,
+                    discussion_id=discussion_id,
+                    session_id=_subagent_session_id,
+                    strict_session=True,
+                )
+                if effective_mode == DISCUSSION_MODE else ""
+            )
             inbox_text = _get_inbox(agent_id)
 
             # 移除上一轮的旧上下文消息（以特定前缀开头的用户消息）
@@ -1334,8 +2391,8 @@ You are a **participant** in this discussion. Rules:
                 m.get("role") == "user" and (
                     str(m.get("content", "")).startswith("[活跃子 agent]") or
                     str(m.get("content", "")).startswith("[收件箱]") or
-                    str(m.get("content", "")).startswith("[Coordination Checkpoint]") or
-                    str(m.get("content", "")).startswith("[快到工具调用上限")
+                    str(m.get("content", "")).startswith("[Execution Checkpoint]") or
+                    str(m.get("content", "")).startswith("[Runtime Finalization]")
                 )
             )]
             # 注入新上下文
@@ -1352,32 +2409,103 @@ You are a **participant** in this discussion. Rules:
                     await _mark_inbox_read(agent_id)
                     _direct_message_mode.set("[DIRECT_MESSAGE]" in inbox_text)
 
-            # 定期注入协调检查点，鼓励 subagent 之间主动沟通
-            if tool_calls_since_checkpoint >= _COORDINATION_CHECKPOINT_INTERVAL:
+            if (
+                effective_mode == EXECUTION_MODE
+                and next_checkpoint
+                and tool_calls_used >= next_checkpoint
+                and not force_finalize_reason
+            ):
                 messages.append({
                     "role": "user",
                     "content": (
-                        "[Coordination Checkpoint]\n"
-                        "Any updates worth sharing? Talk to ONE peer via `send_agent_message`, or broadcast to ALL via `broadcast_agent_message`. Not both, not multiple.\n"
-                        "Any new messages from peers? Read and respond if needed — one person or broadcast."
+                        "[Execution Checkpoint]\n"
+                        f"You have executed {tool_calls_used} tools. Re-check the success criteria now. "
+                        "Continue only if a concrete criterion remains unmet and the next action can produce new evidence or state change. "
+                        "Otherwise call quit with the result."
                     ),
                 })
-                tool_calls_since_checkpoint = 0
+                next_checkpoint += limits["checkpoint_calls"]
 
-            # 快到上限时提醒 agent 收尾，让它能在截断前产出有效结果
-            rounds_left = max_rounds - _round
-            if rounds_left == 3:
+            if force_finalize_reason and not finalization_requested:
+                finalization_requested = True
                 messages.append({
                     "role": "user",
                     "content": (
-                        f"[快到工具调用上限，还剩约 {rounds_left} 轮。"
-                        "请用现有信息给出最好的结果，然后调用 quit 退出。"
-                        "quit 前的文本里说明：已完成什么、还差什么（如有）。"
-                        "不要再启动耗时的新工具调用。]"
+                        "[Runtime Finalization]\n"
+                        f"Stop reason: {force_finalize_reason}. Do not call additional work tools. "
+                        "Write the best available result in normal assistant content, then call quit only as the terminal signal. "
+                        "State what is complete, what remains, and any blocker."
                     ),
                 })
 
-            response = await _call_llm(messages, tools=get_active_tool_defs_for_actor("subagent"), max_tokens=None, secondary=use_secondary)
+            if effective_mode == EXECUTION_MODE and context_limit > 0:
+                from cyrene.model_runtime.client import approx_token_count
+
+                active_tool_defs = (
+                    quit_tool_defs if finalization_requested else wire_tool_defs
+                )
+                reserved_tool_tokens = approx_token_count(
+                    json.dumps(
+                        active_tool_defs,
+                        ensure_ascii=False,
+                        sort_keys=True,
+                        default=str,
+                    )
+                )
+                compacted_messages, context_before, context_after, compacted = (
+                    _compact_subagent_context(
+                        messages,
+                        max_context_tokens=context_limit,
+                        reserved_tokens=reserved_tool_tokens,
+                    )
+                )
+                if compacted:
+                    messages = compacted_messages
+                    context_compactions += 1
+                    await _save_if_registered()
+                await _update_metrics(
+                    agent_id,
+                    context_tokens_before=context_before,
+                    context_tokens_after=context_after,
+                    context_compactions=context_compactions,
+                )
+                if context_after > context_limit:
+                    final_text = (
+                        "Stopped before completion: the task contract and minimum "
+                        "tool schema exceed the execution context safety ceiling."
+                    )
+                    stop_reason = "execution_context_safety_limit"
+                    incomplete_outcome = "resource_exhausted"
+                    await _save_if_registered()
+                    break
+
+            response = await call_agent_model(
+                messages,
+                tools=quit_tool_defs if finalization_requested else wire_tool_defs,
+                max_tokens=None,
+                secondary=use_secondary,
+            )
+            model_turns += 1
+            turn_usage, turn_cost_usd = _response_usage_cost_usd(response)
+            prompt_tokens += turn_usage["prompt_tokens"]
+            completion_tokens += turn_usage["completion_tokens"]
+            total_tokens += turn_usage["total_tokens"]
+            estimated_cost_usd += turn_cost_usd
+            lease_estimated_cost_usd += turn_cost_usd
+            await _update_metrics(
+                agent_id,
+                model_turns=model_turns,
+                tool_calls=total_tool_calls,
+                lease_tool_calls=tool_calls_used,
+                no_progress_turns=no_progress_turns,
+                discussion_rounds=discussion_rounds,
+                prompt_tokens=prompt_tokens,
+                completion_tokens=completion_tokens,
+                total_tokens=total_tokens,
+                estimated_cost_usd=estimated_cost_usd,
+                lease_estimated_cost_usd=lease_estimated_cost_usd,
+                context_compactions=context_compactions,
+            )
 
             entry: dict = {"role": "assistant", "content": response.get("content") or ""}
             if response.get("reasoning_content"):
@@ -1394,41 +2522,113 @@ You are a **participant** in this discussion. Rules:
             tcs = response.get("tool_calls") or []
 
             # 检测 quit 或纯文本（活干完了）
-            should_exit = any(t.get("function", {}).get("name") == "quit" for t in tcs) or not tcs
+            has_quit = any(t.get("function", {}).get("name") == "quit" for t in tcs)
+            quit_completion_status = str(
+                _quit_arguments(response).get("completion_status") or ""
+            ).strip().lower()
+            invalid_completion_status = bool(
+                has_quit
+                and effective_mode == EXECUTION_MODE
+                and criteria
+                and not finalization_requested
+                and quit_completion_status not in {"completed", "partial", "blocked"}
+            )
+            missing_completion_evidence = (
+                _completion_evidence_missing(response, criteria)
+                if (
+                    has_quit
+                    and effective_mode == EXECUTION_MODE
+                    and not finalization_requested
+                )
+                else []
+            )
+            if invalid_completion_status or missing_completion_evidence:
+                remediation = json.dumps({
+                    "status": "error",
+                    "reason": (
+                        "completion_status_missing"
+                        if invalid_completion_status else
+                        "completion_evidence_missing"
+                    ),
+                    "missing_criteria": missing_completion_evidence,
+                    "remediation": (
+                        "Call quit with completion_status=completed, partial, or blocked. "
+                        "A completed status also requires one non-empty criteria_evidence "
+                        "item for every success criterion."
+                    ),
+                }, ensure_ascii=False)
+                for tc in tcs:
+                    messages.append({
+                        "role": "tool",
+                        "tool_call_id": tc.get("id") or f"completion_{model_turns}",
+                        "content": (
+                            remediation
+                            if tc.get("function", {}).get("name") == "quit"
+                            else "Skipped because the same batch contained an invalid terminal quit."
+                        ),
+                    })
+                await _save_if_registered()
+                continue
+
+            if (
+                not tcs
+                and effective_mode == EXECUTION_MODE
+                and criteria
+                and not finalization_requested
+            ):
+                final_text = assistant_text(response).strip() or "No completion evidence was provided."
+                stop_reason = "completion_evidence_missing"
+                incomplete_outcome = "partial"
+                break
+
+            should_exit = has_quit or not tcs
             if should_exit:
                 for tc in tcs:
-                    if tc.get("function", {}).get("name") == "quit":
-                        messages.append({
-                            "role": "tool",
-                            "tool_call_id": tc["id"],
-                            "content": "Interaction ended.",
-                        })
+                    is_quit = tc.get("function", {}).get("name") == "quit"
+                    messages.append({
+                        "role": "tool",
+                        "tool_call_id": tc.get("id") or f"terminal_{model_turns}",
+                        "content": (
+                            "Interaction ended."
+                            if is_quit else
+                            "Skipped because the same batch contained terminal quit."
+                        ),
+                    })
                 if tcs:
                     await _save_if_registered()
 
                 # Include all sent agent messages in the final text so that
                 # creative output (poems, reviews, etc.) is preserved in the
                 # registry result and shown in the final synthesis.
-                sent_output: list[str] = []
-                for msg in messages:
-                    if msg.get("role") != "assistant":
-                        continue
-                    for tc in (msg.get("tool_calls") or []):
-                        fn = tc.get("function", {})
-                        if fn.get("name") in ("send_agent_message", "broadcast_agent_message"):
-                            try:
-                                args = json.loads(fn.get("arguments", "{}"))
-                                content = args.get("content", "")
-                                target = args.get("to", "all") if fn.get("name") == "broadcast_agent_message" else args.get("to", "?")
-                                if content:
-                                    sent_output.append(f"[to {target}]\n{content}")
-                            except Exception:
-                                pass
-                agent_text = _assistant_text(response).strip() or "Done."
+                async with _lock:
+                    delivered = list(
+                        (_registry.get(agent_id, {}).get("delivered_communications") or [])
+                    )
+                sent_output = [
+                    f"[to {item.get('to') or '?'}]\n{item.get('content')}"
+                    for item in delivered
+                    if str(item.get("content") or "").strip()
+                ]
+                agent_text = (
+                    assistant_text(response).strip()
+                    or "Done."
+                )
                 if sent_output:
                     final_text = agent_text + "\n\n---\n\n" + "\n\n".join(sent_output)
                 else:
                     final_text = agent_text
+
+                if finalization_requested:
+                    stop_reason = force_finalize_reason or "runtime_finalization"
+                    break
+                if (
+                    effective_mode == EXECUTION_MODE
+                    and criteria
+                    and quit_completion_status in {"partial", "blocked"}
+                ):
+                    stop_reason = f"subagent_reported_{quit_completion_status}"
+                    incomplete_outcome = quit_completion_status
+                    break
 
                 # 标记 willing_to_quit（带 result），等别人（每 5 秒检查 inbox）
                 inbox_msg = await wait_for_others(agent_id, _get_inbox, mark_read_func=_mark_inbox_read, result=final_text)
@@ -1444,63 +2644,211 @@ You are a **participant** in this discussion. Rules:
                     await _save_if_registered()
                     continue
 
+            if finalization_requested:
+                # A provider should only return quit when quit is the sole visible
+                # tool. Preserve protocol pairing even if it hallucinates another
+                # call, then settle without granting another work turn.
+                for tc in tcs:
+                    messages.append({
+                        "role": "tool",
+                        "tool_call_id": tc.get("id") or f"finalize_{model_turns}",
+                        "content": "Skipped: runtime finalization allows only quit.",
+                    })
+                final_text = assistant_text(response).strip() or (
+                    f"Stopped before completion: {force_finalize_reason}."
+                )
+                stop_reason = force_finalize_reason or "runtime_finalization"
+                await _save_if_registered()
+                break
+
             fresh_inbox = False
+            cancel_remaining_batch = False
+            round_had_execution_work = False
+            round_made_progress = False
             for tc in tcs:
                 name = tc["function"]["name"]
-                if not is_tool_allowed_for_actor(name, "subagent"):
-                    result = f"Tool {name} is reserved for the main agent. Subagents must coordinate via send_agent_message and return their final result via quit."
-                    messages.append({"role": "tool", "tool_call_id": tc["id"], "content": result})
+                discussion_slot_claimed = False
+                counted_tool_call = False
+                if cancel_remaining_batch:
+                    messages.append({
+                        "role": "tool",
+                        "tool_call_id": tc["id"],
+                        "content": "Skipped because new inbox guidance superseded the remaining tool-call batch.",
+                    })
                     continue
                 try:
-                    args = json.loads(tc["function"].get("arguments") or "{}")
-                    token = _current_agent_id.set(agent_id)
-                    try:
-                        result = await _execute_tool(name, args, bot, chat_id, db_path, None)
-                    finally:
-                        _current_agent_id.reset(token)
+                    args = parse_tool_arguments(
+                        tc["function"].get("arguments")
+                    )
+                    capability_id, concrete_args = _resolved_subagent_call(name, args)
+                    is_communication = capability_id in {
+                        "subagent.send_message",
+                        "subagent.broadcast",
+                    }
+                    if (
+                        tool_calls_used >= limits["max_tool_calls"]
+                    ):
+                        result = json.dumps({
+                            "status": "skipped",
+                            "reason": (
+                                "execution_tool_call_safety_limit"
+                                if effective_mode == EXECUTION_MODE
+                                else "discussion_tool_call_limit"
+                            ),
+                        })
+                        force_finalize_reason = (
+                            "execution_tool_call_safety_limit"
+                            if effective_mode == EXECUTION_MODE
+                            else "discussion_tool_call_limit"
+                        )
+                        if effective_mode == EXECUTION_MODE:
+                            incomplete_outcome = "resource_exhausted"
+                    elif is_communication and effective_mode == EXECUTION_MODE:
+                        tool_calls_used += 1
+                        total_tool_calls += 1
+                        counted_tool_call = True
+                        result = json.dumps({
+                            "status": "error",
+                            "reason": "communication_requires_discussion_mode",
+                            "remediation": (
+                                "Execution workers are independent. Return your result through quit; "
+                                "peer communication requires a discussion-mode worker."
+                            ),
+                        })
+                        round_had_execution_work = True
+                    elif is_communication and effective_mode == DISCUSSION_MODE:
+                        content = str(concrete_args.get("content", "") or "")
+                        if len(content) > limits["max_message_chars"]:
+                            tool_calls_used += 1
+                            total_tool_calls += 1
+                            counted_tool_call = True
+                            result = json.dumps({
+                                "status": "skipped",
+                                "reason": "discussion_message_too_long",
+                                "max_message_chars": limits["max_message_chars"],
+                                "actual_message_chars": len(content),
+                            })
+                        else:
+                            allowed, denied_reason = await _claim_discussion_message_slot(
+                                agent_id,
+                                max_per_agent=limits["max_messages_per_agent"],
+                                max_total=limits["max_total_messages"],
+                            )
+                            if not allowed:
+                                result = json.dumps({
+                                    "status": "skipped",
+                                    "reason": denied_reason,
+                                })
+                                force_finalize_reason = denied_reason
+                            else:
+                                discussion_slot_claimed = True
+                                tool_calls_used += 1
+                                total_tool_calls += 1
+                                counted_tool_call = True
+                                discussion_messages += 1
+                                with bind_run_context(agent_id=agent_id):
+                                    result = await execute_wire_tool(
+                                        name, args, bot, chat_id, db_path, None, actor="subagent"
+                                    )
+                                if _communication_delivery_succeeded(capability_id, result):
+                                    await _record_delivered_communication(
+                                        agent_id,
+                                        tool_call_id=str(tc.get("id") or ""),
+                                        capability_id=capability_id,
+                                        arguments=concrete_args,
+                                    )
+                                    discussion_state = await _record_discussion_delivery(
+                                        agent_id,
+                                        content,
+                                    )
+                                    discussion_rounds = int(
+                                        discussion_state.get("rounds") or 0
+                                    )
+                                    discussion_no_new_info_rounds = int(
+                                        discussion_state.get("no_new_info_rounds") or 0
+                                    )
+                                else:
+                                    await _release_discussion_message_slot(agent_id)
+                                    discussion_slot_claimed = False
+                                    discussion_messages = max(
+                                        0,
+                                        discussion_messages - 1,
+                                    )
+                    else:
+                        tool_calls_used += 1
+                        total_tool_calls += 1
+                        counted_tool_call = True
+                        with bind_run_context(agent_id=agent_id):
+                            result = await execute_wire_tool(
+                                name, args, bot, chat_id, db_path, None, actor="subagent"
+                            )
+                        if not is_communication:
+                            round_had_execution_work = True
+                            signature = _tool_signature(capability_id, concrete_args)
+                            result_hash = _result_fingerprint(result)
+                            if _tool_result_is_progress(
+                                capability_id,
+                                signature,
+                                result_hash,
+                                seen_signatures=seen_tool_signatures,
+                                seen_results=seen_result_fingerprints,
+                            ):
+                                round_made_progress = True
+                            seen_tool_signatures.add(signature)
+                            seen_result_fingerprints.add(result_hash)
                 except Exception as e:
+                    if not counted_tool_call:
+                        tool_calls_used += 1
+                        total_tool_calls += 1
+                    if discussion_slot_claimed:
+                        await _release_discussion_message_slot(agent_id)
+                        discussion_messages = max(0, discussion_messages - 1)
                     result = f"Tool {name} failed: {e}"
-                messages.append({"role": "tool", "tool_call_id": tc["id"], "content": _truncate(result)})
+                    capability_id = str(name or "")
+                    if effective_mode == EXECUTION_MODE:
+                        round_had_execution_work = True
+                messages.append({"role": "tool", "tool_call_id": tc["id"], "content": truncate(result)})
                 # 每执行完一个工具检查 inbox，用户引导时能更快响应
                 inbox_text = _get_inbox(agent_id)
                 if inbox_text:
                     fresh_inbox = True
-                    break
-                # 如果刚执行的是通讯类工具，重置检查点计数器（已满足协调要求）
-                if name in ("send_agent_message", "broadcast_agent_message"):
-                    tool_calls_since_checkpoint = 0
-                else:
-                    tool_calls_since_checkpoint += 1
+                    cancel_remaining_batch = True
+
+            if effective_mode == EXECUTION_MODE and round_had_execution_work:
+                no_progress_turns = 0 if round_made_progress else no_progress_turns + 1
+            await _update_metrics(
+                agent_id,
+                model_turns=model_turns,
+                tool_calls=total_tool_calls,
+                lease_tool_calls=tool_calls_used,
+                no_progress_turns=no_progress_turns,
+                discussion_rounds=discussion_rounds,
+                discussion_no_new_info_rounds=discussion_no_new_info_rounds,
+                prompt_tokens=prompt_tokens,
+                completion_tokens=completion_tokens,
+                total_tokens=total_tokens,
+                estimated_cost_usd=estimated_cost_usd,
+                lease_estimated_cost_usd=lease_estimated_cost_usd,
+                context_compactions=context_compactions,
+            )
             if fresh_inbox:
                 await _save_if_registered()
                 continue
             if tcs:
                 await _save_if_registered()
-        else:
-            # 警告注入后 LLM 可能已在最后几轮里给出了部分结果，提取出来
-            last_content = ""
-            for msg in reversed(messages):
-                if msg.get("role") == "assistant":
-                    content = str(msg.get("content") or "").strip()
-                    if content:
-                        last_content = content
-                        break
-            if last_content:
-                final_text = f"[已到工具调用上限，任务可能未完成]\n{last_content}"
-            else:
-                final_text = "[已到工具调用上限，任务未完成。]"
     except Exception as e:
         logger.exception("Sub-agent %s crashed", agent_id)
         final_text = f"Sub-agent crashed: {e}"
+        stop_reason = "subagent_crashed"
+        incomplete_outcome = "blocked"
     finally:
-        _caller_type.reset(caller_token)
+        reset_catalog_snapshot(catalog_snapshot_token)
+        run_binding.reset()
         _direct_message_mode.reset(dm_token)
-        if round_token is not None:
-            _current_round_id.reset(round_token)
 
     if _subagent_session_id and final_text:
         try:
-            from cyrene.workbench_task_context import append_shared_outcome
+            from cyrene.workbench.task_context import append_shared_outcome
 
             append_shared_outcome(
                 db_path=db_path,
@@ -1511,5 +2859,18 @@ You are a **participant** in this discussion. Rules:
             )
         except Exception:
             logger.debug("Failed to append Workbench shared outcome for sub-agent %s", agent_id, exc_info=True)
-    await mark_done(agent_id, final_text)
+    if incomplete_outcome:
+        await mark_incomplete(
+            agent_id,
+            final_text,
+            reason=stop_reason,
+            outcome=incomplete_outcome,
+        )
+    else:
+        await mark_done(agent_id, final_text, reason=stop_reason)
     return final_text
+
+
+async def run_subagent(*args: Any, **kwargs: Any) -> str:
+    """Public execution boundary retained while the runner is split."""
+    return await _run_subagent(*args, **kwargs)

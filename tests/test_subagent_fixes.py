@@ -141,7 +141,7 @@ async def test_wait_for_others_ignores_other_rounds():
 async def test_inbox_mark_all_read():
     """Bug 3 fix: mark_all_read should reset the unread counter so subsequent
     get_inbox_context calls don't re-inject old messages."""
-    from cyrene import inbox
+    from cyrene.runtime import inbox
 
     with tempfile.TemporaryDirectory() as tmp:
         # Redirect inbox dir for the test
@@ -170,7 +170,7 @@ async def test_inbox_mark_all_read():
 
 async def test_inbox_context_keeps_long_messages():
     """长消息注入 inbox context 时不应被硬截断到 200 字。"""
-    from cyrene import inbox
+    from cyrene.runtime import inbox
 
     with tempfile.TemporaryDirectory() as tmp:
         inbox.INBOX_DIR = Path(tmp) / "inbox"
@@ -187,7 +187,7 @@ async def test_inbox_context_keeps_long_messages():
 
 async def test_inbox_mark_read_count_advances_fifo_cursor():
     """main inbox worker 逐条 ack 时，应保持 FIFO 未读窗口。"""
-    from cyrene import inbox
+    from cyrene.runtime import inbox
 
     with tempfile.TemporaryDirectory() as tmp:
         inbox.INBOX_DIR = Path(tmp) / "inbox"
@@ -211,7 +211,7 @@ async def test_inbox_mark_read_count_advances_fifo_cursor():
 
 async def test_register_clears_stale_inbox_messages():
     """同名 agent 重新注册时，不应继承上一次残留的 inbox。"""
-    from cyrene import inbox
+    from cyrene.runtime import inbox
     from cyrene import subagent
 
     with tempfile.TemporaryDirectory() as tmp:
@@ -313,9 +313,8 @@ async def test_get_raw_messages_returns_full_history():
 
 async def test_run_summary_subagent_collects_peer_messages():
     """总结 subagent 应该读取其他 subagent 的 transcript 和互发消息。"""
-    from cyrene import agent
     from cyrene.agent import state as agent_state
-    from cyrene import inbox
+    from cyrene.runtime import inbox
     from cyrene import subagent
 
     with tempfile.TemporaryDirectory() as tmp:

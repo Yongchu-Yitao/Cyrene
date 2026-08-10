@@ -16,15 +16,20 @@ contextBridge.exposeInMainWorld('cyrene', {
     clipboard.writeText(String(text == null ? '' : text));
     return true;
   },
+  showItemInFolder: (filePath) => ipcRenderer.invoke('shell:show-item-in-folder', {
+    path: String(filePath == null ? '' : filePath),
+  }),
   pickDirectory: () => {
     if (process.platform !== 'linux') return Promise.resolve(null);
     return ipcRenderer.invoke('dialog:pick-directory');
   },
-  switchUiShell: (mode) => ipcRenderer.invoke('window:switch-shell', mode),
+  pickBackupSavePath: (options) => ipcRenderer.invoke('dialog:pick-backup-save-path', options || {}),
+  pickBackupFile: (options) => ipcRenderer.invoke('dialog:pick-backup-file', options || {}),
   browser: {
     getState: (sessionId) => ipcRenderer.invoke('browser:get-state', { sessionId: String(sessionId || '') }),
     setBounds: (info) => ipcRenderer.invoke('browser:set-bounds', info || {}),
     setChatOverlay: (info) => ipcRenderer.invoke('browser:set-chat-overlay', info || {}),
+    setTabPicker: (info) => ipcRenderer.invoke('browser:set-tab-picker', info || {}),
     setContext: (info) => ipcRenderer.invoke('browser:set-context', info || {}),
     setObscured: (info) => ipcRenderer.invoke(
       'browser:set-obscured',
@@ -36,7 +41,12 @@ contextBridge.exposeInMainWorld('cyrene', {
     navigate: (info) => ipcRenderer.invoke('browser:navigate', info || {}),
     goBack: (sessionId) => ipcRenderer.invoke('browser:go-back', { sessionId: String(sessionId || '') }),
     goForward: (sessionId) => ipcRenderer.invoke('browser:go-forward', { sessionId: String(sessionId || '') }),
-    reload: (sessionId) => ipcRenderer.invoke('browser:reload', { sessionId: String(sessionId || '') }),
+    reload: (sessionOrInfo) => ipcRenderer.invoke(
+      'browser:reload',
+      sessionOrInfo && typeof sessionOrInfo === 'object'
+        ? sessionOrInfo
+        : { sessionId: String(sessionOrInfo || '') }
+    ),
     setMuted: (info) => ipcRenderer.invoke('browser:set-muted', info || {}),
     screenshot: (info) => ipcRenderer.invoke('browser:screenshot', info || {}),
     onState: (callback) => {
@@ -50,6 +60,12 @@ contextBridge.exposeInMainWorld('cyrene', {
       const listener = (_event, action) => callback(action);
       ipcRenderer.on('browser:chat-overlay-action', listener);
       return () => ipcRenderer.removeListener('browser:chat-overlay-action', listener);
+    },
+    onTabPickerAction: (callback) => {
+      if (typeof callback !== 'function') return () => {};
+      const listener = (_event, action) => callback(action);
+      ipcRenderer.on('browser:tab-picker-action', listener);
+      return () => ipcRenderer.removeListener('browser:tab-picker-action', listener);
     },
   },
   quickChat: {

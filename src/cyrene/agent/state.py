@@ -6,6 +6,7 @@ import from it without circular-dependency risk.
 """
 
 import asyncio
+import copy
 import json
 import logging
 from dataclasses import dataclass, field
@@ -14,8 +15,13 @@ from typing import Any, Awaitable, Callable
 
 from contextvars import ContextVar
 
-from cyrene import debug
-from cyrene.config import ASSISTANT_NAME, DATA_DIR as _DATA_DIR, STATE_FILE as _STATE_FILE, WORKSPACE_DIR as _WORKSPACE_DIR
+from cyrene.observability import debug
+from cyrene.config import (
+    ASSISTANT_NAME as ASSISTANT_NAME,
+    DATA_DIR as _DATA_DIR,
+    STATE_FILE as _STATE_FILE,
+    WORKSPACE_DIR as _WORKSPACE_DIR,
+)
 
 # Mutable references so tests that swap STATE_FILE/DATA_DIR are visible to all
 # ``agent.*`` sub-modules (which import ``state.STATE_FILE`` / ``state.DATA_DIR``).
@@ -53,6 +59,9 @@ class SessionContext:
     pending_distill_task: asyncio.Task | None = None
     main_inbox_worker: asyncio.Task | None = None
     active_task: asyncio.Task | None = None
+    last_main_model_messages: list[dict[str, Any]] = field(default_factory=list)
+    last_main_model_identity: dict[str, str] = field(default_factory=dict)
+    last_main_model_round_id: str = ""
 
 # Per‑session identifier carried by ContextVar — set at entry to run_agent()
 _current_session_id: ContextVar[str] = ContextVar("_current_session_id", default="")
@@ -66,6 +75,19 @@ _current_session_id: ContextVar[str] = ContextVar("_current_session_id", default
 # WORKSPACE_DIR directly — they are cross‑project runtime state, not project
 # files, so they must NOT be redirected here.
 _active_workspace_dir: ContextVar[str] = ContextVar("_active_workspace_dir", default="")
+
+# Client response features available for the current run.  Keep these separate
+# from the workspace/session identity: they determine the stable model-facing
+# tool bundle and must therefore be set before the catalog snapshot is built.
+response_capabilities: ContextVar[frozenset[str]] = ContextVar(
+    "response_capabilities",
+    default=frozenset(),
+)
+
+
+def has_response_capability(name: str) -> bool:
+    """Return whether the current client advertises one response feature."""
+    return str(name or "").strip() in response_capabilities.get()
 
 
 def active_workspace_dir() -> Path:
@@ -144,6 +166,7 @@ _persist_history_prefix_len: ContextVar[int] = ContextVar("_persist_history_pref
 _persist_insert_at: ContextVar[int | None] = ContextVar("_persist_insert_at", default=None)
 _pending_intermediate_user_replies: ContextVar[list[dict[str, Any]] | None] = ContextVar("_pending_intermediate_user_replies", default=None)
 _reply_stream_writer: ContextVar[Callable[[dict[str, Any]], Awaitable[None]] | None] = ContextVar("_reply_stream_writer", default=None)
+_runtime_event_writer: ContextVar[Callable[[dict[str, Any]], Awaitable[None]] | None] = ContextVar("_runtime_event_writer", default=None)
 # Usage dict of the most recent final-reply LLM call (streaming finals return
 # plain text, so token usage would otherwise be lost before persisting).
 _last_final_reply_usage: ContextVar[dict[str, Any] | None] = ContextVar("_last_final_reply_usage", default=None)
@@ -156,7 +179,7 @@ _economy_mode: ContextVar[bool] = ContextVar("_economy_mode", default=False)
 _current_command: ContextVar[str] = ContextVar("_current_command", default="")
 _conversation_source: ContextVar[str] = ContextVar("_conversation_source", default="")
 # Map from filename (and original name without uuid prefix) → full absolute path
-# Populated by routes.py when the user sends a message with attachments.
+# Populated by the chat route adapter when the user sends attachments.
 # Allows tools to auto-resolve agent-guessed paths (e.g. /tmp/file.txt) to the
 # correct webui_uploads path without requiring a permission prompt.
 _attachment_paths_by_name: ContextVar[dict[str, str] | None] = ContextVar("_attachment_paths_by_name", default=None)
@@ -170,13 +193,6 @@ _session_state_lock = asyncio.Lock()
 _session_epoch: int = 0
 _interrupt_event = asyncio.Event()
 
-_MAX_TOOL_ROUNDS = 15  # kept for backward-compat; prefer _get_max_tool_rounds()
-
-
-def _get_max_tool_rounds() -> int:
-    from cyrene.settings_store import get as _get_setting
-    return max(5, min(200, int(_get_setting("max_tool_rounds", 15) or 15)))
-
 _pending_compressors: set[asyncio.Task] = set()
 _pending_label_refreshes: set[asyncio.Task] = set()
 _pending_interrupt_clearers: set[asyncio.Task] = set()
@@ -187,9 +203,24 @@ _active_main_round_id = ""
 _active_main_round_prompt = ""
 _active_main_round_public_prompt = ""
 _active_main_round_started_at = 0.0
-# 临时 full_access 标记 —— "仅这次允许" 时由 guidance 设置，round 结束时清理
-# 使用 ContextVar 确保 asyncio 任务间隔离
+# Explicit run-wide full_access marker.  Exact one-shot approvals use the
+# fingerprint/path grant stores below and must never set this broad flag.
 _temporary_full_access: ContextVar[bool] = ContextVar("_temporary_full_access", default=False)
+
+# Exact, one-shot grants used when a human approves a single permission
+# request.  Unlike ``_temporary_full_access`` these are bound to the request
+# fingerprint and cannot authorize an unrelated tool/path.
+_permission_elevation_grants: ContextVar[set[str] | None] = ContextVar(
+    "_permission_elevation_grants",
+    default=None,
+)
+
+# Exact path grants bridge a successful read/write elevation check to the
+# resolver retry performed by the same tool call.  Entries are consumed on use.
+_scoped_path_access_grants: ContextVar[set[str] | None] = ContextVar(
+    "_scoped_path_access_grants",
+    default=None,
+)
 
 # 破坏性/不可逆操作的二次确认与 full_access 解耦。单次确认使用
 # fingerprint 避免同一工具重试时反复弹窗；"本次会话内总是允许" 使用
@@ -218,9 +249,23 @@ _external_upload_confirmation_fingerprints: ContextVar[frozenset[str]] = Context
 #   "plan"        —— 先规划再执行（同意后回退默认模式）
 PERMISSION_MODES = ("default", "full_access", "auto", "plan")
 _permission_mode: ContextVar[str] = ContextVar("_permission_mode", default="default")
+_llm_phase_override: ContextVar[str] = ContextVar("_llm_phase_override", default="")
 
 _MAIN_INBOX_AGENT_ID = "main"
 _AWAITING_USER_SENTINEL = "[[cyrene.awaiting_user]]"
+
+
+def _sanitize_public_agent_text(value: object) -> str:
+    """Remove internal control sentinels before text crosses a public boundary.
+
+    Callers must not rely on exact equality here: provider adapters or a model
+    can surround a control value with whitespace, Markdown, or other text.
+    """
+    raw = str(value or "")
+    cleaned = raw.replace(_AWAITING_USER_SENTINEL, "").strip()
+    if _AWAITING_USER_SENTINEL in raw and not cleaned.strip("*_`~[](){}<> "):
+        return ""
+    return cleaned
 
 _REPORT_REF_PREFIX = "[Deep research report]"
 _REPORT_REF_MAX_PREVIEW = 280
@@ -230,14 +275,14 @@ _REPORT_REF_MAX_PREVIEW = 280
 # ---------------------------------------------------------------------------
 
 _LIGHT_TOOL_DEFS = [
-    {"type": "function", "function": {"name": "use_tools", "description": "MANDATORY gateway to full tool access. Call this for ANY request that involves doing things — file ops, search, web, code, shell, scheduling, sub-agents, data, browser automation, notifications, etc. This is the ONLY way to reach real tools. Skip ONLY for pure conversation (opinions, greetings, conceptual explanations). IMPORTANT: set task to the user's EXACT original message, do not rewrite it.", "parameters": {"type": "object", "properties": {"task": {"type": "string"}}, "required": ["task"]}}},
+    {"type": "function", "function": {"name": "use_tools", "description": "Gateway to the execution phase. For any request that needs action, first perform a bounded planning pass, then call this without an assistant preamble. Set task to the user's EXACT original message and execution_brief to the concise preliminary plan that Phase 2 should use and revise as evidence arrives. Skip ONLY for pure conversation (opinions, greetings, conceptual explanations).", "parameters": {"type": "object", "properties": {"task": {"type": "string", "description": "The user's exact original message, unchanged."}, "execution_brief": {"type": "string", "description": "Concise handoff with objective, acceptance evidence, constraints/assumptions, approach, initial steps/tools, validation, and material risks/fallbacks; no private chain-of-thought."}}, "required": ["task", "execution_brief"], "additionalProperties": False}}},
     {"type": "function", "function": {"name": "ask_user", "description": "Ask the user a clarification question. Use this proactively whenever: the request is ambiguous, a critical detail is missing, multiple approaches exist and the choice matters, or you need confirmation before a destructive/irreversible action. Guessing is worse than asking. If you need to ask the user anything, use this tool instead of writing a question in assistant text. Use freeform text, or add a short options array when structured choices help. Do not combine with other tools in the same turn.", "parameters": {"type": "object", "properties": {"text": {"type": "string"}, "options": {"type": "array", "items": {"type": "string"}}}, "required": ["text"]}}},
-    {"type": "function", "function": {"name": "quit", "description": "Call this when the interaction is done — pure conversation that needs no tools. Put your COMPLETE reply to the user in `reply`; the user is shown it verbatim, so write the actual answer here.", "parameters": {"type": "object", "properties": {"reply": {"type": "string", "description": "The final user-facing reply, in the user's language. Shown to the user verbatim."}}}}},
+    {"type": "function", "function": {"name": "quit", "description": "Terminal control signal. Call this only after writing the complete user-facing answer in normal assistant content. Do not put answer text or tool syntax in the arguments. A quit call ends the current run and never reopens tools.", "parameters": {"type": "object", "properties": {}}}},
 ]
 
 _DEEP_RESEARCH_LIGHT_TOOL_DEFS = [
     {"type": "function", "function": {"name": "ask_user", "description": "Ask the user a clarification question. Use this to ask about the desired report length before starting research. Use freeform text, or add a short options array when structured choices help. Do not combine with other tools in the same turn.", "parameters": {"type": "object", "properties": {"text": {"type": "string"}, "options": {"type": "array", "items": {"type": "string"}}}, "required": ["text"]}}},
-    {"type": "function", "function": {"name": "quit", "description": "Call this if the user does not want deep research. Put a short acknowledgement to the user in `reply`.", "parameters": {"type": "object", "properties": {"reply": {"type": "string", "description": "The final user-facing reply, in the user's language. Shown to the user verbatim."}}}}},
+    {"type": "function", "function": {"name": "quit", "description": "Terminal control signal. If the user cancels Deep Research, write any acknowledgement in normal assistant content and call quit with no answer text in its arguments.", "parameters": {"type": "object", "properties": {}}}},
 ]
 
 
@@ -258,9 +303,27 @@ def _init_session_epoch() -> None:
         pass
 
 
+_init_session_epoch()
+
+
 # ---------------------------------------------------------------------------
 # Runtime event helpers
 # ---------------------------------------------------------------------------
+
+_PUBLIC_RUN_EVENT_TYPES = frozenset({
+    "auto_review",
+    "phase_transition",
+    "plan",
+    "plan_progress",
+    "permission_decision",
+    "subagent_update",
+    "tool_call_started",
+    "tool_call_progress",
+    "tool_call_finished",
+    "user_question",
+    "user_question_answered",
+})
+
 
 async def _publish_runtime_event(event: dict[str, Any]) -> None:
     round_id = _current_round_id.get()
@@ -270,6 +333,16 @@ async def _publish_runtime_event(event: dict[str, Any]) -> None:
     if session_id:
         event = {**event, "session_id": session_id}
     await debug.publish_event(event)
+    writer = _runtime_event_writer.get()
+    if writer is None or str(event.get("type") or "") not in _PUBLIC_RUN_EVENT_TYPES:
+        return
+    try:
+        await writer(dict(event))
+    except Exception:
+        # Per-run live activity is presentation state. A disconnected client or
+        # renderer must never turn an otherwise successful agent action into a
+        # failed run.
+        logger.debug("Failed to publish public run event", exc_info=True)
 
 
 async def _emit_reply_stream_event(event: dict[str, Any]) -> None:
@@ -288,7 +361,69 @@ def _streaming_reply_requested() -> bool:
 # ---------------------------------------------------------------------------
 
 def _llm_phase_name(tools: list | None) -> str:
-    return "phase1" if tools is _LIGHT_TOOL_DEFS else ("phase2" if tools else "no_tools")
+    override = _llm_phase_override.get()
+    if override:
+        return override
+    if tools is _LIGHT_TOOL_DEFS or tools is _DEEP_RESEARCH_LIGHT_TOOL_DEFS:
+        return "phase1"
+    return "phase2" if tools else "no_tools"
+
+
+def _record_last_main_model_context(
+    messages: list[dict[str, Any]],
+    response: Any,
+    *,
+    secondary: bool,
+) -> None:
+    """Keep the exact provider-normalized main-Agent exchange in memory.
+
+    Memory learning reads this snapshot directly while the run is active and a
+    completed copy is persisted by the Workbench chat finalizer.  Tool schemas
+    are deliberately excluded because the Memory Agent receives no tools.
+    """
+    if secondary or _current_agent_id.get() != "main" or not isinstance(response, dict):
+        return
+    from cyrene.model_runtime.client import (
+        sanitize_messages_for_llm,
+        model_candidate_identity_for_response,
+    )
+
+    normalized = sanitize_messages_for_llm(
+        copy.deepcopy(messages),
+        materialize_internal_media=False,
+    )
+    assistant: dict[str, Any] = {
+        "role": "assistant",
+        "content": response.get("content") or "",
+    }
+    for key in ("reasoning_content", "tool_calls"):
+        if response.get(key):
+            assistant[key] = copy.deepcopy(response[key])
+    normalized.extend(sanitize_messages_for_llm([assistant]))
+    session_id = _current_session_id.get()
+    ctx = _ensure_session(session_id)
+    ctx.last_main_model_messages = normalized
+    actual_identity = response.get("_candidate_identity")
+    ctx.last_main_model_identity = (
+        dict(actual_identity)
+        if isinstance(actual_identity, dict)
+        else model_candidate_identity_for_response(
+            session_id, str(response.get("model") or "")
+        )
+    )
+    ctx.last_main_model_round_id = _current_round_id.get()
+
+
+def get_last_main_model_context(session_id: str = "") -> dict[str, Any] | None:
+    """Return a defensive copy of the latest exact main-model exchange."""
+    ctx = _ensure_session(str(session_id or ""))
+    if not ctx.last_main_model_messages:
+        return None
+    return {
+        "messages": copy.deepcopy(ctx.last_main_model_messages),
+        "model": dict(ctx.last_main_model_identity),
+        "roundId": str(ctx.last_main_model_round_id or ""),
+    }
 
 
 async def _call_llm(
@@ -312,7 +447,7 @@ async def _call_llm(
         if stream_writer is not None and str(event.get("type") or "").startswith("reasoning_"):
             await stream_writer(event)
 
-    return await _unified_call_llm(
+    response = await _unified_call_llm(
         messages,
         tools=tools,
         max_tokens=max_tokens,
@@ -326,6 +461,8 @@ async def _call_llm(
         round_id=_current_round_id.get(),
         session_id=_current_session_id.get(),
     )
+    _record_last_main_model_context(messages, response, secondary=secondary)
+    return response
 
 
 async def _call_llm_stream(
@@ -337,7 +474,7 @@ async def _call_llm_stream(
 ) -> dict[str, Any]:
     from cyrene.call_llm import call_llm as _unified_call_llm
 
-    return await _unified_call_llm(
+    response = await _unified_call_llm(
         messages,
         max_tokens=max_tokens,
         model_type="secondary" if secondary else "primary",
@@ -345,14 +482,16 @@ async def _call_llm_stream(
         stream_callback=_reply_stream_writer.get(),
         tools=tools,
         caller=_caller_type.get(),
-        phase=_llm_phase_name(None),
+        phase=_llm_phase_name(tools),
         round_id=_current_round_id.get(),
         session_id=_current_session_id.get(),
     )
+    _record_last_main_model_context(messages, response, secondary=secondary)
+    return response
 
 
 # ---------------------------------------------------------------------------
-# Quit tool handler (registered in __init__.py to avoid circular imports)
+# Quit tool handler
 # ---------------------------------------------------------------------------
 
 async def _tool_quit(args: dict[str, Any], _bot: Any, _chat_id: int, _db_path: str, _notify_state: dict[str, bool] | None) -> str:

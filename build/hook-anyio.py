@@ -7,7 +7,7 @@ especially acute because the ProactorEventLoop requires specific
 sub-modules that are not reachable through the normal import graph.
 """
 
-from PyInstaller.utils.hooks import collect_all, collect_submodules, copy_metadata
+from PyInstaller.utils.hooks import collect_all, copy_metadata
 
 # ---- submodules (belt-and-suspenders: both collect_all and explicit list) ----
 datas, binaries, hiddenimports = collect_all("anyio")

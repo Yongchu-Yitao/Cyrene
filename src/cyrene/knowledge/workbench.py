@@ -7,13 +7,13 @@ import re
 from pathlib import Path
 from typing import Any
 
-from cyrene.attachments import (
+from cyrene.runtime.attachments import (
     EXPORTS_DIR,
     attachment_kind_from_meta,
     register_generated_attachment,
 )
 from cyrene.config import get_knowledge_db_path
-from cyrene.db import init_knowledge_db
+from cyrene.runtime.database import init_knowledge_db
 from cyrene.knowledge import ingest, store
 
 
@@ -158,18 +158,18 @@ async def archive_workbench_run(
 
 
 async def migrate_default_project_knowledge() -> dict[str, Any]:
-    """Move the Workbench default project's own docs out of the shared legacy KB.
+    """Copy the Workbench default project's own docs out of the shared global KB.
 
-    The legacy default project keys knowledge on ``dataKey == "default"`` →
+    The historical default project keys knowledge on ``dataKey == "default"`` →
     ``kb_default.db``, which the startup catalog also fills with the entire
     global attachment domain (every project's uploads/exports). Knowledge now
     keys on the project **id**, so the default project reads ``kb_<id>.db``. This
     one-time, non-destructive migration re-ingests the default project's own
     docs (its task archives + files produced by its own agent sessions) into the
-    id db, leaving ``kb_default.db`` intact for the ``--agent`` UI. Idempotent:
-    paths already present in the target are skipped.
+    id db, leaving ``kb_default.db`` intact for historical data and API
+    compatibility. Idempotent: paths already present in the target are skipped.
     """
-    from cyrene import workbench_context as wc
+    from cyrene.workbench import context as wc
 
     projects = wc._read_projects()
     default_project = next(

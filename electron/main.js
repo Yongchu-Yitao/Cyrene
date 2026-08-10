@@ -22,12 +22,14 @@ const os = require('os');
 const crypto = require('crypto');
 const { spawn } = require('child_process');
 const { AppUseManager } = require('./app-use');
+const { buildBrowserTypeTargetScript } = require('./browser-input');
 
 const APP_NAME = 'Cyrene';
 const TEMP_ARTIFACT_TTL_MS = 24 * 60 * 60 * 1000;
 const BROWSER_UPLOAD_TARGET_TTL_MS = 15 * 60 * 1000;
 const BROWSER_UPLOAD_MAX_FILES = 10;
 const BROWSER_UPLOAD_MAX_FILE_BYTES = 100 * 1024 * 1024;
+const CLI_CONNECTION_FILENAME = 'cli-connection.json';
 let _errorLogStream = null;
 
 function getCyreneUserDataDir() {
@@ -54,6 +56,43 @@ function getErrorLogPath() {
   return path.join(getCyreneTempDir(), 'cyrene_error.log');
 }
 
+function getCliConnectionPath() {
+  return path.join(getCyreneTempDir(), CLI_CONNECTION_FILENAME);
+}
+
+function clearCliConnection() {
+  try {
+    const target = getCliConnectionPath();
+    if (!fs.existsSync(target)) return;
+    const payload = JSON.parse(fs.readFileSync(target, 'utf8'));
+    if (Number(payload && payload.electronPid) === process.pid) {
+      fs.rmSync(target, { force: true });
+    }
+  } catch (_) {}
+}
+
+function publishCliConnection(port) {
+  const tempDir = getCyreneTempDir();
+  const target = getCliConnectionPath();
+  const temporary = `${target}.${process.pid}.tmp`;
+  try {
+    fs.mkdirSync(tempDir, { recursive: true, mode: 0o700 });
+    fs.writeFileSync(temporary, JSON.stringify({
+      version: 1,
+      url: `http://127.0.0.1:${Number(port)}`,
+      token: AUTH_TOKEN,
+      electronPid: process.pid,
+      backendPid: pythonProcess && pythonProcess.pid ? pythonProcess.pid : null,
+    }), { encoding: 'utf8', mode: 0o600 });
+    try { fs.chmodSync(temporary, 0o600); } catch (_) {}
+    try { fs.rmSync(target, { force: true }); } catch (_) {}
+    fs.renameSync(temporary, target);
+  } catch (err) {
+    try { fs.rmSync(temporary, { force: true }); } catch (_) {}
+    console.error('[electron] Failed to publish CLI connection:', err.message);
+  }
+}
+
 function getErrorLogStream() {
   if (!_errorLogStream) {
     try {
@@ -67,6 +106,22 @@ function getErrorLogStream() {
 function appendErrorLog(text) {
   const s = getErrorLogStream();
   if (s) s.write(text);
+}
+
+function installWindowDiagnostics(window, label) {
+  if (!window || !window.webContents) return;
+  const prefix = `[electron:${label}]`;
+  window.webContents.on('did-fail-load', (_event, code, description, targetUrl, isMainFrame) => {
+    // ERR_ABORTED is expected when a navigation is replaced or the app quits.
+    if (isMainFrame === false || Number(code) === -3) return;
+    appendErrorLog(`${prefix} did-fail-load code=${code} description=${description} url=${targetUrl}\n`);
+  });
+  window.webContents.on('render-process-gone', (_event, details) => {
+    appendErrorLog(`${prefix} render-process-gone ${JSON.stringify(details || {})}\n`);
+  });
+  window.on('unresponsive', () => {
+    appendErrorLog(`${prefix} window became unresponsive\n`);
+  });
 }
 
 function sha256File(filePath) {
@@ -101,6 +156,7 @@ function cleanupTemporaryArtifacts(ttlMs = TEMP_ARTIFACT_TTL_MS) {
   try {
     fs.mkdirSync(tempDir, { recursive: true });
     for (const name of fs.readdirSync(tempDir)) {
+      if (name === CLI_CONNECTION_FILENAME) continue;
       const target = path.join(tempDir, name);
       try {
         const stat = fs.lstatSync(target);
@@ -127,6 +183,33 @@ const isWindows = process.platform === 'win32';
 const isLinux = process.platform === 'linux';
 const supportsLoginItem = process.platform === 'darwin' || process.platform === 'win32';
 
+// Chromium aborts with SIGTRAP when its Linux SUID sandbox helper exists but
+// is not root-owned with mode 4755. deb/rpm installers repair that permission;
+// portable/AppImage or manually copied builds cannot rely on a privileged
+// install step, so fall back to Chromium's no-sandbox mode instead of crashing.
+if (isLinux) {
+  const sandboxPath = path.join(path.dirname(process.execPath), 'chrome-sandbox');
+  let hasUsableSuidSandbox = false;
+  try {
+    const sandboxStat = fs.statSync(sandboxPath);
+    hasUsableSuidSandbox = !process.env.APPIMAGE
+      && sandboxStat.uid === 0
+      && (sandboxStat.mode & 0o4000) !== 0;
+  } catch (_) {}
+  if (!hasUsableSuidSandbox) {
+    app.commandLine.appendSwitch('no-sandbox');
+  }
+}
+
+// Electron's GPU process can start successfully while producing an entirely
+// white compositor surface on some Linux/Wayland, virtualized, and older Mesa
+// setups. AppImage users cannot switch Electron builds or system libraries, so
+// prefer Chromium's software renderer there. Set the opt-out only when
+// diagnosing a machine known to have a working GPU stack.
+if (isLinux && process.env.CYRENE_ENABLE_HARDWARE_ACCELERATION !== '1') {
+  app.disableHardwareAcceleration();
+}
+
 let mainWindow = null;
 let quickChatWindow = null;
 let quickChatWindowReady = null;
@@ -137,7 +220,6 @@ let quickChatShortcutError = '';
 let pythonProcess = null;
 let pendingPortResolve = null;
 let backendPort = null;
-let backendUiMode = null;
 let isShuttingDown = false;
 let isQuitting = false;
 let launchHidden = process.argv.includes('--hidden');
@@ -151,7 +233,14 @@ let appUsePointerWindow = null;
 let appUsePointerHideTimer = null;
 let electronRpcServer = null;
 let electronRpcPort = null;
+const isDesktopSmokeTest = process.argv.includes('--desktop-smoke-test');
+if (isDesktopSmokeTest) {
+  // Keep release smoke tests independent from any resident desktop instance
+  // and avoid reading or changing the runner/user's normal Electron profile.
+  app.setPath('userData', path.join(getCyreneTempDir(), 'electron-smoke-profile'));
+}
 const BROWSER_USER_EVENT_CONSOLE_PREFIX = '__CYRENE_BROWSER_USER_EVENT__';
+const BROWSER_RESIZE_EDGE_PREFIX = '__CYRENE_RESIZE_EDGE__';
 
 const DEFAULT_DESKTOP_SETTINGS = Object.freeze({
   launchAtLogin: false,
@@ -288,17 +377,18 @@ const BROWSER_CHAT_OVERLAY_HTML = `<!doctype html>
   :root { color-scheme: light dark; }
   * { box-sizing: border-box; }
   html, body { width: 100%; height: 100%; margin: 0; overflow: hidden; background: transparent; }
-  body { display: flex; flex-direction: column; justify-content: flex-end; align-items: center; gap: 6px; padding: 8px 12px 10px; font-family: Inter, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
+  body { display: flex; flex-direction: column; justify-content: flex-end; align-items: center; gap: 6px; padding: 8px 12px 10px; font-family: Manrope, "Noto Sans SC", system-ui, "Segoe UI", sans-serif; font-synthesis-weight: none; }
   #status { display: none; max-width: min(420px, 100%); min-height: 28px; align-items: center; gap: 8px; padding: 5px 11px; border: 1px solid var(--line, #d8dce4); border-radius: 999px; background: var(--panel, rgba(255,255,255,.96)); color: var(--muted, #6f737b); box-shadow: 0 5px 16px rgba(10,18,32,.12); font-size: 11.5px; font-weight: 650; line-height: 1.2; }
   body.has-status #status { display: flex; }
   #status-dot { width: 7px; height: 7px; flex: 0 0 auto; border-radius: 50%; background: var(--green, #1f9d57); animation: pulse 1.45s ease-out infinite; }
   #status-text { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  form { width: 100%; height: 40px; display: flex; align-items: center; gap: 7px; padding: 4px 5px 4px 13px; border: 1px solid var(--line, #d8dce4); border-radius: 13px; background: var(--panel, rgba(255,255,255,.96)); box-shadow: none; }
-  form:focus-within { border-color: var(--accent, #6d5dfc); box-shadow: none; }
+  form { width: 100%; height: 44px; display: flex; align-items: center; gap: 8px; padding: 5px 6px 5px 14px; border: 1px solid var(--line, #d8dce4); border-radius: 14px; background: var(--panel, #fff); box-shadow: 0 3px 12px rgba(9,17,30,.04); }
+  form:focus-within { border-color: color-mix(in srgb, var(--accent, #6d5dfc) 36%, var(--line, #d8dce4)); box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent, #6d5dfc) 7%, transparent); }
   input { flex: 1 1 auto; min-width: 0; height: 30px; padding: 0; border: 0; outline: 0; background: transparent; color: var(--text, #17191d); font: inherit; font-size: 13px; }
   input::placeholder { color: var(--faint, #9297a1); }
-  button { width: 31px; height: 31px; flex: 0 0 auto; display: grid; place-items: center; padding: 0; border: 0; border-radius: 9px; background: var(--accent, #6d5dfc); color: var(--accent-text, #fff); cursor: pointer; }
-  button.stop { background: var(--red, #d84848); color: #fff; }
+  button { width: 32px; height: 32px; flex: 0 0 auto; display: grid; place-items: center; padding: 0; border: 1px solid color-mix(in srgb, var(--accent, #6d5dfc) 70%, transparent); border-radius: 10px; background: var(--accent, #6d5dfc); color: var(--accent-text, #fff); box-shadow: 0 2px 7px color-mix(in srgb, var(--accent, #6d5dfc) 20%, transparent); cursor: pointer; }
+  button:hover:not(:disabled) { background: color-mix(in srgb, var(--accent, #6d5dfc) 88%, white); }
+  button.stop { border-color: color-mix(in srgb, var(--red, #d84848) 60%, transparent); background: color-mix(in srgb, var(--red, #d84848) 14%, var(--panel, #fff)); color: var(--red, #d84848); box-shadow: 0 2px 7px color-mix(in srgb, var(--red, #d84848) 16%, transparent); }
   button:disabled { opacity: .42; cursor: default; }
   button svg { width: 15px; height: 15px; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
   @keyframes pulse { 0% { box-shadow: 0 0 0 0 color-mix(in srgb, var(--green, #1f9d57) 34%, transparent); } 70%, 100% { box-shadow: 0 0 0 5px transparent; } }
@@ -346,6 +436,138 @@ const BROWSER_CHAT_OVERLAY_HTML = `<!doctype html>
     });
   </script>
 </body></html>`;
+
+const BROWSER_TAB_PICKER_HTML = `<!doctype html>
+<html><head><meta charset="utf-8"><style>
+  :root { color-scheme: light dark; }
+  * { box-sizing: border-box; }
+  html, body { width: 100%; height: 100%; margin: 0; overflow: hidden; background: transparent; }
+  body { padding: 6px; font-family: Manrope, "Noto Sans SC", system-ui, "Segoe UI", sans-serif; font-synthesis-weight: none; }
+  #menu { width: 100%; height: 100%; display: flex; flex-direction: column; gap: 4px; padding: 7px; overflow: auto; border: 1px solid var(--line, #d8dce4); border-radius: 14px; background: var(--panel, #fff); color: var(--text, #17191d); box-shadow: 0 14px 34px rgba(9,17,30,.18); opacity: 0; transform: translate3d(0,-10px,0) scale(.985); transform-origin: top center; }
+  body.open #menu { animation: picker-in 220ms cubic-bezier(.22,1,.36,1) both; }
+  body.closing #menu { pointer-events: none; animation: picker-out 150ms cubic-bezier(.4,0,.2,1) both; }
+  .row { min-height: 44px; display: flex; flex: 0 0 auto; align-items: center; gap: 4px; padding: 3px; border-radius: 10px; color: var(--muted, #6f737b); }
+  .row:hover { background: var(--hover, rgba(23,25,29,.06)); color: var(--text, #17191d); }
+  .row.active { background: var(--selected, rgba(23,25,29,.045)); color: var(--text, #17191d); box-shadow: inset 0 0 0 1px var(--line, #d8dce4); }
+  button { border: 0; background: transparent; color: inherit; font: inherit; cursor: pointer; }
+  button:focus-visible { outline: none; }
+  .row:focus-within { background: var(--hover, rgba(23,25,29,.06)); color: var(--text, #17191d); box-shadow: inset 0 0 0 1px var(--line, #d8dce4); }
+  .select { min-width: 0; min-height: 38px; display: flex; flex: 1 1 auto; align-items: center; gap: 10px; padding: 5px 8px; text-align: left; }
+  .select b { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12px; font-weight: 650; }
+  .favicon { position: relative; width: 22px; height: 22px; flex: 0 0 22px; display: grid; place-items: center; border-radius: 6px; background: var(--hover, rgba(23,25,29,.06)); color: var(--faint, #9297a1); overflow: hidden; }
+  .favicon img { position: absolute; inset: 3px; width: 16px; height: 16px; object-fit: contain; }
+  .actions { display: flex; flex: 0 0 auto; align-items: center; gap: 2px; }
+  .actions button { width: 30px; height: 30px; display: grid; place-items: center; padding: 0; border-radius: 8px; color: var(--faint, #9297a1); }
+  .actions button:hover, .actions button.active { background: var(--hover, rgba(23,25,29,.07)); color: var(--text, #17191d); }
+  svg { width: 15px; height: 15px; fill: none; stroke: currentColor; stroke-width: 1.9; stroke-linecap: round; stroke-linejoin: round; }
+  @keyframes picker-in { from { opacity: 0; transform: translate3d(0,-10px,0) scale(.985); } to { opacity: 1; transform: translate3d(0,0,0) scale(1); } }
+  @keyframes picker-out { from { opacity: 1; transform: translate3d(0,0,0) scale(1); } to { opacity: 0; transform: translate3d(0,-8px,0) scale(.985); } }
+  @media (prefers-reduced-motion: reduce) { body.open #menu { animation-duration: 1ms; } body.closing #menu { animation-duration: 1ms; } }
+</style></head><body><div id="menu" role="menu"></div><script>
+  const menu = document.getElementById('menu');
+  const icons = {
+    tab: '<svg viewBox="0 0 24 24"><rect x="4" y="6" width="16" height="12" rx="2"/><path d="M4 9h16"/></svg>',
+    reload: '<svg viewBox="0 0 24 24"><path d="M20 11a8 8 0 1 0-2.3 5.7"/><path d="M20 5v6h-6"/></svg>',
+    volume: '<svg viewBox="0 0 24 24"><path d="M11 5 6.5 9H3v6h3.5L11 19Z"/><path d="M15 9a4 4 0 0 1 0 6"/></svg>',
+    muted: '<svg viewBox="0 0 24 24"><path d="M11 5 6.5 9H3v6h3.5L11 19Z"/><path d="m16 10 5 5m0-5-5 5"/></svg>',
+    close: '<svg viewBox="0 0 24 24"><path d="m7 7 10 10M17 7 7 17"/></svg>'
+  };
+  let state = { visible: false, tabs: [], activeTabId: '', labels: {}, colors: {} };
+  let wasVisible = false;
+  function action(type, tabId) { window.browserTabPicker.action(type, tabId || ''); }
+  function iconButton(type, tab, label, active) {
+    const button = document.createElement('button');
+    button.type = 'button';
+    button.className = active ? 'active' : '';
+    button.dataset.key = type + ':' + String(tab.id || '');
+    button.setAttribute('role', 'menuitem');
+    button.title = label;
+    button.setAttribute('aria-label', label);
+    button.innerHTML = icons[type] || '';
+    button.addEventListener('click', () => action(type === 'volume' || type === 'muted' ? 'mute' : type, tab.id));
+    return button;
+  }
+  function render() {
+    const focusKey = document.activeElement && document.activeElement.dataset
+      ? String(document.activeElement.dataset.key || '')
+      : '';
+    const colors = state.colors || {};
+    Object.keys(colors).forEach((key) => document.documentElement.style.setProperty('--' + key, String(colors[key] || '')));
+    menu.setAttribute('aria-label', String(state.labels && state.labels.tabs || 'Browser tabs'));
+    menu.replaceChildren();
+    (Array.isArray(state.tabs) ? state.tabs : []).forEach((tab) => {
+      const selected = String(tab.id || '') === String(state.activeTabId || '');
+      const row = document.createElement('div');
+      row.className = 'row' + (selected ? ' active' : '');
+      row.setAttribute('role', 'none');
+      const select = document.createElement('button');
+      select.type = 'button';
+      select.className = 'select';
+      select.dataset.key = 'select:' + String(tab.id || '');
+      select.setAttribute('role', 'menuitemradio');
+      select.setAttribute('aria-checked', selected ? 'true' : 'false');
+      const favicon = document.createElement('span');
+      favicon.className = 'favicon';
+      favicon.innerHTML = icons.tab;
+      if (tab.favicon) {
+        const image = document.createElement('img');
+        image.src = String(tab.favicon);
+        image.alt = '';
+        image.addEventListener('error', () => image.remove());
+        favicon.appendChild(image);
+      }
+      const title = document.createElement('b');
+      title.textContent = String(tab.title || tab.url || state.labels.browser || 'Browser');
+      select.append(favicon, title);
+      select.addEventListener('click', () => action('select', tab.id));
+      const actions = document.createElement('span');
+      actions.className = 'actions';
+      actions.append(
+        iconButton('reload', tab, state.labels.reload || 'Reload', false),
+        iconButton(tab.muted ? 'muted' : 'volume', tab, tab.muted ? (state.labels.unmute || 'Unmute') : (state.labels.mute || 'Mute'), !!tab.muted),
+        iconButton('close', tab, state.labels.close || 'Close tab', false)
+      );
+      row.append(select, actions);
+      menu.appendChild(row);
+    });
+    document.body.classList.toggle('closing', !state.visible);
+    if (state.visible && !wasVisible) {
+      document.body.classList.remove('open', 'closing');
+      void menu.offsetWidth;
+      requestAnimationFrame(() => {
+        document.body.classList.add('open');
+        const target = menu.querySelector('.row.active .select') || menu.querySelector('button');
+        if (target) target.focus({ preventScroll: true });
+      });
+    } else if (state.visible) {
+      document.body.classList.add('open');
+      document.body.classList.remove('closing');
+      if (focusKey) {
+        const target = Array.from(menu.querySelectorAll('button')).find((button) => button.dataset.key === focusKey);
+        if (target) target.focus({ preventScroll: true });
+      }
+    } else {
+      document.body.classList.remove('open');
+    }
+    wasVisible = !!state.visible;
+  }
+  window.browserTabPicker.onState((next) => { state = next || state; render(); });
+  window.addEventListener('keydown', (event) => {
+    if (event.key === 'Escape') { event.preventDefault(); action('dismiss', ''); return; }
+    if (!['ArrowDown', 'ArrowUp', 'Home', 'End'].includes(event.key)) return;
+    const buttons = Array.from(menu.querySelectorAll('button'));
+    if (!buttons.length) return;
+    event.preventDefault();
+    const current = Math.max(0, buttons.indexOf(document.activeElement));
+    const next = event.key === 'Home' ? 0
+      : event.key === 'End' ? buttons.length - 1
+      : event.key === 'ArrowDown' ? (current + 1) % buttons.length
+      : (current - 1 + buttons.length) % buttons.length;
+    buttons[next].focus({ preventScroll: true });
+  });
+  menu.addEventListener('animationend', (event) => { if (!state.visible && event.animationName === 'picker-out') window.browserTabPicker.hiddenReady(); });
+  window.browserTabPicker.ready();
+</script></body></html>`;
 
 function normalizeBrowserSessionId(value) {
   return String(value || '').trim();
@@ -395,12 +617,32 @@ function browserPageSignal(url, title, text) {
   return { kind: 'normal', requiresUserTakeover: false, retryAllowed: true, message: '' };
 }
 
+// Embedded browser panes can be as narrow as ~270px; sites then serve
+// mobile layouts whose header covers the first feed items, so click
+// coordinates land on the header nav instead of the target. Scale the page
+// down so the CSS viewport always spans a desktop width: the page renders
+// the full desktop layout at full size and the pane displays it shrunk to
+// fit. (enableDeviceEmulation is avoided — it SIGSEGVs on Electron 35 +
+// macOS 26 with WebContentsView viewport changes, see createView.)
+// Click coordinates are CSS pixels while sendInputEvent uses DIP pixels, so
+// every input event converts them with the current zoom factor.
+const PAGE_CSS_TARGET_WIDTH = 1100;
+const PAGE_CSS_MAX_FIT_WIDTH = 1920;
+const PAGE_MIN_ZOOM = 0.1;
+
 const BROWSER_VISIBLE_ELEMENTS_SCRIPT = `
 (function(maxArg, textArg) {
   const maxElements = Math.max(1, Math.min(200, Number(maxArg) || 80));
   const textLimit = Math.max(20, Math.min(500, Number(textArg) || 160));
   const viewportW = window.innerWidth || document.documentElement.clientWidth || 0;
   const viewportH = window.innerHeight || document.documentElement.clientHeight || 0;
+  // data-cyrene-ref is shared with text-links and visible_link_matches, which
+  // number independently. Clear every previous stamp so each snapshot's refs
+  // are unique; stale refs on off-viewport elements made click_ref resolve
+  // the wrong (document-order-first) element.
+  for (const el of document.querySelectorAll('[data-cyrene-ref]')) {
+    el.removeAttribute('data-cyrene-ref');
+  }
   const candidates = [
     ...Array.from(document.querySelectorAll('input,textarea,select,button,a[href],[contenteditable="true"],[role="textbox"],[role="searchbox"],[role="combobox"],[role="button"],[role="link"],[tabindex]')),
     ...Array.from(document.querySelectorAll('summary,label,[role],img,video,section,article,div,span')),
@@ -448,7 +690,10 @@ const BROWSER_VISIBLE_ELEMENTS_SCRIPT = `
     if (rect.bottom < 0 || rect.right < 0 || rect.top > viewportH || rect.left > viewportW) continue;
     const tag = String(el.tagName || '').toLowerCase();
     const role = roleOf(el, tag);
-    const text = clean(el.innerText || el.textContent || el.getAttribute('value') || el.getAttribute('title') || el.getAttribute('alt'));
+    const inputType = tag === 'input' ? clean(el.getAttribute('type') || 'text', 40).toLowerCase() : '';
+    const text = tag === 'input' || tag === 'textarea'
+      ? (inputType === 'password' ? '' : clean(el.value))
+      : clean(el.innerText || el.textContent || el.getAttribute('value') || el.getAttribute('title') || el.getAttribute('alt'));
     const ariaLabel = clean(el.getAttribute('aria-label') || el.getAttribute('title') || el.getAttribute('alt'));
     const placeholder = clean(el.getAttribute('placeholder'));
     const href = el.href ? String(el.href) : clean(el.getAttribute('href'), 300);
@@ -461,7 +706,7 @@ const BROWSER_VISIBLE_ELEMENTS_SCRIPT = `
       ref,
       tag,
       role,
-      inputType: tag === 'input' ? clean(el.getAttribute('type') || 'text', 40).toLowerCase() : '',
+      inputType,
       accept: tag === 'input' ? clean(el.getAttribute('accept'), 240) : '',
       multiple: tag === 'input' && el.hasAttribute('multiple'),
       text,
@@ -584,6 +829,19 @@ class BrowserTabManager {
     this.chatOverlayView = null;
     this.chatOverlayParent = null;
     this.chatOverlayState = { visible: false, running: false, showStatus: false };
+    this.tabPickerView = null;
+    this.tabPickerParent = null;
+    this.tabPickerState = {
+      visible: false,
+      closing: false,
+      variant: 'maximized',
+      colors: {},
+      labels: {},
+    };
+    this.tabPickerReady = false;
+    this.tabPickerWindow = null;
+    this._tabPickerWindowBlurHandler = null;
+    this._tabPickerHideTimer = null;
     this.visible = false;
     this.obscured = browserSurfaceObscured;
     this.attachedTabId = '';
@@ -592,6 +850,7 @@ class BrowserTabManager {
     this._repaintTimer = null;
     this._boundsTransitionToken = 0;
     this._boundsTransitioning = false;
+    this._pageZoomTokenByContents = new Map();
     this.videoFullscreen = { active: false, external: false, tabId: '' };
     this.videoFullscreenWindow = null;
     this._videoFullscreenWindowClosing = false;
@@ -798,7 +1057,7 @@ class BrowserTabManager {
         contextIsolation: true,
         nodeIntegration: false,
         sandbox: true,
-        backgroundThrottling: false,
+        backgroundThrottling: true,
         // Cyrene owns the platform-specific fullscreen presentation. Prevent
         // Chromium's HTML fullscreen request from resizing whichever window
         // currently hosts this view before we can move/expand it ourselves.
@@ -824,8 +1083,22 @@ class BrowserTabManager {
     wc.on('did-navigate', () => this.invalidateSnapshot());
     wc.on('did-navigate-in-page', () => this.invalidateSnapshot());
     wc.on('page-title-updated', update);
+    wc.on('page-favicon-updated', (_event, favicons) => {
+      const tab = this._tabForView(view);
+      if (!tab) return;
+      tab.favicon = String(Array.isArray(favicons) && favicons[0] || '');
+      update();
+    });
     wc.on('media-started-playing', update);
     wc.on('media-paused', update);
+    wc.on('focus', () => {
+      if (this.tabPickerState.visible) this.dismissTabPicker(true);
+    });
+    wc.on('before-input-event', (_event, input) => {
+      if (this.tabPickerState.visible && String(input && input.key || '') === 'Escape') {
+        this.dismissTabPicker(true);
+      }
+    });
     wc.on('enter-html-full-screen', () => {
       this.enterVideoFullscreen(view).catch((err) => {
         console.error('[electron] Failed to enter browser video fullscreen:', err);
@@ -842,9 +1115,17 @@ class BrowserTabManager {
     wc.on('did-finish-load', () => {
       this.applyPageFrameStyle(view, undefined, true);
       this.installUserEventCapture(view).catch(() => {});
+      // Navigation may reset the page zoom; re-converge on the desktop-width
+      // CSS viewport so snapshots and clicks stay in a stable coordinate space.
+      const tab = this._tabForView(view);
+      if (tab) {
+        let bounds = this.bounds;
+        try { bounds = tab.view.getBounds(); } catch (_) {}
+        this.applyPageZoom(view, bounds, this.zoomEnabled !== false).catch(() => {});
+      }
     });
-    wc.on('console-message', (_event, _level, message) => {
-      this.handleCapturedUserEvent(view, message);
+    wc.on('console-message', (details) => {
+      this.handleCapturedUserEvent(view, String(details && details.message || ''));
     });
     wc.debugger.on('message', (_event, method, params) => {
       if (method !== 'Page.fileChooserOpened') return;
@@ -1076,6 +1357,40 @@ class BrowserTabManager {
         if (window.__cyreneBrowserUserCaptureInstalled) return true;
         window.__cyreneBrowserUserCaptureInstalled = true;
         const prefix = ${JSON.stringify(BROWSER_USER_EVENT_CONSOLE_PREFIX)};
+        const resizeEdgeCursorStyle = document.createElement("style");
+        resizeEdgeCursorStyle.setAttribute("data-cyrene-resize-edge-cursor", "");
+        resizeEdgeCursorStyle.textContent =
+          'html[data-cyrene-resize-edge-active], ' +
+          'html[data-cyrene-resize-edge-active] * { cursor: col-resize !important; }';
+        document.documentElement.appendChild(resizeEdgeCursorStyle);
+        const resizeEdgePrefix = ${JSON.stringify(BROWSER_RESIZE_EDGE_PREFIX)};
+        let resizeEdgeHintEnabled = ${JSON.stringify(this.zoomEnabled === false)};
+        let resizeEdgeHintLocal = false;
+        let resizeEdgeHintExternal = false;
+        const renderResizeEdgeHint = () => {
+          const active = resizeEdgeHintEnabled && (resizeEdgeHintLocal || resizeEdgeHintExternal);
+          document.documentElement.toggleAttribute("data-cyrene-resize-edge-active", active);
+        };
+        const showResizeEdgeHint = (show) => {
+          const next = resizeEdgeHintEnabled && show === true;
+          if (next === resizeEdgeHintLocal) return;
+          resizeEdgeHintLocal = next;
+          console.info(resizeEdgePrefix + (next ? "in" : "out"));
+          renderResizeEdgeHint();
+        };
+        window.__cyreneSetResizeEdgeHint = (enabled, externalActive) => {
+          resizeEdgeHintEnabled = enabled === true;
+          resizeEdgeHintExternal = externalActive === true;
+          if (!resizeEdgeHintEnabled) showResizeEdgeHint(false);
+          else renderResizeEdgeHint();
+        };
+        document.addEventListener("mousemove", (event) => {
+          showResizeEdgeHint(event.clientX < 14);
+        }, { passive: true, capture: true });
+        document.addEventListener("mouseout", (event) => {
+          if (!event.relatedTarget) showResizeEdgeHint(false);
+        }, true);
+        window.addEventListener("blur", () => showResizeEdgeHint(false));
         const clean = (value, limit = 240) => String(value == null ? "" : value).replace(/\\s+/g, " ").trim().slice(0, limit);
         const stableSelector = (el) => {
           if (!el || !(el instanceof Element)) return "";
@@ -1170,8 +1485,29 @@ class BrowserTabManager {
     await wc.executeJavaScript(script, true).catch(() => {});
   }
 
+  applyResizeEdgeHint(view) {
+    if (!view || !view.webContents || view.webContents.isDestroyed()) return;
+    const enabled = this.zoomEnabled === false;
+    const active = this.resizeEdgeHintActive === true;
+    view.webContents.executeJavaScript(
+      `window.__cyreneSetResizeEdgeHint && window.__cyreneSetResizeEdgeHint(${JSON.stringify(enabled)}, ${JSON.stringify(active)})`,
+      true
+    ).catch(() => {});
+  }
+
   handleCapturedUserEvent(view, message) {
     const raw = String(message || '');
+    if (raw.startsWith(BROWSER_RESIZE_EDGE_PREFIX)) {
+      const active = String(raw.slice(BROWSER_RESIZE_EDGE_PREFIX.length)).trim() === 'in';
+      const win = this.ownerWindow();
+      if (win) {
+        win.webContents.executeJavaScript(
+          `document.body && document.body.classList.toggle("wb-col-resize-hover", ${JSON.stringify(active)})`,
+          true
+        ).catch(() => {});
+      }
+      return;
+    }
     if (!raw.startsWith(BROWSER_USER_EVENT_CONSOLE_PREFIX)) return;
     const tab = this._tabForView(view);
     if (this._shouldSuppressCapturedEvent(tab)) return;
@@ -1217,6 +1553,7 @@ class BrowserTabManager {
       id: tab.id,
       title: wc.getTitle() || tab.title || '',
       url: wc.getURL() || tab.url || 'about:blank',
+      favicon: String(tab.favicon || ''),
       active: tab.id === this.activeTabId,
       loading: wc.isLoading(),
       canGoBack: wc.canGoBack(),
@@ -1247,6 +1584,7 @@ class BrowserTabManager {
   }
 
   emitState() {
+    if (this.tabPickerState.visible || this.tabPickerState.closing) this.pushTabPickerState();
     if (this.sessionId !== activeBrowserSessionId) return;
     // Fullscreen video may live in a separate macOS window, but state updates
     // always belong to the Cyrene renderer so each in-app browser surface can
@@ -1264,6 +1602,9 @@ class BrowserTabManager {
 
   async createTab({ url = 'about:blank', activate = true } = {}) {
     if (!WebContentsView) throw new Error('Electron WebContentsView is unavailable.');
+    // Warm the tiny picker renderer alongside the first page so opening the
+    // menu never waits for a new preload/data-document navigation.
+    try { this.ensureTabPickerView(); } catch (_) {}
     const id = `tab_${this.nextTabId++}`;
     const view = this.createView();
     const tab = {
@@ -1271,6 +1612,7 @@ class BrowserTabManager {
       view,
       url: normalizeBrowserUrl(url),
       title: '',
+      favicon: '',
       debuggerReady: false,
       fileChoosers: new Map(),
       uploadTargets: new Map(),
@@ -1369,6 +1711,187 @@ class BrowserTabManager {
     };
   }
 
+  pageZoomForBounds(bounds = this.bounds) {
+    const width = Math.max(0, Math.round(Number(bounds && bounds.width) || 0));
+    if (width <= 0 || width >= PAGE_CSS_TARGET_WIDTH) return 1;
+    return Math.max(PAGE_MIN_ZOOM, width / PAGE_CSS_TARGET_WIDTH);
+  }
+
+  async applyPageZoom(view, bounds = this.bounds, zoomEnabled = true, options = {}) {
+    if (!view || !view.webContents || view.webContents.isDestroyed()) return 1;
+    const wc = view.webContents;
+    const contentsId = Number(wc.id) || 0;
+    const zoomToken = (this._pageZoomTokenByContents.get(contentsId) || 0) + 1;
+    this._pageZoomTokenByContents.set(contentsId, zoomToken);
+    const isCurrent = () => (
+      !wc.isDestroyed()
+      && this._pageZoomTokenByContents.get(contentsId) === zoomToken
+    );
+    const dipWidth = Math.max(0, Math.round(Number(bounds && bounds.width) || 0));
+    if (!zoomEnabled || dipWidth <= 0 || dipWidth >= PAGE_CSS_TARGET_WIDTH) {
+      if (isCurrent()) {
+        try { wc.setZoomFactor(1); } catch (_) {}
+        wc.executeJavaScript(`(() => {
+          document.documentElement.removeAttribute('data-cyrene-pip-fit-width');
+          return true;
+        })()`, true).catch(() => {});
+      }
+      return 1;
+    }
+    // Chromium quantizes zoom requests to discrete levels. Bias the single
+    // request one zoom step below the mathematical fit so quantization can
+    // never choose a larger factor that clips the right edge. Do not perform a
+    // visible second-pass correction: changing zoom twice is perceived as a
+    // flash in PiP, especially immediately after a split/maximized handoff.
+    const fast = options && options.fast === true;
+    const waitMs = fast ? 40 : 140;
+    let pageLayoutWidth = PAGE_CSS_TARGET_WIDTH;
+    try {
+      const measuredLayoutWidth = Number(await wc.executeJavaScript(`(() => {
+        const root = document.documentElement;
+        const body = document.body;
+        return Math.max(
+          window.innerWidth || 0,
+          root ? root.scrollWidth : 0,
+          body ? body.scrollWidth : 0
+        );
+      })()`, true)) || 0;
+      pageLayoutWidth = Math.min(
+        PAGE_CSS_MAX_FIT_WIDTH,
+        Math.max(PAGE_CSS_TARGET_WIDTH, measuredLayoutWidth)
+      );
+    } catch (_) {}
+    if (!isCurrent()) return 1;
+    const request = Math.max(PAGE_MIN_ZOOM, (dipWidth / pageLayoutWidth) / 1.2);
+    let actual = request;
+    try {
+      if (!isCurrent()) return actual;
+      wc.setZoomFactor(request);
+      wc.executeJavaScript(`(() => {
+        let style = document.querySelector('style[data-cyrene-pip-fit-width-style]');
+        if (!style) {
+          style = document.createElement('style');
+          style.setAttribute('data-cyrene-pip-fit-width-style', '');
+          style.textContent =
+            'html[data-cyrene-pip-fit-width], ' +
+            'html[data-cyrene-pip-fit-width] body {' +
+            'overflow-x: hidden !important;' +
+            'overscroll-behavior-x: none !important;' +
+            'overscroll-behavior-y: auto !important;' +
+            '}';
+          (document.head || document.documentElement).appendChild(style);
+        }
+        document.documentElement.setAttribute('data-cyrene-pip-fit-width', '');
+        const scrolling = document.scrollingElement || document.documentElement;
+        if (scrolling && scrolling.scrollLeft) scrolling.scrollLeft = 0;
+        return true;
+      })()`, true).catch(() => {});
+      await new Promise((resolve) => setTimeout(resolve, waitMs));
+      if (!isCurrent()) return actual;
+      const innerW = Number(await wc.executeJavaScript('window.innerWidth')) || 0;
+      if (!isCurrent()) return actual;
+      if (innerW > 0) {
+        actual = dipWidth / innerW;
+      }
+    } catch (_) {}
+    return actual;
+  }
+
+  async pageZoomOf(wc, dipWidth = 0) {
+    try {
+      const width = dipWidth > 0
+        ? dipWidth
+        : Math.max(0, Math.round(Number(this.bounds.width) || 0));
+      const innerW = Number(await wc.executeJavaScript('window.innerWidth')) || 0;
+      if (innerW <= 0 || width <= 0) return 1;
+      return Math.max(0.001, Math.min(1, width / innerW));
+    } catch (_) {
+      return 1;
+    }
+  }
+
+  async pageViewportMatches(view, bounds) {
+    if (!view || !view.webContents || view.webContents.isDestroyed()) return false;
+    const target = this.pageViewBounds(bounds);
+    // The page zoom scales the CSS viewport. For zoomed panes the width is
+    // pinned to the target desktop width; the height expectation follows
+    // from the applied zoom read back from innerWidth.
+    const zoom = this.pageZoomForBounds(target);
+    let expectedWidth = target.width;
+    let expectedHeight = target.height;
+    let widthTolerance = 2;
+    let fitWidth = false;
+    if (zoom < 1) {
+      expectedWidth = PAGE_CSS_TARGET_WIDTH;
+      // Chromium applies zoom in discrete steps; depending on the exact PiP
+      // width the next safe zoom step can expose up to ~20% extra CSS width.
+      // That is intentional: a fit-width surface may be wider than the target,
+      // but it must never be narrower and clip the page's right edge.
+      fitWidth = true;
+      widthTolerance = Math.ceil((PAGE_CSS_MAX_FIT_WIDTH * 1.2) - PAGE_CSS_TARGET_WIDTH);
+      try {
+        const innerW = Number(await view.webContents.executeJavaScript('window.innerWidth')) || 0;
+        const applied = innerW > 0 ? target.width / innerW : zoom;
+        expectedHeight = Math.round(target.height / applied);
+      } catch (_) {
+        expectedHeight = Math.round(target.height / zoom);
+      }
+    }
+    try {
+      const viewport = await Promise.race([
+        view.webContents.executeJavaScript(
+          '({ width: window.innerWidth, height: window.innerHeight })',
+          true
+        ),
+        new Promise((resolve) => setTimeout(() => resolve(null), 80)),
+      ]);
+      const viewportWidth = Number(viewport && viewport.width) || 0;
+      const widthMatches = fitWidth
+        ? viewportWidth >= expectedWidth - 2 && viewportWidth <= expectedWidth + widthTolerance
+        : Math.abs(viewportWidth - expectedWidth) <= widthTolerance;
+      return !!viewport
+        && widthMatches
+        && Math.abs((Number(viewport.height) || 0) - expectedHeight) <= 2;
+    } catch (_) {
+      return false;
+    }
+  }
+
+  async waitForPageViewport(view, bounds, attempts = 4) {
+    const count = Math.max(1, Math.round(Number(attempts) || 1));
+    for (let attempt = 0; attempt < count; attempt += 1) {
+      if (await this.pageViewportMatches(view, bounds)) return true;
+      if (attempt + 1 < count) {
+        await new Promise((resolve) => setTimeout(resolve, 24));
+      }
+    }
+    return false;
+  }
+
+  async settlePageViewport(view, bounds, forcePulse = false) {
+    if (!view || !view.webContents || view.webContents.isDestroyed()) return false;
+    const target = this.pageViewBounds(bounds);
+    try { view.setBounds(target); } catch (_) {}
+    try { view.webContents.invalidate(); } catch (_) {}
+    if (!forcePulse && await this.waitForPageViewport(view, target, 3)) return true;
+
+    // Electron 35 on macOS can acknowledge the first hidden PiP -> maximized
+    // setBounds call without delivering a resize to Chromium's layout viewport.
+    // A one-pixel geometry pulse forces a second native resize notification;
+    // verify window.innerWidth/innerHeight before treating the transition as
+    // settled so the renderer cannot cache a fullscreen shell around a PiP page.
+    const pulse = {
+      ...target,
+      width: target.width > 9 ? target.width - 1 : target.width,
+      height: target.height > 9 ? target.height - 1 : target.height,
+    };
+    try { view.setBounds(pulse); } catch (_) {}
+    await new Promise((resolve) => setTimeout(resolve, 24));
+    try { view.setBounds(target); } catch (_) {}
+    try { view.webContents.invalidate(); } catch (_) {}
+    return this.waitForPageViewport(view, target, 6);
+  }
+
   applyPageFrameStyle(view, radius = this.pageCornerRadius, force = false) {
     if (!view || !view.webContents || view.webContents.isDestroyed()) return;
     const wc = view.webContents;
@@ -1409,12 +1932,15 @@ class BrowserTabManager {
         contextIsolation: true,
         nodeIntegration: false,
         sandbox: true,
-        backgroundThrottling: false,
+        backgroundThrottling: true,
       },
     });
     try { view.setBackgroundColor('#00000000'); } catch (_) {}
     view.webContents.on('did-finish-load', () => this.pushChatOverlayState());
-    view.webContents.loadURL(`data:text/html;charset=utf-8,${encodeURIComponent(BROWSER_CHAT_OVERLAY_HTML)}`).catch(() => {});
+    const overlayUrl = backendPort
+      ? `http://127.0.0.1:${backendPort}/static/app/electron/browser-chat-overlay.html`
+      : `data:text/html;charset=utf-8,${encodeURIComponent(BROWSER_CHAT_OVERLAY_HTML)}`;
+    view.webContents.loadURL(overlayUrl).catch(() => {});
     this.chatOverlayView = view;
     return view;
   }
@@ -1506,8 +2032,279 @@ class BrowserTabManager {
       sessionId: this.sessionId,
       colors,
     };
-    this.syncChatOverlay(this.ownerWindow()?.contentView || null, false);
+    // The page WebContentsView can be reattached or promoted while entering
+    // maximized mode. Re-add the Agent overlay after it so the composer stays
+    // above the live page instead of silently ending up behind it.
+    const parent = this.ownerWindow()?.contentView || null;
+    this.syncChatOverlay(parent, true);
+    if (this.tabPickerState.visible || this.tabPickerState.closing) {
+      this.syncTabPicker(parent, true);
+    }
     return { ok: true, visible: this.chatOverlayState.visible };
+  }
+
+  tabPickerSnapshot() {
+    const state = this.tabPickerState || {};
+    return {
+      sessionId: this.sessionId,
+      visible: state.visible === true,
+      closing: state.closing === true,
+      variant: state.variant === 'split' ? 'split' : 'maximized',
+      activeTabId: this.activeTabId,
+      tabs: Array.from(this.tabs.values()).map((tab) => this.tabState(tab)).filter(Boolean),
+      labels: state.labels && typeof state.labels === 'object' ? state.labels : {},
+      colors: state.colors && typeof state.colors === 'object' ? state.colors : {},
+    };
+  }
+
+  notifyTabPickerRenderer(extra = {}) {
+    const win = this.ownerWindow();
+    if (!win) return;
+    try {
+      win.webContents.send('browser:tab-picker-action', {
+        sessionId: this.sessionId,
+        visible: this.tabPickerState.visible === true,
+        variant: this.tabPickerState.variant === 'split' ? 'split' : 'maximized',
+        ...extra,
+      });
+    } catch (_) {}
+  }
+
+  ensureTabPickerView() {
+    if (this.tabPickerView && !this.tabPickerView.webContents.isDestroyed()) return this.tabPickerView;
+    if (!WebContentsView) throw new Error('Electron WebContentsView is unavailable.');
+    const view = new WebContentsView({
+      webPreferences: {
+        preload: path.join(__dirname, 'browser-tab-picker-preload.js'),
+        contextIsolation: true,
+        nodeIntegration: false,
+        sandbox: true,
+        backgroundThrottling: true,
+      },
+    });
+    this.tabPickerReady = false;
+    try { view.setBackgroundColor('#00000000'); } catch (_) {}
+    view.webContents.on('did-finish-load', () => {
+      if (this.tabPickerView !== view) return;
+      this.tabPickerReady = true;
+      this.pushTabPickerState();
+      if (this.tabPickerState.visible) {
+        try { view.webContents.focus(); } catch (_) {}
+      }
+    });
+    view.webContents.on('did-fail-load', (_event, code, description) => {
+      if (Number(code) === -3) return;
+      console.warn(`[electron] Browser tab picker failed to load (${code}): ${description}`);
+    });
+    this.tabPickerView = view;
+    const pickerUrl = backendPort
+      ? `http://127.0.0.1:${backendPort}/static/app/electron/browser-tab-picker.html`
+      : `data:text/html;charset=utf-8,${encodeURIComponent(BROWSER_TAB_PICKER_HTML)}`;
+    view.webContents.loadURL(pickerUrl).catch((err) => {
+      console.error('[electron] Failed to load browser tab picker:', err);
+    });
+    return view;
+  }
+
+  pushTabPickerState() {
+    const view = this.tabPickerView;
+    if (!view || view.webContents.isDestroyed()) return;
+    try { view.webContents.send('browser-tab-picker:state', this.tabPickerSnapshot()); } catch (_) {}
+  }
+
+  tabPickerBounds() {
+    const surface = this.pageViewBounds(this.bounds);
+    const variant = this.tabPickerState.variant === 'split' ? 'split' : 'maximized';
+    const horizontalInset = variant === 'maximized' ? 116 : 12;
+    // The native page starts below the browser navigation row. Lift the
+    // floating picker by that chrome height so it sits beneath the title bar
+    // and overlays the navigation row, matching the renderer-hosted menu.
+    const verticalLift = 60;
+    const availableWidth = Math.max(0, surface.width - horizontalInset);
+    const width = Math.min(560, availableWidth);
+    const rows = Math.max(1, this.tabs.size);
+    const desiredHeight = 22 + (rows * 48);
+    const height = Math.min(350, desiredHeight, Math.max(0, surface.height - 12));
+    return {
+      x: surface.x + Math.max(0, Math.round((surface.width - width) / 2)),
+      y: Math.max(0, surface.y - verticalLift),
+      width: Math.max(0, Math.round(width)),
+      height: Math.max(0, Math.round(height)),
+    };
+  }
+
+  trackTabPickerWindow(win) {
+    if (this.tabPickerWindow === win) return;
+    if (this.tabPickerWindow && this._tabPickerWindowBlurHandler) {
+      try { this.tabPickerWindow.removeListener('blur', this._tabPickerWindowBlurHandler); } catch (_) {}
+    }
+    this.tabPickerWindow = win || null;
+    this._tabPickerWindowBlurHandler = null;
+    if (!win || win.isDestroyed()) return;
+    this._tabPickerWindowBlurHandler = () => {
+      if (this.tabPickerState.visible) this.dismissTabPicker(true);
+    };
+    win.on('blur', this._tabPickerWindowBlurHandler);
+  }
+
+  finishTabPickerHide() {
+    if (this.tabPickerState.visible) return;
+    if (this._tabPickerHideTimer) clearTimeout(this._tabPickerHideTimer);
+    this._tabPickerHideTimer = null;
+    this.tabPickerState = { ...this.tabPickerState, closing: false };
+    const view = this.tabPickerView;
+    const win = this.ownerWindow();
+    let restoreRendererFocus = false;
+    if (view && !view.webContents.isDestroyed()) {
+      try {
+        restoreRendererFocus = !!(win && win.isFocused() && view.webContents.isFocused());
+      } catch (_) {}
+      try { view.setVisible(false); } catch (_) {}
+    }
+    if (restoreRendererFocus && win) {
+      try { win.webContents.focus(); } catch (_) {}
+    }
+  }
+
+  dismissTabPicker(animate = true) {
+    const wasVisible = this.tabPickerState.visible === true;
+    const wasClosing = this.tabPickerState.closing === true;
+    if (!wasVisible && !wasClosing) return { ok: true, visible: false };
+    if (this._tabPickerHideTimer) clearTimeout(this._tabPickerHideTimer);
+    this._tabPickerHideTimer = null;
+    const shouldAnimate = animate === true && wasVisible && this.tabPickerReady
+      && !!this.tabPickerView && !this.tabPickerView.webContents.isDestroyed();
+    this.tabPickerState = {
+      ...this.tabPickerState,
+      visible: false,
+      closing: shouldAnimate,
+    };
+    this.pushTabPickerState();
+    this.notifyTabPickerRenderer({ type: 'visibility' });
+    if (!shouldAnimate) {
+      this.finishTabPickerHide();
+    } else {
+      this._tabPickerHideTimer = setTimeout(() => this.finishTabPickerHide(), 220);
+    }
+    return { ok: true, visible: false };
+  }
+
+  syncTabPicker(container, raise = false) {
+    const parent = container && container.contentView ? container.contentView : container;
+    const hostReady = !!(
+      this.visible
+      && !this.obscured
+      && !this._boundsTransitioning
+      && !this.videoFullscreen.active
+      && parent
+      && this.activeTabId
+    );
+    if (!hostReady) {
+      if (this.tabPickerState.visible || this.tabPickerState.closing) this.dismissTabPicker(false);
+      else this.finishTabPickerHide();
+      return;
+    }
+    if (!this.tabPickerState.visible && !this.tabPickerState.closing) {
+      this.finishTabPickerHide();
+      return;
+    }
+    const bounds = this.tabPickerBounds();
+    if (bounds.width < 120 || bounds.height < 48) {
+      this.dismissTabPicker(false);
+      return;
+    }
+    const view = this.ensureTabPickerView();
+    if (this.tabPickerParent && this.tabPickerParent !== parent) {
+      try { this.tabPickerParent.removeChildView(view); } catch (_) {}
+      this.tabPickerParent = null;
+    }
+    try { view.setBounds(bounds); } catch (_) {}
+    if (raise && this.tabPickerParent === parent) {
+      try { parent.removeChildView(view); } catch (_) {}
+      this.tabPickerParent = null;
+    }
+    if (this.tabPickerParent !== parent) {
+      try {
+        parent.addChildView(view);
+        this.tabPickerParent = parent;
+      } catch (err) {
+        console.error('[electron] Failed to attach browser tab picker:', err);
+        this.dismissTabPicker(false);
+        return;
+      }
+    }
+    this.trackTabPickerWindow(this.ownerWindow());
+    try { view.setVisible(true); } catch (_) {}
+    if (this.tabPickerState.visible) this.pushTabPickerState();
+  }
+
+  setTabPicker(info = {}) {
+    const requestedVariant = info.variant === 'split' ? 'split' : 'maximized';
+    if (info.visible !== true || !this.tabs.size) {
+      if ((this.tabPickerState.visible || this.tabPickerState.closing)
+        && this.tabPickerState.variant !== requestedVariant) {
+        return { ok: true, visible: this.tabPickerState.visible === true };
+      }
+      return this.dismissTabPicker(true);
+    }
+    if (this._tabPickerHideTimer) clearTimeout(this._tabPickerHideTimer);
+    this._tabPickerHideTimer = null;
+    const labels = info.labels && typeof info.labels === 'object' ? info.labels : {};
+    const colors = info.colors && typeof info.colors === 'object' ? info.colors : {};
+    this.tabPickerState = {
+      visible: true,
+      closing: false,
+      variant: requestedVariant,
+      labels: Object.fromEntries(Object.entries(labels).map(([key, value]) => [String(key), String(value || '').slice(0, 120)])),
+      colors: Object.fromEntries(Object.entries(colors).map(([key, value]) => [String(key), String(value || '').slice(0, 120)])),
+    };
+    this.syncTabPicker(this.ownerWindow()?.contentView || null, true);
+    this.notifyTabPickerRenderer({ type: 'visibility' });
+    const view = this.tabPickerView;
+    if (view && !view.webContents.isDestroyed()) {
+      setTimeout(() => {
+        if (!this.tabPickerState.visible || this.tabPickerView !== view) return;
+        try { view.webContents.focus(); } catch (_) {}
+      }, 0);
+    }
+    return { ok: true, visible: this.tabPickerState.visible };
+  }
+
+  handleTabPickerAction(action = {}) {
+    const type = String(action.type || '');
+    const tabId = String(action.tabId || '');
+    if (type === 'dismiss') return this.dismissTabPicker(true);
+    if (!this.tabPickerState.visible || !tabId || !this.tabs.has(tabId)) return this.state();
+    if (type === 'select') {
+      this.dismissTabPicker(true);
+      const result = this.activateTab(tabId);
+      this.recordUserEvent('select_tab', { payload: { tabId } });
+      this.notifyTabPickerRenderer({ type, tabId, activeTabId: result.activeTabId, tabCount: result.tabs.length });
+      return result;
+    }
+    if (type === 'reload') {
+      const result = this.reload({ tabId });
+      this.recordUserEvent('navigate', { payload: { action: 'reload', tabId } });
+      this.notifyTabPickerRenderer({ type, tabId, activeTabId: result.activeTabId, tabCount: result.tabs.length });
+      return result;
+    }
+    if (type === 'mute') {
+      const tab = this.tabs.get(tabId);
+      const muted = tab && typeof tab.view.webContents.isAudioMuted === 'function'
+        ? tab.view.webContents.isAudioMuted()
+        : false;
+      const result = this.setMuted({ tabId, muted: !muted });
+      this.notifyTabPickerRenderer({ type, tabId, activeTabId: result.activeTabId, tabCount: result.tabs.length });
+      return result;
+    }
+    if (type === 'close') {
+      this.recordUserEvent('close_tab', { payload: { tabId } });
+      const result = this.closeTab(tabId);
+      if (!result.tabs.length) this.dismissTabPicker(false);
+      this.notifyTabPickerRenderer({ type, tabId, activeTabId: result.activeTabId, tabCount: result.tabs.length });
+      return result;
+    }
+    return this.state();
   }
 
   syncAttachedView() {
@@ -1517,6 +2314,7 @@ class BrowserTabManager {
     const win = this.surfaceWindow();
     if (!win) {
       this.hideChatOverlay();
+      this.dismissTabPicker(false);
       return;
     }
     const ownsVisibleSurface = fullscreenActive || this.sessionId === activeBrowserSessionId;
@@ -1525,6 +2323,7 @@ class BrowserTabManager {
     }
     if (!active || !ownsVisibleSurface) {
       this.hideChatOverlay();
+      this.dismissTabPicker(false);
       return;
     }
     const shouldShow = fullscreenActive || (this.visible && !this.obscured && !this._boundsTransitioning);
@@ -1536,6 +2335,7 @@ class BrowserTabManager {
         try { active.view.setVisible(false); } catch (_) {}
       }
       this.hideChatOverlay();
+      this.dismissTabPicker(false);
       return;
     }
     const wasAttached = this.attachedTabId === active.id;
@@ -1557,13 +2357,21 @@ class BrowserTabManager {
       try { active.view.setBorderRadius(targetCornerRadius); } catch (_) {}
       try { active.view.setBounds(targetBounds); } catch (_) {}
     }
+    this.applyPageZoom(active.view, targetBounds, this.zoomEnabled !== false).catch(() => {});
     this.applyPageFrameStyle(active.view, targetCornerRadius);
     try { active.view.setVisible(true); } catch (_) {}
-    this.syncChatOverlay(win.contentView, !wasAttachedToTargetWindow);
+    // Always keep the native Agent composer as the last child view. Electron
+    // may change the page view's native stacking order during a resize even
+    // when the JS-side attachment did not change.
+    this.syncChatOverlay(win.contentView, true);
+    // The picker is another native child view. Raise it after the live page so
+    // it can float over that page without hiding, snapshotting, or reattaching
+    // the page's compositor surface.
+    this.syncTabPicker(win.contentView, true);
     if (!wasAttached || !wasVisible) this.repaintView(active);
   }
 
-  async settleBoundsTransition() {
+  async prepareBoundsTransition() {
     const token = ++this._boundsTransitionToken;
     this._boundsTransitioning = true;
     if (this._syncTimer) { clearTimeout(this._syncTimer); this._syncTimer = null; }
@@ -1571,27 +2379,150 @@ class BrowserTabManager {
     const active = this.tabs.get(this.activeTabId);
     if (!active || active.view.webContents.isDestroyed()) {
       this._boundsTransitioning = false;
-      return this.state();
+      return { ...this.state(), ok: false, error: 'No active browser view.' };
     }
     const targetCornerRadius = this.pageCornerRadius;
     const targetBounds = this.pageViewBounds(this.bounds);
+    // A hidden WebContentsView keeps its last compositor surface on macOS even
+    // after setBounds updates window.innerWidth/innerHeight.  capturePage() then
+    // returns a bitmap at the *source* size, which makes the renderer stretch a
+    // PiP frame across the maximized shell (and vice versa) for one frame.
+    // Stage the target-sized view at the owner's bottom-right clipping edge
+    // while it is visible. macOS does not composite a completely offscreen
+    // child view, but a 1x1 visible intersection is enough to produce the full
+    // target surface without exposing resize/white-frame churn over the page.
+    const ownerBounds = this.ownerWindow()?.getContentBounds?.() || {};
+    const stagingBounds = {
+      ...targetBounds,
+      x: Math.max(0, Math.round(Number(ownerBounds.width) || 0) - 1),
+      y: Math.max(0, Math.round(Number(ownerBounds.height) || 0) - 1),
+    };
     try { active.view.setBorderRadius(targetCornerRadius); } catch (_) {}
-    try { active.view.setBounds(targetBounds); } catch (_) {}
+    try { active.view.setBounds(stagingBounds); } catch (_) {}
+    try { active.view.setVisible(true); } catch (_) {}
+    await this.applyPageZoom(active.view, targetBounds, this.zoomEnabled !== false, { fast: true });
     this.applyPageFrameStyle(active.view, targetCornerRadius);
-    try { active.view.webContents.invalidate(); } catch (_) {}
-    // capturePage waits for Chromium to produce a frame at the final size. Keep
-    // the renderer's bitmap proxy visible until this promise resolves, so the
-    // native compositor never exposes its temporary white surface.
-    await Promise.race([
+    const viewportReady = await this.settlePageViewport(active.view, stagingBounds);
+    // The 1x1 edge intersection lets capturePage read the already-rasterized
+    // target surface quickly. Validate its physical pixel size because macOS
+    // can occasionally hand back the previous surface; use CDP only as the
+    // slower fallback in that case.
+    let targetPngBase64 = '';
+    const displayScale = (() => {
+      try {
+        return Math.max(1, Number(screen.getDisplayMatching(this.ownerWindow().getBounds()).scaleFactor) || 1);
+      } catch (_) {
+        return 1;
+      }
+    })();
+    const expectedPixelWidth = Math.round(targetBounds.width * displayScale);
+    const expectedPixelHeight = Math.round(targetBounds.height * displayScale);
+    const targetImage = await Promise.race([
       active.view.webContents.capturePage().catch(() => null),
-      new Promise((resolve) => setTimeout(resolve, 180)),
+      new Promise((resolve) => setTimeout(resolve, 120)),
     ]);
-    if (token !== this._boundsTransitionToken) return this.state();
+    if (targetImage) {
+      const imageSize = targetImage.getSize();
+      if (Math.abs(imageSize.width - expectedPixelWidth) <= 4
+        && Math.abs(imageSize.height - expectedPixelHeight) <= 4) {
+        targetPngBase64 = targetImage.toPNG().toString('base64');
+      }
+    }
+    try {
+      if (!targetPngBase64) {
+        const debug = await this._ensureDebugger(active);
+        const metrics = await debug.sendCommand('Page.getLayoutMetrics');
+        const viewport = metrics.cssVisualViewport || metrics.visualViewport || {};
+        const viewportWidth = Math.max(1, Number(viewport.clientWidth) || 1);
+        const viewportHeight = Math.max(1, Number(viewport.clientHeight) || 1);
+        const capture = await Promise.race([
+          debug.sendCommand('Page.captureScreenshot', {
+            format: 'png',
+            fromSurface: true,
+            captureBeyondViewport: false,
+            clip: {
+              x: Number(viewport.pageX) || 0,
+              y: Number(viewport.pageY) || 0,
+              width: viewportWidth,
+              height: viewportHeight,
+              scale: 1,
+            },
+          }),
+          new Promise((resolve) => setTimeout(() => resolve(null), 500)),
+        ]);
+        targetPngBase64 = String(capture && capture.data || '');
+      }
+    } catch (_) {}
+    // Leave the native view hidden at its final on-screen geometry. The target
+    // bitmap remains visible in the renderer until commitBoundsTransition()
+    // reveals this already-sized compositor surface.
+    try { active.view.setVisible(false); } catch (_) {}
+    try { active.view.setBounds(targetBounds); } catch (_) {}
+    if (token !== this._boundsTransitionToken) return { ...this.state(), ok: false, error: 'Browser transition was superseded.' };
+    // A preview is optional polish, not permission to keep the live surface
+    // hidden. If capture fails, immediately recover the native view at the
+    // target bounds so fallback mode changes cannot strand a white panel.
+    if (!targetPngBase64) {
+      this._boundsTransitioning = false;
+      this.syncAttachedView();
+      this.repaintView(active);
+    }
+    return {
+      ...this.state(),
+      ok: !!targetPngBase64,
+      transitionPrepared: !!targetPngBase64,
+      viewportReady,
+      pngBase64: targetPngBase64,
+    };
+  }
+
+  async commitBoundsTransition() {
+    const token = this._boundsTransitionToken;
+    const active = this.tabs.get(this.activeTabId);
+    if (!active || active.view.webContents.isDestroyed()) {
+      this._boundsTransitioning = false;
+      return this.state();
+    }
+    const targetBounds = this.pageViewBounds(this.bounds);
+    let viewportReady = false;
     this._boundsTransitioning = false;
     this.syncAttachedView();
     await new Promise((resolve) => setTimeout(resolve, 34));
+    // A hidden WebContentsView can report the right JS viewport while its
+    // visible compositor surface still holds the previous size. Always pulse
+    // once after reattachment, then wait for a visible frame before allowing
+    // the renderer to remove its bitmap proxy.
+    if (token === this._boundsTransitionToken) {
+      viewportReady = await this.settlePageViewport(active.view, targetBounds, true);
+      await Promise.race([
+        active.view.webContents.capturePage().catch(() => null),
+        new Promise((resolve) => setTimeout(resolve, 180)),
+      ]);
+    }
     if (token === this._boundsTransitionToken) this.repaintView(active);
+    if (!viewportReady && token === this._boundsTransitionToken) {
+      console.warn(
+        `[electron] Browser viewport did not settle at ${targetBounds.width}x${targetBounds.height}.`
+      );
+    }
     return this.state();
+  }
+
+  async settleBoundsTransition() {
+    let prepared;
+    try {
+      prepared = await this.prepareBoundsTransition();
+    } catch (error) {
+      this._boundsTransitioning = false;
+      this.syncAttachedView();
+      throw error;
+    }
+    if (!prepared || prepared.ok === false) {
+      this._boundsTransitioning = false;
+      this.syncAttachedView();
+      return prepared || this.state();
+    }
+    return this.commitBoundsTransition();
   }
 
   setBounds(info = {}) {
@@ -1605,6 +2536,24 @@ class BrowserTabManager {
     };
     this.borderRadius = Math.max(0, Math.min(24, Math.round(Number(info.borderRadius) || 0)));
     this.pageCornerRadius = Math.max(0, Math.min(24, Math.round(Number(info.pageCornerRadius) || 0)));
+    // Sidebar-docked browser panes keep the native (unzoomed) page; only the
+    // floating agent browser converges on the desktop-width CSS viewport.
+    // Only update the flag when the payload carries it: hide/transition
+    // bounds (visible:false) must not reset the active surface's preference.
+    if (Object.prototype.hasOwnProperty.call(info, 'zoomEnabled')) {
+      this.zoomEnabled = info.zoomEnabled !== false;
+    }
+    if (Object.prototype.hasOwnProperty.call(info, 'resizeEdgeHintActive')) {
+      this.resizeEdgeHintActive = info.resizeEdgeHintActive === true;
+    }
+    const active = this.tabs.get(this.activeTabId);
+    if (active) this.applyResizeEdgeHint(active.view);
+    // A newly mounted split surface is authoritative. It may arrive after a
+    // cancelled/failed PiP transition whose renderer never reached commit.
+    if (info.forceVisible === true && this._boundsTransitioning) {
+      this._boundsTransitionToken += 1;
+      this._boundsTransitioning = false;
+    }
     this.visible = info.visible === true && width > 8 && height > 8;
     // Preserve the in-app host geometry while a video owns the fullscreen
     // surface, but never let renderer layout churn resize the fullscreen View.
@@ -1618,6 +2567,14 @@ class BrowserTabManager {
       this._boundsTransitioning = false;
       if (this._syncTimer) { clearTimeout(this._syncTimer); this._syncTimer = null; }
       this.syncAttachedView();
+    } else if (info.transition === 'prepare') {
+      return this.prepareBoundsTransition().catch((error) => {
+        this._boundsTransitioning = false;
+        this.syncAttachedView();
+        throw error;
+      });
+    } else if (info.transition === 'commit') {
+      return this.commitBoundsTransition();
     } else if (info.transition === true) {
       return this.settleBoundsTransition();
     } else if (!this._syncTimer) {
@@ -1661,6 +2618,9 @@ class BrowserTabManager {
       const pageData = await wc.executeJavaScript(
         `(() => {
           const clean = (value, limit = 200) => String(value || '').replace(/\\s+/g, ' ').trim().slice(0, limit);
+          for (const el of document.querySelectorAll('[data-cyrene-ref]')) {
+            el.removeAttribute('data-cyrene-ref');
+          }
           const seen = new Set();
           const links = [];
           for (const el of Array.from(document.querySelectorAll('a[href]'))) {
@@ -1737,6 +2697,14 @@ class BrowserTabManager {
           const clean = (value, limit = 200) => String(value || '').replace(/\\s+/g, ' ').trim().slice(0, limit);
           let normalizedTarget = '';
           try { normalizedTarget = new URL(target, location.href).href; } catch (_) { return { ok: false, error: 'Invalid target URL.', matches: [] }; }
+          // data-cyrene-ref is a shared namespace with browser_snapshot's
+          // inspect script, which numbers from 1 independently. Allocate past
+          // the current max so the two schemes never collide.
+          let nextRef = 1;
+          for (const el of document.querySelectorAll('[data-cyrene-ref]')) {
+            const n = Number(el.getAttribute('data-cyrene-ref') || 0);
+            if (Number.isInteger(n) && n >= nextRef) nextRef = n + 1;
+          }
           const matches = [];
           for (const el of Array.from(document.querySelectorAll('a[href]'))) {
             const style = window.getComputedStyle(el);
@@ -1750,7 +2718,8 @@ class BrowserTabManager {
             const text = clean(el.innerText || el.getAttribute('aria-label') || el.getAttribute('title') || imageAlt);
             let refNumber = Number(el.getAttribute('data-cyrene-ref') || 0);
             if (!Number.isInteger(refNumber) || refNumber < 1) {
-              refNumber = document.querySelectorAll('[data-cyrene-ref]').length + matches.length + 1;
+              refNumber = nextRef;
+              nextRef += 1;
               el.setAttribute('data-cyrene-ref', String(refNumber));
             }
             matches.push({ ref: 'e' + refNumber, text, url: href });
@@ -1941,9 +2910,16 @@ class BrowserTabManager {
       tab.lastAgentFileChooser = null;
       const chooserPromise = new Promise((resolve) => { tab.agentFileChooserResolver = resolve; });
       this._markAgentInput(tab);
-      wc.sendInputEvent({ type: 'mouseMove', x: info.x, y: info.y });
-      wc.sendInputEvent({ type: 'mouseDown', x: info.x, y: info.y, button: 'left', clickCount: 1 });
-      wc.sendInputEvent({ type: 'mouseUp', x: info.x, y: info.y, button: 'left', clickCount: 1 });
+      // Target coordinates are CSS pixels (getBoundingClientRect); input
+      // events are delivered in DIP pixels, scaled by the page zoom.
+      let dipWidth = 0;
+      try { dipWidth = Math.max(0, Math.round(Number(tab.view.getBounds().width) || 0)); } catch (_) {}
+      const zoom = await this.pageZoomOf(wc, dipWidth);
+      const x = Math.round((Number(info.x) || 0) * zoom);
+      const y = Math.round((Number(info.y) || 0) * zoom);
+      wc.sendInputEvent({ type: 'mouseMove', x, y });
+      wc.sendInputEvent({ type: 'mouseDown', x, y, button: 'left', clickCount: 1 });
+      wc.sendInputEvent({ type: 'mouseUp', x, y, button: 'left', clickCount: 1 });
       const outcome = await Promise.race([
         this._waitForClickOutcome(wc, before).then(() => ({ kind: 'page' })),
         chooserPromise.then((target) => ({ kind: 'file-chooser', target })),
@@ -2135,49 +3111,87 @@ class BrowserTabManager {
     const tab = tabId ? this.tabs.get(String(tabId)) : this.tabs.get(this.activeTabId);
     if (!tab) return { ok: false, error: 'No page open. Call browser_navigate first.' };
     const wc = tab.view.webContents;
-    const script = `
-      (function(mode, value, textValue, submitValue) {
-        const find = ${BROWSER_FIND_TARGET_SCRIPT};
-        const info = find(mode, value, false, true);
-        if (!info || !info.ok) return { ok: false, error: 'Element ' + ((info && info.error) || 'not found') };
-        let el = null;
-        if (mode === 'ref') {
-          el = document.querySelector('[data-cyrene-ref="' + String(value || '').replace(/^e/i, '').replace(/"/g, '\\\\"') + '"]');
-        } else {
-          el = document.querySelector(String(value || ''));
-        }
-        if (!el) return { ok: false, error: 'Element not found' };
-        el.focus();
-        const tag = String(el.tagName || '').toLowerCase();
-        if ('value' in el) {
-          el.value = String(textValue || '');
-          el.dispatchEvent(new InputEvent('input', { bubbles: true, inputType: 'insertText', data: String(textValue || '') }));
-          el.dispatchEvent(new Event('change', { bubbles: true }));
-        } else if (el.isContentEditable) {
-          el.textContent = String(textValue || '');
-          el.dispatchEvent(new InputEvent('input', { bubbles: true, inputType: 'insertText', data: String(textValue || '') }));
-        } else {
-          return { ok: false, error: 'Element is not text-editable' };
-        }
-        if (submitValue) {
-          const form = el.form || el.closest('form');
-          if (form && typeof form.requestSubmit === 'function') {
-            try { form.requestSubmit(); }
-            catch (_) { el.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', code: 'Enter', bubbles: true })); }
-          } else {
-            el.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', code: 'Enter', bubbles: true }));
-            el.dispatchEvent(new KeyboardEvent('keypress', { key: 'Enter', code: 'Enter', bubbles: true }));
-            el.dispatchEvent(new KeyboardEvent('keyup', { key: 'Enter', code: 'Enter', bubbles: true }));
-          }
-        }
-        return { ok: true, tag, box: info.box };
-      })(${JSON.stringify(mode)}, ${JSON.stringify(value)}, ${JSON.stringify(String(text || ''))}, ${submit ? 'true' : 'false'})
-    `;
+    const desiredText = String(text ?? '');
+    const runPageOperation = (operation) => wc.executeJavaScript(
+      buildBrowserTypeTargetScript(BROWSER_FIND_TARGET_SCRIPT, {
+        mode,
+        value,
+        text: desiredText,
+        operation,
+      }),
+      true,
+    );
     this._markAgentInput(tab);
-    const result = await wc.executeJavaScript(script, true);
+    let result = await runPageOperation('set-native');
     if (!result || !result.ok) return { ok: false, error: (result && result.error) || 'Unable to type into element.', url: wc.getURL(), title: wc.getTitle(), tabId: tab.id };
-    if (submit) await this._waitNav(wc);
-    return { ok: true, url: wc.getURL(), title: wc.getTitle(), tabId: tab.id, box: result.box };
+
+    let strategy = 'native-setter';
+    if (!result.persisted || result.needsTrustedInput) {
+      const prepared = await runPageOperation('prepare-trusted');
+      if (!prepared || !prepared.ok) {
+        return {
+          ok: false,
+          error: (prepared && prepared.error) || 'Unable to prepare the element for trusted text input.',
+          url: wc.getURL(),
+          title: wc.getTitle(),
+          tabId: tab.id,
+        };
+      }
+      try {
+        wc.focus();
+        if (desiredText) {
+          await wc.insertText(desiredText);
+        } else {
+          wc.delete();
+        }
+      } catch (err) {
+        return {
+          ok: false,
+          error: 'Trusted text input failed: ' + String((err && err.message) || err),
+          url: wc.getURL(),
+          title: wc.getTitle(),
+          tabId: tab.id,
+        };
+      }
+      result = await runPageOperation('verify');
+      strategy = 'trusted-editor';
+      if (!result || !result.ok || !result.persisted) {
+        return {
+          ok: false,
+          error: (result && result.error) || 'The page rejected or reverted the requested text.',
+          url: wc.getURL(),
+          title: wc.getTitle(),
+          tabId: tab.id,
+        };
+      }
+    }
+
+    if (submit) {
+      const submitResult = await runPageOperation('submit');
+      if (!submitResult || !submitResult.ok) {
+        return {
+          ok: false,
+          error: (submitResult && submitResult.error) || 'Unable to submit the text input.',
+          url: wc.getURL(),
+          title: wc.getTitle(),
+          tabId: tab.id,
+        };
+      }
+      if (submitResult.needsTrustedEnter) {
+        wc.focus();
+        wc.sendInputEvent({ type: 'keyDown', keyCode: 'Enter' });
+        wc.sendInputEvent({ type: 'keyUp', keyCode: 'Enter' });
+      }
+      await this._waitNav(wc);
+    }
+    return {
+      ok: true,
+      url: wc.getURL(),
+      title: wc.getTitle(),
+      tabId: tab.id,
+      box: result.box,
+      strategy,
+    };
   }
 
   async type({ selector, text = '', submit = false, tabId = '' } = {}) {
@@ -2230,13 +3244,45 @@ class BrowserTabManager {
     return { ...(result || {}), tabId: tab.id };
   }
 
-  async screenshot({ tabId = '' } = {}) {
+  async screenshot({ tabId = '', highResolution = false, targetWidth = 0, targetHeight = 0 } = {}) {
     const tab = tabId ? this.tabs.get(String(tabId)) : this.tabs.get(this.activeTabId);
     if (!tab) return { ok: false, error: 'No browser tab is open.' };
-    const image = await tab.view.webContents.capturePage();
+    let pngBase64 = '';
+    if (highResolution === true) {
+      try {
+        const debug = await this._ensureDebugger(tab);
+        const metrics = await debug.sendCommand('Page.getLayoutMetrics');
+        const viewport = metrics.cssVisualViewport || metrics.visualViewport || {};
+        const width = Math.max(1, Number(viewport.clientWidth) || 1);
+        const height = Math.max(1, Number(viewport.clientHeight) || 1);
+        const desiredWidth = Math.max(0, Number(targetWidth) || 0);
+        const desiredHeight = Math.max(0, Number(targetHeight) || 0);
+        const scale = Math.max(1, Math.min(4, Math.max(
+          desiredWidth > 0 ? desiredWidth / width : 1,
+          desiredHeight > 0 ? desiredHeight / height : 1,
+        )));
+        const result = await debug.sendCommand('Page.captureScreenshot', {
+          format: 'png',
+          fromSurface: true,
+          captureBeyondViewport: false,
+          clip: {
+            x: Number(viewport.pageX) || 0,
+            y: Number(viewport.pageY) || 0,
+            width,
+            height,
+            scale,
+          },
+        });
+        pngBase64 = String(result && result.data || '');
+      } catch (_) {}
+    }
+    if (!pngBase64) {
+      const image = await tab.view.webContents.capturePage();
+      pngBase64 = image.toPNG().toString('base64');
+    }
     return {
       ok: true,
-      pngBase64: image.toPNG().toString('base64'),
+      pngBase64,
       title: tab.view.webContents.getTitle(),
       url: tab.view.webContents.getURL(),
       tabId: tab.id,
@@ -2257,8 +3303,8 @@ class BrowserTabManager {
     return this.state();
   }
 
-  reload() {
-    const tab = this.tabs.get(this.activeTabId);
+  reload({ tabId = '' } = {}) {
+    const tab = tabId ? this.tabs.get(String(tabId)) : this.tabs.get(this.activeTabId);
     if (tab) tab.view.webContents.reload();
     this.emitState();
     return this.state();
@@ -2292,10 +3338,15 @@ class BrowserTabManager {
       py = info.y;
     }
     const bounds = tab.view.getBounds();
-    if (!Number.isFinite(px)) px = Math.floor(Math.max(1, bounds.width) / 2);
-    if (!Number.isFinite(py)) py = Math.floor(Math.max(1, bounds.height) / 2);
-    px = Math.max(0, Math.min(Math.max(0, bounds.width - 1), Math.round(px)));
-    py = Math.max(0, Math.min(Math.max(0, bounds.height - 1), Math.round(py)));
+    // Default/clamp bounds are DIP sizes; CSS viewport coordinates are
+    // DIP / zoom, so probe and click coordinates must use the CSS space.
+    const zoom = await this.pageZoomOf(wc, bounds.width);
+    const cssWidth = Math.max(1, bounds.width / zoom);
+    const cssHeight = Math.max(1, bounds.height / zoom);
+    if (!Number.isFinite(px)) px = Math.floor(cssWidth / 2);
+    if (!Number.isFinite(py)) py = Math.floor(cssHeight / 2);
+    px = Math.max(0, Math.min(Math.max(0, cssWidth - 1), Math.round(px)));
+    py = Math.max(0, Math.min(Math.max(0, cssHeight - 1), Math.round(py)));
 
     // Mark the nearest scrollable ancestor under the pointer so the result can
     // report whether Chromium actually moved it. The wheel event itself is sent
@@ -2343,11 +3394,15 @@ class BrowserTabManager {
     })()`, true).catch(() => ({ found: false, x: px, y: py }));
 
     this._markAgentInput(tab);
-    wc.sendInputEvent({ type: 'mouseMove', x: px, y: py });
+    // Probe coordinates above are CSS pixels; input events are delivered in
+    // DIP pixels, scaled by the page zoom.
+    const dipX = Math.round(px * zoom);
+    const dipY = Math.round(py * zoom);
+    wc.sendInputEvent({ type: 'mouseMove', x: dipX, y: dipY });
     wc.sendInputEvent({
       type: 'mouseWheel',
-      x: px,
-      y: py,
+      x: dipX,
+      y: dipY,
       // Electron follows native wheel direction (positive is left/up), while
       // browser_scroll and Playwright use positive deltas for right/down.
       deltaX: -dx,
@@ -2407,6 +3462,29 @@ class BrowserTabManager {
     this.chatOverlayView = null;
     this.chatOverlayParent = null;
     this.chatOverlayState = { visible: false, running: false, showStatus: false };
+    if (this._tabPickerHideTimer) clearTimeout(this._tabPickerHideTimer);
+    this._tabPickerHideTimer = null;
+    if (this.tabPickerWindow && this._tabPickerWindowBlurHandler) {
+      try { this.tabPickerWindow.removeListener('blur', this._tabPickerWindowBlurHandler); } catch (_) {}
+    }
+    this.tabPickerWindow = null;
+    this._tabPickerWindowBlurHandler = null;
+    if (this.tabPickerView && this.tabPickerParent) {
+      try { this.tabPickerParent.removeChildView(this.tabPickerView); } catch (_) {}
+    }
+    if (this.tabPickerView && !this.tabPickerView.webContents.isDestroyed()) {
+      try { this.tabPickerView.webContents.close(); } catch (_) {}
+    }
+    this.tabPickerView = null;
+    this.tabPickerParent = null;
+    this.tabPickerReady = false;
+    this.tabPickerState = {
+      visible: false,
+      closing: false,
+      variant: 'maximized',
+      colors: {},
+      labels: {},
+    };
     this.visible = false;
   }
 }
@@ -2586,6 +3664,8 @@ async function handleBrowserRpc(method, args, context = {}) {
       return manager.setBounds(args || {});
     case 'setChatOverlay':
       return manager.setChatOverlay(args || {});
+    case 'setTabPicker':
+      return manager.setTabPicker(args || {});
     case 'setObscured':
       return setBrowserSurfaceObscured(args && args.obscured);
     case 'createTab':
@@ -2632,7 +3712,7 @@ async function handleBrowserRpc(method, args, context = {}) {
     case 'goForward':
       return manager.goForward();
     case 'reload':
-      return manager.reload();
+      return manager.reload(args || {});
     case 'setMuted':
       return manager.setMuted(args || {});
     case 'scroll':
@@ -3113,12 +4193,9 @@ function getPythonBinaryPath() {
 
 function getPythonArgs() {
   if (isDev) {
-    // Dev mode: use system python. CYRENE_UI_MODE=agent launches the legacy UI
-    // (for testing the native title bar); anything else uses the workbench.
-    const uiFlag = process.env.CYRENE_UI_MODE === 'agent' ? '--agent' : '--workbench';
     return [
       path.join(__dirname, '..', 'src', 'cyrene', 'local_cli.py'),
-      uiFlag,
+      '--workbench',
       '--electron-mode',
     ];
   }
@@ -3128,6 +4205,7 @@ function getPythonArgs() {
 
 function spawnPython() {
   if (pythonProcess) return;
+  clearCliConnection();
   const binaryPath = getPythonBinaryPath();
   const args = getPythonArgs();
   const cwd = isDev ? path.join(__dirname, '..') : undefined;
@@ -3165,12 +4243,6 @@ function spawnPython() {
 
   pythonProcess.stdout.on('data', (data) => {
     const text = data.toString();
-    // Capture the UI mode (printed just before PORT) so the window is created
-    // with the matching title bar style.
-    const modeMatch = text.match(/^UIMODE=(\w+)$/m);
-    if (modeMatch) {
-      backendUiMode = modeMatch[1];
-    }
     // Scan each line for PORT=<number>
     const match = text.match(/^PORT=(\d+)$/m);
     if (match) {
@@ -3179,6 +4251,7 @@ function spawnPython() {
       // PORT event arrived before any window registered a pending resolver
       // (e.g. launch-at-login hidden startup).
       backendPort = port;
+      publishCliConnection(port);
       if (pendingPortResolve) {
         pendingPortResolve(port);
         pendingPortResolve = null;
@@ -3216,6 +4289,7 @@ function spawnPython() {
     console.log(`[electron] Python backend exited (code=${code})`);
     pythonProcess = null;
     backendPort = null;
+    clearCliConnection();
     if (code === 42) {
       // Exit code 42 = intentional restart after update.
       // Exit immediately to release the single-instance lock so the
@@ -3245,6 +4319,7 @@ function killPython() {
   isShuttingDown = true;
   const proc = pythonProcess;
   pythonProcess = null;
+  clearCliConnection();
 
   try {
     if (isWindows) {
@@ -3516,7 +4591,7 @@ async function createQuickChatWindow() {
       contextIsolation: true,
       nodeIntegration: false,
       sandbox: false,
-      backgroundThrottling: false,
+      backgroundThrottling: true,
     },
   });
 
@@ -3562,7 +4637,67 @@ async function openQuickChat() {
   }
 }
 
-async function createMainWindow(shellOverride) {
+async function runDesktopSmokeTest(window) {
+  const state = await window.webContents.executeJavaScript(`new Promise((resolve) => {
+    const startedAt = Date.now();
+    const inspect = () => {
+      const root = document.querySelector('#root');
+      const launchScreen = document.querySelector('#cyrene-launch-screen');
+      const result = {
+        readyState: document.readyState,
+        hasRoot: Boolean(root),
+        rootChildren: root ? root.childElementCount : 0,
+        launchScreenPresent: Boolean(launchScreen),
+        bodyText: String(document.body && document.body.innerText || '').trim().slice(0, 200)
+      };
+      if (
+        result.readyState === 'complete'
+        && result.rootChildren > 0
+        && !result.launchScreenPresent
+      ) {
+        resolve(result);
+        return;
+      }
+      if (Date.now() - startedAt >= 30000) {
+        resolve(result);
+        return;
+      }
+      window.setTimeout(inspect, 100);
+    };
+    inspect();
+  })`, true);
+  const image = await window.webContents.capturePage();
+  const bitmap = image.toBitmap();
+  let nonWhitePixels = 0;
+  for (let offset = 0; offset + 3 < bitmap.length; offset += 4) {
+    // BGRA on all Electron desktop platforms. Count pixels visibly darker than
+    // a blank white window; the Cyrene mark and text easily exceed this floor.
+    if (bitmap[offset] < 238 || bitmap[offset + 1] < 238 || bitmap[offset + 2] < 238) {
+      nonWhitePixels += 1;
+    }
+  }
+  if (
+    !state
+    || state.readyState !== 'complete'
+    || !state.hasRoot
+    || state.rootChildren < 1
+    || state.launchScreenPresent
+    || !state.bodyText.includes('Cyrene')
+    || image.isEmpty()
+    || nonWhitePixels < 100
+  ) {
+    throw new Error(`Desktop smoke test rendered an invalid surface: ${JSON.stringify({
+      ...state,
+      imageEmpty: image.isEmpty(),
+      nonWhitePixels,
+    })}`);
+  }
+  console.log(`DESKTOP_SMOKE_TEST=ok nonWhitePixels=${nonWhitePixels}`);
+  isQuitting = true;
+  app.quit();
+}
+
+async function createMainWindow() {
   if (mainWindow && !mainWindow.isDestroyed()) {
     mainWindow.show();
     if (mainWindow.isMinimized()) mainWindow.restore();
@@ -3589,16 +4724,11 @@ async function createMainWindow(shellOverride) {
     return;
   }
 
-  // The workbench draws its own top bar and reserves room for the traffic
-  // lights, so it uses the frameless inset title bar. The legacy/agent UI has a
-  // normal top bar that the inset controls would overlap — keep the native
-  // (default) title bar there. Unknown mode falls back to the workbench style.
-  const uiShell = shellOverride || backendUiMode || 'workbench';
-  const isLegacyShell = uiShell === 'legacy' || uiShell === 'agent';
-  // The inset title bar and traffic-light positioning are macOS-specific.
+  // Workbench draws its own top bar and reserves room for the traffic lights.
+  // The inset title bar and traffic-light positioning remain macOS-specific.
   // Windows and Linux keep their native frame so close/minimize/maximize
   // controls remain available.
-  const useInsetTitleBar = !isLegacyShell && isMac;
+  const useInsetTitleBar = isMac;
   const windowOptions = {
     width: 1200,
     height: 800,
@@ -3621,6 +4751,7 @@ async function createMainWindow(shellOverride) {
     windowOptions.trafficLightPosition = { x: 12, y: 21 };
   }
   mainWindow = new BrowserWindow(windowOptions);
+  installWindowDiagnostics(mainWindow, 'main');
 
   mainWindow.once('ready-to-show', () => {
     if (!launchHidden) {
@@ -3649,17 +4780,31 @@ async function createMainWindow(shellOverride) {
     mainWindow = null;
   });
 
-  // Navigate to the local Python server. The legacy/agent UI is selected via
-  // the ?shell=legacy param so it renders in this (natively-framed) window even
-  // when the backend was launched in workbench mode.
-  const url = isLegacyShell
-    ? `http://127.0.0.1:${port}/?shell=legacy`
-    : `http://127.0.0.1:${port}`;
+  // Navigate to the sole Workbench surface.
+  const url = `http://127.0.0.1:${port}`;
   // Force clear cache so the app always loads fresh assets
-  mainWindow.webContents.session.clearCache();
-  mainWindow.loadURL(url);
-
   installLocalNavigationGuards(mainWindow, port, { allowLocalPopups: true });
+  await mainWindow.webContents.session.clearCache();
+  try {
+    await mainWindow.loadURL(url);
+    if (isDesktopSmokeTest) {
+      await runDesktopSmokeTest(mainWindow);
+    }
+  } catch (err) {
+    const detail = err && err.stack ? err.stack : String(err);
+    appendErrorLog(`[electron:main] load failed: ${detail}\n`);
+    if (isDesktopSmokeTest) {
+      console.error(`DESKTOP_SMOKE_TEST=failed ${detail}`);
+      isQuitting = true;
+      app.exit(1);
+      return;
+    }
+    dialog.showErrorBox(
+      'Cyrene - Window Error',
+      'The application window could not be rendered.\n\n'
+      + `Check cyrene_error.log in ${getCyreneTempDir()} for details.`
+    );
+  }
 }
 
 async function revealMainWindow() {
@@ -3744,38 +4889,6 @@ function syncTrayWithSettings(settings) {
     if (tray) tray.setContextMenu(buildTrayMenu());
   }
   else destroyTray();
-}
-
-// Swap the window to a different UI shell at runtime (e.g. the workbench's
-// "旧界面" button). titleBarStyle is fixed at creation, so we build a fresh
-// window with the right chrome and discard the old one. The new window is
-// created BEFORE the old is destroyed, so the window count never hits zero
-// (which would fire window-all-closed → killPython). Returning to the new UI
-// is a normal app restart.
-let isSwitchingShell = false;
-async function reopenWindowForShell(uiShell) {
-  if (isSwitchingShell) return;
-  isSwitchingShell = true;
-  try {
-    const old = mainWindow;
-    const bounds = old && !old.isDestroyed() ? old.getBounds() : null;
-    if (old && !old.isDestroyed()) {
-      // Drop lifecycle listeners so destroying the old window doesn't
-      // hide-to-background or kill the (still-needed) Python backend.
-      old.removeAllListeners('close');
-      old.removeAllListeners('closed');
-    }
-    mainWindow = null;
-    await createMainWindow(uiShell);
-    if (bounds && mainWindow && !mainWindow.isDestroyed()) {
-      mainWindow.setBounds(bounds);  // keep the same size/position across the swap
-    }
-    if (old && !old.isDestroyed()) {
-      old.destroy();
-    }
-  } finally {
-    isSwitchingShell = false;
-  }
 }
 
 // ---------------------------------------------------------------------------
@@ -3872,6 +4985,16 @@ if (!gotSingleInstanceLock) {
       const icon = getNotificationIconPath();
       new Notification({ title, body, ...(icon ? { icon } : {}) }).show();
     });
+    ipcMain.handle('shell:show-item-in-folder', (_event, info) => {
+      const target = String(info && info.path || '').trim();
+      if (!target) return { ok: false, error: 'File path is required.' };
+      const resolved = path.resolve(target);
+      if (!fs.existsSync(resolved)) {
+        return { ok: false, error: 'File no longer exists.' };
+      }
+      shell.showItemInFolder(resolved);
+      return { ok: true };
+    });
     ipcMain.handle('dialog:pick-directory', async (event) => {
       if (!isLinux) {
         return { path: '', error: 'Native directory picker is only enabled on Linux' };
@@ -3886,13 +5009,35 @@ if (!gotSingleInstanceLock) {
       }
       return { path: result.filePaths[0] };
     });
-    ipcMain.handle('window:switch-shell', (_event, mode) => {
-      const target = (mode === 'legacy' || mode === 'agent') ? 'legacy' : 'workbench';
-      return reopenWindowForShell(target);
+    ipcMain.handle('dialog:pick-backup-save-path', async (event, info) => {
+      const owner = BrowserWindow.fromWebContents(event.sender);
+      const requestedName = path.basename(String(info && info.defaultName || '').trim()) || 'cyrene_backup.zip';
+      const result = await dialog.showSaveDialog(owner || mainWindow, {
+        title: String(info && info.title || 'Save Cyrene backup'),
+        defaultPath: path.join(app.getPath('documents'), requestedName),
+        filters: [{ name: 'Cyrene backup', extensions: ['zip'] }],
+        properties: ['createDirectory', 'showOverwriteConfirmation'],
+      });
+      if (result.canceled || !result.filePath) return { path: '', cancelled: true };
+      const selectedPath = result.filePath.toLowerCase().endsWith('.zip')
+        ? result.filePath
+        : result.filePath + '.zip';
+      return { path: selectedPath };
+    });
+    ipcMain.handle('dialog:pick-backup-file', async (event, info) => {
+      const owner = BrowserWindow.fromWebContents(event.sender);
+      const result = await dialog.showOpenDialog(owner || mainWindow, {
+        title: String(info && info.title || 'Choose a Cyrene backup'),
+        filters: [{ name: 'Cyrene backup', extensions: ['zip'] }],
+        properties: ['openFile'],
+      });
+      if (result.canceled || !result.filePaths.length) return { path: '', cancelled: true };
+      return { path: result.filePaths[0] };
     });
     ipcMain.handle('browser:get-state', (_event, info) => handleBrowserRpc('state', {}, info || {}));
     ipcMain.handle('browser:set-bounds', (_event, info) => handleBrowserRpc('setBounds', info || {}, info || {}));
     ipcMain.handle('browser:set-chat-overlay', (_event, info) => handleBrowserRpc('setChatOverlay', info || {}, info || {}));
+    ipcMain.handle('browser:set-tab-picker', (_event, info) => handleBrowserRpc('setTabPicker', info || {}, info || {}));
     ipcMain.handle('browser:set-context', (_event, info) => handleBrowserRpc('setContext', info || {}));
     ipcMain.handle('browser:set-obscured', (_event, info) => handleBrowserRpc('setObscured', info || {}, info || {}));
     ipcMain.handle('browser:create-tab', async (_event, info) => {
@@ -3926,8 +5071,8 @@ if (!gotSingleInstanceLock) {
       return result;
     });
     ipcMain.handle('browser:reload', async (_event, info) => {
-      const result = await handleBrowserRpc('reload', {}, info || {});
-      getBrowserTabManager(browserRpcSessionId({}, info || {})).recordUserEvent('navigate', { payload: { action: 'reload' } });
+      const result = await handleBrowserRpc('reload', info || {}, info || {});
+      getBrowserTabManager(browserRpcSessionId(info || {}, info || {})).recordUserEvent('navigate', { payload: { action: 'reload', tabId: String(info && info.tabId || '') } });
       return result;
     });
     ipcMain.handle('browser:set-muted', (_event, info) => handleBrowserRpc('setMuted', info || {}, info || {}));
@@ -3944,9 +5089,39 @@ if (!gotSingleInstanceLock) {
         });
       }
     });
+    ipcMain.on('browser-tab-picker:ready', (event, info) => {
+      const sessionId = normalizeBrowserSessionId(info && info.sessionId);
+      const manager = browserTabManagers.get(sessionId) || Array.from(browserTabManagers.values()).find((candidate) => (
+        candidate.tabPickerView && candidate.tabPickerView.webContents === event.sender
+      ));
+      if (!manager || !manager.tabPickerView || manager.tabPickerView.webContents !== event.sender) return;
+      manager.tabPickerReady = true;
+      manager.pushTabPickerState();
+    });
+    ipcMain.on('browser-tab-picker:action', (event, action) => {
+      const sessionId = normalizeBrowserSessionId(action && action.sessionId);
+      const manager = browserTabManagers.get(sessionId);
+      if (!manager || !manager.tabPickerView || manager.tabPickerView.webContents !== event.sender) return;
+      manager.handleTabPickerAction(action || {});
+    });
+    ipcMain.on('browser-tab-picker:hidden-ready', (event, info) => {
+      const sessionId = normalizeBrowserSessionId(info && info.sessionId);
+      const manager = browserTabManagers.get(sessionId);
+      if (!manager || !manager.tabPickerView || manager.tabPickerView.webContents !== event.sender) return;
+      manager.finishTabPickerHide();
+    });
     spawnPython();
     if (!launchHidden) {
-      createMainWindow();
+      createMainWindow().catch((err) => {
+        const detail = err && err.stack ? err.stack : String(err);
+        appendErrorLog(`[electron:main] create window failed: ${detail}\n`);
+        console.error('[electron] Failed to create main window:', err);
+        if (isDesktopSmokeTest) {
+          console.error(`DESKTOP_SMOKE_TEST=failed ${detail}`);
+          isQuitting = true;
+          app.exit(1);
+        }
+      });
     }
   });
 

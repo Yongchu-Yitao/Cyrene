@@ -23,8 +23,8 @@ sys.modules["PIL"] = pil_mock
 pil_mock.Image = MagicMock()
 
 from cyrene import config as cyrene_config
-from cyrene import db
-from webui.routes import register_routes
+from cyrene.runtime import database as db
+from route.registry import register_routes
 
 
 @pytest.fixture
@@ -44,7 +44,13 @@ def client(temp_db):
     """Create a FastAPI test client with knowledge routes."""
     app = FastAPI()
     register_routes(app, bot=None, db_path=temp_db)
-    return TestClient(app)
+    with TestClient(app) as test_client:
+        try:
+            yield test_client
+        finally:
+            from cyrene.knowledge.ingest import cancel_pending_tasks
+
+            test_client.portal.call(cancel_pending_tasks)
 
 
 class TestKnowledgeRoutes:
@@ -193,8 +199,7 @@ class TestKnowledgeRoutes:
         data = response.json()
         assert "error" in data
 
-    @pytest.mark.asyncio
-    async def test_sync_documents(self, client, temp_db):
+    def test_sync_documents(self, client, temp_db):
         """Test syncing documents from filesystem."""
         response = client.post("/api/knowledge/sync")
         assert response.status_code == 200
@@ -208,10 +213,9 @@ class TestKnowledgeRoutes:
         # FastAPI returns 422 for missing multipart files parameter
         assert response.status_code in [400, 422]
 
-    @pytest.mark.asyncio
-    async def test_upload_duplicate_file_reuses_document(self, client, temp_db, tmp_path, monkeypatch):
+    def test_upload_duplicate_file_reuses_document(self, client, temp_db, tmp_path, monkeypatch):
         """Uploading identical bytes twice should return the canonical document."""
-        import webui.routes_knowledge as routes_knowledge
+        import route.knowledge as routes_knowledge
 
         monkeypatch.setattr(routes_knowledge, "_UPLOADS_DIR", tmp_path)
 
@@ -233,19 +237,20 @@ class TestKnowledgeRoutes:
 
         from cyrene.knowledge import store
 
-        all_docs = await store.list_documents(temp_db)
+        import asyncio
+
+        all_docs = asyncio.run(store.list_documents(temp_db))
         assert len(all_docs) == 1
         assert all_docs[0]["content_hash"]
         assert len(list(tmp_path.iterdir())) == 1
 
-    @pytest.mark.asyncio
-    async def test_chat_upload_duplicate_keeps_each_session_attachment(
+    def test_chat_upload_duplicate_keeps_each_session_attachment(
         self, client, temp_db, tmp_path, monkeypatch
     ):
         """KB deduplication must not delete paths returned to chat sessions."""
-        import webui.routes as routes
+        from route.agent import chat as chat_routes
 
-        monkeypatch.setattr(routes, "_UPLOADS_DIR", tmp_path)
+        monkeypatch.setattr(chat_routes, "_UPLOADS_DIR", tmp_path)
         payload = b"same chat attachment bytes"
 
         first = client.post(
@@ -269,7 +274,9 @@ class TestKnowledgeRoutes:
 
         from cyrene.knowledge import store
 
-        all_docs = await store.list_documents(temp_db)
+        import asyncio
+
+        all_docs = asyncio.run(store.list_documents(temp_db))
         assert len(all_docs) == 1
         assert len(list(tmp_path.iterdir())) == 2
 
@@ -295,7 +302,6 @@ class TestKnowledgeRoutes:
     async def test_get_document_raw_missing_path(self, client, temp_db):
         """Test getting raw file for document without path."""
         from cyrene.knowledge import store
-        import asyncio
 
         # Create a document without a path (edge case)
         doc = await store.create_document(
@@ -326,7 +332,7 @@ class TestKnowledgeToolSearchKnowledge:
     @pytest.mark.asyncio
     async def test_search_knowledge_tool_empty(self, temp_db):
         """Test SearchKnowledge tool on empty database."""
-        from cyrene.tools import _tool_search_knowledge
+        from cyrene.tool_impl.knowledge.search_knowledge import _tool_search_knowledge
 
         result = await _tool_search_knowledge(
             {"query": "test", "k": 6},
@@ -341,7 +347,7 @@ class TestKnowledgeToolSearchKnowledge:
     @pytest.mark.asyncio
     async def test_search_knowledge_tool_missing_query(self, temp_db):
         """Test SearchKnowledge tool with missing query."""
-        from cyrene.tools import _tool_search_knowledge
+        from cyrene.tool_impl.knowledge.search_knowledge import _tool_search_knowledge
 
         result = await _tool_search_knowledge(
             {"k": 6},
@@ -357,8 +363,7 @@ class TestKnowledgeToolSearchKnowledge:
     async def test_search_knowledge_tool_with_chunk(self, temp_db):
         """Test SearchKnowledge tool finding a document."""
         from cyrene.knowledge import store
-        from cyrene.tools import _tool_search_knowledge
-        import asyncio
+        from cyrene.tool_impl.knowledge.search_knowledge import _tool_search_knowledge
 
         # Create a test document
         doc = await store.create_document(
@@ -394,6 +399,42 @@ class TestKnowledgeToolSearchKnowledge:
         assert isinstance(result, str)
         # Should find the document
         assert "test.md" in result or "Found" in result
+        assert "retrieval_mode" not in result
+        assert "rrf_rank_score" not in result
+        assert "cosine_similarity" not in result
+
+    @pytest.mark.asyncio
+    async def test_search_knowledge_tool_exposes_only_vector_cosine(self, monkeypatch):
+        from cyrene.knowledge import retrieve
+        from cyrene.tool_impl.knowledge.search_knowledge import _tool_search_knowledge
+        from cyrene.workbench import context
+
+        async def fake_ensure(_session_id):
+            return "kb.db"
+
+        async def fake_search(_db_path, _query, *, k):
+            return [{
+                "document_name": "vector.md",
+                "content": "Relevant passage",
+                "score": 1.0 / 60.0,
+                "mode": "vector",
+                "cosine_similarity": 0.81234567,
+            }]
+
+        monkeypatch.setattr(context, "ensure_knowledge_db_for_session", fake_ensure)
+        monkeypatch.setattr(retrieve, "search_knowledge", fake_search)
+
+        result = await _tool_search_knowledge(
+            {"query": "semantic query", "k": 1},
+            _bot=None,
+            _chat_id=-1,
+            _db_path="ignored.db",
+            _notify_state=None,
+        )
+
+        assert "cosine_similarity: 0.812346" in result
+        assert "retrieval_mode" not in result
+        assert "rrf_rank_score" not in result
 
 
 class TestKnowledgeToolListDocuments:
@@ -402,7 +443,7 @@ class TestKnowledgeToolListDocuments:
     @pytest.mark.asyncio
     async def test_lists_all_documents_and_searchability(self, temp_db):
         from cyrene.knowledge import store
-        from cyrene.tools import _tool_list_knowledge_documents
+        from cyrene.tool_impl.knowledge.list_knowledge_documents import _tool_list_knowledge_documents
 
         searchable = await store.create_document(
             temp_db,
@@ -441,4 +482,5 @@ class TestKnowledgeToolListDocuments:
         assert "searchable.md" in result
         assert "empty.pdf" in result
         assert "1 searchable and 1 without searchable text" in result
-        assert "path=/tmp/searchable.md" in result
+        assert "file=searchable.md" in result
+        assert "/tmp/searchable.md" not in result

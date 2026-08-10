@@ -6,10 +6,18 @@ from fastapi.testclient import TestClient
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 
+from route.registry import register_routes
 
-def test_cc_status_route_exposes_expected_session(monkeypatch):
-    from webui import routes
 
+def test_cc_status_route_exposes_expected_session(monkeypatch, tmp_path):
+    from cyrene import config as cyrene_config
+    from cyrene.workbench import runtime as routes
+
+    monkeypatch.setattr(
+        cyrene_config,
+        "get_knowledge_db_path",
+        lambda workspace_id="default": tmp_path / f"{workspace_id}.db",
+    )
     monkeypatch.setattr(
         routes,
         "get_cc_status",
@@ -29,7 +37,7 @@ def test_cc_status_route_exposes_expected_session(monkeypatch):
     )
 
     app = FastAPI()
-    routes.register_routes(app, bot=None, db_path="db.sqlite3")
+    register_routes(app, bot=None, db_path="db.sqlite3")
     client = TestClient(app)
 
     response = client.get("/api/cc/status")

@@ -295,11 +295,11 @@ async def test_deep_reflect_mixed_tool_turn_compresses_same_turn_tool_results(mo
     assert "Tool failed:" not in next_after_reflection
     assert "NoSuchTool" not in next_after_reflection
     assert "[Deep reflection packet]" in next_after_reflection
-    assert any("Tool failed:" in _text_blob(call) for call in save_calls)
+    assert any("NoSuchTool" in _text_blob(call) for call in save_calls)
 
 
 @pytest.mark.asyncio
-async def test_deep_reflect_mixed_with_quit_preserves_tool_result_pairing(monkeypatch) -> None:
+async def test_deep_reflect_mixed_with_quit_skips_tool_and_preserves_pairing(monkeypatch) -> None:
     import cyrene.agent.agent as agent_core
     import cyrene.agent.deep_reflection as deep_reflection
 
@@ -323,7 +323,7 @@ async def test_deep_reflect_mixed_with_quit_preserves_tool_result_pairing(monkey
     responses = iter([
         {"content": "", "tool_calls": [{"id": "use1", "function": {"name": "use_tools", "arguments": '{"task":"fix"}'}}]},
         {
-            "content": "",
+            "content": "stopped after the terminal signal",
             "tool_calls": [
                 {
                     "id": "reflect1",
@@ -335,7 +335,6 @@ async def test_deep_reflect_mixed_with_quit_preserves_tool_result_pairing(monkey
                 {"id": "quit1", "function": {"name": "quit", "arguments": "{}"}},
             ],
         },
-        {"content": "continued", "tool_calls": [{"id": "quit2", "function": {"name": "quit", "arguments": "{}"}}]},
     ])
 
     async def fake_main_llm(messages, tools=None, max_tokens=32000, **kwargs):
@@ -354,7 +353,7 @@ async def test_deep_reflect_mixed_with_quit_preserves_tool_result_pairing(monkey
 
     result = await agent_core._run_main_agent("Fix the issue", [], None, 0, "db.sqlite3")
 
-    assert result == "continued"
+    assert result == "stopped after the terminal signal"
     saved_after_reflection = save_calls[0]
     tool_result_ids = {
         str(message.get("tool_call_id") or "")
@@ -362,7 +361,12 @@ async def test_deep_reflect_mixed_with_quit_preserves_tool_result_pairing(monkey
         if message.get("role") == "tool"
     }
     assert {"reflect1", "quit1"}.issubset(tool_result_ids)
-    assert any(message.get("deep_reflection_record") for message in saved_after_reflection)
+    assert not any(message.get("deep_reflection_record") for message in saved_after_reflection)
+    assert any(
+        message.get("tool_call_id") == "reflect1"
+        and "Skipped because" in str(message.get("content") or "")
+        for message in saved_after_reflection
+    )
 
 
 @pytest.mark.asyncio

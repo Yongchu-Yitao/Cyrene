@@ -4,6 +4,7 @@ Cyrene CLI — thin HTTP client for the Cyrene daemon.
 Usage:
     cyrene start                         Start daemon (background)
     cyrene stop                          Stop daemon
+    cyrene chat [text]                   Interactive streaming conversation
     cyrene do <text> --session <id>      Send message to agent
     cyrene session list                  List sessions
     cyrene session status --session <id> Session details
@@ -19,35 +20,47 @@ Usage:
 """
 
 import argparse
+import asyncio
 import json
 import os
+import socket
 import subprocess
 import sys
 import time
 from pathlib import Path
+from urllib.parse import urlparse
 
 import httpx
 
 DAEMON_URL = "http://localhost:4242"
+DAEMON_TOKEN = ""
+DAEMON_IS_DESKTOP = False
+_PROTECTED_DAEMON_PRESENT = False
 CLIENT_TIMEOUT = 300.0  # 5 min default for long tasks
+_CLI_PORT_RANGE = range(4242, 4263)
+_CLI_CONNECTION_FILENAME = "cli-connection.json"
 
 
 def _api(path: str, method: str = "GET", **kwargs) -> httpx.Response:
     """Make an API call to the daemon."""
     url = f"{DAEMON_URL}{path}"
     kwargs.setdefault("timeout", CLIENT_TIMEOUT)
-    client = httpx.Client()
+    kwargs.setdefault("headers", _daemon_auth_headers())
     try:
-        if method == "GET":
-            resp = client.get(url, **kwargs)
-        elif method == "POST":
-            resp = client.post(url, **kwargs)
-        elif method == "PUT":
-            resp = client.put(url, **kwargs)
-        elif method == "DELETE":
-            resp = client.delete(url, **kwargs)
-        else:
-            raise ValueError(f"Unsupported method: {method}")
+        # A loopback daemon request must never inherit HTTP(S) proxy settings.
+        # System-level proxy discovery can otherwise turn localhost calls into
+        # remote 502 responses even when no proxy variables are exported.
+        with httpx.Client(trust_env=False) as client:
+            if method == "GET":
+                resp = client.get(url, **kwargs)
+            elif method == "POST":
+                resp = client.post(url, **kwargs)
+            elif method == "PUT":
+                resp = client.put(url, **kwargs)
+            elif method == "DELETE":
+                resp = client.delete(url, **kwargs)
+            else:
+                raise ValueError(f"Unsupported method: {method}")
         resp.raise_for_status()
         return resp
     except httpx.ConnectError:
@@ -72,36 +85,164 @@ def _api_json(path: str, method: str = "GET", **kwargs) -> dict | list:
 # ---------------------------------------------------------------------------
 
 
-def cmd_start(args: argparse.Namespace) -> None:
-    """Start the Cyrene daemon in background."""
-    # Check if already running
+def _daemon_auth_headers(token: str = "") -> dict[str, str]:
+    token = str(token or DAEMON_TOKEN or os.environ.get("CYRENE_AUTH_TOKEN") or "").strip()
+    return {"X-Cyrene-Token": token} if token else {}
+
+
+def _desktop_connection_path() -> Path:
+    from cyrene.runtime.paths import app_temp_dir
+
+    return app_temp_dir() / _CLI_CONNECTION_FILENAME
+
+
+def _read_desktop_connection() -> tuple[str, str] | None:
+    """Read Electron's current same-user connection capability."""
+    path = _desktop_connection_path()
     try:
-        resp = httpx.get(f"{DAEMON_URL}/api/status", timeout=5.0)
-        if resp.status_code == 200:
-            print(f"Cyrene is already running at {DAEMON_URL}")
-            return
+        file_stat = path.stat()
+        if os.name != "nt":
+            if file_stat.st_uid != os.getuid() or file_stat.st_mode & 0o077:
+                return None
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError, TypeError):
+        return None
+    if not isinstance(payload, dict) or int(payload.get("version") or 0) != 1:
+        return None
+    url = str(payload.get("url") or "").rstrip("/")
+    token = str(payload.get("token") or "").strip()
+    parsed = urlparse(url)
+    if (
+        parsed.scheme != "http"
+        or parsed.hostname not in {"127.0.0.1", "localhost", "::1"}
+        or not parsed.port
+        or not token
+    ):
+        return None
+    try:
+        response = httpx.get(
+            f"{url}/api/status",
+            timeout=0.75,
+            trust_env=False,
+            headers=_daemon_auth_headers(token),
+        )
     except Exception:
-        pass
+        return None
+    return (url, token) if response.status_code == 200 else None
+
+
+def _daemon_url(port: int) -> str:
+    return f"http://127.0.0.1:{int(port)}"
+
+
+def _port_is_open(port: int) -> bool:
+    try:
+        with socket.create_connection(("127.0.0.1", int(port)), timeout=0.05):
+            return True
+    except OSError:
+        return False
+
+
+def _discover_daemon_url() -> str:
+    """Find a CLI-accessible Cyrene daemon without touching Electron's token."""
+    global DAEMON_IS_DESKTOP, DAEMON_TOKEN, _PROTECTED_DAEMON_PRESENT
+    DAEMON_IS_DESKTOP = False
+    _PROTECTED_DAEMON_PRESENT = False
+    desktop = _read_desktop_connection()
+    if desktop is not None:
+        url, token = desktop
+        DAEMON_TOKEN = token
+        DAEMON_IS_DESKTOP = True
+        return url
+    DAEMON_TOKEN = str(os.environ.get("CYRENE_AUTH_TOKEN") or "").strip()
+    headers = _daemon_auth_headers()
+    for port in _CLI_PORT_RANGE:
+        if not _port_is_open(port):
+            continue
+        url = _daemon_url(port)
+        try:
+            response = httpx.get(
+                f"{url}/api/status",
+                timeout=0.5,
+                trust_env=False,
+                headers=headers,
+            )
+        except Exception:
+            continue
+        if response.status_code == 200:
+            return url
+        if response.status_code == 401:
+            try:
+                identity = httpx.get(
+                    f"{url}/api/instance-id",
+                    timeout=0.5,
+                    trust_env=False,
+                )
+                if identity.status_code == 200 and identity.json().get("instance_id"):
+                    _PROTECTED_DAEMON_PRESENT = True
+            except Exception:
+                pass
+    return ""
+
+
+def _allocate_daemon_port() -> int:
+    """Choose a deterministic nearby port, falling back to an ephemeral port."""
+    for port in _CLI_PORT_RANGE:
+        try:
+            with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as candidate:
+                candidate.bind(("127.0.0.1", port))
+                return port
+        except OSError:
+            continue
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as candidate:
+        candidate.bind(("127.0.0.1", 0))
+        return int(candidate.getsockname()[1])
+
+
+def cmd_start(args: argparse.Namespace, *, quiet: bool = False) -> str:
+    """Start the Cyrene daemon in background."""
+    headers = _daemon_auth_headers()
+    running_url = _discover_daemon_url()
+    if running_url:
+        if not quiet:
+            print(f"Cyrene is already running at {running_url}")
+        return running_url
+    if _PROTECTED_DAEMON_PRESENT:
+        print(
+            "Error: Cyrene Desktop is running but has not published its CLI "
+            "connection yet. Restart Electron once, then run `cyrene` again.",
+            file=sys.stderr,
+        )
+        raise SystemExit(1)
+
+    selected_port = _allocate_daemon_port()
+    selected_url = _daemon_url(selected_port)
 
     # Launch daemon as subprocess.
     # In PyInstaller frozen builds, sys.executable is the app binary and "-m"
     # does not work — use the trampoline flag that run_cyrene.py understands.
     if getattr(sys, "frozen", False):
-        cmd = [sys.executable, "--launch-web"]
+        cmd = [sys.executable, "--launch-web", "--port", str(selected_port)]
     else:
-        cmd = [sys.executable, "-m", "cyrene", "--workbench"]
+        cmd = [sys.executable, "-m", "cyrene", "--port", str(selected_port)]
 
     proc = subprocess.Popen(
         cmd,
         stdout=subprocess.DEVNULL,
         stderr=subprocess.DEVNULL,
         creationflags=subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0,
+        start_new_session=sys.platform != "win32",
     )
 
     # Wait for it to be ready
     for _ in range(30):
         try:
-            resp = httpx.get(f"{DAEMON_URL}/api/ui-data", timeout=3.0)
+            resp = httpx.get(
+                f"{selected_url}/api/ui-data",
+                timeout=3.0,
+                trust_env=False,
+                headers=headers,
+            )
             if resp.status_code == 200:
                 break
         except Exception:
@@ -113,12 +254,11 @@ def cmd_start(args: argparse.Namespace) -> None:
         sys.exit(1)
 
     data = resp.json()
+    if quiet:
+        return selected_url
     sessions = data.get("sessions", [])
-    live = [s for s in sessions if s.get("id") == "run_live"]
-    session_info = live[0] if live else {}
-    msg_count = len(session_info.get("chat", {}).get("messages", []))
 
-    print(f"Cyrene started at {DAEMON_URL}")
+    print(f"Cyrene started at {selected_url}")
     print()
     print("Available sessions:")
     for s in sessions[:5]:
@@ -131,17 +271,23 @@ def cmd_start(args: argparse.Namespace) -> None:
         print(f"  ... and {len(sessions) - 5} more")
     print()
     print("Available commands:")
+    print("  cyrene chat")
+    print('  cyrene chat "your question"')
     print('  cyrene do "your question" --session run_live')
     print("  cyrene status")
     print("  cyrene --help")
     print()
     print("Extra notes:")
-    print("  This terminal is now running the daemon. Close it to stop the agent.")
-    print("  Open a new terminal to run CLI commands.")
+    print("  The daemon is running in the background.")
+    print("  Use 'cyrene stop' when you want to stop it.")
+    return selected_url
 
 
 def cmd_stop(args: argparse.Namespace) -> None:
     """Stop the Cyrene daemon."""
+    if DAEMON_IS_DESKTOP:
+        print("Cyrene Desktop owns this backend; quit Electron to stop it.")
+        return
     try:
         _api("/api/shutdown", method="POST")
     except Exception:
@@ -168,11 +314,18 @@ def cmd_do(args: argparse.Namespace) -> None:
         response = resp.get("response", "")
         if response:
             print(f"Cyrene: {response}")
-        print(f"---")
+        print("---")
         labels = _api_json("/api/sessions")
         current = next((s for s in labels.get("sessions", []) if s.get("id") == "run_live"), {})
         summary = current.get("summary", {})
         print(f"Session: {session_id} | Tokens: {summary.get('tokens', '—')} | Duration: {summary.get('spend', '—')}")
+
+
+def cmd_chat(args: argparse.Namespace) -> None:
+    """Run the interactive streaming daemon client."""
+    from cyrene.cli_chat import run_chat
+
+    raise SystemExit(asyncio.run(run_chat(args)))
 
 
 # ---------------------------------------------------------------------------
@@ -205,7 +358,7 @@ def cmd_session_status(args: argparse.Namespace) -> None:
     """Show detailed session status."""
     session_id = args.session
 
-    data = _api_json(f"/api/sessions")
+    data = _api_json("/api/sessions")
     sessions = data.get("sessions", [])
     session = next((s for s in sessions if s.get("id") == session_id), None)
 
@@ -300,7 +453,7 @@ def cmd_flow(args: argparse.Namespace) -> None:
                 print(f"  tool: {event.get('tool', '?')}")
                 print(f"  args: {json.dumps(event.get('args', {}), ensure_ascii=False)}")
                 if args.verbose:
-                    print(f"\nFull result:")
+                    print("\nFull result:")
                     print(event.get("result", "")[:2000])
         return
 
@@ -493,7 +646,7 @@ def cmd_status(args: argparse.Namespace) -> None:
 
     metrics = data.get("metrics", [])
     if metrics:
-        print(f"\nMetrics:")
+        print("\nMetrics:")
         for m in metrics:
             label = m.get("label", "?")
             value = m.get("value", "?")
@@ -503,7 +656,7 @@ def cmd_status(args: argparse.Namespace) -> None:
 
     services = data.get("services", [])
     if services:
-        print(f"\nServices:")
+        print("\nServices:")
         for svc in services:
             name = svc.get("name", "?")
             status = svc.get("status", "?")
@@ -519,7 +672,7 @@ def cmd_status(args: argparse.Namespace) -> None:
 
 
 def _mcp_call(method: str = "GET", **kwargs) -> dict | list:
-    return _api_json(f"/api/settings/mcp", method=method, **kwargs)
+    return _api_json("/api/settings/mcp", method=method, **kwargs)
 
 
 def cmd_mcp_list(args: argparse.Namespace) -> None:
@@ -626,6 +779,23 @@ def build_parser() -> argparse.ArgumentParser:
     do_parser.add_argument("text", help="Message text")
     do_parser.add_argument("--session", "-s", required=True, help="Session ID (required)")
 
+    # chat
+    chat_parser = sub.add_parser("chat", help="Interactive streaming conversation")
+    chat_parser.add_argument("text", nargs="?", help="Send one message and exit")
+    chat_parser.add_argument("--chat", dest="chat_id", help="Resume a Workbench conversation")
+    chat_parser.add_argument("--legacy", action="store_true", help="Use the legacy run_live session")
+    chat_parser.add_argument("--list", dest="list_chats", action="store_true", help="List conversations and exit")
+    chat_parser.add_argument("--resume", action="store_true", help="Reconnect to the selected chat's latest run")
+    chat_parser.add_argument("--cursor", type=int, default=0, help="Resume after this event sequence")
+    chat_parser.add_argument("--mode", choices=["default", "plan", "auto"], default="default")
+    chat_parser.add_argument("--lang", choices=["zh", "en"], default="zh")
+    chat_parser.add_argument("--url", default=DAEMON_URL, help="Cyrene daemon URL")
+    chat_parser.add_argument("--timeout", type=float, default=CLIENT_TIMEOUT)
+    chat_parser.add_argument("--history-file", help="Optional plaintext prompt history path")
+    chat_parser.add_argument("--no-color", action="store_true")
+    chat_parser.add_argument("--json", action="store_true", help="Output NDJSON events (one-shot only)")
+    chat_parser.add_argument("--verbose", "-v", action="store_true", help="Show unknown public events")
+
     # session
     session_parser = sub.add_parser("session", help="Session management")
     session_sub = session_parser.add_subparsers(dest="subcommand", required=True)
@@ -688,10 +858,21 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def main() -> None:
+    global DAEMON_URL
     parser = build_parser()
-    args = parser.parse_args()
+    raw_args = sys.argv[1:]
+    default_chat = not raw_args
+    args = parser.parse_args(["chat"] if default_chat else raw_args)
 
     cmd = args.command
+
+    if cmd == "chat" and str(getattr(args, "url", "") or "") == DAEMON_URL:
+        args.url = cmd_start(args, quiet=True)
+        args.auth_token = DAEMON_TOKEN
+    elif cmd != "start":
+        discovered_url = _discover_daemon_url()
+        if discovered_url:
+            DAEMON_URL = discovered_url
 
     if cmd == "start":
         cmd_start(args)
@@ -699,6 +880,8 @@ def main() -> None:
         cmd_stop(args)
     elif cmd == "do":
         cmd_do(args)
+    elif cmd == "chat":
+        cmd_chat(args)
     elif cmd == "session":
         sub = args.subcommand
         if sub == "list":

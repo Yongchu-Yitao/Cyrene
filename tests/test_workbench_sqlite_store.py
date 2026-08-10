@@ -4,7 +4,7 @@ import json
 import multiprocessing
 from pathlib import Path
 
-from cyrene.workbench_store import patch_document_fields, read_document, write_document
+from cyrene.workbench.store import patch_document_fields, read_document, write_document
 
 
 def _append_worker(db_path: str, barrier, item_id: str) -> None:
@@ -52,7 +52,7 @@ def _increment_worker(db_path: str, barrier) -> None:
 
 
 def test_sqlite_is_authoritative_after_one_time_json_import(tmp_path: Path) -> None:
-    db_path = tmp_path / "cyrene.db"
+    db_path = tmp_path / "cyrene.runtime.database"
     legacy = tmp_path / "workbench_chats.json"
     legacy.write_text(
         json.dumps({"chats": [{"id": "chat_1", "title": "Imported"}]}),
@@ -81,7 +81,7 @@ def test_sqlite_is_authoritative_after_one_time_json_import(tmp_path: Path) -> N
 
 
 def test_patch_document_fields_preserves_unrelated_state_and_updates_export(tmp_path: Path) -> None:
-    db_path = tmp_path / "cyrene.db"
+    db_path = tmp_path / "cyrene.runtime.database"
     export_path = tmp_path / "workbench_projects.json"
     original = {
         "projects": [{"id": "project_1", "sessions": [{"id": "session_1"}]}],
@@ -109,7 +109,7 @@ def test_patch_document_fields_preserves_unrelated_state_and_updates_export(tmp_
 
 
 def test_concurrent_process_appends_are_merged_without_lost_updates(tmp_path: Path) -> None:
-    db_path = str(tmp_path / "cyrene.db")
+    db_path = str(tmp_path / "cyrene.runtime.database")
     write_document(db_path, "projects", {"projects": []}, lambda: {"projects": []})
 
     context = multiprocessing.get_context("spawn")
@@ -129,7 +129,7 @@ def test_concurrent_process_appends_are_merged_without_lost_updates(tmp_path: Pa
 
 
 def test_concurrent_chat_messages_are_both_preserved(tmp_path: Path) -> None:
-    db_path = str(tmp_path / "cyrene.db")
+    db_path = str(tmp_path / "cyrene.runtime.database")
     write_document(
         db_path,
         "chats",
@@ -154,7 +154,7 @@ def test_concurrent_chat_messages_are_both_preserved(tmp_path: Path) -> None:
 
 
 def test_notification_append_and_mark_read_do_not_overwrite_each_other(tmp_path: Path) -> None:
-    db_path = str(tmp_path / "cyrene.db")
+    db_path = str(tmp_path / "cyrene.runtime.database")
     write_document(
         db_path,
         "notifications",
@@ -189,8 +189,31 @@ def test_notification_append_and_mark_read_do_not_overwrite_each_other(tmp_path:
     assert by_id["notif_new"]["read"] is False
 
 
+def test_remote_entity_deletion_wins_over_stale_local_edit(tmp_path: Path) -> None:
+    db_path = str(tmp_path / "cyrene.runtime.database")
+    initial = {
+        "projects": [{
+            "id": "project_1",
+            "sessions": [{"id": "session_1", "status": "running", "runs": []}],
+        }]
+    }
+    write_document(db_path, "projects", initial, lambda: {"projects": []})
+
+    stale_worker = read_document(db_path, "projects", lambda: {"projects": []})
+    deleting_request = read_document(db_path, "projects", lambda: {"projects": []})
+    deleting_request["projects"][0]["sessions"] = []
+    write_document(db_path, "projects", deleting_request, lambda: {"projects": []})
+
+    stale_worker["projects"][0]["sessions"][0]["status"] = "completed"
+    stale_worker["projects"][0]["sessions"][0]["runs"].append({"id": "run_1"})
+    write_document(db_path, "projects", stale_worker, lambda: {"projects": []})
+
+    persisted = read_document(db_path, "projects", lambda: {"projects": []})
+    assert persisted["projects"][0]["sessions"] == []
+
+
 def test_concurrent_process_counter_increments_use_deltas(tmp_path: Path) -> None:
-    db_path = str(tmp_path / "cyrene.db")
+    db_path = str(tmp_path / "cyrene.runtime.database")
     write_document(
         db_path,
         "memory:project",
@@ -216,7 +239,7 @@ def test_concurrent_process_counter_increments_use_deltas(tmp_path: Path) -> Non
 
 def test_eight_process_counter_burst_has_no_lost_updates_or_lock_failures(tmp_path: Path) -> None:
     """Bounded pressure check for the process-safe merge/write path."""
-    db_path = str(tmp_path / "cyrene.db")
+    db_path = str(tmp_path / "cyrene.runtime.database")
     write_document(
         db_path,
         "memory:project",

@@ -1,10 +1,9 @@
 """Knowledge base document store.
 
 Provides CRUD operations for documents, chunks, and relations.
-Mirrors the style of cyrene.entities with aiosqlite, JSON serialization, and ISO-8601 timestamps.
+Mirrors the style of cyrene.tool_impl.entity.store with aiosqlite, JSON serialization, and ISO-8601 timestamps.
 """
 
-import json
 import hashlib
 import uuid
 from datetime import datetime, timezone
@@ -12,6 +11,13 @@ from pathlib import Path
 from typing import Any
 
 import aiosqlite
+
+from cyrene.runtime.sqlite_json import (
+    deserialize_dict as _deserialize_dict,
+    deserialize_list as _deserialize_list,
+    serialize_dict as _serialize_dict,
+    serialize_list as _serialize_list,
+)
 
 
 def _now() -> str:
@@ -22,36 +28,6 @@ def _now() -> str:
 def _new_id() -> str:
     """Generate a new UUID string."""
     return str(uuid.uuid4())
-
-
-def _serialize_list(items: list | None) -> str:
-    """Serialize a list to JSON string."""
-    return json.dumps(items or [])
-
-
-def _serialize_dict(d: dict | None) -> str:
-    """Serialize a dict to JSON string."""
-    return json.dumps(d or {})
-
-
-def _deserialize_list(s: str | None) -> list:
-    """Deserialize a JSON string to list."""
-    if not s:
-        return []
-    try:
-        return json.loads(s)
-    except Exception:
-        return []
-
-
-def _deserialize_dict(s: str | None) -> dict:
-    """Deserialize a JSON string to dict."""
-    if not s:
-        return {}
-    try:
-        return json.loads(s)
-    except Exception:
-        return {}
 
 
 def _row_to_document(row: aiosqlite.Row) -> dict:
@@ -363,6 +339,12 @@ async def delete_document(db_path: str, doc_id: str, *, remove_file: bool = True
 
     Optionally delete the on-disk file.
     """
+    # Stop fire-and-forget indexers before the authoritative transaction.  The
+    # existence check in replace_chunks remains the final race guard.
+    from cyrene.knowledge.ingest_tasks import cancel_pending_tasks
+
+    await cancel_pending_tasks(doc_id)
+
     # Get the document to find its path
     doc = await get_document(db_path, doc_id)
     if not doc:
@@ -394,7 +376,11 @@ async def delete_document(db_path: str, doc_id: str, *, remove_file: bool = True
     # Delete the on-disk file
     if remove_file and doc["path"]:
         try:
-            file_path = Path(doc["path"])
+            from cyrene.runtime.attachments import resolve_managed_attachment_path
+
+            file_path = resolve_managed_attachment_path(str(doc["path"]))
+            if file_path is None:
+                file_path = Path(doc["path"])
             if file_path.exists():
                 file_path.unlink()
         except Exception:
@@ -411,7 +397,11 @@ async def deduplicate_documents(db_path: str) -> dict:
     KB records/chunks/relations, and only deletes duplicate files that live in
     Cyrene-managed upload/export directories.
     """
-    from cyrene.attachments import is_uploaded_attachment_path, is_exported_attachment_path
+    from cyrene.runtime.attachments import (
+        is_exported_attachment_path,
+        is_uploaded_attachment_path,
+        resolve_managed_attachment_path,
+    )
 
     updated_hashes = 0
     removed_duplicates = 0
@@ -428,7 +418,14 @@ async def deduplicate_documents(db_path: str) -> dict:
         for row in rows:
             digest = str(row["content_hash"] or "").strip()
             if not digest:
-                digest = content_hash_file(row["path"])
+                from cyrene.runtime.attachments import (
+                    resolve_managed_attachment_path,
+                )
+
+                relocated = resolve_managed_attachment_path(
+                    str(row["path"] or "")
+                )
+                digest = content_hash_file(relocated or row["path"])
             if not digest:
                 continue
 
@@ -457,8 +454,8 @@ async def deduplicate_documents(db_path: str) -> dict:
         if not path or not (is_uploaded_attachment_path(path) or is_exported_attachment_path(path)):
             continue
         try:
-            file_path = Path(path)
-            if file_path.exists():
+            file_path = resolve_managed_attachment_path(path)
+            if file_path is not None and file_path.exists():
                 file_path.unlink()
                 removed_files += 1
         except Exception:
@@ -621,7 +618,7 @@ async def sync_filesystem(db_path: str) -> dict:
 
     Returns {"added": N, "total": M} where added is newly registered and total is all now in DB.
     """
-    from cyrene.attachments import UPLOADS_DIR, EXPORTS_DIR, attachment_kind_from_meta
+    from cyrene.runtime.attachments import UPLOADS_DIR, EXPORTS_DIR, attachment_kind_from_meta
     import mimetypes
 
     dedupe_result = await deduplicate_documents(db_path)
@@ -708,12 +705,17 @@ async def replace_chunks(
     db_path: str,
     doc_id: str,
     chunks: list[dict],
-) -> None:
+) -> bool:
     """Replace all chunks for a document in a transaction.
 
     Deletes old chunks and FTS entries, then inserts new chunks and FTS entries.
     """
     async with aiosqlite.connect(db_path, timeout=30) as db:
+        cursor = await db.execute(
+            "SELECT 1 FROM kb_documents WHERE id = ? LIMIT 1", (doc_id,)
+        )
+        if await cursor.fetchone() is None:
+            return False
         # Delete old FTS entries
         await db.execute(
             "DELETE FROM kb_chunks_fts WHERE document_id = ?",
@@ -760,6 +762,96 @@ async def replace_chunks(
                 (chunk.get("content", ""), chunk_id, doc_id),
             )
 
+        await db.commit()
+        return True
+
+
+async def reusable_embeddings(
+    db_path: str,
+    model: str,
+    dimensions: int = 0,
+) -> dict[str, dict[str, Any]]:
+    """Return one normalized vector per content fingerprint for a model."""
+    result: dict[str, dict[str, Any]] = {}
+    if not model:
+        return result
+    async with aiosqlite.connect(db_path, timeout=30) as db:
+        db.row_factory = aiosqlite.Row
+        query = (
+            "SELECT content, embedding, embedding_dim FROM kb_chunks "
+            "WHERE embedding IS NOT NULL AND embedding_model = ?"
+        )
+        params: list[Any] = [model]
+        if dimensions > 0:
+            query += " AND embedding_dim = ?"
+            params.append(dimensions)
+        cursor = await db.execute(query, params)
+        for row in await cursor.fetchall():
+            fingerprint = hashlib.sha256(row["content"].encode("utf-8")).hexdigest()
+            result.setdefault(fingerprint, {
+                "embedding": row["embedding"],
+                "embedding_dim": int(row["embedding_dim"] or 0),
+            })
+    return result
+
+
+async def get_corpus_embedding_info(db_path: str) -> dict[str, Any]:
+    """Summarize vector identity for consistency checks and settings UI."""
+    async with aiosqlite.connect(db_path, timeout=30) as db:
+        db.row_factory = aiosqlite.Row
+        cursor = await db.execute(
+            "SELECT embedding_model AS model, embedding_dim AS dimensions, COUNT(*) AS count "
+            "FROM kb_chunks WHERE embedding IS NOT NULL "
+            "GROUP BY embedding_model, embedding_dim ORDER BY count DESC"
+        )
+        rows = [dict(row) for row in await cursor.fetchall()]
+    return {"vectors": sum(int(row["count"]) for row in rows), "groups": rows}
+
+
+async def get_embedding_coverage(
+    db_path: str,
+    model: str,
+    dimensions: int = 0,
+) -> dict[str, int]:
+    """Count chunks that are ready or still need vectors for one model identity."""
+    async with aiosqlite.connect(db_path, timeout=30) as db:
+        cursor = await db.execute(
+            """
+            SELECT
+                COUNT(*) AS total,
+                SUM(
+                    CASE WHEN embedding IS NOT NULL
+                        AND embedding_model = ?
+                        AND (? = 0 OR embedding_dim = ?)
+                    THEN 1 ELSE 0 END
+                ) AS compatible
+            FROM kb_chunks
+            """,
+            (model, dimensions, dimensions),
+        )
+        row = await cursor.fetchone()
+    total = int((row or [0, 0])[0] or 0)
+    compatible = int((row or [0, 0])[1] or 0)
+    return {
+        "total_chunks": total,
+        "compatible_vectors": compatible,
+        "pending_vectors": max(0, total - compatible),
+    }
+
+
+async def update_chunk_embeddings(
+    db_path: str,
+    updates: list[dict[str, Any]],
+) -> None:
+    """Update vectors without repeating extraction or chunking."""
+    async with aiosqlite.connect(db_path, timeout=30) as db:
+        await db.executemany(
+            "UPDATE kb_chunks SET embedding = ?, embedding_dim = ?, embedding_model = ? WHERE id = ?",
+            [
+                (item["embedding"], item["embedding_dim"], item["embedding_model"], item["id"])
+                for item in updates
+            ],
+        )
         await db.commit()
 
 
@@ -810,6 +902,16 @@ async def iter_embedded_chunks(
         cursor = await db.execute(query, params)
         rows = await cursor.fetchall()
         return [_row_to_chunk(row) for row in rows]
+
+
+async def iter_all_chunks(db_path: str) -> list[dict]:
+    """Get every chunk in stable document/ordinal order."""
+    async with aiosqlite.connect(db_path, timeout=30) as db:
+        db.row_factory = aiosqlite.Row
+        cursor = await db.execute(
+            "SELECT * FROM kb_chunks ORDER BY document_id, ordinal"
+        )
+        return [_row_to_chunk(row) for row in await cursor.fetchall()]
 
 
 async def create_relation(
@@ -1055,7 +1157,7 @@ async def get_graph(
         elif include_auto:
             # No embeddings configured -> connect documents by shared significant
             # terms (lexical fallback, zero extra deps) so the map still shows links.
-            from cyrene.db import _extract_topic_terms
+            from cyrene.runtime.database import extract_topic_terms
 
             cursor = await db.execute("SELECT document_id, content FROM kb_chunks ORDER BY document_id")
             chunk_rows = await cursor.fetchall()
@@ -1066,7 +1168,7 @@ async def get_graph(
                     bucket.append(row["content"] or "")
             doc_terms: dict[str, set] = {}
             for d_id, parts in doc_text.items():
-                terms = set(_extract_topic_terms(" ".join(parts), limit=40))
+                terms = set(extract_topic_terms(" ".join(parts), limit=40))
                 if len(terms) >= 3:
                     doc_terms[d_id] = terms
             ids = list(doc_terms.keys())

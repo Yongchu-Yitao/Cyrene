@@ -2,10 +2,10 @@ import json
 
 import pytest
 
-from cyrene import settings_store
-from cyrene import tool_legacy
+from cyrene.runtime import settings_store
+from cyrene.tooling import native_definitions
 from cyrene.agent import state as agent_state
-from webui import routes_workbench_memory as memory
+from cyrene.workbench import memory as memory
 
 
 def _isolate_memory_store(monkeypatch, tmp_path, language):
@@ -116,11 +116,108 @@ async def test_failed_translation_does_not_persist_wrong_language(monkeypatch, t
 def test_save_project_memory_tool_requires_user_language():
     content_description = next(
         item
-        for item in tool_legacy.TOOL_DEFS
+        for item in native_definitions.get_native_tool_defs()
         if item["function"]["name"] == "save_project_memory"
     )["function"]["parameters"]["properties"]["content"]["description"]
 
     assert "MUST use the user's configured language" in content_description
+
+
+def test_verified_tool_evidence_includes_successful_current_results_only():
+    messages = [
+        {
+            "id": "old",
+            "role": "assistant",
+            "tool_calls": [{
+                "id": "old-call",
+                "function": {"name": "code_tools", "arguments": "{}"},
+            }],
+        },
+        {"role": "tool", "tool_call_id": "old-call", "content": "old result"},
+        {
+            "id": "new",
+            "role": "assistant",
+            "tool_calls": [
+                {
+                    "id": "ok-call",
+                    "function": {"name": "remote_tools", "arguments": "{}"},
+                },
+                {
+                    "id": "bad-call",
+                    "function": {"name": "code_tools", "arguments": "{}"},
+                },
+                {
+                    "id": "memory-call",
+                    "function": {"name": "memory_tools", "arguments": "{}"},
+                },
+            ],
+        },
+        {
+            "role": "tool",
+            "tool_call_id": "ok-call",
+            "content": '{"status":"success","result":"16GB RAM"}',
+        },
+        {
+            "role": "tool",
+            "tool_call_id": "bad-call",
+            "content": '{"status":"error","message":"failed"}',
+        },
+        {
+            "role": "tool",
+            "tool_call_id": "memory-call",
+            "content": '{"status":"success","result":"saved"}',
+        },
+    ]
+
+    evidence = memory.build_verified_tool_evidence(messages, {"old"})
+
+    assert "remote_tools" in evidence
+    assert "16GB RAM" in evidence
+    assert "old result" not in evidence
+    assert "failed" not in evidence
+    assert "memory_tools" not in evidence
+
+
+@pytest.mark.asyncio
+async def test_background_extractor_accepts_verified_tool_facts(monkeypatch, tmp_path):
+    _isolate_memory_store(monkeypatch, tmp_path, "zh")
+    captured = {}
+
+    async def fake_call_llm(messages, **kwargs):
+        captured["messages"] = messages
+        captured["kwargs"] = kwargs
+        return {
+            "content": json.dumps({
+                "memories": [{
+                    "content": "远程设备配备16GB内存。",
+                    "category": "fact",
+                    "confidence": "high",
+                }]
+            }, ensure_ascii=False)
+        }
+
+    monkeypatch.setattr(agent_state, "_call_llm", fake_call_llm)
+
+    added = await memory.capture_from_exchange(
+        "project-test",
+        "看看硬件信息",
+        "已查到机器配置。",
+        verified_evidence=(
+            '[tool:remote_tools verified result]\n'
+            '{"status":"success","result":"Memory: 16GB"}'
+        ),
+    )
+
+    assert added == 1
+    assert captured["messages"][0]["role"] == "system"
+    assert "成功工具结果直接验证" in captured["messages"][0]["content"]
+    assert "Memory: 16GB" in captured["messages"][1]["content"]
+    assert captured["kwargs"]["response_format"] == {"type": "json_object"}
+    stored = json.loads(
+        (tmp_path / "wb_memory_project-test.json").read_text(encoding="utf-8")
+    )
+    assert stored[0]["source"] == "conversation"
+    assert stored[0]["content"] == "远程设备配备16GB内存。"
 
 
 def test_language_neutral_path_does_not_require_translation():
@@ -282,7 +379,7 @@ def test_workbench_memory_payload_hides_internal_task_reports(monkeypatch, tmp_p
 @pytest.mark.asyncio
 async def test_search_project_memory_tool_uses_current_project(monkeypatch, tmp_path):
     from cyrene.agent import state
-    from cyrene.tool_impl import search_project_memory as tool
+    from cyrene.tool_impl.memory import search_project_memory as tool
 
     _isolate_memory_store(monkeypatch, tmp_path, "zh")
     (tmp_path / "wb_memory_project-test.json").write_text(
@@ -321,14 +418,72 @@ async def test_search_project_memory_tool_uses_current_project(monkeypatch, tmp_
 
     payload = json.loads(result)
     assert payload["status"] == "success"
+    assert payload["search_mode"] == "keyword"
+    assert payload["uses_embeddings"] is False
     assert payload["count"] == 1
     assert payload["memories"][0]["content"] == "用户偏好使用 pytest 编写回归测试。"
 
 
 @pytest.mark.asyncio
+async def test_list_memories_combines_short_term_and_current_project(
+    monkeypatch, tmp_path
+):
+    from cyrene.runtime.memory import short_term
+    from cyrene.agent import state
+    from cyrene.tool_impl.memory import list_memories as tool
+
+    _isolate_memory_store(monkeypatch, tmp_path, "zh")
+    short_term.init_short_term(tmp_path)
+    short_term.save_entries([{
+        "content": "用户偏好简洁回答。",
+        "type": "preference",
+        "first_seen": "2026-06-19",
+        "last_mentioned": "2026-06-20",
+    }])
+    (tmp_path / "wb_memory_project-test.json").write_text(
+        json.dumps([{
+            "id": "mem_project",
+            "content": "项目必须使用 PostgreSQL。",
+            "type": "fact",
+            "category": "fact",
+            "source": "agent",
+            "first_seen": "2026-06-20",
+            "last_mentioned": "2026-06-21",
+            "mention_count": 1,
+        }], ensure_ascii=False),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(
+        "cyrene.workbench.context.resolve_workbench_project_id_for_session",
+        lambda session_id: "project-test",
+    )
+
+    token = state._current_session_id.set("chat-test")
+    try:
+        result = await tool._tool_list_memories(
+            {"scope": "all", "status": "all"},
+            None,
+            0,
+            "",
+            None,
+        )
+    finally:
+        state._current_session_id.reset(token)
+
+    payload = json.loads(result)
+    assert payload["total"] == 2
+    assert payload["total_by_scope"] == {"short_term": 1, "project": 1}
+    assert payload["project_memory_available"] is True
+    assert {item["scope"] for item in payload["memories"]} == {
+        "short_term",
+        "project",
+    }
+
+
+@pytest.mark.asyncio
 async def test_search_project_memory_allows_default_workbench_project(monkeypatch, tmp_path):
     from cyrene.agent import state
-    from cyrene.tool_impl import search_project_memory as tool
+    from cyrene.tool_impl.memory import search_project_memory as tool
 
     _isolate_memory_store(monkeypatch, tmp_path, "zh")
     (tmp_path / "wb_memory_project-default.json").write_text(json.dumps([{
@@ -364,7 +519,7 @@ async def test_search_project_memory_allows_default_workbench_project(monkeypatc
 
 
 def test_workbench_scope_resolver_distinguishes_default_project(monkeypatch, tmp_path):
-    from cyrene import workbench_context
+    from cyrene.workbench import context as workbench_context
 
     projects_path = tmp_path / "workbench_projects.json"
     chats_path = tmp_path / "workbench_chats.json"
@@ -399,8 +554,8 @@ def test_workbench_scope_resolver_distinguishes_default_project(monkeypatch, tmp
 
 
 def test_default_project_memory_does_not_alias_global_short_term(monkeypatch, tmp_path):
-    from cyrene import short_term
-    from webui import routes
+    from cyrene.runtime.memory import short_term
+    from cyrene.workbench import runtime as routes
 
     monkeypatch.setattr(memory, "STORE_DIR", tmp_path)
     monkeypatch.setattr(memory, "_STORE_DB_PATH", "")
@@ -457,22 +612,27 @@ def test_default_project_memory_does_not_alias_global_short_term(monkeypatch, tm
 
 
 def test_memory_tools_are_registered_with_distinct_contracts():
-    from cyrene import tools
+    from cyrene.tooling import catalog as tools
 
     defs = {
         item["function"]["name"]: item["function"]
         for item in tools.TOOL_DEFS
     }
 
+    assert "ListMemories" in defs
     assert "RecallMemory" in defs
     assert "RecallConversation" in defs
     assert "retire_short_term_memory" in defs
     assert "search_project_memory" in defs
     assert "retire_project_memory" in defs
+    assert defs["ListMemories"]["parameters"]["required"] == []
+    assert "query" not in defs["ListMemories"]["parameters"]["properties"]
     assert "session_id" not in defs["RecallMemory"]["parameters"]["properties"]
     assert "session_id" in defs["RecallConversation"]["parameters"]["properties"]
     assert defs["retire_short_term_memory"]["parameters"]["required"] == ["memory_id"]
     assert defs["search_project_memory"]["parameters"]["required"] == ["query"]
+    assert "keyword" in defs["search_project_memory"]["description"].lower()
+    assert "does not use embeddings" in defs["search_project_memory"]["description"].lower()
     assert defs["retire_project_memory"]["parameters"]["required"] == ["memory_id"]
     assert tools.is_tool_allowed_for_actor("retire_short_term_memory", "main")
     assert not tools.is_tool_allowed_for_actor("retire_short_term_memory", "subagent")
@@ -485,7 +645,7 @@ async def test_retire_project_memory_tool_marks_exact_memory_stale(
     monkeypatch, tmp_path
 ):
     from cyrene.agent import state
-    from cyrene.tool_impl import retire_project_memory as tool
+    from cyrene.tool_impl.memory import retire_project_memory as tool
 
     _isolate_memory_store(monkeypatch, tmp_path, "zh")
     (tmp_path / "wb_memory_project-test.json").write_text(
@@ -543,7 +703,7 @@ async def test_retire_project_memory_tool_marks_exact_memory_stale(
 @pytest.mark.asyncio
 async def test_retire_project_memory_tool_is_idempotent(monkeypatch, tmp_path):
     from cyrene.agent import state
-    from cyrene.tool_impl import retire_project_memory as tool
+    from cyrene.tool_impl.memory import retire_project_memory as tool
 
     _isolate_memory_store(monkeypatch, tmp_path, "zh")
     (tmp_path / "wb_memory_project-test.json").write_text(
@@ -589,7 +749,7 @@ async def test_retire_project_memory_tool_supports_default_workbench_project(
     monkeypatch, tmp_path
 ):
     from cyrene.agent import state
-    from cyrene.tool_impl import retire_project_memory as tool
+    from cyrene.tool_impl.memory import retire_project_memory as tool
 
     _isolate_memory_store(monkeypatch, tmp_path, "zh")
     path = tmp_path / "wb_memory_project-default.json"

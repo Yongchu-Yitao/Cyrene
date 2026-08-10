@@ -6,30 +6,37 @@ module-level cycle.
 """
 
 import asyncio
-import contextlib
 import json
 import logging
-import re
 from typing import Any
-from uuid import uuid4
 
 import httpx
 
-from cyrene import debug
-from cyrene.agent.message import _assistant_entry_from_response, _ensure_message_identity, _insert_intermediate_user_reply, _is_placeholder_reply
-from cyrene.agent.state import (
-    _agent_lock,
-    _AWAITING_USER_SENTINEL,
-    _call_llm,
-    _call_llm_stream,
-    _caller_type,
-    _interrupt_event,
-    _MAIN_INBOX_AGENT_ID,
-    _pending_label_refreshes,
-    _publish_runtime_event,
-    _reply_stream_writer,
-    _session_state_lock,
-    _streaming_reply_requested,
+import cyrene.agent.replies as _reply_helpers
+from cyrene.agent.context import (
+    AWAITING_USER_SENTINEL as _AWAITING_USER_SENTINEL,
+    MAIN_AGENT_ID as _MAIN_INBOX_AGENT_ID,
+    allow_all_destructive_operations_for_run,
+    current_session_id,
+    default_agent_lock,
+    default_session_state_lock,
+    grant_destructive_operation,
+    grant_external_upload,
+    grant_permission_elevation,
+    grant_temporary_full_access,
+    permission_elevation_fingerprint,
+    publish_runtime_event as _publish_runtime_event,
+    session_interrupt_event,
+)
+from cyrene.observability import debug
+from cyrene.agent.message import (
+    _ensure_message_identity,
+    _insert_intermediate_user_reply,
+)
+from cyrene.agent.model_service import (
+    call_agent_model as _call_llm,
+    stream_agent_model as _call_llm_stream,
+    streaming_reply_requested as _streaming_reply_requested,
 )
 from cyrene.agent.round import get_live_rounds, _main_inbox_pending_by_round
 from cyrene.agent.session import (
@@ -37,26 +44,36 @@ from cyrene.agent.session import (
     _clear_pending_question,
     _guidance_persist_context_after_ack,
     _guidance_round_context,
-    _load_pending_question,
-    _load_session_messages,
     _load_session_state,
     _pending_question_resume_context,
     _pending_question_is_permission_elevation,
     _restore_pending_question,
-    _save_session_messages,
-    _schedule_session_label_refresh,
     _write_session_messages_locked,
     get_session_labels,
 )
-from cyrene.llm import _assistant_text
+from cyrene.model_runtime.errors import format_httpx_error  # noqa: F401
+from cyrene.model_runtime.messages import assistant_text
 
 logger = logging.getLogger(__name__)
 
-_VISIBLE_DSML_TOOL_BLOCK_RE = re.compile(
-    r"<(?:｜｜|\|\|)DSML(?:｜｜|\|\|)tool_calls>.*?</(?:｜｜|\|\|)DSML(?:｜｜|\|\|)tool_calls>",
-    re.DOTALL,
-)
 
+def _original_round_user_prompt(context: dict[str, Any]) -> str:
+    """Return the original public user request for a resumed round."""
+    for message in context.get("round_history") or []:
+        if str(message.get("role") or "") != "user":
+            continue
+        content = str(message.get("public_content") or message.get("content") or "").strip()
+        if content:
+            return content
+    return ""
+
+# Historical private helpers remained importable from this module before the
+# reply synthesizer was extracted.  Keep the exact function objects so direct
+# calls and monkeypatch identity continue to work.
+_looks_chinese = _reply_helpers._looks_chinese
+_record_final_reply_usage = _reply_helpers._record_final_reply_usage
+_VISIBLE_DSML_TOOL_BLOCK_RE = _reply_helpers._VISIBLE_DSML_TOOL_BLOCK_RE
+_VISIBLE_DSML_TOOL_MARKUP_RE = _reply_helpers._VISIBLE_DSML_TOOL_MARKUP_RE
 
 # ---------------------------------------------------------------------------
 # Guidance ack / error text
@@ -81,45 +98,6 @@ def _guidance_error_text(exc: Exception) -> str:
     else:
         reason = "an internal error occurred while applying the guidance"
     return f"Guidance could not be applied because {reason}."
-
-
-def format_httpx_error(exc: Exception) -> str:
-    parts: list[str] = [type(exc).__name__]
-    detail = str(exc or "").strip()
-    if detail:
-        parts.append(detail)
-
-    request = getattr(exc, "request", None)
-    if request is not None:
-        method = str(getattr(request, "method", "") or "").strip()
-        url = str(getattr(request, "url", "") or "").strip()
-        request_part = "request="
-        if method:
-            request_part += method
-        if url:
-            request_part += f" {url}" if method else url
-        parts.append(request_part)
-
-    response = getattr(exc, "response", None)
-    if response is not None:
-        parts.append(f"status={response.status_code}")
-        try:
-            body = str(response.text or "").strip()
-        except Exception:
-            body = ""
-        if body:
-            body_preview = re.sub(r"\s+", " ", body)[:500]
-            parts.append(f"body={body_preview}")
-
-    cause = getattr(exc, "__cause__", None)
-    if cause is not None:
-        cause_text = str(cause or "").strip()
-        if cause_text:
-            parts.append(f"cause={type(cause).__name__}: {cause_text}")
-        else:
-            parts.append(f"cause={type(cause).__name__}")
-
-    return " | ".join(parts)
 
 
 def _guidance_ack_text() -> str:
@@ -163,7 +141,7 @@ async def _generate_guidance_ack(
     ]
     try:
         response = await _call_llm(prompt_messages, tools=None, max_tokens=240, secondary=True)
-        ack_text = _assistant_text(response).strip()
+        ack_text = assistant_text(response).strip()
         return ack_text or _guidance_ack_text()
     except Exception:
         logger.warning("Failed to generate guidance acknowledgement via LLM", exc_info=True)
@@ -182,8 +160,6 @@ async def _insert_guidance_reply(
     client_request_id: str = "",
     subagent_flow_snapshot: dict[str, Any] | None = None,
 ) -> None:
-    from cyrene.agent.message import _ensure_message_identity
-
     from datetime import datetime, timezone
 
     assistant_entry: dict[str, Any] = {
@@ -201,7 +177,7 @@ async def _insert_guidance_reply(
     if subagent_flow_snapshot:
         assistant_entry["subagent_flow_snapshot"] = subagent_flow_snapshot
 
-    async with _session_state_lock:
+    async with default_session_state_lock():
         state = _load_session_state()
         existing = state.get("messages", [])
         full_messages = list(existing) if isinstance(existing, list) else []
@@ -257,8 +233,6 @@ async def _insert_guidance_ack(
     round_title: str = "",
     client_request_id: str = "",
 ) -> None:
-    from cyrene.agent.message import _ensure_message_identity
-
     from datetime import datetime, timezone
 
     assistant_entry: dict[str, Any] = {
@@ -271,7 +245,7 @@ async def _insert_guidance_ack(
     }
     if round_title:
         assistant_entry["round_title"] = round_title
-    async with _session_state_lock:
+    async with default_session_state_lock():
         state = _load_session_state()
         existing = state.get("messages", [])
         full_messages = list(existing) if isinstance(existing, list) else []
@@ -314,13 +288,13 @@ async def _insert_guidance_ack(
 
 
 async def _fan_out_guidance_to_subagents(target_round_id: str, content: str, bot: Any, chat_id: int, db_path: str) -> list[str]:
-    from cyrene.inbox import send_message as _send_inbox
+    from cyrene.runtime.inbox import send_message as _send_inbox
     from cyrene.subagent import (
-        _run_subagent,
-        _spawn_subagent_task,
         get_raw_messages as _sub_raw_msgs,
         get_snapshot as _sub_snapshot,
         reactivate as _sub_reactivate,
+        run_subagent,
+        spawn_subagent_task,
     )
 
     guidance_text = (
@@ -338,35 +312,36 @@ async def _fan_out_guidance_to_subagents(target_round_id: str, content: str, bot
         sent.append(agent_id)
 
     for agent_id, info in snapshot.items():
-        if info.get("status") not in ("done", "timeout"):
+        if info.get("status") not in ("done", "timeout", "incomplete"):
             continue
         if await _sub_reactivate(agent_id):
             raw_messages = await _sub_raw_msgs(agent_id)
-            _spawn_subagent_task(
-                _run_subagent(agent_id, str(info.get("task") or ""), bot, chat_id, db_path, resume_messages=raw_messages),
+            spawn_subagent_task(
+                run_subagent(agent_id, str(info.get("task") or ""), bot, chat_id, db_path, resume_messages=raw_messages),
                 agent_id,
             )
     return sent
 
 
 async def _wait_for_subagent_round(round_id: str, bot: Any, chat_id: int, db_path: str) -> tuple[bool, str]:
-    from cyrene.inbox import get_unread_count as _inbox_unread
+    from cyrene.runtime.inbox import get_unread_count as _inbox_unread
     from cyrene.subagent import (
-        _run_subagent,
-        _spawn_subagent_task,
         collect_results as _sub_collect,
         get_raw_messages as _sub_raw_msgs,
         get_snapshot as _sub_snapshot,
         reactivate as _sub_reactivate,
+        run_subagent,
+        spawn_subagent_task,
     )
 
-    _interrupt_event.clear()
+    interrupt_event = session_interrupt_event()
+    interrupt_event.clear()
     interrupted = False
     quiet_ticks = 0
     for _ in range(120):
         try:
-            await asyncio.wait_for(_interrupt_event.wait(), timeout=5)
-            _interrupt_event.clear()
+            await asyncio.wait_for(interrupt_event.wait(), timeout=5)
+            interrupt_event.clear()
             interrupted = True
             break
         except asyncio.TimeoutError:
@@ -378,19 +353,19 @@ async def _wait_for_subagent_round(round_id: str, bot: Any, chat_id: int, db_pat
 
         resurrected = False
         for agent_id, info in snapshot.items():
-            if info.get("status") not in ("done", "timeout") or _inbox_unread(agent_id) == 0:
+            if info.get("status") not in ("done", "timeout", "incomplete") or _inbox_unread(agent_id) == 0:
                 continue
             if await _sub_reactivate(agent_id):
                 raw_messages = await _sub_raw_msgs(agent_id)
-                _spawn_subagent_task(
-                    _run_subagent(agent_id, str(info.get("task") or ""), bot, chat_id, db_path, resume_messages=raw_messages),
+                spawn_subagent_task(
+                    run_subagent(agent_id, str(info.get("task") or ""), bot, chat_id, db_path, resume_messages=raw_messages),
                     agent_id,
                 )
                 resurrected = True
 
         snapshot = await _sub_snapshot(round_id=round_id)
         all_truly_done = all(
-            info.get("status") in ("done", "timeout") and _inbox_unread(agent_id) == 0
+            info.get("status") in ("done", "timeout", "incomplete") and _inbox_unread(agent_id) == 0
             for agent_id, info in snapshot.items()
         )
         if all_truly_done and not resurrected:
@@ -435,18 +410,30 @@ async def _synthesize_subagent_results(
                     fn = tc.get("function", {})
                     name = fn.get("name", "")
                     args = fn.get("arguments", "{}")
-                    if name == "spawn_subagent":
-                        try:
-                            a = json.loads(args)
-                            context_lines.append(f"[Spawned subagent: {a.get('agent_id', '?')}]\nTask: {a.get('task', '')[:300]}")
-                        except Exception:
-                            context_lines.append("[Spawned subagent]")
-                    elif name == "send_agent_message":
-                        try:
-                            a = json.loads(args)
-                            context_lines.append(f"[Subagent msg: {a.get('from', '?')} -> {a.get('to', '?')}]")
-                        except Exception:
-                            pass
+                    try:
+                        a = json.loads(args)
+                        from cyrene.tooling import resolve_wire_call
+
+                        resolution = resolve_wire_call(
+                            str(name or ""),
+                            a,
+                            actor="main",
+                        )
+                        capability_id = resolution.capability_id
+                        concrete_args = resolution.concrete_arguments
+                    except Exception:
+                        capability_id = str(name or "")
+                        concrete_args = {}
+                    if capability_id == "subagent.spawn":
+                        context_lines.append(
+                            f"[Spawned subagent: {concrete_args.get('agent_id', '?')}]\n"
+                            f"Task: {str(concrete_args.get('task', ''))[:300]}"
+                        )
+                    elif capability_id == "subagent.send_message":
+                        context_lines.append(
+                            f"[Subagent msg: {concrete_args.get('from', '?')} -> "
+                            f"{concrete_args.get('to', '?')}]"
+                        )
     context_block = "\n\n".join(context_lines) if context_lines else "—"
 
     experts_block = summary.strip() or "(No subagent results.)"
@@ -485,25 +472,77 @@ async def _synthesize_subagent_results(
         },
     ]
     response = await (_call_llm_stream(prompt_messages, max_tokens=None) if _streaming_reply_requested() else _call_llm(prompt_messages, tools=None, max_tokens=None))
-    llm_text = _assistant_text(response).strip()
+    llm_text = assistant_text(response).strip()
     return llm_text or experts_block
 
 
-def _is_placeholder_reply(text: str) -> bool:
-    normalized = str(text or "").strip().lower()
-    return normalized in {
-        "", "done", "done.", "finished", "finished.",
-        "ok", "ok.", "okay", "okay.",
-        "完成", "完成。", "已完成", "已完成。",
-    }
+# Preserve the historical guidance-module exports while keeping one live
+# implementation of final-reply behavior.
+from cyrene.agent import replies as _reply_helpers  # noqa: E402
+
+_default_final_reply_call = _call_llm
+_default_final_reply_stream_call = _call_llm_stream
+_default_streaming_reply_requested = _streaming_reply_requested
+_contains_visible_dsml_tool_markup = (
+    _reply_helpers._contains_visible_dsml_tool_markup
+)
+_delivery_fallback_text = _reply_helpers._delivery_fallback_text
+_is_placeholder_reply = _reply_helpers._is_placeholder_reply
+_strip_visible_dsml_tool_blocks = (
+    _reply_helpers._strip_visible_dsml_tool_blocks
+)
+_tool_result_fallback_text = _reply_helpers._tool_result_fallback_text
 
 
-async def _final_user_reply_from_history(messages: list[dict], max_tokens: int | None = None) -> str:
+def _final_reply_dependency(
+    local_value: Any,
+    original_value: Any,
+    current_reply_value: Any,
+) -> Any:
+    """Prefer a historical guidance override, then the current replies seam."""
+    return (
+        local_value
+        if local_value is not original_value
+        else current_reply_value
+    )
+
+
+async def _validated_final_no_tool_reply(
+    messages: list[dict],
+    max_tokens: int | None = None,
+) -> str:
+    return await _reply_helpers._validated_final_no_tool_reply(
+        messages,
+        max_tokens=max_tokens,
+        call_llm=_final_reply_dependency(
+            _call_llm,
+            _default_final_reply_call,
+            _reply_helpers._call_llm,
+        ),
+        call_llm_stream=_final_reply_dependency(
+            _call_llm_stream,
+            _default_final_reply_stream_call,
+            _reply_helpers._call_llm_stream,
+        ),
+        streaming_reply_requested=_final_reply_dependency(
+            _streaming_reply_requested,
+            _default_streaming_reply_requested,
+            _reply_helpers._streaming_reply_requested,
+        ),
+    )
+
+
+async def _final_user_reply_from_history(
+    messages: list[dict],
+    max_tokens: int | None = None,
+) -> str:
     last_user_text = next(
         (
             str(message.get("content") or "").strip()
             for message in reversed(messages)
-            if isinstance(message, dict) and str(message.get("role") or "") == "user" and str(message.get("content") or "").strip()
+            if isinstance(message, dict)
+            and str(message.get("role") or "") == "user"
+            and str(message.get("content") or "").strip()
         ),
         "",
     )
@@ -512,18 +551,32 @@ async def _final_user_reply_from_history(messages: list[dict], max_tokens: int |
         {
             "role": "user",
             "content": (
-                ("Now answer the user's request directly using the gathered tool results.\n" if last_user_text else
-                 "The user uploaded one or more attachments without extra text. Summarize the attachment contents directly using the gathered tool results.\n")
+                (
+                    "Now answer the user's request directly using the gathered "
+                    "tool results.\n"
+                    if last_user_text
+                    else
+                    "The user uploaded one or more attachments without extra "
+                    "text. Summarize the attachment contents directly using "
+                    "the gathered tool results.\n"
+                )
                 + "Do not call tools.\n"
                 + "Do not reply with only 'Done'.\n"
-                + "If the tools extracted file or attachment contents, quote or summarize those contents in your answer."
+                + "If the tools extracted file or attachment contents, quote "
+                "or summarize those contents in your answer."
             ),
         },
     ]
-    return await _validated_final_no_tool_reply(prompt_messages, max_tokens=max_tokens)
+    return await _validated_final_no_tool_reply(
+        prompt_messages,
+        max_tokens=max_tokens,
+    )
 
 
-async def _final_plain_reply_from_history(messages: list[dict], max_tokens: int | None = None) -> str:
+async def _final_plain_reply_from_history(
+    messages: list[dict],
+    max_tokens: int | None = None,
+) -> str:
     prompt_messages = [
         *messages,
         {
@@ -535,113 +588,29 @@ async def _final_plain_reply_from_history(messages: list[dict], max_tokens: int 
             ),
         },
     ]
-    return await _validated_final_no_tool_reply(prompt_messages, max_tokens=max_tokens)
+    return await _validated_final_no_tool_reply(
+        prompt_messages,
+        max_tokens=max_tokens,
+    )
 
 
-def _tool_result_fallback_text(messages: list[dict]) -> str:
-    for message in reversed(messages):
-        if not isinstance(message, dict) or str(message.get("role") or "") != "tool":
-            continue
-        raw = str(message.get("content") or "").strip()
-        if not raw:
-            continue
-        try:
-            payload = json.loads(raw)
-        except Exception:
-            payload = None
-        if isinstance(payload, dict):
-            text_preview = str(payload.get("text_preview") or "").strip()
-            if text_preview:
-                return f"我从附件中提取到的内容是：\n\n{text_preview}"
-            stdout = str(payload.get("stdout") or "").strip()
-            if stdout:
-                return f"我从附件中提取到的内容是：\n\n{stdout[:4000]}"
-            preview = str(payload.get("preview") or "").strip()
-            if preview and "no built-in parser" not in preview.lower():
-                return f"我从附件中提取到的内容是：\n\n{preview}"
-        elif raw and not raw.lower().startswith("tool failed:"):
-            return f"我从附件中提取到的内容是：\n\n{raw[:4000]}"
-    return ""
+async def _final_reply_from_history(
+    messages: list[dict],
+    max_tokens: int | None = None,
+) -> str:
+    text = await _validated_final_no_tool_reply(
+        messages,
+        max_tokens=max_tokens,
+    )
+    return text or "Done."
 
 
-def _looks_chinese(text: str) -> bool:
-    return any("\u4e00" <= ch <= "\u9fff" for ch in str(text or ""))
-
-
-def _delivery_fallback_text(messages: list[dict]) -> str:
-    """Build a minimal user-facing reply from successful delivery tool results."""
-    names: list[str] = []
-    delivery_call_ids: set[str] = set()
-    saw_delivery = False
-    chinese = False
-    for message in messages:
-        if not isinstance(message, dict):
-            continue
-        if str(message.get("role") or "") == "user" and _looks_chinese(str(message.get("content") or "")):
-            chinese = True
-        if str(message.get("role") or "") == "assistant":
-            for tool_call in message.get("tool_calls") or []:
-                if not isinstance(tool_call, dict):
-                    continue
-                tool_name = str(tool_call.get("function", {}).get("name") or "").strip()
-                if tool_name in {"send_file", "send_wechat_file"}:
-                    call_id = str(tool_call.get("id") or "").strip()
-                    if call_id:
-                        delivery_call_ids.add(call_id)
-    for message in messages:
-        if not isinstance(message, dict):
-            continue
-        if str(message.get("role") or "") != "tool":
-            continue
-        if str(message.get("tool_call_id") or "").strip() not in delivery_call_ids:
-            continue
-        raw = str(message.get("content") or "").strip()
-        if not raw:
-            continue
-        try:
-            payload = json.loads(raw)
-        except Exception:
-            payload = None
-        if isinstance(payload, dict) and str(payload.get("status") or "") == "sent":
-            attachment = payload.get("attachment")
-            name = ""
-            if isinstance(attachment, dict):
-                name = str(attachment.get("name") or attachment.get("filename") or "").strip()
-            if name and name not in names:
-                names.append(name)
-            saw_delivery = True
-            continue
-        match = re.search(r"File sent via WeChat:\s*(.+)$", raw)
-        if match:
-            name = match.group(1).strip()
-            if name and name not in names:
-                names.append(name)
-            saw_delivery = True
-    if not saw_delivery:
-        return ""
-    if chinese:
-        if names:
-            return "文件已发给你：" + "、".join(names) + "。"
-        return "文件已发给你。"
-    if names:
-        joined = ", ".join(names)
-        return f"I sent the file{'s' if len(names) != 1 else ''}: {joined}."
-    return "I sent the file."
-
-
-async def _final_reply_from_history(messages: list[dict], max_tokens: int | None = None) -> str:
-    return (await _validated_final_no_tool_reply(messages, max_tokens=max_tokens)) or "Done."
-
-
-async def _final_reply_with_tools(messages: list[dict], tools: list, max_tokens: int | None = None) -> dict[str, Any]:
-    """Stream the wrap-up reply while keeping the tool channel open.
-
-    The synthesis step normally forbids tools, but the model sometimes only
-    realizes mid-answer that it still needs one (e.g. a source it never fetched).
-    Keeping tools available lets the caller honor that intent and re-enter the
-    tool loop instead of leaking it as textual markup. Returns the full assistant
-    message (content + any tool calls); the streamed text is already filtered of
-    DSML markup by the stream handler."""
+async def _final_reply_with_tools(
+    messages: list[dict],
+    tools: list,
+    max_tokens: int | None = None,
+) -> dict[str, Any]:
+    """Keep the historical guidance monkeypatch seam for streaming replies."""
     prompt_messages = [
         *messages,
         {
@@ -649,70 +618,27 @@ async def _final_reply_with_tools(messages: list[dict], tools: list, max_tokens:
             "content": (
                 "Write the final user-facing reply now, in the user's language. "
                 "Do not reply with only 'Done', 'OK', or another placeholder. "
-                "If files were delivered with send_file or send_wechat_file, briefly confirm the delivery "
-                "and mention the file name or what was sent. "
-                "Call another tool only if it is genuinely needed to satisfy the user's request."
+                "If files were delivered with send_file or send_wechat_file, "
+                "briefly confirm the delivery and mention the file name or what "
+                "was sent. Call another tool only if it is genuinely needed to "
+                "satisfy the user's request."
             ),
         },
     ]
-    response = await _call_llm_stream(prompt_messages, max_tokens=max_tokens, tools=tools)
-    _record_final_reply_usage(response)
+    # New callers patch ``agent.replies``; historical callers patched this
+    # guidance module.  Honor both seams without mutating shared globals.
+    stream_call = _final_reply_dependency(
+        _call_llm_stream,
+        _default_final_reply_stream_call,
+        _reply_helpers._call_llm_stream,
+    )
+    response = await stream_call(
+        prompt_messages,
+        max_tokens=max_tokens,
+        tools=tools,
+    )
+    _reply_helpers._record_final_reply_usage(response)
     return response
-
-
-def _strip_visible_dsml_tool_blocks(text: str) -> str:
-    return _VISIBLE_DSML_TOOL_BLOCK_RE.sub("", str(text or "")).strip()
-
-
-def _record_final_reply_usage(*responses: Any) -> None:
-    """Stash the merged usage of the final-reply call(s) for the persist layer.
-
-    Streaming finals return plain text to their callers, so without this the
-    token usage of the reply call never reaches the saved assistant entry.
-    """
-    from cyrene.agent.state import _last_final_reply_usage
-    merged: dict[str, Any] = {}
-    for response in responses:
-        usage = response.get("usage") if isinstance(response, dict) else None
-        if not isinstance(usage, dict):
-            continue
-        for key, value in usage.items():
-            if isinstance(value, (int, float)) and isinstance(merged.get(key), (int, float)):
-                merged[key] = merged[key] + value
-            else:
-                merged.setdefault(key, value)
-    _last_final_reply_usage.set(merged or None)
-
-
-async def _validated_final_no_tool_reply(messages: list[dict], max_tokens: int | None = None) -> str:
-    """Generate final user-visible text without leaking textual DSML tool markup."""
-    if _streaming_reply_requested():
-        response = await _call_llm_stream(messages, max_tokens=max_tokens)
-    else:
-        response = await _call_llm(messages, tools=None, max_tokens=max_tokens)
-    _record_final_reply_usage(response)
-    text = _assistant_text(response).strip()
-    if not _VISIBLE_DSML_TOOL_BLOCK_RE.search(text):
-        return text
-
-    retry_messages = [
-        *messages,
-        {"role": "assistant", "content": text},
-        {
-            "role": "user",
-            "content": (
-                "Your previous message was DSML/tool-call markup, but tools are not available in this final-answer step. "
-                "Write the final answer to the user in plain text only, using the already gathered context. "
-                "Do not output XML, DSML, JSON tool calls, or any tool-call markup."
-            ),
-        },
-    ]
-    retry_response = await _call_llm(retry_messages, tools=None, max_tokens=max_tokens)
-    _record_final_reply_usage(response, retry_response)
-    retry_text = _assistant_text(retry_response).strip()
-    if _VISIBLE_DSML_TOOL_BLOCK_RE.search(retry_text):
-        return _strip_visible_dsml_tool_blocks(retry_text)
-    return retry_text
 
 
 # ---------------------------------------------------------------------------
@@ -794,7 +720,6 @@ async def _process_main_inbox_message(message: dict[str, Any], bot: Any, chat_id
             client_request_id=context["client_request_id"],
             subagent_flow_snapshot=flow_snapshot if not interrupted else None,
         )
-        _schedule_session_label_refresh(content, target_round_id)
         return reply
 
     guidance_system = (
@@ -843,7 +768,7 @@ async def queue_round_guidance(
     db_path: str,
     client_request_id: str = "",
 ) -> dict[str, Any]:
-    from cyrene.inbox import send_message as _send_inbox
+    from cyrene.runtime.inbox import send_message as _send_inbox
     from datetime import datetime, timezone
 
     live = {item["id"]: item for item in get_live_rounds()}
@@ -879,8 +804,8 @@ async def queue_round_guidance(
 
 
 async def _drain_main_inbox(bot: Any, chat_id: int, db_path: str) -> None:
-    from cyrene.conversations import archive_exchange
-    from cyrene.inbox import get_unread_messages, mark_read_count
+    from cyrene.runtime.memory.conversations import archive_exchange
+    from cyrene.runtime.inbox import get_unread_messages, mark_read_count
 
     import cyrene.agent.state as _state
     try:
@@ -906,8 +831,8 @@ async def _drain_main_inbox(bot: Any, chat_id: int, db_path: str) -> None:
                     "detail": "Main agent is now applying the queued guidance.",
                     "detail_key": "phase.guidanceExecution",
                 })
-                async with _agent_lock:
-                    _interrupt_event.clear()
+                async with default_agent_lock():
+                    session_interrupt_event().clear()
                     response = await _process_main_inbox_message(item, bot, chat_id, db_path)
             except Exception as exc:
                 logger.exception("Failed to process main inbox guidance for %s", target_round_id or "<unknown>")
@@ -1004,6 +929,7 @@ async def answer_pending_question(
                 answer_text=content,
                 client_request_id=client_request_id,
                 context=context,
+                permission_mode=permission_mode,
             )
         except Exception:
             await _restore_pending_question(pending)
@@ -1054,6 +980,7 @@ async def answer_pending_question(
             persist_user_message=True,
             command=str(context.get("command", "") or "").strip(),
             permission_mode=permission_mode,
+            public_prompt=_original_round_user_prompt(context),
         )
     except Exception:
         await _restore_pending_question(pending)
@@ -1080,7 +1007,7 @@ async def _handle_claude_code_prompt_answer(
     answer_text: str,
     client_request_id: str = "",
 ) -> str:
-    from cyrene.cc_bridge import send_prompt_to_cc
+    from cyrene.tooling.backends.claude_code_bridge import send_prompt_to_cc
     from cyrene.agent.prompts import _contains_cjk
 
     meta = pending.get("meta", {})
@@ -1161,10 +1088,11 @@ def _permission_answer_granted(text: str) -> bool:
     }:
         return False
     return normalized in {
-        "仅这次允许", "allow once", "仅此次", "这次", "once",
+        "同意一次", "仅这次允许", "allow once", "仅此次", "这次", "once",
         "始终允许", "always allow", "always", "永久允许", "allow",
-        "本次会话内总是允许", "本轮总是允许", "always allow this session",
-        "允许这次", "允许这次读取", "允许这次上传", "允许执行", "允许删除", "仅此任务允许 full_access",
+        "在本次会话同意", "本次会话内总是允许", "本轮总是允许", "always allow this session",
+        "允许这次", "允许这次读取", "允许这次上传", "允许执行", "允许执行这一次",
+        "允许调用这一次", "允许删除", "仅此任务允许 full_access",
         "同意", "确认", "好", "好的", "可以", "行", "yes", "y", "ok", "okay",
         "allow_once",
     }
@@ -1177,15 +1105,10 @@ async def _handle_permission_elevation_answer(
     answer_text: str,
     client_request_id: str,
     context: dict[str, Any],
+    permission_mode: str = "default",
 ) -> str:
     from cyrene.agent.coordinator import _run_chat_agent
-    from cyrene.settings_store import set_write_permission_mode
-    from cyrene.agent.state import (
-        _destructive_confirmation_allow_all,
-        _destructive_confirmation_fingerprints,
-        _external_upload_confirmation_fingerprints,
-        _temporary_full_access,
-    )
+    from cyrene.runtime.settings_store import set_write_permission_mode
 
     normalized = str(answer_text or "").strip().lower()
     meta = pending.get("meta") if isinstance(pending.get("meta"), dict) else {}
@@ -1194,17 +1117,39 @@ async def _handle_permission_elevation_answer(
     operation = str(meta.get("operation", "") or "").strip()
     path_hint = str(meta.get("path_hint", "") or "").strip()
     reason = str(meta.get("reason", "") or "").strip()
+    permission_fingerprint = str(meta.get("fingerprint", "") or "").strip()
+    if not permission_fingerprint:
+        permission_fingerprint = permission_elevation_fingerprint(
+            tool_name=tool_name,
+            permission_kind=permission_kind,
+            path_hint=path_hint,
+            operation=operation,
+            reason=reason,
+        )
 
     granted = _permission_answer_granted(answer_text)
+    allow_for_session = normalized in {
+        "在本次会话同意",
+        "本次会话内总是允许",
+        "本轮总是允许",
+        "always allow this session",
+    }
     if permission_kind == "write_permission_request":
-        # "仅这次允许" —— 只在此 round 内有效，round 结束时自动清理
-        if normalized in {"仅这次允许", "allow once", "仅此次", "这次", "once"}:
-            _temporary_full_access.set(True)
+        # New prompts offer session-scoped, one-shot, or denial. Keep
+        # recognizing legacy permanent-grant answers so an already-open prompt
+        # from an older client can still resume.
+        if allow_for_session:
+            grant_temporary_full_access()
             system = (
-                "The user granted elevated write/delete permission for this round only. "
+                "The user granted elevated write/delete permission for the rest of this session. "
                 "Retry the blocked action if it is still required."
             )
-        # "始终允许" —— 全局永久生效
+        elif granted and normalized not in {"始终允许", "always allow", "always", "永久允许", "allow"}:
+            grant_permission_elevation(permission_fingerprint)
+            system = (
+                "The user granted this exact write/delete permission request once. "
+                "Retry the blocked action if it is still required."
+            )
         elif normalized in {"始终允许", "always allow", "always", "永久允许", "allow"}:
             set_write_permission_mode("full_access")
             system = (
@@ -1218,10 +1163,16 @@ async def _handle_permission_elevation_answer(
                 "Stay within the workspace and choose a safer alternative."
             )
     elif permission_kind == "read_elevation":
-        if granted:
-            _temporary_full_access.set(True)
+        if allow_for_session:
+            grant_temporary_full_access()
             system = (
-                "The user granted temporary read access to paths outside the workspace for this round. "
+                "The user granted elevated read permission for the rest of this session. "
+                "Retry the blocked read action if it is still required."
+            )
+        elif granted:
+            grant_permission_elevation(permission_fingerprint)
+            system = (
+                "The user granted this exact outside-workspace read once. "
                 "Retry the blocked read action if it is still required."
             )
         else:
@@ -1231,7 +1182,6 @@ async def _handle_permission_elevation_answer(
             )
     elif permission_kind == "destructive_confirmation":
         fingerprint = str(meta.get("fingerprint", "") or "").strip()
-        from cyrene.agent.state import _publish_runtime_event
         await _publish_runtime_event({
             "type": "destructive_confirmation",
             "decision": "approved" if granted else "denied",
@@ -1243,13 +1193,10 @@ async def _handle_permission_elevation_answer(
             "fingerprint": fingerprint,
         })
         if granted:
-            if normalized in {"本次会话内总是允许", "本轮总是允许", "always allow this session"}:
-                _destructive_confirmation_allow_all.set(True)
+            if allow_for_session:
+                allow_all_destructive_operations_for_run()
             else:
-                if fingerprint:
-                    existing = set(_destructive_confirmation_fingerprints.get())
-                    existing.add(fingerprint)
-                    _destructive_confirmation_fingerprints.set(frozenset(existing))
+                grant_destructive_operation(fingerprint)
             system = (
                 "The user confirmed the destructive/irreversible operation. "
                 "Retry the blocked action if it is still required."
@@ -1261,7 +1208,6 @@ async def _handle_permission_elevation_answer(
             )
     elif permission_kind == "external_upload_confirmation":
         fingerprint = str(meta.get("fingerprint", "") or "").strip()
-        from cyrene.agent.state import _publish_runtime_event
         safe_target = meta.get("target") if isinstance(meta.get("target"), dict) else {}
         safe_files = meta.get("files") if isinstance(meta.get("files"), list) else []
         await _publish_runtime_event({
@@ -1273,10 +1219,7 @@ async def _handle_permission_elevation_answer(
             "files": safe_files,
         })
         if granted:
-            if fingerprint:
-                existing = set(_external_upload_confirmation_fingerprints.get())
-                existing.add(fingerprint)
-                _external_upload_confirmation_fingerprints.set(frozenset(existing))
+            grant_external_upload(fingerprint)
             system = (
                 "The user approved exactly one external browser file upload bound to the displayed "
                 "site, input target, and file hashes. Retry browser_upload_files with the same arguments."
@@ -1286,10 +1229,16 @@ async def _handle_permission_elevation_answer(
                 "The user denied the external browser file upload. Do not retry it or choose another "
                 "file or destination unless the user explicitly asks."
             )
-    elif granted:
-        _temporary_full_access.set(True)
+    elif allow_for_session:
+        grant_temporary_full_access()
         system = (
-            "The user granted the internal permission/confirmation request for this round. "
+            "The user granted elevated permission for the rest of this session. "
+            "Retry the blocked action if it is still required."
+        )
+    elif granted:
+        grant_permission_elevation(permission_fingerprint)
+        system = (
+            "The user granted this exact internal permission request once. "
             "Retry the blocked action if it is still required."
         )
     else:
@@ -1311,6 +1260,19 @@ async def _handle_permission_elevation_answer(
     if details:
         system += "\n" + "\n".join(details)
 
+    await _publish_runtime_event({
+        "type": "permission_decision",
+        "source": "user",
+        "approved": granted,
+        "tool_name": tool_name,
+        "operation": operation,
+        "permission_kind": permission_kind,
+        "path_hint": path_hint,
+        "fingerprint": permission_fingerprint,
+        "rationale": "User approved the displayed request." if granted else "User denied the displayed request.",
+        "round_id": round_id,
+    })
+
     return await _run_chat_agent(
         "[Internal permission decision received. Continue the same round using the system instruction above.]",
         None,
@@ -1324,6 +1286,8 @@ async def _handle_permission_elevation_answer(
         client_request_id=client_request_id,
         persist_user_message=False,
         command=str(context.get("command", "") or "").strip(),
+        permission_mode=permission_mode,
+        public_prompt=_original_round_user_prompt(context),
     )
 
 
@@ -1338,7 +1302,6 @@ async def _handle_plan_confirmation_answer(
 ) -> str:
     """处理「计划模式」确认回答：同意并开始 / 拒绝 / 修改。"""
     from cyrene.agent.coordinator import _run_chat_agent
-    from cyrene.agent.state import _publish_runtime_event
     from cyrene.agent.planning import _plan_to_text
 
     meta = pending.get("meta") if isinstance(pending.get("meta"), dict) else {}
@@ -1355,10 +1318,9 @@ async def _handle_plan_confirmation_answer(
 
     if approve:
         try:
-            from cyrene.agent.state import _current_session_id
-            from webui.routes_workbench_chat import activate_chat_plan
+            from cyrene.workbench.chat import activate_chat_plan
 
-            plan = activate_chat_plan(str(_current_session_id.get() or ""), plan)
+            plan = activate_chat_plan(current_session_id(), plan)
         except Exception:
             logger.warning("Failed to activate Workbench chat plan", exc_info=True)
         await _publish_runtime_event({"type": "plan", "status": "accepted", "plan": plan, "round_id": round_id})
@@ -1384,10 +1346,9 @@ async def _handle_plan_confirmation_answer(
 
     if reject:
         try:
-            from cyrene.agent.state import _current_session_id
-            from webui.routes_workbench_chat import reject_chat_plan
+            from cyrene.workbench.chat import reject_chat_plan
 
-            plan = reject_chat_plan(str(_current_session_id.get() or ""), plan)
+            plan = reject_chat_plan(current_session_id(), plan)
         except Exception:
             logger.warning("Failed to reject Workbench chat plan", exc_info=True)
         await _publish_runtime_event({"type": "plan", "status": "rejected", "plan": plan, "round_id": round_id})

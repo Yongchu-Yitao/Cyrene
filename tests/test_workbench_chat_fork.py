@@ -18,17 +18,18 @@ sys.modules["PIL"] = pil_mock
 pil_mock.Image = MagicMock()
 
 from cyrene import config as cyrene_config
-from cyrene import db
-from webui.routes import register_routes
+from cyrene.runtime import database as db
+from route.registry import register_routes
 
 
 @pytest.fixture
 def fork_env(monkeypatch, tmp_path):
     """Prepare isolated DATA_DIR / STORE_DIR / WORKSPACE_DIR for fork tests."""
-    from cyrene import io_utils
-    from webui import routes as routes_mod
-    from webui import routes_workbench_chat as chat_mod
-    from webui.workbench_chat_runs import ChatRunManager
+    from cyrene.runtime import io as io_utils
+    from cyrene.workbench import chat as chat_service
+    from cyrene.workbench import runtime as routes_mod
+    from route.workbench import chat as chat_mod
+    from cyrene.workbench.chat_runs import ChatRunManager
 
     data_dir = tmp_path / "data"
     store_dir = tmp_path / "store"
@@ -42,7 +43,7 @@ def fork_env(monkeypatch, tmp_path):
     monkeypatch.setattr(cyrene_config, "WORKSPACE_DIR", workspace_dir)
     monkeypatch.setattr(routes_mod, "DATA_DIR", data_dir)
     monkeypatch.setattr(routes_mod, "WORKSPACE_DIR", workspace_dir)
-    monkeypatch.setattr(chat_mod, "DATA_DIR", data_dir)
+    monkeypatch.setattr(chat_service, "DATA_DIR", data_dir)
     # The agent state module captures DATA_DIR at import time as _DATA_DIR;
     # patch both aliases so _session_state_file resolves to the temp data_dir.
     from cyrene.agent import state as agent_state
@@ -51,7 +52,7 @@ def fork_env(monkeypatch, tmp_path):
     # Clear cached SessionContext entries so they re-resolve against the new
     # DATA_DIR (otherwise stale paths from prior tests leak in).
     agent_state._sessions.clear()
-    chat_mod._CHATS_STORE = data_dir / "workbench_chats.json"
+    chat_service._CHATS_STORE = data_dir / "workbench_chats.json"
     monkeypatch.setattr(
         chat_mod,
         "_CHAT_RUN_MANAGER",
@@ -108,7 +109,7 @@ def client(fork_env):
 
 def _write_chat(fork_env, chat_id, messages, **extra):
     """Write a single chat into the workbench chats store."""
-    from cyrene import io_utils
+    from cyrene.runtime import io as io_utils
 
     chat = {
         "id": chat_id,
@@ -150,11 +151,199 @@ def test_create_chat_skips_full_project_repair(client, fork_env, monkeypatch):
     assert response.status_code == 200
     assert response.json()["chat"]["projectId"] == "project_1"
     assert response.json()["chat"]["title"] == "Fast chat"
+    assert response.json()["chat"]["permissionMode"] == "auto"
+
+
+def test_retry_reuses_persisted_permission_mode(client, fork_env, monkeypatch):
+    from cyrene import agent
+
+    _write_chat(
+        fork_env,
+        "chat_mode",
+        [
+            {"id": "u1", "role": "user", "content": "question"},
+            {"id": "a1", "role": "assistant", "content": "answer"},
+        ],
+        permissionMode="default",
+    )
+    _write_state(fork_env, "chat_mode", [
+        {"role": "user", "content": "question"},
+        {"role": "assistant", "content": "answer"},
+    ])
+    seen = {}
+
+    async def fake_run_agent(**kwargs):
+        seen.update(kwargs)
+        return "retried"
+
+    monkeypatch.setattr(agent, "run_agent", fake_run_agent)
+    response = client.post(
+        "/api/workbench/chats/chat_mode/messages",
+        json={"retry": True},
+    )
+
+    assert response.status_code == 200
+    assert seen["permission_mode"] == "default"
+    assert client.get("/api/workbench/chats/chat_mode").json()["chat"]["permissionMode"] == "default"
+
+
+def test_invalid_permission_mode_fails_closed(client, fork_env, monkeypatch):
+    from cyrene import agent
+
+    _write_chat(fork_env, "chat_invalid_mode", [], permissionMode="auto")
+    seen = {}
+
+    async def fake_run_agent(**kwargs):
+        seen.update(kwargs)
+        return "done"
+
+    monkeypatch.setattr(agent, "run_agent", fake_run_agent)
+    response = client.post(
+        "/api/workbench/chats/chat_invalid_mode/messages",
+        json={"message": "hello", "mode": "unexpected"},
+    )
+
+    assert response.status_code == 200
+    assert seen["permission_mode"] == "default"
+
+
+def test_chat_message_selects_configured_model_and_reasoning_effort(
+    client, fork_env, monkeypatch
+):
+    from cyrene import agent
+    from cyrene.model_runtime import client as model_client
+    from cyrene.runtime import settings_store
+
+    _write_chat(fork_env, "chat_model", [], permissionMode="auto")
+    configured = {
+        "id": "candidate-sol",
+        "name": "5.6 Sol",
+        "model": "gpt-5.6-sol",
+        "base_url": "https://api.example/v1",
+        "reasoning_effort": "medium",
+    }
+    monkeypatch.setattr(settings_store, "get_models", lambda: [configured])
+    selected = {}
+    monkeypatch.setattr(
+        model_client,
+        "set_session_model_preference",
+        lambda session_id, candidate, effort="": selected.update(
+            session_id=session_id, candidate=candidate, effort=effort
+        ),
+    )
+    async def fake_run_agent(**kwargs):
+        return "done"
+
+    monkeypatch.setattr(agent, "run_agent", fake_run_agent)
+
+    response = client.post(
+        "/api/workbench/chats/chat_model/messages",
+        json={
+            "message": "hello",
+            "model": "candidate-sol",
+            "reasoningEffort": "high",
+        },
+    )
+
+    assert response.status_code == 200
+    chat = client.get("/api/workbench/chats/chat_model").json()["chat"]
+    assert chat["modelSelectionId"] == "candidate-sol"
+    assert chat["model"] == "gpt-5.6-sol"
+    assert chat["reasoningEffort"] == "high"
+    assert selected["session_id"] == "chat_model"
+    assert selected["candidate"] == configured
+    assert selected["effort"] == "high"
+
+
+def test_retry_recovers_from_stale_model_selection_after_source_switch(
+    client, fork_env, monkeypatch
+):
+    from cyrene import agent
+    from cyrene.model_runtime import client as model_client
+    from cyrene.runtime import settings_store
+
+    _write_chat(
+        fork_env,
+        "chat_source_switch",
+        [
+            {"id": "u1", "role": "user", "content": "question"},
+            {"id": "a1", "role": "assistant", "content": "failed answer"},
+        ],
+        permissionMode="auto",
+        model="gpt-5.3-codex-spark",
+        modelSelectionId="codex-spark",
+        reasoningEffort="high",
+    )
+    _write_state(
+        fork_env,
+        "chat_source_switch",
+        [
+            {"role": "user", "content": "question"},
+            {"role": "assistant", "content": "failed answer"},
+        ],
+    )
+    deepseek = {
+        "id": "deepseek-flash",
+        "name": "DeepSeek V4 Flash",
+        "model": "deepseek-v4-flash",
+        "base_url": "https://api.deepseek.example/v1",
+        "reasoning_effort": "max",
+    }
+    monkeypatch.setattr(settings_store, "get_models", lambda: [deepseek])
+    selected = {}
+    monkeypatch.setattr(
+        model_client,
+        "set_session_model_preference",
+        lambda session_id, candidate, effort="": selected.update(
+            session_id=session_id, candidate=candidate, effort=effort
+        ),
+    )
+
+    async def fake_run_agent(**kwargs):
+        return "retried with DeepSeek"
+
+    monkeypatch.setattr(agent, "run_agent", fake_run_agent)
+
+    response = client.post(
+        "/api/workbench/chats/chat_source_switch/messages",
+        json={"retry": True},
+    )
+
+    assert response.status_code == 200
+    chat = client.get("/api/workbench/chats/chat_source_switch").json()["chat"]
+    assert chat["modelSelectionId"] == "deepseek-flash"
+    assert chat["model"] == "deepseek-v4-flash"
+    assert selected == {
+        "session_id": "chat_source_switch",
+        "candidate": deepseek,
+        "effort": "max",
+    }
+
+
+def test_explicit_unknown_model_still_returns_validation_error(
+    client, fork_env, monkeypatch
+):
+    from cyrene.runtime import settings_store
+
+    _write_chat(fork_env, "chat_unknown_model", [], permissionMode="auto")
+    monkeypatch.setattr(
+        settings_store,
+        "get_models",
+        lambda: [{"id": "deepseek-flash", "model": "deepseek-v4-flash"}],
+    )
+
+    response = client.post(
+        "/api/workbench/chats/chat_unknown_model/messages",
+        json={"message": "hello", "model": "missing-model"},
+    )
+
+    assert response.status_code == 400
+    assert response.json()["error"] == "configured model not found"
 
 
 def _write_chats(fork_env, chats):
     """Write multiple chats into the workbench chats store."""
-    from cyrene import io_utils
+    from cyrene.runtime import io as io_utils
 
     io_utils.atomic_write_json(
         fork_env["data_dir"] / "workbench_chats.json",
@@ -164,7 +353,7 @@ def _write_chats(fork_env, chats):
 
 def _write_state(fork_env, session_id, messages):
     """Write a raw agent state file for a session."""
-    from cyrene import io_utils
+    from cyrene.runtime import io as io_utils
 
     state_dir = fork_env["data_dir"] / "sessions" / session_id
     state_dir.mkdir(parents=True, exist_ok=True)
@@ -332,7 +521,7 @@ def test_fork_replay_send_does_not_retruncate_state(client, fork_env, monkeypatc
             {"role": "user", "content": str(kwargs.get("user_message") or "")},
             {"role": "assistant", "content": "new reply"},
         ])
-        from cyrene import io_utils
+        from cyrene.runtime import io as io_utils
         io_utils.atomic_write_json(state_path, state)
         return "new reply"
 
@@ -413,7 +602,7 @@ def test_successful_retry_replaces_old_reply_only_after_new_reply_is_ready(
             {"role": "user", "content": kwargs["user_message"]},
             {"role": "assistant", "content": "new answer"},
         ])
-        from cyrene import io_utils
+        from cyrene.runtime import io as io_utils
         io_utils.atomic_write_json(state_path, state)
         return "new answer"
 
@@ -437,7 +626,7 @@ def test_non_streaming_send_is_owned_by_chat_run_manager(
     client, fork_env, monkeypatch
 ):
     from cyrene import agent
-    from webui import routes_workbench_chat as chat_mod
+    from route.workbench import chat as chat_mod
 
     _write_chat(fork_env, "chat_owned", [])
     calls = []
@@ -471,7 +660,7 @@ def test_non_streaming_send_is_owned_by_chat_run_manager(
 def test_existing_run_rejects_new_send_and_has_explicit_reconnect_endpoint(
     client, fork_env, monkeypatch
 ):
-    from webui import routes_workbench_chat as chat_mod
+    from route.workbench import chat as chat_mod
 
     _write_chat(fork_env, "chat_running", [])
 
@@ -479,8 +668,12 @@ def test_existing_run_rejects_new_send_and_has_explicit_reconnect_endpoint(
         def get(self, chat_id):
             return object() if chat_id == "chat_running" else None
 
-        async def stream(self, _run):
-            yield json.dumps({"type": "ack", "chatId": "chat_running"}) + "\n"
+        async def stream(self, _run, cursor=0):
+            yield json.dumps({
+                "type": "ack",
+                "chatId": "chat_running",
+                "cursor": cursor,
+            }) + "\n"
 
     monkeypatch.setattr(chat_mod, "_CHAT_RUN_MANAGER", FakeManager())
 
@@ -489,20 +682,24 @@ def test_existing_run_rejects_new_send_and_has_explicit_reconnect_endpoint(
         json={"message": "must not be dropped", "stream": True},
     )
     reconnect = client.get(
-        "/api/workbench/chats/chat_running/run-stream",
+        "/api/workbench/chats/chat_running/run-stream?cursor=7",
     )
 
     assert send.status_code == 409
     assert send.json()["code"] == "chat_run_in_progress"
     assert reconnect.status_code == 200
-    assert json.loads(reconnect.text.strip())["type"] == "ack"
+    assert json.loads(reconnect.text.strip()) == {
+        "type": "ack",
+        "chatId": "chat_running",
+        "cursor": 7,
+    }
 
 
 @pytest.mark.asyncio
 async def test_chat_run_continues_after_stream_subscriber_disconnects():
     """Dropping the HTTP subscriber must not cancel the owned agent task."""
     import asyncio
-    from webui.workbench_chat_runs import ChatRunManager
+    from cyrene.workbench.chat_runs import ChatRunManager
 
     release = asyncio.Event()
     manager = ChatRunManager(retention_seconds=0)

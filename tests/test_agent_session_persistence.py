@@ -248,7 +248,7 @@ async def test_memory_compression_uses_latest_message_window(monkeypatch) -> Non
 
 @pytest.mark.asyncio
 async def test_memory_compression_skips_workbench_sessions(monkeypatch) -> None:
-    from cyrene import workbench_context
+    from cyrene.workbench import context as workbench_context
 
     async def unexpected_call(*args, **kwargs):
         raise AssertionError("Workbench sessions must use project memory capture")

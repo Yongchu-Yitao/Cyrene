@@ -7,11 +7,11 @@ move the task to `review`, preserving the plan, its revision, and any artifacts.
 import json
 import asyncio
 
-import pytest
+from route.registry import register_routes
 
 
 def test_classify_intent_maps_done_to_finalize(monkeypatch):
-    from webui import routes
+    from cyrene.workbench import runtime as routes
 
     async def fake_call_llm(*_args, **_kwargs):
         return {"content": '{"kind":"done"}'}
@@ -71,7 +71,7 @@ def _seed_store(store_path, workspace):
 def test_dispatch_finalize_summarizes_without_replanning(monkeypatch, tmp_path):
     from fastapi import FastAPI
     from fastapi.testclient import TestClient
-    from webui import routes
+    from cyrene.workbench import runtime as routes
 
     data_dir = tmp_path / "data"
     data_dir.mkdir()
@@ -104,7 +104,7 @@ def test_dispatch_finalize_summarizes_without_replanning(monkeypatch, tmp_path):
     monkeypatch.setattr(routes, "append_notification", lambda **_kwargs: {})
 
     app = FastAPI()
-    routes.register_routes(app, bot=None, db_path=str(tmp_path / "test.db"))
+    register_routes(app, bot=None, db_path=str(tmp_path / "test.db"))
     client = TestClient(app)
 
     resp = client.post("/api/task-sessions/session_1/dispatch", json={"input": "任务完成了，给我成果"})
@@ -128,7 +128,7 @@ def test_dispatch_finalize_summarizes_without_replanning(monkeypatch, tmp_path):
 def test_dispatch_answer_uses_task_reply_mode_and_reply_card(monkeypatch, tmp_path):
     from fastapi import FastAPI
     from fastapi.testclient import TestClient
-    from webui import routes
+    from cyrene.workbench import runtime as routes
 
     data_dir = tmp_path / "data"
     data_dir.mkdir()
@@ -162,7 +162,7 @@ def test_dispatch_answer_uses_task_reply_mode_and_reply_card(monkeypatch, tmp_pa
     monkeypatch.setattr(routes, "append_notification", lambda **_kwargs: {})
 
     app = FastAPI()
-    routes.register_routes(app, bot=None, db_path=str(tmp_path / "test.db"))
+    register_routes(app, bot=None, db_path=str(tmp_path / "test.db"))
     client = TestClient(app)
 
     resp = client.post("/api/task-sessions/session_1/dispatch", json={"input": "现在进展到哪一步了？"})
@@ -182,7 +182,7 @@ def test_dispatch_acceptance_repair_does_not_return_500(monkeypatch, tmp_path):
     """A failed verification can be repaired through the normal dispatch path."""
     from fastapi import FastAPI
     from fastapi.testclient import TestClient
-    from webui import routes
+    from cyrene.workbench import runtime as routes
 
     data_dir = tmp_path / "data"
     data_dir.mkdir()
@@ -212,7 +212,7 @@ def test_dispatch_acceptance_repair_does_not_return_500(monkeypatch, tmp_path):
     monkeypatch.setattr(routes, "append_notification", lambda **_kwargs: {})
 
     app = FastAPI()
-    routes.register_routes(app, bot=None, db_path=str(tmp_path / "test.db"))
+    register_routes(app, bot=None, db_path=str(tmp_path / "test.db"))
     client = TestClient(app)
 
     resp = client.post(
@@ -223,3 +223,73 @@ def test_dispatch_acceptance_repair_does_not_return_500(monkeypatch, tmp_path):
     assert resp.json()["replyKind"] == "repair"
     assert "验收未完全通过" in seen["ephemeral"]
     assert "PDF 缺少目录" in seen["ephemeral"]
+
+
+def test_task_dispatch_persists_selected_model_and_reasoning_effort(
+    monkeypatch, tmp_path
+):
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+    from cyrene.model_runtime import client as model_client
+    from cyrene.runtime import settings_store
+    from cyrene.workbench import runtime as routes
+
+    data_dir = tmp_path / "data"
+    data_dir.mkdir()
+    store_path = data_dir / "workbench_projects.json"
+    _seed_store(store_path, tmp_path)
+    selected = {
+        "id": "codex-spark",
+        "provider": "codex_oauth",
+        "model": "gpt-5.3-codex-spark",
+    }
+    seen = {}
+
+    async def fake_classify(_text, _session):
+        return "answer"
+
+    async def fake_reply(*_args, **_kwargs):
+        return "已使用所选模型。"
+
+    def fake_set_preference(session_id, candidate, reasoning_effort):
+        seen.update(
+            session_id=session_id,
+            candidate=candidate,
+            reasoning_effort=reasoning_effort,
+        )
+
+    monkeypatch.setattr(routes, "DATA_DIR", data_dir)
+    monkeypatch.setattr(routes, "_WORKBENCH_STORE", store_path)
+    monkeypatch.setattr(routes, "_workbench_classify_intent", fake_classify)
+    monkeypatch.setattr(routes, "_workbench_agent_reply", fake_reply)
+    monkeypatch.setattr(routes, "schedule_capture", lambda *_a, **_k: None)
+    monkeypatch.setattr(routes, "append_notification", lambda **_kwargs: {})
+    monkeypatch.setattr(settings_store, "get_models", lambda: [selected])
+    monkeypatch.setattr(
+        model_client,
+        "set_session_model_preference",
+        fake_set_preference,
+    )
+
+    app = FastAPI()
+    register_routes(app, bot=None, db_path=str(tmp_path / "test.db"))
+    client = TestClient(app)
+    response = client.post(
+        "/api/task-sessions/session_1/dispatch",
+        json={
+            "input": "当前进展如何？",
+            "model": "codex-spark",
+            "reasoningEffort": "high",
+        },
+    )
+
+    assert response.status_code == 200
+    session = response.json()["session"]
+    assert session["modelSelectionId"] == "codex-spark"
+    assert session["model"] == "gpt-5.3-codex-spark"
+    assert session["reasoningEffort"] == "high"
+    assert seen == {
+        "session_id": "session_1",
+        "candidate": selected,
+        "reasoning_effort": "high",
+    }

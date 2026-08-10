@@ -10,10 +10,16 @@
 
 from __future__ import annotations
 
-import json
 import logging
 from typing import Any
 from uuid import uuid4
+
+from cyrene.model_runtime.messages import parse_tool_arguments
+from cyrene.agent.context import (
+    active_workspace_dir,
+    current_session_id,
+    publish_runtime_event as _publish_runtime_event,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -158,15 +164,17 @@ async def generate_plan(
         if str(tc.get("function", {}).get("name") or "").strip() != "submit_plan":
             continue
         try:
-            args = json.loads(tc.get("function", {}).get("arguments") or "{}")
+            args = parse_tool_arguments(
+                tc.get("function", {}).get("arguments")
+            )
         except Exception:
             args = {}
         plan = _normalize_plan(args)
         if plan["steps"]:
             return plan
     # 降级：未给出结构化计划
-    from cyrene.llm import _assistant_text
-    text = str(_assistant_text(response) or "").strip()
+    from cyrene.model_runtime.messages import assistant_text
+    text = str(assistant_text(response) or "").strip()
     return {"title": "执行计划", "summary": text[:400], "steps": []}
 
 
@@ -182,14 +190,12 @@ async def run_plan_flow(
     modification: str = "",
 ) -> str:
     """生成计划 → 推送「计划」tab 事件 → ask_user 三选项 → 返回 awaiting_user。"""
-    import cyrene.agent.state as _state
-    from cyrene.agent.state import _publish_runtime_event
     from cyrene.agent.session import (
         _append_session_message,
         _upsert_pending_question,
         get_session_labels,
     )
-    from cyrene.tool_legacy import _json_result
+    from cyrene.tooling.runtime_api import json_result
 
     # 1. 持久化用户可见消息（新轮：原请求；修改：本次修改意见），让聊天里能看到
     if persist_user_message:
@@ -226,11 +232,10 @@ async def run_plan_flow(
     # 3. Persist the plan on the Workbench chat and as workspace/plan/*.md.
     # Lazy import keeps the agent package usable without the web UI server.
     try:
-        from cyrene.agent.state import _current_session_id, active_workspace_dir
-        from webui.routes_workbench_chat import persist_chat_plan
+        from cyrene.workbench.chat import persist_chat_plan
 
         plan = persist_chat_plan(
-            str(_current_session_id.get() or ""),
+            current_session_id(),
             plan,
             round_id=round_id,
             workspace_dir=active_workspace_dir(),
@@ -263,7 +268,7 @@ async def run_plan_flow(
     })
     # 返回 awaiting_user JSON（与 ask_user 一致）：作为工具结果时 agent loop 会暂停；
     # 从 _run_chat_agent 拦截调用时，由 coordinator 归一化为 _AWAITING_USER_SENTINEL。
-    return _json_result({
+    return json_result({
         "status": "awaiting_user",
         "question_id": question.get("id", ""),
         "option_count": len(question.get("options", []) or []),

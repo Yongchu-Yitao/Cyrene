@@ -13,6 +13,8 @@ import importlib
 import importlib.util
 import jinja2
 import multipart
+from pathlib import Path
+import subprocess
 import simplexng
 import sniffio
 import websockets
@@ -22,7 +24,8 @@ from playwright_bundle import find_bundled_browser_dir
 
 def _run_smoke_test() -> None:
     """Verify frozen runtime can import critical dependencies before release."""
-    from cyrene.version import get_version
+    from cyrene.runtime.module_compat import LEGACY_MODULE_ALIASES
+    from cyrene.runtime.version import get_version
 
     modules = {
         "httpx": httpx.__version__,
@@ -39,6 +42,20 @@ def _run_smoke_test() -> None:
         "simplexng": getattr(simplexng, "__version__", "unknown"),
         "multipart": getattr(multipart, "__version__", "unknown"),
     }
+    compatibility_aliases = {
+        **LEGACY_MODULE_ALIASES,
+        "webui.workbench_chat_runs": "cyrene.workbench.chat_runs",
+        "webui.workbench_goal_loop": "cyrene.workbench.goal_loop",
+        "webui.workbench_notifications": "cyrene.workbench.notifications",
+    }
+    for legacy_name, canonical_name in compatibility_aliases.items():
+        legacy_module = importlib.import_module(legacy_name)
+        canonical_module = importlib.import_module(canonical_name)
+        if legacy_module is not canonical_module:
+            raise RuntimeError(
+                f"legacy module alias {legacy_name!r} did not resolve to "
+                f"{canonical_name!r}"
+            )
     # Smoke-test imports for modules with C extensions that are
     # historically fragile in PyInstaller frozen builds.
     _smoke_imports = {
@@ -62,6 +79,40 @@ def _run_smoke_test() -> None:
         print(f"{name}={version}")
     for _name, _ver in _smoke_imports.items():
         print(f"{_name}={_ver}")
+    print(f"legacy_module_aliases={len(compatibility_aliases)}")
+
+    # OAuth model discovery and login depend on the pinned Codex App Server
+    # executable shipped by openai-codex-cli-bin. Importing the Python adapter
+    # alone is insufficient: PyInstaller must also retain the platform binary,
+    # package metadata, and companion PATH tools.
+    from codex_cli_bin import bundled_codex_path
+    from openai_codex import CodexConfig
+
+    codex_path = bundled_codex_path()
+    codex_version = subprocess.run(
+        [str(codex_path), "--version"],
+        check=True,
+        capture_output=True,
+        text=True,
+        timeout=15,
+    ).stdout.strip()
+    if not codex_version:
+        raise RuntimeError(f"Bundled Codex runtime returned no version: {codex_path}")
+    print(f"codex_runtime={codex_version}")
+    print(f"codex_config={CodexConfig.__name__}")
+
+    # simplexng vendors SearXNG under its _vendor tree and injects that path at
+    # import time; verify the frozen copy is complete and importable.
+    try:
+        vendor_dir = Path(simplexng.__file__).parent / "_vendor"
+        if str(vendor_dir) not in sys.path:
+            sys.path.insert(0, str(vendor_dir))
+        import searx  # noqa: F401
+        import searx.network.client  # noqa: F401
+
+        print("searx_runtime=ok")
+    except Exception as exc:
+        print(f"searx_runtime=FAILED: {exc!r}")
 
     import os
 
@@ -125,7 +176,14 @@ if __name__ == "__main__":
     _setup_playwright_browsers_path()
 
     if "--smoke-test" in sys.argv:
-        _run_smoke_test()
+        try:
+            _run_smoke_test()
+        except Exception as _exc:
+            # A frozen app's unhandled exception must not pass CI silently;
+            # PyInstaller's bootloader can swallow the exit code.
+            _write_crash_log(_exc)
+            print(f"SMOKE TEST FAILED: {_exc!r}", file=sys.stderr)
+            raise SystemExit(1)
         raise SystemExit(0)
 
     # In a PyInstaller frozen build, sys.executable is the app binary itself.
@@ -134,7 +192,7 @@ if __name__ == "__main__":
     # These flags let the frozen binary act as a trampoline for bundled modules.
     if "--launch-simplexng" in sys.argv:
         sys.argv.remove("--launch-simplexng")
-        from cyrene.simplexng_child import main as _run_simplexng_child
+        from cyrene.tooling.backends.simplexng_child import main as _run_simplexng_child
         _run_simplexng_child()
         raise SystemExit(0)
 
@@ -144,13 +202,11 @@ if __name__ == "__main__":
             sys.argv.remove("--electron")
             sys.argv.append("--electron-mode")
         else:
-            try:
-                from cyrene._buildinfo import DEFAULT_UI_MODE as _ui_mode
-            except Exception:
-                _ui_mode = "workbench"
-            sys.argv.append("--workbench" if _ui_mode != "legacy" else "--agent")
+            # Historical buildinfo values such as "agent" or "legacy" are
+            # normalized to the sole supported Workbench surface.
+            sys.argv.append("--workbench")
         try:
-            from cyrene.local_cli import main
+            from cyrene.runtime.host import main
             main()
         except Exception as _exc:
             _write_crash_log(_exc)
@@ -161,7 +217,7 @@ if __name__ == "__main__":
         sys.argv.append("--gui")
 
     try:
-        from cyrene.local_cli import main
+        from cyrene.runtime.host import main
         main()
     except Exception as _exc:
         _write_crash_log(_exc)

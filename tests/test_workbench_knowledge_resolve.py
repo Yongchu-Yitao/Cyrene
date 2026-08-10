@@ -19,8 +19,8 @@ import json
 
 import pytest
 
-from webui import routes as R
-from webui import routes_workbench_knowledge as kb
+from cyrene.workbench import runtime as R
+from cyrene.workbench import knowledge as kb
 
 
 @pytest.fixture
@@ -79,7 +79,7 @@ async def test_ensure_kb_db_uses_id_scoped_file_for_default_project(
 # ── resolver: agent write path (session -> knowledge db) ────────────────────
 
 def _point_stores(monkeypatch, tmp_path, projects, chats=None):
-    from cyrene import workbench_context as wc
+    from cyrene.workbench import context as wc
 
     projects_path = tmp_path / "workbench_projects.json"
     projects_path.write_text(json.dumps({"projects": projects}), encoding="utf-8")
@@ -91,7 +91,7 @@ def _point_stores(monkeypatch, tmp_path, projects, chats=None):
 
 
 def test_session_knowledge_key_decouples_default_project(monkeypatch, tmp_path):
-    from cyrene import workbench_context as wc
+    from cyrene.workbench import context as wc
 
     _point_stores(
         monkeypatch,
@@ -109,15 +109,15 @@ def test_session_knowledge_key_decouples_default_project(monkeypatch, tmp_path):
 
 
 def test_session_knowledge_key_falls_back_to_default_when_unattached(monkeypatch, tmp_path):
-    from cyrene import workbench_context as wc
+    from cyrene.workbench import context as wc
 
     _point_stores(monkeypatch, tmp_path, projects=[])
-    # Legacy --agent / unattached sessions keep using the global kb_default.db.
+    # Unattached historical sessions keep using the global kb_default.db.
     assert wc.resolve_project_knowledge_key_for_session("ghost-session") == "default"
 
 
 def test_workbench_session_kind_distinguishes_chat_from_task(monkeypatch, tmp_path):
-    from cyrene import workbench_context as wc
+    from cyrene.workbench import context as wc
 
     _point_stores(
         monkeypatch,
@@ -141,7 +141,7 @@ def test_workbench_session_kind_distinguishes_chat_from_task(monkeypatch, tmp_pa
 @pytest.mark.asyncio
 async def test_migration_lifts_only_attributable_docs(tmp_path, monkeypatch):
     from cyrene import config
-    from cyrene.db import init_knowledge_db
+    from cyrene.runtime.database import init_knowledge_db
     from cyrene.knowledge import store, workbench
 
     monkeypatch.setattr(config, "STORE_DIR", tmp_path / "store")
@@ -199,14 +199,14 @@ async def test_migration_lifts_only_attributable_docs(tmp_path, monkeypatch):
     assert str(catalog_generated.resolve()) not in moved
     assert str(catalog_upload.resolve()) not in moved
 
-    # The shared legacy db is left intact (non-destructive) for the --agent UI.
+    # The shared historical DB remains intact for data/API compatibility.
     assert len(await store.list_documents(source_db, limit=0)) == 4
 
 
 @pytest.mark.asyncio
 async def test_migration_is_idempotent(tmp_path, monkeypatch):
     from cyrene import config
-    from cyrene.db import init_knowledge_db
+    from cyrene.runtime.database import init_knowledge_db
     from cyrene.knowledge import store, workbench
 
     monkeypatch.setattr(config, "STORE_DIR", tmp_path / "store")

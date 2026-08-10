@@ -4,16 +4,16 @@ import asyncio
 import logging
 
 from cyrene.config import (
-    DB_PATH, DATA_DIR, INBOX_DIR, STORE_DIR, TEMP_DIR, WORKSPACE_DIR,
-    SEARXNG_AUTO_START, SEARXNG_HOST, SEARXNG_PORT,
+    DB_PATH,
 )
-from cyrene.app_paths import cleanup_temporary_artifacts
-from cyrene.db import init_db
-from cyrene.inbox import ensure_inbox
-from cyrene.short_term import init_short_term
-from cyrene.soul import ensure_soul
-from cyrene.debug import enable_event_bus
-from cyrene.scheduler import setup_scheduler
+from cyrene.runtime.bootstrap import (
+    initialize_runtime,
+    start_external_services,
+    start_update_check,
+    stop_external_services,
+    stop_runtime_tasks,
+)
+from cyrene.runtime.scheduler import setup_scheduler
 from webui.server import run_web, WebBot
 
 logging.basicConfig(
@@ -24,42 +24,27 @@ logger = logging.getLogger(__name__)
 
 
 async def main() -> None:
-    for d in (WORKSPACE_DIR, STORE_DIR, DATA_DIR, INBOX_DIR, TEMP_DIR):
-        d.mkdir(parents=True, exist_ok=True)
-    cleanup_temporary_artifacts(TEMP_DIR)
-
-    await init_db(str(DB_PATH))
-    ensure_soul()
-    ensure_inbox("cyrene")
-    init_short_term(DATA_DIR)
-    enable_event_bus()
-    from cyrene.pattern import init as _pattern_init
-    await _pattern_init(DATA_DIR, WORKSPACE_DIR)
-
-    if SEARXNG_AUTO_START:
-        from cyrene.searxng_manager import start_searxng
-        try:
-            url = await start_searxng(SEARXNG_PORT, SEARXNG_HOST)
-            logger.info("SearXNG auto-started at %s", url)
-        except Exception as exc:
-            logger.warning("SearXNG auto-start failed: %s", exc)
+    await initialize_runtime(
+        events=True,
+        learning=True,
+        include_temp=True,
+        clean_temp=True,
+    )
+    await start_external_services(mcp=False)
 
     bot = WebBot()
     scheduler = setup_scheduler(bot, str(DB_PATH))
     scheduler.start()
     logger.info("Scheduler started")
 
-    try:
-        from cyrene.updater import background_check
-        update_check_task = asyncio.create_task(background_check())
-    except Exception:
-        update_check_task = None
+    update_check_task = start_update_check()
 
     try:
         await run_web(bot, str(DB_PATH))
     except KeyboardInterrupt:
         logger.info("Shutting down...")
     finally:
+        await stop_runtime_tasks(update_check_task)
         scheduler.shutdown()
 
 
@@ -67,5 +52,4 @@ if __name__ == "__main__":
     try:
         asyncio.run(main())
     finally:
-        from cyrene.searxng_manager import stop_searxng
-        stop_searxng()
+        stop_external_services(mcp=False)

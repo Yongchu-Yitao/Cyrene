@@ -2,7 +2,7 @@ import json
 import subprocess
 from pathlib import Path
 
-from webui.routes_pdf import (
+from route.pdf import (
     _MAX_CONTEXT_CHARS,
     _MAX_CONTEXT_PAGES,
     _MAX_SELECTED_TEXT_CHARS,
@@ -95,11 +95,14 @@ def test_context_planner_can_choose_non_adjacent_reference_pages():
 
 
 def test_pdfjs_inventory_and_agent_selected_context_extraction():
-    setup_path = ROOT / "src" / "webui" / "static" / "app" / "pdfjs" / "pdf-setup.js"
+    runtime_path = ROOT / "src" / "webui" / "frontend" / "platform" / "runtime.jsx"
+    setup_path = ROOT / "src" / "webui" / "frontend" / "shared" / "pdf" / "bridge.jsx"
     script = f"""
 const fs = require('fs');
 const vm = require('vm');
 global.window = global;
+global.pdfjsLib = {{}};
+global.pdfjsViewer = {{}};
 const container = {{ nodeType: 1 }};
 function pageNode(pageNumber) {{
   return {{
@@ -121,7 +124,9 @@ global.document = {{
     toString: () => 'selected passage',
   }}),
 }};
+vm.runInThisContext(fs.readFileSync({json.dumps(str(runtime_path))}, 'utf8'));
 vm.runInThisContext(fs.readFileSync({json.dumps(str(setup_path))}, 'utf8'));
+const pdf = global.CyreneUI.require('pdf');
 const requested = [];
 const viewer = {{
   pdfDocument: {{
@@ -138,8 +143,8 @@ const viewer = {{
   }},
 }};
 (async () => {{
-  const inventory = await global.pdfjsBuildAnalysisInventory(container, viewer, 9);
-  const context = await global.pdfjsExtractAnalysisContext(
+  const inventory = await pdf.buildAnalysisInventory(container, viewer, 9);
+  const context = await pdf.extractAnalysisContext(
     viewer,
     [9, 4, 2],
     inventory,
@@ -168,18 +173,21 @@ const viewer = {{
 
 
 def test_both_pdf_viewers_submit_automatic_context():
-    workbench = (ROOT / "src" / "workbench-webui" / "workbench-chat.jsx").read_text(encoding="utf-8")
-    routes = (ROOT / "src" / "webui" / "routes_pdf.py").read_text(encoding="utf-8")
+    workbench = (ROOT / "src" / "webui" / "frontend" / "workbench-chat.jsx").read_text(encoding="utf-8")
+    routes = (ROOT / "src" / "route" / "pdf.py").read_text(encoding="utf-8")
 
-    assert "window.pdfjsBuildAnalysisInventory(containerRef.current, viewerRef.current, pageNum)" in workbench
-    assert "window.pdfjsExtractAnalysisContext(" in workbench
+    assert "pdf.buildAnalysisInventory(containerRef.current, viewerRef.current, pageNum)" in workbench
+    assert "pdf.extractAnalysisContext(" in workbench
     assert "fetch('/api/pdf/context-plan'" in workbench
     assert "lang: language" in workbench
     assert "wbcRenderMarkdown(analysisResult)" in workbench
     assert 'className="wbc-pdf-analysis"' in workbench
     assert "context: context" in workbench
-    assert "window.pdfjsBuildAnalysisInventory(container, viewer, currentPage)" in routes
-    assert "window.pdfjsExtractAnalysisContext(viewer, plan.page_numbers" in routes
+    assert "pdfBridge.buildAnalysisInventory(container, viewer, currentPage)" in routes
+    assert "pdfBridge.extractAnalysisContext(viewer, plan.page_numbers" in routes
+    assert 'src="/static/app/compiled/platform/runtime.js?v={asset_version}"' in routes
+    assert 'src="/static/app/compiled/shared/pdf/bridge.js?v={asset_version}"' in routes
+    assert "pdfjs/pdf-setup.js" not in routes
     assert "fetch('/api/pdf/context-plan'" in routes
     assert "lang: language" in routes
     assert "context: context" in routes

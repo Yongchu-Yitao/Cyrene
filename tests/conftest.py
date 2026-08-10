@@ -24,15 +24,42 @@ every test so one test can never poison the next.
 """
 
 import asyncio
+import importlib
 import sys
 from pathlib import Path
 
 import pytest
+import PIL as _REAL_PIL
 
 # Tests import ``cyrene`` from the in-repo ``src/`` tree; make sure it is on the
 # path before any cyrene import happens (mirrors the shim at the top of
 # ``tests/test_runtime_fixes.py``).
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
+
+_REAL_PIL_IMAGE = importlib.import_module("PIL.Image")
+
+
+@pytest.fixture
+def real_pillow_modules():
+    """Temporarily undo legacy module-level Pillow shims for image tests."""
+    previous_modules = {name: sys.modules.get(name) for name in ("PIL", "PIL.Image")}
+    previous_image_attr = getattr(_REAL_PIL, "Image", None)
+    sys.modules["PIL"] = _REAL_PIL
+    sys.modules["PIL.Image"] = _REAL_PIL_IMAGE
+    _REAL_PIL.Image = _REAL_PIL_IMAGE
+    from cyrene.tooling import mcp_content
+    previous_mcp_image = mcp_content.Image
+    mcp_content.Image = _REAL_PIL_IMAGE
+    try:
+        yield _REAL_PIL_IMAGE
+    finally:
+        mcp_content.Image = previous_mcp_image
+        _REAL_PIL.Image = previous_image_attr
+        for name, previous in previous_modules.items():
+            if previous is None:
+                sys.modules.pop(name, None)
+            else:
+                sys.modules[name] = previous
 
 
 @pytest.fixture(autouse=True)
@@ -86,6 +113,11 @@ def _reset_agent_global_state():
     _call_llm_mod.set_setting = lambda _key, _value: None
     _call_llm_mod._record_latency_faf = lambda _event: None
 
+    from cyrene.agent import coordinator as _coordinator
+
+    _cancel_pending_tasks(_coordinator._BACKGROUND_BEHAVIOR_TASKS)
+    _coordinator._DEFERRED_BEHAVIOR_TASK = None
+
     # Knowledge indexing has the same shape: routes may spawn detached indexing
     # tasks, and a closed per-test event loop can otherwise leave the module lock
     # stale-locked for a later test.
@@ -127,6 +159,6 @@ def pytest_runtest_call(item):
     if loop.is_closed() or loop.is_running():
         return
 
-    from cyrene.runtime_lifecycle import shutdown_background_work
+    from cyrene.runtime.lifecycle import shutdown_background_work
 
     loop.run_until_complete(shutdown_background_work())

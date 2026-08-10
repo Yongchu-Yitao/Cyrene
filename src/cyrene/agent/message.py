@@ -4,125 +4,30 @@ Depends on ``state`` (for ContextVars) but not on ``session``, ``guidance``,
 or ``coordinator``.
 """
 
-import json
 import logging
 import re
 from datetime import datetime, timezone
 from typing import Any
-from uuid import uuid4
 
-from cyrene.agent.state import (
-    _current_round_id,
-    _emit_reply_stream_event,
-    _pending_intermediate_user_replies,
-    _ui_round_assistant_meta,
+from cyrene.agent.context import (
+    append_pending_intermediate_reply,
+    current_assistant_meta,
+    current_session_state_lock,
+    emit_reply_stream_event as _emit_reply_stream_event,
+    publish_runtime_event as _publish_runtime_event,
+    take_pending_intermediate_replies,
+)
+from cyrene.agent.message_utils import (
+    dedupe_messages_by_id as _dedupe_messages_by_id,
+    ensure_message_identity as _ensure_message_identity,
+    extract_json_object as _extract_json_object,
+    fallback_label as _fallback_label,
+    is_replaceable_live_message as _is_replaceable_live_message,
+    merge_message_sequence as _merge_message_sequence,
+    message_suffix_after_persisted_prefix as _message_suffix_after_persisted_prefix,
 )
 
 logger = logging.getLogger(__name__)
-
-
-# ---------------------------------------------------------------------------
-# Message identity and dedup
-# ---------------------------------------------------------------------------
-
-def _ensure_message_identity(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    for message in messages:
-        if not isinstance(message, dict):
-            continue
-        if not str(message.get("message_id", "")).strip():
-            message["message_id"] = f"msg_{uuid4().hex}"
-    return messages
-
-
-def _dedupe_messages_by_id(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    """Keep message order while preferring the latest version for each message_id."""
-    deduped: list[dict[str, Any]] = []
-    seen_index: dict[str, int] = {}
-    for message in messages:
-        if not isinstance(message, dict):
-            continue
-        message_id = str(message.get("message_id", "")).strip()
-        if message_id and message_id in seen_index:
-            deduped[seen_index[message_id]] = message
-            continue
-        if message_id:
-            seen_index[message_id] = len(deduped)
-        deduped.append(message)
-    return deduped
-
-
-def _merge_message_sequence(existing: list[dict[str, Any]], incoming: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    """Merge two persisted message sequences without regressing newer entries."""
-    incoming_by_id = {
-        str(message.get("message_id", "")).strip(): message
-        for message in incoming
-        if isinstance(message, dict) and str(message.get("message_id", "")).strip()
-    }
-
-    merged: list[dict[str, Any]] = []
-    seen_ids: set[str] = set()
-    for message in existing:
-        if not isinstance(message, dict):
-            continue
-        message_id = str(message.get("message_id", "")).strip()
-        if message_id and message_id in incoming_by_id:
-            merged.append(incoming_by_id[message_id])
-            seen_ids.add(message_id)
-            continue
-        merged.append(message)
-        if message_id:
-            seen_ids.add(message_id)
-
-    for message in incoming:
-        if not isinstance(message, dict):
-            continue
-        message_id = str(message.get("message_id", "")).strip()
-        if message_id and message_id in seen_ids:
-            continue
-        merged.append(message)
-        if message_id:
-            seen_ids.add(message_id)
-
-    return _dedupe_messages_by_id(merged)
-
-
-# ---------------------------------------------------------------------------
-# Persisted-prefix helpers
-# ---------------------------------------------------------------------------
-
-def _message_suffix_after_persisted_prefix(
-    messages: list[dict[str, Any]],
-    base_messages: list[dict[str, Any]],
-    fallback_prefix_len: int,
-) -> list[dict[str, Any]]:
-    """Return newly produced messages after the persisted history prefix."""
-    base_ids = {
-        str(message.get("message_id", "")).strip()
-        for message in base_messages
-        if isinstance(message, dict) and str(message.get("message_id", "")).strip()
-    }
-    if base_ids:
-        index = 0
-        while index < len(messages):
-            message = messages[index]
-            message_id = str(message.get("message_id", "")).strip() if isinstance(message, dict) else ""
-            if not message_id or message_id not in base_ids:
-                break
-            index += 1
-        if index > 0:
-            return messages[index:]
-
-    prefix_len = max(0, min(fallback_prefix_len, len(messages)))
-    return messages[prefix_len:]
-
-
-def _is_replaceable_live_message(entry: dict[str, Any], round_id: str) -> bool:
-    """Return True for persisted messages that belong to the active live run."""
-    if not round_id:
-        return False
-    if str(entry.get("round_id", "")).strip() != round_id:
-        return False
-    return not str(entry.get("queued_guidance_id", "")).strip()
 
 
 # ---------------------------------------------------------------------------
@@ -130,7 +35,7 @@ def _is_replaceable_live_message(entry: dict[str, Any], round_id: str) -> bool:
 # ---------------------------------------------------------------------------
 
 def _flush_intermediate_user_replies(messages: list[dict[str, Any]]) -> None:
-    pending = _pending_intermediate_user_replies.get()
+    pending = take_pending_intermediate_replies()
     if not pending:
         return
     existing_ids = {str(m.get("message_id", "")).strip() for m in messages if isinstance(m, dict)}
@@ -142,7 +47,6 @@ def _flush_intermediate_user_replies(messages: list[dict[str, Any]]) -> None:
         messages.append(dict(entry))
         if mid:
             existing_ids.add(mid)
-    pending.clear()
 
 
 async def _insert_intermediate_user_reply(
@@ -172,14 +76,11 @@ async def _insert_intermediate_user_reply(
 
     _ensure_message_identity([assistant_entry])
 
-    pending = _pending_intermediate_user_replies.get()
-    if pending is not None:
-        pending.append(dict(assistant_entry))
+    append_pending_intermediate_reply(assistant_entry)
 
     from cyrene.agent.session import _load_session_state, _write_session_messages_locked
-    from cyrene.agent.state import _ensure_session, _current_session_id, _publish_runtime_event
 
-    async with _ensure_session(_current_session_id.get()).session_state_lock:
+    async with current_session_state_lock():
         state = _load_session_state()
         existing = state.get("messages", [])
         full_messages = list(existing) if isinstance(existing, list) else []
@@ -211,6 +112,21 @@ async def _insert_intermediate_user_reply(
     return assistant_entry
 
 
+async def insert_intermediate_user_reply(
+    content: str,
+    round_id: str,
+    client_request_id: str = "",
+    attachments: list[dict[str, Any]] | None = None,
+) -> dict[str, Any]:
+    """Public delivery boundary for user-visible intermediate replies."""
+    return await _insert_intermediate_user_reply(
+        content,
+        round_id,
+        client_request_id,
+        attachments,
+    )
+
+
 # ---------------------------------------------------------------------------
 # Entry builders
 # ---------------------------------------------------------------------------
@@ -229,7 +145,7 @@ def _assistant_entry_from_response(response: dict[str, Any], round_id: str, incl
         entry["usage"] = response["usage"]
     if round_id:
         entry["round_id"] = round_id
-    extra_meta = _ui_round_assistant_meta.get()
+    extra_meta = current_assistant_meta()
     if extra_meta:
         entry.update(extra_meta)
     return entry
@@ -237,38 +153,10 @@ def _assistant_entry_from_response(response: dict[str, Any], round_id: str, incl
 
 def _apply_assistant_meta(entry: dict[str, Any]) -> dict[str, Any]:
     entry.setdefault("created_at", datetime.now(timezone.utc).isoformat())
-    extra_meta = _ui_round_assistant_meta.get()
+    extra_meta = current_assistant_meta()
     if extra_meta:
         entry.update(extra_meta)
     return entry
-
-
-# ---------------------------------------------------------------------------
-# Label / fallback helpers
-# ---------------------------------------------------------------------------
-
-def _fallback_label(text: str, limit: int = 48) -> str:
-    compact = re.sub(r"\s+", " ", str(text or "")).strip().strip("[](){}<>\"'`，。！？；：,.;!?")
-    return compact[:limit] or "Untitled"
-
-
-def _extract_json_object(text: str) -> dict[str, Any]:
-    source = str(text or "").strip()
-    if not source:
-        return {}
-    try:
-        data = json.loads(source)
-        return data if isinstance(data, dict) else {}
-    except Exception:
-        pass
-    match = re.search(r"\{.*\}", source, re.DOTALL)
-    if not match:
-        return {}
-    try:
-        data = json.loads(match.group(0))
-        return data if isinstance(data, dict) else {}
-    except Exception:
-        return {}
 
 
 def _tool_result_requests_user_input(result: str) -> bool:

@@ -1,5 +1,5 @@
-from cyrene.workbench_store import read_document, write_document
-from cyrene.workbench_task_context import (
+from cyrene.workbench.store import read_document, write_document
+from cyrene.workbench.task_context import (
     append_shared_outcome,
     build_main_context,
     build_subagent_context,

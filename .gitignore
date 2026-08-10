@@ -17,10 +17,17 @@ workspace/
 store/
 data/
 backups/
+*.sqlite3
+*.sqlite3-shm
+*.sqlite3-wal
 
 # Stray root-level SQLite (runtime DBs live in store/ and data/)
-/db.sqlite3
-/db.sqlite3-*
+db.sqlite3
+db.sqlite3-*
+/*.remote-control
+/*.remote-control-shm
+/*.remote-control-wal
+test.db
 
 # Environment
 .env
@@ -49,6 +56,8 @@ AGENTS.md
 .codex-run
 .pytest_cache
 /.playwright-cli/
+.codex-audit/
+.codex-qa/
 
 # Tests
 tests*
@@ -61,6 +70,13 @@ webpage/
 # Node.js build artifacts (webui JSX precompilation)
 node_modules/
 src/webui/static/app/compiled/
+src/webui/static/app/index.html
+src/webui/static/app/workbench.css
+src/webui/static/app/workbench-library.css
+src/webui/static/app/shared/
+src/webui/static/app/fonts.css
+src/webui/static/app/assets/
+src/webui/static/app/electron/
 
 # Transient agent/test output written to the repo root
 /animations/
@@ -77,9 +93,4 @@ gaia_*.json
 # Scripts and tools
 scripts/
 finetune/
-docs/research-workbench-report/artifact.json
-.gitignore
-.gitignore
-docs/research-workbench-report/research-workbench-report.html
-.gitignore
-docs/research-workbench-roadmap.md
+design-qa.md

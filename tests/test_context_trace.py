@@ -1,4 +1,4 @@
-from cyrene.context_trace import (
+from cyrene.observability.context_trace import (
     attach_context,
     context_block,
     strip_context_metadata,

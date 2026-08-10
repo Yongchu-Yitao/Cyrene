@@ -33,15 +33,6 @@ if _static_dir.is_dir():
             dest = str(f.relative_to(_SRC).parent)
             _datas.append((str(f), dest))
 
-# workbench-webui static files (CSS served via /static/workbench-ui/ route)
-# .jsx source files are excluded — they compile to webui/static/app/compiled/*.js
-_workbench_ui_dir = _SRC / "workbench-webui"
-if _workbench_ui_dir.is_dir():
-    for f in _workbench_ui_dir.rglob("*"):
-        if f.is_file() and "__pycache__" not in f.parts and f.suffix != ".jsx":
-            dest = str(f.relative_to(_SRC).parent)
-            _datas.append((str(f), dest))
-
 # .env 模板（打包模式首次启动时复制到用户数据目录）
 _env_tpl = _PROJECT_ROOT / ".env.example"
 if _env_tpl.exists():
@@ -53,7 +44,7 @@ if _pyproject.exists():
     _datas.append((str(_pyproject), "."))
 
 # ---- 本地包模块自动枚举 ----
-# cyrene/webui 大量使用 importlib.import_module() 动态加载（tool_impl、agent
+# cyrene/webui/route 大量使用 importlib.import_module() 动态加载（tool_impl、agent
 # 子包等），PyInstaller 静态分析无法追踪。直接扫描 src/ 下所有 .py 文件生成
 # 完整列表，避免手动维护漏项。
 def _enumerate_local_package(src: Path, pkg: str) -> list:
@@ -75,6 +66,7 @@ def _enumerate_local_package(src: Path, pkg: str) -> list:
 _hidden = (
     _enumerate_local_package(_SRC, "cyrene")
     + _enumerate_local_package(_SRC, "webui")
+    + _enumerate_local_package(_SRC, "route")
 )
 _hidden += [
     "jinja2", "jinja2.ext",
@@ -84,10 +76,14 @@ _hidden += [
     "fastapi", "pydantic", "pydantic_core", "pydantic_core._pydantic_core",
     "starlette", "typing_extensions", "annotated_types",
     "dotenv", "telegram", "mcp", "httpx_sse", "sse_starlette", "requests",
-    "packaging", "pypdf", "reportlab", "PIL",
+    "packaging", "pypdf", "pypdfium2", "reportlab", "PIL",
+    "numpy", "onnxruntime", "rapidocr", "tokenizers",
     # simplexng runtime deps (vendored searx pulls these in transitively;
     # listed explicitly so PyInstaller collects compiled extensions correctly)
-    "waitress", "flask", "brotli", "lxml", "msgspec", "fasttext_predict",
+    "waitress", "flask", "brotli", "lxml", "msgspec",
+    # fasttext-predict installs the module as `fasttext` (with the
+    # fasttext_pybind extension); the dist-info name is not importable.
+    "fasttext",
     # PIL C extensions — listed explicitly in case collect_all("PIL")
     # fails silently on some platforms
     "PIL._imaging",
@@ -144,11 +140,6 @@ for _package in (
     "typing_extensions",
     "annotated_types",
     "dotenv",
-    # keyring's OS backends are loaded via entry-points, which PyInstaller's
-    # static analysis can't see. collect_all + copy_metadata (in _collect_package)
-    # bundle them so the frozen app uses the OS keychain instead of silently
-    # degrading to a plaintext .config_key (see config_store._get_fernet).
-    "keyring",
     "telegram",
     "mcp",
     "httpx_sse",
@@ -156,15 +147,22 @@ for _package in (
     "requests",
     "packaging",
     "pypdf",
+    "pypdfium2",
     "reportlab",
     "PIL",
+    "numpy",
+    "onnxruntime",
+    "rapidocr",
+    "tokenizers",
+    "openai_codex",
+    "codex_cli_bin",
     # simplexng runtime deps
     "waitress",
     "flask",
     "brotli",
     "lxml",
     "msgspec",
-    "fasttext_predict",
+    "fasttext",
 ):
     _collect_package(_package)
 
@@ -176,6 +174,18 @@ if _BUNDLE_PLAYWRIGHT:
 
 if _IS_WIN:
     _collect_package("winloop")
+
+# The Codex OAuth runtime is required at startup of the model settings page;
+# a build environment missing it must fail the build, not ship a broken app.
+for _critical in ("openai_codex", "codex_cli_bin"):
+    if not any(
+        _mod == _critical or _mod.startswith(_critical + ".")
+        for _mod in _hidden
+    ):
+        raise SystemExit(
+            f"[fatal] PyInstaller could not collect required package {_critical!r}; "
+            "aborting build (is it installed in the build environment?)"
+        )
 
 _datas = list(dict.fromkeys(_datas))
 _binaries = list(dict.fromkeys(_binaries))

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import json
 
-from webui import workbench_notifications as notifications
+from cyrene.workbench import notifications as notifications
 
 
 def test_visible_session_notification_is_not_returned_or_counted(tmp_path, monkeypatch) -> None:

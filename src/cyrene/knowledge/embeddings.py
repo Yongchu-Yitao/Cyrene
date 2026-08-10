@@ -8,7 +8,17 @@ import math
 import os
 from array import array
 
-import httpx
+from cyrene.knowledge.embedding_client import embed_texts_with_config
+
+
+def _persisted() -> dict:
+    """Read the current encrypted runtime settings without caching secrets."""
+    try:
+        from cyrene.runtime.integration_settings import get_embedding_settings
+
+        return get_embedding_settings()
+    except Exception:
+        return {}
 
 
 def _base_url() -> str:
@@ -16,6 +26,10 @@ def _base_url() -> str:
     env_val = os.environ.get("EMBEDDING_BASE_URL", "").strip()
     if env_val:
         return env_val
+
+    persisted = str(_persisted().get("base_url") or "").strip()
+    if persisted:
+        return persisted
 
     try:
         from cyrene import config
@@ -31,6 +45,10 @@ def _api_key() -> str:
     if env_val:
         return env_val
 
+    persisted = str(_persisted().get("api_key") or "").strip()
+    if persisted:
+        return persisted
+
     try:
         from cyrene import config
 
@@ -45,6 +63,10 @@ def _model() -> str:
     if env_val:
         return env_val
 
+    persisted = str(_persisted().get("model") or "").strip()
+    if persisted:
+        return persisted
+
     try:
         from cyrene import config
 
@@ -55,10 +77,21 @@ def _model() -> str:
 
 def is_configured() -> bool:
     """Check if all embedding configuration is present."""
-    return bool(_base_url() and _api_key() and _model())
+    persisted = _persisted()
+    provider = str(os.environ.get("EMBEDDING_PROVIDER") or persisted.get("provider") or "openai_compatible")
+    return bool(_model() and (provider == "local_onnx" or _base_url()))
 
 
-async def embed_texts(texts: list[str]) -> list[list[float]]:
+def current_identity() -> tuple[str, int]:
+    persisted = _persisted()
+    model = _model()
+    dimensions = int(os.environ.get("EMBEDDING_DIMENSIONS") or persisted.get("dimensions") or 0)
+    if str(persisted.get("provider") or "") == "local_onnx" and not dimensions:
+        dimensions = 1024
+    return model, dimensions
+
+
+async def embed_texts(texts: list[str], *, input_type: str = "document") -> list[list[float]]:
     """Embed a list of texts using the configured embedding API.
 
     Raises an exception if embeddings are not configured or the API call fails.
@@ -66,43 +99,16 @@ async def embed_texts(texts: list[str]) -> list[list[float]]:
     if not is_configured():
         raise RuntimeError("Embeddings not configured")
 
-    base_url = _base_url()
-    api_key = _api_key()
-    model = _model()
-
-    payload = {
-        "model": model,
-        "input": texts,
+    persisted = _persisted()
+    config = {
+        "provider": str(os.environ.get("EMBEDDING_PROVIDER") or persisted.get("provider") or "openai_compatible"),
+        "base_url": _base_url(),
+        "api_key": _api_key(),
+        "model": _model(),
+        "dimensions": int(os.environ.get("EMBEDDING_DIMENSIONS") or persisted.get("dimensions") or 0),
+        "input_type": input_type,
     }
-
-    headers = {
-        "Authorization": f"Bearer {api_key}",
-        "Content-Type": "application/json",
-    }
-
-    async with httpx.AsyncClient() as client:
-        response = await client.post(
-            f"{base_url}/embeddings",
-            json=payload,
-            headers=headers,
-            timeout=60.0,
-        )
-        response.raise_for_status()
-        data = response.json()
-
-    # Parse embeddings from response
-    embeddings = []
-    for item in data.get("data", []):
-        embedding = item.get("embedding")
-        if isinstance(embedding, list):
-            embeddings.append(embedding)
-
-    if len(embeddings) != len(texts):
-        raise RuntimeError(
-            f"Expected {len(texts)} embeddings, got {len(embeddings)}"
-        )
-
-    return embeddings
+    return await embed_texts_with_config(texts, config)
 
 
 def pack_vector(vec: list[float] | array) -> bytes:

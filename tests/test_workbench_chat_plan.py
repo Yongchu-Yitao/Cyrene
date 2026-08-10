@@ -4,8 +4,8 @@ import pytest
 
 
 def test_chat_plan_persists_markdown_and_tracks_step_progress(monkeypatch, tmp_path):
-    from cyrene.io_utils import atomic_write_json
-    from webui import routes_workbench_chat as chat_routes
+    from cyrene.runtime.io import atomic_write_json
+    from cyrene.workbench import chat as chat_routes
 
     store_path = tmp_path / "workbench_chats.json"
     atomic_write_json(store_path, {
@@ -60,8 +60,29 @@ def test_chat_plan_persists_markdown_and_tracks_step_progress(monkeypatch, tmp_p
     assert "activePlan" not in chat_routes._public_chat_full(stored)
 
 
+def test_plan_markdown_path_rebases_after_portable_restore(monkeypatch, tmp_path):
+    from cyrene.workbench import chat
+
+    current_workspace = tmp_path / "current" / "workspace"
+    monkeypatch.setattr(chat, "WORKSPACE_DIR", current_workspace)
+
+    old_path = (
+        "/Users/old/Library/Application Support/Cyrene/"
+        "workspace/projects/project_demo/plan/plan_demo.md"
+    )
+    resolved = chat._resolve_managed_plan_path(old_path)
+
+    assert resolved == (
+        current_workspace
+        / "projects"
+        / "project_demo"
+        / "plan"
+        / "plan_demo.md"
+    )
+
+
 def test_workbench_plan_progress_tool_is_main_only():
-    from cyrene.registry_tools import AGENT_TOOL_GROUPS, get_tool_names
+    from cyrene.tooling.catalog import AGENT_TOOL_GROUPS, get_tool_names
 
     assert "update_plan_progress" in get_tool_names()
     assert "update_plan_progress" in AGENT_TOOL_GROUPS["subagent_blocklist"]
@@ -114,7 +135,7 @@ async def test_generate_plan_includes_pre_plan_tool_history(monkeypatch):
 @pytest.mark.asyncio
 async def test_plan_confirmation_can_resume_with_auto_mode(monkeypatch):
     from cyrene.agent import coordinator, guidance, state
-    from webui import routes_workbench_chat
+    from cyrene.workbench import chat as routes_workbench_chat
 
     seen = {}
 

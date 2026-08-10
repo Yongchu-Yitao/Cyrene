@@ -1,6 +1,6 @@
 import os
 
-from cyrene.app_paths import cleanup_temporary_artifacts, resolve_app_paths
+from cyrene.runtime.paths import cleanup_temporary_artifacts, resolve_app_paths
 
 
 def test_packaged_macos_paths_are_separated():

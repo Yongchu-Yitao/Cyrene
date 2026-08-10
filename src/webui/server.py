@@ -12,12 +12,11 @@ from fastapi import FastAPI
 from fastapi.staticfiles import StaticFiles
 
 from cyrene.config import WEB_PORT
-from cyrene.task_lifecycle import cancel_and_wait
+from cyrene.runtime.task_lifecycle import cancel_and_wait
 
 logger = logging.getLogger(__name__)
 
 _STATIC_DIR = Path(__file__).parent / "static"
-_WORKBENCH_UI_DIR = Path(__file__).parent.parent / "workbench-webui"
 
 
 class WebBot:
@@ -45,13 +44,14 @@ class WebBot:
 
 def create_app(bot: Any, db_path: str, instance_id: str = "", ui_mode: str = "workbench") -> FastAPI:
     from cyrene.channels.wechat import setup_wechat as _setup_wechat
-    from webui.routes import register_routes
+    from route.registry import register_routes
 
     from webui.auth import LocalAuthMiddleware
 
     @asynccontextmanager
     async def _lifespan(_app: FastAPI):
         await _start_workbench_chat_runs()
+        await _start_remote_control()
         await _start_wechat()
         await _migrate_knowledge_db()
         await _sync_knowledge_catalog()
@@ -64,18 +64,15 @@ def create_app(bot: Any, db_path: str, instance_id: str = "", ui_mode: str = "wo
     app = FastAPI(title="Cyrene", lifespan=_lifespan)
     app.add_middleware(LocalAuthMiddleware)
     app.state.instance_id = instance_id
-    app.state.ui_mode = ui_mode
-    app.mount("/static/workbench-ui", StaticFiles(directory=str(_WORKBENCH_UI_DIR)), name="workbench-ui")
+    # ``ui_mode`` remains in the Python call signature for historical callers,
+    # but Workbench is now the only served UI.
+    app.state.ui_mode = "workbench"
     app.mount("/static", StaticFiles(directory=str(_STATIC_DIR)), name="static")
-
-    @app.get("/api/instance-id")
-    async def api_instance_id() -> dict[str, str]:
-        return {"instance_id": str(app.state.instance_id or "")}
 
     register_routes(app, bot, db_path)
 
     async def _start_workbench_chat_runs() -> None:
-        from webui.routes_workbench_chat import startup_chat_runs
+        from cyrene.workbench.chat import startup_chat_runs
 
         startup_chat_runs()
         manager = getattr(app.state, "goal_loop_manager", None)
@@ -87,6 +84,15 @@ def create_app(bot: Any, db_path: str, instance_id: str = "", ui_mode: str = "wo
             await _setup_wechat(app, db_path)
         except Exception:
             logger.warning("WeChat bot setup failed — check your config / proxy setup")
+
+    async def _start_remote_control() -> None:
+        runtime = getattr(app.state, "remote_control_runtime", None)
+        if runtime is None:
+            return
+        try:
+            await runtime.start()
+        except Exception:
+            logger.warning("Remote-control gateway startup failed", exc_info=True)
 
     async def _migrate_knowledge_db() -> None:
         try:
@@ -100,7 +106,7 @@ def create_app(bot: Any, db_path: str, instance_id: str = "", ui_mode: str = "wo
     async def _sync_knowledge_catalog() -> None:
         try:
             from cyrene.config import get_knowledge_db_path
-            from cyrene.db import init_knowledge_db
+            from cyrene.runtime.database import init_knowledge_db
             from cyrene.knowledge import store, ingest
             _kb_db_path = str(get_knowledge_db_path())
             await init_knowledge_db(_kb_db_path)
@@ -142,6 +148,16 @@ def create_app(bot: Any, db_path: str, instance_id: str = "", ui_mode: str = "wo
         app.state._decouple_task = asyncio.create_task(_run())
 
     async def _close_browser_session() -> None:
+        remote_runtime = getattr(app.state, "remote_control_runtime", None)
+        if remote_runtime is not None:
+            try:
+                await remote_runtime.stop()
+            except Exception:
+                logger.warning(
+                    "Remote-control gateway shutdown failed",
+                    exc_info=True,
+                )
+
         manager = getattr(app.state, "goal_loop_manager", None)
         if manager is not None:
             try:
@@ -150,7 +166,7 @@ def create_app(bot: Any, db_path: str, instance_id: str = "", ui_mode: str = "wo
                 logger.warning("Goal-loop shutdown failed", exc_info=True)
 
         try:
-            from webui.routes_workbench_chat import shutdown_chat_runs
+            from cyrene.workbench.chat import shutdown_chat_runs
 
             await shutdown_chat_runs()
         except Exception:
@@ -189,7 +205,7 @@ def create_app(bot: Any, db_path: str, instance_id: str = "", ui_mode: str = "wo
         # Cancel and await all agent/telemetry/indexing work while the event loop
         # and SQLite worker threads are still alive.
         try:
-            from cyrene.runtime_lifecycle import shutdown_background_work
+            from cyrene.runtime.lifecycle import shutdown_background_work
 
             await shutdown_background_work()
         except Exception:

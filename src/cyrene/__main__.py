@@ -16,13 +16,13 @@ def _print_help() -> None:
 Cyrene runtime entry point.
 
 modes:
-  --workbench       Start the Workbench web UI
-  --agent           Start the legacy agent web UI
+  (default)         Start the Workbench web UI
+  --workbench       Start the Workbench web UI (compatibility alias)
   --gui              Start the native GUI wrapper
-  --telegram         Start the Telegram bot (also the legacy no-argument mode)
+  --telegram         Start the Telegram bot
 
 options:
-  --port PORT        Web server port (Workbench/agent modes)
+  --port PORT        Workbench web server port
   --verbose, -v      Enable verbose diagnostics
   -h, --help         Show this help without initializing the runtime
 
@@ -38,66 +38,23 @@ async def _prepare_runtime() -> None:
         DATA_DIR,
         DB_PATH,
         INBOX_DIR,
-        SEARXNG_AUTO_START,
-        SEARXNG_HOST,
-        SEARXNG_PORT,
         SOUL_PATH,
-        STORE_DIR,
-        WORKSPACE_DIR,
     )
-    from cyrene.db import init_db
-    from cyrene.inbox import ensure_inbox
-    from cyrene.short_term import init_short_term
-    from cyrene.soul import ensure_soul
+    from cyrene.runtime.bootstrap import initialize_runtime, start_external_services
 
-    # 创建目录
-    for d in (WORKSPACE_DIR, STORE_DIR, DATA_DIR, INBOX_DIR):
-        d.mkdir(parents=True, exist_ok=True)
-
-    # 初始化数据库
-    await init_db(str(DB_PATH))
+    await initialize_runtime(learning=True)
     logger.info("Database initialized at %s", DB_PATH)
-
-    # 创建 SOUL.md（如果不存在）
-    ensure_soul()
     logger.info("SOUL.md ready at %s", SOUL_PATH)
-
-    # 创建默认 inbox
-    ensure_inbox("cyrene")
     logger.info("Inbox ready at %s", INBOX_DIR)
-
-    # 初始化短期记忆
-    init_short_term(DATA_DIR)
     logger.info("Short-term memory initialized at %s", DATA_DIR / "short_term.json")
-
-    # 初始化 Pattern 模块（动作追踪 + 脚本学习）
-    from cyrene.pattern import init as _pattern_init
-    await _pattern_init(DATA_DIR, WORKSPACE_DIR)
-    logger.info("Pattern module initialized")
-
-    # 自动启动 SearXNG
-    if SEARXNG_AUTO_START:
-        from cyrene.searxng_manager import start_searxng
-        try:
-            url = await start_searxng(SEARXNG_PORT, SEARXNG_HOST)
-            logger.info("SearXNG auto-started at %s", url)
-        except Exception as exc:
-            logger.warning("SearXNG auto-start failed: %s", exc)
-
-    # Start MCP servers
-    from cyrene.mcp_manager import start_mcp as _start_mcp
-    try:
-        await _start_mcp()
-        logger.info("MCP manager started")
-    except Exception as exc:
-        logger.warning("MCP manager start failed: %s", exc)
+    await start_external_services()
 
     # 人格设置检测（Telegram 模式跳过交互，提示用户先运行 CLI）
-    from cyrene.setup import init_setup_flag, is_setup_done
+    from cyrene.runtime.setup import init_setup_flag, is_setup_done
     init_setup_flag()
     if not is_setup_done():
         logger.warning("首次启动检测到未设置人格。请先运行 CLI 模式完成设置：")
-        logger.warning("  python -m cyrene.local_cli")
+        logger.warning("  python -m cyrene.runtime.host")
 
 
 def _run_bot() -> None:
@@ -115,24 +72,19 @@ def main() -> None:
     if "--help" in sys.argv or "-h" in sys.argv:
         _print_help()
         return
-    if "--workbench" in sys.argv:
-        _runtime_started = True
-        from cyrene.local_cli import _run_web_mode
-        _run_web_mode(ui_mode="workbench")
-        return
-    if "--agent" in sys.argv:
-        _runtime_started = True
-        from cyrene.local_cli import _run_web_mode
-        _run_web_mode(ui_mode="legacy")
-        return
     if "--gui" in sys.argv or "--electron-mode" in sys.argv:
         _runtime_started = True
-        from cyrene.local_cli import main as _local_main
+        from cyrene.runtime.host import main as _local_main
         _local_main()
         return
+    if "--telegram" in sys.argv:
+        _runtime_started = True
+        asyncio.run(_prepare_runtime())
+        _run_bot()
+        return
     _runtime_started = True
-    asyncio.run(_prepare_runtime())
-    _run_bot()
+    from cyrene.runtime.host import run_web_mode
+    run_web_mode(ui_mode="workbench")
 
 
 if __name__ == "__main__":
@@ -144,7 +96,6 @@ if __name__ == "__main__":
         logger.exception("Fatal error")
     finally:
         if _runtime_started:
-            from cyrene.searxng_manager import stop_searxng
-            stop_searxng()
-            from cyrene.mcp_manager import stop_mcp as _stop_mcp
-            _stop_mcp()
+            from cyrene.runtime.bootstrap import stop_external_services
+
+            stop_external_services()

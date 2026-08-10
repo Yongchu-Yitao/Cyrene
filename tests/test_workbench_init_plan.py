@@ -7,9 +7,11 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 
+from route.registry import register_routes
+
 
 def test_workbench_init_task_plan_normalizes_llm_payload():
-    from webui.routes import _workbench_coerce_init_task_plan
+    from cyrene.workbench.runtime import _workbench_coerce_init_task_plan
 
     fallback = [{"title": "fallback", "goal": "fallback", "priority": "medium"}]
     plan = _workbench_coerce_init_task_plan(
@@ -38,7 +40,7 @@ def test_workbench_init_task_plan_normalizes_llm_payload():
 
 
 def test_workbench_init_tool_creates_task_sessions_from_major_plan():
-    from webui.routes import _workbench_create_sessions_from_init_plan
+    from cyrene.workbench.runtime import _workbench_create_sessions_from_init_plan
 
     project = {"id": "project_1", "sessions": [{"id": "init_1", "kind": "init"}]}
     created = _workbench_create_sessions_from_init_plan(
@@ -68,7 +70,7 @@ def test_workbench_init_tool_creates_task_sessions_from_major_plan():
 
 
 def test_workbench_follow_up_seed_uses_current_task_state():
-    from webui.routes import _workbench_follow_up_seed
+    from cyrene.workbench.runtime import _workbench_follow_up_seed
 
     seed = _workbench_follow_up_seed({
         "title": "修复登录流程",
@@ -99,7 +101,7 @@ def test_workbench_follow_up_seed_uses_current_task_state():
 
 
 def test_workbench_follow_up_seed_keeps_explicit_request_with_source_context():
-    from webui.routes import _workbench_follow_up_seed
+    from cyrene.workbench.runtime import _workbench_follow_up_seed
 
     seed = _workbench_follow_up_seed(
         {
@@ -121,7 +123,7 @@ def test_workbench_follow_up_seed_keeps_explicit_request_with_source_context():
 def test_workbench_follow_up_endpoint_creates_linked_session(monkeypatch, tmp_path):
     from fastapi import FastAPI
     from fastapi.testclient import TestClient
-    from webui import routes
+    from cyrene.workbench import runtime as routes
 
     data_dir = tmp_path / "data"
     data_dir.mkdir()
@@ -162,7 +164,7 @@ def test_workbench_follow_up_endpoint_creates_linked_session(monkeypatch, tmp_pa
     monkeypatch.setattr(routes, "append_notification", lambda **_kwargs: {})
 
     app = FastAPI()
-    routes.register_routes(app, bot=None, db_path=str(tmp_path / "test.db"))
+    register_routes(app, bot=None, db_path=str(tmp_path / "test.db"))
     response = TestClient(app).post(
         "/api/task-sessions/session_source/follow-up",
         json={},
@@ -182,7 +184,7 @@ def test_workbench_follow_up_endpoint_creates_linked_session(monkeypatch, tmp_pa
 
 
 def test_workbench_plan_revision_preserves_existing_steps_when_feedback_is_supplemental():
-    from webui.routes import _workbench_new_plan_step, _workbench_reconcile_revised_plan
+    from cyrene.workbench.runtime import _workbench_new_plan_step, _workbench_reconcile_revised_plan
 
     existing = [
         _workbench_new_plan_step("读取项目上下文", "理解当前实现", 1, "task_1"),
@@ -200,7 +202,7 @@ def test_workbench_plan_revision_preserves_existing_steps_when_feedback_is_suppl
 
 
 def test_workbench_plan_graph_rejects_cycles_missing_dependencies_and_invalid_order():
-    from webui.routes import _workbench_validate_plan_graph
+    from cyrene.workbench.runtime import _workbench_validate_plan_graph
 
     valid, _, code = _workbench_validate_plan_graph([
         {"id": "a", "title": "A", "dependsOn": []},
@@ -231,7 +233,7 @@ def test_workbench_plan_graph_rejects_cycles_missing_dependencies_and_invalid_or
 
 
 def test_workbench_plan_coercion_resolves_dependency_indexes():
-    from webui.routes import _workbench_coerce_plan_steps
+    from cyrene.workbench.runtime import _workbench_coerce_plan_steps
 
     steps = _workbench_coerce_plan_steps(
         {
@@ -252,7 +254,7 @@ def test_workbench_plan_coercion_resolves_dependency_indexes():
 def test_workbench_plan_mutation_endpoint_validates_revision_dependencies_and_started_state(monkeypatch, tmp_path):
     from fastapi import FastAPI
     from fastapi.testclient import TestClient
-    from webui import routes
+    from cyrene.workbench import runtime as routes
 
     data_dir = tmp_path / "data"
     data_dir.mkdir()
@@ -296,7 +298,7 @@ def test_workbench_plan_mutation_endpoint_validates_revision_dependencies_and_st
     monkeypatch.setattr(routes, "append_notification", lambda **_kwargs: {})
     monkeypatch.setattr(routes, "is_session_running", lambda _session_id: False)
     app = FastAPI()
-    routes.register_routes(app, bot=None, db_path=str(tmp_path / "test.db"))
+    register_routes(app, bot=None, db_path=str(tmp_path / "test.db"))
     client = TestClient(app)
 
     stale = client.patch("/api/task-sessions/session_1/plan", json={
@@ -360,7 +362,7 @@ def test_workbench_plan_mutation_endpoint_validates_revision_dependencies_and_st
 def test_workbench_step_run_rejects_unmet_dependencies_before_agent_call(monkeypatch, tmp_path):
     from fastapi import FastAPI
     from fastapi.testclient import TestClient
-    from webui import routes
+    from cyrene.workbench import runtime as routes
 
     data_dir = tmp_path / "data"
     data_dir.mkdir()
@@ -410,7 +412,7 @@ def test_workbench_step_run_rejects_unmet_dependencies_before_agent_call(monkeyp
     monkeypatch.setattr(routes, "_WORKBENCH_STORE", store_path)
     monkeypatch.setattr(routes, "_workbench_agent_reply", fake_reply)
     app = FastAPI()
-    routes.register_routes(app, bot=None, db_path=str(tmp_path / "test.db"))
+    register_routes(app, bot=None, db_path=str(tmp_path / "test.db"))
 
     client = TestClient(app)
     stale = client.post("/api/task-sessions/session_1/runs", json={
@@ -451,8 +453,136 @@ def test_workbench_step_run_rejects_unmet_dependencies_before_agent_call(monkeyp
     assert called is False
 
 
+def test_workbench_step_run_commits_completion_and_real_timestamps(monkeypatch, tmp_path):
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+    from cyrene.workbench import runtime as routes
+
+    data_dir = tmp_path / "data"
+    data_dir.mkdir()
+    store_path = data_dir / "workbench_projects.json"
+    store_path.write_text(json.dumps({
+        "projects": [{
+            "id": "project_1",
+            "name": "Cyrene",
+            "workspacePath": str(tmp_path),
+            "sessions": [{
+                "id": "session_1",
+                "projectId": "project_1",
+                "kind": "task",
+                "title": "原子完成",
+                "goal": "完成一个步骤",
+                "status": "running",
+                "planRevision": 2,
+                "planDefinitionRevision": 1,
+                "approvedPlanDefinitionRevision": 1,
+                "plan": [{
+                    "id": "step_a", "title": "A", "status": "running",
+                    "order": 1, "dependsOn": [],
+                    "startedAt": "2026-06-19T00:00:00+00:00",
+                }],
+                "events": [], "runs": [], "artifacts": [],
+                "acceptanceCriteria": [],
+                "createdAt": "2026-06-19T00:00:00+00:00",
+                "updatedAt": "2026-06-19T00:00:00+00:00",
+            }],
+            "createdAt": "2026-06-19T00:00:00+00:00",
+            "updatedAt": "2026-06-19T00:00:00+00:00",
+        }],
+        "activeProjectId": "project_1",
+        "activeSessionId": "session_1",
+    }), encoding="utf-8")
+
+    async def fake_reply(*_args, **_kwargs):
+        await asyncio.sleep(0.01)
+        return "步骤已经真正执行完成"
+
+    async def no_outcome(*_args, **_kwargs):
+        return None
+
+    async def no_archive(*_args, **_kwargs):
+        return None
+
+    monkeypatch.setattr(routes, "DATA_DIR", data_dir)
+    monkeypatch.setattr(routes, "_WORKBENCH_STORE", store_path)
+    monkeypatch.setattr(routes, "_workbench_agent_reply", fake_reply)
+    monkeypatch.setattr(routes, "_workbench_generate_step_outcome", no_outcome)
+    monkeypatch.setattr(routes, "_workbench_archive_run_knowledge", no_archive)
+    monkeypatch.setattr(routes, "schedule_capture", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(routes, "append_notification", lambda **_kwargs: {})
+
+    app = FastAPI()
+    register_routes(app, bot=None, db_path=str(tmp_path / "test.db"))
+    response = TestClient(app).post("/api/task-sessions/session_1/runs", json={
+        "input": "执行 A",
+        "stepId": "step_a",
+        "stepTitle": "A",
+        "action": "spawn_subagent",
+        "planDefinitionRevision": 1,
+    })
+
+    assert response.status_code == 200
+    session = response.json()["session"]
+    run = response.json()["run"]
+    assert session["plan"][0]["status"] == "completed"
+    assert session["status"] == "review"
+    assert run["status"] == "completed"
+    assert run["endedAt"] > run["startedAt"]
+    stored = json.loads(store_path.read_text(encoding="utf-8"))
+    assert stored["projects"][0]["sessions"][0]["plan"][0]["status"] == "completed"
+
+
+def test_workbench_step_run_persists_agent_failure(monkeypatch, tmp_path):
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+    from cyrene.workbench import runtime as routes
+
+    data_dir = tmp_path / "data"
+    data_dir.mkdir()
+    store_path = data_dir / "workbench_projects.json"
+    store_path.write_text(json.dumps({
+        "projects": [{
+            "id": "project_1", "name": "Cyrene", "workspacePath": str(tmp_path),
+            "sessions": [{
+                "id": "session_1", "projectId": "project_1", "kind": "task",
+                "title": "失败落库", "goal": "执行步骤", "status": "running",
+                "planRevision": 1, "planDefinitionRevision": 1,
+                "approvedPlanDefinitionRevision": 1,
+                "plan": [{"id": "step_a", "title": "A", "status": "running", "order": 1, "dependsOn": []}],
+                "events": [], "runs": [], "artifacts": [], "acceptanceCriteria": [],
+                "createdAt": "2026-06-19T00:00:00+00:00", "updatedAt": "2026-06-19T00:00:00+00:00",
+            }],
+            "createdAt": "2026-06-19T00:00:00+00:00", "updatedAt": "2026-06-19T00:00:00+00:00",
+        }],
+        "activeProjectId": "project_1", "activeSessionId": "session_1",
+    }), encoding="utf-8")
+
+    async def failed_reply(*_args, **_kwargs):
+        raise routes._WorkbenchAgentRunError("workbench_agent_run_failed", "Agent 执行失败：boom")
+
+    monkeypatch.setattr(routes, "DATA_DIR", data_dir)
+    monkeypatch.setattr(routes, "_WORKBENCH_STORE", store_path)
+    monkeypatch.setattr(routes, "_workbench_agent_reply", failed_reply)
+    monkeypatch.setattr(routes, "append_notification", lambda **_kwargs: {})
+
+    app = FastAPI()
+    register_routes(app, bot=None, db_path=str(tmp_path / "test.db"))
+    response = TestClient(app).post("/api/task-sessions/session_1/runs", json={
+        "input": "执行 A", "stepId": "step_a", "action": "spawn_subagent",
+        "planDefinitionRevision": 1,
+    })
+
+    assert response.status_code == 502
+    stored = json.loads(store_path.read_text(encoding="utf-8"))
+    session = stored["projects"][0]["sessions"][0]
+    assert session["status"] == "failed"
+    assert session["plan"][0]["status"] == "failed"
+    assert session["runs"][0]["status"] == "failed"
+    assert session["runs"][0]["error"] == "Agent 执行失败：boom"
+
+
 def test_workbench_plan_revision_drops_only_invalid_dependency_edges():
-    from webui.routes import _workbench_new_plan_step, _workbench_reconcile_revised_plan
+    from cyrene.workbench.runtime import _workbench_new_plan_step, _workbench_reconcile_revised_plan
 
     existing = [
         _workbench_new_plan_step("A", "", 1, "task_1"),
@@ -482,7 +612,7 @@ def test_workbench_plan_revision_drops_only_invalid_dependency_edges():
 def test_workbench_permission_denial_returns_plan_step_to_pending(monkeypatch, tmp_path):
     from fastapi import FastAPI
     from fastapi.testclient import TestClient
-    from webui import routes
+    from cyrene.workbench import runtime as routes
 
     data_dir = tmp_path / "data"
     data_dir.mkdir()
@@ -550,7 +680,7 @@ def test_workbench_permission_denial_returns_plan_step_to_pending(monkeypatch, t
     monkeypatch.setattr(routes, "schedule_capture", lambda *_args, **_kwargs: None)
 
     app = FastAPI()
-    routes.register_routes(app, bot=None, db_path=str(tmp_path / "test.db"))
+    register_routes(app, bot=None, db_path=str(tmp_path / "test.db"))
     response = TestClient(app).post(
         "/api/task-sessions/session_1/answer",
         json={"question_id": "question_1", "answer": "拒绝"},
@@ -566,7 +696,7 @@ def test_workbench_permission_denial_returns_plan_step_to_pending(monkeypatch, t
 
 
 def test_workbench_plan_revision_allows_explicit_replacement():
-    from webui.routes import _workbench_new_plan_step, _workbench_reconcile_revised_plan
+    from cyrene.workbench.runtime import _workbench_new_plan_step, _workbench_reconcile_revised_plan
 
     existing = [_workbench_new_plan_step("旧计划", "", 1, "task_1")]
     generated = [_workbench_new_plan_step("新计划", "", 1, "task_1")]
@@ -577,7 +707,7 @@ def test_workbench_plan_revision_allows_explicit_replacement():
 
 
 def test_workbench_agent_selected_replacement_does_not_append_old_plan():
-    from webui.routes import _workbench_new_plan_step, _workbench_reconcile_revised_plan
+    from cyrene.workbench.runtime import _workbench_new_plan_step, _workbench_reconcile_revised_plan
 
     existing = [_workbench_new_plan_step("旧计划", "", 1, "task_1")]
     generated = [_workbench_new_plan_step("完全不同的新计划", "", 1, "task_1")]
@@ -590,7 +720,7 @@ def test_workbench_agent_selected_replacement_does_not_append_old_plan():
 
 
 def test_workbench_revision_preserves_matching_step_identity_and_progress():
-    from webui.routes import _workbench_new_plan_step, _workbench_reconcile_revised_plan
+    from cyrene.workbench.runtime import _workbench_new_plan_step, _workbench_reconcile_revised_plan
 
     existing = [
         _workbench_new_plan_step("实现接口", "旧描述", 1, "task_1"),
@@ -618,7 +748,7 @@ def test_workbench_revision_preserves_matching_step_identity_and_progress():
 
 
 def test_workbench_repeated_partial_revisions_cannot_grow_plan_unbounded():
-    from webui.routes import _workbench_new_plan_step, _workbench_reconcile_revised_plan
+    from cyrene.workbench.runtime import _workbench_new_plan_step, _workbench_reconcile_revised_plan
 
     existing = [
         _workbench_new_plan_step(f"旧步骤 {index}", "", index, "task_1")
@@ -634,7 +764,7 @@ def test_workbench_repeated_partial_revisions_cannot_grow_plan_unbounded():
 
 
 def test_workbench_acceptance_normalizes_agent_payload_and_resets_status():
-    from webui.routes import _workbench_coerce_acceptance_criteria
+    from cyrene.workbench.runtime import _workbench_coerce_acceptance_criteria
 
     criteria = _workbench_coerce_acceptance_criteria(
         {
@@ -655,7 +785,7 @@ def test_workbench_acceptance_normalizes_agent_payload_and_resets_status():
 
 
 def test_workbench_json_parser_skips_stray_braces_before_valid_object():
-    from webui.routes import _workbench_parse_json_object
+    from cyrene.workbench.runtime import _workbench_parse_json_object
 
     parsed = _workbench_parse_json_object(
         '说明里有一个无效片段 {not json}，最终结果是 '
@@ -667,7 +797,7 @@ def test_workbench_json_parser_skips_stray_braces_before_valid_object():
 
 
 def test_workbench_json_parser_does_not_accept_nested_object_from_malformed_outer_json():
-    from webui.routes import _workbench_parse_json_object
+    from cyrene.workbench.runtime import _workbench_parse_json_object
 
     parsed = _workbench_parse_json_object(
         '{"results": [{"id": "a1", "passed": true}], "reason": "ok",}'
@@ -677,7 +807,7 @@ def test_workbench_json_parser_does_not_accept_nested_object_from_malformed_oute
 
 
 async def test_workbench_explore_agent_repairs_malformed_json_once(monkeypatch):
-    from webui import routes
+    from cyrene.workbench import runtime as routes
 
     responses = [
         {"content": '结果如下：{"ok": true,}', "tool_calls": []},
@@ -696,7 +826,7 @@ async def test_workbench_explore_agent_repairs_malformed_json_once(monkeypatch):
 
 
 async def test_workbench_empty_workspace_init_form_uses_project_description(monkeypatch, tmp_path):
-    from webui import routes
+    from cyrene.workbench import runtime as routes
 
     captured = {}
 
@@ -745,7 +875,7 @@ async def test_workbench_empty_workspace_init_form_uses_project_description(monk
 
 
 async def test_workbench_non_empty_workspace_init_form_prioritizes_description(monkeypatch, tmp_path):
-    from webui import routes
+    from cyrene.workbench import runtime as routes
 
     (tmp_path / "README.md").write_text("# Existing App\n", encoding="utf-8")
     captured = {}
@@ -788,7 +918,7 @@ async def test_workbench_non_empty_workspace_init_form_prioritizes_description(m
 
 
 async def test_workbench_blank_project_existing_workspace_prompt_keeps_files_unconfirmed(monkeypatch, tmp_path):
-    from webui import routes
+    from cyrene.workbench import runtime as routes
 
     (tmp_path / "script.txt").write_text("完整剧本\n", encoding="utf-8")
     captured = {}
@@ -835,7 +965,7 @@ async def test_workbench_blank_project_existing_workspace_prompt_keeps_files_unc
 
 
 async def test_workbench_plan_revision_reuses_thread_without_tools(monkeypatch, tmp_path):
-    from webui import routes
+    from cyrene.workbench import runtime as routes
 
     (tmp_path / "app.py").write_text("print('ok')\n", encoding="utf-8")
     revision = routes._workbench_workspace_revision(tmp_path)
@@ -902,7 +1032,7 @@ async def test_workbench_plan_revision_reuses_thread_without_tools(monkeypatch, 
 
 
 async def test_workbench_plan_revision_explores_after_workspace_change(monkeypatch, tmp_path):
-    from webui import routes
+    from cyrene.workbench import runtime as routes
 
     target = tmp_path / "app.py"
     target.write_text("print('old')\n", encoding="utf-8")
@@ -955,7 +1085,7 @@ async def test_workbench_plan_revision_explores_after_workspace_change(monkeypat
 
 
 async def test_workbench_read_file_observation_cache_and_runtime_dedup(monkeypatch, tmp_path):
-    from webui import routes
+    from cyrene.workbench import runtime as routes
 
     target = tmp_path / "notes.txt"
     target.write_text("0123456789", encoding="utf-8")
@@ -1014,7 +1144,7 @@ async def test_workbench_read_file_observation_cache_and_runtime_dedup(monkeypat
 
 
 async def test_workbench_plan_agent_returns_fresh_acceptance_criteria(monkeypatch, tmp_path):
-    from webui import routes
+    from cyrene.workbench import runtime as routes
 
     async def fake_agent(*args, **kwargs):
         return {
@@ -1052,7 +1182,7 @@ async def test_workbench_plan_agent_returns_fresh_acceptance_criteria(monkeypatc
 
 
 async def test_workbench_acceptance_agent_uses_current_plan(monkeypatch, tmp_path):
-    from webui import routes
+    from cyrene.workbench import runtime as routes
 
     captured = {}
 
@@ -1080,7 +1210,7 @@ async def test_workbench_acceptance_agent_uses_current_plan(monkeypatch, tmp_pat
 
 
 async def test_workbench_failed_plan_revision_preserves_existing_acceptance(monkeypatch):
-    from webui import routes
+    from cyrene.workbench import runtime as routes
 
     async def failed_agent(*args, **kwargs):
         return None
@@ -1112,7 +1242,7 @@ async def test_workbench_failed_plan_revision_preserves_existing_acceptance(monk
 
 
 async def test_workbench_reconciled_plan_does_not_launch_second_acceptance_agent(monkeypatch):
-    from webui import routes
+    from cyrene.workbench import runtime as routes
 
     prompts = []
 
@@ -1149,7 +1279,7 @@ async def test_workbench_reconciled_plan_does_not_launch_second_acceptance_agent
 
 
 async def test_workbench_plan_revision_updates_goal_used_by_goal_loop(monkeypatch):
-    from webui import routes
+    from cyrene.workbench import runtime as routes
 
     async def fake_agent(*args, **kwargs):
         return {
@@ -1185,7 +1315,7 @@ async def test_workbench_plan_revision_updates_goal_used_by_goal_loop(monkeypatc
 
 
 async def test_workbench_plan_agent_can_choose_full_replacement(monkeypatch):
-    from webui import routes
+    from cyrene.workbench import runtime as routes
 
     async def fake_agent(*args, **kwargs):
         return {
@@ -1223,7 +1353,7 @@ async def test_workbench_plan_agent_can_choose_full_replacement(monkeypatch):
 
 
 async def test_workbench_explicit_regeneration_hides_old_plan(monkeypatch):
-    from webui import routes
+    from cyrene.workbench import runtime as routes
 
     prompts = []
     async def fake_agent(_workspace_root, prompt, **_kwargs):
@@ -1273,7 +1403,7 @@ async def test_workbench_explicit_regeneration_hides_old_plan(monkeypatch):
 
 
 async def test_workbench_plan_prompt_leaves_workspace_exploration_to_agent(monkeypatch, tmp_path):
-    from webui import routes
+    from cyrene.workbench import runtime as routes
 
     # Non-empty workspace so the no-tools decision comes from the task being
     # explicitly project-independent, not merely from an empty workspace.
@@ -1318,7 +1448,7 @@ async def test_workbench_plan_prompt_leaves_workspace_exploration_to_agent(monke
 
 
 async def test_workbench_auto_start_acceptance_uses_derived_goal(monkeypatch):
-    from webui import routes
+    from cyrene.workbench import runtime as routes
 
     calls = 0
 
@@ -1354,7 +1484,7 @@ async def test_workbench_auto_start_acceptance_uses_derived_goal(monkeypatch):
 
 
 async def test_workbench_verifier_uses_clean_agent_context(monkeypatch, tmp_path):
-    from webui import routes
+    from cyrene.workbench import runtime as routes
 
     captured = {}
 
@@ -1392,7 +1522,7 @@ async def test_workbench_verifier_uses_clean_agent_context(monkeypatch, tmp_path
 
 async def test_workbench_verifier_rejects_missing_criteria_results(monkeypatch, tmp_path):
     import pytest
-    from webui import routes
+    from cyrene.workbench import runtime as routes
 
     calls = {"n": 0}
 
@@ -1426,7 +1556,7 @@ async def test_workbench_verifier_rejects_missing_criteria_results(monkeypatch, 
 
 
 async def test_workbench_verifier_retries_transient_then_succeeds(monkeypatch, tmp_path):
-    from webui import routes
+    from cyrene.workbench import runtime as routes
 
     calls = {"n": 0}
 
@@ -1461,7 +1591,7 @@ async def test_workbench_verifier_retries_transient_then_succeeds(monkeypatch, t
 
 async def test_workbench_verifier_does_not_retry_auth_failure(monkeypatch, tmp_path):
     import pytest
-    from webui import routes
+    from cyrene.workbench import runtime as routes
 
     calls = {"n": 0}
 
@@ -1489,7 +1619,7 @@ async def test_workbench_verifier_does_not_retry_auth_failure(monkeypatch, tmp_p
 
 async def test_workbench_clean_explore_agent_clears_inherited_session(monkeypatch):
     from cyrene.agent.state import _current_session_id
-    from webui import routes
+    from cyrene.workbench import runtime as routes
 
     seen_session_ids = []
 
@@ -1514,7 +1644,7 @@ async def test_workbench_clean_explore_agent_clears_inherited_session(monkeypatc
 
 
 def test_workbench_file_changes_from_write_and_edit_events(tmp_path):
-    from webui.routes import _workbench_file_changes_from_tool_event
+    from cyrene.workbench.runtime import _workbench_file_changes_from_tool_event
 
     write_changes = _workbench_file_changes_from_tool_event(
         {"tool": "Write", "args": {"path": str(tmp_path / "notes.md")}, "result": ""},
@@ -1532,7 +1662,7 @@ def test_workbench_file_changes_from_write_and_edit_events(tmp_path):
 
 
 def test_workbench_file_changes_parse_tool_result_fallback(tmp_path):
-    from webui.routes import _workbench_file_changes_from_tool_event
+    from cyrene.workbench.runtime import _workbench_file_changes_from_tool_event
 
     changes = _workbench_file_changes_from_tool_event(
         {"tool": "custom_write", "args": {}, "result": f"Wrote {tmp_path / 'out.txt'}"},
@@ -1544,7 +1674,7 @@ def test_workbench_file_changes_parse_tool_result_fallback(tmp_path):
 
 
 def test_workbench_file_changes_reject_paths_outside_workspace(tmp_path):
-    from webui.routes import _workbench_file_changes_from_tool_event
+    from cyrene.workbench.runtime import _workbench_file_changes_from_tool_event
 
     outside = tmp_path.parent / "outside.md"
     absolute = _workbench_file_changes_from_tool_event(
@@ -1560,8 +1690,35 @@ def test_workbench_file_changes_reject_paths_outside_workspace(tmp_path):
     assert traversal == []
 
 
+def test_workbench_file_changes_reject_cyrene_managed_run_state(tmp_path):
+    from cyrene.workbench.runtime import (
+        _workbench_file_changes_from_tool_event,
+        _workbench_git_status_delta,
+        _workbench_workspace_file_snapshot,
+        _workbench_workspace_text_snapshot,
+    )
+
+    (tmp_path / "conversations").mkdir()
+    (tmp_path / "conversations" / "wbchat_1.md").write_text("chat\n", encoding="utf-8")
+    (tmp_path / "plan").mkdir()
+    (tmp_path / "plan" / "plan_1.md").write_text("plan\n", encoding="utf-8")
+    (tmp_path / "app.py").write_text("print('ok')\n", encoding="utf-8")
+
+    assert _workbench_file_changes_from_tool_event(
+        {"tool": "Write", "args": {"path": "conversations/wbchat_1.md"}, "result": ""},
+        tmp_path,
+    ) == []
+    assert _workbench_git_status_delta(
+        {},
+        {"conversations/wbchat_1.md": "??", "plan/plan_1.md": "??", "app.py": "??"},
+        tmp_path,
+    )[0]["path"] == "app.py"
+    assert set(_workbench_workspace_file_snapshot(tmp_path)) == {"app.py"}
+    assert set(_workbench_workspace_text_snapshot(tmp_path)) == {"app.py"}
+
+
 def test_workbench_git_status_snapshot_is_scoped_to_nested_workspace(tmp_path):
-    from webui.routes import _workbench_git_status_snapshot
+    from cyrene.workbench.runtime import _workbench_git_status_snapshot
 
     repo = tmp_path / "repo"
     workspace = repo / "workspace"
@@ -1577,7 +1734,7 @@ def test_workbench_git_status_snapshot_is_scoped_to_nested_workspace(tmp_path):
 
 
 def test_workbench_git_status_delta_and_step_related_files():
-    from webui.routes import _workbench_apply_step_file_changes, _workbench_git_status_delta
+    from cyrene.workbench.runtime import _workbench_apply_step_file_changes, _workbench_git_status_delta
 
     changes = _workbench_git_status_delta({"old.py": " M"}, {"old.py": " M", "new.py": "??", "app.py": " M"})
     assert [(item["path"], item["status"]) for item in changes] == [("new.py", "created"), ("app.py", "modified")]
@@ -1588,7 +1745,7 @@ def test_workbench_git_status_delta_and_step_related_files():
 
 
 def test_workbench_workspace_snapshot_detects_named_shell_output(tmp_path):
-    from webui.routes import (
+    from cyrene.workbench.runtime import (
         _workbench_workspace_file_snapshot,
         _workbench_workspace_snapshot_delta,
         _workbench_workspace_text_snapshot,
@@ -1620,7 +1777,7 @@ def test_workbench_workspace_snapshot_detects_named_shell_output(tmp_path):
 
 
 def test_workbench_workspace_snapshot_delta_records_text_diffs_without_git(tmp_path):
-    from webui.routes import (
+    from cyrene.workbench.runtime import (
         _workbench_merge_file_changes,
         _workbench_recorded_diff_for_path,
         _workbench_workspace_file_snapshot,
@@ -1674,7 +1831,7 @@ def test_workbench_workspace_snapshot_delta_records_text_diffs_without_git(tmp_p
 
 
 def test_workbench_recorded_diff_blocks_misleading_current_snapshot_fallback(tmp_path):
-    from webui.routes import (
+    from cyrene.workbench.runtime import (
         _workbench_git_diff_for_path,
         _workbench_recorded_diff_for_path,
         _workbench_workspace_file_snapshot,
@@ -1721,7 +1878,7 @@ import pytest
 
 @pytest.mark.asyncio
 async def test_workbench_git_diff_for_tracked_and_untracked_files(tmp_path):
-    from webui.routes import _workbench_git_diff_for_path
+    from cyrene.workbench.runtime import _workbench_git_diff_for_path
 
     subprocess.run(["git", "init"], cwd=tmp_path, check=True, capture_output=True)
     tracked = tmp_path / "app.py"
@@ -1753,7 +1910,7 @@ async def test_workbench_git_diff_for_tracked_and_untracked_files(tmp_path):
 
 @pytest.mark.asyncio
 async def test_workbench_file_diff_falls_back_to_current_text_snapshot(tmp_path):
-    from webui.routes import _workbench_git_diff_for_path
+    from cyrene.workbench.runtime import _workbench_git_diff_for_path
 
     report = tmp_path / "report.tex"
     report.write_text("\\section{Result}\n", encoding="utf-8")
@@ -1781,7 +1938,7 @@ async def test_workbench_file_diff_falls_back_to_current_text_snapshot(tmp_path)
 
 @pytest.mark.asyncio
 async def test_workbench_git_diff_rejects_paths_outside_workspace(tmp_path):
-    from webui.routes import _workbench_git_diff_for_path
+    from cyrene.workbench.runtime import _workbench_git_diff_for_path
 
     outside = tmp_path.parent / "outside.txt"
     outside.write_text("secret", encoding="utf-8")
@@ -1791,7 +1948,7 @@ async def test_workbench_git_diff_rejects_paths_outside_workspace(tmp_path):
 
 @pytest.mark.asyncio
 async def test_workbench_init_task_plan_reports_llm_success(monkeypatch):
-    from webui import routes as R
+    from cyrene.workbench import runtime as R
 
     async def fake_call_llm(messages, tools=None, max_tokens=None, secondary=False, thinking="auto"):
         return {"content": '{"tasks": [{"title": "拆解需求", "goal": "明确范围", "priority": "high"}]}'}
@@ -1807,7 +1964,7 @@ async def test_workbench_init_task_plan_reports_llm_success(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_workbench_init_task_plan_retries_five_times_without_fallback(monkeypatch):
-    from webui import routes as R
+    from cyrene.workbench import runtime as R
 
     calls = 0
 
@@ -1836,7 +1993,7 @@ async def test_workbench_init_task_plan_retries_five_times_without_fallback(monk
 
 @pytest.mark.asyncio
 async def test_workbench_init_task_plan_can_recover_on_fifth_attempt(monkeypatch):
-    from webui import routes as R
+    from cyrene.workbench import runtime as R
 
     calls = 0
 
@@ -1864,7 +2021,7 @@ async def test_workbench_init_task_plan_can_recover_on_fifth_attempt(monkeypatch
 
 
 def test_workbench_generation_error_redacts_credentials():
-    from webui.routes import _workbench_generation_error
+    from cyrene.workbench.runtime import _workbench_generation_error
 
     error = _workbench_generation_error(
         RuntimeError("Bearer secret-token sk-abcdefghijkl api_key=private-value")
@@ -1877,7 +2034,7 @@ def test_workbench_generation_error_redacts_credentials():
 
 
 def test_workbench_promote_file_artifacts_promotes_and_dedups():
-    from webui.routes import _workbench_promote_file_artifacts
+    from cyrene.workbench.runtime import _workbench_promote_file_artifacts
 
     session = {"artifacts": [
         {"id": "a1", "type": "task_brief", "name": "task-brief.md", "status": "draft"},
@@ -1908,7 +2065,7 @@ def test_workbench_promote_file_artifacts_promotes_and_dedups():
 
 
 def test_workbench_promote_file_artifacts_copies_source_and_relabels_diff_headers(tmp_path):
-    from webui.routes import _workbench_promote_file_artifacts
+    from cyrene.workbench.runtime import _workbench_promote_file_artifacts
 
     (tmp_path / "report.md").write_text("# Report\n", encoding="utf-8")
     session = {"artifacts": []}
@@ -1930,7 +2087,7 @@ def test_workbench_promote_file_artifacts_copies_source_and_relabels_diff_header
 
 
 def test_workbench_final_artifact_file_changes_use_declared_artifacts_only():
-    from webui.routes import _workbench_final_artifact_file_changes
+    from cyrene.workbench.runtime import _workbench_final_artifact_file_changes
 
     session = {
         "runs": [{"fileChanges": [
@@ -1957,7 +2114,7 @@ def test_workbench_final_artifact_file_changes_use_declared_artifacts_only():
 
 
 def test_workbench_backfill_file_artifacts_from_runs_and_steps():
-    from webui.routes import _workbench_backfill_file_artifacts
+    from cyrene.workbench.runtime import _workbench_backfill_file_artifacts
 
     session = {
         "artifacts": [{"id": "a1", "type": "task_brief", "name": "task-brief.md", "status": "draft"}],
@@ -1980,7 +2137,7 @@ def test_workbench_backfill_file_artifacts_from_runs_and_steps():
 
 
 def test_workbench_backfill_does_not_restore_missing_produced_artifact(tmp_path):
-    from webui.routes import _workbench_backfill_file_artifacts
+    from cyrene.workbench.runtime import _workbench_backfill_file_artifacts
 
     session = {
         "runs": [{
@@ -2003,7 +2160,7 @@ def test_workbench_backfill_does_not_restore_missing_produced_artifact(tmp_path)
 
 
 def test_workbench_prunes_non_file_and_duplicate_artifacts():
-    from webui.routes import _workbench_prune_non_file_artifacts
+    from cyrene.workbench.runtime import _workbench_prune_non_file_artifacts
 
     session = {"artifacts": [
         {"id": "brief", "type": "task_brief", "name": "task-brief.md"},
@@ -2020,7 +2177,7 @@ def test_workbench_prunes_non_file_and_duplicate_artifacts():
 
 
 def test_workbench_backfills_reported_historical_output(tmp_path):
-    from webui.routes import _workbench_backfill_referenced_file_artifacts
+    from cyrene.workbench.runtime import _workbench_backfill_referenced_file_artifacts
 
     output = tmp_path / "exports" / "final.pdf"
     output.parent.mkdir()
@@ -2049,7 +2206,7 @@ def test_workbench_backfills_reported_historical_output(tmp_path):
 
 
 def test_workbench_prunes_parent_repo_git_files_and_artifacts(tmp_path):
-    from webui.routes import _workbench_prune_invalid_file_records
+    from cyrene.workbench.runtime import _workbench_prune_invalid_file_records
 
     workspace = tmp_path / "workspace"
     workspace.mkdir()
@@ -2080,7 +2237,7 @@ def test_workbench_prunes_parent_repo_git_files_and_artifacts(tmp_path):
 
 
 def test_workbench_task_plan_tool_helper_scopes_mutation_to_current_session(monkeypatch, tmp_path):
-    from webui import routes
+    from cyrene.workbench import runtime as routes
 
     data_dir = tmp_path / "data"
     data_dir.mkdir()
@@ -2181,7 +2338,7 @@ def test_workbench_task_plan_tool_helper_scopes_mutation_to_current_session(monk
 
 
 def test_update_task_plan_is_registered_main_only():
-    from cyrene import registry_tools
+    from cyrene.tooling import catalog as registry_tools
 
     registry_tools._initialize_registry()
 

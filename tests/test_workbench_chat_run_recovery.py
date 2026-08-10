@@ -5,8 +5,8 @@ import threading
 
 
 def test_startup_recovers_crashed_running_chat_and_clears_stale_question(monkeypatch):
-    from webui import routes_workbench_chat as chat_mod
-    from webui.workbench_chat_runs import ChatRunManager
+    from cyrene.workbench import chat as chat_mod
+    from cyrene.workbench.chat_runs import ChatRunManager
 
     payload = {
         "chats": [
@@ -30,6 +30,8 @@ def test_startup_recovers_crashed_running_chat_and_clears_stale_question(monkeyp
 
     assert payload["chats"][0]["status"] == "idle"
     assert "pendingQuestion" not in payload["chats"][0]
+    assert payload["chats"][0]["lastRun"]["status"] == "error"
+    assert payload["chats"][0]["lastRun"]["terminationReason"] == "process_restarted"
     assert payload["chats"][1]["pendingQuestion"]["id"] == "valid"
     assert written == [payload]
 
@@ -37,8 +39,8 @@ def test_startup_recovers_crashed_running_chat_and_clears_stale_question(monkeyp
 async def test_chat_run_driver_error_always_publishes_terminal_event_and_wakes_waiters(
     monkeypatch,
 ):
-    from webui import routes_workbench_chat as chat_mod
-    from webui.workbench_chat_runs import ChatRunManager
+    from cyrene.workbench import chat as chat_mod
+    from cyrene.workbench.chat_runs import ChatRunManager
 
     monkeypatch.setattr(chat_mod, "_settle_chat_running_status", lambda _chat_id: None)
     manager = ChatRunManager(retention_seconds=0)
@@ -63,7 +65,7 @@ async def test_chat_run_driver_error_always_publishes_terminal_event_and_wakes_w
 
 
 async def test_finished_run_remains_replayable_during_retention_window():
-    from webui.workbench_chat_runs import ChatRunManager
+    from cyrene.workbench.chat_runs import ChatRunManager
 
     manager = ChatRunManager(retention_seconds=45)
 
@@ -83,9 +85,102 @@ async def test_finished_run_remains_replayable_during_retention_window():
     await manager.shutdown()
 
 
+async def test_finished_run_events_reload_from_sqlite_after_memory_cleanup(
+    tmp_path,
+):
+    from cyrene.workbench.chat_runs import ChatRunManager
+
+    db_path = str(tmp_path / "durable-runs.sqlite3")
+    manager = ChatRunManager(retention_seconds=0)
+    manager.configure(db_path)
+
+    async def runner(run):
+        await run.publish({"type": "reply_done", "response": "durable reply"})
+        run.outcome = {"kind": "reply"}
+
+    run, _ = manager.start_or_get(
+        "chat_durable",
+        {"type": "ack", "chatId": "chat_durable"},
+        runner,
+        stream=False,
+    )
+    await asyncio.wait_for(run.done.wait(), timeout=2)
+
+    restarted = ChatRunManager(retention_seconds=0)
+    restarted.configure(db_path)
+    restored = restarted.get_replayable_by_run_id(run.run_id)
+
+    assert restored is not None
+    assert restored.done.is_set()
+    assert restored.status == "done"
+    assert restored.outcome == {"kind": "reply"}
+    assert [event["type"] for event in restored.events] == [
+        "ack",
+        "reply_done",
+    ]
+    assert restored.events[-1]["response"] == "durable reply"
+
+
+async def test_stream_deltas_are_batched_into_one_sqlite_transaction(
+    monkeypatch,
+    tmp_path,
+):
+    from cyrene.workbench.chat_runs import ChatRun, ChatRunEventStore
+
+    store = ChatRunEventStore(str(tmp_path / "batched-events.sqlite3"))
+    run = ChatRun("chat_batched", {"type": "ack", "chatId": "chat_batched"})
+    await run.configure_event_store(store)
+    batch_sizes = []
+    original_append_many = store.append_many
+
+    def tracked_append_many(run_id, events):
+        batch_sizes.append(len(events))
+        return original_append_many(run_id, events)
+
+    monkeypatch.setattr(store, "append_many", tracked_append_many)
+    for index in range(32):
+        await run.publish({"type": "reply_delta", "delta": str(index)})
+
+    # In-memory fanout remains immediate while SQLite work waits for a bounded
+    # batch or a terminal event.
+    assert len(run.events) == 33
+    assert batch_sizes == []
+
+    await run.publish({"type": "reply_done", "response": "done"})
+
+    assert batch_sizes == [33]
+    restored = store.load_by_run_id(run.run_id)
+    assert restored is not None
+    assert [event["type"] for event in restored.events] == [
+        "ack",
+        *(["reply_delta"] * 32),
+        "reply_done",
+    ]
+
+
+def test_startup_marks_unfinished_durable_run_as_process_restarted(tmp_path):
+    from cyrene.workbench.chat_runs import ChatRun, ChatRunEventStore, ChatRunManager
+
+    db_path = str(tmp_path / "crashed-run.sqlite3")
+    store = ChatRunEventStore(db_path)
+    run = ChatRun("chat_crashed", {"type": "ack", "chatId": "chat_crashed"})
+    store.create(run)
+
+    manager = ChatRunManager(retention_seconds=0)
+    manager.configure(db_path)
+    manager.startup()
+    restored = manager.get_replayable_by_run_id(run.run_id)
+
+    assert restored is not None
+    assert restored.status == "error"
+    assert restored.termination_reason == "process_restarted"
+    assert restored.events[-1]["code"] == "process_restarted"
+    assert restored.events[-1]["_seq"] == 2
+
+
 async def test_chat_run_storage_setup_runs_off_the_event_loop(monkeypatch, tmp_path):
-    from cyrene.workbench_inbox import WorkbenchAgentInbox
-    from webui.workbench_chat_runs import ChatRunManager
+    from cyrene.workbench.inbox import WorkbenchAgentInbox
+    from cyrene.workbench.chat_runs import ChatRunManager
 
     started = threading.Event()
     release = threading.Event()
@@ -130,8 +225,8 @@ async def test_chat_detail_load_does_not_block_other_event_loop_work(monkeypatch
 
     import httpx
     from fastapi import FastAPI
-    from webui import routes_workbench_chat as chat_mod
-    from webui.workbench_chat_runs import ChatRunManager
+    from route.workbench import chat as chat_routes
+    from cyrene.workbench.chat_runs import ChatRunManager
 
     started = threading.Event()
     release = threading.Event()
@@ -149,12 +244,12 @@ async def test_chat_detail_load_does_not_block_other_event_loop_work(monkeypatch
             }]
         }
 
-    monkeypatch.setattr(chat_mod, "_read_chats_store", locked_read)
+    monkeypatch.setattr(chat_routes, "_read_chats_store", locked_read)
     monkeypatch.setattr(
-        chat_mod, "_CHAT_RUN_MANAGER", ChatRunManager(retention_seconds=0)
+        chat_routes, "_CHAT_RUN_MANAGER", ChatRunManager(retention_seconds=0)
     )
     app = FastAPI()
-    chat_mod.register_workbench_chat_routes(app, bot=None, db_path="")
+    chat_routes.register_workbench_chat_routes(app, bot=None, db_path="")
     transport = httpx.ASGITransport(app=app)
 
     async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:

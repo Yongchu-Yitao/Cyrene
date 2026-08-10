@@ -145,3 +145,13 @@ def test_frozen_smoke_test_rejects_stray_playwright_package():
 
     assert 'importlib.util.find_spec("playwright")' in entrypoint
     assert "playwright_package=FAILED: unexpectedly bundled" in entrypoint
+
+
+def test_macos_dmg_uses_electron_semver_and_tracks_python_alias():
+    build_module = _load_build_module()
+
+    assert build_module.get_version() == "0.7.0"
+    assert build_module.get_electron_version() == "0.7.0"
+    assert build_module._mac_dmg_version_aliases() == (
+        "0.7.0",
+    )

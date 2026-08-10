@@ -1,12 +1,24 @@
 import * as esbuild from 'esbuild'
-import { readFileSync, writeFileSync, mkdirSync, readdirSync, statSync, existsSync, copyFileSync } from 'fs'
+import { createHash } from 'crypto'
+import { readFileSync, writeFileSync, mkdirSync, readdirSync, statSync, existsSync, copyFileSync, rmSync } from 'fs'
 import { join, relative, dirname, extname, resolve } from 'path'
 import { fileURLToPath } from 'url'
 
 const __dirname = dirname(fileURLToPath(import.meta.url))
 const APP_DIR = resolve(__dirname, 'static/app')
 const OUT_DIR = resolve(APP_DIR, 'compiled')
-const WORKBENCH_DIR = resolve(__dirname, '../workbench-webui')
+const WORKBENCH_DIR = resolve(__dirname, 'frontend')
+const ASSETS_DIR = resolve(WORKBENCH_DIR, 'assets')
+const INDEX_SOURCE = resolve(WORKBENCH_DIR, 'index.html')
+const ELECTRON_MAIN_SOURCE = resolve(__dirname, '../../electron/main.js')
+const PROJECT_FILE = resolve(__dirname, '../../pyproject.toml')
+
+function projectVersion() {
+  const source = readFileSync(PROJECT_FILE, 'utf8')
+  const match = source.match(/^\s*version\s*=\s*"([^"]+)"/m)
+  if (!match) throw new Error(`Unable to read project version from ${PROJECT_FILE}`)
+  return match[1]
+}
 
 function collect(dir) {
   const files = []
@@ -21,9 +33,63 @@ function collect(dir) {
   return files
 }
 
+function collectCss(dir) {
+  const files = []
+  for (const entry of readdirSync(dir)) {
+    const full = join(dir, entry)
+    if (statSync(full).isDirectory()) {
+      files.push(...collectCss(full))
+    } else if (entry.endsWith('.css')) {
+      files.push(full)
+    }
+  }
+  return files
+}
+
+function collectAssets(dir) {
+  const files = []
+  for (const entry of readdirSync(dir)) {
+    const full = join(dir, entry)
+    if (statSync(full).isDirectory()) {
+      files.push(...collectAssets(full))
+    } else {
+      files.push(full)
+    }
+  }
+  return files
+}
+
+function frontendRevision(files, cssFiles, assetFiles, indexTemplate) {
+  const hash = createHash('sha256')
+  const sources = [...files, ...cssFiles, ...assetFiles].sort()
+  for (const file of sources) {
+    hash.update(relative(WORKBENCH_DIR, file))
+    hash.update('\0')
+    hash.update(readFileSync(file))
+    hash.update('\0')
+  }
+  // Ignore the previous query value so rebuilding identical sources remains
+  // deterministic instead of hashing the last generated revision.
+  hash.update(indexTemplate.replace(/(\?v=)[A-Za-z0-9.+-]+/g, '$1'))
+  return `${projectVersion()}-${hash.digest('hex').slice(0, 10)}`
+}
+
+function electronOverlayTemplate(electronSource, constantName) {
+  const marker = `const ${constantName} = \``
+  const start = electronSource.indexOf(marker)
+  if (start < 0) throw new Error(`Unable to find ${constantName} in Electron main`)
+  const contentStart = start + marker.length
+  const end = electronSource.indexOf('\`;', contentStart)
+  if (end < 0) throw new Error(`Unable to read ${constantName} from Electron main`)
+  return electronSource.slice(contentStart, end)
+}
+
 async function build() {
   const workbenchFiles = existsSync(WORKBENCH_DIR) ? collect(WORKBENCH_DIR) : []
-  const files = [...collect(APP_DIR), ...workbenchFiles]
+  const cssFiles = existsSync(WORKBENCH_DIR) ? collectCss(WORKBENCH_DIR) : []
+  const assetFiles = existsSync(ASSETS_DIR) ? collectAssets(ASSETS_DIR) : []
+  const files = workbenchFiles
+  rmSync(OUT_DIR, { recursive: true, force: true })
   mkdirSync(OUT_DIR, { recursive: true })
 
   for (const file of files) {
@@ -62,16 +128,72 @@ async function build() {
   const total = files.length
   console.log(`\nDone. ${total} JSX file${total > 1 ? 's' : ''} compiled to ${OUT_DIR}`)
 
+  const indexTemplate = readFileSync(INDEX_SOURCE, 'utf8')
+  const revision = frontendRevision(files, cssFiles, assetFiles, indexTemplate)
+  const indexHtml = indexTemplate.replace(
+    /(\?v=)[A-Za-z0-9.+-]+/g,
+    `$1${revision}`,
+  )
+  writeFileSync(join(APP_DIR, 'index.html'), indexHtml)
+  console.log(`✓ index.html (${revision})`)
+
+  // Browser chrome overlays run in separate WebContentsViews. Emitting their
+  // existing inline templates as same-origin pages lets them load the exact
+  // same bundled fonts as the main Workbench without weakening local CORS.
+  const electronSource = readFileSync(ELECTRON_MAIN_SOURCE, 'utf8')
+  const overlayDir = join(APP_DIR, 'electron')
+  mkdirSync(overlayDir, { recursive: true })
+  for (const [constantName, outputName] of [
+    ['BROWSER_CHAT_OVERLAY_HTML', 'browser-chat-overlay.html'],
+    ['BROWSER_TAB_PICKER_HTML', 'browser-tab-picker.html'],
+  ]) {
+    const overlayHtml = electronOverlayTemplate(electronSource, constantName).replace(
+      '<head>',
+      `<head><link rel="stylesheet" href="../fonts.css?v=${revision}">`,
+    )
+    writeFileSync(join(overlayDir, outputName), overlayHtml)
+    console.log(`✓ electron/${outputName}`)
+  }
+
+  const reactAssets = [
+    ['node_modules/react/umd/react.production.min.js', 'react.production.min.js'],
+    ['node_modules/react-dom/umd/react-dom.production.min.js', 'react-dom.production.min.js'],
+    ['node_modules/echarts/dist/echarts.min.js', 'echarts.min.js'],
+  ]
+  for (const [source, target] of reactAssets) {
+    copyFileSync(resolve(__dirname, source), join(APP_DIR, target))
+    console.log(`✓ ${target}`)
+  }
+
+  // CSS is maintained beside its owning source and copied to the one static
+  // output namespace with the same relative path.
+  for (const srcPath of cssFiles) {
+    const rel = relative(WORKBENCH_DIR, srcPath)
+    const outPath = join(APP_DIR, rel)
+    mkdirSync(dirname(outPath), { recursive: true })
+    copyFileSync(srcPath, outPath)
+    console.log(`✓ ${rel}`)
+  }
+
+  // Fonts and their licenses are source-owned beside the Workbench and copied
+  // into the same static namespace that PyInstaller packages for every OS.
+  for (const srcPath of assetFiles) {
+    const rel = relative(WORKBENCH_DIR, srcPath)
+    const outPath = join(APP_DIR, rel)
+    mkdirSync(dirname(outPath), { recursive: true })
+    copyFileSync(srcPath, outPath)
+    console.log(`✓ ${rel}`)
+  }
+
   // ---- Copy pdfjs-dist assets ------------------------------------------------
   const PDFJS_SRC = resolve(__dirname, 'node_modules/pdfjs-dist')
   const PDFJS_DST = resolve(APP_DIR, 'pdfjs')
   if (existsSync(PDFJS_SRC)) {
     mkdirSync(join(PDFJS_DST, 'images'), { recursive: true })
 
-    // Electron 35 / Chromium 134 does not implement all APIs used by the
-    // pdfjs-dist 6 modern bundles (notably Map/WeakMap#getOrInsertComputed and
-    // Uint8Array#toHex). Keep the core, worker, and viewer on PDF.js's official
-    // legacy build so all three execution contexts receive the same polyfills.
+    // Keep the core, worker, and viewer on PDF.js's official legacy build so
+    // packaged desktop runtimes and supported source-mode browsers all receive
+    // the same polyfills and execute the same asset set.
     const files = [
       ['legacy/build/pdf.min.mjs', 'pdf.min.js'],
       ['legacy/build/pdf.worker.min.mjs', 'pdf.worker.min.js'],

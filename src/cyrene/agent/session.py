@@ -1,39 +1,34 @@
-"""Session persistence: message I/O, pending questions, labels, lifecycle.
+"""Session persistence: message I/O, pending questions, metadata, lifecycle.
 
-Depends on ``state`` (ContextVars, ``_call_llm``) and ``message``
+Depends on ``state`` (ContextVars, ``_call_llm``) and message helpers
 (message utilities), but not on ``guidance``, ``coordinator``, or ``agent``.
 """
 
 import asyncio
-import json
 import logging
 from datetime import datetime, timezone
 from typing import Any
 from uuid import uuid4
 
 import cyrene.agent.state as _state
-from cyrene import debug
-from cyrene.context_trace import strip_context_metadata, summarize_context_trace
-from cyrene.io_utils import atomic_write_json, read_json_safe
-from cyrene.agent.message import (
-    _dedupe_messages_by_id,
-    _ensure_message_identity,
-    _extract_json_object,
-    _fallback_label,
-    _is_replaceable_live_message,
-    _message_suffix_after_persisted_prefix,
+import cyrene.model_runtime.compaction as _compaction
+from cyrene.observability import debug
+from cyrene.observability.context_trace import strip_context_metadata, summarize_context_trace
+from cyrene.runtime.io import atomic_write_json, read_json_safe
+from cyrene.agent.message_utils import (
+    dedupe_messages_by_id as _dedupe_messages_by_id,
+    ensure_message_identity as _ensure_message_identity,
+    fallback_label as _fallback_label,
+    is_replaceable_live_message as _is_replaceable_live_message,
+    message_suffix_after_persisted_prefix as _message_suffix_after_persisted_prefix,
 )
 from cyrene.agent.state import (
     ASSISTANT_NAME,
     _call_llm,
     _caller_type,
-    _current_agent_id,
     _current_round_id,
-    _current_client_request_id,
     _current_session_id,
     _ensure_session,
-    _pending_compressors,
-    _pending_label_refreshes,
     _persist_base_messages,
     _persist_history_prefix_len,
     _persist_insert_at,
@@ -42,12 +37,22 @@ from cyrene.agent.state import (
     _REPORT_REF_MAX_PREVIEW,
     _REPORT_REF_PREFIX,
     _session_state_file,
-    _session_state_lock,
 )
-from cyrene.llm import _assistant_text
-from cyrene.task_lifecycle import cancel_and_wait, track_task
+from cyrene.model_runtime.messages import assistant_text
+from cyrene.model_runtime.compaction import (
+    COMPACT_BLOCK_PREFIX as _COMPACT_BLOCK_PREFIX,
+    COMPACT_TRIGGER_RATIO as _COMPACT_TRIGGER_RATIO,
+    compact_messages_for_storage as _compact_messages_for_storage,
+)
+from cyrene.runtime.task_lifecycle import cancel_and_wait, drain_or_cancel, track_task
 
 logger = logging.getLogger(__name__)
+
+# Compatibility aliases for helpers that historically lived in this module.
+_is_compacted_block = _compaction.is_compacted_block
+_safe_recent_start = _compaction._safe_recent_start
+_strip_tool_episode_text = _compaction._strip_tool_episode_text
+_COMPACT_RECENT_RATIO = _compaction.COMPACT_RECENT_RATIO
 
 
 # ---------------------------------------------------------------------------
@@ -224,146 +229,8 @@ def _load_round_messages(round_id: str) -> list[dict[str, Any]]:
 # Token-budget compaction (append-only immutable compacted blocks)
 # ---------------------------------------------------------------------------
 
-_COMPACT_TRIGGER_RATIO = 0.6
-_COMPACT_RECENT_RATIO = 0.3
-_COMPACT_BLOCK_PREFIX = "[Compacted earlier context]"
 _MEMORY_COMPRESSION_MIN_MESSAGES = 45
 _MEMORY_COMPRESSION_WINDOW_MESSAGES = 20
-
-
-def _is_compacted_block(message: dict[str, Any]) -> bool:
-    return isinstance(message, dict) and bool(message.get("compacted_block"))
-
-
-def _strip_tool_episode_text(messages: list[dict[str, Any]]) -> list[str]:
-    """Render messages as compact text lines, stripping tool noise.
-
-    Tool calls are reduced to ``[tool] name(args)``; tool *results* (role=="tool")
-    are dropped entirely — we keep what was attempted, not the bulky output.
-
-    User/assistant prose is kept verbatim: it is a small slice of the token
-    budget (the bulk is tool results, already dropped) and truncating it would
-    cost conversational context for negligible savings. The background LLM
-    distillation pass bounds the final block size, so fidelity here is free.
-    """
-    lines: list[str] = []
-    for m in messages:
-        if _is_compacted_block(m):
-            content = str(m.get("content") or "").strip()
-            if content.startswith(_COMPACT_BLOCK_PREFIX):
-                content = content[len(_COMPACT_BLOCK_PREFIX):].lstrip("\n")
-            if content:
-                lines.append(content)
-            continue
-        role = m.get("role")
-        if role == "tool":
-            continue  # tool result body stripped
-        content = str(m.get("content") or "").strip()
-        if role == "user":
-            if content:
-                lines.append(f"User: {content}")
-        elif role == "assistant":
-            if content:
-                lines.append(f"{ASSISTANT_NAME}: {content}")
-            for tc in (m.get("tool_calls") or []):
-                fn = tc.get("function", {}) if isinstance(tc, dict) else {}
-                name = str(fn.get("name") or "").strip()
-                args = str(fn.get("arguments") or "").strip()
-                if name:
-                    lines.append(f"  [tool] {name}({args[:200]})")
-        elif role == "system":
-            if content:
-                lines.append(content[:300])
-    return lines
-
-
-def _safe_recent_start(live: list[dict[str, Any]], idx: int) -> int:
-    """Move boundary forward so ``live[idx:]`` never starts on a tool result."""
-    n = len(live)
-    i = max(0, min(idx, n))
-    while i < n and live[i].get("role") == "tool":
-        i += 1
-    return i
-
-
-def _compact_messages_for_storage(
-    messages: list[dict[str, Any]],
-    *,
-    ctx_limit: int | None = None,
-    force: bool = False,
-) -> list[dict[str, Any]]:
-    """Token-budget compaction with an immutable, append-only compacted-block chain.
-
-    - At or below 60% of the model context window: return unchanged (append-only
-      → stable prefix → prompt-cache hits).
-    - Above 60%: mechanically fold the older live messages into ONE new compacted
-      block (tool results stripped, calls reduced to name+args), appended AFTER any
-      existing compacted blocks (which are never rewritten). Recent messages are
-      kept verbatim within ~30% of the window.
-    - With ``force=True``: mechanically fold the entire conversation, including
-      prior compacted blocks, into ONE replacement block. No recent raw messages
-      are retained. This is the explicit user-triggered Workbench behavior.
-
-    When the context window is unknown, automatic compaction is disabled so
-    persistence remains lossless. Forced full compaction does not need a window.
-    """
-    from cyrene.config_store import get_current_ctx_limit
-    from cyrene.call_llm import _message_token_estimate
-
-    if ctx_limit is None:
-        ctx_limit = get_current_ctx_limit()
-    if ctx_limit <= 0 and not force:
-        return messages
-
-    if not force:
-        total = sum(_message_token_estimate(m) for m in messages)
-        if total <= int(ctx_limit * _COMPACT_TRIGGER_RATIO):
-            return messages
-
-    if force:
-        if len(messages) == 1 and _is_compacted_block(messages[0]):
-            return messages
-        head_blocks: list[dict[str, Any]] = []
-        to_compact = messages
-        recent: list[dict[str, Any]] = []
-    else:
-        head_blocks = []
-        i = 0
-        while i < len(messages) and _is_compacted_block(messages[i]):
-            head_blocks.append(messages[i])
-            i += 1
-        live = messages[i:]
-
-        recent_budget = int(ctx_limit * _COMPACT_RECENT_RATIO)
-        acc = 0
-        cut = 0
-        for j in range(len(live) - 1, -1, -1):
-            acc += _message_token_estimate(live[j])
-            if acc > recent_budget:
-                cut = j + 1
-                break
-        cut = _safe_recent_start(live, cut)
-
-        to_compact = live[:cut]
-        recent = live[cut:]
-    if not to_compact:
-        return messages
-
-    block_lines = _strip_tool_episode_text(to_compact)
-    if not block_lines:
-        # The compactable prefix contains only tool results. Those results are
-        # intentionally excluded from compacted context, so dropping the prefix
-        # is the successful compacted representation rather than a no-op.
-        if not force:
-            return [*head_blocks, *recent]
-        block_lines = ["Earlier context contained only tool results and was omitted."]
-    block: dict[str, Any] = {
-        "role": "system",
-        "content": _COMPACT_BLOCK_PREFIX + "\n" + "\n".join(block_lines),
-        "compacted_block": True,
-    }
-    _ensure_message_identity([block])
-    return [*head_blocks, block, *recent]
 
 
 # ---------------------------------------------------------------------------
@@ -418,14 +285,14 @@ def _exceeds_compact_threshold(
     ctx-limit handling in ``_compact_messages_for_storage`` (unknown window → no
     compaction or distillation).
     """
-    from cyrene.config_store import get_current_ctx_limit
-    from cyrene.call_llm import _message_token_estimate
+    from cyrene.runtime.config_store import get_current_ctx_limit
+    from cyrene.model_runtime.client import message_token_estimate
 
     if ctx_limit is None:
         ctx_limit = get_current_ctx_limit()
     if ctx_limit <= 0:
         return False
-    total = sum(_message_token_estimate(m) for m in messages)
+    total = sum(message_token_estimate(m) for m in messages)
     return total > int(ctx_limit * _COMPACT_TRIGGER_RATIO)
 
 
@@ -443,8 +310,8 @@ async def compact_session_if_needed(
     ``force`` is the explicit user action: it mechanically folds the entire
     conversation into one block instead of retaining the automatic recent window.
     """
-    from cyrene.call_llm import _message_token_estimate
-    from cyrene.config_store import get_current_ctx_limit
+    from cyrene.model_runtime.client import message_token_estimate
+    from cyrene.runtime.config_store import get_current_ctx_limit
 
     ctx = _ensure_session(session_id)
     if ctx.lock.locked():
@@ -470,7 +337,7 @@ async def compact_session_if_needed(
                 effective_limit = int(
                     ctx_limit if ctx_limit is not None else get_current_ctx_limit()
                 )
-                before_tokens = sum(_message_token_estimate(m) for m in messages)
+                before_tokens = sum(message_token_estimate(m) for m in messages)
                 threshold_tokens = int(effective_limit * _COMPACT_TRIGGER_RATIO)
                 if effective_limit > 0 and not force and before_tokens <= threshold_tokens:
                     return {
@@ -513,7 +380,7 @@ async def compact_session_if_needed(
 
                 state["messages"] = trimmed
                 _write_session_state(state)
-                after_tokens = sum(_message_token_estimate(m) for m in trimmed)
+                after_tokens = sum(message_token_estimate(m) for m in trimmed)
                 await debug.publish_event({
                     "type": "session_update",
                     "message_count": len(trimmed),
@@ -551,8 +418,9 @@ async def compact_session_if_needed(
         _current_session_id.reset(session_token)
 
 
-def _schedule_compaction_distill() -> None:
-    session_id = _current_session_id.get()
+def _schedule_compaction_distill(session_id: str | None = None) -> None:
+    if session_id is None:
+        session_id = _current_session_id.get()
     ctx = _ensure_session(session_id)
     if ctx.pending_distill_task is not None and not ctx.pending_distill_task.done():
         return
@@ -624,7 +492,7 @@ async def _distill_pending_compacted_blocks(session_id: str = "") -> None:
                     max_tokens=4500,
                     secondary=True,
                 )
-                distilled = (_assistant_text(response) or "").strip()
+                distilled = (assistant_text(response) or "").strip()
             except Exception:
                 logger.warning("Compaction distillation failed", exc_info=True)
             finally:
@@ -734,7 +602,7 @@ def _compress_report_messages_for_storage(messages: list[dict[str, Any]]) -> lis
             round_id=str(message.get("round_id", "")).strip(),
             round_title=str(message.get("round_title", "")).strip(),
             archive_session_id=archive_session_id,
-            full_text=_assistant_text(message) or str(message.get("content") or ""),
+            full_text=assistant_text(message) or str(message.get("content") or ""),
             attachments=message.get("attachments") if isinstance(message.get("attachments"), list) else None,
         )
         for key in ("message_id", "client_request_id", "subagent_flow_snapshot"):
@@ -789,7 +657,7 @@ def _select_report_ref(user_message: str, report_refs: list[dict[str, Any]]) -> 
 
 
 def _expand_report_reference_history(history: list[dict[str, Any]], user_message: str) -> list[dict[str, Any]]:
-    from cyrene.conversations import get_archived_round
+    from cyrene.runtime.memory.conversations import get_archived_round
 
     report_refs = _iter_report_refs(history)
     if not _looks_like_report_followup(user_message, report_refs):
@@ -846,7 +714,12 @@ def _schedule_memory_compression(messages: list[dict[str, Any]], session_id: str
     )
 
 
-async def _write_session_messages_locked(state: dict[str, Any], messages: list[dict[str, Any]]) -> None:
+async def _write_session_messages_locked(
+    state: dict[str, Any],
+    messages: list[dict[str, Any]],
+    *,
+    session_id: str | None = None,
+) -> None:
     messages = strip_context_metadata(messages)
     _ensure_archive_session_id(state)
     messages = _compress_report_messages_for_storage(messages)
@@ -856,22 +729,27 @@ async def _write_session_messages_locked(state: dict[str, Any], messages: list[d
     state["messages"] = trimmed
     if not str(state.get("session_title", "")).strip():
         state.pop("session_title", None)
-    _write_session_state(state)
-    await debug.publish_event({
+    target_session_id = _current_session_id.get() if session_id is None else session_id
+    _write_session_state(state, target_session_id)
+    update_event = {
         "type": "session_update",
         "message_count": len(trimmed),
         "last_role": trimmed[-1].get("role") if trimmed else "",
         "round_id": next((str(m.get("round_id", "")).strip() for m in reversed(trimmed) if m.get("round_id")), ""),
-    })
+    }
+    if session_id is None:
+        await debug.publish_event(update_event)
+    else:
+        await debug.publish_event(update_event, session_id=target_session_id)
 
     if len(messages) >= _MEMORY_COMPRESSION_MIN_MESSAGES:
-        _schedule_memory_compression(messages, session_id=_current_session_id.get())
+        _schedule_memory_compression(messages, session_id=target_session_id)
 
     # Distill only when the cheap mechanical fold was not enough on its own:
     # the post-fold context still exceeds the compaction threshold. A fold that
     # already fit within budget keeps its mechanical block and skips the LLM.
     if _has_pending_compacted_block(trimmed) and _exceeds_compact_threshold(trimmed):
-        _schedule_compaction_distill()
+        _schedule_compaction_distill(target_session_id)
 
 
 async def _save_session_messages(
@@ -979,6 +857,47 @@ async def _append_session_message(entry: dict[str, Any]) -> None:
         full_messages.append(entry)
         _ensure_message_identity(full_messages)
         await _write_session_messages_locked(state, full_messages)
+
+
+async def append_message_to_session(
+    session_id: str,
+    entry: dict[str, Any],
+) -> None:
+    """Append a durable message to an arbitrary session without rebinding a run.
+
+    Group-membership events use this boundary while another session may be
+    active.  The target session's own lock and epoch are authoritative, and a
+    stable ``message_id`` makes outbox retries idempotent.
+    """
+    target = str(session_id or "").strip()
+    if not target:
+        raise ValueError("session_id is required")
+    ctx = _ensure_session(target)
+    async with ctx.session_state_lock:
+        state = _load_session_state(target)
+        saved_epoch = state.get("_session_epoch")
+        if saved_epoch is not None and saved_epoch != ctx.session_epoch:
+            logger.warning(
+                "Stale append_message_to_session skipped for %s (session was reset)",
+                target,
+            )
+            return
+        messages = state.get("messages", [])
+        full_messages = list(messages) if isinstance(messages, list) else []
+        message_id = str(entry.get("message_id") or "").strip()
+        if message_id and any(
+            isinstance(message, dict)
+            and str(message.get("message_id") or "").strip() == message_id
+            for message in full_messages
+        ):
+            return
+        full_messages.append(dict(entry))
+        _ensure_message_identity(full_messages)
+        await _write_session_messages_locked(
+            state,
+            full_messages,
+            session_id=target,
+        )
 
 
 async def append_system_message(
@@ -1323,94 +1242,18 @@ def get_session_labels(round_id: str = "") -> dict[str, str]:
 
 
 def _schedule_session_label_refresh(current_user_message: str, round_id: str) -> None:
-    session_id = _current_session_id.get()
-    async def _runner() -> None:
-        try:
-            await _refresh_session_labels(current_user_message, round_id, session_id=session_id)
-        except Exception:
-            logger.warning("Async session naming failed for %s", round_id or "<unknown>", exc_info=True)
+    """Compatibility no-op: Workbench owns visible one-shot session naming.
 
-    task = asyncio.create_task(_runner())
-    ctx = _ensure_session(session_id)
-    track_task(
-        task,
-        ctx.pending_label_refreshes,
-        logger=logger,
-        label="session label refresh",
-    )
+    Visible Chat and Task sessions schedule naming directly after their first
+    user message, so this legacy per-round hook must remain disabled.
+    """
 
-
-async def _refresh_session_labels(current_user_message: str, round_id: str, session_id: str = "") -> None:
-    state = _load_session_state(session_id=session_id)
-    messages = state.get("messages", []) if isinstance(state.get("messages"), list) else []
-    if not messages:
-        return
-
-    session_user_inputs = [
-        str(msg.get("content", "")).strip()
-        for msg in messages
-        if msg.get("role") == "user" and str(msg.get("content", "")).strip()
-    ]
-    round_user_inputs = [
-        str(msg.get("content", "")).strip()
-        for msg in messages
-        if msg.get("role") == "user"
-        and str(msg.get("round_id", "")).strip() == round_id
-        and str(msg.get("content", "")).strip()
-    ]
-    if not round_user_inputs:
-        round_user_inputs = [_fallback_label(current_user_message, limit=80)]
-    if not session_user_inputs:
-        session_user_inputs = round_user_inputs
-
-    round_fallback = _fallback_label(" / ".join(round_user_inputs), limit=40)
-    session_fallback = _fallback_label(" / ".join(session_user_inputs), limit=56)
-    token = _caller_type.set("session_namer")
-    try:
-        response = await _call_llm([
-            {
-                "role": "system",
-                "content": (
-                    "You generate concise UI labels for chat sessions and rounds. "
-                    "Return strict JSON with keys round_title and session_title only."
-                ),
-            },
-            {
-                "role": "user",
-                "content": (
-                    "Summarize the following chat inputs into compact labels.\n"
-                    "Rules:\n"
-                    "- round_title: summarize only the current round's user input(s)\n"
-                    "- session_title: summarize all user inputs in the session so far\n"
-                    "- Keep each label under 12 words\n"
-                    "- Use the user's language when obvious\n"
-                    "- No quotes, markdown, numbering, or trailing punctuation\n\n"
-                    f"Current round user inputs:\n{json.dumps(round_user_inputs, ensure_ascii=False)}\n\n"
-                    f"All session user inputs:\n{json.dumps(session_user_inputs, ensure_ascii=False)}\n\n"
-                    "Return JSON only."
-                ),
-            },
-        ], tools=None, secondary=True)
-        payload = _extract_json_object(_assistant_text(response))
-    except Exception:
-        logger.warning("Session naming failed", exc_info=True)
-        payload = {}
-    finally:
-        _caller_type.reset(token)
-
-    round_title = _fallback_label(payload.get("round_title") or round_fallback, limit=40)
-    session_title = _fallback_label(payload.get("session_title") or session_fallback, limit=56)
-
-    async with _ensure_session(session_id).session_state_lock:
-        latest_state = _load_session_state(session_id=session_id)
-        latest_messages = latest_state.get("messages", [])
-        full_messages = list(latest_messages) if isinstance(latest_messages, list) else []
-        for msg in full_messages:
-            if str(msg.get("round_id", "")).strip() == round_id:
-                msg["round_title"] = round_title
-        latest_state["messages"] = full_messages
-        latest_state["session_title"] = session_title
-        _write_session_state(latest_state, session_id=session_id)
+async def _refresh_session_labels(
+    current_user_message: str,
+    round_id: str,
+    session_id: str = "",
+) -> None:
+    """Compatibility no-op for integrations importing the former helper."""
 
 
 # ---------------------------------------------------------------------------
@@ -1426,12 +1269,12 @@ async def _compress_old_messages(
     # sessions into the legacy compressor would write every project's memories
     # into global short_term.json, which the old default-project page exposed.
     if session_id:
-        from cyrene.workbench_context import resolve_workbench_project_id_for_session
+        from cyrene.workbench.context import resolve_workbench_project_id_for_session
 
         if resolve_workbench_project_id_for_session(session_id) is not None:
             return
 
-    from cyrene.short_term import touch_entry
+    from cyrene.runtime.memory.short_term import touch_entry
 
     eligible = [
         m for m in all_messages
@@ -1483,7 +1326,7 @@ Output format (one per line, no explanations):
             {"role": "system", "content": "You extract structured memories from conversations. Be concise."},
             {"role": "user", "content": prompt}
         ], tools=None)
-        compressed = _assistant_text(response) or ""
+        compressed = assistant_text(response) or ""
     except Exception:
         logger.warning("Memory compression failed", exc_info=True)
         return
@@ -1513,7 +1356,7 @@ Output format (one per line, no explanations):
 async def clear_session_id(session_id: str = "") -> None:
     import cyrene.agent.state as _state
     from cyrene.subagent import clear as _clear_subagents
-    from cyrene.inbox import clear_all_inboxes
+    from cyrene.runtime.inbox import clear_all_inboxes
 
     ctx = _ensure_session(session_id)
 
@@ -1547,7 +1390,7 @@ async def clear_session_id(session_id: str = "") -> None:
     if not session_id:
         _state._session_epoch = ctx.session_epoch
     try:
-        from cyrene import pattern as _pattern_module
+        from cyrene import learning as _pattern_module
         task = asyncio.create_task(_pattern_module.scan_for_session_start())
         track_task(
             task,
@@ -1593,6 +1436,10 @@ async def shutdown_session_tasks() -> None:
     current = asyncio.current_task()
     for session_id, ctx in list(_state._sessions.items()):
         ctx.interrupt_event.set()
+        # Memory compression starts with short SQLite-backed observability
+        # writes. Give those operations a bounded chance to close their
+        # aiosqlite worker before cancellation tears down the event loop.
+        await drain_or_cancel(ctx.pending_compressors, grace_seconds=0.25)
         tasks: set[asyncio.Task[Any]] = set()
         for registry in (
             ctx.pending_compressors,
@@ -1616,3 +1463,49 @@ async def shutdown_session_tasks() -> None:
             ctx.active_task = None
         if session_id:
             _state._sessions.pop(session_id, None)
+
+
+# Public persistence and pending-question boundary for non-agent domains.
+def load_session_state(session_id: str | None = None) -> dict[str, Any]:
+    return _load_session_state(session_id)
+
+
+def load_session_messages() -> list[dict[str, Any]]:
+    return _load_session_messages()
+
+
+def write_session_state(
+    state: dict[str, Any],
+    session_id: str | None = None,
+) -> None:
+    _write_session_state(state, session_id)
+
+
+async def upsert_pending_question(payload: dict[str, Any]) -> dict[str, Any]:
+    return await _upsert_pending_question(payload)
+
+
+async def clear_pending_question(question_id: str) -> dict[str, Any]:
+    return await _clear_pending_question(question_id)
+
+
+async def append_session_message(entry: dict[str, Any]) -> None:
+    await _append_session_message(entry)
+
+
+async def remove_messages_by_request_id(request_id: str) -> None:
+    await _remove_messages_by_request_id(request_id)
+
+
+__all__ = [
+    "append_message_to_session",
+    "append_session_message",
+    "clear_pending_question",
+    "clear_session_id",
+    "load_session_messages",
+    "load_session_state",
+    "remove_messages_by_request_id",
+    "shutdown_session_tasks",
+    "upsert_pending_question",
+    "write_session_state",
+]
