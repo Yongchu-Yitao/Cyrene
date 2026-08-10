@@ -15809,6 +15809,7 @@ span.wbc-chat-group-toggle {
   align-items: center;
   justify-content: center;
   color: var(--wb-muted);
+  transition: opacity 120ms ease;
 }
 
 .wbc-chat-row-icon svg {
@@ -16176,6 +16177,70 @@ span.wbc-chat-group-toggle {
   opacity: 1;
   transform: translateX(0);
   pointer-events: auto;
+}
+
+/* A conversation opened from the split panel changes React ownership while it
+   travels directly from its current rectangle to the final left/main track.
+   The View Transition API animates position and size as one operation, avoiding
+   the former narrow-left intermediate state and its follow-up width snap. Root
+   snapshots stay still; only the promoted conversation receives motion. */
+html.wbc-split-view-transition::view-transition-old(root),
+html.wbc-split-view-transition::view-transition-new(root) {
+  animation: none;
+  mix-blend-mode: normal;
+}
+html.wbc-split-view-transition::view-transition-group(wbc-promoted-conversation),
+html.wbc-split-view-transition::view-transition-old(wbc-promoted-conversation),
+html.wbc-split-view-transition::view-transition-new(wbc-promoted-conversation) {
+  animation-duration: 380ms;
+  /* Symmetric curve: reversing the endpoints produces the same motion path. */
+  animation-timing-function: cubic-bezier(.4, 0, .6, 1);
+  mix-blend-mode: normal;
+}
+
+/* The two supporting surfaces are time-reversed as well: opening fades the
+   previous main conversation out while the resource enters; closing fades the
+   resource out while that conversation returns. */
+html.wbc-split-view-transition-opening::view-transition-old(wbc-displaced-conversation),
+html.wbc-split-view-transition-opening::view-transition-new(wbc-promoted-resource),
+html.wbc-split-view-transition-closing::view-transition-old(wbc-promoted-resource),
+html.wbc-split-view-transition-closing::view-transition-new(wbc-displaced-conversation) {
+  animation-duration: 240ms;
+  animation-timing-function: cubic-bezier(.4, 0, .6, 1);
+  animation-fill-mode: both;
+  mix-blend-mode: normal;
+}
+
+html.wbc-split-view-transition-opening::view-transition-old(wbc-displaced-conversation),
+html.wbc-split-view-transition-closing::view-transition-old(wbc-promoted-resource) {
+  animation-name: wbc-split-surface-out;
+}
+
+html.wbc-split-view-transition-opening::view-transition-new(wbc-promoted-resource),
+html.wbc-split-view-transition-closing::view-transition-new(wbc-displaced-conversation) {
+  animation-name: wbc-split-surface-in;
+}
+
+@keyframes wbc-split-surface-in {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+@keyframes wbc-split-surface-out {
+  from { opacity: 1; }
+  to { opacity: 0; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  html.wbc-split-view-transition::view-transition-group(wbc-promoted-conversation),
+  html.wbc-split-view-transition::view-transition-old(wbc-promoted-conversation),
+  html.wbc-split-view-transition::view-transition-new(wbc-promoted-conversation),
+  html.wbc-split-view-transition::view-transition-old(wbc-displaced-conversation),
+  html.wbc-split-view-transition::view-transition-new(wbc-displaced-conversation),
+  html.wbc-split-view-transition::view-transition-old(wbc-promoted-resource),
+  html.wbc-split-view-transition::view-transition-new(wbc-promoted-resource) {
+    animation: none;
+  }
 }
 
 .wbc-side-agent-split-resizer {
@@ -27931,6 +27996,8 @@ html[data-density="compact"] .workbench-shell :where(.wb-budget-model-head, .wb-
    status map. It mirrors the current project's conversation order while only
    surfacing work that is running, actionable, newly completed, or failed. */
 .wbc-conversation-status-track {
+  --wbc-track-blue: #4f83e8;
+  --wbc-track-collapsed-x: 23px;
   position: absolute;
   z-index: 45;
   top: 62px;
@@ -27939,36 +28006,69 @@ html[data-density="compact"] .workbench-shell :where(.wb-budget-model-head, .wb-
   left: 0;
   display: block;
   min-height: 82px;
-  visibility: hidden;
   pointer-events: none;
 }
 
 .workbench-grid.integrated-sidebars .wbc-rail.workbench-integrated-rail.is-collapsed .wbc-conversation-status-track {
-  --wbc-track-blue: #4f83e8;
-  visibility: visible;
   pointer-events: none;
 }
 
-.workbench-grid.integrated-sidebars .wbc-rail.workbench-integrated-rail.is-collapsed .wbc-conversation-status-track::before {
+.wbc-conversation-status-track::before {
   content: "";
   position: absolute;
   top: 5px;
   bottom: 5px;
-  left: 50%;
+  left: var(--wbc-track-collapsed-x);
   width: 1px;
-  transform: translateX(-50%);
+  opacity: 0;
+  transform: translateX(-50%) scaleY(.72);
+  transform-origin: center;
   border-radius: 999px;
   background: color-mix(in srgb, var(--wb-line-2) 42%, transparent);
+  transition:
+    opacity 180ms ease,
+    transform var(--wb-sidebar-motion-duration) var(--wb-sidebar-motion-ease);
+}
+
+.workbench-grid.integrated-sidebars .wbc-rail.workbench-integrated-rail.is-collapsed .wbc-conversation-status-track::before {
+  opacity: 1;
+  transform: translateX(-50%) scaleY(1);
 }
 
 .wbc-conversation-status-anchor {
   position: absolute;
-  top: var(--wbc-track-position);
-  left: 50%;
+  top: var(--wbc-track-expanded-position, var(--wbc-track-position));
+  left: var(--wbc-track-expanded-x, 29px);
   width: 32px;
   height: 32px;
-  transform: translate(-50%, -50%);
-  pointer-events: auto;
+  opacity: 0;
+  transform: translate(-50%, -50%) translateY(0);
+  pointer-events: none;
+  will-change: left, transform;
+}
+
+.wbc-conversation-status-anchor.is-measured {
+  opacity: 1;
+}
+
+.workbench-grid.integrated-sidebars .wbc-rail.workbench-integrated-rail.is-collapsed .wbc-conversation-status-anchor {
+  left: var(--wbc-track-collapsed-x);
+  transform: translate(-50%, -50%) translateY(var(--wbc-track-collapse-y, 0px));
+  animation: wbc-status-enable-interaction 240ms step-end both;
+}
+
+.wbc-rail.is-status-expanding .wbc-conversation-status-anchor {
+  transition:
+    left 180ms var(--wb-sidebar-motion-ease),
+    transform 180ms var(--wb-sidebar-motion-ease),
+    opacity 120ms ease;
+}
+
+.wbc-rail.is-status-collapsing .wbc-conversation-status-anchor {
+  transition:
+    left 180ms var(--wb-sidebar-motion-ease) 60ms,
+    transform 180ms var(--wb-sidebar-motion-ease) 60ms,
+    opacity 120ms ease;
 }
 
 .wbc-conversation-status-marker {
@@ -27983,15 +28083,37 @@ html[data-density="compact"] .workbench-shell :where(.wb-budget-model-head, .wb-
   border-radius: 999px;
   background: transparent;
   color: var(--wbc-track-blue);
-  cursor: pointer;
+  cursor: default;
 }
 
-.wbc-conversation-status-marker > span {
+.wbc-conversation-status-glyph,
+.wbc-conversation-status-dot {
+  position: absolute;
+  inset: 50% auto auto 50%;
+  display: grid;
+  place-items: center;
+  transform: translate(-50%, -50%);
+}
+
+.wbc-conversation-status-glyph {
+  width: 18px;
+  height: 18px;
+  opacity: 1;
+}
+
+.wbc-conversation-status-glyph svg {
+  width: 17px;
+  height: 17px;
+}
+
+.wbc-conversation-status-dot {
   width: 6px;
   height: 6px;
+  opacity: 0;
   border-radius: 999px;
   background: currentColor;
   box-shadow: 0 0 0 2px var(--wb-floating-rail-bg);
+  transform: translate(-50%, -50%) scale(.58);
   transition:
     width 150ms ease,
     height 150ms ease,
@@ -27999,9 +28121,46 @@ html[data-density="compact"] .workbench-shell :where(.wb-budget-model-head, .wb-
     box-shadow 150ms ease;
 }
 
-.wbc-conversation-status-marker.is-urgent > span {
+.wbc-conversation-status-marker.is-urgent .wbc-conversation-status-dot {
   width: 10px;
   height: 10px;
+}
+
+.workbench-grid.integrated-sidebars .wbc-rail.workbench-integrated-rail.is-collapsed .wbc-conversation-status-marker {
+  cursor: pointer;
+}
+
+.workbench-grid.integrated-sidebars .wbc-rail.workbench-integrated-rail.is-collapsed .wbc-conversation-status-glyph {
+  opacity: 0;
+  transform: translate(-50%, -50%) scale(.58) rotate(-8deg);
+}
+
+.workbench-grid.integrated-sidebars .wbc-rail.workbench-integrated-rail.is-collapsed .wbc-conversation-status-dot {
+  opacity: 1;
+  transform: translate(-50%, -50%) scale(1);
+  transition:
+    width 150ms ease,
+    height 150ms ease,
+    transform 150ms ease,
+    box-shadow 150ms ease;
+}
+
+.workbench-grid.integrated-sidebars .wbc-rail.workbench-integrated-rail.is-status-expanding .wbc-conversation-status-glyph,
+.workbench-grid.integrated-sidebars .wbc-rail.workbench-integrated-rail.is-status-expanding .wbc-conversation-status-dot {
+  transition:
+    opacity 90ms ease 130ms,
+    transform 90ms ease 130ms;
+}
+
+.workbench-grid.integrated-sidebars .wbc-rail.workbench-integrated-rail.is-status-collapsing .wbc-conversation-status-glyph,
+.workbench-grid.integrated-sidebars .wbc-rail.workbench-integrated-rail.is-status-collapsing .wbc-conversation-status-dot {
+  transition:
+    opacity 80ms ease,
+    transform 80ms ease;
+}
+
+.wbc-chat-card.track-marker-ready .wbc-chat-row-icon {
+  opacity: 0;
 }
 
 .wbc-conversation-status-marker.is-running { color: var(--wb-green); }
@@ -28009,13 +28168,18 @@ html[data-density="compact"] .workbench-shell :where(.wb-budget-model-head, .wb-
 .wbc-conversation-status-marker.is-result { color: var(--wbc-track-blue); }
 .wbc-conversation-status-marker.is-failed { color: var(--wb-red); }
 
-.wbc-conversation-status-anchor:hover .wbc-conversation-status-marker > span,
-.wbc-conversation-status-anchor:focus-within .wbc-conversation-status-marker > span,
-.wbc-conversation-status-anchor.preview-open .wbc-conversation-status-marker > span {
-  transform: scale(1.24);
+.workbench-grid.integrated-sidebars .wbc-rail.workbench-integrated-rail.is-collapsed .wbc-conversation-status-anchor:hover .wbc-conversation-status-dot,
+.workbench-grid.integrated-sidebars .wbc-rail.workbench-integrated-rail.is-collapsed .wbc-conversation-status-anchor:focus-within .wbc-conversation-status-dot,
+.workbench-grid.integrated-sidebars .wbc-rail.workbench-integrated-rail.is-collapsed .wbc-conversation-status-anchor.preview-open .wbc-conversation-status-dot {
+  transform: translate(-50%, -50%) scale(1.24);
   box-shadow:
     0 0 0 2px var(--wb-floating-rail-bg),
     0 0 0 6px color-mix(in srgb, currentColor 16%, transparent);
+}
+
+@keyframes wbc-status-enable-interaction {
+  from { pointer-events: none; }
+  to { pointer-events: auto; }
 }
 
 .wbc-conversation-status-marker:focus-visible {
@@ -28301,7 +28465,10 @@ html[data-density="compact"] .workbench-shell :where(.wb-budget-model-head, .wb-
   .workbench-grid.integrated-sidebars .wbc-page,
   .workbench-grid.integrated-sidebars .workbench-integrated-rail,
   .workbench-grid.integrated-sidebars .workbench-integrated-rail-body,
-  .wbc-conversation-status-marker > span,
+  .wbc-conversation-status-track::before,
+  .wbc-conversation-status-anchor,
+  .wbc-conversation-status-glyph,
+  .wbc-conversation-status-dot,
   .wbc-conversation-status-preview,
   .workbench-grid.integrated-sidebars .workbench-sidebar-dock,
   .workbench-grid.integrated-sidebars .workbench-sidebar-dock-nav {

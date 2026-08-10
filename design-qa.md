@@ -427,6 +427,8 @@ final result: passed
 - Corrected collapsed state: `/tmp/cyrene-status-map-qa.4ir2Eq/aligned-collapsed.png`.
 - Combined corrected comparison: `/tmp/cyrene-status-map-qa.4ir2Eq/aligned-comparison.png`.
 - Opaque hover-card evidence: `/tmp/cyrene-status-map-qa.4ir2Eq/opaque-hover.png`.
+- Continuous-motion sequence (collapsed, expansion midpoint, expanded): `/tmp/cyrene-status-map-qa.4ir2Eq/motion-sequence.png`.
+- Expansion midpoint evidence: `/tmp/cyrene-status-map-qa.4ir2Eq/motion-expand-mid.png`.
 
 **Normalization**
 
@@ -442,6 +444,11 @@ final result: passed
 - Clicking the yellow marker changed the active Session to `wbchat_6bce4253e2` and the sidebar remained collapsed.
 - Hover preview and quick actions remain independent from marker navigation.
 - The hover card uses the opaque `--wb-card-bg-strong` token with no backdrop filter, so underlying transcript content cannot show through in either theme.
+- The status marker is one continuously mounted element. Its expanded endpoint matched the source row icon at `x=42.008, y=400.5` versus `x=42, y=400.5` (0 px Y error).
+- Expansion keeps the dot visible during movement; the attention glyph stays at opacity 0 until the final 110 ms crossfade, preventing a warning triangle from drifting through the list. Collapse reverses the choreography: glyph-to-dot first, then a 340 ms move after a 100 ms delay.
+- List scrolling updates the anchor's unanimated `top` immediately. After a 36 px scroll, the 24 ms sample had 0 px Y error and 0.008 px X error; no delayed catch-up remained at the 184 ms sample.
+- Out-of-track rows retain separate expanded and collapsed Y endpoints. Only the computed transform delta animates during rail transitions, so clamping remains continuous without adding scroll latency.
+- Marker hit testing stays disabled until the 440 ms collapse motion completes, and the reduced-motion rule collapses the same transitions to 1 ms.
 - No actionable P0/P1/P2 mismatch remains.
 
 final result: passed

@@ -1346,8 +1346,11 @@ def test_floating_conversation_panel_resource_split_replaces_right_and_restores_
     source = (root / "src" / "webui" / "frontend" / "workbench-chat.jsx").read_text(
         encoding="utf-8"
     )
+    styles = (root / "src" / "webui" / "frontend" / "workbench.css").read_text(
+        encoding="utf-8"
+    )
 
-    begin = source.split("  function beginFloatingPanelSplit(openSplit, sourceChatId) {", 1)[1].split(
+    begin = source.split("  function beginFloatingPanelSplit(openSplit, sourceChatId, sourceChatSnapshot) {", 1)[1].split(
         "\n  function restoreFloatingPanelSplit", 1
     )[0]
     restore = source.split("  function restoreFloatingPanelSplit() {", 1)[1].split(
@@ -1357,7 +1360,7 @@ def test_floating_conversation_panel_resource_split_replaces_right_and_restores_
         "\n\n  return (\n    <div", 1
     )[0]
 
-    split_chat_content = source.split("  function openSplitChatContent(type, payload) {", 1)[1].split(
+    split_chat_content = source.split("  function openSplitChatContent(type, payload, sourceChatSnapshot) {", 1)[1].split(
         "\n  function renderConversationPanel", 1
     )[0]
     chat_split = source.split("function WbcChatSplit({", 1)[1].split(
@@ -1369,28 +1372,58 @@ def test_floating_conversation_panel_resource_split_replaces_right_and_restores_
     assert "floatingSplitRestoreRef.current = {" in begin
     assert "splitSide: splitSide" in begin
     assert "activeChatId: activeId" in begin
+    assert "activeChat: activeChat &&" in begin
     assert "activeSplit: splitStateSnapshot(activeId)" in begin
     assert "sourceSplit: sourceId === activeId ? null : splitStateSnapshot(sourceId)" in begin
     # Whether the source conversation started left or right, it owns the left
     # track and the new content owns the right. Selecting a right-side source
     # causes the existing grid transition to slide it into the left position.
     assert "function promoteSourceAndOpenContent()" in begin
-    assert "if (sourceId !== activeId) selectChat(sourceId);" in begin
+    assert "selectChat(sourceId);" in begin
     assert 'setSplitSideDirect("right");' in begin
     assert "openSplit();" in begin
-    # A split conversation that physically starts on the right first moves its
-    # existing pane to the left, then gets promoted in-place after the shared
-    # grid transition. Reduced-motion users do not wait for an invisible move.
-    assert 'if (sourceId !== activeId && splitSide === "right")' in begin
-    assert 'setSplitSideDirect("left");' in begin
+    # Reuse the split pane's already-loaded transcript and commit the owner
+    # handoff atomically, preventing a one-frame loading/empty flash.
+    assert "chatCache.details[sourceId] = sourceChat;" in begin
+    assert "setActiveChat(sourceChat);" in begin
+    assert "setChatLoading(false);" in begin
+    assert "window.ReactDOM.flushSync(commitPromotion)" in begin
+    assert "document.startViewTransition" in begin
+    assert 'var transitionName = "wbc-promoted-conversation";' in begin
+    assert 'querySelector(":scope > .wbc-main")' in begin
+    assert "html.wbc-split-view-transition::view-transition-old(root)" in styles
+    assert "::view-transition-group(wbc-promoted-conversation)" in styles
+    assert "animation-duration: 380ms;" in styles
+    assert "cubic-bezier(.4, 0, .6, 1)" in styles
+    assert "wbc-split-view-transition-opening" in begin
+    assert 'var displacedName = "wbc-displaced-conversation";' in begin
+    assert 'var resourceName = "wbc-promoted-resource";' in begin
+    # Position and width change in one shared-element transition. There is no
+    # narrow left-side intermediate layout (or timer boundary) that can snap
+    # to the wider main conversation after arriving.
+    assert 'setSplitSideDirect("left");' not in begin
+    assert 'movingPane.addEventListener("transitionend", onMoveEnd);' not in begin
+    assert "setTimeout(promoteSourceAndOpenContent" not in begin
     assert 'window.matchMedia("(prefers-reduced-motion: reduce)").matches' in begin
-    assert "reducedMotion ? 0 : 500" in begin
     # Closing temporary content restores both conversations and the original
     # left/right placement.
     assert "restoreSplitState(snapshot.activeChatId, snapshot.activeSplit);" in restore
     assert "restoreSplitState(snapshot.chatId, snapshot.sourceSplit);" in restore
     assert "selectChat(snapshot.activeChatId);" in restore
     assert 'setSplitSideDirect(snapshot.splitSide === "left" ? "left" : "right");' in restore
+    assert "function commitRestoreNow()" in restore
+    assert "snapshot.activeChat || chatCache.details[snapshot.activeChatId]" in restore
+    assert "window.ReactDOM.flushSync(commitRestore)" in restore
+    assert "document.startViewTransition" in restore
+    assert "wbc-split-view-transition-closing" in restore
+    assert 'sourcePane.style.viewTransitionName = transitionName;' in restore
+    assert 'targetPane.style.viewTransitionName = transitionName;' in restore
+    assert 'targetMainPane.style.viewTransitionName = displacedName;' in restore
+    assert 'data-split-open={openKey ? "true" : "false"}' in source
+    assert 'data-split-open="true"' in begin
+    assert 'data-split-open="true"' in restore
+    assert "wbc-split-surface-in" in styles
+    assert "wbc-split-surface-out" in styles
     assert source.count("if (restoreFloatingPanelSplit()) return;") >= 5
     assert "if (floating) beginFloatingPanelSplit(openSplit);" in render_panel
     assert 'selectResourceSplit("viewer"' in render_panel
@@ -1403,7 +1436,7 @@ def test_floating_conversation_panel_resource_split_replaces_right_and_restores_
     # The split conversation's own floating panel exposes the same content
     # entries instead of swallowing them with placeholder callbacks.
     assert "beginFloatingPanelSplit(function ()" in split_chat_content
-    assert "}, sourceChatId);" in split_chat_content
+    assert "}, sourceChatId, sourceChatSnapshot);" in split_chat_content
     assert 'type === "artifact"' in split_chat_content
     assert 'type === "change"' in split_chat_content
     assert 'type === "viewer"' in split_chat_content
@@ -1413,6 +1446,7 @@ def test_floating_conversation_panel_resource_split_replaces_right_and_restores_
     assert 'onSelectChange={function (change) { openContent("change", change); }}' in chat_split
     assert 'onSelectMap={function (item) { openContent("map", item); }}' in chat_split
     assert 'onSelectBrowser={function (tabId) { openContent("browser", tabId); }}' in chat_split
+    assert "onOpenContent(type, payload, chat)" in chat_split
     assert "browserActiveByChat={browserActiveByChat}" in chat_split
     assert "browserSuppressed={false}" in chat_split
 
@@ -3972,7 +4006,7 @@ process.stdout.write(JSON.stringify(positioned));
         + """
 const positioned = wbcConversationTrackPositions([
   {index: 5, chat: {id: "attention"}}
-], 10, {attention: 75.5});
+], 10, {attention: {position: 110, expandedX: 29, trackHeight: 300}});
 process.stdout.write(JSON.stringify(positioned));
 """
     )
@@ -3983,7 +4017,12 @@ process.stdout.write(JSON.stringify(positioned));
         text=True,
         cwd=root,
     )
-    assert json.loads(measured_result.stdout)[0]["position"] == 75.5
+    measured_item = json.loads(measured_result.stdout)[0]
+    assert measured_item["position"] == 94
+    assert measured_item["expandedPosition"] == 110
+    assert measured_item["expandedX"] == 29
+    assert measured_item["collapseY"] == -48
+    assert measured_item["measured"] is True
 
 
 def test_collapsed_chat_rail_measures_expanded_row_centres_for_spatial_mapping():
@@ -3995,16 +4034,20 @@ def test_collapsed_chat_rail_measures_expanded_row_centres_for_spatial_mapping()
         "// Conversation main (column 3)", 1
     )[0]
 
-    assert "trackPositionByChatId" in rail
+    assert "trackGeometryByChatId" in rail
     assert "useWbcLayoutEffect" in rail
     assert 'rail.querySelectorAll(".wbc-chat-card[data-chat-id]")' in rail
     assert "rect.top + (rect.height / 2) - trackRect.top" in rail
+    assert "trackHeight: trackRect.height" in rail
+    assert "!collapsed && !railMotionState.phase && iconRect" in rail
+    assert "iconRect.left + (iconRect.width / 2) - trackRect.left" in rail
+    assert "measuredExpandedX != null" in rail
     assert 'rail.addEventListener("scroll", measure, true)' in rail
     assert "new ResizeObserver(measure)" in rail
-    assert "orderedChats.length, trackPositionByChatId" in rail
+    assert "orderedChats.length, trackGeometryByChatId" in rail
     assert "trackMeasuredExpandedRef" in rail
     measurement = rail.split("useWbcLayoutEffect(function () {", 1)[1].split(
-        "}, [collapsed, projectId, visibleTrackLayoutKey]);", 1
+        "}, [collapsed, projectId, visibleTrackLayoutKey, railMotionState.phase]);", 1
     )[0]
     assert "if (collapsed && trackMeasuredExpandedRef.current) return undefined" in measurement
     assert "if (!collapsed) trackMeasuredExpandedRef.current = true" in measurement
@@ -4017,10 +4060,46 @@ def test_collapsed_chat_rail_measures_expanded_row_centres_for_spatial_mapping()
         ".workbench-grid.integrated-sidebars .wbc-rail.workbench-integrated-rail.is-collapsed .wbc-conversation-status-track {",
         1,
     )[1].split("}", 1)[0]
-    assert "visibility: hidden" in base_track
+    assert "visibility: hidden" not in base_track
+    assert "--wbc-track-blue: #4f83e8" in base_track
     assert "top: 62px" in base_track
     assert "bottom: 270px" in base_track
-    assert "visibility: visible" in collapsed_track
+    assert "visibility" not in collapsed_track
+
+    anchor_css = styles.split(".wbc-conversation-status-anchor {", 1)[1].split("}", 1)[0]
+    collapsed_anchor_css = styles.split(
+        ".workbench-grid.integrated-sidebars .wbc-rail.workbench-integrated-rail.is-collapsed .wbc-conversation-status-anchor {",
+        1,
+    )[1].split("}", 1)[0]
+    assert "left: var(--wbc-track-expanded-x, 29px)" in anchor_css
+    assert "top: var(--wbc-track-expanded-position, var(--wbc-track-position))" in anchor_css
+    assert "transition:" not in anchor_css
+    assert "top 360ms" not in anchor_css
+    assert "left: var(--wbc-track-collapsed-x)" in collapsed_anchor_css
+    assert "transition:" not in collapsed_anchor_css
+    assert "top:" not in collapsed_anchor_css
+    assert "--wbc-track-collapsed-x: 23px" in base_track
+    assert "wbc-status-enable-interaction" in collapsed_anchor_css
+    assert ".wbc-conversation-status-glyph" in styles
+    assert ".wbc-conversation-status-dot" in styles
+    expanding_css = styles.split(
+        ".wbc-rail.is-status-expanding .wbc-conversation-status-anchor {", 1
+    )[1].split("}", 1)[0]
+    collapsing_css = styles.split(
+        ".wbc-rail.is-status-collapsing .wbc-conversation-status-anchor {", 1
+    )[1].split("}", 1)[0]
+    assert "left 180ms var(--wb-sidebar-motion-ease)" in expanding_css
+    assert "transform 180ms var(--wb-sidebar-motion-ease)" in expanding_css
+    assert "left 180ms var(--wb-sidebar-motion-ease) 60ms" in collapsing_css
+    assert "transform 180ms var(--wb-sidebar-motion-ease) 60ms" in collapsing_css
+    assert "is-status-expanding .wbc-conversation-status-glyph" in styles
+    assert "opacity 90ms ease 130ms" in styles
+    assert "is-status-collapsing .wbc-conversation-status-glyph" in styles
+    assert 'phase: collapsed ? "collapsing" : "expanding"' in rail
+    assert '}, 260);' in rail
+    assert "wbc-status-enable-interaction 240ms" in collapsed_anchor_css
+    assert ".wbc-chat-card.track-marker-ready .wbc-chat-row-icon" in styles
+    assert "@keyframes wbc-status-enable-interaction" in styles
 
 
 def test_status_preview_answers_the_target_background_chat_without_opening_it():

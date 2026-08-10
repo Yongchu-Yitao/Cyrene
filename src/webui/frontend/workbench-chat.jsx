@@ -2949,7 +2949,6 @@ function WorkbenchChatPage({ active, project, newChatRequestId, onOpenTask, onAc
   // close action can restore the exact previous layout.
   var [floatingConversationPanelOpen, setFloatingConversationPanelOpen] = useWbcState(false);
   var floatingSplitRestoreRef = useWbcRef(null);
-  var floatingSplitPromotionTimerRef = useWbcRef(null);
   var [sideAgentSplitWidth, setSideAgentSplitWidth] = useWbcState(function () {
     var initial = 520;
     try {
@@ -2967,10 +2966,6 @@ function WorkbenchChatPage({ active, project, newChatRequestId, onOpenTask, onAc
   var [subagentData, setSubagentData] = useWbcState({ rounds: [], activeRoundId: "", agents: [], messages: [] });
   var [subagentLoading, setSubagentLoading] = useWbcState(false);
   var subagentRefreshTimerRef = useWbcRef(null);
-
-  useWbcEffect(function () {
-    return function () { cancelFloatingSplitPromotion(); };
-  }, []);
 
   useWbcEffect(function () {
     function keepSplitWithinViewport() {
@@ -3968,52 +3963,123 @@ function WorkbenchChatPage({ active, project, newChatRequestId, onOpenTask, onAc
     restoreEntry(setResourceSplitByChat, snapshot.resource);
   }
 
-  function cancelFloatingSplitPromotion() {
-    if (!floatingSplitPromotionTimerRef.current) return;
-    clearTimeout(floatingSplitPromotionTimerRef.current);
-    floatingSplitPromotionTimerRef.current = null;
-  }
-
-  function beginFloatingPanelSplit(openSplit, sourceChatId) {
+  function beginFloatingPanelSplit(openSplit, sourceChatId, sourceChatSnapshot) {
     var activeId = String(activeChatIdRef.current || "");
     var sourceId = String(sourceChatId || activeId);
     if (!activeId || !sourceId || typeof openSplit !== "function") return;
+    var sourceChat = sourceChatSnapshot && String(sourceChatSnapshot.id || "") === sourceId
+      ? sourceChatSnapshot
+      : (chatCache.details[sourceId] || null);
     if (!floatingSplitRestoreRef.current) {
       floatingSplitRestoreRef.current = {
         // `chatId` is the temporary content owner and therefore the only
         // selection that should keep this restore transaction alive.
         chatId: sourceId,
         activeChatId: activeId,
+        activeChat: activeChat && String(activeChat.id || "") === activeId
+          ? activeChat
+          : (chatCache.details[activeId] || null),
         splitSide: splitSide,
         activeSplit: splitStateSnapshot(activeId),
         sourceSplit: sourceId === activeId ? null : splitStateSnapshot(sourceId),
       };
     }
     setFloatingConversationPanelOpen(false);
-    // The conversation that opened the resource always becomes the left pane,
-    // while the resource owns the right track. If the source conversation was
-    // on the right, selecting it makes the existing grid transition carry it
-    // left as the resource replaces the other conversation on the right.
-    function promoteSourceAndOpenContent() {
-      floatingSplitPromotionTimerRef.current = null;
-      if (sourceId !== activeId) selectChat(sourceId);
+    // The conversation that opened the resource becomes the left pane while
+    // the resource owns the right track. The shared-element handoff below
+    // moves and resizes it directly from its current split rectangle to the
+    // final main rectangle — there is deliberately no narrow left-side
+    // intermediate layout, because that second geometry caused a width snap.
+    function commitPromotion() {
+      if (sourceId !== activeId) {
+        // The split conversation already owns a complete, live transcript.
+        // Hand that exact snapshot to the main pane in the same commit as the
+        // selection change; otherwise the main pane paints an empty loading
+        // state before its hydration effect can reuse the cache.
+        if (sourceChat) {
+          chatCache.details[sourceId] = sourceChat;
+          setActiveChat(sourceChat);
+          setChatLoading(false);
+        }
+        selectChat(sourceId);
+      }
       setSplitSideDirect("right");
       openSplit();
     }
-    cancelFloatingSplitPromotion();
-    if (sourceId !== activeId && splitSide === "right") {
-      // The source is the physical right-hand conversation split. Let its
-      // existing DOM glide into the left track first; after the 500ms grid
-      // transition, promote it without a positional jump and mount the new
-      // content in the vacated right track.
-      setSplitSideDirect("left");
+    function commitPromotionNow() {
+      if (window.ReactDOM && typeof window.ReactDOM.flushSync === "function") {
+        window.ReactDOM.flushSync(commitPromotion);
+      } else {
+        commitPromotion();
+      }
+    }
+    function promoteSourceAndOpenContent() {
       var reducedMotion = !!(window.matchMedia
         && window.matchMedia("(prefers-reduced-motion: reduce)").matches);
-      floatingSplitPromotionTimerRef.current = setTimeout(
-        promoteSourceAndOpenContent,
-        reducedMotion ? 0 : 500
+      var page = pageRef.current;
+      var sourcePane = page && page.querySelector(".wbc-side-agent-split-motion.open .wbc-chat-split");
+      var canTransitionHandoff = !!(
+        sourceId !== activeId
+        && !reducedMotion
+        && sourcePane
+        && document.startViewTransition
+        && window.ReactDOM
+        && typeof window.ReactDOM.flushSync === "function"
       );
-      return;
+      if (!canTransitionHandoff) {
+        commitPromotionNow();
+        return;
+      }
+
+      // The conversation changes React owners here (split pane -> main pane).
+      // Give both snapshots one shared transition identity so Chromium morphs
+      // the current split rectangle directly into its final left-hand geometry
+      // instead of exposing the unmount/remount boundary as a flash.
+      var transitionName = "wbc-promoted-conversation";
+      var displacedName = "wbc-displaced-conversation";
+      var resourceName = "wbc-promoted-resource";
+      var displacedPane = page && page.querySelector(":scope > .wbc-main");
+      var targetPane = null;
+      var targetResourcePane = null;
+      sourcePane.style.viewTransitionName = transitionName;
+      if (displacedPane) displacedPane.style.viewTransitionName = displacedName;
+      document.documentElement.classList.add("wbc-split-view-transition");
+      document.documentElement.classList.add("wbc-split-view-transition-opening");
+      function clearTransitionIdentity() {
+        sourcePane.style.viewTransitionName = "";
+        if (displacedPane) displacedPane.style.viewTransitionName = "";
+        if (targetPane) targetPane.style.viewTransitionName = "";
+        if (targetResourcePane) targetResourcePane.style.viewTransitionName = "";
+        document.documentElement.classList.remove("wbc-split-view-transition");
+        document.documentElement.classList.remove("wbc-split-view-transition-opening");
+      }
+      try {
+        var transition = document.startViewTransition(function () {
+          // The old snapshot has already captured the split pane. Remove its
+          // name before the final DOM is captured, then assign it to the main
+          // pane created by the atomic promotion commit.
+          sourcePane.style.viewTransitionName = "";
+          if (displacedPane) displacedPane.style.viewTransitionName = "";
+          commitPromotionNow();
+          targetPane = pageRef.current && pageRef.current.querySelector(":scope > .wbc-main");
+          if (targetPane) targetPane.style.viewTransitionName = transitionName;
+          var resourceContent = pageRef.current && pageRef.current.querySelector(
+            '.wbc-side-agent-split-motion[data-split-open="true"] .wbc-side-agent-split:not(.wbc-chat-split)'
+          );
+          targetResourcePane = resourceContent && resourceContent.closest(".wbc-side-agent-split-motion");
+          if (targetResourcePane) {
+            // Resource hosts normally enter on the next animation frame. Make
+            // the final snapshot measurable now; the host's own entered state
+            // adopts the same class on that next frame.
+            targetResourcePane.classList.add("open");
+            targetResourcePane.style.viewTransitionName = resourceName;
+          }
+        });
+        Promise.resolve(transition.finished).catch(function () {}).then(clearTransitionIdentity);
+      } catch (error) {
+        clearTransitionIdentity();
+        commitPromotionNow();
+      }
     }
     promoteSourceAndOpenContent();
   }
@@ -4022,23 +4088,85 @@ function WorkbenchChatPage({ active, project, newChatRequestId, onOpenTask, onAc
     var snapshot = floatingSplitRestoreRef.current;
     var chatId = String(activeChatIdRef.current || "");
     if (!snapshot || !chatId) return false;
-    if (snapshot.chatId !== chatId) {
-      if (!floatingSplitPromotionTimerRef.current || snapshot.activeChatId !== chatId) return false;
-      cancelFloatingSplitPromotion();
+    if (snapshot.chatId !== chatId) return false;
+    var restoredChat = snapshot.activeChat || chatCache.details[snapshot.activeChatId] || null;
+    function commitRestore() {
       floatingSplitRestoreRef.current = null;
       restoreSplitState(snapshot.activeChatId, snapshot.activeSplit);
-      restoreSplitState(snapshot.chatId, snapshot.sourceSplit);
+      if (snapshot.chatId !== snapshot.activeChatId) {
+        restoreSplitState(snapshot.chatId, snapshot.sourceSplit);
+        if (restoredChat) {
+          setActiveChat(restoredChat);
+          setChatLoading(false);
+        }
+        selectChat(snapshot.activeChatId);
+      }
       setSplitSideDirect(snapshot.splitSide === "left" ? "left" : "right");
+    }
+    function commitRestoreNow() {
+      if (window.ReactDOM && typeof window.ReactDOM.flushSync === "function") {
+        window.ReactDOM.flushSync(commitRestore);
+      } else {
+        commitRestore();
+      }
+    }
+    var reducedMotion = !!(window.matchMedia
+      && window.matchMedia("(prefers-reduced-motion: reduce)").matches);
+    var page = pageRef.current;
+    var sourcePane = page && page.querySelector(":scope > .wbc-main");
+    var sourceResourcePane = page && page.querySelector(".wbc-side-agent-split-motion.open");
+    var canTransitionRestore = !!(
+      snapshot.chatId !== snapshot.activeChatId
+      && !reducedMotion
+      && sourcePane
+      && document.startViewTransition
+      && window.ReactDOM
+      && typeof window.ReactDOM.flushSync === "function"
+    );
+    if (!canTransitionRestore) {
+      commitRestoreNow();
       return true;
     }
-    cancelFloatingSplitPromotion();
-    floatingSplitRestoreRef.current = null;
-    restoreSplitState(snapshot.activeChatId, snapshot.activeSplit);
-    if (snapshot.chatId !== snapshot.activeChatId) {
-      restoreSplitState(snapshot.chatId, snapshot.sourceSplit);
-      selectChat(snapshot.activeChatId);
+
+    // Exact inverse of promotion: the current main conversation returns to
+    // its original split rectangle, the resource fades out, and the displaced
+    // main conversation fades back into the left track.
+    var transitionName = "wbc-promoted-conversation";
+    var displacedName = "wbc-displaced-conversation";
+    var resourceName = "wbc-promoted-resource";
+    var targetPane = null;
+    var targetMainPane = null;
+    sourcePane.style.viewTransitionName = transitionName;
+    if (sourceResourcePane) sourceResourcePane.style.viewTransitionName = resourceName;
+    document.documentElement.classList.add("wbc-split-view-transition");
+    document.documentElement.classList.add("wbc-split-view-transition-closing");
+    function clearRestoreTransitionIdentity() {
+      sourcePane.style.viewTransitionName = "";
+      if (sourceResourcePane) sourceResourcePane.style.viewTransitionName = "";
+      if (targetPane) targetPane.style.viewTransitionName = "";
+      if (targetMainPane) targetMainPane.style.viewTransitionName = "";
+      document.documentElement.classList.remove("wbc-split-view-transition");
+      document.documentElement.classList.remove("wbc-split-view-transition-closing");
     }
-    setSplitSideDirect(snapshot.splitSide === "left" ? "left" : "right");
+    try {
+      var transition = document.startViewTransition(function () {
+        sourcePane.style.viewTransitionName = "";
+        if (sourceResourcePane) sourceResourcePane.style.viewTransitionName = "";
+        commitRestoreNow();
+        targetPane = pageRef.current && pageRef.current.querySelector(
+          '.wbc-side-agent-split-motion[data-split-open="true"] .wbc-chat-split'
+        );
+        var targetMotion = targetPane && targetPane.closest(".wbc-side-agent-split-motion");
+        if (targetMotion) targetMotion.classList.add("open");
+        if (targetPane) targetPane.style.viewTransitionName = transitionName;
+        targetMainPane = pageRef.current && pageRef.current.querySelector(":scope > .wbc-main");
+        if (targetMainPane) targetMainPane.style.viewTransitionName = displacedName;
+      });
+      Promise.resolve(transition.finished).catch(function () {}).then(clearRestoreTransitionIdentity);
+    } catch (error) {
+      clearRestoreTransitionIdentity();
+      commitRestoreNow();
+    }
     return true;
   }
 
@@ -4702,7 +4830,6 @@ function WorkbenchChatPage({ active, project, newChatRequestId, onOpenTask, onAc
     setFloatingConversationPanelOpen(false);
     var snapshot = floatingSplitRestoreRef.current;
     if (!snapshot || snapshot.chatId === String(activeChatId || "")) return;
-    cancelFloatingSplitPromotion();
     floatingSplitRestoreRef.current = null;
     restoreSplitState(snapshot.activeChatId, snapshot.activeSplit);
     if (snapshot.chatId !== snapshot.activeChatId) {
@@ -4741,7 +4868,7 @@ function WorkbenchChatPage({ active, project, newChatRequestId, onOpenTask, onAc
     setBrowserWindowModeForChat(activeChatId, mode);
   }
 
-  function openSplitChatContent(type, payload) {
+  function openSplitChatContent(type, payload, sourceChatSnapshot) {
     var sourceChatId = String(splitChatId || "");
     if (!sourceChatId || !type) return;
     beginFloatingPanelSplit(function () {
@@ -4757,7 +4884,7 @@ function WorkbenchChatPage({ active, project, newChatRequestId, onOpenTask, onAc
       } else if (type === "side-agent") {
         selectSideAgent(payload);
       }
-    }, sourceChatId);
+    }, sourceChatId, sourceChatSnapshot);
   }
 
   function renderConversationPanel(floating) {
@@ -5505,20 +5632,36 @@ function wbcConversationTrackState(chat, runningChatIds, newResultChatIds) {
   return null;
 }
 
-function wbcConversationTrackPositions(items, totalCount, measuredPositions) {
+function wbcConversationTrackPositions(items, totalCount, measuredGeometry) {
   var list = Array.isArray(items) ? items.map(function (item) { return { ...item }; }) : [];
   if (!list.length) return list;
   if (Number(totalCount) <= 1) return list.map(function (item) {
     var chatId = String(item.chat && item.chat.id || "");
-    var measured = Number(measuredPositions && measuredPositions[chatId]);
-    return { ...item, position: Number.isFinite(measured) ? Math.max(6, Math.min(94, measured)) : 50 };
+    var geometry = measuredGeometry && measuredGeometry[chatId];
+    var measured = Number(geometry && typeof geometry === "object" ? geometry.position : geometry);
+    var position = Number.isFinite(measured) ? Math.max(6, Math.min(94, measured)) : 50;
+    var expandedPosition = Number.isFinite(measured) ? measured : 50;
+    var trackHeight = Number(geometry && geometry.trackHeight);
+    return {
+      ...item,
+      position: position,
+      expandedPosition: expandedPosition,
+      expandedX: Number(geometry && geometry.expandedX),
+      collapseY: Number.isFinite(trackHeight) ? ((position - expandedPosition) / 100) * trackHeight : 0,
+      measured: Number.isFinite(measured),
+    };
   });
   list.forEach(function (item) {
     var chatId = String(item.chat && item.chat.id || "");
-    var measured = Number(measuredPositions && measuredPositions[chatId]);
+    var geometry = measuredGeometry && measuredGeometry[chatId];
+    var measured = Number(geometry && typeof geometry === "object" ? geometry.position : geometry);
     item.position = Number.isFinite(measured)
       ? Math.max(6, Math.min(94, measured))
       : 6 + (Number(item.index) / Math.max(1, Number(totalCount) - 1)) * 88;
+    item.expandedPosition = Number.isFinite(measured) ? measured : item.position;
+    item.expandedX = Number(geometry && geometry.expandedX);
+    item.trackHeight = Number(geometry && geometry.trackHeight);
+    item.measured = Number.isFinite(measured);
   });
   var minimumGap = list.length > 1 ? Math.min(7, 88 / (list.length - 1)) : 0;
   for (var index = 1; index < list.length; index += 1) {
@@ -5535,6 +5678,11 @@ function wbcConversationTrackPositions(items, totalCount, measuredPositions) {
     var underflow = 6 - list[0].position;
     list.forEach(function (item) { item.position += underflow; });
   }
+  list.forEach(function (item) {
+    item.collapseY = Number.isFinite(item.trackHeight)
+      ? ((item.position - item.expandedPosition) / 100) * item.trackHeight
+      : 0;
+  });
   return list;
 }
 
@@ -5661,7 +5809,11 @@ function WbcRail({ projectId, chats, pinnedChatIds, activeChatId, loading, runni
   var [previewChatId, setPreviewChatId] = useWbcState("");
   var [newResultChatIds, setNewResultChatIds] = useWbcState({});
   var [previewAnswerState, setPreviewAnswerState] = useWbcState({ chatId: "", busy: false, result: "", error: "" });
-  var [trackPositionByChatId, setTrackPositionByChatId] = useWbcState({});
+  var [trackGeometryByChatId, setTrackGeometryByChatId] = useWbcState({});
+  var [railMotionState, setRailMotionState] = useWbcState({ collapsed: !!collapsed, phase: "" });
+  if (railMotionState.collapsed !== !!collapsed) {
+    setRailMotionState({ collapsed: !!collapsed, phase: collapsed ? "collapsing" : "expanding" });
+  }
   var trackLifecycleRef = useWbcRef({ projectId: "", chats: {} });
   var railRef = useWbcRef(null);
   var trackRef = useWbcRef(null);
@@ -5713,6 +5865,17 @@ function WbcRail({ projectId, chats, pinnedChatIds, activeChatId, loading, runni
   useWbcEffect(function () {
     return function () { cancelPreviewClose(); };
   }, []);
+
+  useWbcEffect(function () {
+    if (!railMotionState.phase) return undefined;
+    var phase = railMotionState.phase;
+    var timer = window.setTimeout(function () {
+      setRailMotionState(function (current) {
+        return current.phase === phase ? { ...current, phase: "" } : current;
+      });
+    }, 260);
+    return function () { window.clearTimeout(timer); };
+  }, [railMotionState.phase]);
 
   useWbcEffect(function () {
     if (!collapsed) setPreviewChatId("");
@@ -6222,6 +6385,14 @@ function WbcRail({ projectId, chats, pinnedChatIds, activeChatId, loading, runni
     var chatStatusLabel = chatFailed
       ? wbcT("status.failed", "Failed")
       : chatAttention ? wbcT("workbenchChat.awaitingUser", "Needs input") : "";
+    var chatTrackState = wbcConversationTrackState(chat, runningChatIds, newResultChatIds);
+    var chatTrackGeometry = trackGeometryByChatId[String(chat.id)] || null;
+    var chatTrackMarkerReady = !!(
+      chatTrackState
+      && chatTrackGeometry
+      && Number.isFinite(Number(chatTrackGeometry.position))
+      && Number.isFinite(Number(chatTrackGeometry.expandedX))
+    );
     var isMenuOpen = menuId === chat.id;
     var isPinned = (Array.isArray(pinnedChatIds) ? pinnedChatIds : []).some(function (id) {
       return String(id || "") === String(chat.id || "");
@@ -6241,6 +6412,7 @@ function WbcRail({ projectId, chats, pinnedChatIds, activeChatId, loading, runni
           + (isMenuOpen ? " menu-open" : "")
           + (isDragging ? " dragging" : "")
           + (isGroupTarget ? " group-drop-target" : "")
+          + (chatTrackMarkerReady ? " track-marker-ready" : "")
           + chatStatusTone}
         title={wbcT("workbenchChat.dragChat", "Drag to reorder, overlap another chat to group, or drop in the conversation area to open {title}.", {
           title: chat.title || wbcT("workbenchChat.newChat", "New chat"),
@@ -6691,7 +6863,7 @@ function WbcRail({ projectId, chats, pinnedChatIds, activeChatId, loading, runni
 
   useWbcLayoutEffect(function () {
     trackMeasuredExpandedRef.current = false;
-    setTrackPositionByChatId({});
+    setTrackGeometryByChatId({});
   }, [projectId]);
 
   /* Measure the expanded list itself instead of inferring geometry from the
@@ -6716,16 +6888,38 @@ function WbcRail({ projectId, chats, pinnedChatIds, activeChatId, loading, runni
         var measured = {};
         rail.querySelectorAll(".wbc-chat-card[data-chat-id]").forEach(function (card) {
           var rect = card.getBoundingClientRect();
+          var iconRect = card.querySelector(".wbc-chat-row-icon")?.getBoundingClientRect();
           var chatId = String(card.getAttribute("data-chat-id") || "");
           if (!chatId || rect.height <= 0) return;
-          measured[chatId] = ((rect.top + (rect.height / 2) - trackRect.top) / trackRect.height) * 100;
+          measured[chatId] = {
+            position: ((rect.top + (rect.height / 2) - trackRect.top) / trackRect.height) * 100,
+            trackHeight: trackRect.height,
+            expandedX: !collapsed && !railMotionState.phase && iconRect
+              ? iconRect.left + (iconRect.width / 2) - trackRect.left
+              : null,
+          };
         });
-        setTrackPositionByChatId(function (current) {
-          var next = { ...current, ...measured };
+        setTrackGeometryByChatId(function (current) {
+          var next = { ...current };
+          Object.keys(measured).forEach(function (chatId) {
+            var previous = current[chatId] || {};
+            var measuredExpandedX = measured[chatId].expandedX;
+            next[chatId] = {
+              position: measured[chatId].position,
+              trackHeight: measured[chatId].trackHeight,
+              expandedX: measuredExpandedX != null && Number.isFinite(Number(measuredExpandedX))
+                ? Number(measuredExpandedX)
+                : (Number.isFinite(Number(previous.expandedX)) ? Number(previous.expandedX) : 29),
+            };
+          });
           var keys = Object.keys(next);
           if (
             keys.length === Object.keys(current).length
-            && keys.every(function (key) { return Math.abs(Number(next[key]) - Number(current[key])) < 0.05; })
+            && keys.every(function (key) {
+              return Math.abs(Number(next[key].position) - Number(current[key] && current[key].position)) < 0.05
+                && Math.abs(Number(next[key].trackHeight) - Number(current[key] && current[key].trackHeight)) < 0.05
+                && Math.abs(Number(next[key].expandedX) - Number(current[key] && current[key].expandedX)) < 0.05;
+            })
           ) return current;
           return next;
         });
@@ -6748,7 +6942,7 @@ function WbcRail({ projectId, chats, pinnedChatIds, activeChatId, loading, runni
       window.removeEventListener("resize", measure);
       if (observer) observer.disconnect();
     };
-  }, [collapsed, projectId, visibleTrackLayoutKey]);
+  }, [collapsed, projectId, visibleTrackLayoutKey, railMotionState.phase]);
 
   var statusTrackItems = wbcConversationTrackPositions(orderedChats.map(function (chat, index) {
     return {
@@ -6756,7 +6950,7 @@ function WbcRail({ projectId, chats, pinnedChatIds, activeChatId, loading, runni
       index: index,
       state: wbcConversationTrackState(chat, runningChatIds, newResultChatIds),
     };
-  }).filter(function (item) { return !!item.state; }), orderedChats.length, trackPositionByChatId);
+  }).filter(function (item) { return !!item.state; }), orderedChats.length, trackGeometryByChatId);
 
   function renderRailItem(item) {
     if (item.kind === "group") return renderGroupFrame(item.group, item.chats);
@@ -6827,7 +7021,9 @@ function WbcRail({ projectId, chats, pinnedChatIds, activeChatId, loading, runni
   }
 
   return (
-    <aside ref={railRef} className={"wbc-rail workbench-integrated-rail" + (collapsed ? " is-collapsed" : "")}>
+    <aside ref={railRef} className={"wbc-rail workbench-integrated-rail"
+      + (collapsed ? " is-collapsed" : "")
+      + (railMotionState.phase ? (" is-status-" + railMotionState.phase) : "")}>
       <div className="wbc-rail-glass">
         <div className="wbc-nav-card">
           <div className="wbc-nav-card-head workbench-integrated-rail-head workbench-integrated-rail-search-head">
@@ -6939,13 +7135,25 @@ function WbcRail({ projectId, chats, pinnedChatIds, activeChatId, loading, runni
           var answerState = previewAnswerState.chatId === String(chat.id)
             ? previewAnswerState
             : { busy: false, result: "", error: "" };
+          var markerGlyph = item.state.kind === "attention"
+            ? WBC_ICONS.alert
+            : item.state.kind === "failed"
+              ? WBC_ICONS.errorCircle
+              : item.state.kind === "result"
+                ? WBC_ICONS.check
+                : WBC_ICONS.file;
           var alignment = item.position < 24 ? " align-top" : item.position > 76 ? " align-bottom" : " align-center";
           var title = item.state.label + " · " + (chat.title || wbcT("workbenchChat.newChat", "New chat"));
           return (
             <div
               key={chat.id}
-              className={"wbc-conversation-status-anchor" + alignment + (previewOpen ? " preview-open" : "")}
-              style={{ "--wbc-track-position": item.position + "%" }}
+              className={"wbc-conversation-status-anchor" + alignment + (item.measured ? " is-measured" : "") + (previewOpen ? " preview-open" : "")}
+              style={{
+                "--wbc-track-position": item.position + "%",
+                "--wbc-track-expanded-position": item.expandedPosition + "%",
+                "--wbc-track-expanded-x": (Number.isFinite(item.expandedX) ? item.expandedX : 29) + "px",
+                "--wbc-track-collapse-y": (Number.isFinite(item.collapseY) ? item.collapseY : 0) + "px",
+              }}
               onMouseEnter={function () { openStatusPreview(chat.id); }}
               onMouseLeave={closeStatusPreviewSoon}
               onFocusCapture={function () { openStatusPreview(chat.id); }}
@@ -6978,7 +7186,8 @@ function WbcRail({ projectId, chats, pinnedChatIds, activeChatId, loading, runni
                   onSelect(chat.id);
                 }}
               >
-                <span aria-hidden="true"></span>
+                <span className="wbc-conversation-status-glyph" aria-hidden="true">{markerGlyph}</span>
+                <span className="wbc-conversation-status-dot" aria-hidden="true"></span>
               </button>
               {previewOpen && (
                 <WbcConversationStatusPreview
@@ -11323,7 +11532,7 @@ function WbcResourceSplitHost({ openKey, children, closingChildren, width, onRes
     return function () { clearTimeout(timer); };
   }, [openKey]);
   if (!visibleChildren) return null;
-  return <div className={"wbc-side-agent-split-motion" + (entered ? " open" : "")}>
+  return <div className={"wbc-side-agent-split-motion" + (entered ? " open" : "")} data-split-open={openKey ? "true" : "false"}>
     <WbcSideAgentSplitResizer width={width} onResize={onResize} splitSide={splitSide} />
     {visibleChildren}
   </div>;
@@ -11792,7 +12001,7 @@ function WbcChatSplit({ chatId, project, onOpenContent, browserActiveByChat, onC
 
   function openContent(type, payload) {
     setSplitPanelOpen(false);
-    if (onOpenContent) onOpenContent(type, payload);
+    if (onOpenContent) onOpenContent(type, payload, chat);
   }
 
   function openFile(file) {
