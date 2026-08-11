@@ -67,13 +67,14 @@ def _run_smoke_test() -> None:
         "fastapi": None,
         "pydantic_core": None,
         "starlette": None,
+        "numpy": None,
     }
     for _name in _smoke_imports:
         try:
             mod = importlib.import_module(_name)
             _smoke_imports[_name] = getattr(mod, "__version__", "ok")
         except Exception as exc:
-            _smoke_imports[_name] = f"FAILED: {exc}"
+            raise RuntimeError(f"critical frozen import {_name!r} failed: {exc}") from exc
     print(f"Cyrene smoke test OK: v{get_version()}")
     for name, version in modules.items():
         print(f"{name}={version}")

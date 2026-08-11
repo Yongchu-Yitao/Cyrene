@@ -1,3 +1,4 @@
+import ast
 import json
 from pathlib import Path
 
@@ -32,6 +33,26 @@ def test_electron_package_includes_main_process_modules():
         "host-control.js",
         "main.js",
     } <= packaged_files
+
+
+def test_frozen_build_keeps_numpy_native_extensions():
+    source = (ROOT / "build" / "cyrene.spec").read_text(encoding="utf-8")
+    entrypoint = (ROOT / "build" / "run_cyrene.py").read_text(encoding="utf-8")
+    tree = ast.parse(source)
+    excludes = next(
+        ast.literal_eval(node.value)
+        for node in tree.body
+        if isinstance(node, ast.Assign)
+        and any(
+            isinstance(target, ast.Name) and target.id == "_excludes"
+            for target in node.targets
+        )
+    )
+
+    assert "numpy" not in excludes
+    assert '    "numpy",\n' in source
+    assert '        "numpy": None,\n' in entrypoint
+    assert "critical frozen import" in entrypoint
 
 
 def test_release_pipeline_smoke_tests_and_publishes_all_linux_packages():

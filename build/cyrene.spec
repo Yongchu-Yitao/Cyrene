@@ -208,7 +208,7 @@ if _BUNDLE_PLAYWRIGHT and _playwright_browser_root:
 
 # ---- 排除 ----
 _excludes = [
-    "tkinter", "matplotlib", "numpy", "pandas", "scipy",
+    "tkinter", "matplotlib", "pandas", "scipy",
     "PIL._tkinter_finder", "curses",
 ]
 if not _BUNDLE_PLAYWRIGHT:
