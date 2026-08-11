@@ -20,11 +20,11 @@ WEBUI_ROOT = ROOT / "src" / "webui"
 WORKBENCH_ROOT = WEBUI_ROOT / "frontend"
 INDEX = WORKBENCH_ROOT / "index.html"
 
-OPENAPI_OPERATION_COUNT = 320
+OPENAPI_OPERATION_COUNT = 321
 OPENAPI_BASELINE_FASTAPI = "0.136.1"
 OPENAPI_BASELINE_PYDANTIC = "2.13.4"
-OPENAPI_SHA256 = "2ef2b3c2777c3242a3a6d83038ba5cdd972080b1439de46d0243300110451232"
-TOOL_REGISTRY_SHA256 = "a4e070d4347e5f631c5e8f5cdd492ea68484ea85f4223b8a9022bd0dcb348ab4"
+OPENAPI_SHA256 = "f325eff96b111c62465fabaaba4c7369531db6e43cd91b470d20fd16e168c717"
+TOOL_REGISTRY_SHA256 = "55018c652d7101ae9eff35e5af9e66d03295c0de3179b85cd4a8ecb631f4b74f"
 MAIN_WIRE_SHA256 = "f8fa3f2b0c53ae9059ac763792a9a218fa7c8f30c5c2335a0ab2f332816e4136"
 SUBAGENT_WIRE_SHA256 = "4d2f207b6508c148e5756826b435c4ca95830b3b8441198e2066cc7529ae27ad"
 
@@ -108,9 +108,9 @@ def test_tool_registry_wire_and_actor_policy_contracts_are_unchanged(monkeypatch
         "get_models",
         lambda: [{"provider": "openai_compatible", "model": "custom-model"}],
     )
-    assert len(catalog.TOOL_DEFS) == 103
-    assert len(catalog.TOOL_HANDLERS) == 103
-    assert len(catalog._MAIN_ONLY_TOOLS) == 42
+    assert len(catalog.TOOL_DEFS) == 105
+    assert len(catalog.TOOL_HANDLERS) == 105
+    assert len(catalog._MAIN_ONLY_TOOLS) == 44
     assert _sha256_json(catalog.TOOL_DEFS) == TOOL_REGISTRY_SHA256
 
     assert len(wire.get_main_wire_tool_defs()) == 29
@@ -155,44 +155,44 @@ def test_workbench_runtime_dependencies_keep_their_relative_script_order():
         "katex/katex.min.js",
         "purify.min.js",
         "highlight.min.js",
-        "compiled/platform/runtime.js?v=0.7.0",
-        "compiled/shared/markdown/math.js?v=0.7.0",
-        "compiled/shared/markdown/highlight.js?v=0.7.0",
+        "compiled/platform/runtime.js?v=0.7.1",
+        "compiled/shared/markdown/math.js?v=0.7.1",
+        "compiled/shared/markdown/highlight.js?v=0.7.1",
         "leaflet.js",
-        "pdfjs/pdf.min.js?v=0.7.0",
-        "pdfjs/pdf_viewer.js?v=0.7.0",
-        "compiled/platform/readiness.js?v=0.7.0",
-        "compiled/platform/events.js?v=0.7.0",
-        "compiled/platform/navigation.js?v=0.7.0",
-        "compiled/workbench-i18n.js?v=0.7.0",
-        "compiled/shared/i18n/format.js?v=0.7.0",
-        "compiled/shared/i18n/translations.js?v=0.7.0",
-        "compiled/shared/pdf/bridge.js?v=0.7.0",
-        "compiled/shared/feedback/service.js?v=0.7.0",
-        "compiled/shared/markdown/renderer.js?v=0.7.0",
-        "compiled/platform/data-store.js?v=0.7.0",
-        "compiled/shared/browser/viewport.js?v=0.7.0",
-        "compiled/shared/search/overlay.js?v=0.7.0",
-        "compiled/shared/markdown/actions.js?v=0.7.0",
-        "compiled/shared/diff/viewer.js?v=0.7.0",
-        "compiled/platform/api.js?v=0.7.0",
-        "compiled/workbench-chat.js?v=0.7.0",
-        "compiled/workbench-quick-chat.js?v=0.7.0",
-        "compiled/workbench.js?v=0.7.0",
-        "compiled/settings-overlay.js?v=0.7.0",
-        "compiled/entry/bootstrap.js?v=0.7.0",
+        "pdfjs/pdf.min.js?v=0.7.1",
+        "pdfjs/pdf_viewer.js?v=0.7.1",
+        "compiled/platform/readiness.js?v=0.7.1",
+        "compiled/platform/events.js?v=0.7.1",
+        "compiled/platform/navigation.js?v=0.7.1",
+        "compiled/workbench-i18n.js?v=0.7.1",
+        "compiled/shared/i18n/format.js?v=0.7.1",
+        "compiled/shared/i18n/translations.js?v=0.7.1",
+        "compiled/shared/pdf/bridge.js?v=0.7.1",
+        "compiled/shared/feedback/service.js?v=0.7.1",
+        "compiled/shared/markdown/renderer.js?v=0.7.1",
+        "compiled/platform/data-store.js?v=0.7.1",
+        "compiled/shared/browser/viewport.js?v=0.7.1",
+        "compiled/shared/search/overlay.js?v=0.7.1",
+        "compiled/shared/markdown/actions.js?v=0.7.1",
+        "compiled/shared/diff/viewer.js?v=0.7.1",
+        "compiled/platform/api.js?v=0.7.1",
+        "compiled/workbench-chat.js?v=0.7.1",
+        "compiled/workbench-quick-chat.js?v=0.7.1",
+        "compiled/workbench.js?v=0.7.1",
+        "compiled/settings-overlay.js?v=0.7.1",
+        "compiled/entry/bootstrap.js?v=0.7.1",
     ]
 
     positions = [scripts.index(script) for script in required_in_order]
     assert positions == sorted(positions)
     assert not {
-        "compiled/app.js?v=0.7.0",
-        "compiled/chat.js?v=0.7.0",
-        "compiled/dashboard.js?v=0.7.0",
-        "compiled/knowledge.js?v=0.7.0",
-        "compiled/memory.js?v=0.7.0",
-        "compiled/tasks.js?v=0.7.0",
-        "compiled/settings.js?v=0.7.0",
+        "compiled/app.js?v=0.7.1",
+        "compiled/chat.js?v=0.7.1",
+        "compiled/dashboard.js?v=0.7.1",
+        "compiled/knowledge.js?v=0.7.1",
+        "compiled/memory.js?v=0.7.1",
+        "compiled/tasks.js?v=0.7.1",
+        "compiled/settings.js?v=0.7.1",
     }.intersection(scripts)
 
 

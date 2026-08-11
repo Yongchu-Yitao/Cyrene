@@ -5,15 +5,37 @@
 This English edition preserves the release history of the Chinese changelog.
 The Chinese edition remains the most detailed record for older releases.
 
-## [Unreleased]
+## [0.7.1] - 2026-08-11
 
-### Memory
+### Remote collaboration and file workflows
 
-- **Project memory writes are never rejected for language anymore** — when an agent-saved memory's language does not match the UI language it is best-effort translated; if translation is unavailable (failure/timeout/unusable result) the original text is saved as-is instead of being refused. Dense technical Chinese content (code, paths, model names) now passes through directly without being misdetected as English; conversation-captured memories still follow the UI language, so the same fact written by the agent and extracted from a conversation can still dedupe.
+- Paired devices now have a complete project file channel for listing files and folders, uploading, downloading, resuming transfers, synchronizing directories, creating, copying, moving, patching, and deleting content, with conflict handling and transfer progress.
+- Long-running remote jobs can be started on another Cyrene, followed through live logs, waited on, interrupted, or cancelled; selected artifacts are collected at completion and the originating conversation receives a status notification.
+- Remote files, jobs, and tool calls follow the current conversation's permission mode. Access outside the project and risky writes, overwrites, or deletions request the appropriate confirmation, and remote Shell can no longer be used to bypass the file channel.
+- Pairing, grant changes, and revocation now refresh the conversation's remote-device picker immediately. Devices that are synchronizing or temporarily offline show a clear state, while invalid selections are removed automatically.
+
+### Agent, conversations, and workspaces
+
+- Each conversation can use a workspace separate from the project's default path. The selection is saved with the conversation and inherited by branches, side agents, attachment access, resumed background Shell work, and later runs.
+- User messages that are being sent or have just been confirmed are no longer lost when a slightly older conversation refresh arrives; stale loads also cannot replace the active conversation after rapid switching.
+- After answering a paused question, the conversation returns to the correct completed or waiting state instead of remaining stuck on an obsolete “waiting for user” status.
+- Running conversations and tasks have a clearer animated status, and Workbench surfaces remote-job completion notifications.
+
+### Project memory, knowledge search, and local models
+
+- Older conversations can generate project memory from recoverable session history; clear errors explain when no context is recoverable or the conversation belongs to another project.
+- Project-memory learning is more reliable, with fewer generation failures.
+- Agent-written project memories are no longer rejected when their language differs from the interface language. The original is kept when translation is unavailable, and technical content containing code, paths, or model names is not misclassified.
+- When the local Qwen embedding model has not been downloaded or is temporarily unavailable, the knowledge base continues with keyword search, clearly reports the active search mode, and no longer incorrectly asks for vector rebuilding.
+- Local embedding and OCR models now use dedicated management cards with runtime state, download progress, and direct download, retry, and delete actions.
+
+### Workbench and desktop experience
+
+- The Changes view has a more compact, readable run selector, making it easier to browse edits produced by different runs.
+- Code previews now use a stable dark syntax palette so keywords, strings, numbers, comments, and added or removed content remain distinct in both app themes.
+- Windows low-DPI and 1080p displays use clearer font weights and fallbacks across Workbench, browser controls, and the tab picker.
 
 ## [0.7.0] - 2026-08-11
-
-`0.7.0` is a complete account of every feature and interface change since `0.6.17`. This section covers only user-visible capabilities and experience changes, without development chronology or implementation details.
 
 ### Knowledge, literature, and local search
 
