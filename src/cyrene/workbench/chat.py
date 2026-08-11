@@ -947,6 +947,36 @@ def _new_chat(
     return chat
 
 
+def _normalize_workspace_override(path: Any) -> str:
+    """Return a validated absolute directory selected for one conversation."""
+    raw = str(path or "").strip()
+    if not raw:
+        return ""
+    candidate = Path(raw).expanduser()
+    if not candidate.is_absolute():
+        raise ValueError("workspace override must be an absolute path")
+    try:
+        resolved = candidate.resolve(strict=True)
+    except (OSError, RuntimeError) as exc:
+        raise ValueError("workspace override does not exist") from exc
+    if not resolved.is_dir():
+        raise ValueError("workspace override must be a directory")
+    return str(resolved)
+
+
+def _resolve_chat_workspace_dir(
+    chat: dict[str, Any],
+    project: dict[str, Any],
+    project_workspace_resolver: Callable[[dict[str, Any] | None], str],
+) -> str:
+    """Resolve a chat override before falling back to its project workspace."""
+    override = str(chat.get("workspaceOverride") or "").strip()
+    if not override:
+        return project_workspace_resolver(project)
+    normalized = _normalize_workspace_override(override)
+    return project_workspace_resolver({"workspacePath": normalized})
+
+
 def _completed_turn_count(chat: dict[str, Any]) -> int:
     """Return durable completed user→final-assistant exchanges for one chat."""
     stored = chat.get("completedTurnCount")
@@ -1100,7 +1130,9 @@ def _public_chat_light(chat: dict[str, Any]) -> dict[str, Any]:
             "cancelled", "user_interrupted", "shutdown_timeout"
         }:
             run_status = "cancelled"
-        elif last_outcome == "awaiting" or termination_reason == "awaiting_user":
+        elif (
+            last_outcome == "awaiting" or termination_reason == "awaiting_user"
+        ) and isinstance(chat.get("pendingQuestion"), dict) and bool(chat.get("pendingQuestion")):
             run_status = "awaiting_user"
         elif last_status in {"done", "completed", "success"} or last_outcome == "reply":
             run_status = "completed"
@@ -1123,6 +1155,7 @@ def _public_chat_light(chat: dict[str, Any]) -> dict[str, Any]:
         "projectMemoryModifiedAt": str((chat.get("projectMemorySnapshot") or {}).get("modifiedAt") or ""),
         "projectMemoryHash": str((chat.get("projectMemorySnapshot") or {}).get("hash") or ""),
         "permissionMode": chat.get("permissionMode") or "default",
+        "workspaceOverride": str(chat.get("workspaceOverride") or ""),
         "createdAt": chat.get("createdAt"),
         "updatedAt": chat.get("updatedAt"),
         "preview": _chat_preview(chat),
@@ -2599,7 +2632,16 @@ async def dispatch_shell_wake_run(wake: dict[str, Any], *, bot: Any, db_path: st
     project = legacy_routes._workbench_find_project(project_store, project_id)
     if not project:
         return "missing"
-    workspace_dir = legacy_routes._workbench_resolve_workspace_dir(project)
+    try:
+        workspace_dir = _resolve_chat_workspace_dir(
+            chat, project, legacy_routes._workbench_resolve_workspace_dir
+        )
+    except ValueError:
+        logger.warning(
+            "Shell wake workspace override is unavailable for %s", chat_id,
+            exc_info=True,
+        )
+        return "error"
     try:
         chat_groups = importlib.import_module("cyrene.workbench.chat_groups")
         chat_groups.configure_store(db_path)

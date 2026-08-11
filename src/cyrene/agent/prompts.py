@@ -28,6 +28,7 @@ def workspace_scope_block(workspace_dir: Any = WORKSPACE_DIR, shell_kind: str = 
         f"## Workspace Scope\n"
         f"- Use `{workspace}` as the default root for `Read`, `Write`, `Edit`, `Glob`, and `Grep`; relative paths resolve from it. "
         f"`Bash` already starts at the workspace root, so use relative paths without `cd {workspace}` or an extra `workspace/` prefix.\n"
+        f"- For requests about this project or its local files, proactively inspect the workspace before deciding what to do: list the top-level entries, read applicable instruction files, and then open or search the relevant source, configuration, documentation, and tests. Do not wait for the user to name every file, and do not claim the workspace is empty or unrelated without checking it. Skip this inspection only when the request clearly does not depend on workspace contents.\n"
         f"- Only access external paths when the task explicitly requires a specific external location. External access pauses the workflow for user permission, except read-only shell commands, which may access external paths freely. Shell writes, moves, and deletes must stay within the workspace or trigger permission.\n"
         f"- Avoid `$(...)` and backticks because they trigger security review. Avoid `rm` unless deletion is required; even workspace deletions require user confirmation.\n"
         f"- Put user-facing outputs in `deliverables/` and temporary or intermediate files in `scratch/`; never place deliverables directly in the workspace root.\n"

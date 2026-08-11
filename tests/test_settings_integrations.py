@@ -137,6 +137,44 @@ def test_local_qwen_embedding_does_not_require_endpoint(integration_store):
     assert config["dimensions"] == 1024
 
 
+def test_missing_local_qwen_falls_back_to_keyword_retrieval(monkeypatch):
+    from cyrene.knowledge import embeddings, local_models
+
+    monkeypatch.delenv("EMBEDDING_PROVIDER", raising=False)
+    monkeypatch.delenv("EMBEDDING_MODEL", raising=False)
+    monkeypatch.setattr(embeddings, "_persisted", lambda: {
+        "provider": "local_onnx",
+        "base_url": "",
+        "api_key": "",
+        "model": "qwen3-embedding-0.6b",
+        "dimensions": 1024,
+    })
+    monkeypatch.setattr(local_models, "is_ready", lambda _model_id: False)
+
+    assert embeddings.is_configured() is False
+
+    monkeypatch.setattr(local_models, "is_ready", lambda _model_id: True)
+    assert embeddings.is_configured() is True
+
+
+@pytest.mark.asyncio
+async def test_local_embedding_probe_reports_keyword_fallback_when_pack_is_missing(monkeypatch):
+    from cyrene.knowledge import local_models
+    from cyrene.runtime import integration_settings
+
+    monkeypatch.setattr(local_models, "is_ready", lambda _model_id: False)
+
+    result = await integration_settings.test_embedding({
+        "provider": "local_onnx",
+        "model": "qwen3-embedding-0.6b",
+        "dimensions": 1024,
+    })
+
+    assert result["ok"] is True
+    assert result["fallback"] == "keyword"
+    assert result["dimensions"] == 0
+
+
 @pytest.mark.asyncio
 async def test_embedding_transport_normalizes_vectors(monkeypatch):
     from cyrene.knowledge import embedding_client
@@ -275,6 +313,8 @@ def test_settings_ui_keeps_zotero_in_general_and_embedding_in_models():
     assert 'function EmbeddingSettingsSection(p)' in models_panel
     assert 'React.createElement(EmbeddingSettingsSection, {' in models_panel
     assert 'settings.localModels' in models_panel
+    assert 'settings.localModelOptional' in models_panel
+    assert '!coverage.configured' in models_panel
     assert 'saveAllModels' in models_panel
     assert 'settings.reembedPromptTitle' in models_panel
     assert 'coverage.pending_vectors' in models_panel

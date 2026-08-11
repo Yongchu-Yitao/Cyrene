@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import hashlib
 import importlib
 import json
 import sqlite3
@@ -20,6 +21,7 @@ from fastapi.testclient import TestClient
 
 
 from cyrene.runtime.remote_control import (
+    BASE_REMOTE_CAPABILITIES,
     DEFAULT_REMOTE_CAPABILITIES,
     InMemoryRemoteRelay,
     RemoteControlStore,
@@ -83,7 +85,7 @@ def paired_stores(monkeypatch, tmp_path):
         device_name="Controller Cyrene",
     )
     invitation = target.create_pairing_invitation(
-        capabilities=["projects:list_shared", "chat:read", "chat:send"],
+        capabilities=list(DEFAULT_REMOTE_CAPABILITIES),
         project_scopes=["project_1"],
     )
     accepted = controller.accept_pairing_invitation(invitation["invitation"])
@@ -184,7 +186,11 @@ def test_remote_tool_pack_grants_are_valid_but_remote_pack_is_not(monkeypatch, t
     store.update_settings(enabled=True, relay_url="", device_name="Target")
 
     invitation = store.create_pairing_invitation(
-        capabilities=["toolpack:desktop_tools", "toolpack:integration_tools"],
+        capabilities=[
+            *DEFAULT_REMOTE_CAPABILITIES,
+            "toolpack:desktop_tools",
+            "toolpack:integration_tools",
+        ],
         project_scopes=["project_1"],
     )
 
@@ -262,9 +268,10 @@ def test_existing_grants_gain_required_compatibility_capabilities(
 
     assert peer is not None
     assert peer["received_capabilities"] == sorted([
-        *DEFAULT_REMOTE_CAPABILITIES,
+        *BASE_REMOTE_CAPABILITIES,
         "toolpack:desktop_tools",
     ])
+    assert "workspace_file:write" not in peer["received_capabilities"]
 
 
 def test_remote_tool_pack_defaults_are_persisted(monkeypatch, tmp_path):
@@ -385,7 +392,7 @@ async def test_ip_and_short_key_pairing_completes_both_sides(monkeypatch, tmp_pa
         controller_peer = controller.get_peer(target.identity.device_id)
         target_peer = target.get_peer(controller.identity.device_id)
         assert controller_peer["received_capabilities"] == sorted(
-            DEFAULT_REMOTE_CAPABILITIES
+            BASE_REMOTE_CAPABILITIES
         )
         assert controller_peer["lan_address"] == f"127.0.0.1:{target_port}"
         assert target_peer["granted_project_scopes"] == ["project_1"]
@@ -458,7 +465,7 @@ async def test_ip_and_short_key_pairing_completes_both_sides(monkeypatch, tmp_pa
         f"127.0.0.1:{target_port}"
     )
     assert persisted_controller_peer["received_capabilities"] == sorted(
-        DEFAULT_REMOTE_CAPABILITIES
+        BASE_REMOTE_CAPABILITIES
     )
     assert persisted_target_peer is not None
     assert persisted_target_peer["lan_address"] == (
@@ -823,7 +830,7 @@ def test_peer_grant_scope_and_revocation_are_enforced(paired_stores):
         project_scopes=["project_2"],
     )
     assert updated["granted_capabilities"] == sorted(
-        DEFAULT_REMOTE_CAPABILITIES
+        BASE_REMOTE_CAPABILITIES
     )
     assert target.authorize_inbound(
         controller_id, "tasks.read", "project_2"
@@ -1090,29 +1097,28 @@ def test_remote_command_sanitizes_task_data_and_rejects_elevated_modes(
         )
         assert chat_detail["chat"]["pending_question"] == listed["tasks"][0]["pending_question"]
 
-        with pytest.raises(ValueError, match="permission_mode"):
-            await executor(
-                controller.identity.device_id,
-                "chats.send",
-                {
-                    "chat_id": "chat_1",
-                    "message": "Run everything",
-                    "permission_mode": "full_access",
-                },
-                "project_1",
-            )
-        with pytest.raises(ValueError, match="permission_mode"):
-            await executor(
-                controller.identity.device_id,
-                "tasks.dispatch",
-                {
-                    "task_id": "task_1",
-                    "message": "Run everything",
-                    "permission_mode": "full_access",
-                },
-                "project_1",
-            )
-        assert calls == {"chat_send": 0, "task_dispatch": 0}
+        await executor(
+            controller.identity.device_id,
+            "chats.send",
+            {
+                "chat_id": "chat_1",
+                "message": "Run everything",
+                "permission_mode": "full_access",
+            },
+            "project_1",
+        )
+        await executor(
+            controller.identity.device_id,
+            "tasks.dispatch",
+            {
+                "task_id": "task_1",
+                "message": "Run everything",
+                "permission_mode": "full_access",
+            },
+            "project_1",
+        )
+        assert calls == {"chat_send": 1, "task_dispatch": 1}
+        assert modes == {"chat": "full_access", "task": "full_access"}
 
         await executor(
             controller.identity.device_id,
@@ -1134,7 +1140,7 @@ def test_remote_command_sanitizes_task_data_and_rejects_elevated_modes(
             },
             "project_1",
         )
-        assert calls == {"chat_send": 1, "task_dispatch": 1}
+        assert calls == {"chat_send": 2, "task_dispatch": 2}
         assert modes == {"chat": "auto", "task": "auto"}
 
     asyncio.run(scenario())
@@ -1199,6 +1205,22 @@ def test_remote_harness_filters_by_granted_tool_pack_and_uses_bound_context(
             {"tool_pack": "code_tools"},
             "project_1",
         )
+        invocation_arguments = {
+            "device_id": target.identity.device_id,
+            "project_id": "project_1",
+            "tool_pack": "desktop_tools",
+            "operation": "invoke",
+            "capability_id": "desktop.use",
+            "arguments": {"operation": "list_targets"},
+        }
+        authorization_hash = hashlib.sha256(
+            json.dumps(
+                invocation_arguments,
+                ensure_ascii=False,
+                sort_keys=True,
+                separators=(",", ":"),
+            ).encode("utf-8")
+        ).hexdigest()
         invoked = await executor(
             controller.identity.device_id,
             "harness.invoke",
@@ -1207,18 +1229,50 @@ def test_remote_harness_filters_by_granted_tool_pack_and_uses_bound_context(
                 "capability_id": "desktop.use",
                 "arguments": {"operation": "list_targets"},
                 "call_id": "remote-call-1",
+                "authorization": {
+                    "version": 1,
+                    "approved": True,
+                    "permission_mode": "auto",
+                    "arguments_sha256": authorization_hash,
+                },
+            },
+            "project_1",
+        )
+        missing_receipt = await executor(
+            controller.identity.device_id,
+            "harness.invoke",
+            {
+                "tool_pack": "desktop_tools",
+                "capability_id": "desktop.use",
+                "arguments": {"operation": "list_targets"},
+            },
+            "project_1",
+        )
+        manual_file_tunnel = await executor(
+            controller.identity.device_id,
+            "harness.invoke",
+            {
+                "tool_pack": "desktop_tools",
+                "capability_id": "desktop.shell",
+                "arguments": {
+                    "command": "base64 -d > payload.bin " + ("A" * 300),
+                },
             },
             "project_1",
         )
 
         assert denied["code"] == "remote_tool_pack_denied"
+        assert missing_receipt["code"] == "remote_authorization_invalid"
+        assert manual_file_tunnel["code"] == "remote_file_channel_required"
         assert invoked["ok"] is True
         assert observed["wire_name"] == "desktop_tools"
         assert observed["arguments"]["capability_id"] == "desktop.use"
-        assert observed["context"].permission_mode == "full_access"
+        assert observed["context"].permission_mode == "auto"
         assert observed["run_context"].caller == "remote_harness"
-        assert observed["run_context"].permission_mode == "full_access"
-        assert observed["run_context"].temporary_full_access is True
+        assert observed["run_context"].permission_mode == "auto"
+        assert observed["run_context"].temporary_full_access is False
+        assert observed["run_context"].bounded_remote_authorization is True
+        assert invoked["authorization"]["scope"] == "single_invocation"
 
     asyncio.run(scenario())
 
@@ -1369,7 +1423,10 @@ def test_remote_harness_approves_invoke_locally_but_not_discovery(monkeypatch):
     async def scenario():
         device = {
             "device_id": "device_target",
-            "received_capabilities": ["toolpack:desktop_tools"],
+            "received_capabilities": [
+                "toolpack:desktop_tools",
+                "workspace_file:metadata",
+            ],
         }
         approvals = []
         commands = []
@@ -1801,7 +1858,7 @@ def test_encrypted_grant_updates_and_revocation_propagate(paired_stores):
             synchronized = controller.get_peer(target.identity.device_id)
             assert synchronized is not None
             assert synchronized["received_capabilities"] == sorted(
-                DEFAULT_REMOTE_CAPABILITIES
+                BASE_REMOTE_CAPABILITIES
             )
             assert synchronized["received_project_scopes"] == ["project_2"]
 
@@ -1958,6 +2015,13 @@ def test_remote_context_accepts_only_trusted_controller_grants(
     register_remote_routes(router, app, controller_db)
     app.include_router(router)
     with TestClient(app) as client:
+        catalog = client.get("/api/remote/context-devices")
+        assert catalog.status_code == 200
+        assert catalog.json()["revision"] >= 1
+        assert catalog.json()["devices"][0]["device_id"] == target.identity.device_id
+        assert catalog.json()["devices"][0]["state"] == "ready"
+        assert catalog.json()["devices"][0]["eligible"] is True
+
         selected = client.put(
             "/api/workbench/chats/chat_1/remote-context",
             json={"device_ids": [target.identity.device_id]},

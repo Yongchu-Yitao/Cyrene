@@ -77,6 +77,15 @@ html[data-theme="light"] {
   --focus-ring: 0 0 0 3px color-mix(in srgb, var(--accent) 10%, transparent);
 }
 
+/* Native Windows UI fonts retain optical sizing and low-DPI hinting. Keep the
+   bundled cross-platform faces on Retina/HiDPI displays, where they render
+   cleanly and preserve the intended visual identity. */
+@media (max-resolution: 1.5dppx) {
+  html[data-platform="win32"] {
+    --sans: "Segoe UI Variable", "Microsoft YaHei UI", "Segoe UI", sans-serif;
+  }
+}
+
 * {
   box-sizing: border-box;
 }

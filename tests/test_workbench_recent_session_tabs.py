@@ -609,12 +609,19 @@ def test_chat_summary_preserves_failed_cancelled_and_awaiting_run_outcomes():
     awaiting = _public_chat_light({
         **base,
         "id": "topbar-last-awaiting-chat",
+        "pendingQuestion": {"id": "question-1", "text": "Continue?"},
+        "lastRun": {"status": "done", "outcome": "awaiting"},
+    })
+    answered = _public_chat_light({
+        **base,
+        "id": "topbar-answered-chat",
         "lastRun": {"status": "done", "outcome": "awaiting"},
     })
 
     assert failed["runStatus"] == "failed"
     assert cancelled["runStatus"] == "cancelled"
     assert awaiting["runStatus"] == "awaiting_user"
+    assert answered["runStatus"] == "completed"
 
 
 def test_chat_run_outcome_projection_is_persisted_for_list_and_topbar(monkeypatch):

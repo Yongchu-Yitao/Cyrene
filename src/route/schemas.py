@@ -229,6 +229,7 @@ class ChatMessageBody(APIBody):
     forkReplay: bool = False
     mode: str | None = Field(default=None, max_length=80)
     lang: Literal["", "en", "zh"] = ""
+    workspaceOverride: str | None = Field(default=None, max_length=4096)
 
 
 class ChatGuidanceBody(APIBody):

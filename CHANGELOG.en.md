@@ -5,6 +5,12 @@
 This English edition preserves the release history of the Chinese changelog.
 The Chinese edition remains the most detailed record for older releases.
 
+## [Unreleased]
+
+### Memory
+
+- **Project memory writes are never rejected for language anymore** — when an agent-saved memory's language does not match the UI language it is best-effort translated; if translation is unavailable (failure/timeout/unusable result) the original text is saved as-is instead of being refused. Dense technical Chinese content (code, paths, model names) now passes through directly without being misdetected as English; conversation-captured memories still follow the UI language, so the same fact written by the agent and extracted from a conversation can still dedupe.
+
 ## [0.7.0] - 2026-08-11
 
 `0.7.0` is a complete account of every feature and interface change since `0.6.17`. This section covers only user-visible capabilities and experience changes, without development chronology or implementation details.

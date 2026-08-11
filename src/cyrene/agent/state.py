@@ -249,6 +249,10 @@ _external_upload_confirmation_fingerprints: ContextVar[frozenset[str]] = Context
 #   "plan"        —— 先规划再执行（同意后回退默认模式）
 PERMISSION_MODES = ("default", "full_access", "auto", "plan")
 _permission_mode: ContextVar[str] = ContextVar("_permission_mode", default="default")
+_bounded_remote_authorization: ContextVar[bool] = ContextVar(
+    "_bounded_remote_authorization",
+    default=False,
+)
 _llm_phase_override: ContextVar[str] = ContextVar("_llm_phase_override", default="")
 
 _MAIN_INBOX_AGENT_ID = "main"
@@ -378,8 +382,9 @@ def _record_last_main_model_context(
     """Keep the exact provider-normalized main-Agent exchange in memory.
 
     Memory learning reads this snapshot directly while the run is active and a
-    completed copy is persisted by the Workbench chat finalizer.  Tool schemas
-    are deliberately excluded because the Memory Agent receives no tools.
+    completed copy is persisted by the Workbench chat finalizer. Main-Agent tool
+    schemas are deliberately excluded; the learner receives only its dedicated
+    project-memory submission tool.
     """
     if secondary or _current_agent_id.get() != "main" or not isinstance(response, dict):
         return

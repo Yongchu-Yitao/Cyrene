@@ -177,6 +177,18 @@ async def test_zotero(config: dict[str, Any]) -> dict[str, Any]:
 
 
 async def test_embedding(config: dict[str, Any]) -> dict[str, Any]:
+    if config.get("provider") == "local_onnx":
+        from cyrene.knowledge import local_models
+
+        if not local_models.is_ready("qwen3-embedding-0.6b"):
+            return {
+                "ok": True,
+                "service": "embedding",
+                "model": config["model"],
+                "dimensions": 0,
+                "fallback": "keyword",
+            }
+
     from cyrene.knowledge.embedding_client import embed_texts_with_config
 
     vectors = await embed_texts_with_config(

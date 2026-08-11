@@ -48,6 +48,7 @@ from cyrene.tooling.backends.shells import (
 from cyrene.tooling.snapshot import build_catalog_snapshot
 from cyrene.tooling.types import ToolExecutionContext
 from cyrene.runtime.remote_pairing import DirectPairingServer
+from cyrene.runtime.remote_workspace import RemoteJobManager, RemoteWorkspaceFiles
 from cyrene.runtime.settings_store import get_all as get_web_settings
 from cyrene.runtime.settings_store import set_ as set_setting
 from cyrene.workbench import runtime as workbench_runtime
@@ -1340,6 +1341,11 @@ class RemoteCommandExecutor:
         self.task = task_adapter
         self.goal_loop = goal_loop_adapter or {}
         self._remote_shell_owners: dict[str, tuple[str, str]] = {}
+        self._remote_files = RemoteWorkspaceFiles(store)
+        self._remote_jobs = RemoteJobManager(store)
+
+    def set_remote_event_sender(self, sender: Any) -> None:
+        self._remote_jobs.set_event_sender(sender)
 
     async def __call__(
         self,
@@ -1357,6 +1363,11 @@ class RemoteCommandExecutor:
                 "protocol_version": 1,
                 "capabilities": sorted(REMOTE_CAPABILITIES),
                 "remote_tool_packages": list(REMOTE_TOOL_PACK_WIRE_NAMES),
+                "features": {
+                    "workspace_files_v1": True,
+                    "remote_jobs_v1": True,
+                    "remote_authorization_v1": True,
+                },
             }
         if command == "projects.list":
             return await self._projects_list(peer_device_id)
@@ -1406,6 +1417,32 @@ class RemoteCommandExecutor:
             return await self._artifacts_read(project_id, payload)
         if command == "attachments.read":
             return await self._attachments_read(project_id, payload)
+        if command.startswith("files."):
+            allow_outside = self._remote_path_authorization(
+                command,
+                project_id,
+                payload,
+            )
+            return await self._remote_files.execute(
+                peer_device_id,
+                command,
+                project_id,
+                payload,
+                allow_outside=allow_outside,
+            )
+        if command.startswith("jobs."):
+            allow_outside = self._remote_path_authorization(
+                command,
+                project_id,
+                payload,
+            )
+            return await self._remote_jobs.execute(
+                peer_device_id,
+                command,
+                project_id,
+                payload,
+                allow_outside=allow_outside,
+            )
         if command == "settings.read":
             return self._settings_read()
         if command == "settings.models.copy":
@@ -1431,6 +1468,46 @@ class RemoteCommandExecutor:
             "code": "remote_command_unsupported",
             "error": f"unsupported remote command: {command}",
         }
+
+    def _remote_path_authorization(
+        self,
+        command: str,
+        project_id: str,
+        payload: dict[str, Any],
+    ) -> bool:
+        """Verify a single-operation receipt before enabling absolute paths."""
+        authorization = payload.pop("_authorization", None)
+        if not isinstance(authorization, dict):
+            return False
+        arguments = {
+            "device_id": self.store.identity.device_id,
+            "project_id": project_id,
+            "command": command,
+            "payload": payload,
+        }
+        expected = hashlib.sha256(
+            json.dumps(
+                arguments,
+                ensure_ascii=False,
+                sort_keys=True,
+                separators=(",", ":"),
+                default=str,
+            ).encode("utf-8")
+        ).hexdigest()
+        valid = bool(
+            authorization.get("approved") is True
+            and int(authorization.get("version") or 0) == 1
+            and str(authorization.get("scope") or "") == "single_operation"
+            and str(authorization.get("arguments_sha256") or "") == expected
+            and str(authorization.get("permission_mode") or "")
+            in {"plan", "default", "auto", "full_access"}
+        )
+        outside = bool(authorization.get("outside_workspace"))
+        if outside and not valid:
+            raise PermissionError(
+                "absolute remote paths require an exact controller authorization"
+            )
+        return bool(outside and valid)
 
     @staticmethod
     def _public_shell_snapshot(
@@ -2052,7 +2129,7 @@ class RemoteCommandExecutor:
             "message": _require_text(payload, "message"),
             "mode": _permission_mode(
                 payload,
-                allowed=frozenset({"auto", "default", "plan"}),
+                allowed=frozenset({"auto", "default", "plan", "full_access"}),
                 default="auto",
             ),
             "lang": str(payload.get("language") or ""),
@@ -2230,8 +2307,82 @@ class RemoteCommandExecutor:
                 ),
                 "arguments": dict(payload.get("arguments") or {}),
             })
+            capability_lower = str(payload.get("capability_id") or "").lower()
+            invoked_arguments = dict(payload.get("arguments") or {})
+            shell_input = str(
+                invoked_arguments.get("input")
+                or invoked_arguments.get("command")
+                or invoked_arguments.get("cmd")
+                or ""
+            ).lower()
+            if (
+                "shell" in capability_lower
+                and len(shell_input) > 256
+                and any(
+                    marker in shell_input
+                    for marker in (
+                        "base64 -d",
+                        "base64 --decode",
+                        "b64decode(",
+                        "frombase64string",
+                    )
+                )
+            ):
+                return {
+                    "ok": False,
+                    "status": "denied",
+                    "code": "remote_file_channel_required",
+                    "error": (
+                        "manual base64 file transfer through a remote shell is disabled; "
+                        "use RemoteCyreneFiles"
+                    ),
+                }
         else:
             raise ValueError("unsupported harness operation")
+
+        authorization = payload.get("authorization")
+        if not isinstance(authorization, dict):
+            authorization = {}
+        authorization_arguments = {
+            "device_id": self.store.identity.device_id,
+            "project_id": project_id,
+            "tool_pack": wire_name,
+            "operation": operation,
+            "capability_id": str(payload.get("capability_id") or ""),
+            "arguments": dict(payload.get("arguments") or {}),
+        }
+        expected_authorization_hash = hashlib.sha256(
+            json.dumps(
+                authorization_arguments,
+                ensure_ascii=False,
+                sort_keys=True,
+                separators=(",", ":"),
+                default=str,
+            ).encode("utf-8")
+        ).hexdigest()
+        authorized_invocation = bool(
+            operation == "invoke"
+            and authorization.get("approved") is True
+            and int(authorization.get("version") or 0) == 1
+            and str(authorization.get("arguments_sha256") or "")
+            == expected_authorization_hash
+        )
+        if operation == "invoke" and not authorized_invocation:
+            return {
+                "ok": False,
+                "status": "approval_required",
+                "code": "remote_authorization_invalid",
+                "error": "exact controller authorization is required",
+                "error_origin": "controller",
+                "delegable": True,
+            }
+        controller_mode = str(authorization.get("permission_mode") or "default")
+        if controller_mode not in {"plan", "default", "auto", "full_access"}:
+            controller_mode = "default"
+        # The controller already evaluated this exact, argument-hashed invoke.
+        # Mirror its local permission mode for this one bounded call; destructive
+        # and external-delivery boundaries remain independently guarded.
+        execution_mode = controller_mode
 
         snapshot = build_catalog_snapshot("main")
         context = ToolExecutionContext(
@@ -2242,7 +2393,7 @@ class RemoteCommandExecutor:
             bot=self.bot,
             chat_id=0,
             db_path=self.db_path,
-            permission_mode="full_access",
+            permission_mode=execution_mode,
             catalog_snapshot=snapshot,
         )
         binding = bind_run_context(
@@ -2252,8 +2403,13 @@ class RemoteCommandExecutor:
             round_id=context.round_id or f"remote-{peer_device_id}",
             session_id=context.session_id,
             workspace_dir=workspace_dir,
-            permission_mode="full_access",
-            temporary_full_access=True,
+            permission_mode=execution_mode,
+            temporary_full_access=False,
+            bounded_remote_authorization=authorized_invocation,
+            destructive_confirmation_allow_all=bool(
+                authorized_invocation
+                and authorization.get("destructive_approved") is True
+            ),
         )
         try:
             timeout = max(
@@ -2269,14 +2425,29 @@ class RemoteCommandExecutor:
             result: Any = json.loads(raw)
         except (TypeError, json.JSONDecodeError):
             result = raw
-        failed = (
-            isinstance(result, dict)
-            and str(result.get("status") or "").lower() == "error"
+        result_status = (
+            str(result.get("status") or "").lower()
+            if isinstance(result, dict)
+            else ""
         )
+        awaiting = result_status == "awaiting_user"
+        failed = result_status in {"error", "denied", "cancelled"} or awaiting
         return {
             "ok": not failed,
+            "status": "approval_required" if awaiting else (result_status or "completed"),
+            **({
+                "code": "remote_target_approval_required",
+                "error": "the target requires a non-delegable local or OS approval",
+                "error_origin": "target",
+                "delegable": False,
+            } if awaiting else {}),
             "tool_pack": wire_name,
             "operation": operation,
+            "authorization": {
+                "mode": controller_mode,
+                "arguments_sha256": expected_authorization_hash,
+                "scope": "single_invocation",
+            },
             "result": result,
         }
 
@@ -2392,7 +2563,7 @@ class RemoteCommandExecutor:
                         attachments=attachments,
                         mode=_permission_mode(
                             payload,
-                            allowed=frozenset({"auto", "default"}),
+                            allowed=frozenset({"auto", "default", "plan", "full_access"}),
                             default="auto",
                         ),
                         command=str(payload.get("command") or ""),
@@ -2499,7 +2670,7 @@ class RemoteCommandExecutor:
                     input=_require_text(payload, "message"),
                     mode=_permission_mode(
                         payload,
-                        allowed=frozenset({"auto", "default"}),
+                        allowed=frozenset({"auto", "default", "plan", "full_access"}),
                         default="auto",
                     ),
                     stepId=step_id,
@@ -2913,8 +3084,12 @@ class RemoteControlRuntime:
             return
         try:
             gateway = RemoteGateway(self.store, pairing_server, self.executor)
+            if hasattr(self.executor, "set_remote_event_sender"):
+                self.executor.set_remote_event_sender(gateway.send_event)
             await gateway.start()
         except Exception as exc:
+            if hasattr(self.executor, "set_remote_event_sender"):
+                self.executor.set_remote_event_sender(None)
             self.last_error = str(exc)
             self.store.audit(
                 "remote_gateway_start_failed",
@@ -2931,6 +3106,8 @@ class RemoteControlRuntime:
         if gateway is None:
             return
         unregister_remote_gateway(self.db_path, gateway)
+        if hasattr(self.executor, "set_remote_event_sender"):
+            self.executor.set_remote_event_sender(None)
         await gateway.stop()
 
     async def _stop_pairing_server_locked(self) -> None:

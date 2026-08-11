@@ -65,3 +65,29 @@ def test_electron_browser_overlays_load_the_same_origin_bundled_fonts():
     assert "static/app/electron/browser-chat-overlay.html" in main
     assert "static/app/electron/browser-tab-picker.html" in main
     assert "font-synthesis-weight: none;" in main
+
+
+def test_low_dpi_windows_uses_native_hinted_fonts_and_quantized_weights():
+    index = (FRONTEND / "index.html").read_text(encoding="utf-8")
+    base_css = (FRONTEND / "shared/theme/base.css").read_text(encoding="utf-8")
+    workbench_css = (FRONTEND / "workbench.css").read_text(encoding="utf-8")
+    main = (ROOT / "electron/main.js").read_text(encoding="utf-8")
+
+    assert "(window.cyrene && window.cyrene.platform)" in index
+    assert "@media (max-resolution: 1.5dppx)" in base_css
+    assert 'html[data-platform="win32"]' in base_css
+    assert '--sans: "Segoe UI Variable", "Microsoft YaHei UI", "Segoe UI"' in base_css
+
+    low_dpi = workbench_css.split(
+        "/* Windows 1080p / low-DPI typography", 1
+    )[1]
+    assert 'html[data-platform="win32"]' in low_dpi
+    assert "font-weight: 400 !important;" in low_dpi
+    assert "font-weight: 600 !important;" in low_dpi
+    assert "font-weight: 700 !important;" in low_dpi
+    assert "font-size:" not in low_dpi
+
+    assert main.count("@media (max-resolution: 1.5dppx)") == 2
+    assert main.count('"Segoe UI Variable", "Microsoft YaHei UI"') == 2
+    assert main.count("new URLSearchParams(location.search).get('platform')") == 2
+    assert main.count("?platform=${encodeURIComponent(process.platform)}") == 2

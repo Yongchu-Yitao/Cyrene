@@ -64,6 +64,8 @@ _MAIN_ONLY_TOOLS = {
     "GenerateImage",
     "LoadRendererContract",
     "RemoteCyreneAction",
+    "RemoteCyreneFiles",
+    "RemoteCyreneJobs",
     "RemoteHarness",
     "RunRemoteCyrene",
 }
@@ -137,6 +139,8 @@ _RESOURCE_KEY_TEMPLATES: dict[str, tuple[str, ...]] = {
     "CloseShell": ("shell:{shell_id}",),
     "ListRemoteDevices": ("remote:chat-context",),
     "RemoteCyreneStatus": ("remote:{device_id}",),
+    "RemoteCyreneFiles": ("remote:{device_id}",),
+    "RemoteCyreneJobs": ("remote:{device_id}",),
     "RemoteHarness": ("remote:{device_id}",),
     "RemoteCyreneAction": ("remote:{device_id}",),
     "RunRemoteCyrene": ("remote:{device_id}",),

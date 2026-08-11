@@ -696,6 +696,14 @@ function RemotePanel(p) {
     setNotice(message);
   }
 
+  function notifyRemoteDevicesChanged(reason) {
+    try {
+      window.dispatchEvent(new CustomEvent("cyrene:remote-devices-changed", {
+        detail: { reason: reason || "settings" },
+      }));
+    } catch (e) {}
+  }
+
   function loadRemote(options) {
     var background = !!(options && options.background);
     if (!background) setLoading(true);
@@ -767,6 +775,7 @@ function RemotePanel(p) {
         if (!hasNewPeer) return;
         setPairingKey("");
         showRemoteNotice(t("settings.remotePairingComplete"));
+        notifyRemoteDevicesChanged("paired");
         loadAudit();
       });
     };
@@ -894,6 +903,7 @@ function RemotePanel(p) {
       setIncomingPairingKey("");
       upsertRemotePeer(payload.peer);
       showRemoteNotice(t("settings.remotePairingComplete"));
+      notifyRemoteDevicesChanged("paired");
       loadRemote({ background: true });
       loadAudit();
     }).catch(function (error) {
@@ -1167,6 +1177,7 @@ function RemotePeerCard(p) {
       setGrantedCapabilities(requiredGrant);
       setEditing(false);
       onNotice(t("settings.remoteGrantSaved"), "success");
+      try { window.dispatchEvent(new CustomEvent("cyrene:remote-devices-changed", { detail: { reason: "grant_updated" } })); } catch (e) {}
       onChanged();
     }).catch(function (error) {
       onNotice(t("settings.error") + ": " + error.message, "error");
@@ -1178,6 +1189,7 @@ function RemotePeerCard(p) {
     fetch("/api/remote/peers/" + encodeURIComponent(peer.device_id), { method: "DELETE" })
       .then(readSettingsResponse).then(function () {
         onNotice(t("settings.remoteDeviceRevoked"), "success");
+        try { window.dispatchEvent(new CustomEvent("cyrene:remote-devices-changed", { detail: { reason: "revoked" } })); } catch (e) {}
         onChanged();
       }).catch(function (error) {
         onNotice(t("settings.error") + ": " + error.message, "error");
@@ -1562,7 +1574,9 @@ function EmbeddingSettingsSection(p) {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ service: "embedding", config: draft() }),
     }).then(readSettingsResponse).then(function (payload) {
-      setStatus({ kind: "success", text: t("settings.embeddingConnected", { dimensions: payload.dimensions || 0 }) });
+      setStatus(payload.fallback
+        ? { kind: "info", text: t("settings.embeddingLocalFallback") }
+        : { kind: "success", text: t("settings.embeddingConnected", { dimensions: payload.dimensions || 0 }) });
     }).catch(function (error) {
       setStatus({ kind: "error", text: t("settings.connectionFailed") + ": " + (error.message || "") });
     }).finally(function () { setBusy(""); });
@@ -1779,7 +1793,7 @@ function ModelsPanel(p) {
       setEmbeddingApiKey("");
       setEmbeddingStatus({ kind: "success", text: t("settings.saved") });
       loadCorpusEmbedding().then(function (coverage) {
-        if (!coverage || !coverage.pending_vectors) return;
+        if (!coverage || !coverage.configured || !coverage.pending_vectors) return;
         if (nextIdentity !== "local_onnx:qwen3-embedding-0.6b" || previousIdentity === nextIdentity) return;
         var feedback = window.CyreneUI && window.CyreneUI.require
           ? window.CyreneUI.require("feedback")
@@ -1817,6 +1831,29 @@ function ModelsPanel(p) {
       .catch(function (error) {
         setEmbeddingStatus({ kind: "error", text: t("settings.reembedFailed") + ": " + (error.message || "") });
       });
+  }
+
+  function LocalModelIcon(kind) {
+    if (kind === "embedding") {
+      return React.createElement("svg", {
+        width: "20", height: "20", viewBox: "0 0 24 24", fill: "none",
+        stroke: "currentColor", strokeWidth: "1.8", strokeLinecap: "round",
+        strokeLinejoin: "round", "aria-hidden": "true",
+      },
+        React.createElement("circle", { cx: "6", cy: "6", r: "2.25" }),
+        React.createElement("circle", { cx: "18", cy: "6", r: "2.25" }),
+        React.createElement("circle", { cx: "12", cy: "18", r: "2.25" }),
+        React.createElement("path", { d: "m7.9 7.2 2.7 8.6M16.1 7.2l-2.7 8.6M8.3 6h7.4" }),
+      );
+    }
+    return React.createElement("svg", {
+      width: "20", height: "20", viewBox: "0 0 24 24", fill: "none",
+      stroke: "currentColor", strokeWidth: "1.8", strokeLinecap: "round",
+      strokeLinejoin: "round", "aria-hidden": "true",
+    },
+      React.createElement("path", { d: "M4 8V5a1 1 0 0 1 1-1h3M16 4h3a1 1 0 0 1 1 1v3M20 16v3a1 1 0 0 1-1 1h-3M8 20H5a1 1 0 0 1-1-1v-3" }),
+      React.createElement("path", { d: "M8 10h8M8 14h6" }),
+    );
   }
 
   useEffectSt(function () {
@@ -2181,28 +2218,51 @@ function ModelsPanel(p) {
     ModelSettingsSection({
       title: t("settings.localModels"),
       description: t("settings.localModelsHint"),
+      className: "is-local-models",
       children: localModels.map(function (item) {
         var percent = item.total_bytes ? Math.min(100, Math.round(item.downloaded_bytes * 100 / item.total_bytes)) : 0;
         var isQwen = item.id === "qwen3-embedding-0.6b";
+        var kind = isQwen ? "embedding" : "ocr";
         var displayTitle = t(isQwen ? "settings.localEmbeddingTitle" : "settings.localOcrTitle");
         var displayName = t(isQwen ? "settings.localQwenName" : "settings.localOcrName");
         var displayDescription = t(isQwen ? "settings.localQwenHint" : "settings.localOcrHint");
         var runtime = String(item.runtime || "onnx").toLowerCase();
         var runtimeLabel = runtime === "onnx-cpu" ? "ONNX" : runtime.toUpperCase();
         var runtimeClass = runtime.indexOf("cuda") >= 0 ? " is-cuda" : runtime.indexOf("mlx") >= 0 ? " is-mlx" : " is-onnx";
-        return React.createElement("div", { className: "wb-model-card wb-local-model", key: item.id },
+        var statusText = item.error
+          ? t("settings.localModelError")
+          : item.ready
+            ? t("settings.localModelActive", { runtime: runtimeLabel })
+            : item.downloading
+              ? t("settings.localModelDownloading", { percent: percent })
+              : t("settings.localModelOptional");
+        return React.createElement("article", { className: "wb-model-card wb-local-model" + (item.ready ? " is-ready" : " is-optional"), key: item.id },
+          React.createElement("span", { className: "wb-local-model-icon is-" + kind }, LocalModelIcon(kind)),
           React.createElement("div", { className: "wb-local-model-copy" },
-            React.createElement("strong", null, displayTitle),
-            React.createElement("small", null, displayName + " · " + displayDescription),
-            item.downloading && React.createElement("progress", { max: "100", value: percent }),
+            React.createElement("span", { className: "wb-local-model-heading" },
+              React.createElement("strong", null, displayTitle),
+              React.createElement("span", { className: "wb-local-model-name" }, displayName),
+            ),
+            React.createElement("small", null, displayDescription),
+            item.downloading && React.createElement("div", { className: "wb-local-model-progress" },
+              React.createElement("progress", { max: "100", value: percent, "aria-label": t("settings.localModelDownloading", { percent: percent }) }),
+              React.createElement("span", null, percent + "%"),
+            ),
             item.error && React.createElement("small", { className: "wb-local-model-error" }, item.error),
           ),
-          React.createElement("span", { className: "wb-model-status" + (item.error ? " is-error" : item.ready ? " wb-runtime-badge" + runtimeClass : "") }, item.error ? t("settings.localModelError") : item.ready ? runtimeLabel : item.downloading ? (percent + "%") : t("settings.localModelNotDownloaded")),
-          React.createElement("button", {
-            className: "wb-btn compact " + (item.ready ? "muted" : "tonal"),
-            disabled: !!localBusy || item.downloading,
-            onClick: function () { manageLocalModel(item.id, item.ready ? "delete" : "download"); },
-          }, item.ready ? t("settings.delete") : item.error ? t("settings.retry") : t("settings.download")),
+          React.createElement("div", { className: "wb-local-model-actions" },
+            React.createElement("span", { className: "wb-model-status" + (item.error ? " is-error" : item.ready ? " wb-runtime-badge" + runtimeClass : ""), role: "status" },
+              React.createElement("span", { className: "wb-local-model-status-dot", "aria-hidden": "true" }),
+              statusText,
+            ),
+            React.createElement("button", {
+              type: "button",
+              className: "wb-btn compact " + (item.ready ? "muted" : "tonal"),
+              disabled: !!localBusy || item.downloading,
+              "aria-label": (item.ready ? t("settings.delete") : item.error ? t("settings.retry") : t("settings.download")) + " " + displayName,
+              onClick: function () { manageLocalModel(item.id, item.ready ? "delete" : "download"); },
+            }, item.ready ? t("settings.delete") : item.error ? t("settings.retry") : t("settings.download")),
+          ),
         );
       }).concat(corpusEmbedding && corpusEmbedding.mismatch ? [
         React.createElement("div", { className: "wb-integration-status error", key: "mismatch" },

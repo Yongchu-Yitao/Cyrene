@@ -76,10 +76,28 @@ def _model() -> str:
 
 
 def is_configured() -> bool:
-    """Check if all embedding configuration is present."""
+    """Check whether semantic embeddings are currently usable.
+
+    Local models are optional enhancements.  A saved local provider must not
+    disable the knowledge base while its explicitly managed model pack is
+    absent; callers should keep using the existing lexical retrieval path.
+    """
     persisted = _persisted()
-    provider = str(os.environ.get("EMBEDDING_PROVIDER") or persisted.get("provider") or "openai_compatible")
-    return bool(_model() and (provider == "local_onnx" or _base_url()))
+    provider = str(
+        os.environ.get("EMBEDDING_PROVIDER")
+        or persisted.get("provider")
+        or "openai_compatible"
+    ).strip().lower().replace("-", "_")
+    if provider == "local_onnx":
+        if _model() != "qwen3-embedding-0.6b":
+            return False
+        try:
+            from cyrene.knowledge import local_models
+
+            return local_models.is_ready("qwen3-embedding-0.6b")
+        except Exception:
+            return False
+    return bool(_model() and _base_url())
 
 
 def current_identity() -> tuple[str, int]:

@@ -10109,9 +10109,53 @@ details.wb-model-section > .wb-model-section-head::marker {
 
 .wb-local-model {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) auto auto;
+  grid-template-columns: 42px minmax(0, 1fr) auto;
   align-items: center;
-  gap: 12px;
+  gap: 14px;
+}
+
+.wb-model-section.is-local-models .wb-model-section-body {
+  display: grid;
+  gap: 10px;
+  padding: 12px 14px 14px;
+}
+
+.wb-model-section.is-local-models .wb-model-section-body > .wb-model-card {
+  min-height: 82px;
+  padding: 13px;
+  border: 1px solid color-mix(in srgb, var(--wb-line-2) 62%, transparent);
+  border-radius: 13px;
+  background: color-mix(in srgb, var(--wb-control-bg) 64%, transparent);
+  box-shadow: inset 0 1px 0 color-mix(in srgb, #fff 4%, transparent);
+  box-sizing: border-box;
+}
+
+.wb-model-section.is-local-models .wb-model-section-body > .wb-model-card + .wb-model-card {
+  margin-top: 0;
+  border-top: 1px solid color-mix(in srgb, var(--wb-line-2) 62%, transparent);
+}
+
+.wb-model-section.is-local-models .wb-model-section-body > .wb-model-card.is-ready {
+  border-color: color-mix(in srgb, var(--wb-accent) 30%, var(--wb-line-2));
+  background: color-mix(in srgb, var(--wb-accent) 5%, var(--wb-control-bg));
+}
+
+.wb-local-model-icon {
+  width: 42px;
+  height: 42px;
+  display: inline-grid;
+  place-items: center;
+  border: 1px solid color-mix(in srgb, var(--wb-line-2) 68%, transparent);
+  border-radius: 12px;
+  background: var(--wb-card-bg);
+  color: var(--wb-muted);
+  box-shadow: 0 4px 12px color-mix(in srgb, #06101d 6%, transparent);
+}
+
+.wb-local-model.is-ready .wb-local-model-icon {
+  border-color: color-mix(in srgb, var(--wb-accent) 30%, var(--wb-line-2));
+  background: color-mix(in srgb, var(--wb-accent) 10%, var(--wb-card-bg));
+  color: var(--wb-accent);
 }
 
 .wb-local-model-copy {
@@ -10121,69 +10165,142 @@ details.wb-model-section > .wb-model-section-head::marker {
   gap: 4px;
 }
 
+.wb-local-model-heading {
+  min-width: 0;
+  display: flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: 4px 8px;
+}
+
 .wb-local-model-copy strong {
   color: var(--wb-text);
   font-size: calc(13px * var(--wb-ui-font-scale, 1));
-  font-weight: 680;
+  font-weight: 720;
   line-height: 1.3;
+}
+
+.wb-local-model-name {
+  color: var(--wb-muted);
+  font-size: calc(11px * var(--wb-ui-font-scale, 1));
+  font-weight: 600;
 }
 
 .wb-local-model-copy small {
   color: var(--wb-muted);
   font-size: calc(11px * var(--wb-ui-font-scale, 1));
+  line-height: 1.4;
 }
 
-.wb-local-model-copy progress {
+.wb-local-model-progress {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 8px;
+  margin-top: 3px;
+}
+
+.wb-local-model-progress progress {
   width: 100%;
   height: 5px;
   accent-color: var(--wb-accent);
+}
+
+.wb-local-model-progress span {
+  color: var(--wb-muted);
+  font-size: calc(10px * var(--wb-ui-font-scale, 1));
+  font-variant-numeric: tabular-nums;
 }
 
 .wb-local-model-copy .wb-local-model-error {
   color: var(--wb-red);
 }
 
-.wb-local-model > .wb-model-status {
-  padding: 3px 7px;
-  font-size: calc(10.5px * var(--wb-ui-font-scale, 1));
+.wb-local-model-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 10px;
 }
 
-.wb-local-model > .wb-runtime-badge {
+.wb-local-model-actions > .wb-model-status {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 8px;
+  font-size: calc(10.5px * var(--wb-ui-font-scale, 1));
+  white-space: nowrap;
+}
+
+.wb-local-model-status-dot {
+  width: 6px;
+  height: 6px;
+  flex: 0 0 auto;
+  border-radius: 999px;
+  background: var(--wb-faint);
+}
+
+.wb-local-model.is-ready .wb-local-model-status-dot {
+  background: currentColor;
+  box-shadow: 0 0 0 3px color-mix(in srgb, currentColor 11%, transparent);
+}
+
+.wb-local-model-actions > .wb-runtime-badge {
   font-weight: 650;
   letter-spacing: 0.02em;
 }
 
-.wb-local-model > .wb-runtime-badge.is-mlx {
+.wb-local-model-actions > .wb-runtime-badge.is-mlx {
   background: color-mix(in srgb, #8b5cf6 15%, transparent);
   color: #7c3aed;
 }
 
-.wb-local-model > .wb-runtime-badge.is-cuda {
+.wb-local-model-actions > .wb-runtime-badge.is-cuda {
   background: color-mix(in srgb, #16a34a 15%, transparent);
   color: #15803d;
 }
 
-.wb-local-model > .wb-runtime-badge.is-onnx {
+.wb-local-model-actions > .wb-runtime-badge.is-onnx {
   background: color-mix(in srgb, #0284c7 14%, transparent);
   color: #0369a1;
 }
 
-.wb-local-model > .wb-model-status.is-error {
+.wb-local-model-actions > .wb-model-status.is-error {
   background: color-mix(in srgb, var(--wb-red) 14%, transparent);
   color: var(--wb-red);
   font-weight: 650;
 }
 
-html[data-theme="dark"] .wb-local-model > .wb-runtime-badge.is-mlx { color: #c4b5fd; }
-html[data-theme="dark"] .wb-local-model > .wb-runtime-badge.is-cuda { color: #86efac; }
-html[data-theme="dark"] .wb-local-model > .wb-runtime-badge.is-onnx { color: #7dd3fc; }
+html[data-theme="dark"] .wb-local-model-actions > .wb-runtime-badge.is-mlx { color: #c4b5fd; }
+html[data-theme="dark"] .wb-local-model-actions > .wb-runtime-badge.is-cuda { color: #86efac; }
+html[data-theme="dark"] .wb-local-model-actions > .wb-runtime-badge.is-onnx { color: #7dd3fc; }
 
-.wb-local-model > .wb-btn.compact {
-  height: 28px;
-  min-height: 28px;
-  padding: 0 10px;
-  border-radius: 6px;
+.wb-local-model-actions > .wb-btn.compact {
+  height: 34px;
+  min-height: 34px;
+  padding: 0 13px;
+  border-radius: 9px;
   font-size: calc(11.5px * var(--wb-ui-font-scale, 1));
+}
+
+@media (max-width: 760px) {
+  .wb-local-model {
+    grid-template-columns: 38px minmax(0, 1fr);
+    align-items: start;
+    gap: 11px;
+  }
+
+  .wb-local-model-icon {
+    width: 38px;
+    height: 38px;
+    border-radius: 10px;
+  }
+
+  .wb-local-model-actions {
+    grid-column: 1 / -1;
+    justify-content: space-between;
+    padding-left: 49px;
+  }
 }
 
 .wb-model-section.is-codex .wb-model-status {
@@ -16656,6 +16773,14 @@ span.wbc-chat-group-toggle {
   height: 17px;
 }
 
+.wbc-chat-running-spinner {
+  width: 16px;
+  height: 16px;
+  flex: 0 0 16px;
+  border-width: 2px;
+  animation-duration: 0.7s;
+}
+
 .wbc-rail .wbc-chat-card-title {
   gap: 4px;
 }
@@ -16938,6 +17063,7 @@ span.wbc-chat-group-toggle {
   .wbc-chat-group-content,
   .wbc-chat-group-chevron svg,
   .wbc-chat-group-leading-chevron svg,
+  .wbc-chat-running-spinner,
   .wbc-hover-marquee.overflow:hover .wbc-hover-marquee-track,
   .wbc-hover-marquee.overflow:focus-within .wbc-hover-marquee-track,
   .wbc-chat-card:hover .wbc-hover-marquee.overflow .wbc-hover-marquee-track,
@@ -21923,40 +22049,83 @@ body.wb-col-resizing .wbc-side-card > .wb-col-resizer.card-edge::after {
 
 .wbc-changes-run-picker {
   flex: 0 0 auto;
+  position: relative;
   display: flex;
   align-items: center;
-  padding: 0 0 6px;
+  padding: 0 0 10px;
 }
 
 .wbc-changes-run-picker select {
+  appearance: none;
+  -webkit-appearance: none;
   width: 100%;
   min-width: 0;
-  min-height: 30px;
-  border: 1px solid var(--wb-line);
-  border-radius: 7px;
-  background: var(--wb-control-bg);
+  height: 40px;
+  min-height: 40px;
+  border: 1px solid color-mix(in srgb, var(--wb-line-2) 70%, transparent);
+  border-radius: 12px;
+  background: color-mix(in srgb, var(--wb-card-bg) 88%, var(--wb-surface));
   color: var(--wb-text);
-  padding: 4px 26px 4px 8px;
-  font-size: 11px;
+  padding: 0 40px 0 14px;
+  font: inherit;
+  font-size: calc(13px * var(--wb-ui-font-scale, 1));
+  font-weight: 620;
+  line-height: 1;
+  outline: none;
   cursor: pointer;
-  transition: background-color 160ms ease, border-color 160ms ease, box-shadow 160ms ease;
+  box-shadow:
+    var(--wbc-control-shadow),
+    inset 0 1px 0 color-mix(in srgb, #fff 7%, transparent);
+  transition:
+    background-color 160ms ease,
+    border-color 160ms ease,
+    box-shadow 160ms ease;
 }
 
 .wbc-changes-run-picker select:hover {
-  border-color: color-mix(in srgb, var(--wb-text) 24%, var(--wb-line));
-  background-color: var(--wb-control-hover-bg);
+  border-color: color-mix(in srgb, var(--wb-accent) 34%, var(--wb-line-2));
+  background-color: color-mix(in srgb, var(--wb-accent) 6%, color-mix(in srgb, var(--wb-card-bg) 88%, var(--wb-surface)));
 }
 
 .wbc-changes-run-picker select:focus {
   outline: none !important;
-  border-color: color-mix(in srgb, var(--wb-text) 28%, var(--wb-line)) !important;
-  box-shadow: none !important;
+  border-color: color-mix(in srgb, var(--wb-accent) 62%, var(--wb-line-2)) !important;
+  box-shadow:
+    var(--wbc-control-shadow),
+    inset 0 0 0 1px color-mix(in srgb, var(--wb-accent) 18%, transparent) !important;
 }
 
 .wbc-changes-run-picker select:focus-visible {
   outline: none !important;
-  border-color: color-mix(in srgb, var(--wb-text) 34%, var(--wb-line)) !important;
-  box-shadow: 0 0 0 2px color-mix(in srgb, var(--wb-text) 12%, transparent) !important;
+  border-color: color-mix(in srgb, var(--wb-accent) 72%, var(--wb-line-2)) !important;
+  box-shadow:
+    0 0 0 3px color-mix(in srgb, var(--wb-accent) 12%, transparent),
+    var(--wbc-control-shadow),
+    inset 0 0 0 1px color-mix(in srgb, var(--wb-accent) 18%, transparent) !important;
+}
+
+.wbc-changes-run-picker-chevron {
+  position: absolute;
+  right: 12px;
+  top: 12px;
+  width: 16px;
+  height: 16px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--wb-muted);
+  pointer-events: none;
+  transition: color 160ms ease;
+}
+
+.wbc-changes-run-picker-chevron svg {
+  width: 16px;
+  height: 16px;
+}
+
+.wbc-changes-run-picker:has(select:hover) .wbc-changes-run-picker-chevron,
+.wbc-changes-run-picker:has(select:focus-visible) .wbc-changes-run-picker-chevron {
+  color: var(--wb-text);
 }
 
 .wbc-change-file-lines i,
@@ -25092,10 +25261,71 @@ html[data-theme="dark"] .wbc-trace {
   line-height: 1.6;
   white-space: pre-wrap;
   word-break: break-all;
-  background: var(--wb-panel-2);
+  color: #c9d1d9;
+  color-scheme: dark;
+  background: #0d1117;
 }
 
-.wbc-viewer-pre code { background: transparent; padding: 0; }
+.wbc-viewer-pre code {
+  color: #c9d1d9;
+  background: transparent;
+  padding: 0;
+}
+
+/* Code previews intentionally keep GitHub's dark syntax palette in every app
+   theme.  The explicit base color also covers plain text that Highlight.js
+   does not wrap in a token span. */
+.wbc-viewer-pre code.hljs {
+  display: block;
+  overflow: visible;
+  padding: 0;
+  color: #c9d1d9;
+  background: transparent;
+}
+
+/* Stable dark syntax palette for the file viewer.  Keep these rules scoped to
+   the preview so keywords, declarations, strings, numbers, built-ins, and
+   comments remain visually distinct regardless of the application theme. */
+.wbc-viewer-pre .hljs-doctag,
+.wbc-viewer-pre .hljs-keyword,
+.wbc-viewer-pre .hljs-meta .hljs-keyword,
+.wbc-viewer-pre .hljs-template-tag,
+.wbc-viewer-pre .hljs-template-variable,
+.wbc-viewer-pre .hljs-type,
+.wbc-viewer-pre .hljs-variable.language_ { color: #ff7b72; }
+.wbc-viewer-pre .hljs-title,
+.wbc-viewer-pre .hljs-title.class_,
+.wbc-viewer-pre .hljs-title.class_.inherited__,
+.wbc-viewer-pre .hljs-title.function_ { color: #d2a8ff; }
+.wbc-viewer-pre .hljs-attr,
+.wbc-viewer-pre .hljs-attribute,
+.wbc-viewer-pre .hljs-literal,
+.wbc-viewer-pre .hljs-meta,
+.wbc-viewer-pre .hljs-number,
+.wbc-viewer-pre .hljs-operator,
+.wbc-viewer-pre .hljs-selector-attr,
+.wbc-viewer-pre .hljs-selector-class,
+.wbc-viewer-pre .hljs-selector-id,
+.wbc-viewer-pre .hljs-variable { color: #79c0ff; }
+.wbc-viewer-pre .hljs-meta .hljs-string,
+.wbc-viewer-pre .hljs-regexp,
+.wbc-viewer-pre .hljs-string { color: #a5d6ff; }
+.wbc-viewer-pre .hljs-built_in,
+.wbc-viewer-pre .hljs-symbol { color: #ffa657; }
+.wbc-viewer-pre .hljs-code,
+.wbc-viewer-pre .hljs-comment,
+.wbc-viewer-pre .hljs-formula { color: #8b949e; }
+.wbc-viewer-pre .hljs-name,
+.wbc-viewer-pre .hljs-quote,
+.wbc-viewer-pre .hljs-selector-pseudo,
+.wbc-viewer-pre .hljs-selector-tag { color: #7ee787; }
+.wbc-viewer-pre .hljs-subst { color: #c9d1d9; }
+.wbc-viewer-pre .hljs-section { color: #58a6ff; }
+.wbc-viewer-pre .hljs-bullet { color: #f2cc60; }
+.wbc-viewer-pre .hljs-emphasis { color: #c9d1d9; font-style: italic; }
+.wbc-viewer-pre .hljs-strong { color: #c9d1d9; font-weight: 700; }
+.wbc-viewer-pre .hljs-addition { color: #aff5b4; background: #033a16; }
+.wbc-viewer-pre .hljs-deletion { color: #ffdcd7; background: #67060c; }
 
 .wbc-viewer-md {
   flex: 1;
@@ -29033,6 +29263,10 @@ html[data-density="compact"] .workbench-shell :where(.wb-budget-model-head, .wb-
   width: 18px;
   height: 18px;
   opacity: 1;
+  will-change: opacity, transform;
+  transition:
+    opacity 180ms ease,
+    transform 180ms ease;
 }
 
 .wbc-conversation-status-glyph svg {
@@ -29048,7 +29282,9 @@ html[data-density="compact"] .workbench-shell :where(.wb-budget-model-head, .wb-
   background: currentColor;
   box-shadow: 0 0 0 2px var(--wb-floating-rail-bg);
   transform: translate(-50%, -50%) scale(.58);
+  will-change: opacity, transform;
   transition:
+    opacity 180ms ease,
     width 150ms ease,
     height 150ms ease,
     transform 150ms ease,
@@ -29073,6 +29309,7 @@ html[data-density="compact"] .workbench-shell :where(.wb-budget-model-head, .wb-
   opacity: 1;
   transform: translate(-50%, -50%) scale(1);
   transition:
+    opacity 180ms ease,
     width 150ms ease,
     height 150ms ease,
     transform 150ms ease,
@@ -29082,15 +29319,15 @@ html[data-density="compact"] .workbench-shell :where(.wb-budget-model-head, .wb-
 .workbench-grid.integrated-sidebars .wbc-rail.workbench-integrated-rail.is-status-expanding .wbc-conversation-status-glyph,
 .workbench-grid.integrated-sidebars .wbc-rail.workbench-integrated-rail.is-status-expanding .wbc-conversation-status-dot {
   transition:
-    opacity 90ms ease 510ms,
-    transform 90ms ease 510ms;
+    opacity 180ms ease 420ms,
+    transform 180ms ease 420ms;
 }
 
 .workbench-grid.integrated-sidebars .wbc-rail.workbench-integrated-rail.is-status-collapsing .wbc-conversation-status-glyph,
 .workbench-grid.integrated-sidebars .wbc-rail.workbench-integrated-rail.is-status-collapsing .wbc-conversation-status-dot {
   transition:
-    opacity 80ms ease,
-    transform 80ms ease;
+    opacity 180ms ease,
+    transform 180ms ease;
 }
 
 .wbc-chat-card.track-marker-ready .wbc-chat-row-icon {
@@ -29595,5 +29832,76 @@ html[data-density="compact"] .workbench-shell :where(.wb-budget-model-head, .wb-
   .workbench-grid.integrated-sidebars.is-task-board .wb-board-completed-strip,
   .workbench-grid.integrated-sidebars.is-task-board .wb-board-columns {
     transition: none;
+  }
+}
+
+/* Windows 1080p / low-DPI typography ---------------------------------------
+   Fractional variable-font weights look soft under DirectWrite at DPR 1–1.5.
+   Quantize the UI type ramp to Regular, Semibold, and Bold without changing
+   any font size, spacing, or macOS/HiDPI presentation. */
+@media (max-resolution: 1.5dppx) {
+  html[data-platform="win32"] :where(
+    .workbench-shell,
+    .wbq-shell,
+    .workbench-confirm-modal,
+    .workbench-toast-host
+  ),
+  html[data-platform="win32"] :where(
+    .workbench-shell,
+    .wbq-shell,
+    .workbench-confirm-modal,
+    .workbench-toast-host
+  ) * {
+    font-weight: 400 !important;
+  }
+
+  html[data-platform="win32"] :where(
+    .workbench-shell,
+    .wbq-shell,
+    .workbench-confirm-modal,
+    .workbench-toast-host
+  ) :where(
+    h3, h4, h5, h6,
+    strong, b,
+    button, [role="button"],
+    [aria-selected="true"],
+    .selected, .active, .current
+  ),
+  html[data-platform="win32"] :where(
+    .workbench-shell,
+    .wbq-shell,
+    .workbench-confirm-modal,
+    .workbench-toast-host
+  ) :where(strong, b) * {
+    font-weight: 600 !important;
+  }
+
+  html[data-platform="win32"] :where(
+    .workbench-shell,
+    .wbq-shell,
+    .workbench-confirm-modal,
+    .workbench-toast-host
+  ) :where(
+    h3, h4, h5, h6,
+    button, [role="button"],
+    [aria-selected="true"],
+    .selected, .active, .current
+  ) * {
+    font-weight: 600 !important;
+  }
+
+  html[data-platform="win32"] :where(
+    .workbench-shell,
+    .wbq-shell,
+    .workbench-confirm-modal,
+    .workbench-toast-host
+  ) :where(h1, h2),
+  html[data-platform="win32"] :where(
+    .workbench-shell,
+    .wbq-shell,
+    .workbench-confirm-modal,
+    .workbench-toast-host
+  ) :where(h1, h2) * {
+    font-weight: 700 !important;
   }
 }

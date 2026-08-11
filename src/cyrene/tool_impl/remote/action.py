@@ -2,7 +2,11 @@
 
 from __future__ import annotations
 
+import hashlib
+import json
 from typing import Any
+
+from cyrene.agent.context import current_run_context
 
 from cyrene.tool_impl.remote.common import (
     remote_tool_error,
@@ -106,19 +110,54 @@ async def handler(
             db_path,
             fallback_chat_id=chat_id,
         )
+        request_args = dict(args)
+        request_payload = dict(args.get("payload") or {})
+        if str(args.get("command") or "") in {
+            "chats.send",
+            "tasks.dispatch",
+            "tasks.run_step",
+        }:
+            request_payload["permission_mode"] = current_run_context().permission_mode
+        request_args["payload"] = request_payload
+        exact_operation = json.dumps(
+            {
+                "device_id": str(device["device_id"]),
+                "project_id": str(args.get("project_id") or ""),
+                "command": str(args.get("command") or ""),
+                "payload": request_payload,
+                "idempotency_key": str(args.get("idempotency_key") or ""),
+            },
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+            default=str,
+        )
+        operation_sha256 = hashlib.sha256(exact_operation.encode("utf-8")).hexdigest()
         permission = await request_scope_elevation(
             tool_name=TOOL_NAME,
             path_hint=str(device["device_id"]),
             operation=f"操作远程 Cyrene：{args.get('command') or ''}",
-            reason=str(args.get("reason") or "执行用户请求的远程设备操作"),
+            reason=(
+                str(args.get("reason") or "执行用户请求的远程设备操作")
+                + "\n精确操作："
+                + exact_operation[:8000]
+                + "\nSHA-256："
+                + operation_sha256
+            ),
             permission_kind="remote_device_action",
             options=["允许执行这一次", "拒绝"],
             scope_hint="远程设备操作的 ",
+            meta_extra={
+                "device_id": str(device["device_id"]),
+                "project_id": str(args.get("project_id") or ""),
+                "command": str(args.get("command") or ""),
+                "operation_sha256": operation_sha256,
+            },
         )
         if permission is not None:
             return permission
         result = await request_remote_command(
-            args,
+            request_args,
             db_path,
             fallback_chat_id=chat_id,
         )

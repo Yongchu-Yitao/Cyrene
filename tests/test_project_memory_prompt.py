@@ -199,8 +199,14 @@ def test_manual_chat_memory_learning_http_contract_queues_root_chat(monkeypatch)
     monkeypatch.setattr(chat_service, "_read_chats_store", lambda: {"chats": [chat]})
     monkeypatch.setattr(chat_service, "_find_chat", lambda _payload, chat_id: chat if chat_id == "chat-a" else None)
 
-    def fake_schedule(project_id, chat_id, *, source, reason):
-        captured.update(project_id=project_id, chat_id=chat_id, source=source, reason=reason)
+    def fake_schedule(project_id, chat_id, *, source, reason, chat):
+        captured.update(
+            project_id=project_id,
+            chat_id=chat_id,
+            source=source,
+            reason=reason,
+            chat=chat,
+        )
         return {"status": "queued", "job": {"id": "job-a"}}
 
     monkeypatch.setattr(memory_prompt, "schedule_learning_from_completed_chat", fake_schedule)
@@ -212,6 +218,7 @@ def test_manual_chat_memory_learning_http_contract_queues_root_chat(monkeypatch)
         "chat_id": "chat-a",
         "source": "conversation_menu",
         "reason": "manual_menu",
+        "chat": chat,
     }
 
 
@@ -271,6 +278,112 @@ def test_completed_context_snapshot_preserves_every_message_and_final_reply(monk
     assert memory_prompt.get_completed_context_snapshot("chat-a") == snapshot
 
 
+def test_pre_snapshot_chat_recovers_persisted_model_messages_and_identity(monkeypatch):
+    persisted_messages = [
+        {"role": "user", "content": "Search today's news."},
+        {
+            "role": "assistant",
+            "content": "Searching.",
+            "reasoning_content": "private historical reasoning",
+            "tool_calls": [{
+                "id": "search-1",
+                "type": "function",
+                "function": {"name": "WebSearch", "arguments": '{"q":"news"}'},
+            }],
+        },
+        {"role": "tool", "tool_call_id": "search-1", "content": "results"},
+        {"role": "assistant", "content": "Here is the verified summary."},
+    ]
+    monkeypatch.setattr(
+        "cyrene.agent.session.load_session_state",
+        lambda chat_id: {"messages": persisted_messages} if chat_id == "chat-old" else {},
+    )
+    monkeypatch.setattr(
+        "cyrene.runtime.settings_store.get_models",
+        lambda: [{
+            "id": "deepseek-chat",
+            "provider": "openai_compatible",
+            "model": "deepseek-v4-flash",
+            "reasoning_effort": "max",
+        }],
+    )
+    chat = {
+        "id": "chat-old",
+        "projectId": "project-a",
+        "kind": "chat",
+        "modelSelectionId": "deepseek-chat",
+        "lastModel": "deepseek-v4-flash",
+        "reasoningEffort": "high",
+        "completedTurnCount": 1,
+        "lastRun": {"id": "run-old", "status": "done"},
+        "messages": [],
+    }
+
+    snapshot = memory_prompt._recover_completed_context_snapshot(
+        "chat-old", "project-a", chat
+    )
+
+    assert snapshot is not None
+    assert snapshot["snapshotSource"] == "recovered_session_state"
+    assert snapshot["roundId"] == "run-old"
+    assert snapshot["completedTurnCount"] == 1
+    assert snapshot["model"] == {
+        "candidateId": "deepseek-chat",
+        "provider": "openai_compatible",
+        "model": "deepseek-v4-flash",
+        "baseUrl": "",
+        "reasoningEffort": "high",
+    }
+    assert [message["role"] for message in snapshot["messages"]] == [
+        "user", "assistant", "tool", "assistant"
+    ]
+    assert "reasoning_content" not in snapshot["messages"][1]
+    assert snapshot["messages"][1]["tool_calls"] == persisted_messages[1]["tool_calls"]
+    assert memory_prompt.get_completed_context_snapshot("chat-old") == snapshot
+
+
+def test_manual_learning_recovers_old_chat_when_snapshot_is_missing(monkeypatch):
+    recovered = {
+        "chatId": "chat-old",
+        "projectId": "project-a",
+        "roundId": "run-old",
+        "contextHash": "recovered-hash",
+        "messages": [{"role": "user", "content": "evidence"}],
+        "model": {},
+    }
+    chat = {"id": "chat-old", "projectId": "project-a"}
+    monkeypatch.setattr(memory_prompt, "get_completed_context_snapshot", lambda _chat_id: None)
+    monkeypatch.setattr(
+        memory_prompt,
+        "_recover_completed_context_snapshot",
+        lambda chat_id, project_id, value: recovered
+        if (chat_id, project_id, value) == ("chat-old", "project-a", chat)
+        else None,
+    )
+    captured = {}
+
+    def fake_schedule(project_id, snapshot, *, source, reason):
+        captured.update(
+            project_id=project_id,
+            snapshot=snapshot,
+            source=source,
+            reason=reason,
+        )
+        return {"status": "queued", "job": {"id": "job-old"}}
+
+    monkeypatch.setattr(memory_prompt, "schedule_learning", fake_schedule)
+    result = memory_prompt.schedule_learning_from_completed_chat(
+        "project-a",
+        "chat-old",
+        source="conversation_menu",
+        reason="manual_menu",
+        chat=chat,
+    )
+
+    assert result["status"] == "queued"
+    assert captured["snapshot"] == recovered
+
+
 def test_all_structured_memories_can_include_internal_categories(monkeypatch):
     entries = [
         {"id": "visible", "content": "Preference", "category": "preference", "type": "preference"},
@@ -288,7 +401,7 @@ def test_all_structured_memories_can_include_internal_categories(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_memory_agent_reuses_exact_candidate_and_appends_one_system_message(monkeypatch):
+async def test_memory_agent_reuses_exact_candidate_and_submits_with_one_user_message(monkeypatch):
     candidate = {
         "id": "candidate-2",
         "provider": "openai_compatible",
@@ -322,7 +435,16 @@ async def test_memory_agent_reuses_exact_candidate_and_appends_one_system_messag
         return {
             "role": "assistant",
             "model": "same-model",
-            "content": '{"prompt":"Errors and lessons: parser fix verified twice.","change_summary":"Recorded parser recovery."}',
+            "content": "",
+            "finish_reason": "tool_calls",
+            "tool_calls": [{
+                "id": "memory-submit-1",
+                "type": "function",
+                "function": {
+                    "name": "submit_project_memory",
+                    "arguments": '{"prompt":"Errors and lessons: parser fix verified twice.","change_summary":"Recorded parser recovery."}',
+                },
+            }],
         }
 
     monkeypatch.setattr("cyrene.call_llm.call_llm", fake_call_llm)
@@ -332,11 +454,11 @@ async def test_memory_agent_reuses_exact_candidate_and_appends_one_system_messag
     )
 
     assert captured["messages"][:-1] == original_messages
-    assert captured["messages"][-1]["role"] == "system"
+    assert captured["messages"][-1]["role"] == "user"
     assert "Current project memory:\nExisting project memory." in captured["messages"][-1]["content"]
-    assert captured["kwargs"]["tools"] is None
+    assert captured["kwargs"]["tools"][0]["function"]["name"] == "submit_project_memory"
     assert captured["kwargs"]["candidates"] == [candidate]
-    assert captured["kwargs"]["response_format"] == {"type": "json_object"}
+    assert "response_format" not in captured["kwargs"]
     assert learned.startswith("Errors and lessons")
     assert summary == "Recorded parser recovery."
     assert used_model["candidateId"] == "candidate-2"
@@ -362,13 +484,63 @@ async def test_memory_agent_rejects_secrets_and_prompt_injection(monkeypatch):
     ])
 
     async def fake_call_llm(_messages, **_kwargs):
-        return {"role": "assistant", "model": "same-model", "content": next(responses)}
+        return {
+            "role": "assistant",
+            "model": "same-model",
+            "content": "",
+            "finish_reason": "tool_calls",
+            "tool_calls": [{
+                "id": "memory-submit",
+                "type": "function",
+                "function": {
+                    "name": "submit_project_memory",
+                    "arguments": next(responses),
+                },
+            }],
+        }
 
     monkeypatch.setattr("cyrene.call_llm.call_llm", fake_call_llm)
     snapshot = {"messages": [{"role": "user", "content": "evidence"}], "model": {}}
     with pytest.raises(memory_prompt.InvalidProjectMemoryOutput, match="secret"):
         await memory_prompt._learn_prompt(snapshot, "")
     with pytest.raises(memory_prompt.InvalidProjectMemoryOutput, match="prompt injection"):
+        await memory_prompt._learn_prompt(snapshot, "")
+
+
+@pytest.mark.asyncio
+async def test_memory_agent_rejects_text_or_malformed_tool_submission(monkeypatch):
+    candidate = {
+        "id": "only",
+        "provider": "openai_compatible",
+        "model": "same-model",
+        "base_url": "http://model.local/v1",
+        "endpoints": ["http://model.local/v1/chat/completions"],
+    }
+    monkeypatch.setattr(
+        "cyrene.model_runtime.client.resolve_exact_model_candidate", lambda _identity: candidate
+    )
+    responses = iter([
+        {"role": "assistant", "content": "I learned something.", "tool_calls": []},
+        {
+            "role": "assistant",
+            "content": "",
+            "tool_calls": [{
+                "function": {
+                    "name": "submit_project_memory",
+                    "arguments": "{not-json",
+                },
+            }],
+        },
+    ])
+
+    async def fake_call_llm(_messages, **_kwargs):
+        return next(responses)
+
+    monkeypatch.setattr("cyrene.call_llm.call_llm", fake_call_llm)
+    snapshot = {"messages": [{"role": "user", "content": "evidence"}], "model": {}}
+    with pytest.raises(memory_prompt.InvalidProjectMemoryOutput, match="exactly one"):
+        await memory_prompt._learn_prompt(snapshot, "")
+    with pytest.raises(memory_prompt.InvalidProjectMemoryOutput, match="malformed"):
         await memory_prompt._learn_prompt(snapshot, "")
 
 

@@ -288,6 +288,17 @@ async def _request_scope_elevation(
         "destructive_confirmation",
         "external_upload_confirmation",
     }
+    # A paired controller may pre-authorize one exact, argument-hashed capability
+    # invocation. That bounded receipt carries the controller chat's local path
+    # decision, but never deletion or external-upload authority.
+    if (
+        run_context.bounded_remote_authorization
+        and permission_kind not in {
+            "destructive_confirmation",
+            "external_upload_confirmation",
+        }
+    ):
+        return None
     # Explicit full-access modes may pass ordinary permission boundaries, but
     # never destructive or external-upload confirmation.
     if (
@@ -459,6 +470,7 @@ async def _request_destructive_confirmation(
     path_hint: str = "",
     destructive_kind: str = "destructive_operation",
     risk_level: str = "high",
+    meta_extra: dict[str, Any] | None = None,
 ) -> str | None:
     """Require human confirmation before irreversible/destructive side effects."""
     from cyrene.agent.context import (
@@ -498,6 +510,7 @@ async def _request_destructive_confirmation(
             "fingerprint": fingerprint,
             "destructive_kind": destructive_kind,
             "risk_level": risk_level,
+            **dict(meta_extra or {}),
         },
     )
 

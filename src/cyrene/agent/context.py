@@ -36,6 +36,7 @@ class AgentRunContext:
     response_capabilities: frozenset[str]
     deep_research: bool
     temporary_full_access: bool
+    bounded_remote_authorization: bool
 
 
 class ContextBinding:
@@ -70,6 +71,9 @@ def current_run_context() -> AgentRunContext:
         response_capabilities=frozenset(_state.response_capabilities.get()),
         deep_research=bool(_state._deep_research_mode.get()),
         temporary_full_access=bool(_state._temporary_full_access.get()),
+        bounded_remote_authorization=bool(
+            _state._bounded_remote_authorization.get()
+        ),
     )
 
 
@@ -87,6 +91,8 @@ def bind_run_context(
     response_capabilities: object = _UNSET,
     deep_research: object = _UNSET,
     temporary_full_access: object = _UNSET,
+    bounded_remote_authorization: object = _UNSET,
+    destructive_confirmation_allow_all: object = _UNSET,
     assistant_meta: object = _UNSET,
     attachment_paths: object = _UNSET,
     reply_stream_writer: object = _UNSET,
@@ -106,6 +112,8 @@ def bind_run_context(
         (_state.response_capabilities, response_capabilities),
         (_state._deep_research_mode, deep_research),
         (_state._temporary_full_access, temporary_full_access),
+        (_state._bounded_remote_authorization, bounded_remote_authorization),
+        (_state._destructive_confirmation_allow_all, destructive_confirmation_allow_all),
         (_state._ui_round_assistant_meta, assistant_meta),
         (_state._attachment_paths_by_name, attachment_paths),
         (_state._reply_stream_writer, reply_stream_writer),

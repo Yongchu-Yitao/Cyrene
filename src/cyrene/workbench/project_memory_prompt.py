@@ -38,6 +38,30 @@ _CHAT_TASKS: dict[str, set[asyncio.Task[Any]]] = {}
 _SCHEMA_VERSION = 1
 _MAX_PROMPT_CHARS = 16_000
 _MAX_JOB_RECORDS = 100
+_MEMORY_SUBMIT_TOOL_NAME = "submit_project_memory"
+
+_MEMORY_SUBMIT_TOOL = {
+    "type": "function",
+    "function": {
+        "name": _MEMORY_SUBMIT_TOOL_NAME,
+        "description": "Submit the complete learned project memory once; do not answer in text.",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "prompt": {
+                    "type": "string",
+                    "description": "Complete concise project-memory prompt for future agents.",
+                },
+                "change_summary": {
+                    "type": "string",
+                    "description": "Short summary of what changed in this revision.",
+                },
+            },
+            "required": ["prompt", "change_summary"],
+            "additionalProperties": False,
+        },
+    },
+}
 
 MAIN_AGENT_MEMORY_TRIGGER_PROMPT = (
     "When durable project knowledge, a recurring user habit, completed project "
@@ -491,6 +515,108 @@ def get_completed_context_snapshot(chat_id: str) -> dict[str, Any] | None:
     return copy.deepcopy(value) if value else None
 
 
+def _recover_completed_context_snapshot(
+    chat_id: str,
+    project_id: str,
+    chat: dict[str, Any],
+) -> dict[str, Any] | None:
+    """Recover the best persisted model context for pre-snapshot conversations.
+
+    Older Workbench sessions predate ``completed_context_snapshot`` but still
+    retain their model-visible user, assistant, tool, and runtime-event messages
+    in the per-session state file.  Reuse those durable messages instead of the
+    shorter UI transcript and mark the provenance explicitly: old state files
+    contain hashes for their historical system-prefix blocks, not the original
+    block text, so this is intentionally not labelled an exact live snapshot.
+    """
+    from cyrene.agent.session import load_session_state
+    from cyrene.model_runtime.client import sanitize_messages_for_llm
+    from cyrene.runtime.settings_store import get_models
+    from cyrene.workbench.chat import completed_turn_count
+
+    state = load_session_state(chat_id)
+    raw_messages = state.get("messages") if isinstance(state, dict) else None
+    if not isinstance(raw_messages, list) or not raw_messages:
+        return None
+    messages = sanitize_messages_for_llm(
+        copy.deepcopy(raw_messages),
+        materialize_internal_media=False,
+    )
+    if not messages or not any(
+        str(message.get("role") or "") in {"user", "assistant"}
+        for message in messages
+        if isinstance(message, dict)
+    ):
+        return None
+
+    selection = str(chat.get("modelSelectionId") or "").strip()
+    remembered_model = str(chat.get("lastModel") or chat.get("model") or "").strip()
+    configured = get_models() or []
+    candidate = next(
+        (
+            item
+            for item in configured
+            if isinstance(item, dict)
+            and selection
+            and selection
+            in {
+                str(item.get("id") or "").strip(),
+                str(item.get("model") or "").strip(),
+                str(item.get("name") or "").strip(),
+            }
+        ),
+        None,
+    )
+    if candidate is None and remembered_model:
+        candidate = next(
+            (
+                item
+                for item in configured
+                if isinstance(item, dict)
+                and remembered_model
+                in {
+                    str(item.get("model") or "").strip(),
+                    str(item.get("name") or "").strip(),
+                }
+            ),
+            None,
+        )
+    candidate = candidate if isinstance(candidate, dict) else {}
+    model = str(
+        candidate.get("model")
+        or candidate.get("name")
+        or remembered_model
+    ).strip()
+    identity = {
+        "candidateId": str(candidate.get("id") or selection).strip(),
+        "provider": str(candidate.get("provider") or "openai_compatible").strip(),
+        "model": model,
+        "baseUrl": "",
+        "reasoningEffort": str(
+            chat.get("reasoningEffort")
+            or candidate.get("reasoning_effort")
+            or ""
+        ).strip().lower(),
+    }
+    if not identity["candidateId"] and not identity["model"]:
+        return None
+
+    last_run = chat.get("lastRun") if isinstance(chat.get("lastRun"), dict) else {}
+    snapshot = {
+        "schemaVersion": _SCHEMA_VERSION,
+        "chatId": str(chat_id or ""),
+        "projectId": str(project_id or ""),
+        "roundId": str(last_run.get("id") or "recovered"),
+        "completedTurnCount": completed_turn_count(chat),
+        "capturedAt": _job_now(),
+        "messages": messages,
+        "contextHash": _context_hash(messages),
+        "model": identity,
+        "snapshotSource": "recovered_session_state",
+    }
+    return _save_context_snapshot(chat_id, snapshot)
+
+
 def _job_now() -> str:
     return datetime.now(timezone.utc).isoformat(timespec="milliseconds").replace("+00:00", "Z")
 
@@ -521,6 +647,7 @@ def _append_job(project_id: str, snapshot: dict[str, Any], source: str, reason: 
             "roundId": str(snapshot.get("roundId") or ""),
             "turn": int(snapshot.get("completedTurnCount") or 0),
             "contextHash": str(snapshot.get("contextHash") or ""),
+            "contextSource": str(snapshot.get("snapshotSource") or "exact_completed_context"),
             "source": str(source or "manual"),
             "reason": str(reason or "manual"),
             "status": "queued",
@@ -557,24 +684,6 @@ def _update_job(project_id: str, job_id: str, **fields: Any) -> dict[str, Any]:
         return dict(target)
 
 
-def _parse_json_object(value: str) -> dict[str, Any]:
-    raw = str(value or "").strip()
-    if raw.startswith("```"):
-        raw = re.sub(r"^```(?:json)?\s*", "", raw, flags=re.IGNORECASE)
-        raw = re.sub(r"\s*```$", "", raw)
-    try:
-        parsed = json.loads(raw)
-    except json.JSONDecodeError:
-        start, end = raw.find("{"), raw.rfind("}")
-        if start < 0 or end <= start:
-            return {}
-        try:
-            parsed = json.loads(raw[start : end + 1])
-        except json.JSONDecodeError:
-            return {}
-    return parsed if isinstance(parsed, dict) else {}
-
-
 def _contains_secret(value: str) -> bool:
     return any(pattern.search(value) for pattern in _SECRET_PATTERNS)
 
@@ -598,8 +707,8 @@ def _memory_agent_instruction(current_prompt: str) -> str:
         "one incidental act; omit secrets, speculation, transient details, and "
         "duplicates. Use only needed headings: User habits; Project work and "
         "decisions; Effective methods; Errors and lessons; Ongoing or unresolved. "
-        "Return JSON only: "
-        '{"prompt":"complete concise project-memory prompt","change_summary":"short summary"}.\n\n'
+        f"Call {_MEMORY_SUBMIT_TOOL_NAME} exactly once with the complete concise "
+        "project-memory prompt and a short change summary; do not answer in text.\n\n"
         "Current project memory:\n"
         + (current_prompt or "(empty)")
     )
@@ -610,20 +719,20 @@ async def _learn_prompt(
 ) -> tuple[str, str, dict[str, Any]]:
     from cyrene.call_llm import call_llm
     from cyrene.model_runtime.client import resolve_exact_model_candidate
+    from cyrene.model_runtime.messages import parse_tool_arguments
 
     identity = dict(snapshot.get("model") or {})
     candidate = resolve_exact_model_candidate(identity)
     if candidate is None:
         raise ProjectMemoryModelUnavailable("the triggering main-Agent model is no longer configured")
     messages = copy.deepcopy(snapshot.get("messages") or [])
-    messages.append({"role": "system", "content": _memory_agent_instruction(current_prompt)})
+    messages.append({"role": "user", "content": _memory_agent_instruction(current_prompt)})
     response = await call_llm(
         messages,
-        tools=None,
+        tools=[copy.deepcopy(_MEMORY_SUBMIT_TOOL)],
         candidates=[candidate],
         max_tokens=4_000,
         thinking="auto",
-        response_format={"type": "json_object"},
         caller="project_memory_agent",
         phase="learning",
         session_id=f"memory:{snapshot.get('projectId') or ''}",
@@ -636,9 +745,26 @@ async def _learn_prompt(
         "max_output_tokens",
     }:
         raise InvalidProjectMemoryOutput("Memory Agent output was truncated")
-    parsed = _parse_json_object(str(response.get("content") or ""))
+    tool_calls = response.get("tool_calls") or []
+    submissions = [
+        call
+        for call in tool_calls
+        if isinstance(call, dict)
+        and isinstance(call.get("function"), dict)
+        and str(call["function"].get("name") or "") == _MEMORY_SUBMIT_TOOL_NAME
+    ]
+    if len(submissions) != 1:
+        raise InvalidProjectMemoryOutput(
+            "Memory Agent did not submit exactly one project-memory result"
+        )
+    try:
+        parsed = parse_tool_arguments(submissions[0]["function"].get("arguments"))
+    except ValueError as exc:
+        raise InvalidProjectMemoryOutput(
+            "Memory Agent submitted malformed project-memory arguments"
+        ) from exc
     if "prompt" not in parsed:
-        raise InvalidProjectMemoryOutput("Memory Agent response is missing prompt")
+        raise InvalidProjectMemoryOutput("Memory Agent submission is missing prompt")
     prompt = normalize_prompt(parsed.get("prompt"))
     if len(prompt) > _MAX_PROMPT_CHARS:
         raise InvalidProjectMemoryOutput(
@@ -712,6 +838,9 @@ async def _run_job(job: dict[str, Any], snapshot: dict[str, Any]) -> None:
                     "turn": int(snapshot.get("completedTurnCount") or 0),
                     "reason": str(job.get("reason") or ""),
                     "contextHash": str(snapshot.get("contextHash") or ""),
+                    "contextSource": str(
+                        snapshot.get("snapshotSource") or "exact_completed_context"
+                    ),
                 }
                 try:
                     _payload, changed = _commit_prompt(
@@ -839,13 +968,16 @@ def schedule_learning_from_completed_chat(
     *,
     source: str,
     reason: str,
+    chat: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     snapshot = get_completed_context_snapshot(chat_id)
+    if not snapshot and isinstance(chat, dict):
+        snapshot = _recover_completed_context_snapshot(chat_id, project_id, chat)
     if not snapshot:
         return {
             "status": "error",
             "type": "no_completed_context",
-            "message": "No completed model context is available for this conversation.",
+            "message": "No recoverable model context is available for this conversation.",
         }
     if str(snapshot.get("projectId") or "") != str(project_id or ""):
         return {

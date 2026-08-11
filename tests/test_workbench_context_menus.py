@@ -491,10 +491,17 @@ def test_project_memory_editor_and_manual_chat_trigger_are_wired_end_to_end():
         '"rail.editMemory": "编辑记忆"',
         '"workbenchChat.generateMemory": "Generate memory"',
         '"workbenchChat.generateMemory": "生成记忆"',
+        '"workbenchChat.error.memoryTitle": "Could not generate memory"',
+        '"workbenchChat.error.memoryTitle": "无法生成记忆"',
+        '"workbenchChat.error.memoryContextUnavailable": "This conversation has no recoverable model context, so project memory cannot be generated."',
+        '"workbenchChat.error.memoryContextUnavailable": "这段对话没有可恢复的模型上下文，无法生成项目记忆。"',
         '"memory.editProjectMemory": "Edit project memory"',
         '"memory.editProjectMemory": "编辑项目记忆"',
     ):
         assert text in i18n
+    assert 'setErrorKind("memory")' in chat
+    assert 'kind === "memory"' in chat
+    assert 'no_completed_context: "workbenchChat.error.memoryContextUnavailable"' in chat
     assert 'wbcNotifyBrowserWindowInteraction(false, "context-menu"' in chat
 
 

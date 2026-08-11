@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+from datetime import datetime, timedelta, timezone
 from typing import Any
 
 import httpx
@@ -94,6 +95,81 @@ def _settings_payload(
     }
 
 
+def _context_device_payload(
+    store: RemoteControlStore,
+    runtime: RemoteControlRuntime | None = None,
+) -> dict[str, Any]:
+    now = datetime.now(timezone.utc)
+    stale_before = now - timedelta(seconds=90)
+    devices: list[dict[str, Any]] = []
+    for peer in store.list_peers():
+        received_capabilities = list(peer.get("received_capabilities") or [])
+        received_scopes = list(peer.get("received_project_scopes") or [])
+        last_seen_raw = str(peer.get("last_seen_at") or "")
+        try:
+            last_seen = datetime.fromisoformat(last_seen_raw) if last_seen_raw else None
+            if last_seen is not None and last_seen.tzinfo is None:
+                last_seen = last_seen.replace(tzinfo=timezone.utc)
+        except ValueError:
+            last_seen = None
+        has_grants = bool(received_capabilities and received_scopes)
+        is_stale = bool(last_seen is not None and last_seen < stale_before)
+        if not received_capabilities or not received_scopes:
+            state = "syncing_grants"
+        elif is_stale:
+            state = "offline"
+        else:
+            state = "ready"
+        workspace_files_v1 = all(
+            capability in received_capabilities
+            for capability in (
+                "workspace_file:metadata",
+                "workspace_file:read",
+                "workspace_file:write",
+            )
+        )
+        remote_jobs_v1 = all(
+            capability in received_capabilities
+            for capability in ("remote_job:read", "remote_job:run")
+        )
+        devices.append(
+            {
+                **peer,
+                "state": state,
+                "eligible": has_grants,
+                "online": state == "ready",
+                "features": {
+                    "workspace_files_v1": workspace_files_v1,
+                    "remote_jobs_v1": remote_jobs_v1,
+                    "remote_authorization_v1": workspace_files_v1 or remote_jobs_v1,
+                },
+            }
+        )
+    return {
+        "revision": store.catalog_revision(),
+        "devices": devices,
+        "transport_connected": bool(runtime is not None and runtime.gateway is not None and runtime.gateway.connected),
+    }
+
+
+async def _publish_remote_devices_changed(
+    store: RemoteControlStore,
+    *,
+    reason: str,
+    device_id: str = "",
+) -> None:
+    from cyrene.observability import debug
+
+    await debug.publish_event(
+        {
+            "type": "remote_devices_changed",
+            "revision": await asyncio.to_thread(store.catalog_revision),
+            "reason": reason,
+            "device_id": device_id,
+        }
+    )
+
+
 def register_remote_routes(
     router: APIRouter,
     app: FastAPI,
@@ -131,6 +207,14 @@ def register_remote_routes(
     )
     async def remote_settings_get():
         return await asyncio.to_thread(_settings_payload, store, runtime)
+
+    @router.get(
+        "/api/remote/context-devices",
+        tags=["Remote Settings"],
+        operation_id="remote_context_devices_get",
+    )
+    async def remote_context_devices_get():
+        return await asyncio.to_thread(_context_device_payload, store, runtime)
 
     @router.put(
         "/api/remote/settings",
@@ -241,6 +325,11 @@ def register_remote_routes(
                 status_code=409,
             )
         await load_remote_grant_sync(result["peer"])
+        await _publish_remote_devices_changed(
+            store,
+            reason="paired",
+            device_id=str(result["peer"].get("device_id") or ""),
+        )
         return result
 
     async def load_remote_grant_sync(peer: dict[str, Any]) -> None:
@@ -265,7 +354,7 @@ def register_remote_routes(
     )
     async def remote_pairing_accept(request: RemotePairingAcceptRequest):
         try:
-            return await asyncio.to_thread(
+            result = await asyncio.to_thread(
                 store.accept_pairing_invitation, request.invitation
             )
         except ValueError as exc:
@@ -273,6 +362,13 @@ def register_remote_routes(
                 {"error": str(exc), "code": "remote_pairing_invalid"},
                 status_code=400,
             )
+        peer = result.get("peer") or {}
+        await _publish_remote_devices_changed(
+            store,
+            reason="pairing_accepted",
+            device_id=str(peer.get("device_id") or ""),
+        )
+        return result
 
     @router.post(
         "/api/remote/pairing/complete",
@@ -303,6 +399,11 @@ def register_remote_routes(
                     peer_device_id=str(peer["device_id"]),
                     outcome="offline",
                 )
+        await _publish_remote_devices_changed(
+            store,
+            reason="paired",
+            device_id=str(peer.get("device_id") or ""),
+        )
         return {"peer": peer}
 
     @router.patch(
@@ -343,6 +444,11 @@ def register_remote_routes(
                     peer_device_id=device_id,
                     outcome="offline",
                 )
+        await _publish_remote_devices_changed(
+            store,
+            reason="grant_updated",
+            device_id=device_id,
+        )
         return {"peer": peer}
 
     @router.delete(
@@ -369,6 +475,11 @@ def register_remote_routes(
                 {"error": "remote peer not found", "code": "remote_peer_not_found"},
                 status_code=404,
             )
+        await _publish_remote_devices_changed(
+            store,
+            reason="revoked",
+            device_id=device_id,
+        )
         return {"revoked": True, "device_id": device_id}
 
     @router.get(

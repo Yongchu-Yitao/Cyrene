@@ -113,6 +113,7 @@ def register_project_memory_routes(router: APIRouter, db_path: str = "") -> None
             chat_id,
             source="conversation_menu",
             reason="manual_menu",
+            chat=chat,
         )
         if result.get("status") == "error":
             status = 409 if result.get("type") == "no_completed_context" else 400

@@ -626,22 +626,26 @@ var WorkbenchChatModel = (function () {
 
   // Streaming send. handlers: { onAck, onReplyStart, onReplyDelta, onReplyDone, onFinalizing, onSaved, onError }
   function sendMessage(chatId, input, handlers, signal) {
+    var body = {
+      message: input.message || "",
+      clientRequestId: input.clientRequestId || "",
+      attachments: input.attachments || [],
+      mode: input.mode || "default",
+      command: input.command || "",
+      model: input.model || "",
+      reasoningEffort: input.reasoningEffort || "",
+      retry: !!input.retry,
+      forkReplay: !!input.forkReplay,
+      stream: true,
+      lang: window.CyreneUI.require("i18n").getLang(),
+    };
+    if (Object.prototype.hasOwnProperty.call(input, "workspaceOverride")) {
+      body.workspaceOverride = input.workspaceOverride || "";
+    }
     return fetch("/api/workbench/chats/" + encodeURIComponent(chatId) + "/messages", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        message: input.message || "",
-        clientRequestId: input.clientRequestId || "",
-        attachments: input.attachments || [],
-        mode: input.mode || "default",
-        command: input.command || "",
-        model: input.model || "",
-        reasoningEffort: input.reasoningEffort || "",
-        retry: !!input.retry,
-        forkReplay: !!input.forkReplay,
-        stream: true,
-        lang: window.CyreneUI.require("i18n").getLang(),
-      }),
+      body: JSON.stringify(body),
       signal: signal,
     }).then(function (response) {
       return consumeEventStream(response, handlers);
@@ -843,37 +847,52 @@ function wbcConfirmOptimisticMessage(previous, confirmed) {
   return next;
 }
 
+function wbcReconcileLiveUserMessages(messages, liveUserMessages) {
+  var merged = Array.isArray(messages) ? messages.slice() : [];
+  (Array.isArray(liveUserMessages) ? liveUserMessages : []).forEach(function (liveMessage) {
+    if (!liveMessage || liveMessage.role !== "user") return;
+    var liveId = String(liveMessage.id || "");
+    var liveRequestId = String(liveMessage.clientRequestId || "");
+    var matchIndex = -1;
+    for (var i = 0; i < merged.length; i++) {
+      var current = merged[i];
+      if (!current || current.role !== "user") continue;
+      var sameRequest = liveRequestId
+        && String(current.clientRequestId || "") === liveRequestId;
+      var sameMessage = liveId && String(current.id || "") === liveId;
+      if (sameRequest || sameMessage) {
+        matchIndex = i;
+        break;
+      }
+    }
+    if (matchIndex < 0) {
+      merged = wbcMergeChronologicalMessages(merged, [liveMessage]);
+      return;
+    }
+    var matched = merged[matchIndex] || {};
+    if (liveMessage.optimistic && !matched.optimistic) {
+      merged[matchIndex] = wbcConfirmOptimisticMessage(liveMessage, matched);
+    } else if (matched.optimistic && !liveMessage.optimistic) {
+      merged[matchIndex] = wbcConfirmOptimisticMessage(matched, liveMessage);
+    } else {
+      merged[matchIndex] = {
+        ...matched,
+        ...liveMessage,
+        createdAt: liveMessage.createdAt || matched.createdAt,
+      };
+    }
+  });
+  return merged;
+}
+
 function wbcPreserveLiveTimelineAnchors(previousChat, hydratedChat, runtime) {
   if (!hydratedChat || !runtime) return hydratedChat;
-  var runtimeRequestId = String(runtime.clientRequestId || "");
-  var runtimeMessageId = String(runtime.confirmedUserMessageId || "");
-  if (!runtimeRequestId && !runtimeMessageId) return hydratedChat;
-  var previousMessages = previousChat && Array.isArray(previousChat.messages)
-    ? previousChat.messages
-    : [];
-  if (!previousMessages.length || !Array.isArray(hydratedChat.messages)) return hydratedChat;
-  var anchor = previousMessages.find(function (message) {
-    if (!message || !message.createdAt) return false;
-    return (runtimeRequestId && String(message.clientRequestId || "") === runtimeRequestId)
-      || (runtimeMessageId && String(message.id || "") === runtimeMessageId);
-  });
-  if (!anchor) return hydratedChat;
-  var changed = false;
-  var messages = hydratedChat.messages.map(function (message) {
-    if (!message) return message;
-    var matches = (runtimeRequestId && String(message.clientRequestId || "") === runtimeRequestId)
-      || (runtimeMessageId && String(message.id || "") === runtimeMessageId);
-    if (!matches) return message;
-    var serverCreatedAt = String(message.createdAt || message.created_at || "");
-    if (String(anchor.createdAt) === serverCreatedAt) return message;
-    changed = true;
-    return {
-      ...message,
-      createdAt: anchor.createdAt,
-      serverCreatedAt: serverCreatedAt,
-    };
-  });
-  return changed ? { ...hydratedChat, messages: messages } : hydratedChat;
+  var liveUserMessages = Array.isArray(runtime.userMessages) ? runtime.userMessages : [];
+  if (!liveUserMessages.length || !Array.isArray(hydratedChat.messages)) return hydratedChat;
+  return {
+    ...hydratedChat,
+    messages: wbcReconcileLiveUserMessages(hydratedChat.messages, liveUserMessages),
+  };
 }
 
 function wbcMergeChronologicalMessages(messages, additions) {
@@ -1557,6 +1576,8 @@ var WORKBENCH_ERROR_I18N_KEYS = {
   chat_run_in_progress: "workbenchChat.error.chatRunInProgress",
   guidance_persistence_failed: "workbenchChat.error.guidancePersistenceFailed",
   answer_resume_failed: "workbenchChat.error.answerResumeFailed",
+  no_completed_context: "workbenchChat.error.memoryContextUnavailable",
+  project_mismatch: "workbenchChat.error.memoryProjectMismatch",
 };
 
 function wbcErrorText(err) {
@@ -1599,6 +1620,7 @@ var WBC_ICONS = {
   edit: <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round"><path d="M12 20h9"/><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4Z"/></svg>,
   pin: <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d="M12 17v5"/><path d="M5 17h14"/><path d="M17 3a1 1 0 0 1 1 1v4.6a2 2 0 0 0 .6 1.4l1.7 1.7A1 1 0 0 1 19.6 13H4.4a1 1 0 0 1-.7-1.7l1.7-1.7A2 2 0 0 0 6 8.2V4a1 1 0 0 1 1-1Z"/></svg>,
   dots: <svg viewBox="0 0 24 24" width="17" height="17" fill="currentColor"><circle cx="5.5" cy="12" r="1.6"/><circle cx="12" cy="12" r="1.6"/><circle cx="18.5" cy="12" r="1.6"/></svg>,
+  running: <span className="wb-spinner wbc-chat-running-spinner" aria-hidden="true" />,
   play: <svg viewBox="0 0 24 24" width="15" height="15" fill="currentColor"><path d="M7 4.8c0-1 1.1-1.6 2-1.1l11 6.3c.9.5.9 1.8 0 2.3L9 18.6c-.9.5-2-.1-2-1.1Z"/></svg>,
   send: <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M22 2 11 13M22 2l-7 20-4-9-9-4Z"/></svg>,
   stop: <svg viewBox="0 0 24 24" width="14" height="14" fill="currentColor"><rect x="5" y="5" width="14" height="14" rx="2.5"/></svg>,
@@ -2019,6 +2041,48 @@ var WorkbenchChatRuntimes = (function () {
     return next;
   }
 
+  function recordUserMessage(chatId, message, previousId) {
+    if (!chatId || !message) return null;
+    return update(chatId, function (current) {
+      if (!current) return null;
+      var userMessages = Array.isArray(current.userMessages) ? current.userMessages.slice() : [];
+      var requestId = String(message.clientRequestId || "");
+      var messageId = String(message.id || "");
+      var priorId = String(previousId || "");
+      var matchIndex = -1;
+      for (var i = 0; i < userMessages.length; i++) {
+        var candidate = userMessages[i] || {};
+        if (
+          (priorId && String(candidate.id || "") === priorId)
+          || (requestId && String(candidate.clientRequestId || "") === requestId)
+          || (messageId && String(candidate.id || "") === messageId)
+        ) {
+          matchIndex = i;
+          break;
+        }
+      }
+      if (matchIndex < 0) {
+        userMessages.push(message);
+      } else {
+        var previous = userMessages[matchIndex] || {};
+        if (previous.optimistic && !message.optimistic) {
+          userMessages[matchIndex] = wbcConfirmOptimisticMessage(previous, message);
+        } else if (!previous.optimistic && message.optimistic) {
+          userMessages[matchIndex] = previous;
+        } else {
+          userMessages[matchIndex] = {
+            ...previous,
+            ...message,
+            createdAt: previous.createdAt || message.createdAt,
+            serverCreatedAt: previous.serverCreatedAt
+              || String(message.createdAt || message.created_at || ""),
+          };
+        }
+      }
+      return { ...current, userMessages: userMessages };
+    });
+  }
+
   function clear(chatId) { update(chatId, null); }
 
   function appendActivity(cur, fields) {
@@ -2226,14 +2290,10 @@ var WorkbenchChatRuntimes = (function () {
         if (event.retry) return;
         if (event.userMessage) {
           var runtime = get(chatId);
-          update(chatId, function (current) {
-            return current ? {
-              ...current,
-              confirmedUserMessageId: String(event.userMessage.id || ""),
-            } : null;
-          });
+          var optimisticId = String(runtime && runtime.optimisticUserMessageId || "");
+          recordUserMessage(chatId, event.userMessage, optimisticId);
           fire("onUserMessageConfirmed", chatId, {
-            optimisticId: String(runtime && runtime.optimisticUserMessageId || ""),
+            optimisticId: optimisticId,
             userMessage: event.userMessage,
           });
         }
@@ -2345,7 +2405,10 @@ var WorkbenchChatRuntimes = (function () {
         appendIntermediate(chatId, event && event.message);
       },
       onGuidanceReceived: function (event) {
-        if (event && event.userMessage) fire("onUserMessage", chatId, event.userMessage);
+        if (event && event.userMessage) {
+          recordUserMessage(chatId, event.userMessage);
+          fire("onUserMessage", chatId, event.userMessage);
+        }
         update(chatId, function (cur) {
           if (!cur) return null;
           return { ...closeActivityTimeline(cur), lastEventAt: Date.now() };
@@ -2465,6 +2528,7 @@ var WorkbenchChatRuntimes = (function () {
       lastEventAt: startedAt,
       replying: false,
       optimisticUserMessageId: optimisticUserMessage ? optimisticUserMessage.id : "",
+      userMessages: optimisticUserMessage ? [optimisticUserMessage] : [],
       clientRequestId: clientRequestId,
     });
     return ownStream(
@@ -2720,7 +2784,7 @@ var WorkbenchChatRuntimes = (function () {
 
   return {
     subscribe: subscribe, subscribeSummary: subscribeSummary, snapshot: snapshot, get: get, isRunning: isRunning,
-    update: update, clear: clear, abort: abort, interrupt: interrupt,
+    update: update, recordUserMessage: recordUserMessage, clear: clear, abort: abort, interrupt: interrupt,
     start: start, reconnect: reconnect, deferSend: deferSend, closeTimeline: closeTimeline, setHooks: setHooks,
   };
 })();
@@ -2793,7 +2857,19 @@ function WorkbenchChatPage({ active, project, newChatRequestId, onOpenTask, onAc
   // POST /chats and /fork already return the complete conversation. Mark the
   // adopted id so the selection effect does not clear it and fetch it again.
   var skipNextHydrationChatIdRef = useWbcRef("");
+  var chatHydrationSequenceRef = useWbcRef({});
   var handledNewChatRequestIdRef = useWbcRef(0);
+
+  function beginChatHydration(chatId) {
+    var id = String(chatId || "");
+    var next = Number(chatHydrationSequenceRef.current[id] || 0) + 1;
+    chatHydrationSequenceRef.current[id] = next;
+    return next;
+  }
+
+  function isCurrentChatHydration(chatId, sequence) {
+    return Number(chatHydrationSequenceRef.current[String(chatId || "")] || 0) === sequence;
+  }
 
   useWbcEffect(function () {
     chatsRef.current = chats;
@@ -3437,9 +3513,13 @@ function WorkbenchChatPage({ active, project, newChatRequestId, onOpenTask, onAc
     setErrorKind("load");
     setChatLoading(!cachedChat);
     setSubagentLoading(!cachedSubagents);
+    var hydrationSequence = beginChatHydration(activeChatId);
     model.getChat(activeChatId, requestOptions)
       .then(function (chat) {
-        if (activeChatIdRef.current !== activeChatId) return;
+        if (
+          activeChatIdRef.current !== activeChatId
+          || !isCurrentChatHydration(activeChatId, hydrationSequence)
+        ) return;
         setActiveChat(function (previous) {
           var reconciled = wbcPreserveLiveTimelineAnchors(
             previous,
@@ -3452,12 +3532,18 @@ function WorkbenchChatPage({ active, project, newChatRequestId, onOpenTask, onAc
       })
       .catch(function (err) {
         if (err && err.name === "AbortError") return;
-        if (activeChatIdRef.current === activeChatId) {
+        if (
+          activeChatIdRef.current === activeChatId
+          && isCurrentChatHydration(activeChatId, hydrationSequence)
+        ) {
           setError(wbcT("workbenchChat.error.transcriptPrefix", "Conversation details: {error}", { error: wbcErrorText(err) }));
         }
       })
       .finally(function () {
-        if (activeChatIdRef.current === activeChatId) setChatLoading(false);
+        if (
+          activeChatIdRef.current === activeChatId
+          && isCurrentChatHydration(activeChatId, hydrationSequence)
+        ) setChatLoading(false);
       });
     model.getSubagents(activeChatId, "", requestOptions)
       .then(function (payload) {
@@ -3591,6 +3677,23 @@ function WorkbenchChatPage({ active, project, newChatRequestId, onOpenTask, onAc
   useWbcEffect(function () {
     function onEvent(event) {
       if (!event) return;
+      if (event.type === "remote_job_update") {
+        try {
+          window.dispatchEvent(new CustomEvent("cyrene:remote-job-update", { detail: event }));
+          var feedback = window.CyreneUI.require("feedback");
+          if (feedback && typeof feedback.showToast === "function") {
+            feedback.showToast(
+              wbcT(
+                "workbenchChat.remoteJobFinished",
+                "Remote job {jobId}: {status}",
+                { jobId: event.job_id || "", status: event.status || "completed" }
+              ),
+              event.status === "completed" ? "success" : "info"
+            );
+          }
+        } catch (e) {}
+        return;
+      }
       if (event.type === "workbench_chat_changed") {
         if (
           event.project_id
@@ -3887,7 +3990,9 @@ function WorkbenchChatPage({ active, project, newChatRequestId, onOpenTask, onAc
         setError(wbcErrorText(err));
       },
       onSettled: function (chatId) {
+        var hydrationSequence = beginChatHydration(chatId);
         model.getChat(chatId).then(function (chat) {
+          if (!isCurrentChatHydration(chatId, hydrationSequence)) return;
           chatCache.details[chatId] = chat;
           if (activeChatIdRef.current === chatId) setActiveChat(chat);
         }).catch(function () {});
@@ -3895,7 +4000,9 @@ function WorkbenchChatPage({ active, project, newChatRequestId, onOpenTask, onAc
       },
       onResync: function (chatId) {
         // Stream ended without a `saved` event (e.g. interrupted) — re-pull.
+        var hydrationSequence = beginChatHydration(chatId);
         model.getChat(chatId).then(function (chat) {
+          if (!isCurrentChatHydration(chatId, hydrationSequence)) return;
           chatCache.details[chatId] = chat;
           if (activeChatIdRef.current === chatId) setActiveChat(chat);
         }).catch(function () {});
@@ -4575,12 +4682,14 @@ function WorkbenchChatPage({ active, project, newChatRequestId, onOpenTask, onAc
     };
     setError("");
     runtimeEngine.closeTimeline(chatId);
+    runtimeEngine.recordUserMessage(chatId, optimisticMessage);
     setActiveChat(function (prev) {
       if (!prev || prev.id !== chatId) return prev;
       return { ...prev, messages: wbcMergeChronologicalMessages(prev.messages || [], [optimisticMessage]) };
     });
     return model.sendGuidance(chatId, text, clientRequestId).then(function (response) {
       if (response && response.userMessage) {
+        runtimeEngine.recordUserMessage(chatId, response.userMessage, optimisticMessage.id);
         setActiveChat(function (prev) {
           if (!prev || prev.id !== chatId) return prev;
           return { ...prev, messages: wbcMergeChronologicalMessages(prev.messages || [], [response.userMessage]) };
@@ -4653,7 +4762,8 @@ function WorkbenchChatPage({ active, project, newChatRequestId, onOpenTask, onAc
     // progress folds into it (onSseEvent only fills a runtime that already exists).
     // Without it the resume ran invisibly — an empty thread while the side panel
     // showed a frozen "Replying" — and the composer offered no way to stop it.
-    runtimeEngine.update(chatId, { chatId: chatId, text: "", progress: [], activities: [], activitySeq: 0, segments: [], startedAt: Date.now(), lastEventAt: Date.now(), replying: true });
+    var answerStartedAt = Date.parse(String(optimisticAnswer.createdAt || "")) || Date.now();
+    runtimeEngine.update(chatId, { chatId: chatId, text: "", progress: [], activities: [], activitySeq: 0, segments: [], userMessages: [optimisticAnswer], startedAt: answerStartedAt, lastEventAt: answerStartedAt, replying: true });
     var targetPermissionMode = activeChatIdRef.current === chatId && activeChat && activeChat.permissionMode
       ? activeChat.permissionMode
       : targetSummary.permissionMode;
@@ -4667,7 +4777,9 @@ function WorkbenchChatPage({ active, project, newChatRequestId, onOpenTask, onAc
       runtimeEngine.update(chatId, null);
       // Pull the durable transcript: it now contains the question, this answer,
       // every pre-question tool/intermediate block, and the continued reply.
+      var hydrationSequence = beginChatHydration(chatId);
       return model.getChat(chatId).then(function (chat) {
+        if (!isCurrentChatHydration(chatId, hydrationSequence)) return;
         chatCache.details[chatId] = chat;
         if (activeChatIdRef.current === chatId) setActiveChat(chat);
       });
@@ -4677,7 +4789,9 @@ function WorkbenchChatPage({ active, project, newChatRequestId, onOpenTask, onAc
       runtimeEngine.update(chatId, null);
       if (activeChatIdRef.current === chatId) setError(wbcErrorText(err));
       // Restore the prompt so the user can retry.
+      var hydrationSequence = beginChatHydration(chatId);
       return model.getChat(chatId).then(function (chat) {
+        if (!isCurrentChatHydration(chatId, hydrationSequence)) return;
         chatCache.details[chatId] = chat;
         if (activeChatIdRef.current === chatId) setActiveChat(chat);
       }).catch(function () {}).then(function () {
@@ -4963,8 +5077,10 @@ function WorkbenchChatPage({ active, project, newChatRequestId, onOpenTask, onAc
   function handleGenerateMemory() {
     if (!activeChat || activeChat.legacy || memoryLearningBusy) return;
     setMemoryLearningBusy(true);
+    setErrorKind("memory");
     setError("");
     model.generateMemory(activeChat.id).then(function (payload) {
+      setErrorKind("load");
       var duplicate = payload && payload.status === "deduplicated";
       window.CyreneUI.require("feedback").showToast(
         duplicate
@@ -4973,6 +5089,7 @@ function WorkbenchChatPage({ active, project, newChatRequestId, onOpenTask, onAc
         duplicate ? "warning" : "success"
       );
     }).catch(function (err) {
+      setErrorKind("memory");
       setError(wbcErrorText(err));
       window.CyreneUI.require("feedback").showToast(wbcErrorText(err), "error");
     }).then(function () {
@@ -5275,7 +5392,7 @@ function WorkbenchChatPage({ active, project, newChatRequestId, onOpenTask, onAc
         runtime={activeRuntime}
         error={error}
         errorKind={errorKind}
-        onRetry={errorKind === "message" ? handleRetryMessage : retryLoad}
+        onRetry={errorKind === "message" ? handleRetryMessage : (errorKind === "memory" ? handleGenerateMemory : retryLoad)}
         running={activeRunning}
         onSend={handleSend}
         onGuidance={handleGuidance}
@@ -6619,7 +6736,7 @@ function WbcRail({ projectId, chats, pinnedChatIds, activeChatId, loading, runni
     return {
       running: running,
       tone: failed ? " status-failed" : attention ? " status-attention" : completed ? " status-completed" : running ? " status-running" : "",
-      icon: failed ? WBC_ICONS.errorCircle : attention ? WBC_ICONS.alert : completed ? WBC_ICONS.check : WBC_ICONS.file,
+      icon: failed ? WBC_ICONS.errorCircle : attention ? WBC_ICONS.alert : completed ? WBC_ICONS.check : running ? WBC_ICONS.running : WBC_ICONS.file,
       label: failed
         ? wbcT("status.failed", "Failed")
         : attention ? wbcT("workbenchChat.awaitingUser", "Needs input") : "",
@@ -7513,7 +7630,7 @@ function WbcRail({ projectId, chats, pinnedChatIds, activeChatId, loading, runni
               ? WBC_ICONS.errorCircle
               : item.state.kind === "result"
                 ? WBC_ICONS.check
-                : WBC_ICONS.file;
+                : WBC_ICONS.running;
           var alignment = item.position < 24 ? " align-top" : item.position > 76 ? " align-bottom" : " align-center";
           var title = item.state.label + " · " + (chat.title || wbcT("workbenchChat.newChat", "New chat"));
           return (
@@ -8986,7 +9103,10 @@ function WbcMain({ project, chat, chatSummary, loading, runtime, error, errorKin
     lastEventAt: 0,
     waitingForIdle: false,
   });
-  var durableMessages = chat && Array.isArray(chat.messages) ? chat.messages : [];
+  var durableMessages = wbcReconcileLiveUserMessages(
+    chat && Array.isArray(chat.messages) ? chat.messages : [],
+    runtime && runtime.userMessages
+  );
   var runtimeTimeline = wbcRuntimeSegmentMessages(runtime).concat(wbcRuntimeTimelineMessages(runtime));
   var messages = wbcMergeChronologicalMessages(durableMessages, runtimeTimeline);
   var activityTraceKeys = new Set();
@@ -9685,15 +9805,20 @@ function WbcQuestionPrompt({ pending, onAnswer, busy, trace }) {
 
 function WbcErrorNotice({ message, kind, onRetry }) {
   var isMessageError = kind === "message";
-  var title = isMessageError
-    ? wbcT("workbenchChat.error.messageTitle", "Message processing failed")
-    : wbcT("workbenchChat.error.title", "Could not load this chat");
+  var isMemoryError = kind === "memory";
+  var title = isMemoryError
+    ? wbcT("workbenchChat.error.memoryTitle", "Could not generate memory")
+    : (isMessageError
+      ? wbcT("workbenchChat.error.messageTitle", "Message processing failed")
+      : wbcT("workbenchChat.error.title", "Could not load this chat"));
   var detail = String(message || "").trim() || wbcT("workbenchChat.error.loadFailed", "Load failed");
   var generic = wbcT("workbenchChat.error.loadFailed", "Load failed");
   var body = detail === generic
-    ? (isMessageError
-      ? wbcT("workbenchChat.error.messageBody", "The message was saved but could not be processed. Retry to run it again.")
-      : wbcT("workbenchChat.error.body", "The conversation data did not load. Check the local service and try again."))
+    ? (isMemoryError
+      ? wbcT("workbenchChat.error.memoryBody", "Project memory could not be generated from this conversation. Try again.")
+      : (isMessageError
+        ? wbcT("workbenchChat.error.messageBody", "The message was saved but could not be processed. Retry to run it again.")
+        : wbcT("workbenchChat.error.body", "The conversation data did not load. Check the local service and try again.")))
     : detail;
   return (
     <div className="workbench-error wbc-error-card" role="alert">
@@ -10446,6 +10571,95 @@ function wbcSaveWorkspaceOverride(key, path, ns) {
   } catch (e) {}
 }
 
+// One process-wide, revision-ordered catalog keeps every composer in sync with
+// pairing/grant changes without coupling chat selection to Settings state.
+var WbcRemoteDeviceCatalog = (function () {
+  var revision = -1;
+  var devices = [];
+  var listeners = new Set();
+  var pending = null;
+  var started = false;
+  var eventUnsubscribe = null;
+  var broadcast = null;
+
+  function snapshot() {
+    return { revision: revision, devices: devices.slice() };
+  }
+
+  function notify() {
+    var value = snapshot();
+    listeners.forEach(function (listener) {
+      try { listener(value); } catch (error) { console.error(error); }
+    });
+  }
+
+  function apply(payload) {
+    var nextRevision = Number(payload && payload.revision);
+    if (!Number.isFinite(nextRevision)) nextRevision = revision + 1;
+    if (nextRevision < revision) return snapshot();
+    revision = nextRevision;
+    devices = Array.isArray(payload && payload.devices) ? payload.devices.slice() : [];
+    notify();
+    return snapshot();
+  }
+
+  function refresh(options) {
+    var force = !!(options && options.force);
+    if (pending && !force) return pending;
+    var request = fetch("/api/remote/context-devices", { cache: "no-store" })
+      .then(function (response) {
+        if (!response.ok) throw new Error("HTTP " + response.status);
+        return response.json();
+      })
+      .then(apply)
+      .finally(function () {
+        if (pending === request) pending = null;
+      });
+    pending = request;
+    return request;
+  }
+
+  function invalidate(reason) {
+    refresh({ force: true }).catch(function () {});
+    if (broadcast) {
+      try { broadcast.postMessage({ type: "remote_devices_changed", reason: reason || "local" }); } catch (e) {}
+    }
+  }
+
+  function start() {
+    if (started) return;
+    started = true;
+    try {
+      eventUnsubscribe = window.CyreneUI.require("events").subscribe(function (event) {
+        if (event && event.type === "remote_devices_changed") invalidate(event.reason || "sse");
+      });
+    } catch (e) {}
+    window.addEventListener("cyrene:remote-devices-changed", function (event) {
+      invalidate((event && event.detail && event.detail.reason) || "local");
+    });
+    window.addEventListener("focus", function () { invalidate("focus"); });
+    document.addEventListener("visibilitychange", function () {
+      if (document.visibilityState === "visible") invalidate("visible");
+    });
+    if (typeof BroadcastChannel === "function") {
+      try {
+        broadcast = new BroadcastChannel("cyrene-remote-devices");
+        broadcast.onmessage = function () { refresh({ force: true }).catch(function () {}); };
+      } catch (e) {}
+    }
+    refresh().catch(function () {});
+  }
+
+  function subscribe(listener) {
+    start();
+    listeners.add(listener);
+    listener(snapshot());
+    return function () { listeners.delete(listener); };
+  }
+
+  return { subscribe: subscribe, refresh: refresh, invalidate: invalidate };
+})();
+
 function WbcComposer({ chat, project, runtime, running, onSend, onGuidance, onInterrupt, draftNamespace, autoFocus, clearOnSend, error, errorKind, compact, placeholder, runningPlaceholder, hideDisclaimer, topOverlay }) {
   var model = WorkbenchChatModel;
   var chatId = chat ? chat.id : "";
@@ -10476,7 +10690,8 @@ function WbcComposer({ chat, project, runtime, running, onSend, onGuidance, onIn
   });
   var [contextState, setContextState] = useWbcState(null);
   var [workspaceOverride, setWorkspaceOverride] = useWbcState(function () {
-    return wbcLoadWorkspaceOverride(workspaceContextKey, draftNs);
+    return String(chat && chat.workspaceOverride || "").trim()
+      || wbcLoadWorkspaceOverride(workspaceContextKey, draftNs);
   });
   var [remoteDevices, setRemoteDevices] = useWbcState([]);
   var [remoteDeviceIds, setRemoteDeviceIds] = useWbcState([]);
@@ -10659,7 +10874,8 @@ function WbcComposer({ chat, project, runtime, running, onSend, onGuidance, onIn
     if (prevKey === workspaceContextKey) return;
     var currentOverride = workspaceOverrideRef.current;
     wbcSaveWorkspaceOverride(prevKey, currentOverride, draftNs);
-    var nextOverride = wbcLoadWorkspaceOverride(workspaceContextKey, draftNs);
+    var nextOverride = String(chat && chat.workspaceOverride || "").trim()
+      || wbcLoadWorkspaceOverride(workspaceContextKey, draftNs);
     setWorkspaceOverride(nextOverride);
     workspaceOverrideRef.current = nextOverride;
     prevWorkspaceContextKeyRef.current = workspaceContextKey;
@@ -10716,21 +10932,25 @@ function WbcComposer({ chat, project, runtime, running, onSend, onGuidance, onIn
   }, [projectId, projectWorkspacePath]);
 
   useWbcEffect(function () {
-    var cancelled = false;
-    fetch("/api/remote/settings").then(function (r) { return r.json(); }).then(function (payload) {
-      if (cancelled) return;
-      var eligible = (payload.peers || []).filter(function (peer) {
-        return peer
-          && Array.isArray(peer.received_capabilities)
-          && peer.received_capabilities.length > 0
-          && Array.isArray(peer.received_project_scopes)
-          && peer.received_project_scopes.length > 0
-          && !peer.revoked_at;
+    return WbcRemoteDeviceCatalog.subscribe(function (catalog) {
+      var nextDevices = Array.isArray(catalog.devices) ? catalog.devices : [];
+      setRemoteDevices(nextDevices);
+      setRemoteDeviceIds(function (current) {
+        var nextIds = current.filter(function (deviceId) {
+          var device = nextDevices.find(function (item) { return item.device_id === deviceId; });
+          return !!(device && device.eligible && !device.revoked_at);
+        });
+        if (nextIds.length !== current.length && chatId && String(chatId).indexOf("legacy:") !== 0) {
+          remoteDeviceIdsRef.current = nextIds;
+          wbcSaveRemoteContext(chatId, nextIds).catch(function () {});
+        }
+        return nextIds;
       });
-      setRemoteDevices(eligible);
-    }).catch(function () {
-      if (!cancelled) setRemoteDevices([]);
     });
+  }, [chatId]);
+
+  useWbcEffect(function () {
+    var cancelled = false;
     if (!chatId || String(chatId).indexOf("legacy:") === 0) {
       setRemoteDeviceIds([]);
       return function () { cancelled = true; };
@@ -10780,6 +11000,7 @@ function WbcComposer({ chat, project, runtime, running, onSend, onGuidance, onIn
       command: command,
       model: selectedModelId,
       reasoningEffort: reasoningEffort,
+      workspaceOverride: workspaceOverride,
     };
     // Optimistically clear on send; restored in the running-transition effect
     // if the send fails (error). The quick-chat surface passes clearOnSend=false
@@ -11351,10 +11572,16 @@ function WbcCtxPicker({ personaOn, workspaceOn, defaultWorkspacePath, wsHistory,
           {remoteDevices.map(function (device) {
             var selected = selectedRemoteDeviceIds.indexOf(device.device_id) >= 0;
             var capabilityCount = (device.received_capabilities || []).length;
+            var eligible = !!device.eligible;
+            var stateLabel = device.state === "syncing_grants"
+              ? wbcT("workbenchChat.remoteDeviceSyncing", "Syncing permissions…")
+              : device.state === "offline"
+                ? wbcT("workbenchChat.remoteDeviceOffline", "Offline · available when reconnected")
+                : wbcT("workbenchChat.remoteDeviceHint", "{count} granted capabilities", { count: capabilityCount });
             return (
-              <button key={device.device_id} type="button" className={selected ? "active" : ""} onClick={function () { onToggleRemoteDevice(device.device_id); }}>
+              <button key={device.device_id} type="button" disabled={!eligible} className={selected ? "active" : ""} onClick={function () { onToggleRemoteDevice(device.device_id); }}>
                 <span className="wbc-popmenu-label">{WBC_ICONS.device} {device.display_name || device.device_id}</span>
-                <span className="wbc-popmenu-desc">{wbcT("workbenchChat.remoteDeviceHint", "{count} granted capabilities", { count: capabilityCount })}</span>
+                <span className="wbc-popmenu-desc">{stateLabel}</span>
                 {selected ? <span className="wbc-popmenu-check">{WBC_ICONS.check}</span> : null}
               </button>
             );
@@ -13339,11 +13566,16 @@ function WbcChangesTab({ chatId, onSelectChange }) {
     <div className="wbc-changes-tab">
       {changeSets.length > 1 && (
         <div className="wbc-changes-run-picker">
-          <select value={selectedSet ? selectedSet.id : ""} onChange={function (event) { setSelectedSetId(event.target.value); }}>
+          <select
+            aria-label={wbcT("workbenchChat.changes.latestRun", "Latest run")}
+            value={selectedSet ? selectedSet.id : ""}
+            onChange={function (event) { setSelectedSetId(event.target.value); }}
+          >
             {changeSets.map(function (item, index) {
               return <option value={item.id} key={item.id}>{index === 0 ? wbcT("workbenchChat.changes.latestRun", "Latest run") : wbcFormatTime(item.completedAt)}</option>;
             })}
           </select>
+          <span className="wbc-changes-run-picker-chevron" aria-hidden="true">{WBC_ICONS.chevronDown}</span>
         </div>
       )}
       {loading && !changeSets.length ? (

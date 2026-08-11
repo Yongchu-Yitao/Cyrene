@@ -157,14 +157,14 @@ _NATIVE_TOOL_DEFS: tuple[dict[str, Any], ...] = tuple([{'type': 'function',
                               'output, or secrets. Duplicates are merged automatically, and if this fact '
                               'updates/contradicts an older memory (e.g. a changed value or a corrected conclusion) '
                               'the outdated one is retired automatically — so always record your latest understanding '
-                              "without worrying about stale entries. Write the memory content in the user's configured "
+                              "without worrying about stale entries. Prefer writing prose in the user's configured "
                               'language (Chinese UI/user → Chinese; English UI/user → English), while preserving code, '
                               'paths, commands, identifiers, and proper nouns exactly.',
                'parameters': {'type': 'object',
                               'properties': {'content': {'type': 'string',
                                                          'description': 'The fact to remember, as one concise '
-                                                                        'self-contained sentence. It MUST use the '
-                                                                        "user's configured language; preserve code, "
+                                                                        'self-contained sentence. Prefer the user\'s '
+                                                                        'configured language for prose; preserve code, '
                                                                         'paths, commands, identifiers, and proper '
                                                                         'nouns exactly.'},
                                              'category': {'type': 'string',

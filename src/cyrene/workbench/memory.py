@@ -484,24 +484,32 @@ def _preferred_memory_language() -> str:
 def _content_matches_language(content: str, language: str) -> bool:
     """Whether natural-language text already matches the requested language.
 
-    Pure identifiers, paths, commands, and similarly language-neutral fragments
-    are accepted unchanged. Chinese content needs at least one Han character;
-    English content must not contain Han characters.
+    Language-neutral technical fragments (paths, commands, identifiers) are
+    ignored so dense technical content does not force translation: only
+    lowercase English *prose* words count against the Chinese characters.
     """
     text = str(content or "").strip()
-    has_han = bool(re.search(r"[\u3400-\u9fff]", text))
+    has_han = bool(re.search(r"[㐀-鿿]", text))
     if language == "en":
         return not has_han
     if has_han:
-        han_count = len(re.findall(r"[\u3400-\u9fff]", text))
-        # Lowercase English words are a useful prose signal while mixed-case
-        # tokens such as PostgreSQL, TypeScript, and Next.js are usually
-        # technical names that should not force translation. Require enough
-        # Chinese text to outweigh multiple English prose words.
-        prose_words = [
-            word for word in re.findall(r"[A-Za-z][A-Za-z'-]*", text)
-            if word.islower() or word.casefold() in {"a", "an", "the", "user"}
-        ]
+        han_count = len(re.findall(r"[㐀-鿿]", text))
+        # A lowercase word glued to digits or symbols (train.py, iter/s,
+        # w=32, safe_import, float16) is part of a technical token, not
+        # English prose; code spans in backticks are stripped first.
+        code_stripped = re.sub(r"`[^`]*`", " ", text)
+        prose_words: list[str] = []
+        for match in re.finditer(r"[A-Za-z][A-Za-z'-]*", code_stripped):
+            word = match.group()
+            if not (word.islower() or word.casefold() in {"a", "an", "the", "user"}):
+                continue
+            start, end = match.span()
+            glued = (
+                (start > 0 and (code_stripped[start - 1].isalnum() or code_stripped[start - 1] in "._/=-"))
+                or (end < len(code_stripped) and (code_stripped[end].isalnum() or code_stripped[end] in "._/=-"))
+            )
+            if not glued:
+                prose_words.append(word)
         return han_count >= max(2, len(prose_words) * 2)
     if not re.search(r"\s", text):
         return True
@@ -512,11 +520,13 @@ def _content_matches_language(content: str, language: str) -> bool:
 
 
 async def _normalize_agent_memory_language(content: str) -> str:
-    """Translate an agent-authored memory into the configured UI language.
+    """Best-effort translation of an agent-authored memory into the UI language.
 
-    Returns an empty string when translation fails or still produces the wrong
-    language. Callers must treat that as a rejected write so wrong-language
-    content never reaches the Workbench memory store.
+    Keeps agent-written memories in the same language the conversation-capture
+    extractor is told to emit, so the same fact written by the agent and
+    distilled from a conversation can dedupe. This is a consistency nicety,
+    NOT a gate: whenever translation fails or is unusable the original content
+    is returned unchanged, so a write is never rejected for language reasons.
     """
     text = str(content or "").strip()
     language = _preferred_memory_language()
@@ -539,7 +549,6 @@ async def _normalize_agent_memory_language(content: str) -> str:
             call_agent_model(
                 [{"role": "user", "content": prompt}],
                 tools=None,
-                max_tokens=900,
                 caller="workbench_memory",
                 secondary=True,
                 thinking="disabled",
@@ -549,11 +558,11 @@ async def _normalize_agent_memory_language(content: str) -> str:
         parsed = _parse_json_object(assistant_text(response))
         translated = str(parsed.get("content") or "").strip() if isinstance(parsed, dict) else ""
     except Exception:  # noqa: BLE001
-        logger.debug("Workbench agent-memory translation failed", exc_info=True)
-        return ""
+        logger.debug("Workbench agent-memory translation failed; keeping original", exc_info=True)
+        return text
     if len(translated) < 4 or not _content_matches_language(translated, language):
-        logger.warning("Rejected wrong-language Workbench agent memory after translation")
-        return ""
+        logger.debug("Workbench agent-memory translation unusable; keeping original")
+        return text
     return translated
 
 
@@ -1106,9 +1115,11 @@ async def add_agent_memory_checked(
     while the superseded record is kept (reversible) and no longer injected.
 
     Returns ``(new_or_reinforced_entry, [retired_entries])``. It may make one
-    language-normalization call when the agent supplied content in the wrong
-    language, plus one semantic-conflict call for a genuinely new fact. The
-    cheap conversation-capture / reflection-sink paths are unaffected."""
+    translation call when the agent's content language does not match the UI
+    language (a failed translation falls back to the original — it never
+    blocks the write), plus one semantic-conflict call for a genuinely new
+    fact. The cheap conversation-capture / reflection-sink paths are
+    unaffected."""
     content = str(content or "").strip()
     if len(content) < 4:
         return None, []

@@ -391,6 +391,10 @@ const BROWSER_CHAT_OVERLAY_HTML = `<!doctype html>
   button.stop { border-color: color-mix(in srgb, var(--red, #d84848) 60%, transparent); background: color-mix(in srgb, var(--red, #d84848) 14%, var(--panel, #fff)); color: var(--red, #d84848); box-shadow: 0 2px 7px color-mix(in srgb, var(--red, #d84848) 16%, transparent); }
   button:disabled { opacity: .42; cursor: default; }
   button svg { width: 15px; height: 15px; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
+  @media (max-resolution: 1.5dppx) {
+    html[data-platform="win32"] body { font-family: "Segoe UI Variable", "Microsoft YaHei UI", "Segoe UI", sans-serif; font-weight: 400; }
+    html[data-platform="win32"] #status, html[data-platform="win32"] button { font-weight: 600; }
+  }
   @keyframes pulse { 0% { box-shadow: 0 0 0 0 color-mix(in srgb, var(--green, #1f9d57) 34%, transparent); } 70%, 100% { box-shadow: 0 0 0 5px transparent; } }
   body.status-complete #status-dot { animation: none; box-shadow: none; }
   @media (prefers-reduced-motion: reduce) { #status-dot { animation: none; } }
@@ -398,6 +402,7 @@ const BROWSER_CHAT_OVERLAY_HTML = `<!doctype html>
   <div id="status" role="status" aria-live="polite"><span id="status-dot"></span><span id="status-text"></span></div>
   <form><input type="text"><button type="submit" aria-label="Send"></button></form>
   <script>
+    document.documentElement.dataset.platform = new URLSearchParams(location.search).get('platform') || '';
     const input = document.querySelector('input');
     const button = document.querySelector('button');
     const statusText = document.getElementById('status-text');
@@ -460,10 +465,15 @@ const BROWSER_TAB_PICKER_HTML = `<!doctype html>
   .actions button { width: 30px; height: 30px; display: grid; place-items: center; padding: 0; border-radius: 8px; color: var(--faint, #9297a1); }
   .actions button:hover, .actions button.active { background: var(--hover, rgba(23,25,29,.07)); color: var(--text, #17191d); }
   svg { width: 15px; height: 15px; fill: none; stroke: currentColor; stroke-width: 1.9; stroke-linecap: round; stroke-linejoin: round; }
+  @media (max-resolution: 1.5dppx) {
+    html[data-platform="win32"] body { font-family: "Segoe UI Variable", "Microsoft YaHei UI", "Segoe UI", sans-serif; font-weight: 400; }
+    html[data-platform="win32"] .select b, html[data-platform="win32"] .row.active { font-weight: 600; }
+  }
   @keyframes picker-in { from { opacity: 0; transform: translate3d(0,-10px,0) scale(.985); } to { opacity: 1; transform: translate3d(0,0,0) scale(1); } }
   @keyframes picker-out { from { opacity: 1; transform: translate3d(0,0,0) scale(1); } to { opacity: 0; transform: translate3d(0,-8px,0) scale(.985); } }
   @media (prefers-reduced-motion: reduce) { body.open #menu { animation-duration: 1ms; } body.closing #menu { animation-duration: 1ms; } }
 </style></head><body><div id="menu" role="menu"></div><script>
+  document.documentElement.dataset.platform = new URLSearchParams(location.search).get('platform') || '';
   const menu = document.getElementById('menu');
   const icons = {
     tab: '<svg viewBox="0 0 24 24"><rect x="4" y="6" width="16" height="12" rx="2"/><path d="M4 9h16"/></svg>',
@@ -1938,7 +1948,7 @@ class BrowserTabManager {
     try { view.setBackgroundColor('#00000000'); } catch (_) {}
     view.webContents.on('did-finish-load', () => this.pushChatOverlayState());
     const overlayUrl = backendPort
-      ? `http://127.0.0.1:${backendPort}/static/app/electron/browser-chat-overlay.html`
+      ? `http://127.0.0.1:${backendPort}/static/app/electron/browser-chat-overlay.html?platform=${encodeURIComponent(process.platform)}`
       : `data:text/html;charset=utf-8,${encodeURIComponent(BROWSER_CHAT_OVERLAY_HTML)}`;
     view.webContents.loadURL(overlayUrl).catch(() => {});
     this.chatOverlayView = view;
@@ -2098,7 +2108,7 @@ class BrowserTabManager {
     });
     this.tabPickerView = view;
     const pickerUrl = backendPort
-      ? `http://127.0.0.1:${backendPort}/static/app/electron/browser-tab-picker.html`
+      ? `http://127.0.0.1:${backendPort}/static/app/electron/browser-tab-picker.html?platform=${encodeURIComponent(process.platform)}`
       : `data:text/html;charset=utf-8,${encodeURIComponent(BROWSER_TAB_PICKER_HTML)}`;
     view.webContents.loadURL(pickerUrl).catch((err) => {
       console.error('[electron] Failed to load browser tab picker:', err);

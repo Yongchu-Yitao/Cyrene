@@ -198,6 +198,34 @@ final result: passed
 
 ---
 
+# Changes Run Picker Design QA — 2026-08-11
+
+- Source reference: `/var/folders/zm/qgh_rgw903j0b9t01yg2l0mc0000gn/T/codex-clipboard-37296f91-cba5-4e3b-82f8-2c3903e74b88.png`
+- Isolated implementation render: `/Users/syw/Documents/playground/Cyrene/output/changes-run-picker-new-ui.png`
+- Side-by-side component comparison: `/Users/syw/Documents/playground/Cyrene/output/changes-run-picker-comparison.png`
+- Browser viewport: `1280 × 720` CSS px, dark theme.
+
+## Findings
+
+No actionable P0, P1, or P2 mismatch remains for the requested selector refresh.
+
+- The run selector now follows the current glass-control system instead of the legacy near-black native-select treatment.
+- The control uses the shared 40 px height, 12 px radius, card/surface color mix, subtle inset highlight, and accent-aware hover/focus ring.
+- The native platform arrow is replaced by the existing Cyrene chevron icon so alignment and color remain consistent across platforms.
+- The select keeps native keyboard and option behavior and now exposes an explicit localized accessible label.
+- Browser interaction verified changing to an older run and returning to the latest run; focus styling and value changes both work.
+
+## Verification
+
+- Frontend production build: passed.
+- `git diff --check`: passed.
+- Isolated render measurement: `466 × 40 px`, `12 px` radius, `13 px` text.
+- Browser console errors: none.
+
+final result: passed
+
+---
+
 # Detail Divider / Library Inspector Consolidation Design QA — 2026-08-11
 
 - Detail-divider reference: `/var/folders/zm/qgh_rgw903j0b9t01yg2l0mc0000gn/T/codex-clipboard-6874debc-c214-4d78-9d2f-9162da89c9a3.png`

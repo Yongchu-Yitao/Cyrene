@@ -44,13 +44,19 @@ def register_workbench_knowledge_routes(router: APIRouter) -> None:
         model, dimensions = embeddings.current_identity()
         configured = embeddings.is_configured()
         coverage = await store.get_embedding_coverage(db_path, model, dimensions)
-        mismatch = bool(coverage["total_chunks"]) and (
-            not configured or bool(coverage["pending_vectors"])
+        # Missing optional embeddings means lexical-only retrieval, not a
+        # broken corpus.  A mismatch is actionable only when the configured
+        # provider is actually available and can generate replacement vectors.
+        mismatch = bool(
+            configured
+            and coverage["total_chunks"]
+            and coverage["pending_vectors"]
         )
         return {
             **info,
             **coverage,
             "configured": configured,
+            "retrieval_mode": "hybrid" if configured else "keyword",
             "model": model,
             "dimensions": dimensions,
             "mismatch": mismatch,

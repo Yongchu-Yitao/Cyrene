@@ -405,6 +405,8 @@ def register_workbench_chat_routes(
             agent["kind"] = "side-agent"
             agent["parentChatId"] = chat_id
             agent["sourceQuote"] = quote[:12_000]
+            if parent.get("workspaceOverride"):
+                agent["workspaceOverride"] = str(parent["workspaceOverride"])
             payload.setdefault("chats", []).insert(0, agent)
             _write_chats_store(payload)
             return agent
@@ -516,7 +518,13 @@ def register_workbench_chat_routes(
         )
         if not project:
             return JSONResponse({"error": "project not found"}, status_code=404)
-        root = Path(R._workbench_resolve_workspace_dir(project)).expanduser().resolve()
+        try:
+            workspace_dir = _resolve_chat_workspace_dir(
+                chat, project, R._workbench_resolve_workspace_dir
+            )
+        except ValueError as exc:
+            return JSONResponse({"error": str(exc)}, status_code=400)
+        root = Path(workspace_dir).expanduser().resolve()
         try:
             target = (root / normalized).resolve()
             target.relative_to(root)
@@ -1179,7 +1187,23 @@ def register_workbench_chat_routes(
         project = R._workbench_find_project(project_store, project_id)
         if not project:
             return JSONResponse({"error": "project not found"}, status_code=404)
-        workspace_dir = R._workbench_resolve_workspace_dir(project)
+        if "workspaceOverride" in body:
+            try:
+                requested_workspace = _normalize_workspace_override(
+                    body.get("workspaceOverride")
+                )
+            except ValueError as exc:
+                return JSONResponse({"error": str(exc)}, status_code=400)
+            if requested_workspace:
+                chat["workspaceOverride"] = requested_workspace
+            else:
+                chat.pop("workspaceOverride", None)
+        try:
+            workspace_dir = _resolve_chat_workspace_dir(
+                chat, project, R._workbench_resolve_workspace_dir
+            )
+        except ValueError as exc:
+            return JSONResponse({"error": str(exc)}, status_code=400)
         selected_candidate = None
         recovered_stale_selection = False
         selected_key = requested_model or str(chat.get("modelSelectionId") or "").strip()
@@ -2084,6 +2108,8 @@ def register_workbench_chat_routes(
         )
         new_chat["forkedFromChatId"] = chat_id
         new_chat["forkedAtMessageId"] = message_id
+        if chat.get("workspaceOverride"):
+            new_chat["workspaceOverride"] = str(chat["workspaceOverride"])
         # Immutable divergence snippet — the edited prompt that started this
         # branch. Captured here so the branch tree never has to diff transcripts.
         new_chat["forkMessage"] = new_content.replace("\n", " ").strip()[:80]
@@ -2363,7 +2389,12 @@ def register_workbench_chat_routes(
         project = R._workbench_find_project(project_store, project_id)
         if not project:
             return JSONResponse({"error": "project not found"}, status_code=404)
-        workspace_dir = R._workbench_resolve_workspace_dir(project)
+        try:
+            workspace_dir = _resolve_chat_workspace_dir(
+                chat, project, R._workbench_resolve_workspace_dir
+            )
+        except ValueError as exc:
+            return JSONResponse({"error": str(exc)}, status_code=400)
         now = _utc_now_iso()
         answer_entry: dict[str, Any] = {
             "id": _short_id("msg"),
@@ -2462,6 +2493,15 @@ def register_workbench_chat_routes(
             await asyncio.to_thread(
                 _stash_chat_pending_for, chat_id, new_pending, additions=additions
             )
+            await asyncio.to_thread(
+                _record_chat_run_outcome,
+                chat_id,
+                run_id=resume_run_id,
+                status="done",
+                termination_reason="awaiting_user",
+                outcome_kind="awaiting",
+                created_at=now,
+            )
             return {
                 "ok": True,
                 "awaitingUser": True,
@@ -2514,6 +2554,19 @@ def register_workbench_chat_routes(
         fresh_chat["updatedAt"] = assistant_entry["createdAt"]
         await asyncio.to_thread(_write_chats_store, fresh)
         await asyncio.to_thread(complete_chat_plan, chat_id)
+        # Answer-resume runs do not pass through ChatRunManager, whose normal
+        # finalizer projects the terminal outcome into ``lastRun``.  Record the
+        # resumed reply explicitly so the lightweight conversation list cannot
+        # fall back to the original paused run's stale ``awaiting`` outcome.
+        await asyncio.to_thread(
+            _record_chat_run_outcome,
+            chat_id,
+            run_id=resume_run_id,
+            status="done",
+            termination_reason="completed",
+            outcome_kind="reply",
+            created_at=now,
+        )
         try:
             await asyncio.to_thread(
                 archive_session_exchange,

@@ -2,7 +2,11 @@
 
 from __future__ import annotations
 
+import hashlib
+import json
 from typing import Any
+
+from cyrene.agent.context import current_run_context
 
 from cyrene.tool_impl.remote.common import (
     remote_tool_error,
@@ -51,10 +55,10 @@ TOOL_DEF = {
                 },
                 "permission_mode": {
                     "type": "string",
-                    "enum": ["auto", "default", "plan"],
+                    "enum": ["auto", "default", "plan", "full_access"],
                     "description": (
-                        "Remote run mode. Defaults to auto so its reviewer can "
-                        "resolve approvals when the compatibility path is required."
+                        "Compatibility input. The current controller chat's local "
+                        "permission mode is authoritative."
                     ),
                 },
                 "language": {
@@ -116,14 +120,41 @@ async def handler(
         if len(idempotency_key) < 8:
             raise ValueError("idempotency_key must contain at least 8 characters")
 
+        controller_mode = current_run_context().permission_mode
+        exact_operation = json.dumps(
+            {
+                "device_id": str(device["device_id"]),
+                "project_id": project_id,
+                "message": message,
+                "title": str(args.get("title") or "")[:160],
+                "permission_mode": controller_mode,
+                "language": str(args.get("language") or ""),
+                "idempotency_key": idempotency_key,
+            },
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+        )
+        operation_sha256 = hashlib.sha256(exact_operation.encode("utf-8")).hexdigest()
         permission = await request_scope_elevation(
             tool_name=TOOL_NAME,
             path_hint=str(device["device_id"]),
             operation="在远程 Cyrene 创建对话并启动 Agent",
-            reason=str(args.get("reason") or "执行用户请求的远程工作"),
+            reason=(
+                str(args.get("reason") or "执行用户请求的远程工作")
+                + "\n精确操作："
+                + exact_operation[:8000]
+                + "\nSHA-256："
+                + operation_sha256
+            ),
             permission_kind="remote_device_action",
             options=["允许执行这一次", "拒绝"],
             scope_hint="远程设备操作的 ",
+            meta_extra={
+                "device_id": str(device["device_id"]),
+                "project_id": project_id,
+                "operation_sha256": operation_sha256,
+            },
         )
         if permission is not None:
             return permission
@@ -163,9 +194,7 @@ async def handler(
                 "payload": {
                     "chat_id": remote_chat_id,
                     "message": message,
-                    "permission_mode": str(
-                        args.get("permission_mode") or "auto"
-                    ),
+                    "permission_mode": controller_mode,
                     "language": str(args.get("language") or ""),
                 },
                 "idempotency_key": f"{idempotency_key}:send",

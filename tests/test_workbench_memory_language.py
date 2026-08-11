@@ -19,7 +19,60 @@ def _isolate_memory_store(monkeypatch, tmp_path, language):
 
 
 @pytest.mark.asyncio
-async def test_agent_memory_is_translated_to_configured_chinese(monkeypatch, tmp_path):
+async def test_agent_memory_is_saved_verbatim_without_llm(monkeypatch, tmp_path):
+    _isolate_memory_store(monkeypatch, tmp_path, "zh")
+
+    async def unexpected_call(*args, **kwargs):
+        raise AssertionError("agent memory save must not call the LLM")
+
+    monkeypatch.setattr(agent_state, "_call_llm", unexpected_call)
+
+    # Mixed technical/Chinese content (as an agent would write it) must be
+    # stored exactly as-is — no language detection, translation, or rejection.
+    content = (
+        "cifar_challenge 参赛经验：最终成绩 Cyrene v1=0.7633。"
+        "① train.py 的 safe_import 只兼容顶层导入（from torch import nn 可）；"
+        "② MPS 上 AMP float16 无提速，弃用；"
+        "③ w=32 ResNet(1.21M)+batch=256 最优，实测 14.3 iter/s；"
+        "④ 运行用 /opt/miniconda3/envs/torch/bin/python train.py --candidate name.py"
+    )
+    saved, retired = await memory.add_agent_memory_checked(
+        "project-test",
+        content,
+        category="fact",
+    )
+
+    assert retired == []
+    assert saved is not None
+    assert saved["content"] == content
+    assert saved["source"] == "agent"
+    stored = json.loads((tmp_path / "wb_memory_project-test.json").read_text())
+    assert stored[0]["content"] == content
+
+
+@pytest.mark.asyncio
+async def test_agent_memory_keeps_original_when_translation_fails(monkeypatch, tmp_path):
+    _isolate_memory_store(monkeypatch, tmp_path, "zh")
+
+    async def failing_llm(*args, **kwargs):
+        raise RuntimeError("LLM unavailable")
+
+    monkeypatch.setattr(agent_state, "_call_llm", failing_llm)
+
+    saved, retired = await memory.add_agent_memory_checked(
+        "project-test",
+        "The user prefers concise answers.",
+        category="preference",
+    )
+
+    assert retired == []
+    assert saved is not None
+    assert saved["content"] == "The user prefers concise answers."
+    assert (tmp_path / "wb_memory_project-test.json").exists()
+
+
+@pytest.mark.asyncio
+async def test_agent_memory_is_translated_to_configured_language(monkeypatch, tmp_path):
     _isolate_memory_store(monkeypatch, tmp_path, "zh")
     calls = []
 
@@ -27,7 +80,7 @@ async def test_agent_memory_is_translated_to_configured_chinese(monkeypatch, tmp
         calls.append((messages, kwargs))
         return {
             "content": json.dumps(
-                {"content": "用户是中国公民，正在申请澳大利亚旅游签证。"},
+                {"content": "用户偏好简洁、结构化的回答。"},
                 ensure_ascii=False,
             )
         }
@@ -36,91 +89,25 @@ async def test_agent_memory_is_translated_to_configured_chinese(monkeypatch, tmp
 
     saved, retired = await memory.add_agent_memory_checked(
         "project-test",
-        "The user is a Chinese citizen applying for an Australian tourist visa.",
-        category="fact",
-    )
-
-    assert retired == []
-    assert saved is not None
-    assert saved["content"] == "用户是中国公民，正在申请澳大利亚旅游签证。"
-    assert saved["source"] == "agent"
-    assert len(calls) == 1
-    stored = json.loads((tmp_path / "wb_memory_project-test.json").read_text())
-    assert stored[0]["content"] == saved["content"]
-
-
-@pytest.mark.asyncio
-async def test_agent_memory_is_translated_to_configured_english(monkeypatch, tmp_path):
-    _isolate_memory_store(monkeypatch, tmp_path, "en")
-
-    async def fake_call_llm(messages, **kwargs):
-        return {
-            "content": json.dumps(
-                {"content": "The user prefers concise, structured answers."}
-            )
-        }
-
-    monkeypatch.setattr(agent_state, "_call_llm", fake_call_llm)
-
-    saved, retired = await memory.add_agent_memory_checked(
-        "project-test",
-        "用户偏好简洁、结构化的回答。",
-        category="preference",
-    )
-
-    assert retired == []
-    assert saved is not None
-    assert saved["content"] == "The user prefers concise, structured answers."
-
-
-@pytest.mark.asyncio
-async def test_agent_memory_in_correct_language_skips_translation(monkeypatch, tmp_path):
-    _isolate_memory_store(monkeypatch, tmp_path, "zh")
-
-    async def unexpected_call(*args, **kwargs):
-        raise AssertionError("language normalization should not call the LLM")
-
-    monkeypatch.setattr(agent_state, "_call_llm", unexpected_call)
-
-    saved, retired = await memory.add_agent_memory_checked(
-        "project-test",
-        "用户偏好简洁、结构化的回答。",
+        "The user prefers concise, structured answers.",
         category="preference",
     )
 
     assert retired == []
     assert saved is not None
     assert saved["content"] == "用户偏好简洁、结构化的回答。"
+    assert len(calls) == 1
 
 
-@pytest.mark.asyncio
-async def test_failed_translation_does_not_persist_wrong_language(monkeypatch, tmp_path):
-    _isolate_memory_store(monkeypatch, tmp_path, "zh")
-
-    async def fake_call_llm(messages, **kwargs):
-        return {"content": '{"content":"Still written in English."}'}
-
-    monkeypatch.setattr(agent_state, "_call_llm", fake_call_llm)
-
-    saved, retired = await memory.add_agent_memory_checked(
-        "project-test",
-        "The user prefers concise answers.",
-        category="preference",
-    )
-
-    assert saved is None
-    assert retired == []
-    assert not (tmp_path / "wb_memory_project-test.json").exists()
-
-
-def test_save_project_memory_tool_requires_user_language():
+def test_save_project_memory_tool_suggests_but_does_not_require_user_language():
     content_description = next(
         item
         for item in native_definitions.get_native_tool_defs()
         if item["function"]["name"] == "save_project_memory"
     )["function"]["parameters"]["properties"]["content"]["description"]
 
-    assert "MUST use the user's configured language" in content_description
+    assert "user's configured language" in content_description
+    assert "MUST" not in content_description
 
 
 def test_verified_tool_evidence_includes_successful_current_results_only():
@@ -229,6 +216,18 @@ def test_english_dominant_mixed_text_requires_chinese_normalization():
     assert not memory._content_matches_language("User prefers 中文 responses.", "zh")
     assert not memory._content_matches_language("The user prefers 中文 responses.", "zh")
     assert memory._content_matches_language("用户使用 React、Next.js 和 TypeScript。", "zh")
+
+
+def test_technical_chinese_text_matches_without_translation():
+    # Dense technical content written in Chinese passes as-is: code, paths,
+    # and model names are language-neutral, not English prose.
+    content = (
+        "cifar_challenge 参赛经验：最终成绩 Cyrene v1=0.7633。"
+        "① train.py 的 safe_import 只兼容顶层导入（from torch import nn 可）；"
+        "② MPS 上 AMP float16 无提速，弃用；"
+        "③ w=32 ResNet(1.21M)+batch=256 最优，实测 14.3 iter/s"
+    )
+    assert memory._content_matches_language(content, "zh")
 
 
 def test_search_project_memories_filters_and_excludes_stale(monkeypatch, tmp_path):

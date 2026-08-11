@@ -48,6 +48,8 @@ NATIVE_TOOL_MODULES = (
     "cyrene.tool_impl.core.web_search",
     "cyrene.tool_impl.remote.list_devices",
     "cyrene.tool_impl.remote.status",
+    "cyrene.tool_impl.remote.files",
+    "cyrene.tool_impl.remote.jobs",
     "cyrene.tool_impl.remote.harness",
     "cyrene.tool_impl.remote.action",
     "cyrene.tool_impl.remote.run",

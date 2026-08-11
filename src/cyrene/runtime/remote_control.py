@@ -52,7 +52,7 @@ DIRECT_PAIRING_PORT = 37841
 DIRECT_PAIRING_CODE_LENGTH = 10
 DIRECT_PAIRING_MAX_ATTEMPTS = 5
 ENVELOPE_MAX_SKEW_SECONDS = 300
-REMOTE_CAPABILITIES = frozenset(
+BASE_REMOTE_CAPABILITIES = frozenset(
     {
         "projects:list_shared",
         "chat:read",
@@ -71,6 +71,21 @@ REMOTE_CAPABILITIES = frozenset(
         "settings:update",
     }
 )
+REMOTE_EXTENSION_CAPABILITIES = frozenset(
+    {
+        "workspace_file:metadata",
+        "workspace_file:read",
+        "workspace_file:write",
+        "workspace_file:overwrite",
+        "workspace_file:move",
+        "workspace_file:delete",
+        "workspace_directory:transfer",
+        "remote_job:read",
+        "remote_job:run",
+        "remote_job:control",
+    }
+)
+REMOTE_CAPABILITIES = BASE_REMOTE_CAPABILITIES | REMOTE_EXTENSION_CAPABILITIES
 DEFAULT_REMOTE_CAPABILITIES = (
     "projects:list_shared",
     "chat:read",
@@ -85,6 +100,16 @@ DEFAULT_REMOTE_CAPABILITIES = (
     "approval:clarification",
     "approval:respond",
     "artifact:read",
+    "workspace_file:metadata",
+    "workspace_file:read",
+    "workspace_file:write",
+    "workspace_file:overwrite",
+    "workspace_file:move",
+    "workspace_file:delete",
+    "workspace_directory:transfer",
+    "remote_job:read",
+    "remote_job:run",
+    "remote_job:control",
     "settings:read",
     "settings:update",
 )
@@ -139,6 +164,34 @@ _COMMAND_CAPABILITIES = {
     "artifacts.list": "artifact:read",
     "artifacts.read": "artifact:read",
     "attachments.read": "artifact:read",
+    "files.stat": "workspace_file:metadata",
+    "files.list": "workspace_file:metadata",
+    "files.manifest": "workspace_file:metadata",
+    "files.hash": "workspace_file:metadata",
+    "files.read": "workspace_file:read",
+    "files.download": "workspace_file:read",
+    "files.upload.begin": "workspace_file:write",
+    "files.upload.chunk": "workspace_file:write",
+    "files.upload.commit": "workspace_file:write",
+    "files.upload.abort": "workspace_file:write",
+    "files.mkdir": "workspace_file:write",
+    "files.touch": "workspace_file:write",
+    "files.apply_patch": "workspace_file:write",
+    "files.copy": "workspace_file:write",
+    "files.move": "workspace_file:move",
+    "files.delete": "workspace_file:delete",
+    "files.delete_tree": "workspace_file:delete",
+    "files.sync.prepare": "workspace_directory:transfer",
+    "files.sync.diff": "workspace_directory:transfer",
+    "files.sync.apply": "workspace_directory:transfer",
+    "files.sync.commit": "workspace_directory:transfer",
+    "files.sync.abort": "workspace_directory:transfer",
+    "jobs.start": "remote_job:run",
+    "jobs.read": "remote_job:read",
+    "jobs.wait": "remote_job:read",
+    "jobs.artifacts": "remote_job:read",
+    "jobs.cancel": "remote_job:control",
+    "jobs.interrupt": "remote_job:control",
     "settings.read": "settings:read",
     "settings.models.copy": "settings:read",
     "settings.update": "settings:update",
@@ -192,6 +245,24 @@ _SIDE_EFFECT_COMMANDS = frozenset(
         "shell.interrupt",
         "shell.close",
         "harness.invoke",
+        "files.upload.begin",
+        "files.upload.chunk",
+        "files.upload.commit",
+        "files.upload.abort",
+        "files.mkdir",
+        "files.touch",
+        "files.apply_patch",
+        "files.copy",
+        "files.move",
+        "files.delete",
+        "files.delete_tree",
+        "files.sync.prepare",
+        "files.sync.apply",
+        "files.sync.commit",
+        "files.sync.abort",
+        "jobs.start",
+        "jobs.cancel",
+        "jobs.interrupt",
     }
 )
 
@@ -445,6 +516,57 @@ class RemoteControlStore:
         conn.execute("PRAGMA foreign_keys = ON")
         return conn
 
+    def catalog_revision(self) -> int:
+        with self._lock, self._connect() as conn:
+            row = conn.execute(
+                "SELECT revision FROM remote_catalog_state WHERE singleton = 1"
+            ).fetchone()
+        return int(row["revision"] if row is not None else 1)
+
+    def _bump_catalog_revision(
+        self,
+        conn: sqlite3.Connection,
+        *,
+        reason: str,
+        peer_device_id: str = "",
+    ) -> int:
+        conn.execute(
+            """
+            INSERT INTO remote_catalog_state(singleton, revision, updated_at)
+            VALUES (1, 2, ?)
+            ON CONFLICT(singleton) DO UPDATE SET
+                revision = remote_catalog_state.revision + 1,
+                updated_at = excluded.updated_at
+            """,
+            (_utc_iso(),),
+        )
+        row = conn.execute(
+            "SELECT revision FROM remote_catalog_state WHERE singleton = 1"
+        ).fetchone()
+        revision = int(row["revision"] if row is not None else 1)
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            return revision
+
+        async def publish() -> None:
+            try:
+                from cyrene.observability import debug
+
+                await debug.publish_event(
+                    {
+                        "type": "remote_devices_changed",
+                        "revision": revision,
+                        "reason": str(reason or "updated"),
+                        "device_id": str(peer_device_id or ""),
+                    }
+                )
+            except Exception:
+                logger.debug("Failed to publish remote device change", exc_info=True)
+
+        loop.create_task(publish())
+        return revision
+
     def _initialize(self) -> None:
         Path(self.remote_db_path).parent.mkdir(parents=True, exist_ok=True)
         with self._lock, self._connect() as conn:
@@ -516,6 +638,47 @@ class RemoteControlStore:
                     detail_json TEXT NOT NULL DEFAULT '{}',
                     created_at TEXT NOT NULL
                 );
+
+                CREATE TABLE IF NOT EXISTS remote_catalog_state (
+                    singleton INTEGER PRIMARY KEY CHECK (singleton = 1),
+                    revision INTEGER NOT NULL DEFAULT 1,
+                    updated_at TEXT NOT NULL
+                );
+
+                CREATE TABLE IF NOT EXISTS remote_file_transfers (
+                    transfer_id TEXT PRIMARY KEY,
+                    peer_device_id TEXT NOT NULL,
+                    project_id TEXT NOT NULL,
+                    direction TEXT NOT NULL,
+                    relative_path TEXT NOT NULL,
+                    staging_path TEXT NOT NULL,
+                    expected_size INTEGER NOT NULL DEFAULT 0,
+                    expected_sha256 TEXT NOT NULL DEFAULT '',
+                    received_size INTEGER NOT NULL DEFAULT 0,
+                    conflict_policy TEXT NOT NULL DEFAULT 'fail',
+                    state TEXT NOT NULL DEFAULT 'active',
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL
+                );
+
+                CREATE TABLE IF NOT EXISTS remote_jobs (
+                    job_id TEXT PRIMARY KEY,
+                    peer_device_id TEXT NOT NULL,
+                    project_id TEXT NOT NULL,
+                    command_hash TEXT NOT NULL,
+                    origin_chat_id TEXT NOT NULL DEFAULT '',
+                    cwd_relative TEXT NOT NULL DEFAULT '.',
+                    outside_workspace INTEGER NOT NULL DEFAULT 0,
+                    log_path TEXT NOT NULL,
+                    pid INTEGER NOT NULL DEFAULT 0,
+                    status TEXT NOT NULL,
+                    exit_code INTEGER,
+                    artifact_paths_json TEXT NOT NULL DEFAULT '[]',
+                    created_at TEXT NOT NULL,
+                    started_at TEXT NOT NULL DEFAULT '',
+                    completed_at TEXT NOT NULL DEFAULT '',
+                    updated_at TEXT NOT NULL
+                );
                 """
             )
             self._migrate_legacy_store(conn)
@@ -565,6 +728,26 @@ class RemoteControlStore:
                     ADD COLUMN default_tool_packs_json TEXT NOT NULL DEFAULT '[]'
                     """
                 )
+            job_columns = {
+                str(row["name"])
+                for row in conn.execute(
+                    "PRAGMA table_info(remote_jobs)"
+                ).fetchall()
+            }
+            if "origin_chat_id" not in job_columns:
+                conn.execute(
+                    """
+                    ALTER TABLE remote_jobs
+                    ADD COLUMN origin_chat_id TEXT NOT NULL DEFAULT ''
+                    """
+                )
+            if "outside_workspace" not in job_columns:
+                conn.execute(
+                    """
+                    ALTER TABLE remote_jobs
+                    ADD COLUMN outside_workspace INTEGER NOT NULL DEFAULT 0
+                    """
+                )
             conn.execute(
                 """
                 INSERT OR IGNORE INTO remote_settings(
@@ -576,6 +759,14 @@ class RemoteControlStore:
                     platform.node() or "Cyrene device",
                     _utc_iso(),
                 ),
+            )
+            conn.execute(
+                """
+                INSERT OR IGNORE INTO remote_catalog_state(
+                    singleton, revision, updated_at
+                ) VALUES (1, 1, ?)
+                """,
+                (_utc_iso(),),
             )
             self._upgrade_required_compatibility_grants(conn)
 
@@ -685,7 +876,10 @@ class RemoteControlStore:
                     }
                 except (TypeError, ValueError, json.JSONDecodeError):
                     continue
-                upgraded = capabilities | REMOTE_CAPABILITIES
+                # Only the original compatibility surface is mandatory. New
+                # protocol extensions are negotiated explicitly so upgrading
+                # one desktop never silently expands an old peer's authority.
+                upgraded = capabilities | BASE_REMOTE_CAPABILITIES
                 if upgraded != capabilities:
                     capabilities = upgraded
                     updates[column] = _json_dumps(sorted(capabilities))
@@ -822,7 +1016,7 @@ class RemoteControlStore:
         invalid = [item for item in normalized if item not in ALL_REMOTE_GRANTS]
         if invalid:
             raise ValueError(f"unsupported remote capabilities: {', '.join(invalid)}")
-        return sorted(set(normalized) | REMOTE_CAPABILITIES)
+        return sorted(set(normalized) | BASE_REMOTE_CAPABILITIES)
 
     @staticmethod
     def _normalize_scopes(values: list[str] | tuple[str, ...]) -> list[str]:
@@ -1255,6 +1449,11 @@ class RemoteControlStore:
                     str(existing["created_at"]) if existing else now,
                 ),
             )
+            self._bump_catalog_revision(
+                conn,
+                reason="paired" if existing is None else "peer_updated",
+                peer_device_id=device_id,
+            )
             if own_connection:
                 conn.commit()
         finally:
@@ -1378,6 +1577,11 @@ class RemoteControlStore:
             )
             if result.rowcount != 1:
                 raise KeyError("remote peer not found")
+            self._bump_catalog_revision(
+                conn,
+                reason="grant_updated",
+                peer_device_id=device_id,
+            )
         self.audit(
             "peer_grant_updated",
             peer_device_id=device_id,
@@ -1415,6 +1619,12 @@ class RemoteControlStore:
                 """,
                 (_json_dumps(caps), _json_dumps(scopes), str(device_id)),
             )
+            if result.rowcount:
+                self._bump_catalog_revision(
+                    conn,
+                    reason="received_grant_updated",
+                    peer_device_id=device_id,
+                )
         if not result.rowcount:
             raise KeyError(device_id)
         self.audit(
@@ -1435,6 +1645,12 @@ class RemoteControlStore:
                 "WHERE device_id = ? AND revoked_at = ''",
                 (now, str(device_id)),
             )
+            if result.rowcount:
+                self._bump_catalog_revision(
+                    conn,
+                    reason="revoked",
+                    peer_device_id=device_id,
+                )
         if result.rowcount:
             self.audit(
                 "peer_revoked",
@@ -2167,6 +2383,20 @@ class RemoteGateway:
             payload={},
         )
 
+    async def send_event(
+        self,
+        peer_device_id: str,
+        event: dict[str, Any],
+    ) -> None:
+        peer = self.store.get_peer(peer_device_id)
+        if peer is None:
+            raise KeyError(peer_device_id)
+        await self._send_peer_state(
+            peer,
+            kind="event",
+            payload={"event": dict(event)},
+        )
+
     async def _grant_sync_loop(self) -> None:
         while self._started:
             for peer in self.store.list_peers():
@@ -2303,6 +2533,27 @@ class RemoteGateway:
             return
         if kind == "peer_revoked":
             self.store.revoke_peer(sender)
+            return
+        if kind == "event":
+            event = payload.get("event")
+            if isinstance(event, dict) and str(event.get("type") or "") in {
+                "remote_job_update",
+                "remote_transfer_update",
+            }:
+                from cyrene.observability import debug
+
+                await debug.publish_event(
+                    {
+                        **event,
+                        "remote_device_id": sender,
+                        "remote_event": True,
+                    },
+                    session_id=str(
+                        event.get("session_id")
+                        or event.get("chat_id")
+                        or ""
+                    ),
+                )
             return
         if kind == "response":
             grant = payload.get("grant")
@@ -2489,11 +2740,13 @@ class RemoteGateway:
 
 
 __all__ = [
+    "BASE_REMOTE_CAPABILITIES",
     "DEFAULT_REMOTE_CAPABILITIES",
     "ENVELOPE_MAX_SKEW_SECONDS",
     "InMemoryRemoteRelay",
     "PAIRING_TTL_SECONDS",
     "REMOTE_CAPABILITIES",
+    "REMOTE_EXTENSION_CAPABILITIES",
     "REMOTE_TOOL_PACK_CAPABILITIES",
     "REMOTE_TOOL_PACK_PREFIX",
     "REMOTE_TOOL_PACK_WIRE_NAMES",

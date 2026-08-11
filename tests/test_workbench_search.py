@@ -726,6 +726,69 @@ def test_workbench_chat_run_uses_project_workspace(client, search_env, monkeypat
     assert chats["chats"][0]["messages"][-2]["clientRequestId"] == "send_test_1"
 
 
+def test_workbench_chat_run_uses_and_persists_workspace_override(
+    client, search_env, monkeypatch,
+):
+    from cyrene import agent
+
+    override = search_env["data_dir"].parent / "manually-selected"
+    override.mkdir()
+    captured = []
+
+    async def fake_run_agent(**kwargs):
+        captured.append(kwargs)
+        return "done"
+
+    monkeypatch.setattr(agent, "run_agent", fake_run_agent)
+
+    response = client.post(
+        "/api/workbench/chats/chat_1/messages",
+        json={"message": "inspect it", "workspaceOverride": str(override)},
+    )
+
+    assert response.status_code == 200
+    assert captured[-1]["workspace_dir"] == str(override.resolve())
+    chats_path = search_env["data_dir"] / "workbench_chats.json"
+    stored = json.loads(chats_path.read_text(encoding="utf-8"))["chats"][0]
+    assert stored["workspaceOverride"] == str(override.resolve())
+    listed = client.get("/api/workbench/chats?project=project_1").json()["chats"][0]
+    assert listed["workspaceOverride"] == str(override.resolve())
+
+    # Older clients and non-composer execution paths can omit the field; the
+    # conversation keeps using its durable override instead of reverting.
+    follow_up = client.post(
+        "/api/workbench/chats/chat_1/messages",
+        json={"message": "inspect it again"},
+    )
+    assert follow_up.status_code == 200
+    assert captured[-1]["workspace_dir"] == str(override.resolve())
+
+
+def test_workbench_chat_rejects_unavailable_workspace_override(
+    client, search_env, monkeypatch,
+):
+    from cyrene import agent
+
+    called = False
+
+    async def fake_run_agent(**kwargs):
+        nonlocal called
+        called = True
+        return "done"
+
+    monkeypatch.setattr(agent, "run_agent", fake_run_agent)
+    missing = search_env["data_dir"].parent / "missing-directory"
+
+    response = client.post(
+        "/api/workbench/chats/chat_1/messages",
+        json={"message": "inspect it", "workspaceOverride": str(missing)},
+    )
+
+    assert response.status_code == 400
+    assert "does not exist" in response.json()["error"]
+    assert called is False
+
+
 def test_chat_session_is_llm_named_only_after_its_first_message(
     client, search_env, monkeypatch,
 ):
@@ -978,16 +1041,28 @@ def test_workspace_scope_block_uses_runtime_workspace(tmp_path):
     assert f"Use `{project_workspace}` as the default root" in block
     assert "already starts at the workspace root" in block
     assert f"without `cd {project_workspace}`" in block
+    assert "proactively inspect the workspace" in block
+    assert "read applicable instruction files" in block
 
 
-def test_workbench_chat_answer_resumes_in_project_workspace(
+def test_workbench_chat_answer_resumes_in_conversation_workspace(
     client, search_env, monkeypatch,
 ):
     from cyrene.workbench import runtime as routes_mod
 
     chats_path = search_env["data_dir"] / "workbench_chats.json"
     chats = json.loads(chats_path.read_text(encoding="utf-8"))
+    override = search_env["data_dir"].parent / "answer-workspace"
+    override.mkdir()
+    chats["chats"][0]["workspaceOverride"] = str(override)
     chats["chats"][0]["pendingQuestion"] = {"id": "question_1"}
+    chats["chats"][0]["lastRun"] = {
+        "id": "paused_run",
+        "status": "done",
+        "terminationReason": "awaiting_user",
+        "outcome": "awaiting",
+        "createdAt": "2026-01-02T00:00:00+00:00",
+    }
     chats_path.write_text(json.dumps(chats), encoding="utf-8")
     captured = {}
 
@@ -1012,15 +1087,20 @@ def test_workbench_chat_answer_resumes_in_project_workspace(
         "session_id": "chat_1",
         "question_id": "question_1",
         "answer_text": "continue",
-        "workspace_dir": str(
-            (search_env["data_dir"].parent / "workspace").resolve()
-        ),
+        "workspace_dir": str(override.resolve()),
     }
     payload = response.json()
     assert payload["userMessage"]["content"] == "continue"
-    stored = json.loads(chats_path.read_text(encoding="utf-8"))["chats"][0]["messages"]
-    assert [message["content"] for message in stored[-2:]] == ["continue", "continued"]
-    assert stored[-2]["answerToQuestionId"] == "question_1"
+    stored_chat = json.loads(chats_path.read_text(encoding="utf-8"))["chats"][0]
+    assert [message["content"] for message in stored_chat["messages"][-2:]] == ["continue", "continued"]
+    assert stored_chat["messages"][-2]["answerToQuestionId"] == "question_1"
+    assert "pendingQuestion" not in stored_chat
+    assert stored_chat["lastRun"]["id"].startswith("resume_")
+    assert stored_chat["lastRun"]["outcome"] == "reply"
+
+    listed = client.get("/api/workbench/chats?project=project_1").json()["chats"][0]
+    assert listed["runStatus"] == "completed"
+    assert listed["pendingQuestion"] is None
 
 
 def test_workbench_chat_answer_can_stream_continuation_events(

@@ -254,6 +254,10 @@ def test_workbench_chat_group_drop_uses_one_enclosing_frame_without_stacking():
     assert 'attention ? WBC_ICONS.alert' in rail
     assert 'failed ? WBC_ICONS.errorCircle' in rail
     assert 'completed ? WBC_ICONS.check' in rail
+    assert 'running ? WBC_ICONS.running : WBC_ICONS.file' in rail
+    assert 'running: <span className="wb-spinner wbc-chat-running-spinner"' in source
+    assert ".wbc-chat-running-spinner {" in styles
+    assert "animation-duration: 0.7s;" in styles
     assert "var chatStatusLabel = visualState.label" in rail
     assert 'wbcT("status.failed", "Failed")' in rail
     assert '!chatStatusLabel && (' in rail
@@ -2323,6 +2327,9 @@ def _run_workbench_runtime_js(expression: str):
     args_preview_source = "function wbcToolArgsPreview(" + source.split(
         "function wbcToolArgsPreview(", 1
     )[1].split("function wbcThinkingPhrases", 1)[0]
+    timeline_source = "function wbcConfirmOptimisticMessage(" + source.split(
+        "function wbcConfirmOptimisticMessage(", 1
+    )[1].split("function wbcCurrentModel(", 1)[0]
     runtime_source = source.split(
         "var WorkbenchChatRuntimes = (function () {", 1
     )[1].split("// Page", 1)[0]
@@ -2338,6 +2345,7 @@ global.window = {{
 function wbcT(_key, fallback) {{ return fallback; }}
 function wbcSubagentStatusText(status) {{ return String(status || ""); }}
 eval({json.dumps(args_preview_source)});
+eval({json.dumps(timeline_source)});
 eval({json.dumps(runtime_source)});
 const result = ({expression});
 process.stdout.write(JSON.stringify(result));
@@ -2427,7 +2435,13 @@ def test_workbench_hydration_keeps_live_user_turn_before_runtime_placeholder():
       clientRequestId: "send_1"
     }]
   };
-  const runtime = { chatId: "chat_1", startedAt, activities: [], clientRequestId: "send_1" };
+  const runtime = {
+    chatId: "chat_1",
+    startedAt,
+    activities: [],
+    clientRequestId: "send_1",
+    userMessages: previous.messages
+  };
   const reconciled = wbcPreserveLiveTimelineAnchors(previous, hydrated, runtime);
   const merged = wbcMergeChronologicalMessages(
     reconciled.messages,
@@ -2447,6 +2461,65 @@ def test_workbench_hydration_keeps_live_user_turn_before_runtime_placeholder():
         "createdAt": "2026-07-15T09:27:52.100Z",
         "serverCreatedAt": "2026-07-15T09:27:56.000000+00:00",
     }
+
+
+def test_workbench_hydration_cannot_remove_the_live_user_turn():
+    result = _run_workbench_timeline_js(
+        """
+(() => {
+  const startedAt = Date.parse("2026-07-15T09:27:52.100Z");
+  const liveUser = {
+    id: "pending_user",
+    role: "user",
+    content: "你好",
+    createdAt: new Date(startedAt).toISOString(),
+    optimistic: true,
+    clientRequestId: "send_1"
+  };
+  const runtime = {
+    chatId: "chat_1",
+    startedAt,
+    activities: [],
+    clientRequestId: "send_1",
+    userMessages: [liveUser]
+  };
+  const reconciled = wbcPreserveLiveTimelineAnchors(
+    { messages: [liveUser] },
+    { messages: [] },
+    runtime
+  );
+  const merged = wbcMergeChronologicalMessages(
+    reconciled.messages,
+    wbcRuntimeTimelineMessages(runtime)
+  );
+  return {
+    ids: merged.map(item => item.id),
+    content: merged[0].content,
+    optimistic: merged[0].optimistic
+  };
+})()
+"""
+    )
+
+    assert result == {
+        "ids": ["pending_user", "runtime_heartbeat_chat_1", "runtime_activity_1"],
+        "content": "你好",
+        "optimistic": True,
+    }
+
+    root = Path(__file__).resolve().parent.parent
+    source = (root / "src" / "webui" / "frontend" / "workbench-chat.jsx").read_text(
+        encoding="utf-8"
+    )
+    selection_hydration = source.split(
+        "var hydrationSequence = beginChatHydration(activeChatId);", 1
+    )[1].split("model.getSubagents", 1)[0]
+    settled_hydration = source.split(
+        "onSettled: function (chatId) {", 1
+    )[1].split("onResync:", 1)[0]
+    assert "isCurrentChatHydration(activeChatId, hydrationSequence)" in selection_hydration
+    assert "var hydrationSequence = beginChatHydration(chatId);" in settled_hydration
+    assert "if (!isCurrentChatHydration(chatId, hydrationSequence)) return;" in settled_hydration
 
 
 def test_workbench_timeline_compares_real_instants_not_timestamp_strings():
@@ -2906,12 +2979,18 @@ def test_workbench_chat_renders_new_user_turn_before_live_thinking_card():
   );
   const beforeAck = events.slice();
   handlers.onAck({
-    userMessage: { id: "msg-1", role: "user", content: "hello" }
+    userMessage: {
+      id: "msg-1",
+      role: "user",
+      content: "hello",
+      createdAt: "2026-07-15T09:27:56.000Z"
+    }
   });
   return {
     beforeAck,
     optimistic: userMessages[0],
-    confirmation: confirmations[0]
+    confirmation: confirmations[0],
+    runtimeUser: WorkbenchChatRuntimes.get("chat-1").userMessages[0]
   };
 })()
 """
@@ -2923,6 +3002,9 @@ def test_workbench_chat_renders_new_user_turn_before_live_thinking_card():
     assert result["optimistic"]["optimistic"] is True
     assert result["confirmation"]["optimisticId"] == result["optimistic"]["id"]
     assert result["confirmation"]["userMessage"]["id"] == "msg-1"
+    assert result["runtimeUser"]["id"] == "msg-1"
+    assert result["runtimeUser"]["createdAt"] == result["optimistic"]["createdAt"]
+    assert result["runtimeUser"]["serverCreatedAt"] == "2026-07-15T09:27:56.000Z"
 
 
 def test_workbench_chat_opens_bounded_browser_window_from_live_browser_events():
@@ -4325,6 +4407,8 @@ def test_collapsed_chat_rail_measures_expanded_row_centres_for_spatial_mapping()
     assert "if (!collapsed) trackMeasuredExpandedRef.current = true" in measurement
     assert "renderedRailMotionPhase, railDragActive" in rail
     assert "!railDragActive && statusTrackItems.map" in rail
+    assert 'item.state.kind === "result"' in rail
+    assert ': WBC_ICONS.running;' in rail
     assert "!dragState\n      && chatTrackState" in rail
     assert "railDragWasActiveRef.current = true" in rail
     assert "setTrackGeometryByChatId({});" in rail
@@ -4377,8 +4461,9 @@ def test_collapsed_chat_rail_measures_expanded_row_centres_for_spatial_mapping()
     assert "left 360ms var(--wb-sidebar-motion-ease) 80ms" in collapsing_css
     assert "transform 360ms var(--wb-sidebar-motion-ease) 80ms" in collapsing_css
     assert "is-status-expanding .wbc-conversation-status-glyph" in styles
-    assert "opacity 90ms ease 510ms" in styles
+    assert "opacity 180ms ease 420ms" in styles
     assert "is-status-collapsing .wbc-conversation-status-glyph" in styles
+    assert "opacity 180ms ease" in styles
     assert "railMotionCollapsedRef.current !== !!collapsed" in rail
     assert 'collapsed ? "collapsing" : "expanding"' in rail
     assert '}, 630);' in rail
@@ -5865,6 +5950,18 @@ def test_workbench_side_viewer_keeps_html_sandboxed_and_uses_pdfjs_text_layer():
     assert 'onLoad={confirmViewed}' in source
     assert 'return <WbcPdfJsViewer file={file} url={url} onViewed={confirmViewed} />;' in source
     assert '.wbc-viewer .pdfViewer .textLayer' not in styles
+    viewer_pre_rule = styles.split('.wbc-viewer-pre {', 1)[1].split('}', 1)[0]
+    assert 'color: #c9d1d9;' in viewer_pre_rule
+    assert 'color-scheme: dark;' in viewer_pre_rule
+    assert 'background: #0d1117;' in viewer_pre_rule
+    viewer_code_rule = styles.split('.wbc-viewer-pre code.hljs {', 1)[1].split('}', 1)[0]
+    assert 'color: #c9d1d9;' in viewer_code_rule
+    assert 'background: transparent;' in viewer_code_rule
+    assert '.wbc-viewer-pre .hljs-keyword,' in styles
+    assert '.wbc-viewer-pre .hljs-title.function_ { color: #d2a8ff; }' in styles
+    assert '.wbc-viewer-pre .hljs-string { color: #a5d6ff; }' in styles
+    assert '.wbc-viewer-pre .hljs-comment,' in styles
+    assert '.wbc-viewer-pre .hljs-built_in,' in styles
     assert "width: 100%;" in styles
     assert "height: 100%;" in styles
     assert r"/\.html?$/i.test(target.pathname)" in main
@@ -6230,12 +6327,13 @@ def test_workbench_chat_workspace_chip_follows_project_until_user_overrides_it()
     # The workspace override helpers take an optional draft namespace (default
     # "" for the main chat; the quick-chat window passes one) — the call sites
     # thread it through.
-    assert "return wbcLoadWorkspaceOverride(workspaceContextKey, draftNs);" in chat
+    assert 'return String(chat && chat.workspaceOverride || "").trim()' in chat
+    assert "|| wbcLoadWorkspaceOverride(workspaceContextKey, draftNs);" in chat
     assert 'var WBC_WORKSPACE_PREFIX = "cyrene-wbc-workspace-";' in chat
     assert "function wbcWorkspaceContextKey(chatId, projectId)" in chat
     assert "var workspaceContextKey = wbcWorkspaceContextKey(chatId, projectId);" in chat
     assert "wbcSaveWorkspaceOverride(prevKey, currentOverride, draftNs);" in chat
-    assert "var nextOverride = wbcLoadWorkspaceOverride(workspaceContextKey, draftNs);" in chat
+    assert 'var nextOverride = String(chat && chat.workspaceOverride || "").trim()' in chat
     assert 'window.dispatchEvent(new CustomEvent("cyrene:wbc-chat-created"' in chat
     assert 'window.addEventListener("cyrene:wbc-chat-created", onChatCreated);' in chat
     assert "wbcSaveWorkspaceOverride(nextKey, workspaceOverrideRef.current, draftNs);" in chat
@@ -6249,6 +6347,8 @@ def test_workbench_chat_workspace_chip_follows_project_until_user_overrides_it()
         'setWorkspaceOverride(selectedPath && selectedPath !== '
         'projectWorkspacePath ? selectedPath : "");'
     ) in chat
+    assert "workspaceOverride: workspaceOverride," in chat
+    assert 'body.workspaceOverride = input.workspaceOverride || "";' in chat
 
 
 def test_workbench_context_picker_contains_long_workspace_paths():

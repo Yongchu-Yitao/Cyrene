@@ -67,6 +67,8 @@
     localStorage.removeItem("cyrene-tweak-density");
     document.documentElement.dataset.density = "cozy";
     document.documentElement.dataset.textSize = readTweak("textSize", "default") || "default";
+    document.documentElement.dataset.platform =
+      (window.cyrene && window.cyrene.platform) || "web";
     const lightBackground = readTweak("backgroundLight", null);
     const darkBackground = readTweak("backgroundDark", null);
     if (/^#[0-9a-f]{6}$/i.test(lightBackground || "")) {

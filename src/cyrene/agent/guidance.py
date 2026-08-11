@@ -23,6 +23,7 @@ from cyrene.agent.context import (
     grant_destructive_operation,
     grant_external_upload,
     grant_permission_elevation,
+    grant_scoped_path_access,
     grant_temporary_full_access,
     permission_elevation_fingerprint,
     publish_runtime_event as _publish_runtime_event,
@@ -1193,6 +1194,8 @@ async def _handle_permission_elevation_answer(
             "fingerprint": fingerprint,
         })
         if granted:
+            if bool(meta.get("grant_read_path")) and path_hint:
+                grant_scoped_path_access("read", path_hint)
             if allow_for_session:
                 allow_all_destructive_operations_for_run()
             else:
