@@ -2478,7 +2478,24 @@ class RemoteCommandExecutor:
         chat_id, chat = await self._chat_for_project(project_id, payload)
         if chat is None or chat.get("ok") is False:
             return dict(chat or {"ok": False, "error": "chat not found"})
-        interrupted = self.chat["run_manager"].interrupt(chat_id)
+        run_manager = self.chat["run_manager"]
+        run = run_manager.get(chat_id)
+        interrupted = run_manager.interrupt(chat_id)
+        if (
+            interrupted
+            and run is not None
+            and run.task is not None
+            and not run.done.is_set()
+        ):
+            try:
+                await asyncio.wait_for(asyncio.shield(run.done.wait()), timeout=8.0)
+            except asyncio.TimeoutError:
+                return {
+                    "ok": False,
+                    "interrupted": False,
+                    "code": "chat_interrupt_timeout",
+                    "error": "chat interruption is still settling",
+                }
         return {
             "ok": interrupted,
             "interrupted": interrupted,

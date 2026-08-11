@@ -8,7 +8,7 @@ Phase 1 (policy-gated decision on the enabled-package wire bundle) → Phase 2
 import asyncio
 import json
 import logging
-from typing import Any
+from typing import Any, Awaitable, Callable
 from uuid import uuid4
 
 from cyrene.agent.replies import (
@@ -466,6 +466,46 @@ async def _run_main_agent_impl(
         runtime_inbox.acknowledge(events)
         return True
 
+    async def _call_with_runtime_guidance(
+        msgs: list[dict[str, Any]],
+        call: Callable[[], Awaitable[dict[str, Any]]],
+    ) -> dict[str, Any]:
+        """Let durable guidance preempt an unfinished model request.
+
+        Previously the inbox was checked only after the upstream response, so a
+        user could wait for the full model timeout before steering took effect.
+        Tool execution already has an inbox wake path; this gives model waits
+        the same behavior.
+        """
+        if runtime_inbox is None:
+            return await call()
+        while True:
+            await _inject_runtime_guidance(msgs)
+            model_task = asyncio.create_task(call())
+            guidance_task = asyncio.create_task(runtime_inbox.wait_for_guidance())
+            try:
+                done, _pending = await asyncio.wait(
+                    {model_task, guidance_task},
+                    return_when=asyncio.FIRST_COMPLETED,
+                )
+            except asyncio.CancelledError:
+                model_task.cancel()
+                guidance_task.cancel()
+                await asyncio.gather(
+                    model_task, guidance_task, return_exceptions=True
+                )
+                raise
+            if model_task in done:
+                guidance_task.cancel()
+                await asyncio.gather(guidance_task, return_exceptions=True)
+                return await model_task
+            guidance_available = await guidance_task
+            if not guidance_available:
+                return await model_task
+            model_task.cancel()
+            await asyncio.gather(model_task, return_exceptions=True)
+            await _inject_runtime_guidance(msgs)
+
     async def _save(msgs):
         saved_ephemeral = "\n\n".join(
             part for part in (fixed_ephemeral_system, ephemeral_system) if part
@@ -661,9 +701,12 @@ async def _run_main_agent_impl(
         phase1_tools if _deep_research_first_round.get() else wire_tool_defs
     )
     phase1_runtime_guidance_entries: list[dict[str, Any]] = []
-    response = await _call_phase1_llm(
-        _pin_tail(project_history_for_llm(phase1_messages)),
-        tools=phase1_wire_tools,
+    response = await _call_with_runtime_guidance(
+        phase1_messages,
+        lambda: _call_phase1_llm(
+            _pin_tail(project_history_for_llm(phase1_messages)),
+            tools=phase1_wire_tools,
+        ),
     )
     if runtime_inbox is not None:
         phase1_guidance = runtime_inbox.collect_guidance_nowait()
@@ -680,9 +723,12 @@ async def _run_main_agent_impl(
             phase1_runtime_guidance_entries = [
                 message for message in phase1_messages if message.get("runtime_guidance")
             ]
-            response = await _call_phase1_llm(
-                _pin_tail(project_history_for_llm(phase1_messages)),
-                tools=phase1_wire_tools,
+            response = await _call_with_runtime_guidance(
+                phase1_messages,
+                lambda: _call_phase1_llm(
+                    _pin_tail(project_history_for_llm(phase1_messages)),
+                    tools=phase1_wire_tools,
+                ),
             )
     tool_calls = response.get("tool_calls") or []
     phase1_allowed = {_tool_def_name(tool_def) for tool_def in phase1_tools}
@@ -691,6 +737,7 @@ async def _run_main_agent_impl(
         for tc in tool_calls
         if str(tc.get("function", {}).get("name") or "").strip() not in phase1_allowed
     ]
+    phase1_context_messages = phase1_messages
     if invalid_phase1_tools:
         retry_messages = [
             *phase1_messages,
@@ -714,17 +761,27 @@ async def _run_main_agent_impl(
                 ),
             },
         ]
-        response = await _call_phase1_llm(
-            _pin_tail(project_history_for_llm(retry_messages)),
-            tools=phase1_wire_tools,
+        response = await _call_with_runtime_guidance(
+            retry_messages,
+            lambda: _call_phase1_llm(
+                _pin_tail(project_history_for_llm(retry_messages)),
+                tools=phase1_wire_tools,
+            ),
         )
+        phase1_context_messages = retry_messages
     tool_calls = response.get("tool_calls") or []
+    phase1_runtime_guidance_entries = [
+        message
+        for message in phase1_context_messages
+        if message.get("runtime_guidance")
+    ]
     messages = [*run_prefix, llm_user_entry, *phase1_runtime_guidance_entries]
     assistant_entry = _assistant_entry_from_response(response, round_id)
     messages.append(assistant_entry)
 
     use_tools_call = None
     ask_user_call = None
+    quit_call = None
     for tc in tool_calls:
         name = tc.get("function", {}).get("name")
         if name == "use_tools":
@@ -732,15 +789,44 @@ async def _run_main_agent_impl(
         elif name == "ask_user" and not system_initiated:
             ask_user_call = tc
         elif name == "quit":
-            if runtime_inbox is not None:
-                await runtime_inbox.wait_for_active_tools()
-            final_text = await _ensure_text_reply(response, messages)
-            messages[-1]["content"] = final_text
-            messages[-1].pop("tool_calls", None)
-            if client_request_id:
-                messages[-1]["client_request_id"] = client_request_id
-            await _save(_session_messages_to_save(messages))
-            return final_text
+            quit_call = tc
+
+    # Phase 1 has several direct-return branches. Atomically close guidance
+    # admission before taking one; if a durable command won the race, promote
+    # this turn into Phase 2 so the command is applied instead of cancelled.
+    if use_tools_call is None and runtime_inbox is not None:
+        boundary_guidance = await runtime_inbox.collect_guidance_or_seal()
+        if boundary_guidance:
+            phase1_messages.append(_assistant_entry_from_response(response, round_id))
+            for tc in tool_calls:
+                phase1_messages.append({
+                    "role": "tool",
+                    "tool_call_id": tc["id"],
+                    "content": "Decision deferred because new user guidance arrived.",
+                    **({"round_id": round_id} if round_id else {}),
+                })
+            await _inject_runtime_guidance(phase1_messages, boundary_guidance)
+            phase1_runtime_guidance_entries = [
+                message
+                for message in phase1_messages
+                if message.get("runtime_guidance")
+            ]
+            use_tools_call = {
+                "function": {"arguments": "{}"},
+            }
+            ask_user_call = None
+            quit_call = None
+
+    if quit_call is not None:
+        if runtime_inbox is not None:
+            await runtime_inbox.wait_for_active_tools()
+        final_text = await _ensure_text_reply(response, messages)
+        messages[-1]["content"] = final_text
+        messages[-1].pop("tool_calls", None)
+        if client_request_id:
+            messages[-1]["client_request_id"] = client_request_id
+        await _save(_session_messages_to_save(messages))
+        return final_text
 
     if ask_user_call:
         try:
@@ -819,7 +905,13 @@ async def _run_main_agent_impl(
 
         while True:
             await _inject_runtime_guidance(messages)
-            response = await _call_llm(_pin_tail(project_history_for_llm(messages)), tools=wire_tool_defs)
+            response = await _call_with_runtime_guidance(
+                messages,
+                lambda: _call_llm(
+                    _pin_tail(project_history_for_llm(messages)),
+                    tools=wire_tool_defs,
+                ),
+            )
             entry: dict = {"role": "assistant", "content": response.get("content") or ""}
             if response.get("reasoning_content"):
                 entry["reasoning_content"] = response["reasoning_content"]
@@ -910,7 +1002,7 @@ async def _run_main_agent_impl(
                 # Guidance that arrived while a no-tool repair was in flight
                 # starts a continuation; it does not revive the terminated batch.
                 late_guidance = (
-                    runtime_inbox.collect_guidance_nowait()
+                    await runtime_inbox.collect_guidance_or_seal()
                     if runtime_inbox is not None
                     else []
                 )
@@ -1121,11 +1213,38 @@ async def _run_main_agent_impl(
                     pending_reflection_records.append(_apply_assistant_meta(reflection_record))
                 messages.extend(pending_reflection_records)
             if awaiting_user:
+                boundary_guidance = (
+                    await runtime_inbox.collect_guidance_or_seal()
+                    if runtime_inbox is not None
+                    else []
+                )
+                if boundary_guidance:
+                    await _inject_runtime_guidance(messages, boundary_guidance)
+                    await _save(_session_messages_to_save(messages))
+                    continue
                 return _AWAITING_USER_SENTINEL
-            await _save(_session_messages_to_save(messages))
             if quit_requested and not pending_reflection_tool_calls:
                 await _publish_runtime_event({"type": "phase_transition", "from": "execution", "to": "done", "detail": "Agent called quit", "detail_key": "phase.agentQuit"})
-                return await _ensure_text_reply(response, messages)
+                final_text = await _ensure_text_reply(response, messages)
+                boundary_guidance = (
+                    await runtime_inbox.collect_guidance_or_seal()
+                    if runtime_inbox is not None
+                    else []
+                )
+                if boundary_guidance:
+                    intermediate = _apply_assistant_meta({
+                        "role": "assistant",
+                        "content": final_text,
+                        "intermediate_reply": True,
+                        **({"round_id": round_id} if round_id else {}),
+                    })
+                    messages.append(intermediate)
+                    await _inject_runtime_guidance(messages, boundary_guidance)
+                    await _save(_session_messages_to_save(messages))
+                    continue
+                await _save(_session_messages_to_save(messages))
+                return final_text
+            await _save(_session_messages_to_save(messages))
 
             # Subagent monitoring loop
             if spawned:
@@ -1145,6 +1264,7 @@ async def _run_main_agent_impl(
                     timeout_subagents as _timeout_subagents,
                 )
                 from cyrene.runtime.inbox import get_unread_count as _inbox_unread_base
+                from cyrene.agent.guidance import _fan_out_guidance_to_subagents
                 _agent_session_id = _current_session_id.get()
 
                 def _inbox_unread(agent_id: str) -> int:
@@ -1177,6 +1297,18 @@ async def _run_main_agent_impl(
                 ) + 30
                 monitor_deadline = asyncio.get_running_loop().time() + monitor_timeout_seconds
                 while asyncio.get_running_loop().time() < monitor_deadline:
+                    if runtime_inbox is not None and runtime_inbox.has_guidance_nowait():
+                        live_guidance = runtime_inbox.collect_guidance_nowait()
+                        guidance_text = "\n\n".join(
+                            str((item.get("payload") or {}).get("text") or "").strip()
+                            for item in live_guidance
+                            if str((item.get("payload") or {}).get("text") or "").strip()
+                        )
+                        await _inject_runtime_guidance(messages, live_guidance)
+                        if guidance_text:
+                            await _fan_out_guidance_to_subagents(
+                                round_id, guidance_text, bot, chat_id, db_path
+                            )
                     try:
                         await asyncio.wait_for(_interrupt_event_sess.wait(), timeout=0.5)
                         _interrupt_event_sess.clear()
@@ -1232,9 +1364,42 @@ async def _run_main_agent_impl(
                     "detail": "All subagents done, starting summary subagent",
                     "detail_key": "phase.synthesis",
                 })
-                summary_result = await _run_summary_subagent(
+                summary_task = asyncio.create_task(_run_summary_subagent(
                     round_id=round_id, parent_task=user_message, round_history=messages,
-                )
+                ))
+                if runtime_inbox is not None:
+                    guidance_task = asyncio.create_task(runtime_inbox.wait_for_guidance())
+                    try:
+                        done, _pending = await asyncio.wait(
+                            {summary_task, guidance_task},
+                            return_when=asyncio.FIRST_COMPLETED,
+                        )
+                    except asyncio.CancelledError:
+                        summary_task.cancel()
+                        guidance_task.cancel()
+                        await asyncio.gather(
+                            summary_task, guidance_task, return_exceptions=True
+                        )
+                        raise
+                    if guidance_task in done and summary_task not in done and await guidance_task:
+                        summary_task.cancel()
+                        await asyncio.gather(summary_task, return_exceptions=True)
+                        live_guidance = runtime_inbox.collect_guidance_nowait()
+                        guidance_text = "\n\n".join(
+                            str((item.get("payload") or {}).get("text") or "").strip()
+                            for item in live_guidance
+                            if str((item.get("payload") or {}).get("text") or "").strip()
+                        )
+                        await _inject_runtime_guidance(messages, live_guidance)
+                        if guidance_text:
+                            await _fan_out_guidance_to_subagents(
+                                round_id, guidance_text, bot, chat_id, db_path
+                            )
+                        await _save(_session_messages_to_save(messages))
+                        continue
+                    guidance_task.cancel()
+                    await asyncio.gather(guidance_task, return_exceptions=True)
+                summary_result = await summary_task
 
                 # Deep research Phase 3
                 if _deep_research_mode.get():
@@ -1297,6 +1462,28 @@ async def _run_main_agent_impl(
                     synthesis_entry["round_id"] = round_id
                 if flow_snapshot:
                     synthesis_entry["subagent_flow_snapshot"] = flow_snapshot
+                boundary_guidance = (
+                    await runtime_inbox.collect_guidance_or_seal()
+                    if runtime_inbox is not None
+                    else []
+                )
+                if boundary_guidance:
+                    synthesis_entry["intermediate_reply"] = True
+                    if _streaming_reply_requested():
+                        messages.pop()
+                    messages.append(_apply_assistant_meta(synthesis_entry))
+                    guidance_text = "\n\n".join(
+                        str((item.get("payload") or {}).get("text") or "").strip()
+                        for item in boundary_guidance
+                        if str((item.get("payload") or {}).get("text") or "").strip()
+                    )
+                    await _inject_runtime_guidance(messages, boundary_guidance)
+                    if guidance_text:
+                        await _fan_out_guidance_to_subagents(
+                            round_id, guidance_text, bot, chat_id, db_path
+                        )
+                    await _save(_session_messages_to_save(messages))
+                    continue
                 # 弹出 Phase 2 的 assistant entry（content="" + tool_calls），避免
                 # 流式输出时与 synthesis_entry 的 clientRequestId 重复导致前端去重异常
                 if _streaming_reply_requested():
@@ -1323,9 +1510,12 @@ async def _run_main_agent_impl(
                 ),
             },
         ]
-        response = await _call_phase1_llm(
-            _pin_tail(project_history_for_llm(retry_messages)),
-            tools=phase1_tools,
+        response = await _call_with_runtime_guidance(
+            retry_messages,
+            lambda: _call_phase1_llm(
+                _pin_tail(project_history_for_llm(retry_messages)),
+                tools=phase1_tools,
+            ),
         )
         for tc in (response.get("tool_calls") or []):
             if tc.get("function", {}).get("name") == "ask_user":

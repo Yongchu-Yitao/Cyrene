@@ -19,6 +19,7 @@ from fastapi import APIRouter, Request
 from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 
 from cyrene.workbench import chat as _service
+from cyrene.workbench.inbox import GuidanceAdmissionClosed
 from cyrene.workbench.workspace_changes import (
     delete_chat_change_sets,
     get_chat_file_change,
@@ -826,6 +827,15 @@ def register_workbench_chat_routes(
                 public_message_id=public_message_id,
                 public_created_at=now,
             )
+        except GuidanceAdmissionClosed:
+            # The UI promotes this text to a normal follow-up. Do not release
+            # that retry while the sealed run is still finalizing, otherwise it
+            # can immediately bounce with ``chat_run_in_progress``.
+            await run.done.wait()
+            return JSONResponse(
+                {"error": "chat has no running reply", "code": "chat_not_running"},
+                status_code=409,
+            )
         except RuntimeError:
             logger.exception("Failed to persist guidance for chat %s", chat_id)
             return JSONResponse(
@@ -836,10 +846,30 @@ def register_workbench_chat_routes(
                 status_code=503,
             )
         if event.get("duplicate"):
-            return {
+            duplicate_message = next(
+                (
+                    item
+                    for item in reversed(chat.get("messages") or [])
+                    if isinstance(item, dict)
+                    and (
+                        str(item.get("guidanceEventId") or "")
+                        == str(event.get("event_id") or "")
+                        or (
+                            client_request_id
+                            and str(item.get("clientRequestId") or "")
+                            == client_request_id
+                        )
+                    )
+                ),
+                None,
+            )
+            response = {
                 "queued": True, "duplicate": True, "eventId": event["event_id"],
                 "runId": run.run_id,
             }
+            if duplicate_message is not None:
+                response["userMessage"] = _public_message(duplicate_message)
+            return response
 
         user_entry = {
             "id": public_message_id,

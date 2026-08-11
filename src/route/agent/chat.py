@@ -440,6 +440,14 @@ def register_chat_routes(router: APIRouter, bot: Any, db_path: str) -> None:
 
     @router.post("/api/chat/interrupt")
     async def api_interrupt_chat(session_id: str = ""):
+        workbench_run = None
+        if session_id:
+            try:
+                from route.workbench.chat import _CHAT_RUN_MANAGER
+
+                workbench_run = _CHAT_RUN_MANAGER.get(session_id)
+            except Exception:
+                logger.exception("Failed to resolve workbench chat run for %s", session_id)
         interrupted = interrupt_active_run(session_id=session_id)
         if session_id:
             try:
@@ -449,6 +457,22 @@ def register_chat_routes(router: APIRouter, bot: Any, db_path: str) -> None:
                 )
 
                 interrupted = _CHAT_RUN_MANAGER.interrupt(session_id) or interrupted
+                if workbench_run is not None and not workbench_run.done.is_set():
+                    try:
+                        await asyncio.wait_for(
+                            asyncio.shield(workbench_run.done.wait()),
+                            timeout=8.0,
+                        )
+                    except asyncio.TimeoutError:
+                        return JSONResponse(
+                            {
+                                "ok": False,
+                                "interrupted": False,
+                                "error": "chat interruption is still settling",
+                                "code": "chat_interrupt_timeout",
+                            },
+                            status_code=504,
+                        )
                 # Do not acknowledge a Workbench interruption while its durable
                 # chat record can still say "running". The frontend waits for
                 # this response before detaching its stream, so the subsequent
