@@ -295,8 +295,8 @@ def test_settings_ui_keeps_zotero_in_general_and_embedding_in_models():
     source = (root / "src" / "webui" / "frontend" / "settings-overlay.jsx").read_text(encoding="utf-8")
     translations = (root / "src" / "webui" / "frontend" / "workbench-i18n.jsx").read_text(encoding="utf-8")
 
-    assert 'fetch("/api/settings/integrations")' in source
-    assert 'fetch("/api/settings/integrations/test"' in source
+    assert 'settingsFetch("/api/settings/integrations")' in source
+    assert 'settingsFetch("/api/settings/integrations/test"' in source
     assert 'value: "openai_compatible"' in source
     assert 'value: "ollama"' in source
     assert 'value: "local_onnx"' in source

@@ -17,6 +17,7 @@ compaction; the agent's own raw context lives in
 from __future__ import annotations
 
 import asyncio
+import copy
 import hashlib
 import importlib
 import json

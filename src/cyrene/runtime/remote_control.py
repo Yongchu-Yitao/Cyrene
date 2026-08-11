@@ -300,8 +300,11 @@ def _utc_now() -> datetime:
     return datetime.now(timezone.utc)
 
 
-def _utc_iso(value: datetime | None = None) -> str:
+def utc_iso(value: datetime | None = None) -> str:
     return (value or _utc_now()).isoformat()
+
+
+_utc_iso = utc_iso
 
 
 def _json_dumps(value: Any) -> str:

@@ -90,6 +90,37 @@ def test_cron_next_run():
     assert datetime.fromisoformat(nxt) == datetime(2026, 6, 5, 9, 0, tzinfo=timezone.utc)
 
 
+def test_cron_timezone_preserves_wall_clock_across_dst_transition():
+    from zoneinfo import ZoneInfo
+
+    from cyrene.runtime.schedule_spec import compute_next_run
+
+    new_york = ZoneInfo("America/New_York")
+    before_dst = datetime(2026, 3, 7, 15, 0, tzinfo=timezone.utc)
+    after_dst = datetime(2026, 3, 8, 14, 0, tzinfo=timezone.utc)
+
+    first = datetime.fromisoformat(
+        compute_next_run("cron", "0 9 * * *", now=before_dst, timezone_name="America/New_York")
+    )
+    second = datetime.fromisoformat(
+        compute_next_run("cron", "0 9 * * *", now=after_dst, timezone_name="America/New_York")
+    )
+
+    assert first.astimezone(new_york).hour == 9
+    assert second.astimezone(new_york).hour == 9
+    assert first.utcoffset() == timedelta(0)
+    assert second.utcoffset() == timedelta(0)
+
+
+def test_invalid_cron_timezone_raises_valueerror():
+    from cyrene.runtime.schedule_spec import compute_next_run
+
+    with pytest.raises(ValueError, match="invalid schedule timezone"):
+        compute_next_run(
+            "cron", "0 9 * * *", now=FIXED_NOW, timezone_name="Mars/Olympus_Mons"
+        )
+
+
 @pytest.mark.parametrize(
     "stype,svalue",
     [

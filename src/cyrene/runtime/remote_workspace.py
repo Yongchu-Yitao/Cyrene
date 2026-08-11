@@ -21,7 +21,7 @@ from pathlib import Path, PurePosixPath
 from typing import Any, Awaitable, Callable
 from uuid import uuid4
 
-from cyrene.runtime.remote_control import RemoteControlStore, _utc_iso
+from cyrene.runtime.remote_control import RemoteControlStore, utc_iso
 from cyrene.workbench import runtime as workbench_runtime
 
 TRANSFER_CHUNK_BYTES = 512 * 1024
@@ -300,7 +300,7 @@ class RemoteWorkspaceFiles:
         if policy not in {"fail", "skip", "rename", "overwrite", "overwrite_if_unchanged"}:
             raise ValueError("unsupported file conflict policy")
         staging = self.transfer_dir / f"{transfer_id}.part"
-        now = _utc_iso()
+        now = utc_iso()
         with self.store._lock, self.store._connect() as conn:
             existing = conn.execute("SELECT * FROM remote_file_transfers WHERE transfer_id = ?", (transfer_id,)).fetchone()
             if existing is not None:
@@ -368,7 +368,7 @@ class RemoteWorkspaceFiles:
             os.fsync(handle.fileno())
         next_offset = current + len(chunk)
         with self.store._lock, self.store._connect() as conn:
-            conn.execute("UPDATE remote_file_transfers SET received_size = ?, updated_at = ? WHERE transfer_id = ?", (next_offset, _utc_iso(), transfer_id))
+            conn.execute("UPDATE remote_file_transfers SET received_size = ?, updated_at = ? WHERE transfer_id = ?", (next_offset, utc_iso(), transfer_id))
         return {"ok": True, "transfer_id": transfer_id, "offset": offset, "next_offset": next_offset, "chunk_sha256": actual_chunk_sha}
 
     def _upload_commit(self, peer: str, project: str, root: Path, payload: dict[str, Any]) -> dict[str, Any]:
@@ -418,7 +418,7 @@ class RemoteWorkspaceFiles:
 
     def _finish_transfer(self, transfer_id: str, state: str) -> None:
         with self.store._lock, self.store._connect() as conn:
-            conn.execute("UPDATE remote_file_transfers SET state = ?, updated_at = ? WHERE transfer_id = ?", (state, _utc_iso(), transfer_id))
+            conn.execute("UPDATE remote_file_transfers SET state = ?, updated_at = ? WHERE transfer_id = ?", (state, utc_iso(), transfer_id))
 
     def _upload_abort(self, peer: str, project: str, payload: dict[str, Any]) -> dict[str, Any]:
         transfer_id = _text(payload, "transfer_id")
@@ -573,7 +573,7 @@ class RemoteJobManager:
         self._watchers: dict[str, asyncio.Task[None]] = {}
         self._event_sender: Callable[[str, dict[str, Any]], Awaitable[None]] | None = None
         with self.store._lock, self.store._connect() as conn:
-            conn.execute("UPDATE remote_jobs SET status = 'interrupted', completed_at = ?, updated_at = ? WHERE status IN ('starting', 'running')", (_utc_iso(), _utc_iso()))
+            conn.execute("UPDATE remote_jobs SET status = 'interrupted', completed_at = ?, updated_at = ? WHERE status IN ('starting', 'running')", (utc_iso(), utc_iso()))
 
     def set_event_sender(
         self,
@@ -670,7 +670,7 @@ class RemoteJobManager:
         artifacts = [str(item) for item in payload.get("artifact_paths") or []][:100]
         for item in artifacts:
             self.files._target(root, item, allow_outside=allow_outside)
-        now = _utc_iso()
+        now = utc_iso()
         command_hash = hashlib.sha256(
             json.dumps(
                 {
@@ -713,12 +713,12 @@ class RemoteJobManager:
         except Exception:
             handle.close()
             with self.store._lock, self.store._connect() as conn:
-                conn.execute("UPDATE remote_jobs SET status = 'failed', completed_at = ?, updated_at = ? WHERE job_id = ?", (_utc_iso(), _utc_iso(), job_id))
+                conn.execute("UPDATE remote_jobs SET status = 'failed', completed_at = ?, updated_at = ? WHERE job_id = ?", (utc_iso(), utc_iso(), job_id))
             raise
         self._processes[job_id] = process
         self._log_handles[job_id] = handle
         with self.store._lock, self.store._connect() as conn:
-            conn.execute("UPDATE remote_jobs SET pid = ?, status = 'running', started_at = ?, updated_at = ? WHERE job_id = ?", (process.pid, _utc_iso(), _utc_iso(), job_id))
+            conn.execute("UPDATE remote_jobs SET pid = ?, status = 'running', started_at = ?, updated_at = ? WHERE job_id = ?", (process.pid, utc_iso(), utc_iso(), job_id))
         self._watchers[job_id] = asyncio.create_task(
             self._watch(job_id, process),
             name=f"remote-job-{job_id}",
@@ -739,7 +739,7 @@ class RemoteJobManager:
             current = conn.execute("SELECT status FROM remote_jobs WHERE job_id = ?", (job_id,)).fetchone()
             if current is not None and str(current["status"]) in {"cancelling", "interrupting"}:
                 status = "cancelled" if str(current["status"]) == "cancelling" else "interrupted"
-            conn.execute("UPDATE remote_jobs SET status = ?, exit_code = ?, completed_at = ?, updated_at = ? WHERE job_id = ?", (status, exit_code, _utc_iso(), _utc_iso(), job_id))
+            conn.execute("UPDATE remote_jobs SET status = ?, exit_code = ?, completed_at = ?, updated_at = ? WHERE job_id = ?", (status, exit_code, utc_iso(), utc_iso(), job_id))
         handle = self._log_handles.pop(job_id, None)
         if handle is not None:
             handle.close()
@@ -781,7 +781,7 @@ class RemoteJobManager:
             return self._public(self._job_row(job_id), cursor=0)
         status = "interrupting" if interrupt else "cancelling"
         with self.store._lock, self.store._connect() as conn:
-            conn.execute("UPDATE remote_jobs SET status = ?, updated_at = ? WHERE job_id = ?", (status, _utc_iso(), job_id))
+            conn.execute("UPDATE remote_jobs SET status = ?, updated_at = ? WHERE job_id = ?", (status, utc_iso(), job_id))
         try:
             os.killpg(process.pid, signal.SIGINT if interrupt else signal.SIGTERM)
         except (ProcessLookupError, PermissionError):

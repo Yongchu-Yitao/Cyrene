@@ -23,12 +23,18 @@ async def _tool_schedule_task(args: dict[str, Any], _bot: Any, chat_id: int, db_
 
     stype = str(args["schedule_type"])
     svalue = str(args["schedule_value"])
+    schedule_timezone = str(args.get("schedule_timezone") or "UTC").strip() or "UTC"
     now = datetime.now(timezone.utc)
     permission_mode = str(args.get("permission_mode", "workspace_only") or "workspace_only").strip().lower()
     if permission_mode not in ("workspace_only", "full_access"):
         permission_mode = "workspace_only"
 
-    next_run = compute_next_run(stype, svalue, now=now)
+    next_run = compute_next_run(
+        stype,
+        svalue,
+        now=now,
+        timezone_name=schedule_timezone,
+    )
     if stype == "once":
         # Persist the normalized UTC time as the stored value too, so a re-read
         # of the task shows exactly when it will fire.
@@ -62,6 +68,7 @@ async def _tool_schedule_task(args: dict[str, Any], _bot: Any, chat_id: int, db_
         next_run,
         permission_mode=permission_mode,
         project_id=project_id,
+        schedule_timezone=schedule_timezone,
     )
     return f"Task {task_id} scheduled. Next run: {next_run} 权限模式：{permission_mode}"
 

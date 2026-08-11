@@ -289,6 +289,7 @@ class ScheduleCreateBody(APIBody):
     prompt: str = Field(min_length=1, max_length=200_000)
     schedule_type: Literal["once", "cron", "interval"]
     schedule_value: str = Field(min_length=1, max_length=500)
+    schedule_timezone: str | None = Field(default=None, min_length=1, max_length=100)
     next_run: str | None = Field(default=None, max_length=200)
     chat_id: int = -1
 
@@ -297,6 +298,7 @@ class ScheduleUpdateBody(APIBody):
     prompt: str | None = Field(default=None, min_length=1, max_length=200_000)
     schedule_type: Literal["once", "cron", "interval"] | None = None
     schedule_value: str | None = Field(default=None, min_length=1, max_length=500)
+    schedule_timezone: str | None = Field(default=None, min_length=1, max_length=100)
     next_run: str | None = Field(default=None, max_length=200)
     status: Literal["active", "paused"] | None = None
 

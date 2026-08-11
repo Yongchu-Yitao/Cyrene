@@ -92,6 +92,21 @@ async function readSettingsResponse(response) {
   return payload;
 }
 
+async function settingsFetch(input, init) {
+  var response = await globalThis.fetch(input, init);
+  if (response.ok) return response;
+  var payload = {};
+  try {
+    payload = await response.clone().json();
+  } catch (e) {}
+  var error = new Error(
+    String(payload.detail || payload.error || payload.message || ("HTTP " + response.status))
+  );
+  error.code = String(payload.code || "");
+  error.status = response.status;
+  throw error;
+}
+
 function renderSettingsMarkdown(value) {
   return window.CyreneUI.require("markdown").render(value, {
     fallback: "escaped-breaks",
@@ -263,7 +278,7 @@ function SettingsOverlay({
 
   useEffectSt(function () {
     var cancelled = false;
-    fetch("/api/workbench/chats").then(function (response) {
+    settingsFetch("/api/workbench/chats").then(function (response) {
       if (!response.ok) throw new Error("failed to load conversations");
       return response.json();
     }).then(function (payload) {
@@ -326,7 +341,7 @@ function SettingsOverlay({
     document.documentElement.dataset.animPulse = tweaks.animatePulse ? "on" : "off";
 
     setConfigLoading(true);
-    fetch("/api/settings/config").then(function (r) { return r.ok ? r.json() : Promise.reject("HTTP " + r.status); })
+    settingsFetch("/api/settings/config").then(function (r) { return r.ok ? r.json() : Promise.reject("HTTP " + r.status); })
       .then(function (p) {
         setConfig(p);
         setSoulDraft(p.soul_content || "");
@@ -337,7 +352,7 @@ function SettingsOverlay({
         setConfigLoading(false);
       }).catch(function () { setConfigLoading(false); });
 
-    fetch("/api/settings/models").then(readSettingsResponse).then(function (p) {
+    settingsFetch("/api/settings/models").then(readSettingsResponse).then(function (p) {
       var fb = p.base_url || DEFAULT_MODEL_BASE_URL;
       var norm = function (raw, i) { return normalizeModel(raw, i, fb, ""); };
       var ms = (p.custom_models || p.models || p.primary_candidates || [])
@@ -362,23 +377,23 @@ function SettingsOverlay({
       setModelsSaved(t("settings.error") + ": " + (e.message || ""));
     });
 
-    fetch("/api/settings/tools").then(function (r) { return r.json(); }).then(function (p) {
+    settingsFetch("/api/settings/tools").then(function (r) { return r.json(); }).then(function (p) {
       setToolGroups(p.tool_groups || []);
     }).catch(function () {});
-    fetch("/api/settings/mcp").then(function (r) { return r.json(); }).then(function (p) { setMcpServers(p.servers || []); setMcpConfigs(p.configs || []); }).catch(function () {});
-    fetch("/api/settings/keys").then(function (r) { return r.json(); }).then(function (p) {
+    settingsFetch("/api/settings/mcp").then(function (r) { return r.json(); }).then(function (p) { setMcpServers(p.servers || []); setMcpConfigs(p.configs || []); }).catch(function () {});
+    settingsFetch("/api/settings/keys").then(function (r) { return r.json(); }).then(function (p) {
       var tk = (p.keys || []).find(function (item) { return item.key === "TELEGRAM_BOT_TOKEN"; });
       if (tk) setTelegramToken(tk.value || "");
       var ak = (p.keys || []).find(function (item) { return item.key === "AMAP_API_KEY"; });
       if (ak) setAmapKey(ak.value || "");
     }).catch(function () {});
 
-    fetch("/api/backup/list").then(function (r) { return r.json(); }).then(function (d) { if (d.ok) setBackupList(d.backups || []); }).catch(function () {});
+    settingsFetch("/api/backup/list").then(function (r) { return r.json(); }).then(function (d) { if (d.ok) setBackupList(d.backups || []); }).catch(function () {});
   }, []);
 
   function saveSoul() {
     setSoulStatus(t("settings.saving"));
-    fetch("/api/settings/soul", { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ content: soulDraft }) })
+    settingsFetch("/api/settings/soul", { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ content: soulDraft }) })
       .then(function (r) { return r.ok ? setSoulStatus(t("settings.saved")) : Promise.reject(); })
       .catch(function () { setSoulStatus(t("settings.error")); });
     setTimeout(function () { setSoulStatus(""); }, 1500);
@@ -397,7 +412,7 @@ function SettingsOverlay({
     if (modelsSaving) return;
     setModelsSaving(true);
     setModelsSaved(t("settings.saving"));
-    var modelRequest = fetch("/api/settings/models", {
+    var modelRequest = settingsFetch("/api/settings/models", {
       method: "PUT", headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         models: modelSource === "codex" ? [normalizedCodex] : norm,
@@ -413,7 +428,7 @@ function SettingsOverlay({
         } : null,
       }),
     }).then(readSettingsResponse).then(function (p) { return p; });
-    var embeddingRequest = fetch("/api/settings/integrations", {
+    var embeddingRequest = settingsFetch("/api/settings/integrations", {
       method: "PUT", headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ embedding: embeddingDraft }),
     }).then(readSettingsResponse);
@@ -451,7 +466,7 @@ function SettingsOverlay({
   }
 
   function saveAgents() {
-    fetch("/api/settings/config", { method: "PUT", headers: { "Content-Type": "application/json" },
+    settingsFetch("/api/settings/config", { method: "PUT", headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         spawn_policy: config.spawn_policy || "conservative",
         heartbeat_interval: Number(config.heartbeat_interval) || 1800,
@@ -484,7 +499,7 @@ function SettingsOverlay({
     payload.packages[groupId] = nextEnabled;
     setToolGroups(nextGroups);
     setToolsSaved(t("settings.saving"));
-    fetch("/api/settings/tools", {
+    settingsFetch("/api/settings/tools", {
       method: "PUT",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(payload),
@@ -500,18 +515,22 @@ function SettingsOverlay({
   }
 
   function saveRedactSecrets(nextEnabled) {
+    var previousEnabled = redactSecrets;
     setRedactSecrets(nextEnabled);
     setCapability("redactSecrets", nextEnabled);
-    fetch("/api/settings/config", { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ redact_secrets: nextEnabled }) }).catch(function () {});
+    settingsFetch("/api/settings/config", { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ redact_secrets: nextEnabled }) }).catch(function () {
+      setRedactSecrets(previousEnabled);
+      setCapability("redactSecrets", previousEnabled);
+    });
   }
 
   function saveMcp() {
     setMcpSaved(t("settings.saving"));
-    fetch("/api/settings/mcp", { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ servers: mcpConfigs }) })
+    settingsFetch("/api/settings/mcp", { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ servers: mcpConfigs }) })
       .then(function () {
         setMcpSaved(t("settings.saved"));
         setTimeout(function () { setMcpSaved(""); }, 1500);
-        fetch("/api/settings/mcp").then(function (r) { return r.json(); }).then(function (p) { setMcpServers(p.servers || []); setMcpConfigs(p.configs || []); }).catch(function () {});
+        settingsFetch("/api/settings/mcp").then(function (r) { return r.json(); }).then(function (p) { setMcpServers(p.servers || []); setMcpConfigs(p.configs || []); }).catch(function () {});
       }).catch(function () { setMcpSaved(t("settings.error")); });
   }
 
@@ -523,7 +542,7 @@ function SettingsOverlay({
   }
 
   function loadBackups() {
-    fetch("/api/backup/list").then(function (r) { return r.json(); }).then(function (d) { if (d.ok) setBackupList(d.backups || []); }).catch(function () {});
+    settingsFetch("/api/backup/list").then(function (r) { return r.json(); }).then(function (d) { if (d.ok) setBackupList(d.backups || []); }).catch(function () {});
   }
 
   function formatBytes(n) { n = Number(n || 0); if (n < 1024) return n + " B"; if (n < 1048576) return (n / 1024).toFixed(1) + " KB"; return (n / 1048576).toFixed(1) + " MB"; }
@@ -698,7 +717,7 @@ function RemotePanel(p) {
   function loadRemote(options) {
     var background = !!(options && options.background);
     if (!background) setLoading(true);
-    return fetch("/api/remote/settings").then(readSettingsResponse).then(function (payload) {
+    return settingsFetch("/api/remote/settings").then(readSettingsResponse).then(function (payload) {
       setRemote(payload);
       remoteDraftRef.current = payload;
       if (!inviteDefaultsInitializedRef.current) {
@@ -735,7 +754,7 @@ function RemotePanel(p) {
   }
 
   function loadAudit() {
-    return fetch("/api/remote/audit?limit=30").then(readSettingsResponse).then(function (payload) {
+    return settingsFetch("/api/remote/audit?limit=30").then(readSettingsResponse).then(function (payload) {
       setAuditEvents(payload.events || []);
     }).catch(function () {});
   }
@@ -784,7 +803,7 @@ function RemotePanel(p) {
     };
     setBusy("settings");
     var request = remoteSaveQueueRef.current.catch(function () {}).then(function () {
-      return fetch("/api/remote/settings", {
+      return settingsFetch("/api/remote/settings", {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(snapshot),
@@ -857,7 +876,7 @@ function RemotePanel(p) {
       return peer.device_id;
     });
     setBusy("invite");
-    fetch("/api/remote/pairing/short-key", {
+    settingsFetch("/api/remote/pairing/short-key", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
@@ -883,7 +902,7 @@ function RemotePanel(p) {
   function connectRemoteDevice() {
     if (!remoteAddress.trim() || !incomingPairingKey.trim()) return;
     setBusy("accept");
-    fetch("/api/remote/pairing/connect", {
+    settingsFetch("/api/remote/pairing/connect", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
@@ -1160,7 +1179,7 @@ function RemotePeerCard(p) {
       grantedCapabilities,
     );
     setBusy(true);
-    fetch("/api/remote/peers/" + encodeURIComponent(peer.device_id), {
+    settingsFetch("/api/remote/peers/" + encodeURIComponent(peer.device_id), {
       method: "PATCH",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ capabilities: requiredGrant, project_scopes: grantedProjects }),
@@ -1177,7 +1196,7 @@ function RemotePeerCard(p) {
 
   function revoke() {
     setBusy(true);
-    fetch("/api/remote/peers/" + encodeURIComponent(peer.device_id), { method: "DELETE" })
+    settingsFetch("/api/remote/peers/" + encodeURIComponent(peer.device_id), { method: "DELETE" })
       .then(readSettingsResponse).then(function () {
         onNotice(t("settings.remoteDeviceRevoked"), "success");
         try { window.dispatchEvent(new CustomEvent("cyrene:remote-devices-changed", { detail: { reason: "revoked" } })); } catch (e) {}
@@ -1286,7 +1305,7 @@ function GeneralPanel(p) {
 
   useEffectSt(function () {
     var cancelled = false;
-    fetch("/api/settings/config").then(readSettingsResponse).then(function (payload) {
+    settingsFetch("/api/settings/config").then(readSettingsResponse).then(function (payload) {
       if (cancelled) return;
       var savedTimezone = String(payload.timezone || "");
       if (timezoneOptions.indexOf(savedTimezone) < 0) return;
@@ -1303,7 +1322,7 @@ function GeneralPanel(p) {
 
   useEffectSt(function () {
     var cancelled = false;
-    fetch("/api/settings/integrations").then(readSettingsResponse).then(function (payload) {
+    settingsFetch("/api/settings/integrations").then(readSettingsResponse).then(function (payload) {
       if (cancelled) return;
       if (payload.zotero) setZoteroSettings(payload.zotero);
     }).catch(function () {
@@ -1361,7 +1380,7 @@ function GeneralPanel(p) {
     setSelectedTimezone(nextTimezone);
     try { localStorage.setItem("cyrene-timezone", nextTimezone); } catch (e) {}
     try { window.CyreneUI.require("data").reload(); } catch (e) {}
-    fetch("/api/settings/config", {
+    settingsFetch("/api/settings/config", {
       method: "PUT",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ timezone: nextTimezone }),
@@ -1375,10 +1394,10 @@ function GeneralPanel(p) {
   function saveAmapKey() {
     if (!amapKey || amapKey.startsWith("••")) { setAmapKeySaved(t("settings.noChanges")); setTimeout(function () { setAmapKeySaved(""); }, 1500); return; }
     setAmapKeySaved(t("settings.saving"));
-    fetch("/api/settings/keys", { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ AMAP_API_KEY: amapKey }) })
+    settingsFetch("/api/settings/keys", { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ AMAP_API_KEY: amapKey }) })
       .then(function (r) { return r.ok ? r.json() : Promise.reject(); })
       .then(function () {
-        fetch("/api/amap/verify").then(function (r) { return r.json(); }).then(function (vd) {
+        settingsFetch("/api/amap/verify").then(function (r) { return r.json(); }).then(function (vd) {
           if (vd.valid) { setAmapKeySaved(t("settings.amapKeySaved")); localStorage.setItem("cyrene-tweak-map-provider", "amap"); }
           else { setAmapKeySaved(t("settings.amapKeyVerifyFail") + " " + (vd.error || "")); }
         }).catch(function () { setAmapKeySaved(t("settings.saved")); });
@@ -1389,7 +1408,7 @@ function GeneralPanel(p) {
   function saveIntegration() {
     setIntegrationBusy("save-zotero");
     setZoteroStatus({ kind: "info", text: t("settings.saving") });
-    fetch("/api/settings/integrations", {
+    settingsFetch("/api/settings/integrations", {
       method: "PUT",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ zotero: zoteroSettings }),
@@ -1404,7 +1423,7 @@ function GeneralPanel(p) {
   function testIntegration() {
     setIntegrationBusy("test-zotero");
     setZoteroStatus({ kind: "info", text: t("settings.testingConnection") });
-    fetch("/api/settings/integrations/test", {
+    settingsFetch("/api/settings/integrations/test", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ service: "zotero", config: zoteroSettings }),
@@ -1422,13 +1441,13 @@ function GeneralPanel(p) {
     }
     setIntegrationBusy("import-zotero");
     setZoteroStatus({ kind: "info", text: t("settings.zoteroImporting") });
-    fetch("/api/settings/integrations", {
+    settingsFetch("/api/settings/integrations", {
       method: "PUT",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ zotero: zoteroSettings }),
     }).then(readSettingsResponse).then(function (payload) {
       if (payload.zotero) setZoteroSettings(payload.zotero);
-      return fetch("/api/workbench/library/zotero/sync?workspace=" + encodeURIComponent(String(p.project.id)), {
+      return settingsFetch("/api/workbench/library/zotero/sync?workspace=" + encodeURIComponent(String(p.project.id)), {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ library_id: "0", library_type: "user", collection_key: "" }),
@@ -1560,7 +1579,7 @@ function EmbeddingSettingsSection(p) {
   function test() {
     setBusy("test");
     setStatus({ kind: "info", text: t("settings.testingConnection") });
-    fetch("/api/settings/integrations/test", {
+    settingsFetch("/api/settings/integrations/test", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ service: "embedding", config: draft() }),
@@ -1575,7 +1594,7 @@ function EmbeddingSettingsSection(p) {
 
   function clearApiKey() {
     setBusy("clear");
-    fetch("/api/settings/integrations", {
+    settingsFetch("/api/settings/integrations", {
       method: "PUT",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ embedding: { clear_api_key: true } }),
@@ -1719,14 +1738,14 @@ function ModelsPanel(p) {
   codexCandidateRef.current = codexCandidate;
 
   function loadLocalModels() {
-    return fetch("/api/settings/local-models/status").then(readSettingsResponse).then(function (payload) {
+    return settingsFetch("/api/settings/local-models/status").then(readSettingsResponse).then(function (payload) {
       setLocalModels(payload.models || []);
       return payload.models || [];
     });
   }
 
   function loadCorpusEmbedding() {
-    return fetch("/api/workbench/knowledge/embedding/status?workspace=" + encodeURIComponent(workspaceId))
+    return settingsFetch("/api/workbench/knowledge/embedding/status?workspace=" + encodeURIComponent(workspaceId))
       .then(readSettingsResponse).then(function (payload) {
         setCorpusEmbedding(function (previous) {
           if (previous && previous.reembed && previous.reembed.running && payload.reembed && !payload.reembed.running) {
@@ -1744,7 +1763,7 @@ function ModelsPanel(p) {
 
   useEffectSt(function () {
     var cancelled = false;
-    fetch("/api/settings/integrations").then(readSettingsResponse).then(function (payload) {
+    settingsFetch("/api/settings/integrations").then(readSettingsResponse).then(function (payload) {
       if (!cancelled && payload.embedding) {
         setEmbeddingSettings(payload.embedding);
         savedEmbeddingIdentityRef.current = [payload.embedding.provider, payload.embedding.model].join(":");
@@ -1801,7 +1820,7 @@ function ModelsPanel(p) {
 
   function manageLocalModel(modelId, action) {
     setLocalBusy(modelId + ":" + action);
-    fetch("/api/settings/local-models/" + encodeURIComponent(modelId) + (action === "download" ? "/download" : ""), {
+    settingsFetch("/api/settings/local-models/" + encodeURIComponent(modelId) + (action === "download" ? "/download" : ""), {
       method: action === "download" ? "POST" : "DELETE",
     }).then(readSettingsResponse).then(function (payload) {
       setLocalModels(payload.models || []);
@@ -1817,7 +1836,7 @@ function ModelsPanel(p) {
     setCorpusEmbedding(function (previous) {
       return previous ? { ...previous, reembed: { running: true, error: "" } } : previous;
     });
-    return fetch("/api/workbench/knowledge/reembed?workspace=" + encodeURIComponent(workspaceId), { method: "POST" })
+    return settingsFetch("/api/workbench/knowledge/reembed?workspace=" + encodeURIComponent(workspaceId), { method: "POST" })
       .then(readSettingsResponse).then(function () { return loadCorpusEmbedding(); })
       .catch(function (error) {
         setEmbeddingStatus({ kind: "error", text: t("settings.reembedFailed") + ": " + (error.message || "") });
@@ -1880,7 +1899,7 @@ function ModelsPanel(p) {
   }, [codexCandidate]);
 
   function loadCodexState() {
-    return fetch("/api/settings/openai-oauth")
+    return settingsFetch("/api/settings/openai-oauth")
       .then(readSettingsResponse)
       .then(function (data) {
         setCodexState({ ...data, checking: false });
@@ -1909,7 +1928,7 @@ function ModelsPanel(p) {
 
   function startCodexLogin() {
     setCodexBusy("login"); setCodexNotice("");
-    fetch("/api/settings/openai-oauth/login", { method: "POST" })
+    settingsFetch("/api/settings/openai-oauth/login", { method: "POST" })
       .then(readSettingsResponse)
       .then(function (data) {
         var authUrl = data.authUrl || data.auth_url || data.url;
@@ -1929,7 +1948,7 @@ function ModelsPanel(p) {
 
   function logoutCodex() {
     setCodexBusy("logout"); setCodexNotice("");
-    fetch("/api/settings/openai-oauth/logout", { method: "POST" })
+    settingsFetch("/api/settings/openai-oauth/logout", { method: "POST" })
       .then(readSettingsResponse)
       .then(function () { setCodexBusy(""); setCodexModel(""); return loadCodexState(); })
       .catch(function (error) { setCodexBusy(""); setCodexNotice(error.message); });
@@ -2328,7 +2347,7 @@ function ChannelsPanel(p) {
   function saveTelegram() {
     if (!telegramToken || telegramToken.startsWith("••")) { setTelegramSaved(t("settings.noChanges")); setTimeout(function () { setTelegramSaved(""); }, 1500); return; }
     setTelegramSaved(t("settings.saving"));
-    fetch("/api/settings/keys", { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ TELEGRAM_BOT_TOKEN: telegramToken }) })
+    settingsFetch("/api/settings/keys", { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ TELEGRAM_BOT_TOKEN: telegramToken }) })
       .then(function () { setTelegramSaved(t("settings.saved")); setTimeout(function () { setTelegramSaved(""); }, 1500); })
       .catch(function () { setTelegramSaved(t("settings.error")); });
   }
@@ -2353,7 +2372,7 @@ function ChannelsPanel(p) {
         Toggle(notifyTelegram, function () {
           var next = !notifyTelegram;
           setNotifyTelegram(next);
-          fetch("/api/settings/config", { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ notify_telegram: next }) }).catch(function () {});
+          settingsFetch("/api/settings/config", { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ notify_telegram: next }) }).catch(function () { setNotifyTelegram(!next); });
         }),
       ),
     ),
@@ -2374,7 +2393,7 @@ function WeChatConnectionPanel(p) {
   var pollAbortRef = useRefSt(null);
 
   function refreshStatus() {
-    return fetch("/api/wechat/status")
+    return settingsFetch("/api/wechat/status")
       .then(readSettingsResponse)
       .then(function (status) {
         setConnected(!!status.connected);
@@ -2413,7 +2432,7 @@ function WeChatConnectionPanel(p) {
     var controller = new AbortController();
     pollAbortRef.current = controller;
     setQrStatus(t("settings.wechatWaitingConfirm"));
-    fetch("/api/wechat/poll-login", {
+    settingsFetch("/api/wechat/poll-login", {
       method: "POST",
       body: JSON.stringify({ qrcode_id: qrcodeId }),
       headers: { "Content-Type": "application/json" },
@@ -2426,7 +2445,7 @@ function WeChatConnectionPanel(p) {
         return;
       }
       setQrStatus(t("settings.wechatLoginSuccess"));
-      return fetch("/api/wechat/start", { method: "POST" })
+      return settingsFetch("/api/wechat/start", { method: "POST" })
         .then(readSettingsResponse)
         .then(refreshStatus)
         .then(function () {
@@ -2450,7 +2469,7 @@ function WeChatConnectionPanel(p) {
     setBusy(true);
     setQrCode("");
     setQrStatus(t("settings.wechatFetchingQr"));
-    fetch("/api/wechat/qr-login", { method: "POST" })
+    settingsFetch("/api/wechat/qr-login", { method: "POST" })
       .then(readSettingsResponse)
       .then(function (result) {
         if (!result.qrcode_id || (!result.qrcode_image && !result.qrcode_img)) {
@@ -2471,7 +2490,7 @@ function WeChatConnectionPanel(p) {
   function startWechat() {
     setBusy(true);
     setQrStatus("");
-    fetch("/api/wechat/start", { method: "POST" })
+    settingsFetch("/api/wechat/start", { method: "POST" })
       .then(readSettingsResponse)
       .then(refreshStatus)
       .catch(function (error) {
@@ -2483,7 +2502,7 @@ function WeChatConnectionPanel(p) {
   function stopWechat() {
     setBusy(true);
     setQrStatus("");
-    fetch("/api/wechat/stop", { method: "POST" })
+    settingsFetch("/api/wechat/stop", { method: "POST" })
       .then(readSettingsResponse)
       .then(refreshStatus)
       .catch(function (error) {
@@ -2532,7 +2551,7 @@ function WeChatConnectionPanel(p) {
     FieldRow(t("settings.notifyWechat"), t("settings.notifyWechatHint"), Toggle(notifyWechat, function () {
       var next = !notifyWechat;
       setNotifyWechat(next);
-      fetch("/api/settings/config", { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ notify_wechat: next }) }).catch(function () {});
+      settingsFetch("/api/settings/config", { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ notify_wechat: next }) }).catch(function () { setNotifyWechat(!next); });
     })),
     qrCode && React.createElement("div", {
       className: "wb-wechat-qr-overlay",
@@ -3064,13 +3083,13 @@ function DataPanel(p) {
   });
 
   function clearSession() {
-    fetch("/api/chat/clear", { method: "POST" }).then(function () { dataStore.refreshSessions(); }).catch(function () {});
+    settingsFetch("/api/chat/clear", { method: "POST" }).then(function () { dataStore.refreshSessions(); }).catch(function () {});
   }
 
   function resetData() {
     setResetting(true);
     setResetStatus(t("settings.resettingData"));
-    fetch("/api/settings/reset-data", { method: "POST" }).then(function (r) { return r.json(); }).then(function (p) {
+    settingsFetch("/api/settings/reset-data", { method: "POST" }).then(function (r) { return r.json(); }).then(function (p) {
       if (p.ok) {
         try { Object.keys(localStorage).forEach(function (k) { if (k.indexOf("cyrene-") === 0) localStorage.removeItem(k); }); } catch (e) {}
         window.location.reload();
@@ -3094,7 +3113,7 @@ function DataPanel(p) {
       var selection = await bridge.pickBackupSavePath({ title: t("settings.backupChooseSaveTitle"), defaultName: backupDefaultName() });
       if (!selection || selection.cancelled || !selection.path) return;
       setBackupMsg(t("settings.backupExporting"));
-      var response = await fetch("/api/backup/export", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ path: selection.path }) });
+      var response = await settingsFetch("/api/backup/export", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ path: selection.path }) });
       var result = await response.json();
       if (!result.ok) throw new Error(result.error || t("settings.failed"));
       setBackupMsg(t("settings.backupExported", { n: result.entries.length, size: formatBytes(result.size) }));
@@ -3113,7 +3132,7 @@ function DataPanel(p) {
     try {
       var selection = await bridge.pickBackupFile({ title: t("settings.backupChooseFileTitle") });
       if (!selection || selection.cancelled || !selection.path) return;
-      var response = await fetch("/api/backup/restore", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ path: selection.path }) });
+      var response = await settingsFetch("/api/backup/restore", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ path: selection.path }) });
       var result = await response.json();
       if (!result.ok) throw new Error(result.error || (result.errors || []).join(";") || t("settings.backupRestoreFailed"));
       setBackupMsg(t("settings.backupRestored", { n: result.restored.length }) + " " + t("settings.backupRestartRequired"));
@@ -3248,7 +3267,7 @@ function UpdateSection({ t, config }) {
 
   function checkUpdate() {
     setChecking(true); setError("");
-    fetch("/api/update/check").then(function (r) { return r.json(); }).then(function (d) {
+    settingsFetch("/api/update/check").then(function (r) { return r.json(); }).then(function (d) {
       setInfo(d);
       setChangelog({ version: d.latest_version || "", published_at: d.published_at || "", release_notes: d.release_notes || "" });
       setDownloaded(false);
@@ -3257,7 +3276,7 @@ function UpdateSection({ t, config }) {
   }
 
   function openChangelog() {
-    fetch("/api/update/changelog").then(function (r) { return r.json(); }).then(function (d) {
+    settingsFetch("/api/update/changelog").then(function (r) { return r.json(); }).then(function (d) {
       setChangelog({
         version: d.version || (info && info.latest_version) || "",
         published_at: d.published_at || (info && info.published_at) || "",
@@ -3278,7 +3297,7 @@ function UpdateSection({ t, config }) {
     if (checking || downloading) return;
     var next = !beta;
     setBeta(next);
-    fetch("/api/settings/config", { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ beta_updates: next }) })
+    settingsFetch("/api/settings/config", { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ beta_updates: next }) })
       .then(function () { checkUpdate(); })
       .catch(function () { setBeta(!next); });
   }
@@ -3287,13 +3306,13 @@ function UpdateSection({ t, config }) {
     if (checking || downloading) return;
     var next = !autoUpdate;
     setAutoUpdate(next);
-    fetch("/api/settings/config", { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ auto_update: next }) })
+    settingsFetch("/api/settings/config", { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ auto_update: next }) })
       .catch(function () { setAutoUpdate(!next); });
   }
 
   function startDownload() {
     setDownloading(true); setError("");
-    fetch("/api/update/download", { method: "POST" }).then(function (r) { return r.json(); }).then(function (d) {
+    settingsFetch("/api/update/download", { method: "POST" }).then(function (r) { return r.json(); }).then(function (d) {
       if (d.ok && d.verified) {
         setDownloaded(true);
         setProgress(function (p) { return Object.assign({}, p, { done: true, verified: true, actual_sha256: d.sha256 || p.actual_sha256 || "" }); });
@@ -3355,7 +3374,7 @@ function UpdateSection({ t, config }) {
       : Promise.resolve(window.confirm([confirmTitle, "", confirmBody].join("\n")));
     confirmed.then(function (ok) {
       if (!ok) return;
-      fetch("/api/update/restart", { method: "POST" }).then(function (r) {
+      settingsFetch("/api/update/restart", { method: "POST" }).then(function (r) {
         if (!r.ok) return r.json().then(function (d) { throw new Error(d.message || d.error || t("settings.updateRestartFailed", null, "Restart failed")); });
       }).catch(function (err) {
         if (err && err.message) setError(err.message);
@@ -3366,7 +3385,7 @@ function UpdateSection({ t, config }) {
   useEffectSt(function () {
     if (!downloading) return;
     var timer = setInterval(function () {
-      fetch("/api/update/progress").then(function (r) { return r.json(); }).then(function (d) { setProgress(d); if (d.done) clearInterval(timer); }).catch(function () { clearInterval(timer); });
+      settingsFetch("/api/update/progress").then(function (r) { return r.json(); }).then(function (d) { setProgress(d); if (d.done) clearInterval(timer); }).catch(function () { clearInterval(timer); });
     }, 500);
     return function () { clearInterval(timer); };
   }, [downloading]);
@@ -3517,7 +3536,7 @@ function SkillsPanel(p) {
 
   function loadSkills() {
     setLoading(true);
-    return fetch("/api/skills/installed")
+    return settingsFetch("/api/skills/installed")
       .then(function (r) { return r.ok ? r.json() : Promise.reject("HTTP " + r.status); })
       .then(function (data) {
         var list = (data && data.skills) || [];
@@ -3549,7 +3568,7 @@ function SkillsPanel(p) {
   function handleToggle(id) {
     if (busy) return;
     setBusy(true);
-    fetch("/api/skills/" + id + "/toggle", { method: "POST" })
+    settingsFetch("/api/skills/" + id + "/toggle", { method: "POST" })
       .then(function (r) { return r.ok ? r.json() : Promise.reject(); })
       .then(function (data) {
         if (data && data.ok) {
@@ -3571,7 +3590,7 @@ function SkillsPanel(p) {
     }).then(function (ok) {
       if (!ok) return;
       setBusy(true);
-      fetch("/api/skills/" + id + "/uninstall", { method: "POST" })
+      settingsFetch("/api/skills/" + id + "/uninstall", { method: "POST" })
         .then(function (r) { return r.ok ? r.json() : Promise.reject(); })
         .then(function (data) {
           if (data && data.ok) {
@@ -3595,7 +3614,7 @@ function SkillsPanel(p) {
     setShowMenu(false);
     var formData = new FormData();
     formData.append("file", file);
-    fetch("/api/skills/install-upload", { method: "POST", body: formData })
+    settingsFetch("/api/skills/install-upload", { method: "POST", body: formData })
       .then(function (r) { return r.ok ? r.json() : Promise.reject(); })
       .then(function (data) {
         if (data && data.ok) {
@@ -3620,7 +3639,7 @@ function SkillsPanel(p) {
   function handleInstallFolder() {
     setBusy(true);
     setShowMenu(false);
-    fetch("/api/skills/install-picker", { method: "POST" })
+    settingsFetch("/api/skills/install-picker", { method: "POST" })
       .then(function (r) { return r.ok ? r.json() : Promise.reject(); })
       .then(function (data) {
         if (data && data.cancelled) {
@@ -3642,7 +3661,7 @@ function SkillsPanel(p) {
   function handleScanExisting() {
     if (busy) return;
     setBusy(true);
-    fetch("/api/skills/scan", { method: "POST" })
+    settingsFetch("/api/skills/scan", { method: "POST" })
       .then(function (r) { return r.ok ? r.json() : Promise.reject(); })
       .then(function (data) {
         if (data && data.ok) {
@@ -4132,7 +4151,7 @@ function BudgetPanel(p) {
   }
 
   function saveBudgetConfig(body) {
-    fetch("/api/settings/config", {
+    settingsFetch("/api/settings/config", {
       method: "PUT", headers: { "Content-Type": "application/json" },
       body: JSON.stringify(body),
     }).then(function (r) {
@@ -4159,14 +4178,14 @@ function BudgetPanel(p) {
   function toggleCodexQuota() {
     var next = !codexQuotaEnabled;
     setCodexQuotaEnabled(next);
-    fetch("/api/settings/config", {
+    settingsFetch("/api/settings/config", {
       method: "PUT", headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ codex_budget_enabled: next }),
-    }).catch(function () {});
+    }).catch(function () { setCodexQuotaEnabled(!next); });
   }
 
   function fetchCodexQuota() {
-    fetch("/api/settings/openai-oauth/limits")
+    settingsFetch("/api/settings/openai-oauth/limits")
       .then(readSettingsResponse)
       .then(function (data) {
         setCodexQuota(data);
@@ -4194,7 +4213,7 @@ function BudgetPanel(p) {
   var [budgetLoading, setBudgetLoading] = useStateSt(true);
 
   function fetchStats() {
-    fetch("/api/settings/budget/stats")
+    settingsFetch("/api/settings/budget/stats")
       .then(function (r) { return r.json(); })
       .then(function (d) {
         setBudgetModels(d.models || []);

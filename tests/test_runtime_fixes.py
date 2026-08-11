@@ -2331,7 +2331,7 @@ async def test_schedule_task_once_normalizes_naive_local_time_to_utc(monkeypatch
     seen = {}
     local_timezone = timezone(timedelta(hours=8))
 
-    async def fake_create_task(db_path, chat_id, prompt, schedule_type, schedule_value, next_run, permission_mode="workspace_only", project_id="default"):
+    async def fake_create_task(db_path, chat_id, prompt, schedule_type, schedule_value, next_run, permission_mode="workspace_only", project_id="default", schedule_timezone="UTC"):
         seen["db_path"] = db_path
         seen["chat_id"] = chat_id
         seen["prompt"] = prompt
@@ -2340,6 +2340,7 @@ async def test_schedule_task_once_normalizes_naive_local_time_to_utc(monkeypatch
         seen["next_run"] = next_run
         seen["permission_mode"] = permission_mode
         seen["project_id"] = project_id
+        seen["schedule_timezone"] = schedule_timezone
         return "task_local"
 
     class _FakeLocalNow(datetime):
@@ -2370,6 +2371,7 @@ async def test_schedule_task_once_normalizes_naive_local_time_to_utc(monkeypatch
     assert seen["next_run"] == "2026-05-20T11:35:35+00:00"
     assert seen["permission_mode"] == "workspace_only"
     assert seen["project_id"] == "default"
+    assert seen["schedule_timezone"] == "UTC"
 
 
 async def test_schedule_task_uses_workbench_project_scope(monkeypatch, tmp_path):
@@ -2399,8 +2401,9 @@ async def test_schedule_task_uses_workbench_project_scope(monkeypatch, tmp_path)
         ]
     }), encoding="utf-8")
 
-    async def fake_create_task(db_path, chat_id, prompt, schedule_type, schedule_value, next_run, permission_mode="workspace_only", project_id="default"):
+    async def fake_create_task(db_path, chat_id, prompt, schedule_type, schedule_value, next_run, permission_mode="workspace_only", project_id="default", schedule_timezone="UTC"):
         seen["project_id"] = project_id
+        seen["schedule_timezone"] = schedule_timezone
         return "task_scope"
 
     monkeypatch.setattr(workbench_context, "_WORKBENCH_STORE", projects_store)

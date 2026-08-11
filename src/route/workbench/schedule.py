@@ -18,11 +18,10 @@ concrete, dated calendar events inside a ``[start, end]`` window. Cron expansion
 runs server-side through croniter so the calendar shows exactly what the
 scheduler will fire — there is no second cron implementation in the browser.
 
-Timezone note: ``scheduled_tasks.next_run`` and cron expressions are evaluated
-in **UTC** (see ``schedule_spec.compute_next_run``). Occurrences are therefore
-returned as UTC ISO-8601; the frontend renders them in the viewer's local time.
-The Workbench create form mirrors this by building cron fields from a chosen
-local time's UTC components, so "what you see is when it fires".
+Timezone note: ``scheduled_tasks.next_run`` is stored in UTC, while cron fields
+are evaluated in the task's persisted IANA ``schedule_timezone``. Existing
+tasks default to UTC for backward compatibility. Occurrences are returned as
+UTC ISO-8601 and the frontend renders them in the viewer's local time.
 """
 
 from __future__ import annotations
@@ -39,6 +38,7 @@ from fastapi.responses import JSONResponse
 from route import schemas as api_models
 from route.errors import error_response
 from cyrene.workbench.notifications import append_notification
+from cyrene.runtime.schedule_spec import resolve_schedule_timezone
 
 logger = logging.getLogger(__name__)
 
@@ -112,7 +112,11 @@ def _category_for_task(schedule_type: str) -> str:
     return "task_once" if schedule_type == "once" else "task_recurring"
 
 
-def _recurrence_label(schedule_type: str, schedule_value: str) -> str:
+def _recurrence_label(
+    schedule_type: str,
+    schedule_value: str,
+    schedule_timezone: str = "UTC",
+) -> str:
     """Human (Chinese) description of a task's cadence for the detail panel."""
     stype = (schedule_type or "").strip()
     sval = (schedule_value or "").strip()
@@ -136,7 +140,7 @@ def _recurrence_label(schedule_type: str, schedule_value: str) -> str:
             minute, hour, dom, month, dow = parts
             hhmm = ""
             if minute.isdigit() and hour.isdigit():
-                hhmm = f" {int(hour):02d}:{int(minute):02d}(UTC)"
+                hhmm = f" {int(hour):02d}:{int(minute):02d}({schedule_timezone or 'UTC'})"
             if dom == "*" and month == "*" and dow == "*":
                 return f"每天{hhmm}"
             if dom == "*" and month == "*" and dow != "*":
@@ -194,15 +198,20 @@ def _expand_task(task: dict, start: datetime, end: datetime) -> list[datetime]:
     if stype == "cron":
         if not croniter.is_valid(sval):
             return occ
-        itr = croniter(sval, start - timedelta(seconds=1))
+        try:
+            schedule_tz = resolve_schedule_timezone(task.get("schedule_timezone"))
+        except ValueError:
+            return occ
+        local_wall_start = start.astimezone(schedule_tz).replace(tzinfo=None)
+        itr = croniter(sval, local_wall_start - timedelta(seconds=1))
         while len(occ) < _MAX_OCC_PER_TASK:
-            nxt = itr.get_next(datetime)
-            if nxt.tzinfo is None:
-                nxt = nxt.replace(tzinfo=timezone.utc)
-            if nxt > end:
+            next_wall = itr.get_next(datetime)
+            next_local = next_wall.replace(tzinfo=schedule_tz)
+            nxt_utc = next_local.astimezone(timezone.utc)
+            if nxt_utc > end:
                 break
-            if nxt >= start:
-                occ.append(nxt)
+            if nxt_utc >= start:
+                occ.append(nxt_utc)
         return occ
 
     return occ
@@ -212,8 +221,9 @@ def _task_events(task: dict, start: datetime, end: datetime) -> list[dict]:
     """Build calendar event dicts for a task's occurrences in the window."""
     stype = (task.get("schedule_type") or "").strip()
     sval = task.get("schedule_value") or ""
+    schedule_timezone = task.get("schedule_timezone") or "UTC"
     category = _category_for_task(stype)
-    recurrence = _recurrence_label(stype, sval)
+    recurrence = _recurrence_label(stype, sval, schedule_timezone)
     status = task.get("status") or "active"
     events: list[dict] = []
     for fire in _expand_task(task, start, end):
@@ -229,6 +239,7 @@ def _task_events(task: dict, start: datetime, end: datetime) -> list[dict]:
             "category": category,
             "schedule_type": stype,
             "schedule_value": sval,
+            "schedule_timezone": schedule_timezone,
             "recurrence": recurrence,
             "status": status,
             "next_run": task.get("next_run"),
@@ -342,15 +353,25 @@ def register_workbench_schedule_routes(router: APIRouter, db_path: str) -> None:
         prompt = str(body.get("prompt") or "").strip()
         stype = str(body.get("schedule_type") or "").strip()
         svalue = str(body.get("schedule_value") or "").strip()
+        schedule_timezone = str(body.get("schedule_timezone") or "UTC").strip() or "UTC"
         if not prompt:
             return JSONResponse({"error": "prompt is required"}, status_code=400)
         if not stype or not svalue:
             return JSONResponse({"error": "schedule_type and schedule_value are required"}, status_code=400)
+        if stype == "cron":
+            try:
+                resolve_schedule_timezone(schedule_timezone)
+            except ValueError as exc:
+                return JSONResponse({"error": str(exc)}, status_code=400)
 
         next_run = str(body.get("next_run") or "").strip()
         if not next_run:
             try:
-                next_run = compute_next_run(stype, svalue)
+                next_run = compute_next_run(
+                    stype,
+                    svalue,
+                    timezone_name=schedule_timezone,
+                )
             except ValueError as exc:
                 return JSONResponse({"error": str(exc)}, status_code=400)
 
@@ -365,6 +386,7 @@ def register_workbench_schedule_routes(router: APIRouter, db_path: str) -> None:
                 next_run=next_run,
                 permission_mode="workspace_only",
                 project_id=resolved_workspace,
+                schedule_timezone=schedule_timezone,
             )
             append_notification(
                 title="日程提醒已创建",
@@ -393,16 +415,26 @@ def register_workbench_schedule_routes(router: APIRouter, db_path: str) -> None:
 
         stype = body.get("schedule_type")
         svalue = body.get("schedule_value")
+        schedule_timezone = body.get("schedule_timezone") or "UTC"
+        if body.get("schedule_timezone") is not None:
+            try:
+                resolve_schedule_timezone(schedule_timezone)
+            except ValueError as exc:
+                return JSONResponse({"error": str(exc)}, status_code=400)
         if stype and svalue and "next_run" not in body:
             try:
-                body["next_run"] = compute_next_run(stype, svalue)
+                body["next_run"] = compute_next_run(
+                    stype,
+                    svalue,
+                    timezone_name=schedule_timezone,
+                )
             except ValueError as exc:
                 return JSONResponse({"error": str(exc)}, status_code=400)
 
         sets: list[str] = []
         vals: list = []
         # permission_mode is intentionally NOT updatable here (REST policy).
-        for field in ("prompt", "schedule_type", "schedule_value", "next_run", "status"):
+        for field in ("prompt", "schedule_type", "schedule_value", "schedule_timezone", "next_run", "status"):
             if field in body:
                 sets.append(f"{field} = ?")
                 vals.append(body[field])
