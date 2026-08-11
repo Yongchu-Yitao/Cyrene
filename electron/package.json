@@ -131,6 +131,7 @@
       "main.js",
       "host-control.js",
       "browser-input.js",
+      "browser-target.js",
       "agent-cursor.js",
       "preload.js",
       "browser-chat-overlay-preload.js",

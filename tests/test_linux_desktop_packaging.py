@@ -20,6 +20,20 @@ def test_linux_packages_include_appimage_deb_and_rpm():
     assert package["build"]["rpm"]["afterInstall"] == "linux-after-install.sh"
 
 
+def test_electron_package_includes_main_process_modules():
+    package = json.loads((ROOT / "electron" / "package.json").read_text(encoding="utf-8"))
+
+    packaged_files = set(package["build"]["files"])
+    assert {
+        "agent-cursor.js",
+        "app-use.js",
+        "browser-input.js",
+        "browser-target.js",
+        "host-control.js",
+        "main.js",
+    } <= packaged_files
+
+
 def test_release_pipeline_smoke_tests_and_publishes_all_linux_packages():
     workflow = (ROOT / ".github" / "workflows" / "release.yml").read_text(encoding="utf-8")
 
