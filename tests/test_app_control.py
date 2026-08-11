@@ -83,6 +83,8 @@ def test_current_tree_exposes_project_switch_chat_search_and_shared_pip_maximize
     workbench = (root / "src/webui/frontend/workbench.jsx").read_text(encoding="utf-8")
     chat = (root / "src/webui/frontend/workbench-chat.jsx").read_text(encoding="utf-8")
     model = (root / "src/webui/frontend/workbench-model.jsx").read_text(encoding="utf-8")
+    welcome = (root / "src/webui/frontend/workbench-welcome.jsx").read_text(encoding="utf-8")
+    electron = (root / "electron/main.js").read_text(encoding="utf-8")
 
     assert 'node_id: "project_switcher"' in workbench
     assert 'scope: "project_menu"' in workbench
@@ -119,6 +121,11 @@ def test_current_tree_exposes_project_switch_chat_search_and_shared_pip_maximize
     assert 'maximize: maximizeBrowserWindow' in chat
     assert model.count("uiInstanceId: currentUiInstanceId()") == 4
     assert 'clientRequestId: options.clientRequestId || newClientRequestId("task_dispatch")' in model
+    assert 'data-cyrene-node-id="onboarding"' in welcome
+    assert 'data-cyrene-node-id="onboarding_base_url"' in welcome
+    assert 'data-cyrene-node-id="onboarding_model"' in welcome
+    assert "isDesktopOnboardingTree(candidate)" in electron
+    assert "runDesktopOnboardingSmokeTest(window, uiInstanceId, tree)" in electron
 
 
 def test_window_control_schema_requires_argument_bound_idempotency_key():

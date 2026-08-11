@@ -5400,6 +5400,96 @@ async function runShortcutSettingsSmokeTest(window) {
   return 'shortcut_settings_sync';
 }
 
+function isDesktopOnboardingTree(candidate) {
+  return !!(
+    candidate
+    && candidate.surface
+    && candidate.surface.kind === 'main'
+    && findDesktopSmokeNode(candidate.root, (node) => node.node_id === 'onboarding')
+    && findDesktopSmokeNode(candidate.root, (node) => node.node_id === 'onboarding_custom_model_source')
+    && findDesktopSmokeNode(candidate.root, (node) => node.node_id === 'onboarding_oauth_source')
+  );
+}
+
+async function runDesktopOnboardingSmokeTest(window, uiInstanceId, initialTree) {
+  let tree = initialTree;
+  const oauthSource = findDesktopSmokeNode(
+    tree.root,
+    (node) => node.node_id === 'onboarding_oauth_source',
+  );
+  await runDesktopSmokeAction(uiInstanceId, tree, oauthSource, 'invoke');
+  tree = await waitForDesktopSmokeTree(
+    uiInstanceId,
+    (candidate) => isDesktopOnboardingTree(candidate)
+      && !findDesktopSmokeNode(candidate.root, (node) => node.node_id === 'onboarding_base_url'),
+    'onboarding OAuth source',
+  );
+
+  const customSource = findDesktopSmokeNode(
+    tree.root,
+    (node) => node.node_id === 'onboarding_custom_model_source',
+  );
+  await runDesktopSmokeAction(uiInstanceId, tree, customSource, 'invoke');
+  tree = await waitForDesktopSmokeTree(
+    uiInstanceId,
+    (candidate) => isDesktopOnboardingTree(candidate)
+      && !!findDesktopSmokeNode(candidate.root, (node) => node.node_id === 'onboarding_base_url')
+      && !!findDesktopSmokeNode(candidate.root, (node) => node.node_id === 'onboarding_model'),
+    'onboarding custom model fields',
+  );
+
+  let endpoint = findDesktopSmokeNode(
+    tree.root,
+    (node) => node.node_id === 'onboarding_base_url',
+  );
+  const originalEndpoint = String(endpoint.value_summary || '');
+  const marker = 'https://cyrene-smoke.invalid/v1';
+  await runDesktopSmokeAction(uiInstanceId, tree, endpoint, 'set_value', { value: marker });
+  tree = await waitForDesktopSmokeTree(
+    uiInstanceId,
+    (candidate) => {
+      const node = findDesktopSmokeNode(
+        candidate.root,
+        (item) => item.node_id === 'onboarding_base_url',
+      );
+      return !!node && node.value_summary === marker;
+    },
+    'onboarding endpoint value',
+  );
+  endpoint = findDesktopSmokeNode(
+    tree.root,
+    (node) => node.node_id === 'onboarding_base_url',
+  );
+  await runDesktopSmokeAction(
+    uiInstanceId,
+    tree,
+    endpoint,
+    'set_value',
+    { value: originalEndpoint },
+  );
+  await waitForDesktopSmokeTree(
+    uiInstanceId,
+    (candidate) => {
+      const node = findDesktopSmokeNode(
+        candidate.root,
+        (item) => item.node_id === 'onboarding_base_url',
+      );
+      return !!node && node.value_summary === originalEndpoint;
+    },
+    'restored onboarding endpoint',
+  );
+
+  const settingsCheck = await runDesktopSettingsSmokeTest();
+  const shortcutCheck = await runShortcutSettingsSmokeTest(window);
+  return {
+    uiInstanceId,
+    checks: [
+      'tree', 'onboarding_sources', 'onboarding_model_fields',
+      'onboarding_endpoint', settingsCheck, shortcutCheck,
+    ],
+  };
+}
+
 async function runDesktopSemanticSmokeTest(window) {
   window.show();
   window.focus();
@@ -5414,11 +5504,17 @@ async function runDesktopSemanticSmokeTest(window) {
   let tree = await waitForDesktopSmokeTree(
     uiInstanceId,
     (candidate) => candidate.surface && candidate.surface.kind === 'main'
-      && !!findDesktopSmokeNode(candidate.root, (node) => node.node_id === 'project_switcher')
       && !!findDesktopSmokeNode(candidate.root, (node) => node.node_id === 'navigation_chat')
-      && !!findDesktopSmokeNode(candidate.root, (node) => node.node_id === 'workspace_sidebar'),
-    'main project/navigation tree',
+      && !!findDesktopSmokeNode(candidate.root, (node) => node.node_id === 'workspace_sidebar')
+      && (
+        !!findDesktopSmokeNode(candidate.root, (node) => node.node_id === 'project_switcher')
+        || isDesktopOnboardingTree(candidate)
+      ),
+    'main project/navigation or onboarding tree',
   );
+  if (isDesktopOnboardingTree(tree)) {
+    return runDesktopOnboardingSmokeTest(window, uiInstanceId, tree);
+  }
   let sidebar = findDesktopSmokeNode(tree.root, (node) => node.node_id === 'workspace_sidebar');
   if (sidebar && sidebar.state && sidebar.state.collapsed === true) {
     await runDesktopSmokeAction(uiInstanceId, tree, sidebar, 'toggle');

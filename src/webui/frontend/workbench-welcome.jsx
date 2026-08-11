@@ -441,7 +441,7 @@
     ];
 
     return (
-      <section className="wb-wel-page wb-ob-page">
+      <section className="wb-wel-page wb-ob-page" data-cyrene-node-id="onboarding">
         <div className="wb-wel-inner wb-ob-inner">
           <header className="wb-wel-head wb-ob-head">
             <div className="wb-ob-eyebrow">
@@ -473,10 +473,10 @@
                 <h2>{T("welcome.setup.llm.title", null, "Connect your model")}</h2>
                 <p className="wb-ob-sub">{T("welcome.setup.llm.subtitle", null, "Choose a custom endpoint or use the models included with your OpenAI account.")}</p>
                 <div className="wb-ob-seg wb-ob-source-seg">
-                  <button type="button" className={"wb-ob-seg-btn" + (llmSource === "custom" ? " active" : "")} onClick={function () { setLlmSource("custom"); setError(""); setNotice(""); }}>
+                  <button type="button" data-cyrene-node-id="onboarding_custom_model_source" className={"wb-ob-seg-btn" + (llmSource === "custom" ? " active" : "")} onClick={function () { setLlmSource("custom"); setError(""); setNotice(""); }}>
                     {T("welcome.setup.llm.customSource", null, "Custom model")}
                   </button>
-                  <button type="button" className={"wb-ob-seg-btn" + (llmSource === "codex" ? " active" : "")} onClick={function () { setLlmSource("codex"); setError(""); setNotice(""); }}>
+                  <button type="button" data-cyrene-node-id="onboarding_oauth_source" className={"wb-ob-seg-btn" + (llmSource === "codex" ? " active" : "")} onClick={function () { setLlmSource("codex"); setError(""); setNotice(""); }}>
                     OpenAI OAuth
                   </button>
                 </div>
@@ -488,11 +488,11 @@
                     </label>
                     <label className="wb-ob-field">
                       <span className="wb-ob-label">{T("welcome.setup.llm.endpoint", null, "Endpoint")}<small>{T("welcome.setup.llm.endpointHint", null, "Base URL, e.g. https://api.openai.com/v1")}</small></span>
-                      <input className="wb-ob-input mono" value={baseUrl} placeholder="https://api.openai.com/v1" onChange={function (e) { setBaseUrl(e.target.value); }} />
+                      <input className="wb-ob-input mono" data-cyrene-node-id="onboarding_base_url" value={baseUrl} placeholder="https://api.openai.com/v1" onChange={function (e) { setBaseUrl(e.target.value); }} />
                     </label>
                     <label className="wb-ob-field">
                       <span className="wb-ob-label">{T("welcome.setup.llm.model", null, "Model")}<small>{T("welcome.setup.llm.modelHint", null, "Model identifier")}</small></span>
-                      <input className="wb-ob-input mono" value={model} placeholder="gpt-4o" onChange={function (e) { setModel(e.target.value); }} />
+                      <input className="wb-ob-input mono" data-cyrene-node-id="onboarding_model" value={model} placeholder="gpt-4o" onChange={function (e) { setModel(e.target.value); }} />
                     </label>
                     <div className="wb-ob-actions">
                       <button type="button" className="wb-btn primary" disabled={busy || !model.trim() || !baseUrl.trim()} onClick={saveLlm}>
