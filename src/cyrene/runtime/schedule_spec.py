@@ -17,10 +17,20 @@ seconds" re-fired every 3.6 seconds after its first run — see issue #50.
 from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from croniter import croniter
 
 SCHEDULE_TYPES = ("cron", "interval", "once")
+
+
+def resolve_schedule_timezone(timezone_name: str | None) -> ZoneInfo:
+    """Resolve a persisted IANA timezone, rejecting invalid user input."""
+    name = str(timezone_name or "UTC").strip() or "UTC"
+    try:
+        return ZoneInfo(name)
+    except (ZoneInfoNotFoundError, ValueError) as exc:
+        raise ValueError(f"invalid schedule timezone: {name!r}") from exc
 
 
 def _local_tzinfo():
@@ -60,6 +70,7 @@ def compute_next_run(
     schedule_value: str,
     *,
     now: datetime | None = None,
+    timezone_name: str | None = None,
 ) -> str:
     """Return the next fire time as a UTC ISO-8601 string.
 
@@ -69,6 +80,8 @@ def compute_next_run(
             For ``"once"`` an empty value means "as soon as possible" (now).
         now: reference time (defaults to ``datetime.now(timezone.utc)``); inject
             for deterministic tests.
+        timezone_name: IANA timezone used to evaluate cron wall-clock fields.
+            Existing tasks omit this and retain the historical UTC behavior.
 
     Raises:
         ValueError: unknown ``schedule_type`` or an unparseable value. Callers
@@ -82,7 +95,17 @@ def compute_next_run(
     if stype == "cron":
         if not croniter.is_valid(svalue):
             raise ValueError(f"invalid cron expression: {svalue!r}")
-        return croniter(svalue, now).get_next(datetime).isoformat()
+        schedule_tz = resolve_schedule_timezone(timezone_name)
+        if now.tzinfo is None:
+            now = now.replace(tzinfo=timezone.utc)
+        # croniter advances absolute time when given an aware base, which can
+        # shift a fixed wall-clock schedule by an hour at a DST transition.
+        # Generate the next naive wall time first, then interpret it in the
+        # persisted IANA zone before converting the stored result to UTC.
+        local_wall_now = now.astimezone(schedule_tz).replace(tzinfo=None)
+        next_wall = croniter(svalue, local_wall_now).get_next(datetime)
+        next_local = next_wall.replace(tzinfo=schedule_tz)
+        return next_local.astimezone(timezone.utc).isoformat()
 
     if stype == "interval":
         seconds = parse_interval_seconds(svalue)

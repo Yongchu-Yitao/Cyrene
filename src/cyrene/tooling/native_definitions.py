@@ -136,6 +136,10 @@ _NATIVE_TOOL_DEFS: tuple[dict[str, Any], ...] = tuple([{'type': 'function',
                                                                                "'3600' = hourly). For 'once': an "
                                                                                'ISO-8601 datetime, or empty to run as '
                                                                                'soon as possible.'},
+                                             'schedule_timezone': {'type': 'string',
+                                                                   'description': 'IANA timezone used for cron wall-clock '
+                                                                                  "fields (e.g. 'Asia/Shanghai'). Defaults "
+                                                                                  "to 'UTC'."},
                                              'permission_mode': {'type': 'string',
                                                                  'enum': ['workspace_only', 'full_access'],
                                                                  'description': "Permission scope. 'workspace_only' "

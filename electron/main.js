@@ -4374,13 +4374,26 @@ function waitForPort(timeoutMs = 30000) {
 // Auth header injection
 // ---------------------------------------------------------------------------
 
-// Inject the shared X-Cyrene-Token header on every request to the local
-// backend — document loads, fetch, SSE, and WebSocket upgrades all go through
+// Inject the shared X-Cyrene-Token header only on requests to the exact local
+// backend port. The wildcard filter is required because the backend port is
+// discovered after this listener is installed; the callback must not leak the
+// renderer-hidden token to an unrelated process listening on another loopback
+// port. Document loads, fetch, SSE, and WebSocket upgrades all pass through
 // onBeforeSendHeaders. Must be registered BEFORE the window loads the URL.
 function installAuthHeaderInjector() {
   session.defaultSession.webRequest.onBeforeSendHeaders(
     { urls: ['http://127.0.0.1:*/*', 'ws://127.0.0.1:*/*'] },
     (details, callback) => {
+      let isLocalBackend = false;
+      try {
+        const target = new URL(String(details.url || ''));
+        isLocalBackend = target.hostname === '127.0.0.1'
+          && target.port === String(backendPort || '');
+      } catch (_) {}
+      if (!isLocalBackend) {
+        callback({ requestHeaders: details.requestHeaders });
+        return;
+      }
       const requestHeaders = { ...details.requestHeaders, 'X-Cyrene-Token': AUTH_TOKEN };
       callback({ requestHeaders });
     }
