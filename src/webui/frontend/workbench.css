@@ -1545,7 +1545,14 @@ html[data-platform="darwin"] .workbench-top-project-menu {
 .workbench-session-context-menu .workbench-session-activity-menu-head b,
 .workbench-session-context-menu .workbench-session-overflow-head b {
   font-size: calc(14px * var(--wb-ui-font-scale, 1));
+}
+
+.workbench-session-context-menu .workbench-session-activity-menu-head b {
   font-weight: 700;
+}
+
+.workbench-session-context-menu .workbench-session-overflow-head b {
+  font-weight: 650;
 }
 
 .workbench-session-context-menu .workbench-session-activity-menu-list {
@@ -1588,6 +1595,7 @@ html[data-platform="darwin"] .workbench-top-project-menu {
 
 .workbench-session-context-menu .workbench-session-overflow-list b {
   font-size: calc(13px * var(--wb-ui-font-scale, 1));
+  font-weight: 600;
 }
 
 @media (prefers-reduced-motion: reduce) {
