@@ -7108,7 +7108,6 @@ def test_remote_settings_keeps_compatibility_on_and_persists_package_checkboxes(
     assert 'placeholder: "wss://relay.example/v1"' not in remote_panel
     assert "peer.lan_address" in source
     assert ".wb-textarea {" in styles
-    assert "height: 68px;" in styles
     assert i18n.count('"settings.remotePairingKey"') == 2
     assert i18n.count('"settings.remoteDeviceAddress"') == 2
 
@@ -8124,17 +8123,18 @@ def test_workbench_button_model_mode_forwards_to_runtime_endpoint():
 def test_settings_controls_share_memory_floating_material():
     root = Path(__file__).resolve().parent.parent
     styles = (root / "src" / "webui" / "frontend" / "workbench.css").read_text(encoding="utf-8")
+    source = (root / "src" / "webui" / "frontend" / "settings-overlay.jsx").read_text(encoding="utf-8")
 
     assert "--wb-settings-control-bg: color-mix(in srgb, var(--wb-card-bg) 88%, var(--wb-surface))" in styles
     assert "--wb-settings-control-radius: 12px" in styles
-    assert ".settings-overlay :where(.wb-input, .wb-select, .wb-textarea, .wb-btn)" in styles
+    assert "html[data-theme] .settings-overlay :where(.wb-input, .wb-select, .wb-textarea, .wb-btn)" in styles
     assert "border: var(--wb-settings-control-border)" in styles
     assert "background: var(--wb-settings-control-bg)" in styles
     assert ".settings-overlay .wb-seg" in styles
     assert ".settings-overlay .wb-toggle" in styles
-    assert ".settings-overlay .wb-btn:not(.danger)" in styles
+    assert "html[data-theme] .settings-overlay .wb-btn.primary" in styles
     assert "background: color-mix(in srgb, var(--wb-accent) 26%, var(--wb-settings-control-bg))" in styles
-    assert ".settings-overlay .wb-btn:not(.danger) {\n  border-color:" in styles
+    assert "html[data-theme] .settings-overlay .wb-btn.primary {\n  border-color:" in styles
     assert "background: color-mix(in srgb, var(--wb-accent) 26%, var(--wb-settings-control-bg));\n  color: var(--wb-text)" in styles
     assert "border-color: color-mix(in srgb, var(--wb-accent) 62%, var(--wb-line-2))" in styles
     assert ".workbench-integrated-rail-primary-action," in styles
@@ -8142,5 +8142,10 @@ def test_settings_controls_share_memory_floating_material():
     assert "background: color-mix(in srgb, var(--wb-accent) 26%, var(--wb-floating-control-bg))" in styles
     assert ".settings-overlay .wb-path-display" in styles
     assert "width: min(460px, 48vw)" in styles
-    assert ".settings-overlay .wb-export-session-select" in styles
     assert ".settings-overlay .wb-export-area .wb-seg" in styles
+    assert "function escapeHtml(" not in source
+    assert ".remote-pairing-result" not in styles
+    assert ".remote-bundle" not in styles
+    assert ".wb-accent-custom-button" not in styles
+    assert ".wb-skill-detail-card" not in styles
+    assert ".settings-overlay .wb-export-session-select" not in styles

@@ -1545,7 +1545,14 @@ html[data-platform="darwin"] .workbench-top-project-menu {
 .workbench-session-context-menu .workbench-session-activity-menu-head b,
 .workbench-session-context-menu .workbench-session-overflow-head b {
   font-size: calc(14px * var(--wb-ui-font-scale, 1));
+}
+
+.workbench-session-context-menu .workbench-session-activity-menu-head b {
   font-weight: 700;
+}
+
+.workbench-session-context-menu .workbench-session-overflow-head b {
+  font-weight: 650;
 }
 
 .workbench-session-context-menu .workbench-session-activity-menu-list {
@@ -1588,6 +1595,7 @@ html[data-platform="darwin"] .workbench-top-project-menu {
 
 .workbench-session-context-menu .workbench-session-overflow-list b {
   font-size: calc(13px * var(--wb-ui-font-scale, 1));
+  font-weight: 600;
 }
 
 @media (prefers-reduced-motion: reduce) {
@@ -7470,7 +7478,7 @@ html[data-theme="light"] .wb-tool-list .mono {
   border-bottom-color: color-mix(in srgb, var(--wb-line) 64%, transparent);
 }
 
-.settings-overlay :where(.wb-input, .wb-select, .wb-textarea, .wb-btn) {
+html[data-theme] .settings-overlay :where(.wb-input, .wb-select, .wb-textarea, .wb-btn) {
   border: var(--wb-settings-control-border);
   border-radius: var(--wb-settings-control-radius);
   background: var(--wb-settings-control-bg);
@@ -7483,17 +7491,17 @@ html[data-theme="light"] .wb-tool-list .mono {
     color .16s;
 }
 
-.settings-overlay :where(.wb-input, .wb-select, .wb-btn) {
+html[data-theme] .settings-overlay :where(.wb-input, .wb-select, .wb-btn) {
   height: 38px;
   min-height: 38px;
 }
 
-.settings-overlay :where(.wb-input, .wb-select, .wb-textarea):hover:not(:disabled) {
+html[data-theme] .settings-overlay :where(.wb-input, .wb-select, .wb-textarea):hover:not(:disabled) {
   border-color: color-mix(in srgb, var(--wb-accent) 34%, var(--wb-line-2));
   background: var(--wb-settings-control-hover-bg);
 }
 
-.settings-overlay :where(.wb-input, .wb-select, .wb-textarea):focus {
+html[data-theme] .settings-overlay :where(.wb-input, .wb-select, .wb-textarea):focus {
   outline: 0;
   border-color: color-mix(in srgb, var(--wb-accent) 62%, var(--wb-line-2));
   background: var(--wb-settings-control-bg);
@@ -7502,7 +7510,7 @@ html[data-theme="light"] .wb-tool-list .mono {
     inset 0 0 0 1px color-mix(in srgb, var(--wb-accent) 18%, transparent);
 }
 
-.settings-overlay .wb-select {
+html[data-theme] .settings-overlay .wb-select {
   appearance: none;
   -webkit-appearance: none;
   padding-inline: 14px 38px;
@@ -7515,8 +7523,8 @@ html[data-theme="light"] .wb-tool-list .mono {
   font-weight: 620;
 }
 
-.settings-overlay .wb-input::placeholder,
-.settings-overlay .wb-textarea::placeholder {
+html[data-theme] .settings-overlay .wb-input::placeholder,
+html[data-theme] .settings-overlay .wb-textarea::placeholder {
   color: var(--wb-faint);
 }
 
@@ -7525,11 +7533,6 @@ html[data-theme="light"] .wb-tool-list .mono {
   max-width: 100%;
   min-width: 320px;
   text-overflow: ellipsis;
-}
-
-.settings-overlay .wb-export-session-select {
-  width: min(460px, 100%);
-  max-width: 100%;
 }
 
 .settings-overlay .wb-export-session-toolbar {
@@ -7591,31 +7594,31 @@ html[data-theme="light"] .wb-tool-list .mono {
   align-self: flex-start;
 }
 
-.settings-overlay .wb-btn {
+html[data-theme] .settings-overlay .wb-btn {
   padding-inline: 13px;
   font-weight: 650;
 }
 
-.settings-overlay .wb-btn:not(.danger) {
-  border-color: color-mix(in srgb, var(--wb-accent) 56%, var(--wb-line-2));
-  background: color-mix(in srgb, var(--wb-accent) 26%, var(--wb-settings-control-bg));
+html[data-theme] .settings-overlay .wb-btn:not(.primary):not(.danger) {
+  border-color: color-mix(in srgb, var(--wb-line-2) 70%, transparent);
+  background: var(--wb-settings-control-bg);
   color: var(--wb-text);
   box-shadow:
     0 5px 14px rgba(9, 17, 30, .045),
     inset 0 1px 0 color-mix(in srgb, #fff 10%, transparent);
 }
 
-.settings-overlay .wb-btn:not(.danger):hover:not(:disabled) {
+html[data-theme] .settings-overlay .wb-btn:not(.primary):not(.danger):hover:not(:disabled) {
   transform: translateY(-1px);
-  border-color: color-mix(in srgb, var(--wb-accent) 72%, var(--wb-line-2));
-  background: color-mix(in srgb, var(--wb-accent) 34%, var(--wb-settings-control-bg));
+  border-color: color-mix(in srgb, var(--wb-accent) 38%, var(--wb-line-2));
+  background: var(--wb-settings-control-hover-bg);
   color: var(--wb-text);
   box-shadow:
     0 8px 18px rgba(9, 17, 30, .07),
     inset 0 1px 0 color-mix(in srgb, #fff 10%, transparent);
 }
 
-.settings-overlay .wb-btn.primary {
+html[data-theme] .settings-overlay .wb-btn.primary {
   border-color: color-mix(in srgb, var(--wb-accent) 56%, var(--wb-line-2));
   background: color-mix(in srgb, var(--wb-accent) 26%, var(--wb-settings-control-bg));
   color: var(--wb-text);
@@ -7624,13 +7627,44 @@ html[data-theme="light"] .wb-tool-list .mono {
     inset 0 1px 0 color-mix(in srgb, #fff 10%, transparent);
 }
 
-.settings-overlay .wb-btn.primary:hover:not(:disabled) {
+html[data-theme] .settings-overlay .wb-btn.primary:hover:not(:disabled) {
+  transform: translateY(-1px);
   border-color: color-mix(in srgb, var(--wb-accent) 72%, var(--wb-line-2));
   background: color-mix(in srgb, var(--wb-accent) 34%, var(--wb-settings-control-bg));
   color: var(--wb-text);
+  box-shadow:
+    0 8px 18px rgba(9, 17, 30, .07),
+    inset 0 1px 0 color-mix(in srgb, #fff 12%, transparent);
 }
 
-.settings-overlay .wb-seg {
+html[data-theme] .settings-overlay .wb-btn.danger {
+  border-color: color-mix(in srgb, var(--wb-red) 42%, var(--wb-line-2));
+  background: color-mix(in srgb, var(--wb-red) 8%, var(--wb-settings-control-bg));
+  color: var(--wb-red);
+  box-shadow:
+    0 5px 14px rgba(9, 17, 30, .04),
+    inset 0 1px 0 color-mix(in srgb, #fff 9%, transparent);
+}
+
+html[data-theme] .settings-overlay .wb-btn.danger:hover:not(:disabled) {
+  transform: translateY(-1px);
+  border-color: color-mix(in srgb, var(--wb-red) 62%, var(--wb-line-2));
+  background: color-mix(in srgb, var(--wb-red) 13%, var(--wb-settings-control-bg));
+}
+
+html[data-theme] .settings-overlay .wb-btn:focus-visible {
+  outline: none;
+  border-color: color-mix(in srgb, var(--wb-accent) 72%, var(--wb-line-2));
+  box-shadow:
+    0 0 0 3px color-mix(in srgb, var(--wb-accent) 12%, transparent),
+    var(--wb-settings-control-shadow);
+}
+
+html[data-theme] .settings-overlay .wb-btn:active:not(:disabled) {
+  transform: translateY(0);
+}
+
+html[data-theme] .settings-overlay .wb-seg {
   min-height: 38px;
   padding: 3px;
   border: var(--wb-settings-control-border);
@@ -7640,13 +7674,13 @@ html[data-theme="light"] .wb-tool-list .mono {
   box-sizing: border-box;
 }
 
-.settings-overlay .wb-seg-btn {
+html[data-theme] .settings-overlay .wb-seg-btn {
   min-height: 32px;
   padding: 4px 11px;
   border-radius: 8px;
 }
 
-.settings-overlay .wb-seg-btn.active {
+html[data-theme] .settings-overlay .wb-seg-btn.active {
   background: color-mix(in srgb, var(--wb-accent) 10%, var(--wb-settings-control-bg));
   box-shadow:
     0 1px 2px rgba(0, 0, 0, .12),
@@ -7654,7 +7688,7 @@ html[data-theme="light"] .wb-tool-list .mono {
     0 0 0 1px color-mix(in srgb, var(--wb-accent) 28%, var(--wb-line-2));
 }
 
-.settings-overlay .wb-toggle {
+html[data-theme] .settings-overlay .wb-toggle {
   width: 40px;
   height: 24px;
   border: var(--wb-settings-control-border);
@@ -7662,14 +7696,17 @@ html[data-theme="light"] .wb-tool-list .mono {
   box-shadow: var(--wb-settings-control-shadow);
 }
 
-.settings-overlay .wb-toggle:hover:not(:disabled) {
+html[data-theme] .settings-overlay .wb-toggle:hover:not(:disabled) {
   border-color: color-mix(in srgb, var(--wb-accent) 34%, var(--wb-line-2));
   background: var(--wb-settings-control-hover-bg);
 }
 
-.settings-overlay .wb-toggle.on {
-  background: var(--wb-accent);
-  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--wb-accent) 76%, #000);
+html[data-theme] .settings-overlay .wb-toggle.on {
+  border-color: color-mix(in srgb, var(--wb-accent) 64%, var(--wb-line-2));
+  background: color-mix(in srgb, var(--wb-accent) 42%, var(--wb-settings-control-bg));
+  box-shadow:
+    0 5px 14px rgba(9, 17, 30, .045),
+    inset 0 0 0 1px color-mix(in srgb, var(--wb-accent) 20%, transparent);
 }
 
 /* Model settings reuse the same surface and control tokens as the rest of the
@@ -7992,14 +8029,6 @@ html[data-theme="light"] .wb-tool-list .mono {
   gap: 8px;
 }
 
-.remote-pairing-result {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
-  align-items: end;
-  gap: 8px;
-}
-
-.remote-pairing-complete,
 .remote-pairing-control {
   display: flex;
   flex-direction: column;
@@ -8104,16 +8133,6 @@ html[data-theme="light"] .wb-tool-list .mono {
 .remote-project-list > span {
   color: var(--wb-muted);
   font-size: 11px;
-}
-
-.remote-bundle {
-  height: 68px;
-  min-height: 68px;
-  max-height: 112px;
-  resize: vertical;
-  overflow-wrap: anywhere;
-  font-size: 10.5px;
-  line-height: 1.4;
 }
 
 .remote-peer-card {
@@ -8532,81 +8551,6 @@ html[data-theme="light"] .wb-tool-list .mono {
   text-align: center;
   color: var(--wb-muted);
   font-size: calc(13px * var(--wb-ui-font-scale, 1));
-}
-
-.wb-skill-detail-card {
-  display: flex;
-  flex-direction: column;
-  gap: 14px;
-}
-
-.wb-skill-detail-head {
-  display: flex;
-  align-items: flex-start;
-  justify-content: space-between;
-  gap: 14px;
-}
-
-.wb-skill-detail-head-main {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  min-width: 0;
-}
-
-.wb-skill-detail-icon {
-  width: 40px;
-  height: 40px;
-  flex-shrink: 0;
-  display: grid;
-  place-items: center;
-  border-radius: 10px;
-  background: var(--wb-icon-bg);
-  color: var(--wb-muted);
-  font-size: calc(16px * var(--wb-ui-font-scale, 1));
-  font-weight: 700;
-}
-
-.wb-skill-detail-title {
-  min-width: 0;
-}
-
-.wb-skill-detail-title h4 {
-  margin: 0;
-  font-size: calc(16px * var(--wb-ui-font-scale, 1));
-  font-weight: 720;
-}
-
-.wb-skill-detail-title p {
-  margin: 3px 0 0;
-  color: var(--wb-muted);
-  font-size: calc(13px * var(--wb-ui-font-scale, 1));
-  line-height: 1.45;
-}
-
-.wb-skill-detail-tags {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 6px;
-  margin-top: 8px;
-}
-
-.wb-skill-tag {
-  display: inline-flex;
-  align-items: center;
-  padding: 2px 7px;
-  border-radius: 4px;
-  background: rgba(107, 140, 255, 0.14);
-  color: var(--wb-blue);
-  font-size: calc(10.5px * var(--wb-ui-font-scale, 1));
-  font-weight: 650;
-}
-
-.wb-skill-detail-actions {
-  flex-shrink: 0;
-  display: flex;
-  align-items: center;
-  gap: 10px;
 }
 
 .wb-skill-detail-body {
@@ -9438,31 +9382,6 @@ html[data-theme="light"] .wb-tool-list .mono {
     0 0 0 5px color-mix(in srgb, var(--swatch) 24%, transparent);
 }
 
-.wb-accent-custom-button,
-.wb-accent-value-button {
-  height: 34px;
-  display: inline-flex;
-  align-items: center;
-  gap: 8px;
-  padding: 0 11px;
-  border: 1px solid var(--wb-line-2);
-  border-radius: 8px;
-  background: var(--wb-control-bg);
-  color: var(--wb-text);
-  font: inherit;
-  font-size: calc(12px * var(--wb-ui-font-scale, 1));
-  cursor: pointer;
-}
-
-.wb-accent-custom-button:hover,
-.wb-accent-value-button:hover,
-.wb-accent-custom-button.active {
-  border-color: color-mix(in srgb, var(--wb-accent) 48%, var(--wb-line-2));
-  background: color-mix(in srgb, var(--wb-accent) 7%, var(--wb-control-bg));
-}
-
-.wb-accent-custom-button:focus-visible,
-.wb-accent-value-button:focus-visible,
 .wb-accent-popover button:focus-visible,
 .wb-accent-popover input:focus-visible,
 .wb-accent-sv:focus-visible {
@@ -9470,22 +9389,6 @@ html[data-theme="light"] .wb-tool-list .mono {
   outline-offset: 2px;
 }
 
-.wb-accent-spectrum {
-  width: 17px;
-  height: 17px;
-  flex: 0 0 17px;
-  border: 2px solid color-mix(in srgb, var(--wb-card-bg) 84%, transparent);
-  border-radius: 50%;
-  background: conic-gradient(#ff4d64, #ffb13b, #60d36c, #34c9d8, #4378ff, #8b5cf6, #e5488b, #ff4d64);
-  box-shadow: 0 0 0 1px var(--wb-line);
-}
-
-.wb-accent-value-button {
-  min-width: 116px;
-  justify-content: flex-start;
-}
-
-.wb-accent-value-dot,
 .wb-accent-preview-dot {
   width: 19px;
   height: 19px;
@@ -9493,16 +9396,6 @@ html[data-theme="light"] .wb-tool-list .mono {
   border-radius: 50%;
   background: var(--swatch);
   box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.22);
-}
-
-.wb-accent-value-hex {
-  font-family: var(--mono, "IBM Plex Mono", ui-monospace, monospace);
-  font-size: calc(11px * var(--wb-ui-font-scale, 1));
-}
-
-.wb-accent-chevron {
-  margin-left: auto;
-  color: var(--wb-muted);
 }
 
 .wb-accent-popover {
@@ -10408,6 +10301,14 @@ html[data-theme="dark"] .wb-local-model-actions > .wb-runtime-badge.is-onnx { co
   margin-bottom: 12px;
 }
 
+html[data-theme] .settings-overlay .wb-channel-card {
+  border-color: color-mix(in srgb, var(--wb-line-2) 64%, transparent);
+  border-radius: 16px;
+  background: color-mix(in srgb, var(--wb-card-bg) 82%, transparent);
+  padding: 18px;
+  box-shadow: var(--wbc-control-shadow, 0 1px 2px rgba(15, 23, 42, .035));
+}
+
 .wb-channel-head {
   display: flex;
   align-items: center;
@@ -10462,6 +10363,13 @@ html[data-theme="dark"] .wb-local-model-actions > .wb-runtime-badge.is-onnx { co
   border-radius: 8px;
   background: var(--wb-control-bg);
   margin-bottom: 8px;
+}
+
+html[data-theme] .settings-overlay .wb-wechat-status-row {
+  border-color: color-mix(in srgb, var(--wb-line-2) 68%, transparent);
+  border-radius: 12px;
+  background: var(--wb-settings-control-bg);
+  box-shadow: inset 0 1px 0 color-mix(in srgb, #fff 7%, transparent);
 }
 
 .wb-wechat-status-copy {

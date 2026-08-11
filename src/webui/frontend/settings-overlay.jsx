@@ -107,15 +107,6 @@ async function settingsFetch(input, init) {
   throw error;
 }
 
-function escapeHtml(value) {
-  return String(value == null ? "" : value)
-    .replace(/&/g, "&amp;")
-    .replace(/</g, "&lt;")
-    .replace(/>/g, "&gt;")
-    .replace(/"/g, "&quot;")
-    .replace(/'/g, "&#39;");
-}
-
 function renderSettingsMarkdown(value) {
   return window.CyreneUI.require("markdown").render(value, {
     fallback: "escaped-breaks",
@@ -2276,7 +2267,7 @@ function ModelsPanel(p) {
             ),
             React.createElement("button", {
               type: "button",
-              className: "wb-btn compact " + (item.ready ? "muted" : "tonal"),
+              className: "wb-btn compact " + (item.ready ? "danger" : "tonal"),
               disabled: !!localBusy || item.downloading,
               "aria-label": (item.ready ? t("settings.delete") : item.error ? t("settings.retry") : t("settings.download")) + " " + displayName,
               onClick: function () { manageLocalModel(item.id, item.ready ? "delete" : "download"); },
