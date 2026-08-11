@@ -641,9 +641,15 @@
 
   function projectedNodeId(element) {
     if (domNodeIds && domNodeIds.has(element)) return domNodeIds.get(element);
+    var explicitNodeId = String(element.getAttribute("data-cyrene-node-id") || "")
+      .replace(/[^a-zA-Z0-9_-]/g, "_")
+      .slice(0, 100);
+    if (explicitNodeId && !nodes.has(explicitNodeId)) {
+      if (domNodeIds) domNodeIds.set(element, explicitNodeId);
+      return explicitNodeId;
+    }
     var hint = String(
-      element.getAttribute("data-cyrene-node-id")
-      || element.id
+      element.id
       || element.getAttribute("name")
       || "control"
     ).replace(/[^a-zA-Z0-9_-]/g, "_").slice(0, 64) || "control";

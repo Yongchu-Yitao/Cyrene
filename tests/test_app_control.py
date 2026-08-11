@@ -84,6 +84,7 @@ def test_current_tree_exposes_project_switch_chat_search_and_shared_pip_maximize
     chat = (root / "src/webui/frontend/workbench-chat.jsx").read_text(encoding="utf-8")
     model = (root / "src/webui/frontend/workbench-model.jsx").read_text(encoding="utf-8")
     welcome = (root / "src/webui/frontend/workbench-welcome.jsx").read_text(encoding="utf-8")
+    ui_surface = (root / "src/webui/frontend/platform/ui-surface.jsx").read_text(encoding="utf-8")
     electron = (root / "electron/main.js").read_text(encoding="utf-8")
 
     assert 'node_id: "project_switcher"' in workbench
@@ -124,8 +125,11 @@ def test_current_tree_exposes_project_switch_chat_search_and_shared_pip_maximize
     assert 'data-cyrene-node-id="onboarding"' in welcome
     assert 'data-cyrene-node-id="onboarding_base_url"' in welcome
     assert 'data-cyrene-node-id="onboarding_model"' in welcome
+    assert 'domNodeIds.set(element, explicitNodeId)' in ui_surface
+    assert 'return explicitNodeId;' in ui_surface
     assert "isDesktopOnboardingTree(candidate)" in electron
     assert "runDesktopOnboardingSmokeTest(window, uiInstanceId, tree)" in electron
+    assert "'onboarding model field after scroll'" in electron
 
 
 def test_window_control_schema_requires_argument_bound_idempotency_key():

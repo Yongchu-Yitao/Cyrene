@@ -5433,9 +5433,8 @@ async function runDesktopOnboardingSmokeTest(window, uiInstanceId, initialTree) 
   tree = await waitForDesktopSmokeTree(
     uiInstanceId,
     (candidate) => isDesktopOnboardingTree(candidate)
-      && !!findDesktopSmokeNode(candidate.root, (node) => node.node_id === 'onboarding_base_url')
-      && !!findDesktopSmokeNode(candidate.root, (node) => node.node_id === 'onboarding_model'),
-    'onboarding custom model fields',
+      && !!findDesktopSmokeNode(candidate.root, (node) => node.node_id === 'onboarding_base_url'),
+    'onboarding custom model endpoint',
   );
 
   let endpoint = findDesktopSmokeNode(
@@ -5477,6 +5476,35 @@ async function runDesktopOnboardingSmokeTest(window, uiInstanceId, initialTree) 
       return !!node && node.value_summary === originalEndpoint;
     },
     'restored onboarding endpoint',
+  );
+
+  tree = await waitForDesktopSmokeTree(
+    uiInstanceId,
+    (candidate) => {
+      const onboarding = findDesktopSmokeNode(
+        candidate.root,
+        (node) => node.node_id === 'onboarding',
+      );
+      return !!onboarding && Array.isArray(onboarding.actions)
+        && onboarding.actions.some((action) => action.action_id === 'scroll_page');
+    },
+    'scrollable onboarding surface',
+  );
+  const onboarding = findDesktopSmokeNode(tree.root, (node) => node.node_id === 'onboarding');
+  await runDesktopSmokeAction(
+    uiInstanceId,
+    tree,
+    onboarding,
+    'scroll_page',
+    { delta: 1200 },
+  );
+  await waitForDesktopSmokeTree(
+    uiInstanceId,
+    (candidate) => !!findDesktopSmokeNode(
+      candidate.root,
+      (node) => node.node_id === 'onboarding_model',
+    ),
+    'onboarding model field after scroll',
   );
 
   const settingsCheck = await runDesktopSettingsSmokeTest();
