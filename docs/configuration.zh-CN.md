@@ -54,7 +54,7 @@ Portable Backup ZIP 不由 Cyrene 加密。为了让 Restore 能用目标 Instal
 |---|---|---|
 | `ASSISTANT_NAME` | 显示名称 | `Cyrene` |
 | `MAX_HISTORY_MESSAGES` | Context Window 保留消息数 | `40` |
-| `MAX_TOOL_OUTPUT_CHARS` | 发送给 LLM 的 Tool Result 字符上限 | `12000` |
+| `MAX_TOOL_OUTPUT_CHARS` | 发送给 LLM 的 Tool Result 可选字符上限（`0` 表示不设全局限制） | `0` |
 
 ### Telegram（可选）
 
@@ -142,6 +142,18 @@ Settings 页面可以不重启更新：
 - `SOUL.md`；
 - Budget：Estimated Cost、CNY/USD、Billing Start Day、Adaptive Mode 和
   Warn/Block。
+
+### Agent 可见 Typed Settings
+
+Main Agent 只能通过 `cyrene_tools` 使用 `cyrene.settings.describe`、
+`cyrene.settings.read` 和 `cyrene.settings.update`。Registry 包含 52 个 Scalar
+Setting 和 31 个复杂 Control Coverage，覆盖全部非模型 Settings Tab；Namespace
+为 `runtime`、`desktop`、`appearance`、`profile`、`shortcuts`。
+
+Update 是原子 Compare-and-swap Patch，必须携带最新 `expected_revision`。旧 Revision
+返回冲突并保留用户较新的修改。Shortcut Patch 保留未指定 Action，只有明确命名
+Binding 的 `null` 才表示重置。Models、Secret、Secret Redaction 和
+`cyrene_tools` 自身可用性不能通过该控制面修改。
 
 ## Browser 配置
 

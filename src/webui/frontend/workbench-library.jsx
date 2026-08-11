@@ -434,6 +434,7 @@
     var isTrash = props.trash;
     return h("div", {
       className: "wb-lib-row wb-lib-table-grid" + (props.active ? " active" : ""), role: "row", tabIndex: 0,
+      "data-cyrene-context-menu": "true",
       draggable: !!props.onDragStart,
       onDragStart: function (event) { if (props.onDragStart) props.onDragStart(event, item); },
       onDragEnd: props.onDragEnd,
@@ -463,6 +464,7 @@
     var tags = itemTags(item);
     return h("article", {
       className: "wb-lib-card" + (props.active ? " active" : ""),
+      "data-cyrene-context-menu": "true",
       draggable: !!props.onDragStart,
       onDragStart: function (event) { if (props.onDragStart) props.onDragStart(event, item); },
       onDragEnd: props.onDragEnd,
@@ -670,6 +672,7 @@
     });
     var panelHeight = heightState[0]; var setPanelHeight = heightState[1];
     var resizeRef = useRef(null);
+    var resizeHandleRef = useRef(null);
     var tabs = [
       { id: "info", label: L("library.info", "信息") }, { id: "notes", label: L("library.notes", "笔记") }, { id: "tags", label: L("library.tags", "标签") },
       { id: "relations", label: L("library.relations", "关联") }, { id: "attachments", label: L("library.attachments", "附件") }, { id: "citation", label: L("library.citation", "引用") },
@@ -721,12 +724,54 @@
       setPanelHeight(null);
       try { window.localStorage.removeItem("cyrene.library.workspaceHeight"); } catch (_) {}
     }
+    function setSemanticHeight(input) {
+      var handle = resizeHandleRef.current;
+      if (!handle || !handle.isConnected) throw new Error("library detail separator is not available");
+      var bounds = heightBounds(handle);
+      var current = handle.parentElement.getBoundingClientRect().height;
+      var next;
+      if (input && Number.isFinite(Number(input.value_ratio))) {
+        next = bounds.min + ((bounds.max - bounds.min) * Math.max(0, Math.min(1, Number(input.value_ratio))));
+      } else {
+        var delta = Number(input && input.delta_ratio);
+        if (!Number.isFinite(delta)) throw new Error("delta_ratio or value_ratio is required");
+        next = current + ((bounds.max - bounds.min) * Math.max(-1, Math.min(1, delta)));
+      }
+      next = Math.max(bounds.min, Math.min(bounds.max, Math.round(next)));
+      rememberHeight(next);
+      return { height: next, minimum: bounds.min, maximum: bounds.max };
+    }
+    useEffect(function () {
+      if (!window.CyreneUI.has("uiSurface")) return undefined;
+      var uiSurface = window.CyreneUI.require("uiSurface");
+      return uiSurface.register({
+        node_id: "library_detail_separator",
+        parent_id: "root",
+        scope: "main",
+        get_node: function () {
+          var handle = resizeHandleRef.current;
+          return handle && handle.isConnected ? {
+            role: "separator",
+            name: "文献详情面板高度",
+            value_summary: String(Math.round(handle.parentElement.getBoundingClientRect().height)),
+            state: { orientation: "horizontal", automatic: panelHeight == null },
+          } : null;
+        },
+        actions: [
+          { action_id: "adjust", kind: "adjust", risk: "R1", gesture_aliases: ["pointer_resize", "arrow_key"], input_schema: { delta_ratio: "-1..1" } },
+          { action_id: "set_value", kind: "adjust", risk: "R1", gesture_aliases: ["pointer_resize"], input_schema: { value_ratio: "0..1" } },
+          { action_id: "reset_size", kind: "invoke", risk: "R1", gesture_aliases: ["double_press"] },
+        ],
+        handlers: { adjust: setSemanticHeight, set_value: setSemanticHeight, reset_size: resetHeight },
+      });
+    }, [panelHeight]);
 
     return h("section", {
       className: "wb-lib-item-workspace" + (panelHeight ? " is-resized" : ""),
       style: panelHeight ? { height: Math.round(panelHeight) + "px" } : null,
     },
       h("div", {
+        ref: resizeHandleRef,
         className: "wb-lib-work-resizer",
         role: "separator",
         tabIndex: 0,
@@ -1210,6 +1255,7 @@
     var citationState = useState({ style: "ieee", text: "", bibtex: "", citekey: "", loading: false, error: "" }); var citation = citationState[0]; var setCitation = citationState[1];
     var fileRef = useRef(null);
     var requestSeq = useRef(0);
+    var loadMoreSeq = useRef(0);
     var detailSeq = useRef(0);
     var readMarksRef = useRef({});
 
@@ -1250,6 +1296,8 @@
       options = options || {};
       if (!client || !workspace) return Promise.resolve();
       var seq = ++requestSeq.current;
+      loadMoreSeq.current += 1;
+      setLoadingMore(false);
       setLoading(true); setError("");
       var calls = [client.list(listParams())];
       if (!options.itemsOnly) calls.push(client.stats(), client.collections(), client.tags());
@@ -1275,12 +1323,31 @@
     function loadMore() {
       if (!client || loadingMore || data.items.length >= data.total) return;
       var params = listParams(); params.offset = data.items.length;
+      var seq = ++loadMoreSeq.current;
       setLoadingMore(true);
       client.list(params).then(function (payload) {
+        if (seq !== loadMoreSeq.current) return;
         var items = Array.isArray(payload.items) ? payload.items : [];
-        setData(function (prev) { return Object.assign({}, prev, { items: prev.items.concat(items), total: payload.total != null ? payload.total : prev.total }); });
+        setData(function (prev) {
+          var seen = {};
+          prev.items.forEach(function (item) { seen[String(item.id)] = true; });
+          var uniqueItems = items.filter(function (item) {
+            var id = String(item.id);
+            if (seen[id]) return false;
+            seen[id] = true;
+            return true;
+          });
+          return Object.assign({}, prev, {
+            items: prev.items.concat(uniqueItems),
+            total: payload.total != null ? payload.total : prev.total,
+          });
+        });
         setLoadingMore(false);
-      }).catch(function (err) { setLoadingMore(false); Toast(String(err.message || err), "error"); });
+      }).catch(function (err) {
+        if (seq !== loadMoreSeq.current) return;
+        setLoadingMore(false);
+        Toast(String(err.message || err), "error");
+      });
     }
 
     useEffect(function () {

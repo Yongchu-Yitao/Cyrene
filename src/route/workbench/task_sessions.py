@@ -22,6 +22,19 @@ def register_task_session_routes(
             status_code=exc.status_code,
         )
 
+    def finalize_host_actions_after_reply(
+        session_id: str,
+        client_request_id: str = "",
+    ) -> None:
+        """Release deferred host actions only after this route persisted reply state."""
+        from cyrene.runtime.host_actions import finalize_origin
+
+        asyncio.create_task(finalize_origin(
+            session_id,
+            "",
+            origin_run_id=client_request_id,
+        ))
+
     def apply_task_model_preference(
         session_id: str,
         body: dict[str, Any],
@@ -822,6 +835,8 @@ def register_task_session_routes(
         attachments = body.get("attachments") if isinstance(body.get("attachments"), list) else []
         mode = str(body.get("mode") or "auto")
         command = str(body.get("command") or "")
+        ui_instance_id = str(body.get("uiInstanceId") or "").strip()
+        client_request_id = str(body.get("clientRequestId") or "").strip()
         if not user_input and not attachments:
             return JSONResponse({"error": "input is required"}, status_code=400)
 
@@ -919,7 +934,7 @@ def register_task_session_routes(
         volatile_ephemeral_system = _workbench_compose_volatile_ephemeral_system(project, session)
         agent_error = None
         try:
-            agent_reply = await _workbench_agent_reply(user_input, session, constraints, attachments=attachments, permission_mode=mode, command=command, project_workspace=str(project.get("workspacePath") or ""), ephemeral_system=ephemeral_system, volatile_ephemeral_system=volatile_ephemeral_system, static_system_extra=_workbench_compose_static_system(project, session))
+            agent_reply = await _workbench_agent_reply(user_input, session, constraints, attachments=attachments, permission_mode=mode, command=command, project_workspace=str(project.get("workspacePath") or ""), ephemeral_system=ephemeral_system, volatile_ephemeral_system=volatile_ephemeral_system, static_system_extra=_workbench_compose_static_system(project, session), conversation_source="" if ui_instance_id else "webui", ui_instance_id=ui_instance_id, client_request_id=client_request_id)
         except _WorkbenchAgentRunError as exc:
             agent_error = exc
             agent_reply = exc.message
@@ -1069,6 +1084,7 @@ def register_task_session_routes(
         project["updatedAt"] = finished_at
         payload["activeSessionId"] = session_id
         _write_workbench_store(payload)
+        finalize_host_actions_after_reply(session_id, client_request_id)
         append_notification(
             title="任务执行失败" if agent_error else "任务回复完成",
             body=(
@@ -1097,6 +1113,8 @@ def register_task_session_routes(
         attachments = body.get("attachments") if isinstance(body.get("attachments"), list) else []
         mode = str(body.get("mode") or "auto")
         command = str(body.get("command") or "")
+        ui_instance_id = str(body.get("uiInstanceId") or "").strip()
+        client_request_id = str(body.get("clientRequestId") or "").strip()
         if not message and not attachments:
             return JSONResponse({"error": "message is required"}, status_code=400)
 
@@ -1125,7 +1143,7 @@ def register_task_session_routes(
         volatile_ephemeral_system = _workbench_compose_volatile_ephemeral_system(project, session)
         agent_command = command or "workbench-task-reply"
         try:
-            agent_reply = await _workbench_agent_reply(message, session, [], attachments=attachments, permission_mode=mode, command=agent_command, project_workspace=str(project.get("workspacePath") or ""), ephemeral_system=ephemeral_system, volatile_ephemeral_system=volatile_ephemeral_system, static_system_extra=_workbench_compose_static_system(project, session))
+            agent_reply = await _workbench_agent_reply(message, session, [], attachments=attachments, permission_mode=mode, command=agent_command, project_workspace=str(project.get("workspacePath") or ""), ephemeral_system=ephemeral_system, volatile_ephemeral_system=volatile_ephemeral_system, static_system_extra=_workbench_compose_static_system(project, session), conversation_source="" if ui_instance_id else "webui", ui_instance_id=ui_instance_id, client_request_id=client_request_id)
         except _WorkbenchAgentRunError as exc:
             return agent_run_error_response(exc)
         git_status_after = _workbench_git_status_snapshot(workspace_root)
@@ -1160,6 +1178,7 @@ def register_task_session_routes(
         _workbench_promote_file_artifacts(session, file_changes, now, workspace_root)
         payload["activeSessionId"] = session_id
         _write_workbench_store(payload)
+        finalize_host_actions_after_reply(session_id, client_request_id)
         append_notification(
             title="Agent 回复完成",
             body=f"Agent 在「{session.get('title') or '对话'}」中回复了你。",
@@ -1191,6 +1210,8 @@ def register_task_session_routes(
         attachments = body.get("attachments") if isinstance(body.get("attachments"), list) else []
         mode = str(body.get("mode") or "auto")
         command = str(body.get("command") or "")
+        ui_instance_id = str(body.get("uiInstanceId") or "").strip()
+        client_request_id = str(body.get("clientRequestId") or "").strip()
         requested_base_revision = body.get("basePlanRevision")
         if not user_input and not attachments:
             return JSONResponse({"error": "input is required"}, status_code=400)
@@ -1375,7 +1396,7 @@ def register_task_session_routes(
         volatile_ephemeral_system = _workbench_compose_volatile_ephemeral_system(project, session)
         agent_command = command or ("workbench-task-reply" if kind == "answer" else "")
         try:
-            agent_reply = await _workbench_agent_reply(user_input, session, [], attachments=attachments, permission_mode=mode, command=agent_command, project_workspace=str(project.get("workspacePath") or ""), ephemeral_system=ephemeral_system, volatile_ephemeral_system=volatile_ephemeral_system, static_system_extra=_workbench_compose_static_system(project, session))
+            agent_reply = await _workbench_agent_reply(user_input, session, [], attachments=attachments, permission_mode=mode, command=agent_command, project_workspace=str(project.get("workspacePath") or ""), ephemeral_system=ephemeral_system, volatile_ephemeral_system=volatile_ephemeral_system, static_system_extra=_workbench_compose_static_system(project, session), conversation_source="" if ui_instance_id else "webui", ui_instance_id=ui_instance_id, client_request_id=client_request_id)
         except _WorkbenchAgentRunError as exc:
             return agent_run_error_response(exc)
         git_status_after = _workbench_git_status_snapshot(workspace_root)
@@ -1447,6 +1468,7 @@ def register_task_session_routes(
         project["updatedAt"] = finished_at
         payload["activeSessionId"] = session_id
         _write_workbench_store(payload)
+        finalize_host_actions_after_reply(session_id, client_request_id)
         append_notification(
             title="Agent 回复完成",
             body=f"Agent 在「{session.get('title') or '任务'}」中" + (
@@ -1475,6 +1497,7 @@ def register_task_session_routes(
         body = api_models.body_dict(body_model)
         question_id = str(body.get("question_id") or "").strip()
         answer_text = str(body.get("answer") or body.get("selected_option") or "").strip()
+        ui_instance_id = str(body.get("uiInstanceId") or "").strip()
         if not question_id or not answer_text:
             return JSONResponse({"error": "question_id and answer are required"}, status_code=400)
         payload = _read_workbench_store()
@@ -1545,8 +1568,92 @@ def register_task_session_routes(
         git_status_before = _workbench_git_status_snapshot(workspace_root)
         workspace_files_before = _workbench_workspace_file_snapshot(workspace_root)
         workspace_text_before = _workbench_workspace_text_snapshot(workspace_root)
+        from cyrene.runtime.host_bridge import resolve_conversation_source
+
+        conversation_source = await resolve_conversation_source(ui_instance_id)
         try:
-            agent_reply = await _workbench_answer_pending(session_id, question_id, answer_text, workspace_dir)
+            agent_reply = await _workbench_answer_pending(
+                session_id,
+                question_id,
+                answer_text,
+                workspace_dir,
+                ui_instance_id=ui_instance_id,
+                conversation_source=conversation_source,
+            )
+        except asyncio.CancelledError:
+            # The user's answer is consumed before the continuation starts.
+            # Persist a genuine paused/cancelled terminal state rather than
+            # restoring a question that no longer exists in agent state.
+            cancelled_payload = _read_workbench_store()
+            _cancelled_project, cancelled_session = _workbench_find_session(
+                cancelled_payload, session_id
+            )
+            cancelled_run = None
+            if cancelled_session:
+                finished_at = _utc_now_iso()
+                cancelled_session.pop("pendingQuestion", None)
+                cancelled_session.pop("pendingPlanStep", None)
+                cancelled_session["status"] = "paused"
+                cancelled_session["agentReply"] = (
+                    "回答已提交，但继续执行已被你中断。可稍后继续。"
+                )
+                for step in cancelled_session.get("plan") or []:
+                    if not isinstance(step, dict) or step.get("status") != "running":
+                        continue
+                    step["status"] = "pending"
+                    step["startedAt"] = None
+                    step["currentAction"] = "已停止，可重新执行。"
+                    step["updatedAt"] = finished_at
+                run_id = _short_id("run")
+                events = [
+                    {
+                        "id": _short_id("event"),
+                        "type": "UserMessageEvent",
+                        "runId": run_id,
+                        "createdAt": run_start_ts,
+                        "body": f"[确认] {answer_text}",
+                    },
+                    {
+                        "id": _short_id("event"),
+                        "type": "Paused",
+                        "runId": run_id,
+                        "createdAt": finished_at,
+                        "body": "用户中断了回答后的继续执行。",
+                    },
+                ]
+                cancelled_session.setdefault("events", []).extend(events)
+                cancelled_run = {
+                    "id": run_id,
+                    "taskId": session_id,
+                    "userInput": answer_text,
+                    "agentResponse": "",
+                    "status": "cancelled",
+                    "terminationReason": "user_interrupted",
+                    "startedAt": run_start_ts,
+                    "endedAt": finished_at,
+                    "contextPackId": _short_id("ctx"),
+                    "events": events,
+                    "toolCalls": [],
+                    "fileChanges": [],
+                    "artifacts": [],
+                    "attachments": [],
+                    "mode": "auto",
+                    "error": None,
+                }
+                cancelled_session.setdefault("runs", []).append(cancelled_run)
+                cancelled_session["updatedAt"] = finished_at
+                _write_workbench_store(cancelled_payload)
+                return {
+                    "ok": True,
+                    "interrupted": True,
+                    "awaitingUser": False,
+                    "continuePlanExecution": False,
+                    "project": _cancelled_project,
+                    "session": cancelled_session,
+                    "run": cancelled_run,
+                    **cancelled_payload,
+                }
+            raise
         except Exception:
             logger.exception("Workbench answer-resume failed for session %s", session_id)
             return JSONResponse({"error": "answer resume failed"}, status_code=502)
@@ -1694,6 +1801,7 @@ def register_task_session_routes(
         project["updatedAt"] = finished_at
         payload["activeSessionId"] = session_id
         _write_workbench_store(payload)
+        finalize_host_actions_after_reply(session_id)
         if pending_plan_step and bool(pending_plan_step.get("goalLoop")) and not awaiting_user:
             from cyrene.workbench.goal_loop import resume_after_answer
             await resume_after_answer(

@@ -221,7 +221,6 @@ _BROWSER_TOOL_NAMES = {
     "browser_screenshot",
     "browser_click",
     "browser_click_ref",
-    "browser_click_text",
     "browser_click_at",
     "browser_type",
     "browser_type_ref",

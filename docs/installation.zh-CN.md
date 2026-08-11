@@ -98,6 +98,10 @@ uv run python -m cyrene
 
 打开 `http://localhost:4242`。首次启动应显示 Onboarding。
 
+`cyrene_tools` 自管理工具包只在 Electron Host 与 Workbench Renderer 都已连接时
+可用。仅浏览器 Web UI 或 CLI 仍可使用普通 Agent Tool，但不能借用未向该
+Runtime 注册的 Electron UI Surface。
+
 无 Web 运行 Agent：
 
 ```bash

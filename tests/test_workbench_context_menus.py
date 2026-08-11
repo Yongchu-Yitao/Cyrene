@@ -483,8 +483,10 @@ def test_project_memory_editor_and_manual_chat_trigger_are_wired_end_to_end():
     assert ".workbench-project-memory-toolbar" not in css
     assert ".workbench-project-memory-tabs" not in css
 
-    assert 'function generateMemory(chatId)' in chat
+    assert 'function generateMemory(chatId, lang)' in chat
     assert '"/memory-learning"' in chat
+    assert 'body: JSON.stringify({ lang: lang === "zh" ? "zh" : "en" })' in chat
+    assert 'model.generateMemory(activeChat.id, memoryLanguage)' in chat
     assert "onGenerateMemory={handleGenerateMemory}" in chat
     for text in (
         '"rail.editMemory": "Edit memory"',

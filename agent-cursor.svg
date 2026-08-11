@@ -1,0 +1,26 @@
+<svg width="32" height="32" viewBox="0 0 64 64" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <linearGradient id="cursorFill" x1="13" y1="8" x2="48" y2="52" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#A78BFA"/>
+      <stop offset="0.52" stop-color="#6366F1"/>
+      <stop offset="1" stop-color="#22D3EE"/>
+    </linearGradient>
+  </defs>
+
+  <path
+    d="M16.8 11.1
+       C13.5 9.2 10.5 11.5 11.2 15.2
+       L17.3 46.9
+       C18.2 51.8 22.5 53.1 25.2 48.9
+       L30.5 40.6
+       C31.6 38.9 32.7 38.2 34.7 37.8
+       L45.8 35.7
+       C50.8 34.8 51.9 30.3 47.5 27.8
+       L16.8 11.1Z"
+    fill="url(#cursorFill)"
+    stroke="#FFFFFF"
+    stroke-width="2.5"
+    stroke-linejoin="round"
+  />
+
+</svg>

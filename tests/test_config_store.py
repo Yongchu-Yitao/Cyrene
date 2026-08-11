@@ -173,6 +173,22 @@ def test_removed_tool_round_setting_is_purged_and_rejected(
         isolated_config_store.set_env_many({"MAX_TOOL_ROUNDS": "15"})
 
 
+def test_migration_removes_legacy_global_tool_output_cap(isolated_config_store):
+    config = {
+        "env": {
+            "OPENAI_MODEL": "example-model",
+            "MAX_TOOL_OUTPUT_CHARS": "12000",
+        },
+        "settings": {},
+    }
+    _write_encrypted(isolated_config_store, config)
+
+    loaded = isolated_config_store._ensure_loaded()
+
+    assert loaded["env"]["MAX_TOOL_OUTPUT_CHARS"] == "0"
+    assert isolated_config_store.get_env("MAX_TOOL_OUTPUT_CHARS") == "0"
+
+
 def test_restore_drops_removed_tool_round_setting(isolated_config_store):
     normalized, _encrypted = isolated_config_store.prepare_restored_snapshot({
         "env": {

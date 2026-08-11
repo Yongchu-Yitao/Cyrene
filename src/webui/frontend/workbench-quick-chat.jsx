@@ -200,6 +200,28 @@ function QuickChatApp() {
     return (window.cyrene && window.cyrene.quickChat) || null;
   }
 
+  function syncAgentCursorRunning(isRunning) {
+    var cursorBridge = window.cyrene && window.cyrene.agentCursor;
+    if (cursorBridge && typeof cursorBridge.setRunning === "function") {
+      cursorBridge.setRunning(isRunning === true).catch(function () {});
+    }
+    try {
+      if (window.CyreneUI.has("uiSurface")) {
+        window.CyreneUI.require("uiSurface").setAgentRunning(isRunning === true);
+      }
+    } catch (error) {}
+  }
+
+  useQuickChatEffect(function () {
+    syncAgentCursorRunning(sending);
+  }, [sending]);
+
+  useQuickChatEffect(function () {
+    return function () {
+      syncAgentCursorRunning(false);
+    };
+  }, []);
+
   useQuickChatEffect(function () { activeChatIdRef.current = activeChatId; }, [activeChatId]);
 
   useQuickChatEffect(function () {

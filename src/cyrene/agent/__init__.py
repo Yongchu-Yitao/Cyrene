@@ -162,6 +162,7 @@ _EXPORT_GROUPS: dict[str, tuple[str, ...]] = {
         "is_session_running",
         "interrupt_active_run",
         "run_agent",
+        "run_session_operation",
         "run_heartbeat_agent",
         "run_steward_agent",
         "run_task_agent",

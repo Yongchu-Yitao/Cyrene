@@ -182,15 +182,26 @@ def register_project_routes(
                 sid = str(s.get("id") or "").strip()
                 if sid:
                     try:
-                        await clear_session_id(session_id=sid)
+                        interrupt_active_run(session_id=sid)
+                        await clear_session_id(session_id=sid, deleting=True)
                     except Exception:
                         logger.exception("Failed to clear session state for %s", sid)
+                        return error_response(
+                            "Project agents could not be terminated",
+                            503,
+                            "project_agents_not_terminated",
+                        )
             # Also drop the project's workbench conversations (chat-kind sessions).
             try:
                 from route.workbench.chat import remove_project_chats
                 await remove_project_chats(project_id)
             except Exception:
                 logger.exception("Failed to remove chats for project %s", project_id)
+                return error_response(
+                    "Project chat agents could not be terminated",
+                    503,
+                    "project_chat_agents_not_terminated",
+                )
             if doomed_data_key != _WORKBENCH_LEGACY_DATA_KEY:
                 try:
                     from cyrene.config import get_knowledge_db_path

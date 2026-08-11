@@ -12,7 +12,12 @@ var WB_PERMISSION_QUESTION_KINDS = {
   write_permission_request: true,
   read_elevation: true,
   subshell_elevation: true,
+  external_delivery_request: true,
+  external_upload_confirmation: true,
   delete_confirmation: true,
+  destructive_confirmation: true,
+  self_configuration_confirmation: true,
+  host_lifecycle_confirmation: true,
   task_permission_request: true,
   git_commit: true,
 };
@@ -41,6 +46,16 @@ function wbIsPermissionQuestionKind(kind) {
   // the single feedback channel. Quick CRUD callers may pass a `timeout` per call.
   function apiJson(url, options) {
     return window.CyreneUI.require("api").json(url, { toast: false, timeout: 0, ...(options || {}) });
+  }
+
+  function currentUiInstanceId() {
+    return window.CyreneUI.has("uiSurface")
+      ? window.CyreneUI.require("uiSurface").getInstanceId()
+      : "";
+  }
+
+  function newClientRequestId(prefix) {
+    return String(prefix || "task") + "_" + Date.now() + "_" + Math.random().toString(36).slice(2, 11);
   }
 
   function codexLimitBuckets(limits) {
@@ -292,6 +307,7 @@ function wbIsPermissionQuestionKind(kind) {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         input: input || "",
+        clientRequestId: options.clientRequestId || newClientRequestId("task_run"),
         attachments: options.attachments || [],
         mode: options.mode || undefined,
         command: options.command || undefined,
@@ -302,6 +318,7 @@ function wbIsPermissionQuestionKind(kind) {
         action: options.action || undefined,
         meta: options.meta || undefined,
         planDefinitionRevision: options.planDefinitionRevision,
+        uiInstanceId: currentUiInstanceId(),
       }),
     };
     if (options.signal) init.signal = options.signal;
@@ -433,12 +450,14 @@ function wbIsPermissionQuestionKind(kind) {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         input: input || "",
+        clientRequestId: options.clientRequestId || newClientRequestId("task_dispatch"),
         attachments: options.attachments || [],
         mode: options.mode || undefined,
         command: options.command || undefined,
         model: options.model || undefined,
         reasoningEffort: options.reasoningEffort || "",
         basePlanRevision: options.basePlanRevision,
+        uiInstanceId: currentUiInstanceId(),
       }),
     };
     if (options.signal) init.signal = options.signal;
@@ -466,11 +485,13 @@ function wbIsPermissionQuestionKind(kind) {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         message: message || "",
+        clientRequestId: options.clientRequestId || newClientRequestId("task_chat"),
         attachments: options.attachments || [],
         mode: options.mode || undefined,
         command: options.command || undefined,
         model: options.model || undefined,
         reasoningEffort: options.reasoningEffort || "",
+        uiInstanceId: currentUiInstanceId(),
       }),
     };
     if (options.signal) init.signal = options.signal;
@@ -482,7 +503,11 @@ function wbIsPermissionQuestionKind(kind) {
     return apiJson("/api/task-sessions/" + encodeURIComponent(sessionId) + "/answer", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ question_id: questionId || "", answer: answerText || "" }),
+      body: JSON.stringify({
+        question_id: questionId || "",
+        answer: answerText || "",
+        uiInstanceId: currentUiInstanceId(),
+      }),
     }).then(normalizeStore);
   }
 

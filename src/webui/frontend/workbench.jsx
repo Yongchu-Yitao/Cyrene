@@ -1084,6 +1084,7 @@ function wbApplyStoredRightWidth(node) {
 // task context panel and the chat side panel (exposed on window for the
 // separately-bundled workbench-chat.js).
 function WbColResizer({ cardEdge }) {
+  var handleRef = useWorkbenchRef(null);
   function emitResizePhase(phase) {
     try {
       window.dispatchEvent(new CustomEvent("workbench:right-resize", { detail: { phase: phase } }));
@@ -1127,6 +1128,57 @@ function WbColResizer({ cardEdge }) {
     if (grid) grid.style.removeProperty("--wb-right-w");
     try { localStorage.removeItem(WB_RIGHT_STORE); } catch (err) {}
   }
+  function setSemanticWidth(input) {
+    var handle = handleRef.current;
+    var panel = handle && handle.closest(".workbench-right-panel, .wbc-side");
+    var grid = handle && handle.closest(".workbench-grid");
+    if (!panel || !grid) throw new Error("right panel separator is not available");
+    var maxW = wbRightDynamicMax(panel);
+    var minW = WB_RIGHT_MIN;
+    var current = panel.getBoundingClientRect().width;
+    var next;
+    if (input && Number.isFinite(Number(input.value_ratio))) {
+      var ratio = Math.max(0, Math.min(1, Number(input.value_ratio)));
+      next = minW + ((maxW - minW) * ratio);
+    } else {
+      var delta = Number(input && input.delta_ratio);
+      if (!Number.isFinite(delta)) throw new Error("delta_ratio or value_ratio is required");
+      next = current + ((maxW - minW) * Math.max(-1, Math.min(1, delta)));
+    }
+    next = Math.max(minW, Math.min(maxW, Math.round(next)));
+    grid.style.setProperty("--wb-right-w", next + "px");
+    try { localStorage.setItem(WB_RIGHT_STORE, String(next)); } catch (err) {}
+    return { width: next, minimum: minW, maximum: maxW };
+  }
+  useWorkbenchEffect(function () {
+    if (!window.CyreneUI.has("uiSurface")) return undefined;
+    var uiSurface = window.CyreneUI.require("uiSurface");
+    return uiSurface.register({
+      node_id: "right_panel_separator",
+      parent_id: "root",
+      scope: "main",
+      get_node: function () {
+        var handle = handleRef.current;
+        var panel = handle && handle.closest(".workbench-right-panel, .wbc-side");
+        return handle && handle.isConnected && panel ? {
+          role: "separator",
+          name: window.CyreneUI.require("i18n").t("rail.resizeHandle", null, "Right panel width"),
+          value_summary: String(Math.round(panel.getBoundingClientRect().width)),
+          state: { orientation: "vertical" },
+        } : null;
+      },
+      actions: [
+        { action_id: "adjust", kind: "adjust", risk: "R1", gesture_aliases: ["pointer_resize", "arrow_key"], input_schema: { delta_ratio: "-1..1" } },
+        { action_id: "set_value", kind: "adjust", risk: "R1", gesture_aliases: ["pointer_resize"], input_schema: { value_ratio: "0..1" } },
+        { action_id: "reset_size", kind: "invoke", risk: "R1", gesture_aliases: ["double_press"] },
+      ],
+      handlers: {
+        adjust: setSemanticWidth,
+        set_value: setSemanticWidth,
+        reset_size: onDoubleClick,
+      },
+    });
+  }, [cardEdge]);
   function emitResizeHint(active) {
     // The chat panel embeds the hit target in its floating card. Its own border
     // is the resize affordance, so do not draw the legacy full-height guide.
@@ -1145,6 +1197,7 @@ function WbColResizer({ cardEdge }) {
   );
   return (
     <div
+      ref={handleRef}
       className={"wb-col-resizer" + (cardEdge ? " card-edge" : "")}
       role="separator"
       aria-orientation="vertical"
@@ -2033,6 +2086,11 @@ function WorkbenchApp({ theme, actualTheme, onToggleTheme, needsOnboarding }) {
         setSearchOpen(true);
         return;
       }
+      if (sc.matches(event, "voice-command")) {
+        event.preventDefault();
+        WbVoiceCommand.start();
+        return;
+      }
       if (sc.matches(event, "settings")) {
         event.preventDefault();
         setSettingsTab("shortcuts");
@@ -2465,6 +2523,7 @@ function WorkbenchApp({ theme, actualTheme, onToggleTheme, needsOnboarding }) {
       danger: true,
     }).then(function (ok) {
       if (!ok) return undefined;
+      window.dispatchEvent(new Event("cyrene:voice-stop"));
       return model.deleteProject(project.id).then(function (next) {
         setStore(next);
         setFullPage(null);
@@ -2538,6 +2597,84 @@ function WorkbenchApp({ theme, actualTheme, onToggleTheme, needsOnboarding }) {
       return next;
     });
   }
+
+  useWorkbenchEffect(function () {
+    if (!window.CyreneUI.has("uiSurface")) return undefined;
+    var uiSurface = window.CyreneUI.require("uiSurface");
+    uiSurface.setScope(settingsOpen ? "settings" : "main");
+    var unregister = [];
+    var modules = [
+      ["task", t("rail.tasks", "Tasks")],
+      ["chat", t("rail.chat", "Chat")],
+      ["schedule", t("rail.schedule", "Schedule")],
+      ["knowledge", t("rail.knowledge", "Knowledge")],
+      ["memory", t("rail.memory", "Memory")],
+      ["profile", t("rail.profile", "Profile")],
+    ];
+    modules.forEach(function (item) {
+      var page = item[0];
+      unregister.push(uiSurface.register({
+        node_id: "navigation_" + page,
+        parent_id: "root",
+        scope: "main",
+        get_node: function () {
+          return {
+            role: "navigation_item",
+            name: item[1],
+            state: { selected: page === "task" ? !fullPage : fullPage === page },
+          };
+        },
+        actions: [{
+          action_id: "open", kind: "invoke", risk: "R1", gesture_aliases: ["press", "keyboard"],
+          outcome: { effect: "opens_surface", target_scope: page, inspect_after: true },
+        }],
+        handlers: { open: function () { handleOpenPage(page); } },
+      }));
+    });
+    unregister.push(uiSurface.register({
+      node_id: "workspace_sidebar",
+      parent_id: "root",
+      scope: "main",
+      get_node: function () { return { role: "complementary", name: t("rail.sidebar", "Workspace sidebar"), state: { collapsed: railCollapsed } }; },
+      actions: [{ action_id: "toggle", kind: "toggle", risk: "R1", gesture_aliases: ["press"] }],
+      handlers: { toggle: toggleWorkspaceSidebar },
+    }));
+    unregister.push(uiSurface.register({
+      node_id: "open_search",
+      parent_id: "root",
+      scope: "main",
+      order: 20,
+      get_node: function () { return { role: "button", name: t("topbar.search", "Search") }; },
+      actions: [{
+        action_id: "open", kind: "invoke", risk: "R1", gesture_aliases: ["press", "keyboard"],
+        outcome: { effect: "opens_current_overlay", target_role: "dialog", inspect_after: true },
+      }],
+      handlers: { open: function () { setSearchOpen(true); } },
+    }));
+    unregister.push(uiSurface.register({
+      node_id: "open_settings",
+      parent_id: "root",
+      scope: "main",
+      order: 25,
+      get_node: function () { return { role: "button", name: t("settings.title", "Settings") }; },
+      actions: [{
+        action_id: "open", kind: "invoke", risk: "R1", gesture_aliases: ["press", "keyboard"],
+        outcome: { effect: "opens_overlay", target_node_id: "settings_dialog", target_scope: "settings", inspect_after: true },
+      }],
+      handlers: { open: function () { setSettingsTab(""); setSettingsOpen(true); } },
+    }));
+    if (settingsOpen) {
+      unregister.push(uiSurface.register({
+        node_id: "settings_dialog",
+        parent_id: "root",
+        scope: "settings",
+        get_node: function () { return { role: "dialog", name: t("settings.title", "Settings"), state: { tab: settingsTab || "general" } }; },
+        actions: [{ action_id: "dismiss", kind: "dismiss", risk: "R1", gesture_aliases: ["escape_key", "close_button"] }],
+        handlers: { dismiss: function () { setSettingsOpen(false); } },
+      }));
+    }
+    return function () { unregister.forEach(function (remove) { remove(); }); };
+  }, [fullPage, settingsOpen, settingsTab, railCollapsed, t]);
 
   function renderSidebarCollapseControl() {
     return <WorkbenchSidebarCollapseControl collapsed={railCollapsed} onToggle={toggleWorkspaceSidebar} />;
@@ -2636,6 +2773,10 @@ function WorkbenchApp({ theme, actualTheme, onToggleTheme, needsOnboarding }) {
   // backend reports needsOnboarding=false the shell falls through to normal.
   var onboarding = dataState.onboarding || {};
   var onboardingActive = onboarding.needsOnboarding != null ? !!onboarding.needsOnboarding : !!needsOnboarding;
+  function handleOnboardingComplete() {
+    wbRememberWelcomeHandled();
+    setFullPage("chat");
+  }
   if (onboardingActive) {
     return (
       <div className="workbench-shell wb-ob-shell" data-screen-label="Cyrene · onboarding">
@@ -2657,6 +2798,7 @@ function WorkbenchApp({ theme, actualTheme, onToggleTheme, needsOnboarding }) {
         </div>
         {React.createElement(window.CyreneUI.require("welcome").Page || function () { return <div className="workbench-empty">{t("workbench.welcomeLoading")}</div>; }, {
           onboarding: onboarding,
+          onComplete: handleOnboardingComplete,
         })}
         {React.createElement(window.CyreneUI.require("feedback").Host)}
       </div>
@@ -3105,6 +3247,7 @@ function WorkbenchTopbar({ projects, activeProject, activePage, taskView, active
   var [chatSideHidden, setChatSideHidden] = useWorkbenchState(false);
   var [projectMenuOpen, setProjectMenuOpen] = useWorkbenchState(false);
   var [projectActionId, setProjectActionId] = useWorkbenchState("");
+  var [voiceCommand, setVoiceCommand] = useWorkbenchState(function () { return WbVoiceCommand.snapshot(); });
   var topbarRef = useWorkbenchRef(null);
   var projectMenuRef = useWorkbenchRef(null);
   var sessionMenuSeqRef = useWorkbenchRef(0);
@@ -3112,6 +3255,10 @@ function WorkbenchTopbar({ projects, activeProject, activePage, taskView, active
   var terminalMorphKey = tabs.map(function (item) {
     return item.kind + ":" + item.id + ":" + Number(item.activity && item.activity.morphUntil || 0);
   }).join("|");
+
+  useWorkbenchEffect(function () {
+    return WbVoiceCommand.subscribe(setVoiceCommand);
+  }, []);
 
   useWorkbenchEffect(function () {
     if (!projectMenuOpen) return undefined;
@@ -3128,6 +3275,75 @@ function WorkbenchTopbar({ projects, activeProject, activePage, taskView, active
       document.removeEventListener("keydown", closeProjectMenu);
     };
   }, [projectMenuOpen]);
+
+  // Project switching is navigation on the user's current surface. Expose the
+  // same menu/select handlers to the semantic surface; the agent cannot pass a
+  // hidden project id directly to a renderer action.
+  useWorkbenchEffect(function () {
+    if (!window.CyreneUI.has("uiSurface")) return undefined;
+    var uiSurface = window.CyreneUI.require("uiSurface");
+    var unregister = [];
+    unregister.push(uiSurface.register({
+      node_id: "project_switcher",
+      parent_id: "root",
+      scope: "main",
+      order: 10,
+      get_node: function () {
+        return {
+          role: "button",
+          name: t("rail.projects", "Projects"),
+          value_summary: activeProject ? String(activeProject.name || "") : "",
+          state: { expanded: projectMenuOpen, project_id: String(activeProject && activeProject.id || "") },
+        };
+      },
+      actions: [{
+        action_id: "open_menu", kind: "open_menu", risk: "R1", gesture_aliases: ["press", "keyboard"],
+        outcome: { effect: "opens_menu", target_node_id: "project_menu", target_scope: "project_menu", inspect_after: true },
+      }],
+      handlers: { open_menu: function () { setProjectActionId(""); setProjectMenuOpen(true); } },
+    }));
+    if (projectMenuOpen) {
+      uiSurface.setScope("project_menu");
+      unregister.push(uiSurface.register({
+        node_id: "project_menu",
+        parent_id: "root",
+        scope: "project_menu",
+        get_node: function () { return { role: "menu", name: t("rail.projects", "Projects") }; },
+        actions: [{ action_id: "dismiss", kind: "dismiss", risk: "R1", gesture_aliases: ["escape_key", "scrim"] }],
+        handlers: { dismiss: function () { setProjectActionId(""); setProjectMenuOpen(false); } },
+      }));
+      (Array.isArray(projects) ? projects : []).forEach(function (project) {
+        var projectId = String(project.id || "");
+        unregister.push(uiSurface.register({
+          node_id: "project_" + projectId.replace(/[^a-zA-Z0-9_-]/g, "").slice(0, 100),
+          parent_id: "project_menu",
+          scope: "project_menu",
+          get_node: function () {
+            return projectId ? {
+              role: "menuitemradio",
+              name: String(project.name || t("workbench.selectProject", "Select project")),
+              value_summary: WorkbenchModel.pathLabel(project.workspacePath, project.name),
+              state: {
+                project_id: projectId,
+                selected: String(activeProject && activeProject.id || "") === projectId,
+              },
+            } : null;
+          },
+          actions: [{ action_id: "select", kind: "select", risk: "R1", gesture_aliases: ["press", "keyboard"] }],
+          handlers: {
+            select: function () {
+              setProjectActionId("");
+              setProjectMenuOpen(false);
+              return onSelectProject && onSelectProject(projectId);
+            },
+          },
+        }));
+      });
+    } else if (uiSurface.getScope() === "project_menu") {
+      uiSurface.setScope("main");
+    }
+    return function () { unregister.forEach(function (remove) { remove(); }); };
+  }, [projects, activeProject && activeProject.id, activeProject && activeProject.name, projectMenuOpen, onSelectProject, t]);
 
   useWorkbenchEffect(function () {
     var now = Date.now();
@@ -3796,6 +4012,7 @@ function WorkbenchTopbar({ projects, activeProject, activePage, taskView, active
       <div className="workbench-brand" ref={projectMenuRef}>
         <div className="workbench-traffic-space"></div>
         <button
+          data-cyrene-node-id="project_switcher"
           type="button"
           className={"workbench-brand-btn workbench-project-switcher-btn" + (projectMenuOpen ? " active" : "")}
           onClick={function () { setProjectActionId(""); setProjectMenuOpen(function (open) { return !open; }); }}
@@ -3834,7 +4051,7 @@ function WorkbenchTopbar({ projects, activeProject, activePage, taskView, active
                 var actionsOpen = projectActionId === project.id;
                 return (
                   <div key={project.id} className={"workbench-top-project-row" + (selected ? " active" : "") + (actionsOpen ? " menu-open" : "")}>
-                    <button type="button" className="workbench-top-project-select" role="menuitemradio" aria-checked={selected} onClick={function () {
+                    <button type="button" data-cyrene-node-id={"project_" + String(project.id || "").replace(/[^a-zA-Z0-9_-]/g, "").slice(0, 100)} className="workbench-top-project-select" role="menuitemradio" aria-checked={selected} onClick={function () {
                       setProjectMenuOpen(false);
                       setProjectActionId("");
                       if (onSelectProject) onSelectProject(project.id);
@@ -3911,6 +4128,7 @@ function WorkbenchTopbar({ projects, activeProject, activePage, taskView, active
                 data-workbench-topbar-item="session"
                 data-session-kind={item.kind}
                 data-session-id={item.id}
+                data-cyrene-context-menu="true"
                 aria-current={isActive ? "page" : undefined}
                 aria-describedby={hoverPreview && hoverPreview.item.id === item.id && hoverPreview.item.kind === item.kind
                   ? "workbench-session-activity-preview"
@@ -3998,6 +4216,7 @@ function WorkbenchTopbar({ projects, activeProject, activePage, taskView, active
         })}
         {overflowTabs.length ? (
           <button
+            data-cyrene-node-id="open_search"
             type="button"
             className={"workbench-session-overflow-button " + String(overflowActivity.phase || "idle")}
             data-workbench-topbar-item="overflow"
@@ -4059,6 +4278,7 @@ function WorkbenchTopbar({ projects, activeProject, activePage, taskView, active
               type="button"
               className={"workbench-resource-chip " + resource.kind}
               data-workbench-topbar-item="resource"
+              data-cyrene-context-menu="true"
               aria-label={label}
               title={label}
               onClick={function () { if (onOpenPinnedResource) onOpenPinnedResource(resource); }}
@@ -4133,7 +4353,24 @@ function WorkbenchTopbar({ projects, activeProject, activePage, taskView, active
         </div>
         <WorkbenchNotificationCenter notifications={notifications} onReload={onReloadNotifications} onOpenNotification={onOpenNotification} onSettings={onSettings} />
         <button type="button" className="workbench-icon-btn" onClick={onToggleTheme} title={themeTitle}>{themeIcon}</button>
-        <button type="button" className="workbench-icon-btn" onClick={function () { onSettings(); }} title={t("nav.settings")}>
+        {voiceCommand.ready ? (
+          <button
+            type="button"
+            className={"workbench-icon-btn workbench-voice-command-btn" + (voiceCommand.phase ? " " + voiceCommand.phase : "")}
+            onClick={function () { WbVoiceCommand.start(); }}
+            title={voiceCommand.phase === "recording"
+              ? t("topbar.voiceCommandRecording", "Listening…")
+              : voiceCommand.phase === "recognizing"
+                ? t("topbar.voiceCommandRecognizing", "Recognizing…")
+                : t("topbar.voiceCommand", "Voice command")}
+            aria-label={t("topbar.voiceCommand", "Voice command")}
+            aria-pressed={voiceCommand.phase === "recording"}
+            disabled={!!voiceCommand.phase}
+          >
+            <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><rect x="9" y="3" width="6" height="11" rx="3"/><path d="M5.5 11.5a6.5 6.5 0 0 0 13 0M12 18v3M8.5 21h7"/></svg>
+          </button>
+        ) : null}
+        <button type="button" data-cyrene-node-id="open_settings" className="workbench-icon-btn" onClick={function () { onSettings(); }} title={t("nav.settings")}>
           <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2Z"/><circle cx="12" cy="12" r="3"/></svg>
         </button>
         <button type="button" className={"workbench-avatar-btn" + (activePage === "profile" ? " active" : "")} title={t("rail.profile")} onClick={function () { onOpenPage && onOpenPage("profile"); }}>
@@ -4975,10 +5212,144 @@ function WorkbenchSidebarDock({ activePage, onOpenPage, onSettings, collapsed, p
 
 function WorkbenchProfileRail({ collapsed, collapseControl, moduleDock }) {
   var { t } = window.CyreneUI.require("i18n").use();
+  var [budgetState, setBudgetState] = useWorkbenchState(null);
+  var cachedCodexQuota = WorkbenchModel.readCodexQuotaCache();
+  var [codexQuotaState, setCodexQuotaState] = useWorkbenchState({
+    connected: !!(cachedCodexQuota && cachedCodexQuota.connected),
+    windows: cachedCodexQuota ? WorkbenchModel.codexQuotaWindows(cachedCodexQuota.limits) : [],
+    plan: cachedCodexQuota ? WorkbenchModel.codexPlanLabel(cachedCodexQuota.account, cachedCodexQuota.limits) : "",
+  });
+
+  function fetchProfileBudget() {
+    fetch("/api/budget/status")
+      .then(function (response) { return response.json(); })
+      .then(function (payload) { setBudgetState(payload); })
+      .catch(function () {});
+  }
+
+  function fetchProfileCodexQuota() {
+    fetch("/api/settings/openai-oauth/limits")
+      .then(function (response) { return response.json(); })
+      .then(function (payload) {
+        WorkbenchModel.writeCodexQuotaCache(payload);
+        setCodexQuotaState({
+          connected: payload.connected === true,
+          windows: WorkbenchModel.codexQuotaWindows(payload.limits),
+          plan: WorkbenchModel.codexPlanLabel(payload.account, payload.limits),
+        });
+      })
+      .catch(function () {});
+  }
+
+  useWorkbenchEffect(function () {
+    fetchProfileBudget();
+    fetchProfileCodexQuota();
+    function onBudgetSaved() { fetchProfileBudget(); }
+    function onCodexAuthChanged() { fetchProfileCodexQuota(); }
+    try { window.addEventListener("budget-saved", onBudgetSaved); } catch (e) {}
+    try { window.addEventListener("cyrene:codex-auth-changed", onCodexAuthChanged); } catch (e) {}
+    return function () {
+      try { window.removeEventListener("budget-saved", onBudgetSaved); } catch (e) {}
+      try { window.removeEventListener("cyrene:codex-auth-changed", onCodexAuthChanged); } catch (e) {}
+    };
+  }, []);
+
+  function currencySymbol(currency) {
+    return currency === "CNY" ? "¥" : currency === "USD" ? "$" : currency === "EUR" ? "€" : currency === "GBP" ? "£" : currency || "";
+  }
+
+  function formatBudgetAmount(value) {
+    return currencySymbol(budgetState && budgetState.currency) + Number(value || 0).toFixed(2);
+  }
+
+  var budgetEnabled = !!(budgetState && budgetState.monthly_budget > 0);
+  var monthlyUsedPercent = budgetEnabled
+    ? Math.max(0, Math.min(100, Number(budgetState.monthly_spent || 0) / Number(budgetState.monthly_budget) * 100))
+    : 0;
+
+  function codexQuotaWindowName(windowData) {
+    if (windowData.kind === "five_hour") return t("rail.budgetFiveHour");
+    if (windowData.kind === "weekly") return t("rail.budgetWeekly");
+    return windowData.label || t("settings.codexQuotaWindow");
+  }
+
+  function codexQuotaResetTime(windowData) {
+    return windowData.resetsAt ? new Date(windowData.resetsAt * 1000).toLocaleString() : "—";
+  }
+
   return (
     <aside className={"workbench-profile-rail workbench-integrated-rail" + (collapsed ? " is-collapsed" : "")}>
       <header className="workbench-integrated-rail-head"><b>{t("rail.profile")}</b>{collapseControl}</header>
-      <div className="workbench-profile-rail-spacer"></div>
+      <div className="workbench-profile-rail-spacer">
+        <div className="workbench-profile-budget-stack" aria-live="polite">
+          {codexQuotaState.connected && (
+            <section className="workbench-profile-budget workbench-profile-codex-card">
+              <div className="workbench-profile-budget-head">
+                <span className="workbench-profile-budget-icon" aria-hidden="true">
+                  <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+                    <path d="M8.5 4.5 12 2.5l3.5 2 3.5 2v4l2 3.5-2 3.5-3.5 2L12 21.5l-3.5-2-3.5-2v-4L3 10l2-3.5Z"/>
+                    <circle cx="12" cy="12" r="3.5"/>
+                  </svg>
+                </span>
+                <b>{t("settings.codexQuota")}</b>
+              </div>
+              <div className="workbench-profile-codex-quota">
+                <div className="workbench-profile-codex-head">
+                  <strong>Codex</strong>
+                  <small>{t("settings.codexQuotaPlan", { plan: codexQuotaState.plan || "—" })}</small>
+                </div>
+                {codexQuotaState.windows.length > 0 ? codexQuotaState.windows.map(function (windowData) {
+                  return (
+                    <div className="workbench-profile-codex-window" key={windowData.kind + "-" + windowData.durationMins}>
+                      <div className="workbench-profile-codex-row">
+                        <span>{codexQuotaWindowName(windowData)}</span>
+                        <b>{t("settings.codexQuotaRemaining", { pct: windowData.remainingPercent })}</b>
+                      </div>
+                      <div className="workbench-profile-budget-progress" aria-hidden="true">
+                        <span className={windowData.usedPercent >= 100 ? "over" : windowData.usedPercent >= 80 ? "high" : ""} style={{ width: windowData.usedPercent + "%" }} />
+                      </div>
+                      <small>{t("settings.codexQuotaResets", { time: codexQuotaResetTime(windowData) })}</small>
+                    </div>
+                  );
+                }) : (
+                  <div className="workbench-profile-codex-empty">{t("settings.codexQuotaUnavailable")}</div>
+                )}
+              </div>
+            </section>
+          )}
+          <section className="workbench-profile-budget workbench-profile-currency-card">
+            <div className="workbench-profile-budget-head">
+              <span className="workbench-profile-budget-icon" aria-hidden="true">
+                <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+                  <rect x="3" y="5" width="18" height="14" rx="3"/>
+                  <path d="M16 9h5v6h-5a3 3 0 0 1 0-6Z"/><path d="M7 5V3.5h10V5"/>
+                </svg>
+              </span>
+              <b>{t("profile.apiBudgetTitle")}</b>
+            </div>
+            {!budgetState ? (
+              <div className="workbench-profile-budget-empty">{t("common.loading")}</div>
+            ) : !budgetEnabled ? (
+              <div className="workbench-profile-budget-empty">{t("profile.budgetDisabled")}</div>
+            ) : (
+              <div className="workbench-profile-budget-content">
+                <div className="workbench-profile-budget-monthly">
+                  <span>{t("profile.budgetMonthlyRemaining")}</span>
+                  <strong>{formatBudgetAmount(budgetState.monthly_remaining)}</strong>
+                  <small>{t("profile.budgetOfLimit", { limit: formatBudgetAmount(budgetState.monthly_budget) })}</small>
+                </div>
+                <div className="workbench-profile-budget-progress" aria-hidden="true">
+                  <span className={monthlyUsedPercent >= 100 ? "over" : monthlyUsedPercent >= 80 ? "high" : ""} style={{ width: monthlyUsedPercent + "%" }} />
+                </div>
+                <div className="workbench-profile-budget-rows">
+                  <div><span>{t("profile.budgetWeeklyRemaining")}</span><b>{formatBudgetAmount(budgetState.weekly_remaining)}</b></div>
+                  <div><span>{t("profile.budgetFiveHourRemaining")}</span><b>{formatBudgetAmount(budgetState.five_hour_remaining)}</b></div>
+                </div>
+              </div>
+            )}
+          </section>
+        </div>
+      </div>
       {moduleDock}
     </aside>
   );
@@ -5999,13 +6370,23 @@ function useTaskController(session, onRefresh, runtime) {
       var qid = String(questionId || "").trim();
       var ans = String(optionText || "").trim();
       if (!qid || !ans) return Promise.resolve();
-      return runAgentic({ kind: "answer", label: "正在继续…" }, model.answer(sid, qid, ans))
+      interruptedRef.current = false;
+      setBusy(true);
+      setAgentBusy({ kind: "answer", label: "正在继续…", startedAt: new Date().toISOString() });
+      return model.answer(sid, qid, ans)
+        .then(apply)
         .then(function (store) {
           if (store && store.continuePlanExecution) {
             return ctrl.executeAll({ continuing: true, baseSession: store.activeSession });
           }
           return store;
-        });
+        })
+        .catch(function (err) {
+          if (interruptedRef.current || (err && err.name === "AbortError")) return null;
+          fail(err);
+          return null;
+        })
+        .finally(function () { setBusy(false); setAgentBusy(null); });
     },
 
     // answered / acted → promote this exchange into a real, planned task.
@@ -7024,7 +7405,7 @@ function TaskHeader({ project, session, controller, onRightTab, onSelectSession,
             type="button"
             className="wb-th-control-btn wb-th-pause"
             disabled={controller.busy}
-            onClick={function () { status === "running" ? controller.interrupt() : controller.pause(); }}
+            onClick={function () { status === "running" || session.agentBusy ? controller.interrupt() : controller.pause(); }}
             title={wbT("task.action.pauseTask", "Pause task")}
             aria-label={wbT("task.action.pauseTask", "Pause task")}
           >
@@ -7279,8 +7660,76 @@ function AgentQuestionCard({ session, controller }) {
   var options = Array.isArray(pq.options) ? pq.options : [];
   var kind = String(pq.kind || "");
   var isPermission = window.CyreneUI.require("model").isPermissionQuestionKind(kind);
+  var permissionText = isPermission
+    ? window.CyreneUI.require("i18n").permissionQuestionText(pq)
+    : "";
+  var treeOptions = isPermission && !options.length ? ["确认", "拒绝"] : options;
   var customState = useWorkbenchState("");
   var customText = customState[0], setCustomText = customState[1];
+  var optionSignature = JSON.stringify(treeOptions);
+  useWorkbenchEffect(function () {
+    if (!pq.id || controller.busy || !window.CyreneUI.has("uiSurface")) return undefined;
+    var uiSurface = window.CyreneUI.require("uiSurface");
+    var risk = isPermission ? "R3" : "R2";
+    var actions = treeOptions.map(function (_opt, index) {
+      return {
+        action_id: "answer_option_" + index,
+        kind: "invoke",
+        risk: risk,
+        gesture_aliases: ["press"],
+        input_schema: {},
+      };
+    });
+    if (pq.allowCustom && !isPermission) {
+      actions.push({
+        action_id: "answer_custom",
+        kind: "set_value",
+        risk: "R2",
+        gesture_aliases: ["text_input"],
+        input_schema: { value: "text<=20000" },
+      });
+    }
+    var handlers = {};
+    treeOptions.forEach(function (opt, index) {
+      handlers["answer_option_" + index] = function () {
+        return Promise.resolve(controller.answer(pq.id, opt)).then(function () {
+          return { question_id: String(pq.id), answered: true, option_index: index };
+        });
+      };
+    });
+    if (pq.allowCustom && !isPermission) {
+      handlers.answer_custom = function (input) {
+        var answer = String(input.value || "").trim();
+        if (!answer) throw new Error("answer is empty");
+        return Promise.resolve(controller.answer(pq.id, answer)).then(function () {
+          return { question_id: String(pq.id), answered: true, custom: true };
+        });
+      };
+    }
+    return uiSurface.register({
+      node_id: "task_question_" + String(pq.id).replace(/[^a-zA-Z0-9_-]/g, "").slice(0, 100),
+      parent_id: "root",
+      scope: "main",
+      get_node: function () {
+        if (controller.busy) return null;
+        return {
+          role: isPermission ? "approval" : "question",
+          name: String(permissionText || pq.text || wbT("workbenchChat.questionFallback", "Agent needs your confirmation to continue.")),
+          value_summary: treeOptions.length + " options",
+          state: {
+            session_id: String(session.id || ""),
+            session_kind: "task",
+            question_id: String(pq.id),
+            question_kind: kind,
+            permission: isPermission,
+            allow_custom: !!pq.allowCustom && !isPermission,
+          },
+        };
+      },
+      actions: actions,
+      handlers: handlers,
+    });
+  }, [session.id, pq.id, pq.allowCustom, kind, controller.busy, controller.answer, optionSignature, isPermission, permissionText]);
   function submitCustom() {
     var t = String(customText || "").trim();
     if (!t || controller.busy) return;
@@ -7289,7 +7738,7 @@ function AgentQuestionCard({ session, controller }) {
   }
   return (
     <WbCard tone="confirm" icon={ICONS.shield} title={isPermission ? wbT("workbenchChat.permissionTitle", "Authorization needed") : wbT("workbenchChat.questionTitle", "Confirmation needed")}>
-      <AgentReplyBlock text={pq.text || wbT("workbenchChat.questionFallback", "Agent needs your confirmation to continue.")} />
+      <AgentReplyBlock text={permissionText || pq.text || wbT("workbenchChat.questionFallback", "Agent needs your confirmation to continue.")} />
       {isPermission ? (
         // Authorization: a simple binary. Buttons read 确认/拒绝 but send the
         // backend-recognized option text (options[0] = allow, last = deny).
@@ -8217,6 +8666,7 @@ function TaskComposer({
   var [modelPanel, setModelPanel] = useWorkbenchState("root");
   var [uploading, setUploading] = useWorkbenchState(false);
   var taRef = useWorkbenchRef(null);
+  var draftRef = useWorkbenchRef(draft);
   var fileRef = useWorkbenchRef(null);
   var modelPickerRef = useWorkbenchRef(null);
   var uploadCountRef = useWorkbenchRef(0);
@@ -8227,6 +8677,8 @@ function TaskComposer({
   // draft a plan. Once a plan exists, the composer refines that plan instead.
   var hasPlan = Array.isArray(session.plan) && session.plan.length > 0;
   attachments = attachments || [];
+
+  useWorkbenchEffect(function () { draftRef.current = draft; }, [draft]);
 
   useWorkbenchEffect(function () {
     function onFocus() { if (taRef.current) taRef.current.focus(); }
@@ -8393,6 +8845,67 @@ function TaskComposer({
     + ": " + modelName + (effortLabel ? " · " + effortLabel : "");
   var supportedReasoningEfforts = wbSupportedReasoningEfforts(selectedModel);
   var sendDisabled = running ? false : (disabled || (!draft.trim() && attachments.length === 0));
+
+  useWorkbenchEffect(function () {
+    if (!window.CyreneUI.has("uiSurface")) return undefined;
+    var uiSurface = window.CyreneUI.require("uiSurface");
+    return uiSurface.register({
+      node_id: "task_composer_input",
+      parent_id: "root",
+      scope: "main",
+      get_node: function () {
+        if (disabled || awaitingAnswer) return null;
+        var currentDraft = String(draftRef.current || "");
+        return {
+          role: "textbox",
+          name: composerPlaceholder(status),
+          value_summary: currentDraft ? "Draft present" : "Empty draft",
+          state: {
+            session_id: String(session.id || ""),
+            session_kind: "task",
+            draft_empty: !currentDraft,
+            draft_length: currentDraft.length,
+            running: running === true,
+            submit_exposed: false,
+          },
+        };
+      },
+      actions: [{
+        action_id: "set_value",
+        kind: "set_value",
+        risk: "R1",
+        gesture_aliases: ["text_input"],
+        input_schema: { value: "text<=20000" },
+      }, {
+        action_id: "clear_value",
+        kind: "set_value",
+        risk: "R1",
+        gesture_aliases: ["semantic_clear"],
+        input_schema: { expected_value: "text<=20000" },
+      }],
+      handlers: {
+        set_value: function (input) {
+          var currentDraft = String(draftRef.current || "");
+          var nextDraft = String(input.value || "");
+          if (currentDraft && currentDraft !== nextDraft) {
+            throw new Error("composer draft is not empty");
+          }
+          draftRef.current = nextDraft;
+          setDraft(nextDraft);
+          return { draft_length: nextDraft.length, submitted: false };
+        },
+        clear_value: function (input) {
+          var currentDraft = String(draftRef.current || "");
+          if (currentDraft !== String(input.expected_value || "")) {
+            throw new Error("composer draft changed");
+          }
+          draftRef.current = "";
+          setDraft("");
+          return { draft_length: 0, cleared: true, submitted: false };
+        },
+      },
+    });
+  }, [session.id, status, disabled, awaitingAnswer]);
 
   return (
     <div className="workbench-composer compact">

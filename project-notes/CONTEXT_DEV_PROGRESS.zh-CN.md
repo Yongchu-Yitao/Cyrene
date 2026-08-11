@@ -3,7 +3,7 @@
 [English](CONTEXT_DEV_PROGRESS.md) ·
 [简体中文](CONTEXT_DEV_PROGRESS.zh-CN.md)
 
-更新时间：2026-07-28
+更新时间：2026-08-11
 
 分支：`feature/project-literature-library`
 
@@ -52,6 +52,23 @@ Cyrene 的包边界重构已经完成：
   控制，其他 Session 在 Tool 执行层只读。
 - 详细实现与验收基线见
   [顶栏 Work Tabs 与固定资源 Handoff](topbar-work-tabs-design.zh-CN.md)。
+
+## 当前 Cyrene 自控制检查点
+
+- `cyrene_tools` 是渐进披露工具包，对 Agent 公开 12 项能力：UI
+  Snapshot/Inspect、五个 Gesture Tool（包括显式、焦点无关的 Double Click）、
+  Typed Setting Describe/Read/Write/Control
+  和 Host Window Control。
+- Snapshot 只暴露当前渲染视口。稳定全局节点和输入框节点会与 DOM Projection
+  去重；对话详细动作只在右键菜单打开时出现。列表通过真实滚动继续读取，不再
+  使用硬编码数量截断。
+- 当前输入框发送是显式 R2，停止运行是 R1。控制操作由现有 Permission Reviewer
+  和绑定精确操作清单的 Batch Ticket 审核；Project/Chat/Data Service 保持 Internal。
+- Typed Setting 覆盖全部非模型设置，包括 Soul、MCP、Integration、Remote、
+  Channel、Voice 和 Shortcut。Compare-and-set 只更新请求字段，并把用户并发修改
+  明确返回为 Conflict。
+- Electron 持有带认证的 Host Bridge，并负责清理失效 Renderer。当前实现与验收
+  矩阵见 [Cyrene App Control Handoff](cyrene-app-control-handoff.zh-CN.md)。
 
 ## 对 2026-06-01 原始目标的核查
 

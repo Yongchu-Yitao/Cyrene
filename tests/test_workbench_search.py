@@ -175,6 +175,83 @@ def client(search_env):
     return TestClient(app)
 
 
+def test_voice_command_silence_does_not_create_chat(client, search_env, monkeypatch):
+    from cyrene.voice import engine as voice_engine
+
+    monkeypatch.setattr(
+        voice_engine,
+        "status",
+        lambda: {"asr_ready": True, "tts_ready": True},
+    )
+    monkeypatch.setattr(
+        voice_engine,
+        "transcribe",
+        lambda _payload: {"text": "", "silence_only": True},
+    )
+    chats_path = search_env["data_dir"] / "workbench_chats.json"
+    before = chats_path.read_text(encoding="utf-8")
+
+    response = client.post(
+        "/api/workbench/voice-command",
+        files={"audio": ("silence.wav", b"RIFF-silence", "audio/wav")},
+        data={"lang": "zh"},
+    )
+
+    assert response.status_code == 200
+    assert response.json() == {"ok": True, "created": False, "text": ""}
+    assert chats_path.read_text(encoding="utf-8") == before
+
+
+def test_voice_command_silently_creates_auto_chat_in_default_project(
+    client, search_env, monkeypatch,
+):
+    import cyrene.agent as agent
+    from cyrene.voice import engine as voice_engine
+
+    async def fake_run_agent(**_kwargs):
+        return "后台命令已完成。"
+
+    monkeypatch.setattr(agent, "run_agent", fake_run_agent)
+    monkeypatch.setattr(
+        voice_engine,
+        "status",
+        lambda: {"asr_ready": True, "tts_ready": True},
+    )
+    monkeypatch.setattr(
+        voice_engine,
+        "transcribe",
+        lambda _payload: {"text": "整理今天的计划", "silence_only": False},
+    )
+    workbench_store = search_env["routes_mod"]._read_workbench_store()
+    active_before = (
+        workbench_store.get("activeProjectId"),
+        workbench_store.get("activeSessionId"),
+    )
+
+    response = client.post(
+        "/api/workbench/voice-command",
+        files={"audio": ("command.wav", b"RIFF-command", "audio/wav")},
+        data={"lang": "zh", "ui_instance_id": "test-ui"},
+    )
+
+    assert response.status_code == 200
+    result = response.json()
+    assert result["created"] is True
+    assert result["run_id"]
+    chats = json.loads(
+        (search_env["data_dir"] / "workbench_chats.json").read_text(encoding="utf-8")
+    )["chats"]
+    created = next(chat for chat in chats if chat["id"] == result["chat_id"])
+    assert created["projectId"] == "project_1"
+    assert created["permissionMode"] == "auto"
+    assert any(
+        message.get("role") == "user" and message.get("content") == "整理今天的计划"
+        for message in created["messages"]
+    )
+    store_after = search_env["routes_mod"]._read_workbench_store()
+    assert (store_after.get("activeProjectId"), store_after.get("activeSessionId")) == active_before
+
+
 def test_side_agents_are_multiple_persistent_sessions_hidden_from_main_chat_list(
     client, search_env,
 ):
@@ -384,7 +461,7 @@ def test_delete_regular_workbench_chat_still_removes_store(
 ):
     import cyrene.agent as agent
 
-    async def fake_clear_session_id(session_id=""):
+    async def fake_clear_session_id(session_id="", **_kwargs):
         return None
 
     monkeypatch.setattr(agent, "clear_session_id", fake_clear_session_id)
@@ -693,6 +770,7 @@ def test_api_workbench_search_legacy_endpoint_still_works(client):
 
 def test_workbench_chat_run_uses_project_workspace(client, search_env, monkeypatch):
     from cyrene import agent
+    from cyrene.runtime import host_bridge
 
     captured = {}
 
@@ -700,11 +778,22 @@ def test_workbench_chat_run_uses_project_workspace(client, search_env, monkeypat
         captured.update(kwargs)
         return "done"
 
+    async def fake_resolve_conversation_source(ui_instance_id):
+        assert ui_instance_id == "surface-send-test"
+        return "desktop_local"
+
     monkeypatch.setattr(agent, "run_agent", fake_run_agent)
+    monkeypatch.setattr(
+        host_bridge, "resolve_conversation_source", fake_resolve_conversation_source,
+    )
 
     response = client.post(
         "/api/workbench/chats/chat_1/messages",
-        json={"message": "inspect the project", "clientRequestId": "send_test_1"},
+        json={
+            "message": "inspect the project",
+            "clientRequestId": "send_test_1",
+            "uiInstanceId": "surface-send-test",
+        },
     )
 
     assert response.status_code == 200
@@ -716,6 +805,8 @@ def test_workbench_chat_run_uses_project_workspace(client, search_env, monkeypat
     assert captured["workspace_dir"] == str(
         (search_env["data_dir"].parent / "workspace").resolve()
     )
+    assert captured["ui_instance_id"] == "surface-send-test"
+    assert captured["conversation_source"] == "desktop_local"
     chats = json.loads(
         (search_env["data_dir"] / "workbench_chats.json").read_text(encoding="utf-8")
     )
@@ -1066,7 +1157,9 @@ def test_workbench_chat_answer_resumes_in_conversation_workspace(
     chats_path.write_text(json.dumps(chats), encoding="utf-8")
     captured = {}
 
-    async def fake_answer_pending(session_id, question_id, answer_text, workspace_dir):
+    async def fake_answer_pending(
+        session_id, question_id, answer_text, workspace_dir, **_kwargs,
+    ):
         captured.update({
             "session_id": session_id,
             "question_id": question_id,
@@ -1101,6 +1194,99 @@ def test_workbench_chat_answer_resumes_in_conversation_workspace(
     listed = client.get("/api/workbench/chats?project=project_1").json()["chats"][0]
     assert listed["runStatus"] == "completed"
     assert listed["pendingQuestion"] is None
+
+
+async def test_cancelled_workbench_chat_answer_consumes_question_and_records_interrupt(
+    search_env, monkeypatch,
+):
+    from fastapi import APIRouter
+    from route import schemas as api_models
+    from route.workbench.chat import register_workbench_chat_routes
+
+    chats_path = search_env["data_dir"] / "workbench_chats.json"
+    chats = json.loads(chats_path.read_text(encoding="utf-8"))
+    chats["chats"][0]["pendingQuestion"] = {"id": "question_cancel"}
+    chats_path.write_text(json.dumps(chats), encoding="utf-8")
+
+    async def cancelled_resume(*_args, **_kwargs):
+        raise asyncio.CancelledError
+
+    monkeypatch.setattr(
+        search_env["routes_mod"],
+        "_workbench_answer_pending",
+        cancelled_resume,
+    )
+    routes = register_workbench_chat_routes(
+        APIRouter(), bot=None, db_path=search_env["db_path"]
+    )
+
+    result = await routes["answer_chat"](
+        "chat_1",
+        api_models.AnswerBody(
+            question_id="question_cancel",
+            answer="继续",
+        ),
+    )
+
+    assert result["interrupted"] is True
+    stored = json.loads(chats_path.read_text(encoding="utf-8"))["chats"][0]
+    assert "pendingQuestion" not in stored
+    assert stored["lastRun"]["status"] == "cancelled"
+    assert stored["lastRun"]["terminationReason"] == "user_interrupted"
+    assert stored["lastRun"]["outcome"] == "interrupted"
+
+
+async def test_cancelled_workbench_task_answer_persists_paused_terminal_state(
+    search_env, monkeypatch,
+):
+    from fastapi import APIRouter
+    from route import schemas as api_models
+    from route.workbench import task_sessions
+
+    store = search_env["routes_mod"]._read_workbench_store()
+    session = store["projects"][0]["sessions"][0]
+    session["status"] = "waiting_for_user"
+    session["pendingQuestion"] = {"id": "task_question_cancel"}
+    session["pendingPlanStep"] = {"stepId": "step_1", "continueAll": True}
+    session["plan"] = [{
+        "id": "step_1",
+        "title": "继续处理",
+        "status": "running",
+        "startedAt": "2026-01-02T00:00:00+00:00",
+    }]
+    session["events"] = []
+    session["runs"] = []
+    search_env["routes_mod"]._write_workbench_store(store)
+
+    async def cancelled_resume(*_args, **_kwargs):
+        raise asyncio.CancelledError
+
+    monkeypatch.setattr(
+        task_sessions,
+        "_workbench_answer_pending",
+        cancelled_resume,
+    )
+    routes = task_sessions.register_task_session_routes(
+        APIRouter(), bot=None, db_path=search_env["db_path"]
+    )
+
+    result = await routes["answer_task"](
+        "session_1",
+        api_models.AnswerBody(
+            question_id="task_question_cancel",
+            answer="继续",
+        ),
+    )
+
+    assert result["interrupted"] is True
+    updated = search_env["routes_mod"]._read_workbench_store()
+    cancelled_session = updated["projects"][0]["sessions"][0]
+    assert cancelled_session["status"] == "paused"
+    assert "pendingQuestion" not in cancelled_session
+    assert "pendingPlanStep" not in cancelled_session
+    assert cancelled_session["plan"][0]["status"] == "pending"
+    assert cancelled_session["runs"][-1]["status"] == "cancelled"
+    assert cancelled_session["runs"][-1]["terminationReason"] == "user_interrupted"
 
 
 def test_workbench_chat_answer_can_stream_continuation_events(

@@ -92,6 +92,21 @@ async function readSettingsResponse(response) {
   return payload;
 }
 
+async function settingsFetch(input, init) {
+  var response = await window.fetch(input, init);
+  if (response.ok) return response;
+  var payload = {};
+  try {
+    payload = await response.clone().json();
+  } catch (e) {}
+  var error = new Error(
+    String(payload.detail || payload.error || payload.message || ("HTTP " + response.status))
+  );
+  error.code = String(payload.code || "");
+  error.status = response.status;
+  throw error;
+}
+
 function renderSettingsMarkdown(value) {
   return window.CyreneUI.require("markdown").render(value, {
     fallback: "escaped-breaks",
@@ -250,6 +265,24 @@ function SettingsOverlay({
   var [newMcpServer, setNewMcpServer] = useStateSt({ name: "", transport: "stdio", command: "", args: "", url: "", enabled: true });
   var [toolGroups, setToolGroups] = useStateSt([]);
   var [toolsSaved, setToolsSaved] = useStateSt("");
+  var [voiceStatus, setVoiceStatus] = useStateSt({
+    asr_ready: false,
+    tts_model_ready: false,
+    voice_profile_ready: false,
+    voice_preset_ready: false,
+    voice_mode: "preset",
+    voice_preset: "zipvoice-default",
+    voice_presets: [{ id: "zipvoice-default" }],
+    tts_ready: false,
+    auto_read: false,
+    auto_send_after_asr: false,
+    auto_stop_on_silence: true,
+    reference_text: "",
+  });
+  var [voiceReferenceText, setVoiceReferenceText] = useStateSt("");
+  var [voiceReferenceFile, setVoiceReferenceFile] = useStateSt(null);
+  var [voiceBusy, setVoiceBusy] = useStateSt("");
+  var [voiceNotice, setVoiceNotice] = useStateSt("");
 
   // ── Data state ──
   var [resetStatus, setResetStatus] = useStateSt("");
@@ -263,7 +296,7 @@ function SettingsOverlay({
 
   useEffectSt(function () {
     var cancelled = false;
-    fetch("/api/workbench/chats").then(function (response) {
+    settingsFetch("/api/workbench/chats").then(function (response) {
       if (!response.ok) throw new Error("failed to load conversations");
       return response.json();
     }).then(function (payload) {
@@ -285,6 +318,32 @@ function SettingsOverlay({
       animatePulse: readTweak("animatePulse", true),
     };
   });
+  var appearanceRevisionRef = useRefSt(0);
+
+  var appearanceKeyMap = {
+    theme: "theme",
+    accent: "accent",
+    backgroundLight: "background_light",
+    backgroundDark: "background_dark",
+    textSize: "text_size",
+    animatePulse: "animate_pulse",
+  };
+
+  function applyAppearanceValues(values) {
+    var next = {
+      theme: values.theme || "system",
+      accent: values.accent || null,
+      backgroundLight: values.background_light || null,
+      backgroundDark: values.background_dark || null,
+      textSize: values.text_size || "default",
+      animatePulse: values.animate_pulse !== false,
+    };
+    setTweaks(function (previous) { return { ...previous, ...next }; });
+    Object.keys(next).forEach(function (key) {
+      try { localStorage.setItem("cyrene-tweak-" + key, JSON.stringify(next[key])); } catch (e) {}
+      window.dispatchEvent(new Event("cyrene-tweak-" + key + "-change"));
+    });
+  }
 
   useEffectSt(function () {
     setTweaks(function (prev) {
@@ -298,6 +357,23 @@ function SettingsOverlay({
     if (key === "textSize") document.documentElement.dataset.textSize = val || "default";
     if (key === "animatePulse") document.documentElement.dataset.animPulse = val ? "on" : "off";
     window.dispatchEvent(new Event("cyrene-tweak-" + key + "-change"));
+    var backendKey = appearanceKeyMap[key];
+    if (backendKey) {
+      var changes = {};
+      changes[backendKey] = val == null ? "" : val;
+      settingsFetch("/api/settings/namespaces/appearance", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ changes: changes, expected_revision: appearanceRevisionRef.current || undefined }),
+      }).then(readSettingsResponse).then(function (payload) {
+        appearanceRevisionRef.current = Number(payload.revision || appearanceRevisionRef.current || 0);
+      }).catch(function () {
+        settingsFetch("/api/settings/namespaces/appearance").then(readSettingsResponse).then(function (payload) {
+          appearanceRevisionRef.current = Number(payload.revision || 0);
+          applyAppearanceValues(payload.values || {});
+        }).catch(function () {});
+      });
+    }
   }
 
   function setCapability(key, val) {
@@ -326,7 +402,7 @@ function SettingsOverlay({
     document.documentElement.dataset.animPulse = tweaks.animatePulse ? "on" : "off";
 
     setConfigLoading(true);
-    fetch("/api/settings/config").then(function (r) { return r.ok ? r.json() : Promise.reject("HTTP " + r.status); })
+    settingsFetch("/api/settings/config").then(function (r) { return r.ok ? r.json() : Promise.reject("HTTP " + r.status); })
       .then(function (p) {
         setConfig(p);
         setSoulDraft(p.soul_content || "");
@@ -337,7 +413,33 @@ function SettingsOverlay({
         setConfigLoading(false);
       }).catch(function () { setConfigLoading(false); });
 
-    fetch("/api/settings/models").then(readSettingsResponse).then(function (p) {
+    settingsFetch("/api/settings/namespaces/appearance").then(readSettingsResponse).then(function (payload) {
+      appearanceRevisionRef.current = Number(payload.revision || 0);
+      var values = payload.values || {};
+      if (values.appearance_migrated) {
+        applyAppearanceValues(values);
+        return;
+      }
+      var migration = {
+        theme: readTweak("theme", "system") || "system",
+        accent: readTweak("accent", "") || "",
+        background_light: readTweak("backgroundLight", "") || "",
+        background_dark: readTweak("backgroundDark", "") || "",
+        text_size: readTweak("textSize", "default") || "default",
+        animate_pulse: readTweak("animatePulse", true) !== false,
+        appearance_migrated: true,
+      };
+      return settingsFetch("/api/settings/namespaces/appearance", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ changes: migration, expected_revision: payload.revision }),
+      }).then(readSettingsResponse).then(function (updated) {
+        appearanceRevisionRef.current = Number(updated.revision || payload.revision || 0);
+        applyAppearanceValues(migration);
+      });
+    }).catch(function () {});
+
+    settingsFetch("/api/settings/models").then(readSettingsResponse).then(function (p) {
       var fb = p.base_url || DEFAULT_MODEL_BASE_URL;
       var norm = function (raw, i) { return normalizeModel(raw, i, fb, ""); };
       var ms = (p.custom_models || p.models || p.primary_candidates || [])
@@ -362,23 +464,27 @@ function SettingsOverlay({
       setModelsSaved(t("settings.error") + ": " + (e.message || ""));
     });
 
-    fetch("/api/settings/tools").then(function (r) { return r.json(); }).then(function (p) {
+    settingsFetch("/api/settings/tools").then(function (r) { return r.json(); }).then(function (p) {
       setToolGroups(p.tool_groups || []);
     }).catch(function () {});
-    fetch("/api/settings/mcp").then(function (r) { return r.json(); }).then(function (p) { setMcpServers(p.servers || []); setMcpConfigs(p.configs || []); }).catch(function () {});
-    fetch("/api/settings/keys").then(function (r) { return r.json(); }).then(function (p) {
+    settingsFetch("/api/settings/mcp").then(function (r) { return r.json(); }).then(function (p) { setMcpServers(p.servers || []); setMcpConfigs(p.configs || []); }).catch(function () {});
+    settingsFetch("/api/voice/status").then(readSettingsResponse).then(function (p) {
+      setVoiceStatus(p);
+      setVoiceReferenceText(p.reference_text || "");
+    }).catch(function () {});
+    settingsFetch("/api/settings/keys").then(function (r) { return r.json(); }).then(function (p) {
       var tk = (p.keys || []).find(function (item) { return item.key === "TELEGRAM_BOT_TOKEN"; });
       if (tk) setTelegramToken(tk.value || "");
       var ak = (p.keys || []).find(function (item) { return item.key === "AMAP_API_KEY"; });
       if (ak) setAmapKey(ak.value || "");
     }).catch(function () {});
 
-    fetch("/api/backup/list").then(function (r) { return r.json(); }).then(function (d) { if (d.ok) setBackupList(d.backups || []); }).catch(function () {});
+    settingsFetch("/api/backup/list").then(function (r) { return r.json(); }).then(function (d) { if (d.ok) setBackupList(d.backups || []); }).catch(function () {});
   }, []);
 
   function saveSoul() {
     setSoulStatus(t("settings.saving"));
-    fetch("/api/settings/soul", { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ content: soulDraft }) })
+    settingsFetch("/api/settings/soul", { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ content: soulDraft }) })
       .then(function (r) { return r.ok ? setSoulStatus(t("settings.saved")) : Promise.reject(); })
       .catch(function () { setSoulStatus(t("settings.error")); });
     setTimeout(function () { setSoulStatus(""); }, 1500);
@@ -397,7 +503,7 @@ function SettingsOverlay({
     if (modelsSaving) return;
     setModelsSaving(true);
     setModelsSaved(t("settings.saving"));
-    var modelRequest = fetch("/api/settings/models", {
+    var modelRequest = settingsFetch("/api/settings/models", {
       method: "PUT", headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         models: modelSource === "codex" ? [normalizedCodex] : norm,
@@ -413,7 +519,7 @@ function SettingsOverlay({
         } : null,
       }),
     }).then(readSettingsResponse).then(function (p) { return p; });
-    var embeddingRequest = fetch("/api/settings/integrations", {
+    var embeddingRequest = settingsFetch("/api/settings/integrations", {
       method: "PUT", headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ embedding: embeddingDraft }),
     }).then(readSettingsResponse);
@@ -451,7 +557,7 @@ function SettingsOverlay({
   }
 
   function saveAgents() {
-    fetch("/api/settings/config", { method: "PUT", headers: { "Content-Type": "application/json" },
+    settingsFetch("/api/settings/config", { method: "PUT", headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         spawn_policy: config.spawn_policy || "conservative",
         heartbeat_interval: Number(config.heartbeat_interval) || 1800,
@@ -484,7 +590,7 @@ function SettingsOverlay({
     payload.packages[groupId] = nextEnabled;
     setToolGroups(nextGroups);
     setToolsSaved(t("settings.saving"));
-    fetch("/api/settings/tools", {
+    settingsFetch("/api/settings/tools", {
       method: "PUT",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(payload),
@@ -499,19 +605,94 @@ function SettingsOverlay({
     });
   }
 
+  function publishVoiceStatus(next) {
+    setVoiceStatus(next);
+    window.dispatchEvent(new CustomEvent("cyrene:voice-status-changed", { detail: next }));
+  }
+
+  function saveVoiceBooleanSetting(settingKey, nextEnabled) {
+    var previous = voiceStatus;
+    publishVoiceStatus({ ...voiceStatus, [settingKey]: nextEnabled });
+    setVoiceBusy("settings");
+    settingsFetch("/api/voice/settings", {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ [settingKey]: nextEnabled }),
+    }).then(readSettingsResponse).then(function (payload) {
+      publishVoiceStatus(payload);
+      setVoiceNotice(t("settings.saved"));
+      setTimeout(function () { setVoiceNotice(""); }, 1500);
+    }).catch(function (error) {
+      publishVoiceStatus(previous);
+      setVoiceNotice(t("settings.error") + ": " + (error.message || ""));
+    }).finally(function () { setVoiceBusy(""); });
+  }
+
+  function saveVoiceMode(nextMode) {
+    if (voiceBusy || nextMode === voiceStatus.voice_mode) return;
+    setVoiceBusy("settings");
+    settingsFetch("/api/voice/settings", {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ voice_mode: nextMode, voice_preset: "zipvoice-default" }),
+    }).then(readSettingsResponse).then(function (payload) {
+      publishVoiceStatus(payload);
+      setVoiceNotice(t("settings.saved"));
+      setTimeout(function () { setVoiceNotice(""); }, 1500);
+    }).catch(function (error) {
+      setVoiceNotice(t("settings.error") + ": " + (error.message || ""));
+    }).finally(function () { setVoiceBusy(""); });
+  }
+
+  function saveVoiceProfile() {
+    if (!voiceReferenceFile || !voiceReferenceText.trim() || voiceBusy) return;
+    var form = new FormData();
+    form.append("audio", voiceReferenceFile);
+    form.append("reference_text", voiceReferenceText.trim());
+    setVoiceBusy("profile");
+    setVoiceNotice(t("settings.voiceProfileSaving"));
+    settingsFetch("/api/voice/profile", { method: "POST", body: form })
+      .then(readSettingsResponse).then(function (payload) {
+        publishVoiceStatus(payload);
+        setVoiceReferenceFile(null);
+        setVoiceReferenceText(payload.reference_text || voiceReferenceText.trim());
+        setVoiceNotice(t("settings.voiceProfileSaved"));
+      }).catch(function (error) {
+        setVoiceNotice(t("settings.error") + ": " + (error.message || ""));
+      }).finally(function () { setVoiceBusy(""); });
+  }
+
+  function deleteVoiceProfile() {
+    if (voiceBusy) return;
+    setVoiceBusy("profile");
+    settingsFetch("/api/voice/profile", { method: "DELETE" })
+      .then(readSettingsResponse).then(function (payload) {
+        publishVoiceStatus(payload);
+        setVoiceReferenceFile(null);
+        setVoiceReferenceText("");
+        setVoiceNotice(t("settings.voiceProfileDeleted"));
+      }).catch(function (error) {
+        setVoiceNotice(t("settings.error") + ": " + (error.message || ""));
+      }).finally(function () { setVoiceBusy(""); });
+  }
+
   function saveRedactSecrets(nextEnabled) {
+    var previousEnabled = redactSecrets;
     setRedactSecrets(nextEnabled);
     setCapability("redactSecrets", nextEnabled);
-    fetch("/api/settings/config", { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ redact_secrets: nextEnabled }) }).catch(function () {});
+    settingsFetch("/api/settings/config", { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ redact_secrets: nextEnabled }) }).catch(function () {
+      setRedactSecrets(previousEnabled);
+      setCapability("redactSecrets", previousEnabled);
+    });
   }
 
   function saveMcp() {
     setMcpSaved(t("settings.saving"));
-    fetch("/api/settings/mcp", { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ servers: mcpConfigs }) })
+    settingsFetch("/api/settings/mcp", { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ servers: mcpConfigs }) })
       .then(function () {
         setMcpSaved(t("settings.saved"));
         setTimeout(function () { setMcpSaved(""); }, 1500);
-        fetch("/api/settings/mcp").then(function (r) { return r.json(); }).then(function (p) { setMcpServers(p.servers || []); setMcpConfigs(p.configs || []); }).catch(function () {});
+        settingsFetch("/api/settings/mcp").then(function (r) { return r.json(); }).then(function (p) { setMcpServers(p.servers || []); setMcpConfigs(p.configs || []); }).catch(function () {});
       }).catch(function () { setMcpSaved(t("settings.error")); });
   }
 
@@ -523,7 +704,7 @@ function SettingsOverlay({
   }
 
   function loadBackups() {
-    fetch("/api/backup/list").then(function (r) { return r.json(); }).then(function (d) { if (d.ok) setBackupList(d.backups || []); }).catch(function () {});
+    settingsFetch("/api/backup/list").then(function (r) { return r.json(); }).then(function (d) { if (d.ok) setBackupList(d.backups || []); }).catch(function () {});
   }
 
   function formatBytes(n) { n = Number(n || 0); if (n < 1024) return n + " B"; if (n < 1048576) return (n / 1024).toFixed(1) + " KB"; return (n / 1048576).toFixed(1) + " MB"; }
@@ -532,12 +713,35 @@ function SettingsOverlay({
   // ── Render helpers ──
   function onChange(key, stateFn) { return function (e) { stateFn(e.target.value); }; }
 
+  useEffectSt(function () {
+    if (!window.CyreneUI.has("uiSurface")) return undefined;
+    var uiSurface = window.CyreneUI.require("uiSurface");
+    var unregister = TABS.map(function (item) {
+      return uiSurface.register({
+        node_id: "settings_tab_" + item.id,
+        parent_id: "settings_dialog",
+        scope: "settings",
+        get_node: function () {
+          return {
+            role: "tab",
+            name: t(item.labelKey),
+            state: { selected: tab === item.id },
+          };
+        },
+        actions: [{ action_id: "open", kind: "invoke", risk: "R1", gesture_aliases: ["press", "keyboard"] }],
+        handlers: { open: function () { setTab(item.id); } },
+      });
+    });
+    return function () { unregister.forEach(function (remove) { remove(); }); };
+  }, [tab, t]);
+
   return React.createElement("div", {
     className: "settings-overlay",
     onClick: function (e) { if (e.target === e.currentTarget) onClose && onClose(); },
   },
     React.createElement("div", {
       className: "settings-overlay-panel",
+      "data-cyrene-surface-root": "true",
       role: "dialog",
       "aria-modal": "true",
       "aria-label": t("nav.settings"),
@@ -572,14 +776,25 @@ function SettingsOverlay({
         ),
 
         // Content area
-        React.createElement("main", { className: "settings-overlay-content", key: tab },
+        React.createElement("main", {
+          className: "settings-overlay-content",
+          key: tab,
+          "data-settings-active-tab": tab,
+          "data-cyrene-node-id": "settings_content_" + tab,
+        },
           tab === "general" && React.createElement(GeneralPanel, { t, lang, setLang, desktopNotifications, toggleDesktopNotifications, mapProvider, setMapProvider, amapKey, setAmapKey, amapKeySaved, setAmapKeySaved, project }),
           tab === "models" && React.createElement(ModelsPanel, { t, models, setModels, modelSource, setModelSource, codexCandidate, setCodexCandidate, draftModel, setDraftModel, visionModels, setVisionModels, draftVision, setDraftVision, secondaryModel, setSecondaryModel, modelsSaved, modelsSaving, saveModels, config, project }),
           tab === "channels" && ChannelsPanel({ t, telegramToken, setTelegramToken, telegramSaved, setTelegramSaved, notifyTelegram, setNotifyTelegram, notifyWechat, setNotifyWechat }),
           tab === "remote" && React.createElement(RemotePanel, { t }),
           tab === "agents" && AgentsPanel({ t, config, setConfig, configLoading, soulDraft, setSoulDraft, soulStatus, saveSoul, agentProactive, setAgentProactive, saveAgents }),
           tab === "appearance" && React.createElement(AppearancePanel, { t, tweaks, setTweak, actualTheme, theme: initialTheme }),
-          tab === "capabilities" && CapabilitiesPanel({ t, mcpConfigs, setMcpConfigs, mcpServers, toolGroups, toolsSaved, saveToolGroup, newMcpServer, setNewMcpServer, mcpSaved, saveMcp }),
+          tab === "capabilities" && CapabilitiesPanel({
+            t, mcpConfigs, setMcpConfigs, mcpServers, toolGroups, toolsSaved,
+            saveToolGroup, newMcpServer, setNewMcpServer, mcpSaved, saveMcp,
+            voiceStatus, voiceReferenceText, setVoiceReferenceText,
+            voiceReferenceFile, setVoiceReferenceFile, voiceBusy, voiceNotice,
+            saveVoiceBooleanSetting, saveVoiceMode, saveVoiceProfile, deleteVoiceProfile,
+          }),
           tab === "skills" && React.createElement(SkillsPanel, { t }),
           tab === "shortcuts" && React.createElement(ShortcutsPanel, { t }),
           tab === "data" && DataPanel({ t, redactSecrets, saveRedactSecrets, config, configLoading, resetStatus, setResetStatus, resetting, setResetting, backupList, backupMsg, setBackupMsg, loadBackups, exportSids, setExportSids, workbenchExportSessions, exportFmt, setExportFmt, exportMsg, setExportMsg, formatBytes, formatDate }),
@@ -698,7 +913,7 @@ function RemotePanel(p) {
   function loadRemote(options) {
     var background = !!(options && options.background);
     if (!background) setLoading(true);
-    return fetch("/api/remote/settings").then(readSettingsResponse).then(function (payload) {
+    return settingsFetch("/api/remote/settings").then(readSettingsResponse).then(function (payload) {
       setRemote(payload);
       remoteDraftRef.current = payload;
       if (!inviteDefaultsInitializedRef.current) {
@@ -735,7 +950,7 @@ function RemotePanel(p) {
   }
 
   function loadAudit() {
-    return fetch("/api/remote/audit?limit=30").then(readSettingsResponse).then(function (payload) {
+    return settingsFetch("/api/remote/audit?limit=30").then(readSettingsResponse).then(function (payload) {
       setAuditEvents(payload.events || []);
     }).catch(function () {});
   }
@@ -784,7 +999,7 @@ function RemotePanel(p) {
     };
     setBusy("settings");
     var request = remoteSaveQueueRef.current.catch(function () {}).then(function () {
-      return fetch("/api/remote/settings", {
+      return settingsFetch("/api/remote/settings", {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(snapshot),
@@ -857,7 +1072,7 @@ function RemotePanel(p) {
       return peer.device_id;
     });
     setBusy("invite");
-    fetch("/api/remote/pairing/short-key", {
+    settingsFetch("/api/remote/pairing/short-key", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
@@ -883,7 +1098,7 @@ function RemotePanel(p) {
   function connectRemoteDevice() {
     if (!remoteAddress.trim() || !incomingPairingKey.trim()) return;
     setBusy("accept");
-    fetch("/api/remote/pairing/connect", {
+    settingsFetch("/api/remote/pairing/connect", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
@@ -1076,6 +1291,7 @@ function RemotePanel(p) {
                   React.createElement("button", {
                     type: "button",
                     className: "remote-pairing-key",
+                    "data-cyrene-secret": "true",
                     onClick: function () { copyText(pairingKey); },
                     title: t("settings.remoteCopyPairingKey"),
                     "aria-label": t("settings.remoteCopyPairingKey"),
@@ -1096,7 +1312,7 @@ function RemotePanel(p) {
                 ),
                 React.createElement("label", { className: "remote-response-field" },
                   React.createElement("span", null, t("settings.remotePairingKey")),
-                  React.createElement("input", { className: "wb-input mono remote-key-input", value: incomingPairingKey, maxLength: 11, spellCheck: false, autoCapitalize: "characters", autoCorrect: "off", placeholder: "ABCDE-23456", onChange: function (e) { setIncomingPairingKey(e.target.value.toUpperCase()); } }),
+                  React.createElement("input", { className: "wb-input mono remote-key-input", "data-cyrene-user-ceremony": "true", value: incomingPairingKey, maxLength: 11, spellCheck: false, autoCapitalize: "characters", autoCorrect: "off", placeholder: "ABCDE-23456", onChange: function (e) { setIncomingPairingKey(e.target.value.toUpperCase()); } }),
                 ),
                 React.createElement("div", { className: "remote-pairing-actions" },
                   React.createElement("button", { className: "wb-btn primary", onClick: connectRemoteDevice, disabled: !remoteAddress.trim() || !incomingPairingKey.trim() || busy === "accept" }, busy === "accept" ? t("settings.remoteConnectingDevice") : t("settings.remoteConnectDevice")),
@@ -1160,7 +1376,7 @@ function RemotePeerCard(p) {
       grantedCapabilities,
     );
     setBusy(true);
-    fetch("/api/remote/peers/" + encodeURIComponent(peer.device_id), {
+    settingsFetch("/api/remote/peers/" + encodeURIComponent(peer.device_id), {
       method: "PATCH",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ capabilities: requiredGrant, project_scopes: grantedProjects }),
@@ -1177,7 +1393,7 @@ function RemotePeerCard(p) {
 
   function revoke() {
     setBusy(true);
-    fetch("/api/remote/peers/" + encodeURIComponent(peer.device_id), { method: "DELETE" })
+    settingsFetch("/api/remote/peers/" + encodeURIComponent(peer.device_id), { method: "DELETE" })
       .then(readSettingsResponse).then(function () {
         onNotice(t("settings.remoteDeviceRevoked"), "success");
         try { window.dispatchEvent(new CustomEvent("cyrene:remote-devices-changed", { detail: { reason: "revoked" } })); } catch (e) {}
@@ -1286,7 +1502,7 @@ function GeneralPanel(p) {
 
   useEffectSt(function () {
     var cancelled = false;
-    fetch("/api/settings/config").then(readSettingsResponse).then(function (payload) {
+    settingsFetch("/api/settings/config").then(readSettingsResponse).then(function (payload) {
       if (cancelled) return;
       var savedTimezone = String(payload.timezone || "");
       if (timezoneOptions.indexOf(savedTimezone) < 0) return;
@@ -1303,7 +1519,7 @@ function GeneralPanel(p) {
 
   useEffectSt(function () {
     var cancelled = false;
-    fetch("/api/settings/integrations").then(readSettingsResponse).then(function (payload) {
+    settingsFetch("/api/settings/integrations").then(readSettingsResponse).then(function (payload) {
       if (cancelled) return;
       if (payload.zotero) setZoteroSettings(payload.zotero);
     }).catch(function () {
@@ -1361,7 +1577,7 @@ function GeneralPanel(p) {
     setSelectedTimezone(nextTimezone);
     try { localStorage.setItem("cyrene-timezone", nextTimezone); } catch (e) {}
     try { window.CyreneUI.require("data").reload(); } catch (e) {}
-    fetch("/api/settings/config", {
+    settingsFetch("/api/settings/config", {
       method: "PUT",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ timezone: nextTimezone }),
@@ -1375,10 +1591,10 @@ function GeneralPanel(p) {
   function saveAmapKey() {
     if (!amapKey || amapKey.startsWith("••")) { setAmapKeySaved(t("settings.noChanges")); setTimeout(function () { setAmapKeySaved(""); }, 1500); return; }
     setAmapKeySaved(t("settings.saving"));
-    fetch("/api/settings/keys", { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ AMAP_API_KEY: amapKey }) })
+    settingsFetch("/api/settings/keys", { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ AMAP_API_KEY: amapKey }) })
       .then(function (r) { return r.ok ? r.json() : Promise.reject(); })
       .then(function () {
-        fetch("/api/amap/verify").then(function (r) { return r.json(); }).then(function (vd) {
+        settingsFetch("/api/amap/verify").then(function (r) { return r.json(); }).then(function (vd) {
           if (vd.valid) { setAmapKeySaved(t("settings.amapKeySaved")); localStorage.setItem("cyrene-tweak-map-provider", "amap"); }
           else { setAmapKeySaved(t("settings.amapKeyVerifyFail") + " " + (vd.error || "")); }
         }).catch(function () { setAmapKeySaved(t("settings.saved")); });
@@ -1389,7 +1605,7 @@ function GeneralPanel(p) {
   function saveIntegration() {
     setIntegrationBusy("save-zotero");
     setZoteroStatus({ kind: "info", text: t("settings.saving") });
-    fetch("/api/settings/integrations", {
+    settingsFetch("/api/settings/integrations", {
       method: "PUT",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ zotero: zoteroSettings }),
@@ -1404,7 +1620,7 @@ function GeneralPanel(p) {
   function testIntegration() {
     setIntegrationBusy("test-zotero");
     setZoteroStatus({ kind: "info", text: t("settings.testingConnection") });
-    fetch("/api/settings/integrations/test", {
+    settingsFetch("/api/settings/integrations/test", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ service: "zotero", config: zoteroSettings }),
@@ -1422,13 +1638,13 @@ function GeneralPanel(p) {
     }
     setIntegrationBusy("import-zotero");
     setZoteroStatus({ kind: "info", text: t("settings.zoteroImporting") });
-    fetch("/api/settings/integrations", {
+    settingsFetch("/api/settings/integrations", {
       method: "PUT",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ zotero: zoteroSettings }),
     }).then(readSettingsResponse).then(function (payload) {
       if (payload.zotero) setZoteroSettings(payload.zotero);
-      return fetch("/api/workbench/library/zotero/sync?workspace=" + encodeURIComponent(String(p.project.id)), {
+      return settingsFetch("/api/workbench/library/zotero/sync?workspace=" + encodeURIComponent(String(p.project.id)), {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ library_id: "0", library_type: "user", collection_key: "" }),
@@ -1560,7 +1776,7 @@ function EmbeddingSettingsSection(p) {
   function test() {
     setBusy("test");
     setStatus({ kind: "info", text: t("settings.testingConnection") });
-    fetch("/api/settings/integrations/test", {
+    settingsFetch("/api/settings/integrations/test", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ service: "embedding", config: draft() }),
@@ -1575,7 +1791,7 @@ function EmbeddingSettingsSection(p) {
 
   function clearApiKey() {
     setBusy("clear");
-    fetch("/api/settings/integrations", {
+    settingsFetch("/api/settings/integrations", {
       method: "PUT",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ embedding: { clear_api_key: true } }),
@@ -1685,6 +1901,37 @@ function modelCredentialFields(model, update, t) {
   ];
 }
 
+function normalizeLocalModels(models) {
+  return (models || []).map(function (item) {
+    if (item && item.ready) return { ...item, error: "" };
+    return item;
+  });
+}
+
+function localizeLocalModelError(rawError, t) {
+  var lower = String(rawError || "").toLowerCase();
+  if (lower.indexOf("archive output is missing or invalid") >= 0
+      || lower.indexOf("archive has no declared outputs") >= 0) {
+    return t("settings.localModelErrorExtract");
+  }
+  if (lower.indexOf("checksum") >= 0
+      || lower.indexOf("sha256") >= 0
+      || lower.indexOf("validation failed") >= 0) {
+    return t("settings.localModelErrorChecksum");
+  }
+  if (lower.indexOf("all mirrors failed") >= 0
+      || lower.indexOf("connect") >= 0
+      || lower.indexOf("timeout") >= 0
+      || lower.indexOf("network") >= 0
+      || lower.indexOf("proxy") >= 0
+      || lower.indexOf("resolve") >= 0
+      || lower.indexOf("httpx") >= 0
+      || lower.indexOf("remote protocol") >= 0) {
+    return t("settings.localModelErrorNetwork");
+  }
+  return t("settings.localModelErrorGeneric");
+}
+
 function ModelsPanel(p) {
   var { t, models, setModels, modelSource, setModelSource, codexCandidate, setCodexCandidate, draftModel, setDraftModel, visionModels, setVisionModels, draftVision, setDraftVision, secondaryModel, setSecondaryModel, modelsSaved, modelsSaving, saveModels, config, project } = p;
   var [embeddingSettings, setEmbeddingSettings] = useStateSt({ provider: "openai_compatible", base_url: "", model: "", dimensions: 0, api_key_configured: false });
@@ -1695,6 +1942,7 @@ function ModelsPanel(p) {
   var [localBusy, setLocalBusy] = useStateSt("");
   var [corpusEmbedding, setCorpusEmbedding] = useStateSt(null);
   var savedEmbeddingIdentityRef = useRefSt("");
+  var voiceModelSignatureRef = useRefSt("");
   var workspaceId = String(project && (project.id || project.dataKey) || "");
   var savedCodexCandidate = codexCandidate;
   var [codexState, setCodexState] = useStateSt({
@@ -1719,14 +1967,24 @@ function ModelsPanel(p) {
   codexCandidateRef.current = codexCandidate;
 
   function loadLocalModels() {
-    return fetch("/api/settings/local-models/status").then(readSettingsResponse).then(function (payload) {
-      setLocalModels(payload.models || []);
-      return payload.models || [];
+    return settingsFetch("/api/settings/local-models/status").then(readSettingsResponse).then(function (payload) {
+      var items = normalizeLocalModels(payload.models || []);
+      setLocalModels(items);
+      var voiceSignature = items.filter(function (item) {
+        return item.kind === "asr" || item.kind === "tts";
+      }).map(function (item) {
+        return item.id + ":" + (item.ready ? "1" : "0");
+      }).join("|");
+      if (voiceModelSignatureRef.current && voiceModelSignatureRef.current !== voiceSignature) {
+        window.dispatchEvent(new Event("cyrene:voice-status-changed"));
+      }
+      voiceModelSignatureRef.current = voiceSignature;
+      return items;
     });
   }
 
   function loadCorpusEmbedding() {
-    return fetch("/api/workbench/knowledge/embedding/status?workspace=" + encodeURIComponent(workspaceId))
+    return settingsFetch("/api/workbench/knowledge/embedding/status?workspace=" + encodeURIComponent(workspaceId))
       .then(readSettingsResponse).then(function (payload) {
         setCorpusEmbedding(function (previous) {
           if (previous && previous.reembed && previous.reembed.running && payload.reembed && !payload.reembed.running) {
@@ -1744,7 +2002,7 @@ function ModelsPanel(p) {
 
   useEffectSt(function () {
     var cancelled = false;
-    fetch("/api/settings/integrations").then(readSettingsResponse).then(function (payload) {
+    settingsFetch("/api/settings/integrations").then(readSettingsResponse).then(function (payload) {
       if (!cancelled && payload.embedding) {
         setEmbeddingSettings(payload.embedding);
         savedEmbeddingIdentityRef.current = [payload.embedding.provider, payload.embedding.model].join(":");
@@ -1801,10 +2059,10 @@ function ModelsPanel(p) {
 
   function manageLocalModel(modelId, action) {
     setLocalBusy(modelId + ":" + action);
-    fetch("/api/settings/local-models/" + encodeURIComponent(modelId) + (action === "download" ? "/download" : ""), {
+    settingsFetch("/api/settings/local-models/" + encodeURIComponent(modelId) + (action === "download" ? "/download" : ""), {
       method: action === "download" ? "POST" : "DELETE",
     }).then(readSettingsResponse).then(function (payload) {
-      setLocalModels(payload.models || []);
+      setLocalModels(normalizeLocalModels(payload.models || []));
       if (action === "delete") setLocalBusy("");
     }).catch(function (error) {
       setLocalBusy("");
@@ -1817,7 +2075,7 @@ function ModelsPanel(p) {
     setCorpusEmbedding(function (previous) {
       return previous ? { ...previous, reembed: { running: true, error: "" } } : previous;
     });
-    return fetch("/api/workbench/knowledge/reembed?workspace=" + encodeURIComponent(workspaceId), { method: "POST" })
+    return settingsFetch("/api/workbench/knowledge/reembed?workspace=" + encodeURIComponent(workspaceId), { method: "POST" })
       .then(readSettingsResponse).then(function () { return loadCorpusEmbedding(); })
       .catch(function (error) {
         setEmbeddingStatus({ kind: "error", text: t("settings.reembedFailed") + ": " + (error.message || "") });
@@ -1825,6 +2083,13 @@ function ModelsPanel(p) {
   }
 
   function LocalModelIcon(kind) {
+    if (kind === "asr" || kind === "tts") {
+      var BrowserIcon = window.CyreneUI.require("browser").Icon;
+      return React.createElement(BrowserIcon, {
+        name: kind === "asr" ? "microphone" : "volume",
+        size: 20,
+      });
+    }
     if (kind === "embedding") {
       return React.createElement("svg", {
         width: "20", height: "20", viewBox: "0 0 24 24", fill: "none",
@@ -1880,10 +2145,11 @@ function ModelsPanel(p) {
   }, [codexCandidate]);
 
   function loadCodexState() {
-    return fetch("/api/settings/openai-oauth")
+    return settingsFetch("/api/settings/openai-oauth")
       .then(readSettingsResponse)
       .then(function (data) {
         setCodexState({ ...data, checking: false });
+        try { window.dispatchEvent(new CustomEvent("cyrene:codex-auth-changed", { detail: data })); } catch (e) {}
         var options = data.models || [];
         var saved = codexCandidateRef.current;
         var savedModel = saved && saved.model || "";
@@ -1909,7 +2175,7 @@ function ModelsPanel(p) {
 
   function startCodexLogin() {
     setCodexBusy("login"); setCodexNotice("");
-    fetch("/api/settings/openai-oauth/login", { method: "POST" })
+    settingsFetch("/api/settings/openai-oauth/login", { method: "POST" })
       .then(readSettingsResponse)
       .then(function (data) {
         var authUrl = data.authUrl || data.auth_url || data.url;
@@ -1929,7 +2195,7 @@ function ModelsPanel(p) {
 
   function logoutCodex() {
     setCodexBusy("logout"); setCodexNotice("");
-    fetch("/api/settings/openai-oauth/logout", { method: "POST" })
+    settingsFetch("/api/settings/openai-oauth/logout", { method: "POST" })
       .then(readSettingsResponse)
       .then(function () { setCodexBusy(""); setCodexModel(""); return loadCodexState(); })
       .catch(function (error) { setCodexBusy(""); setCodexNotice(error.message); });
@@ -2212,15 +2478,21 @@ function ModelsPanel(p) {
       className: "is-local-models",
       children: localModels.map(function (item) {
         var percent = item.total_bytes ? Math.min(100, Math.round(item.downloaded_bytes * 100 / item.total_bytes)) : 0;
-        var isQwen = item.id === "qwen3-embedding-0.6b";
-        var kind = isQwen ? "embedding" : "ocr";
-        var displayTitle = t(isQwen ? "settings.localEmbeddingTitle" : "settings.localOcrTitle");
-        var displayName = t(isQwen ? "settings.localQwenName" : "settings.localOcrName");
-        var displayDescription = t(isQwen ? "settings.localQwenHint" : "settings.localOcrHint");
+        var kind = item.kind || "model";
+        var localCopy = {
+          "qwen3-embedding-0.6b": ["settings.localEmbeddingTitle", "settings.localQwenName", "settings.localQwenHint"],
+          "pp-ocrv6-medium": ["settings.localOcrTitle", "settings.localOcrName", "settings.localOcrHint"],
+          "fireredasr2-aed-int8": ["settings.localAsrTitle", "settings.localFireRedName", "settings.localFireRedHint"],
+          "zipvoice-zh-en": ["settings.localTtsTitle", "settings.localZipVoiceName", "settings.localZipVoiceHint"],
+        }[item.id];
+        var displayTitle = localCopy ? t(localCopy[0]) : item.kind;
+        var displayName = localCopy ? t(localCopy[1]) : item.name;
+        var displayDescription = localCopy ? t(localCopy[2]) : item.description;
         var runtime = String(item.runtime || "onnx").toLowerCase();
-        var runtimeLabel = runtime === "onnx-cpu" ? "ONNX" : runtime.toUpperCase();
+        var runtimeLabel = runtime === "onnx-cpu" ? "CPU" : runtime.toUpperCase();
         var runtimeClass = runtime.indexOf("cuda") >= 0 ? " is-cuda" : runtime.indexOf("mlx") >= 0 ? " is-mlx" : " is-onnx";
-        var statusText = item.error
+        var hasError = !item.ready && !!item.error;
+        var statusText = hasError
           ? t("settings.localModelError")
           : item.ready
             ? t("settings.localModelActive", { runtime: runtimeLabel })
@@ -2239,10 +2511,10 @@ function ModelsPanel(p) {
               React.createElement("progress", { max: "100", value: percent, "aria-label": t("settings.localModelDownloading", { percent: percent }) }),
               React.createElement("span", null, percent + "%"),
             ),
-            item.error && React.createElement("small", { className: "wb-local-model-error" }, item.error),
+            hasError && React.createElement("small", { className: "wb-local-model-error" }, localizeLocalModelError(item.error, t)),
           ),
           React.createElement("div", { className: "wb-local-model-actions" },
-            React.createElement("span", { className: "wb-model-status" + (item.error ? " is-error" : item.ready ? " wb-runtime-badge" + runtimeClass : ""), role: "status" },
+            React.createElement("span", { className: "wb-model-status" + (hasError ? " is-error" : item.ready ? " wb-runtime-badge" + runtimeClass : ""), role: "status" },
               React.createElement("span", { className: "wb-local-model-status-dot", "aria-hidden": "true" }),
               statusText,
             ),
@@ -2250,9 +2522,9 @@ function ModelsPanel(p) {
               type: "button",
               className: "wb-btn compact " + (item.ready ? "danger" : "tonal"),
               disabled: !!localBusy || item.downloading,
-              "aria-label": (item.ready ? t("settings.delete") : item.error ? t("settings.retry") : t("settings.download")) + " " + displayName,
+              "aria-label": (item.ready ? t("settings.delete") : hasError ? t("settings.retry") : t("settings.download")) + " " + displayName,
               onClick: function () { manageLocalModel(item.id, item.ready ? "delete" : "download"); },
-            }, item.ready ? t("settings.delete") : item.error ? t("settings.retry") : t("settings.download")),
+            }, item.ready ? t("settings.delete") : hasError ? t("settings.retry") : t("settings.download")),
           ),
         );
       }).concat(corpusEmbedding && corpusEmbedding.mismatch ? [
@@ -2328,7 +2600,7 @@ function ChannelsPanel(p) {
   function saveTelegram() {
     if (!telegramToken || telegramToken.startsWith("••")) { setTelegramSaved(t("settings.noChanges")); setTimeout(function () { setTelegramSaved(""); }, 1500); return; }
     setTelegramSaved(t("settings.saving"));
-    fetch("/api/settings/keys", { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ TELEGRAM_BOT_TOKEN: telegramToken }) })
+    settingsFetch("/api/settings/keys", { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ TELEGRAM_BOT_TOKEN: telegramToken }) })
       .then(function () { setTelegramSaved(t("settings.saved")); setTimeout(function () { setTelegramSaved(""); }, 1500); })
       .catch(function () { setTelegramSaved(t("settings.error")); });
   }
@@ -2353,7 +2625,7 @@ function ChannelsPanel(p) {
         Toggle(notifyTelegram, function () {
           var next = !notifyTelegram;
           setNotifyTelegram(next);
-          fetch("/api/settings/config", { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ notify_telegram: next }) }).catch(function () {});
+          settingsFetch("/api/settings/config", { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ notify_telegram: next }) }).catch(function () { setNotifyTelegram(!next); });
         }),
       ),
     ),
@@ -2374,7 +2646,7 @@ function WeChatConnectionPanel(p) {
   var pollAbortRef = useRefSt(null);
 
   function refreshStatus() {
-    return fetch("/api/wechat/status")
+    return settingsFetch("/api/wechat/status")
       .then(readSettingsResponse)
       .then(function (status) {
         setConnected(!!status.connected);
@@ -2413,7 +2685,7 @@ function WeChatConnectionPanel(p) {
     var controller = new AbortController();
     pollAbortRef.current = controller;
     setQrStatus(t("settings.wechatWaitingConfirm"));
-    fetch("/api/wechat/poll-login", {
+    settingsFetch("/api/wechat/poll-login", {
       method: "POST",
       body: JSON.stringify({ qrcode_id: qrcodeId }),
       headers: { "Content-Type": "application/json" },
@@ -2426,7 +2698,7 @@ function WeChatConnectionPanel(p) {
         return;
       }
       setQrStatus(t("settings.wechatLoginSuccess"));
-      return fetch("/api/wechat/start", { method: "POST" })
+      return settingsFetch("/api/wechat/start", { method: "POST" })
         .then(readSettingsResponse)
         .then(refreshStatus)
         .then(function () {
@@ -2450,7 +2722,7 @@ function WeChatConnectionPanel(p) {
     setBusy(true);
     setQrCode("");
     setQrStatus(t("settings.wechatFetchingQr"));
-    fetch("/api/wechat/qr-login", { method: "POST" })
+    settingsFetch("/api/wechat/qr-login", { method: "POST" })
       .then(readSettingsResponse)
       .then(function (result) {
         if (!result.qrcode_id || (!result.qrcode_image && !result.qrcode_img)) {
@@ -2471,7 +2743,7 @@ function WeChatConnectionPanel(p) {
   function startWechat() {
     setBusy(true);
     setQrStatus("");
-    fetch("/api/wechat/start", { method: "POST" })
+    settingsFetch("/api/wechat/start", { method: "POST" })
       .then(readSettingsResponse)
       .then(refreshStatus)
       .catch(function (error) {
@@ -2483,7 +2755,7 @@ function WeChatConnectionPanel(p) {
   function stopWechat() {
     setBusy(true);
     setQrStatus("");
-    fetch("/api/wechat/stop", { method: "POST" })
+    settingsFetch("/api/wechat/stop", { method: "POST" })
       .then(readSettingsResponse)
       .then(refreshStatus)
       .catch(function (error) {
@@ -2532,7 +2804,7 @@ function WeChatConnectionPanel(p) {
     FieldRow(t("settings.notifyWechat"), t("settings.notifyWechatHint"), Toggle(notifyWechat, function () {
       var next = !notifyWechat;
       setNotifyWechat(next);
-      fetch("/api/settings/config", { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ notify_wechat: next }) }).catch(function () {});
+      settingsFetch("/api/settings/config", { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ notify_wechat: next }) }).catch(function () { setNotifyWechat(!next); });
     })),
     qrCode && React.createElement("div", {
       className: "wb-wechat-qr-overlay",
@@ -2961,7 +3233,13 @@ function AppearancePanel(p) {
 
 // ── Capabilities Panel ──
 function CapabilitiesPanel(p) {
-  var { t, mcpConfigs, setMcpConfigs, mcpServers, toolGroups, toolsSaved, saveToolGroup, newMcpServer, setNewMcpServer, mcpSaved, saveMcp } = p;
+  var {
+    t, mcpConfigs, setMcpConfigs, mcpServers, toolGroups, toolsSaved,
+    saveToolGroup, newMcpServer, setNewMcpServer, mcpSaved, saveMcp,
+    voiceStatus, voiceReferenceText, setVoiceReferenceText,
+    voiceReferenceFile, setVoiceReferenceFile, voiceBusy, voiceNotice,
+    saveVoiceBooleanSetting, saveVoiceMode, saveVoiceProfile, deleteVoiceProfile,
+  } = p;
 
   function addMcp() {
     var name = (newMcpServer.name || "").trim();
@@ -2978,9 +3256,140 @@ function CapabilitiesPanel(p) {
 
   function removeMcp(name) { setMcpConfigs(mcpConfigs.filter(function (s) { return s.name !== name; })); }
   function toggleMcp(name) { setMcpConfigs(mcpConfigs.map(function (s) { return s.name === name ? { ...s, enabled: !s.enabled } : s; })); }
+  var customVoiceSelected = voiceStatus.voice_mode === "custom";
 
   return React.createElement("div", { className: "settings-panel" },
     SectionTitle(t("settings.capabilities"), t("settings.capabilitiesSubtitle")),
+
+    SectionBlock(t("settings.voiceCapability"), t("settings.voiceCapabilityHint"),
+      React.createElement("div", { className: "wb-voice-settings" },
+        FieldRow(
+          t("settings.voiceAutoSend"),
+          t("settings.voiceAutoSendHint"),
+          Toggle(
+            voiceStatus.auto_send_after_asr === true,
+            function () { saveVoiceBooleanSetting("auto_send_after_asr", voiceStatus.auto_send_after_asr !== true); },
+            voiceBusy === "settings",
+            t("settings.voiceAutoSend"),
+          ),
+          "voice-auto-send",
+        ),
+        FieldRow(
+          t("settings.voiceAutoStop"),
+          t("settings.voiceAutoStopHint"),
+          Toggle(
+            voiceStatus.auto_stop_on_silence !== false,
+            function () { saveVoiceBooleanSetting("auto_stop_on_silence", voiceStatus.auto_stop_on_silence === false); },
+            voiceBusy === "settings",
+            t("settings.voiceAutoStop"),
+          ),
+          "voice-auto-stop",
+        ),
+        FieldRow(
+          t("settings.voiceAutoRead"),
+          voiceStatus.tts_ready
+            ? t("settings.voiceAutoReadHint")
+            : t("settings.voiceAutoReadUnavailable"),
+          Toggle(
+            voiceStatus.auto_read === true,
+            function () { saveVoiceBooleanSetting("auto_read", voiceStatus.auto_read !== true); },
+            !voiceStatus.tts_ready || voiceBusy === "settings",
+            t("settings.voiceAutoRead"),
+          ),
+          "voice-auto-read",
+        ),
+        React.createElement("div", { className: "wb-voice-profile" },
+          React.createElement("div", { className: "wb-voice-profile-copy" },
+            React.createElement("b", null, t("settings.voiceProfile")),
+            React.createElement("small", null, t("settings.voiceProfileHint")),
+          ),
+          React.createElement("div", {
+            className: "wb-seg wb-voice-mode-switch",
+            role: "group",
+            "aria-label": t("settings.voiceProfile"),
+          },
+            React.createElement("button", {
+              type: "button",
+              className: "wb-seg-btn" + (!customVoiceSelected ? " active" : ""),
+              "aria-pressed": customVoiceSelected ? "false" : "true",
+              disabled: !!voiceBusy,
+              onClick: function () { saveVoiceMode("preset"); },
+            }, t("settings.voicePresetMode")),
+            React.createElement("button", {
+              type: "button",
+              className: "wb-seg-btn" + (customVoiceSelected ? " active" : ""),
+              "aria-pressed": customVoiceSelected ? "true" : "false",
+              disabled: !!voiceBusy,
+              onClick: function () { saveVoiceMode("custom"); },
+            }, t("settings.voiceCustomMode")),
+          ),
+          customVoiceSelected
+            ? React.createElement("div", { className: "wb-voice-custom-fields" },
+                React.createElement("div", { className: "wb-voice-profile-copy" },
+                  React.createElement("b", null, t("settings.voiceCustomTitle")),
+                  React.createElement("small", null, t("settings.voiceCustomHint")),
+                ),
+                React.createElement("label", { className: "wb-voice-file" },
+                  React.createElement("input", {
+                    type: "file",
+                    accept: ".wav,.flac,.ogg,audio/wav,audio/flac,audio/ogg",
+                    onChange: function (event) {
+                      setVoiceReferenceFile(event.target.files && event.target.files[0] || null);
+                    },
+                  }),
+                  React.createElement("span", null,
+                    voiceReferenceFile
+                      ? voiceReferenceFile.name
+                      : voiceStatus.voice_profile_ready
+                        ? t("settings.voiceProfileConfigured")
+                        : t("settings.voiceChooseAudio")
+                  ),
+                ),
+                React.createElement("textarea", {
+                  className: "wb-input wb-voice-reference-text",
+                  rows: 3,
+                  maxLength: 1000,
+                  value: voiceReferenceText,
+                  "aria-label": t("settings.voiceReferencePlaceholder"),
+                  placeholder: t("settings.voiceReferencePlaceholder"),
+                  onChange: function (event) { setVoiceReferenceText(event.target.value); },
+                }),
+                React.createElement("div", { className: "wb-save-actions" },
+                  React.createElement("button", {
+                    type: "button",
+                    className: "wb-btn primary",
+                    disabled: !voiceReferenceFile || !voiceReferenceText.trim() || !!voiceBusy,
+                    onClick: saveVoiceProfile,
+                  }, voiceBusy === "profile" ? t("settings.saving") : t("settings.voiceSaveProfile")),
+                  voiceStatus.voice_profile_ready && React.createElement("button", {
+                    type: "button",
+                    className: "wb-btn danger",
+                    disabled: !!voiceBusy,
+                    onClick: deleteVoiceProfile,
+                  }, t("settings.delete")),
+                ),
+              )
+            : React.createElement("div", { className: "wb-voice-preset-row" },
+                React.createElement("div", { className: "wb-voice-profile-copy" },
+                  React.createElement("b", null, t("settings.voicePresetName")),
+                  React.createElement("small", null, t("settings.voicePresetHint")),
+                ),
+                React.createElement("span", { className: voiceStatus.voice_preset_ready ? "ready" : "" },
+                  t("settings.voicePresetSelected")
+                ),
+              ),
+          voiceNotice && React.createElement("span", { className: "wb-hint saved" }, voiceNotice),
+        ),
+        React.createElement("div", { className: "wb-voice-readiness" },
+          React.createElement("span", { className: voiceStatus.asr_ready ? "ready" : "" },
+            t("settings.voiceAsrStatus") + " · " + t(voiceStatus.asr_ready ? "settings.localModelReady" : "settings.localModelNotDownloaded")
+          ),
+          React.createElement("span", { className: voiceStatus.tts_ready ? "ready" : "" },
+            t("settings.voiceTtsStatus") + " · " + t(voiceStatus.tts_ready ? "settings.localModelReady" : "settings.voiceTtsNeedsProfile")
+          ),
+        ),
+      ),
+    ),
 
     // Tool packages
     SectionBlock(t("settings.toolPackages"), t("settings.toolPackagesHint"),
@@ -2998,6 +3407,9 @@ function CapabilitiesPanel(p) {
               function () { saveToolGroup(group.id, !packageEnabled); },
               false,
               t("settings.packageToggleLabel", { name: groupName }),
+              group.wire_name === "cyrene_tools"
+                ? { "data-cyrene-user-ceremony": "true" }
+                : null,
             ),
             group.id,
           );
@@ -3064,13 +3476,13 @@ function DataPanel(p) {
   });
 
   function clearSession() {
-    fetch("/api/chat/clear", { method: "POST" }).then(function () { dataStore.refreshSessions(); }).catch(function () {});
+    settingsFetch("/api/chat/clear", { method: "POST" }).then(function () { dataStore.refreshSessions(); }).catch(function () {});
   }
 
   function resetData() {
     setResetting(true);
     setResetStatus(t("settings.resettingData"));
-    fetch("/api/settings/reset-data", { method: "POST" }).then(function (r) { return r.json(); }).then(function (p) {
+    settingsFetch("/api/settings/reset-data", { method: "POST" }).then(function (r) { return r.json(); }).then(function (p) {
       if (p.ok) {
         try { Object.keys(localStorage).forEach(function (k) { if (k.indexOf("cyrene-") === 0) localStorage.removeItem(k); }); } catch (e) {}
         window.location.reload();
@@ -3094,7 +3506,7 @@ function DataPanel(p) {
       var selection = await bridge.pickBackupSavePath({ title: t("settings.backupChooseSaveTitle"), defaultName: backupDefaultName() });
       if (!selection || selection.cancelled || !selection.path) return;
       setBackupMsg(t("settings.backupExporting"));
-      var response = await fetch("/api/backup/export", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ path: selection.path }) });
+      var response = await settingsFetch("/api/backup/export", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ path: selection.path }) });
       var result = await response.json();
       if (!result.ok) throw new Error(result.error || t("settings.failed"));
       setBackupMsg(t("settings.backupExported", { n: result.entries.length, size: formatBytes(result.size) }));
@@ -3113,7 +3525,7 @@ function DataPanel(p) {
     try {
       var selection = await bridge.pickBackupFile({ title: t("settings.backupChooseFileTitle") });
       if (!selection || selection.cancelled || !selection.path) return;
-      var response = await fetch("/api/backup/restore", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ path: selection.path }) });
+      var response = await settingsFetch("/api/backup/restore", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ path: selection.path }) });
       var result = await response.json();
       if (!result.ok) throw new Error(result.error || (result.errors || []).join(";") || t("settings.backupRestoreFailed"));
       setBackupMsg(t("settings.backupRestored", { n: result.restored.length }) + " " + t("settings.backupRestartRequired"));
@@ -3175,7 +3587,7 @@ function DataPanel(p) {
     SectionBlock(t("settings.backup"), t("settings.backupHint"),
       React.createElement("div", { className: "wb-inline-row" },
         React.createElement("button", { className: "wb-btn primary", onClick: createBackup }, t("settings.backupExportBtn")),
-        React.createElement("button", { className: "wb-btn", onClick: restoreBackup }, t("settings.backupRestoreBtn")),
+        React.createElement("button", { className: "wb-btn", "data-cyrene-risk": "R3", onClick: restoreBackup }, t("settings.backupRestoreBtn")),
       ),
       backupMsg && React.createElement("p", { className: "wb-hint" }, backupMsg),
       backupList.map(function (b) {
@@ -3248,7 +3660,7 @@ function UpdateSection({ t, config }) {
 
   function checkUpdate() {
     setChecking(true); setError("");
-    fetch("/api/update/check").then(function (r) { return r.json(); }).then(function (d) {
+    settingsFetch("/api/update/check").then(function (r) { return r.json(); }).then(function (d) {
       setInfo(d);
       setChangelog({ version: d.latest_version || "", published_at: d.published_at || "", release_notes: d.release_notes || "" });
       setDownloaded(false);
@@ -3257,7 +3669,7 @@ function UpdateSection({ t, config }) {
   }
 
   function openChangelog() {
-    fetch("/api/update/changelog").then(function (r) { return r.json(); }).then(function (d) {
+    settingsFetch("/api/update/changelog").then(function (r) { return r.json(); }).then(function (d) {
       setChangelog({
         version: d.version || (info && info.latest_version) || "",
         published_at: d.published_at || (info && info.published_at) || "",
@@ -3278,7 +3690,7 @@ function UpdateSection({ t, config }) {
     if (checking || downloading) return;
     var next = !beta;
     setBeta(next);
-    fetch("/api/settings/config", { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ beta_updates: next }) })
+    settingsFetch("/api/settings/config", { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ beta_updates: next }) })
       .then(function () { checkUpdate(); })
       .catch(function () { setBeta(!next); });
   }
@@ -3287,13 +3699,13 @@ function UpdateSection({ t, config }) {
     if (checking || downloading) return;
     var next = !autoUpdate;
     setAutoUpdate(next);
-    fetch("/api/settings/config", { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ auto_update: next }) })
+    settingsFetch("/api/settings/config", { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ auto_update: next }) })
       .catch(function () { setAutoUpdate(!next); });
   }
 
   function startDownload() {
     setDownloading(true); setError("");
-    fetch("/api/update/download", { method: "POST" }).then(function (r) { return r.json(); }).then(function (d) {
+    settingsFetch("/api/update/download", { method: "POST" }).then(function (r) { return r.json(); }).then(function (d) {
       if (d.ok && d.verified) {
         setDownloaded(true);
         setProgress(function (p) { return Object.assign({}, p, { done: true, verified: true, actual_sha256: d.sha256 || p.actual_sha256 || "" }); });
@@ -3355,7 +3767,7 @@ function UpdateSection({ t, config }) {
       : Promise.resolve(window.confirm([confirmTitle, "", confirmBody].join("\n")));
     confirmed.then(function (ok) {
       if (!ok) return;
-      fetch("/api/update/restart", { method: "POST" }).then(function (r) {
+      settingsFetch("/api/update/restart", { method: "POST" }).then(function (r) {
         if (!r.ok) return r.json().then(function (d) { throw new Error(d.message || d.error || t("settings.updateRestartFailed", null, "Restart failed")); });
       }).catch(function (err) {
         if (err && err.message) setError(err.message);
@@ -3366,7 +3778,7 @@ function UpdateSection({ t, config }) {
   useEffectSt(function () {
     if (!downloading) return;
     var timer = setInterval(function () {
-      fetch("/api/update/progress").then(function (r) { return r.json(); }).then(function (d) { setProgress(d); if (d.done) clearInterval(timer); }).catch(function () { clearInterval(timer); });
+      settingsFetch("/api/update/progress").then(function (r) { return r.json(); }).then(function (d) { setProgress(d); if (d.done) clearInterval(timer); }).catch(function () { clearInterval(timer); });
     }, 500);
     return function () { clearInterval(timer); };
   }, [downloading]);
@@ -3407,7 +3819,12 @@ function UpdateSection({ t, config }) {
           React.createElement("p", null, t("settings.aboutHeroCopy")),
         ),
       ),
-      React.createElement("button", { className: "wb-btn wb-about-check-btn", disabled: actionDisabled, onClick: actionHandler }, actionLabel),
+      React.createElement("button", {
+        className: "wb-btn wb-about-check-btn",
+        "data-cyrene-risk": downloaded ? "R3" : "R2",
+        disabled: actionDisabled,
+        onClick: actionHandler,
+      }, actionLabel),
     ),
 
     React.createElement("section", { className: "wb-about-update-card" },
@@ -3517,7 +3934,7 @@ function SkillsPanel(p) {
 
   function loadSkills() {
     setLoading(true);
-    return fetch("/api/skills/installed")
+    return settingsFetch("/api/skills/installed")
       .then(function (r) { return r.ok ? r.json() : Promise.reject("HTTP " + r.status); })
       .then(function (data) {
         var list = (data && data.skills) || [];
@@ -3549,7 +3966,7 @@ function SkillsPanel(p) {
   function handleToggle(id) {
     if (busy) return;
     setBusy(true);
-    fetch("/api/skills/" + id + "/toggle", { method: "POST" })
+    settingsFetch("/api/skills/" + id + "/toggle", { method: "POST" })
       .then(function (r) { return r.ok ? r.json() : Promise.reject(); })
       .then(function (data) {
         if (data && data.ok) {
@@ -3571,7 +3988,7 @@ function SkillsPanel(p) {
     }).then(function (ok) {
       if (!ok) return;
       setBusy(true);
-      fetch("/api/skills/" + id + "/uninstall", { method: "POST" })
+      settingsFetch("/api/skills/" + id + "/uninstall", { method: "POST" })
         .then(function (r) { return r.ok ? r.json() : Promise.reject(); })
         .then(function (data) {
           if (data && data.ok) {
@@ -3595,7 +4012,7 @@ function SkillsPanel(p) {
     setShowMenu(false);
     var formData = new FormData();
     formData.append("file", file);
-    fetch("/api/skills/install-upload", { method: "POST", body: formData })
+    settingsFetch("/api/skills/install-upload", { method: "POST", body: formData })
       .then(function (r) { return r.ok ? r.json() : Promise.reject(); })
       .then(function (data) {
         if (data && data.ok) {
@@ -3620,7 +4037,7 @@ function SkillsPanel(p) {
   function handleInstallFolder() {
     setBusy(true);
     setShowMenu(false);
-    fetch("/api/skills/install-picker", { method: "POST" })
+    settingsFetch("/api/skills/install-picker", { method: "POST" })
       .then(function (r) { return r.ok ? r.json() : Promise.reject(); })
       .then(function (data) {
         if (data && data.cancelled) {
@@ -3642,7 +4059,7 @@ function SkillsPanel(p) {
   function handleScanExisting() {
     if (busy) return;
     setBusy(true);
-    fetch("/api/skills/scan", { method: "POST" })
+    settingsFetch("/api/skills/scan", { method: "POST" })
       .then(function (r) { return r.ok ? r.json() : Promise.reject(); })
       .then(function (data) {
         if (data && data.ok) {
@@ -4132,7 +4549,7 @@ function BudgetPanel(p) {
   }
 
   function saveBudgetConfig(body) {
-    fetch("/api/settings/config", {
+    settingsFetch("/api/settings/config", {
       method: "PUT", headers: { "Content-Type": "application/json" },
       body: JSON.stringify(body),
     }).then(function (r) {
@@ -4159,14 +4576,14 @@ function BudgetPanel(p) {
   function toggleCodexQuota() {
     var next = !codexQuotaEnabled;
     setCodexQuotaEnabled(next);
-    fetch("/api/settings/config", {
+    settingsFetch("/api/settings/config", {
       method: "PUT", headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ codex_budget_enabled: next }),
-    }).catch(function () {});
+    }).catch(function () { setCodexQuotaEnabled(!next); });
   }
 
   function fetchCodexQuota() {
-    fetch("/api/settings/openai-oauth/limits")
+    settingsFetch("/api/settings/openai-oauth/limits")
       .then(readSettingsResponse)
       .then(function (data) {
         setCodexQuota(data);
@@ -4194,7 +4611,7 @@ function BudgetPanel(p) {
   var [budgetLoading, setBudgetLoading] = useStateSt(true);
 
   function fetchStats() {
-    fetch("/api/settings/budget/stats")
+    settingsFetch("/api/settings/budget/stats")
       .then(function (r) { return r.json(); })
       .then(function (d) {
         setBudgetModels(d.models || []);
@@ -4432,8 +4849,8 @@ function FieldRow(label, hint, controls, key) {
   );
 }
 
-function Toggle(on, onClick, disabled, label) {
-  return React.createElement("button", {
+function Toggle(on, onClick, disabled, label, extraProps) {
+  return React.createElement("button", Object.assign({
     type: "button",
     className: "wb-toggle" + (on ? " on" : ""),
     role: "switch",
@@ -4441,7 +4858,7 @@ function Toggle(on, onClick, disabled, label) {
     "aria-label": label || undefined,
     disabled: !!disabled,
     onClick: disabled ? undefined : onClick,
-  });
+  }, extraProps || {}));
 }
 
 function ModelCard(children, key) {

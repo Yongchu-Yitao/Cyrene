@@ -94,12 +94,50 @@ var WORKBENCH_TRANSLATIONS = {
     "settings.localModelOptional": "Optional · not downloaded",
     "settings.localModelNotDownloaded": "not downloaded",
     "settings.localModelReady": "ready",
+    "settings.localModelErrorExtract": "Archive extraction failed — the downloaded bundle is incomplete or invalid. Retry the download.",
+    "settings.localModelErrorChecksum": "Integrity check failed for the downloaded file. Retry the download.",
+    "settings.localModelErrorNetwork": "Network or mirror failure. Check your connection and retry the download.",
+    "settings.localModelErrorGeneric": "Local model download failed. Retry the download.",
     "settings.localEmbeddingTitle": "Local embedding model",
     "settings.localOcrTitle": "Local OCR model",
+    "settings.localAsrTitle": "Local speech recognition",
+    "settings.localTtsTitle": "Local text to speech",
+    "settings.localFireRedName": "FireRedASR2-AED INT8",
+    "settings.localFireRedHint": "High-quality Chinese and English speech recognition · about 904 MB",
+    "settings.localZipVoiceName": "ZipVoice Distill Chinese-English FP32",
+    "settings.localZipVoiceHint": "Higher-fidelity preset or custom-voice synthesis with Vocos · about 532 MB",
     "settings.localOcrHint": "On-device OCR for Chinese, English, Japanese, and Latin scripts · about 130 MB",
     "settings.localOcrName": "PP-OCRv6 Medium OCR",
     "settings.localQwenHint": "1024-dimensional multilingual semantic retrieval · about 626 MB",
     "settings.localQwenName": "Qwen3 Embedding 0.6B",
+    "settings.voiceCapability": "Voice",
+    "settings.voiceCapabilityHint": "Configure private on-device voice input and spoken replies.",
+    "settings.voiceAutoSend": "Send automatically after recognition",
+    "settings.voiceAutoSendHint": "Send recognized text immediately. When off, the text stays in the composer for review.",
+    "settings.voiceAutoStop": "Stop recording automatically",
+    "settings.voiceAutoStopHint": "After you start speaking, about 1.6 seconds of silence stops recording and starts recognition.",
+    "settings.voiceAutoRead": "Read agent replies aloud",
+    "settings.voiceAutoReadHint": "Automatically speak each completed reply in the active conversation.",
+    "settings.voiceAutoReadUnavailable": "Download ZipVoice and finish configuring the selected voice before enabling automatic reading.",
+    "settings.voiceProfile": "Speaking voice",
+    "settings.voiceProfileHint": "Use the bundled voice immediately, or switch to a custom reference voice cloned entirely on this device.",
+    "settings.voicePresetMode": "Preset voice",
+    "settings.voiceCustomMode": "Custom voice",
+    "settings.voicePresetName": "Default Chinese voice",
+    "settings.voicePresetHint": "Clear Chinese and English voice · included with ZipVoice",
+    "settings.voicePresetSelected": "Selected",
+    "settings.voiceCustomTitle": "Custom reference voice",
+    "settings.voiceCustomHint": "Choose a clear 1–15 second recording and enter its exact transcript. ZipVoice uses it to reproduce that voice locally.",
+    "settings.voiceProfileConfigured": "Reference voice configured · choose a file to replace it",
+    "settings.voiceChooseAudio": "Choose WAV, FLAC, or OGG audio",
+    "settings.voiceReferencePlaceholder": "Exact words spoken in the reference recording",
+    "settings.voiceSaveProfile": "Save reference voice",
+    "settings.voiceProfileSaving": "Saving reference voice…",
+    "settings.voiceProfileSaved": "Reference voice saved",
+    "settings.voiceProfileDeleted": "Reference voice deleted",
+    "settings.voiceAsrStatus": "Voice input",
+    "settings.voiceTtsStatus": "Speech output",
+    "settings.voiceTtsNeedsProfile": "model or reference voice not ready",
     "settings.reembed": "Re-embed knowledge",
     "settings.reembedComplete": "Knowledge re-embedding complete · {count} chunks updated",
     "settings.reembedFailed": "Knowledge re-embedding failed",
@@ -1033,6 +1071,12 @@ var WORKBENCH_TRANSLATIONS = {
     "profile.topTools": "Most used",
     "profile.topToolsHint": "since this update",
     "profile.empty": "No data yet",
+    "profile.apiBudgetTitle": "API budget",
+    "profile.budgetDisabled": "Budget is not enabled",
+    "profile.budgetMonthlyRemaining": "Monthly remaining",
+    "profile.budgetOfLimit": "of {limit}",
+    "profile.budgetWeeklyRemaining": "Weekly remaining",
+    "profile.budgetFiveHourRemaining": "5-hour remaining",
     "rail.newTask": "New task",
     "rail.deleteTask": "Delete task",
     "rail.loadingTasks": "Loading tasks...",
@@ -1114,6 +1158,18 @@ var WORKBENCH_TRANSLATIONS = {
     "shortcut.action.toggleSidebarDesc": "Collapse or expand the project rail",
     "shortcut.action.settings": "Open settings",
     "shortcut.action.settingsDesc": "Open the settings overlay",
+    "shortcut.action.voiceCommand": "Start voice command",
+    "shortcut.action.voiceCommandDesc": "Record a command and send it to a new background chat",
+    "topbar.voiceCommand": "Voice command",
+    "topbar.voiceCommandRecording": "Listening…",
+    "topbar.voiceCommandRecognizing": "Recognizing…",
+    "topbar.voiceCommandFailed": "Voice command failed: {error}",
+    "topbar.voiceModelsNotReady": "Configure both local voice models first",
+    "topbar.voiceCommandStartingNotice": "Starting voice input…",
+    "topbar.voiceCommandListening": "Listening; start speaking",
+    "topbar.voiceCommandRecognizingNotice": "Recognizing speech…",
+    "topbar.voiceCommandComplete": "Recognized and sent to a new chat",
+    "topbar.voiceCommandNoSpeech": "No speech recognized; no chat was created",
     "shortcut.action.composerSend": "Send message",
     "shortcut.action.composerSendDesc": "Send the current composer input",
     "shortcut.action.composerNewline": "New line in composer",
@@ -1972,6 +2028,9 @@ var WORKBENCH_TRANSLATIONS = {
     "workbenchChat.ctx.seg.assistant": "Assistant",
     "workbenchChat.ctx.seg.tool": "Tools",
     "workbenchChat.copy": "Copy",
+    "workbenchChat.voicePlayback": "Read aloud",
+    "workbenchChat.voicePlaybackStop": "Stop reading",
+    "workbenchChat.voicePlaybackFailed": "Could not play speech: {error}",
     "workbenchChat.compact": "Compress chat",
     "workbenchChat.generateMemory": "Generate memory",
     "workbenchChat.generateMemoryBusy": "Starting memory learning…",
@@ -2079,6 +2138,8 @@ var WORKBENCH_TRANSLATIONS = {
     "workbenchChat.model": "Model",
     "workbenchChat.modelShare": "Model share",
     "workbenchChat.more": "More",
+    "workbenchChat.agentFlow.created": "Agent created this chat",
+    "workbenchChat.agentFlow.typing": "Agent is entering a message",
     "workbenchChat.newChat": "New chat",
     "workbenchChat.noMatches": "No matching chats.",
     "workbenchChat.noMessages": "No messages yet",
@@ -2086,6 +2147,11 @@ var WORKBENCH_TRANSLATIONS = {
     "workbenchChat.noProject": "Select a project first.",
     "workbenchChat.permissionMode": "Permission mode",
     "workbenchChat.permissionTitle": "Authorization needed",
+    "workbenchChat.permissionRequest": "Agent requests authorization for {operation}.",
+    "workbenchChat.permissionTool": "Tool: {tool}",
+    "workbenchChat.permissionTarget": "Target: {target}",
+    "workbenchChat.permissionReason": "Reason: {reason}",
+    "workbenchChat.permissionPrompt": "Allow this operation?",
     "workbenchChat.approve": "Confirm",
     "workbenchChat.approveAuto": "Confirm and continue in Auto",
     "workbenchChat.reject": "Reject",
@@ -2173,6 +2239,15 @@ var WORKBENCH_TRANSLATIONS = {
     "workbenchChat.renameSuccess": "Chat renamed",
     "workbenchChat.search": "Search chats...",
     "workbenchChat.send": "Send",
+    "workbenchChat.voiceInputStart": "Voice input",
+    "workbenchChat.voiceInputStarting": "Accessing microphone…",
+    "workbenchChat.voiceInputStop": "Stop recording",
+    "workbenchChat.voiceInputAutoStop": "Recording · pauses automatically start recognition",
+    "workbenchChat.voiceTranscribing": "Recognizing speech…",
+    "workbenchChat.voiceInputFailed": "Could not recognize speech: {error}",
+    "workbenchChat.microphoneUnavailable": "Microphone access is unavailable",
+    "workbenchChat.noRecordedAudio": "No audio was recorded",
+    "workbenchChat.noRecognizedSpeech": "No speech was recognized",
     "workbenchChat.selection.actions": "Selection actions",
     "workbenchChat.selection.askInSidebar": "Ask in sidebar",
     "workbenchChat.sideAgent.agent": "Agent",
@@ -2343,6 +2418,7 @@ var WORKBENCH_TRANSLATIONS = {
     "toolName.GenerateImage": "Generate image",
     "toolName.browser_tools": "Browser tools",
     "toolName.code_tools": "Code tools",
+    "toolName.cyrene_tools": "Cyrene app tools",
     "toolName.delivery_tools": "Delivery tools",
     "toolName.desktop_tools": "Desktop tools",
     "toolName.entity_tools": "Entity tools",
@@ -2355,6 +2431,7 @@ var WORKBENCH_TRANSLATIONS = {
     "toolName.subagent_tools": "Subagent tools",
     "toolName.task_tools": "Task tools",
     "toolPackageDesc.code_tools": "Code analysis, Git, persistent shells, and Claude Code helpers.",
+    "toolPackageDesc.cyrene_tools": "Inspect and control the local Cyrene app through typed, current-surface operations.",
     "toolPackageDesc.browser_tools": "Enable browser navigation, page snapshots, screenshots, clicks, typing, waiting, and network inspection.",
     "toolPackageDesc.desktop_tools": "Discover and interact with desktop applications through App Use.",
     "toolPackageDesc.memory_tools": "Retrieve and maintain conversation, short-term, and project memory.",
@@ -2408,6 +2485,24 @@ var WORKBENCH_TRANSLATIONS = {
     "toolName.cancel_task": "Cancel task",
     "toolName.set_task_goal": "Set goal",
     "toolName.update_task_plan": "Update plan",
+    "toolName.CyreneAppStatus": "Read Cyrene status",
+    "toolName.CyreneWindowControl": "Control Cyrene window",
+    "toolName.CyreneUISnapshot": "Snapshot current interface",
+    "toolName.CyreneUIInspect": "Inspect interface component",
+    "toolName.CyreneUIClick": "Click interface component",
+    "toolName.CyreneUIDoubleClick": "Double-click interface component",
+    "toolName.CyreneUIType": "Type in interface component",
+    "toolName.CyreneUIScroll": "Scroll interface component",
+    "toolName.CyreneUIDrag": "Drag interface component",
+    "toolName.CyreneSessionMessage": "Message another session",
+    "toolName.CyreneSettingsDescribe": "Describe Cyrene settings",
+    "toolName.CyreneSettingsRead": "Read Cyrene settings",
+    "toolName.CyreneSettingsUpdate": "Update Cyrene settings",
+    "toolName.CyreneProjectControl": "Manage Cyrene projects",
+    "toolName.CyreneChatControl": "Manage Cyrene chats",
+    "toolName.CyreneDataControl": "Manage Cyrene backups",
+    "toolName.CyreneUpdateControl": "Manage Cyrene updates",
+    "toolName.CyreneLifecycleControl": "Control Cyrene lifecycle",
     "toolName.GitStatus": "Git status",
     "toolName.GitDiff": "Git diff",
     "toolName.GitLog": "Git log",
@@ -2585,12 +2680,50 @@ var WORKBENCH_TRANSLATIONS = {
     "settings.localModelOptional": "可选 · 未下载",
     "settings.localModelNotDownloaded": "未下载",
     "settings.localModelReady": "已就绪",
+    "settings.localModelErrorExtract": "压缩包解压失败，下载的模型文件不完整或无效，请重试下载。",
+    "settings.localModelErrorChecksum": "文件完整性校验失败，下载内容可能已损坏，请重试下载。",
+    "settings.localModelErrorNetwork": "网络或镜像源连接失败，请检查网络后重试下载。",
+    "settings.localModelErrorGeneric": "本地模型下载失败，请重试。",
     "settings.localEmbeddingTitle": "本地嵌入模型",
     "settings.localOcrTitle": "本地 OCR 模型",
+    "settings.localAsrTitle": "本地语音识别",
+    "settings.localTtsTitle": "本地语音合成",
+    "settings.localFireRedName": "FireRedASR2-AED INT8",
+    "settings.localFireRedHint": "高质量中英文语音识别 · 约 904 MB",
+    "settings.localZipVoiceName": "ZipVoice Distill 中英双语 FP32",
+    "settings.localZipVoiceHint": "使用 Vocos 的高保真预设或自定义音色合成 · 约 532 MB",
     "settings.localOcrHint": "本机中英日文及拉丁语系文字识别 · 约 130 MB",
     "settings.localOcrName": "PP-OCRv6 Medium OCR",
     "settings.localQwenHint": "1024 维多语言语义检索 · 约 626 MB",
     "settings.localQwenName": "Qwen3 Embedding 0.6B",
+    "settings.voiceCapability": "语音",
+    "settings.voiceCapabilityHint": "配置完全在本机运行的语音输入和回复朗读。",
+    "settings.voiceAutoSend": "识别后自动发送",
+    "settings.voiceAutoSendHint": "识别出文字后立即发送；关闭时只填入输入框，供确认后手动发送。",
+    "settings.voiceAutoStop": "自动停止录音",
+    "settings.voiceAutoStopHint": "开始说话后持续静音约 1.6 秒，将自动停止录音并开始识别。",
+    "settings.voiceAutoRead": "自动朗读 Agent 回复",
+    "settings.voiceAutoReadHint": "当前对话中的每条完整回复生成后自动朗读。",
+    "settings.voiceAutoReadUnavailable": "请先下载 ZipVoice 并完成当前音色配置，再启用自动朗读。",
+    "settings.voiceProfile": "朗读音色",
+    "settings.voiceProfileHint": "可以直接使用随模型提供的预设音色，也可以切换为完全在本机复刻的自定义音色。",
+    "settings.voicePresetMode": "预设音色",
+    "settings.voiceCustomMode": "自定义音色",
+    "settings.voicePresetName": "默认中文男声",
+    "settings.voicePresetHint": "清晰自然的中英文音色 · 随 ZipVoice 提供",
+    "settings.voicePresetSelected": "已选择",
+    "settings.voiceCustomTitle": "自定义参考音色",
+    "settings.voiceCustomHint": "选择 1–15 秒清晰录音并填写录音中的准确文字；ZipVoice 将在本机复刻这个音色。",
+    "settings.voiceProfileConfigured": "参考音色已配置 · 选择文件可替换",
+    "settings.voiceChooseAudio": "选择 WAV、FLAC 或 OGG 音频",
+    "settings.voiceReferencePlaceholder": "参考录音中说出的准确文字",
+    "settings.voiceSaveProfile": "保存参考音色",
+    "settings.voiceProfileSaving": "正在保存参考音色…",
+    "settings.voiceProfileSaved": "参考音色已保存",
+    "settings.voiceProfileDeleted": "参考音色已删除",
+    "settings.voiceAsrStatus": "语音输入",
+    "settings.voiceTtsStatus": "语音输出",
+    "settings.voiceTtsNeedsProfile": "模型或参考音色未就绪",
     "settings.reembed": "重新嵌入知识库",
     "settings.reembedComplete": "知识库重新嵌入完成 · 已更新 {count} 个分块",
     "settings.reembedFailed": "知识库重新嵌入失败",
@@ -3524,6 +3657,12 @@ var WORKBENCH_TRANSLATIONS = {
     "profile.topTools": "最常用功能",
     "profile.topToolsHint": "自本次更新起累计",
     "profile.empty": "暂无数据",
+    "profile.apiBudgetTitle": "API 预算",
+    "profile.budgetDisabled": "未开启预算功能",
+    "profile.budgetMonthlyRemaining": "本月剩余",
+    "profile.budgetOfLimit": "总额 {limit}",
+    "profile.budgetWeeklyRemaining": "本周剩余",
+    "profile.budgetFiveHourRemaining": "5 小时剩余",
     "rail.newTask": "新建任务",
     "rail.deleteTask": "删除任务",
     "rail.loadingTasks": "加载任务中...",
@@ -3605,6 +3744,18 @@ var WORKBENCH_TRANSLATIONS = {
     "shortcut.action.toggleSidebarDesc": "收起或展开项目侧栏",
     "shortcut.action.settings": "打开设置",
     "shortcut.action.settingsDesc": "打开设置面板",
+    "shortcut.action.voiceCommand": "开始语音命令",
+    "shortcut.action.voiceCommandDesc": "录制命令并发送到新的后台对话",
+    "topbar.voiceCommand": "语音命令",
+    "topbar.voiceCommandRecording": "正在聆听…",
+    "topbar.voiceCommandRecognizing": "正在识别…",
+    "topbar.voiceCommandFailed": "语音命令失败：{error}",
+    "topbar.voiceModelsNotReady": "请先配置两个本地语音模型",
+    "topbar.voiceCommandStartingNotice": "正在启动语音输入…",
+    "topbar.voiceCommandListening": "正在聆听，请开始说话",
+    "topbar.voiceCommandRecognizingNotice": "正在识别语音…",
+    "topbar.voiceCommandComplete": "识别完成，已发送到新对话",
+    "topbar.voiceCommandNoSpeech": "未识别到语音，未创建对话",
     "shortcut.action.composerSend": "发送消息",
     "shortcut.action.composerSendDesc": "发送当前输入框的内容",
     "shortcut.action.composerNewline": "输入框换行",
@@ -4463,6 +4614,9 @@ var WORKBENCH_TRANSLATIONS = {
     "workbenchChat.ctx.seg.assistant": "助手",
     "workbenchChat.ctx.seg.tool": "工具",
     "workbenchChat.copy": "复制",
+    "workbenchChat.voicePlayback": "朗读",
+    "workbenchChat.voicePlaybackStop": "停止朗读",
+    "workbenchChat.voicePlaybackFailed": "无法播放语音：{error}",
     "workbenchChat.compact": "压缩对话",
     "workbenchChat.generateMemory": "生成记忆",
     "workbenchChat.generateMemoryBusy": "正在启动记忆学习…",
@@ -4570,6 +4724,8 @@ var WORKBENCH_TRANSLATIONS = {
     "workbenchChat.model": "模型",
     "workbenchChat.modelShare": "模型占比",
     "workbenchChat.more": "更多",
+    "workbenchChat.agentFlow.created": "Agent 新建了这个对话",
+    "workbenchChat.agentFlow.typing": "Agent 正在输入消息",
     "workbenchChat.newChat": "新对话",
     "workbenchChat.noMatches": "没有匹配的对话。",
     "workbenchChat.noMessages": "还没有消息",
@@ -4577,6 +4733,11 @@ var WORKBENCH_TRANSLATIONS = {
     "workbenchChat.noProject": "请先选择一个项目。",
     "workbenchChat.permissionMode": "权限模式",
     "workbenchChat.permissionTitle": "需要你授权",
+    "workbenchChat.permissionRequest": "Agent 请求授权执行：{operation}。",
+    "workbenchChat.permissionTool": "工具：{tool}",
+    "workbenchChat.permissionTarget": "目标：{target}",
+    "workbenchChat.permissionReason": "原因：{reason}",
+    "workbenchChat.permissionPrompt": "是否允许此操作？",
     "workbenchChat.approve": "确认",
     "workbenchChat.approveAuto": "确认并自动继续",
     "workbenchChat.reject": "拒绝",
@@ -4664,6 +4825,15 @@ var WORKBENCH_TRANSLATIONS = {
     "workbenchChat.renameSuccess": "对话已重命名",
     "workbenchChat.search": "搜索对话...",
     "workbenchChat.send": "发送",
+    "workbenchChat.voiceInputStart": "语音输入",
+    "workbenchChat.voiceInputStarting": "正在访问麦克风…",
+    "workbenchChat.voiceInputStop": "停止录音",
+    "workbenchChat.voiceInputAutoStop": "正在录音 · 停顿后自动开始识别",
+    "workbenchChat.voiceTranscribing": "正在识别语音…",
+    "workbenchChat.voiceInputFailed": "无法识别语音：{error}",
+    "workbenchChat.microphoneUnavailable": "当前无法访问麦克风",
+    "workbenchChat.noRecordedAudio": "没有录到音频",
+    "workbenchChat.noRecognizedSpeech": "没有识别到语音",
     "workbenchChat.selection.actions": "选中文字操作",
     "workbenchChat.selection.askInSidebar": "在侧边提问",
     "workbenchChat.sideAgent.agent": "Agent",
@@ -4834,6 +5004,7 @@ var WORKBENCH_TRANSLATIONS = {
     "toolName.GenerateImage": "生成图片",
     "toolName.browser_tools": "浏览器工具",
     "toolName.code_tools": "代码工具",
+    "toolName.cyrene_tools": "Cyrene 应用工具",
     "toolName.delivery_tools": "交付工具",
     "toolName.desktop_tools": "桌面工具",
     "toolName.entity_tools": "实体工具",
@@ -4846,6 +5017,7 @@ var WORKBENCH_TRANSLATIONS = {
     "toolName.subagent_tools": "子代理工具",
     "toolName.task_tools": "任务工具",
     "toolPackageDesc.code_tools": "代码分析、Git、持久化终端以及 Claude Code 辅助能力。",
+    "toolPackageDesc.cyrene_tools": "通过类型化、当前界面限定的操作检查和控制本机 Cyrene 应用。",
     "toolPackageDesc.browser_tools": "启用浏览器导航、页面快照、截图、点击、输入、等待和网络检查工具。",
     "toolPackageDesc.desktop_tools": "通过应用控制发现桌面应用并与其交互。",
     "toolPackageDesc.memory_tools": "检索和维护对话记忆、短期记忆与项目记忆。",
@@ -4899,6 +5071,24 @@ var WORKBENCH_TRANSLATIONS = {
     "toolName.cancel_task": "取消任务",
     "toolName.set_task_goal": "设置任务目标",
     "toolName.update_task_plan": "更新计划",
+    "toolName.CyreneAppStatus": "读取 Cyrene 状态",
+    "toolName.CyreneWindowControl": "控制 Cyrene 窗口",
+    "toolName.CyreneUISnapshot": "快照当前界面",
+    "toolName.CyreneUIInspect": "检查界面组件",
+    "toolName.CyreneUIClick": "点击界面组件",
+    "toolName.CyreneUIDoubleClick": "双击界面组件",
+    "toolName.CyreneUIType": "向界面组件输入",
+    "toolName.CyreneUIScroll": "滚动界面组件",
+    "toolName.CyreneUIDrag": "拖动界面组件",
+    "toolName.CyreneSessionMessage": "向其他会话发送消息",
+    "toolName.CyreneSettingsDescribe": "描述 Cyrene 设置",
+    "toolName.CyreneSettingsRead": "读取 Cyrene 设置",
+    "toolName.CyreneSettingsUpdate": "修改 Cyrene 设置",
+    "toolName.CyreneProjectControl": "管理 Cyrene 项目",
+    "toolName.CyreneChatControl": "管理 Cyrene 对话",
+    "toolName.CyreneDataControl": "管理 Cyrene 备份",
+    "toolName.CyreneUpdateControl": "管理 Cyrene 更新",
+    "toolName.CyreneLifecycleControl": "控制 Cyrene 生命周期",
     "toolName.GitStatus": "Git 状态",
     "toolName.GitDiff": "Git 差异",
     "toolName.GitLog": "Git 历史",
@@ -5078,6 +5268,24 @@ var WORKBENCH_TOOL_NAME_ALIASES = {
   "remote.harness": "RemoteHarness",
   "remote.action": "RemoteCyreneAction",
   "remote.run": "RunRemoteCyrene",
+  "cyrene.app.status": "CyreneAppStatus",
+  "cyrene.app.window": "CyreneWindowControl",
+  "cyrene.ui.snapshot": "CyreneUISnapshot",
+  "cyrene.ui.inspect": "CyreneUIInspect",
+  "cyrene.ui.click": "CyreneUIClick",
+  "cyrene.ui.double_click": "CyreneUIDoubleClick",
+  "cyrene.ui.type": "CyreneUIType",
+  "cyrene.ui.scroll": "CyreneUIScroll",
+  "cyrene.ui.drag": "CyreneUIDrag",
+  "cyrene.session.message": "CyreneSessionMessage",
+  "cyrene.settings.describe": "CyreneSettingsDescribe",
+  "cyrene.settings.read": "CyreneSettingsRead",
+  "cyrene.settings.update": "CyreneSettingsUpdate",
+  "cyrene.project.manage": "CyreneProjectControl",
+  "cyrene.chat.manage": "CyreneChatControl",
+  "cyrene.data.manage": "CyreneDataControl",
+  "cyrene.update.manage": "CyreneUpdateControl",
+  "cyrene.app.lifecycle": "CyreneLifecycleControl",
 };
 
 var workbenchI18nLang = "en";
@@ -5099,9 +5307,13 @@ function workbenchTranslateForLang(key, lang, params, fallback) {
   var resolvedKey = key;
   if (text === undefined && String(key).indexOf("toolName.") === 0) {
     var toolName = String(key).slice("toolName.".length);
+    toolName = toolName.replace(/\.r[23]$/, "");
     var alias = WORKBENCH_TOOL_NAME_ALIASES[toolName];
     if (alias) {
       resolvedKey = "toolName." + alias;
+      text = dict[resolvedKey];
+    } else if (toolName !== String(key).slice("toolName.".length)) {
+      resolvedKey = "toolName." + toolName;
       text = dict[resolvedKey];
     }
   }
@@ -5130,12 +5342,89 @@ function workbenchT(key, params, fallback) {
 function workbenchToolName(toolName, lang) {
   var raw = String(toolName || "").trim();
   if (!raw) return lang === "zh" ? "工具" : "Tool";
+  // Permission events use risk-qualified operation IDs while tool-name
+  // translations are keyed by the stable capability ID.
+  raw = raw.replace(/\.r[23]$/, "");
   return workbenchTranslateForLang(
     "toolName." + raw,
     lang || workbenchI18nLang || "en",
     null,
     raw
   );
+}
+
+function workbenchPermissionQuestionText(pending, lang) {
+  var question = pending && typeof pending === "object" ? pending : {};
+  var meta = question.meta && typeof question.meta === "object" ? { ...question.meta } : {};
+  var legacyText = String(question.text || "").trim();
+  // Questions persisted by older builds contain only the backend-formatted
+  // text. Recover its display fields so upgrading the renderer localizes an
+  // already-open permission card as well as newly created cards.
+  if (!meta.tool_name && legacyText) {
+    var legacyTool = legacyText.match(/(?:^|\n)(?:工具|Tool)\s*[：:]\s*([^\n]+)/i);
+    if (legacyTool) meta.tool_name = String(legacyTool[1] || "").trim();
+  }
+  if (!meta.operation && legacyText) {
+    var legacyOperation = legacyText.match(/\bcyrene\.[a-z0-9_.-]+(?:\.r[23])?\b/i);
+    if (legacyOperation) meta.operation = String(legacyOperation[0] || "").trim();
+  }
+  if (!meta.path_hint && legacyText) {
+    var legacyTarget = legacyText.match(/(?:^|\n)(?:📂\s*)?(?:目标路径|Target)\s*[：:]\s*([^\n]+)/i);
+    if (legacyTarget) meta.path_hint = String(legacyTarget[1] || "").trim();
+  }
+  if (!meta.reason && legacyText) {
+    var legacyReason = legacyText.match(/(?:^|\n)(?:💡\s*)?(?:原因|Reason)\s*[：:]\s*([^\n]+)/i);
+    if (legacyReason) meta.reason = String(legacyReason[1] || "").trim();
+  }
+  var operationId = String(meta.operation || meta.tool_name || "").trim();
+  var toolId = String(meta.tool_name || operationId).trim();
+  // Older persisted questions predate structured public metadata. Preserve
+  // their readable text instead of inventing an empty "Tool" field.
+  if (!operationId && !toolId) {
+    return legacyText;
+  }
+  var resolvedLang = lang || workbenchI18nLang || "en";
+  var operationName = workbenchToolName(operationId, resolvedLang);
+  var localizedToolName = workbenchToolName(toolId, resolvedLang);
+  var lines = [
+    workbenchTranslateForLang(
+      "workbenchChat.permissionRequest",
+      resolvedLang,
+      { operation: operationName },
+      "Agent requests authorization for {operation}."
+    ),
+    workbenchTranslateForLang(
+      "workbenchChat.permissionTool",
+      resolvedLang,
+      { tool: localizedToolName },
+      "Tool: {tool}"
+    ),
+  ];
+  var target = String(meta.path_hint || "").trim();
+  if (target && !/^cyrene-(?:setting|lifecycle):/.test(target)) {
+    lines.push(workbenchTranslateForLang(
+      "workbenchChat.permissionTarget",
+      resolvedLang,
+      { target: target },
+      "Target: {target}"
+    ));
+  }
+  var reason = String(meta.reason || "").trim();
+  if (reason) {
+    lines.push(workbenchTranslateForLang(
+      "workbenchChat.permissionReason",
+      resolvedLang,
+      { reason: reason },
+      "Reason: {reason}"
+    ));
+  }
+  lines.push(workbenchTranslateForLang(
+    "workbenchChat.permissionPrompt",
+    resolvedLang,
+    null,
+    "Allow this operation?"
+  ));
+  return lines.join("\n");
 }
 
 function setWorkbenchLang(lang) {
@@ -5197,6 +5486,7 @@ window.CyreneUI.i18n = window.CyreneUI.register("i18n", {
   t: workbenchT,
   tForLang: workbenchTranslateForLang,
   toolName: workbenchToolName,
+  permissionQuestionText: workbenchPermissionQuestionText,
   setLang: setWorkbenchLang,
   getLang: function () { return workbenchI18nLang || "en"; },
   use: useWorkbenchI18n,

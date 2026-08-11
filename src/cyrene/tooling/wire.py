@@ -10,7 +10,11 @@ from typing import Any
 
 from cyrene.runtime.settings_store import is_tool_pack_enabled
 from cyrene.tooling.catalog import TOOL_DEFS
-from cyrene.tooling.packs import MODULE_TOOL_NAMES, PACK_BY_WIRE_NAME
+from cyrene.tooling.packs import (
+    MAIN_ONLY_MODULE_TOOL_NAMES,
+    MODULE_TOOL_NAMES,
+    PACK_BY_WIRE_NAME,
+)
 from cyrene.tooling.types import WireToolBundle
 
 DIRECT_TOOL_NAMES = (
@@ -159,12 +163,13 @@ def _direct_def(
     return tool_def
 
 
-def enabled_module_tool_names() -> tuple[str, ...]:
+def enabled_module_tool_names(actor: str = "main") -> tuple[str, ...]:
     """Return enabled package gateways in their stable declaration order."""
     return tuple(
         name
         for name in MODULE_TOOL_NAMES
         if is_tool_pack_enabled(name)
+        and not (actor == "subagent" and name in MAIN_ONLY_MODULE_TOOL_NAMES)
     )
 
 
@@ -216,7 +221,7 @@ def get_main_wire_tool_defs() -> list[dict[str, Any]]:
 
     return deepcopy(list(_wire_bundle(
         "main",
-        enabled_module_tool_names(),
+        enabled_module_tool_names("main"),
         _oauth_image_generation_enabled(),
         has_response_capability("interactive_blocks"),
     )))
@@ -226,7 +231,7 @@ def get_subagent_wire_tool_defs() -> list[dict[str, Any]]:
     """Return the actor-specific bundle with enabled package gateways."""
     return deepcopy(list(_wire_bundle(
         "subagent",
-        enabled_module_tool_names(),
+        enabled_module_tool_names("subagent"),
         False,
         False,
     )))
@@ -267,7 +272,7 @@ def get_wire_tool_bundle(actor: str = "main") -> WireToolBundle:
 
     return _get_wire_tool_bundle(
         normalized_actor,
-        enabled_module_tool_names(),
+        enabled_module_tool_names(normalized_actor),
         _oauth_image_generation_enabled() if normalized_actor == "main" else False,
         (
             has_response_capability("interactive_blocks")

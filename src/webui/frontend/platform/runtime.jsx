@@ -33,10 +33,15 @@
     return services[key];
   }
 
+  function hasService(name) {
+    return !!services[String(name || "").trim()];
+  }
+
   root.CyreneUI = {
     version: 1,
     services: services,
     register: register,
     require: requireService,
+    has: hasService,
   };
 })(window);

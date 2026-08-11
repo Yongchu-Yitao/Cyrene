@@ -271,6 +271,26 @@ class ChatRunEventStore:
                 ),
             )
 
+    def delete_chat(self, chat_id: str) -> None:
+        """Remove durable replay state after its owning chat is deleted."""
+        with self._lock, self._connect() as conn:
+            run_ids = [
+                str(row["run_id"])
+                for row in conn.execute(
+                    "SELECT run_id FROM workbench_chat_runs WHERE chat_id = ?",
+                    (str(chat_id),),
+                ).fetchall()
+            ]
+            if run_ids:
+                conn.executemany(
+                    "DELETE FROM workbench_chat_run_events WHERE run_id = ?",
+                    [(run_id,) for run_id in run_ids],
+                )
+            conn.execute(
+                "DELETE FROM workbench_chat_runs WHERE chat_id = ?",
+                (str(chat_id),),
+            )
+
     def recover_interrupted(self) -> int:
         now = datetime.now(timezone.utc).isoformat()
         with self._lock, self._connect() as conn:
@@ -625,12 +645,56 @@ class ChatRunManager:
             asyncio.create_task(run.publish({"type": "interrupted", "chatId": run.chat_id}))
         except RuntimeError:
             pass
-        for queue in list(run.subscribers):
-            try:
-                queue.put_nowait(None)
-            except Exception:
-                pass
+        # Keep streams attached until the cancelled runner has closed its inbox
+        # and persisted the terminal outcome. ``publish`` provides immediate UI
+        # feedback; ``_drive`` sends the final wake after ``run.done`` is set.
         return True
+
+    async def terminate(
+        self,
+        chat_id: str,
+        *,
+        termination_reason: str = "chat_deleted",
+    ) -> bool:
+        """Cancel, await, and forget a run before its chat record is deleted."""
+        target = str(chat_id or "")
+        run = self.runs.get(target)
+        had_run = run is not None
+        if run is not None:
+            run.status = "cancelled"
+            run.termination_reason = str(termination_reason or "chat_deleted")
+            run.outcome = {"kind": "deleted"}
+            task = run.task
+            if task is not None and not task.done():
+                task.cancel()
+            if task is not None and task is not asyncio.current_task():
+                await asyncio.gather(task, return_exceptions=True)
+            # A task cancelled before its first event-loop turn never enters
+            # ``_drive`` and therefore cannot execute its normal finalizer.
+            # Close/wake explicitly so subscribers and inbox workers cannot
+            # survive deletion in that narrow startup window.
+            if not run.done.is_set():
+                try:
+                    await run.inbox.close(termination_reason=run.termination_reason)
+                except Exception:
+                    logger.exception("Failed to close deleted chat inbox %s", target)
+                run.ready.set()
+                run.done.set()
+                for queue in list(run.subscribers):
+                    try:
+                        queue.put_nowait(None)
+                    except Exception:
+                        pass
+            if self.runs.get(target) is run:
+                self.runs.pop(target, None)
+        if self._event_store is not None:
+            try:
+                await asyncio.to_thread(self._event_store.delete_chat, target)
+            except Exception:
+                # Durable replay cleanup must never resurrect or keep a live
+                # agent merely because its old database became unavailable.
+                logger.exception("Failed to delete durable run history for chat %s", target)
+        return had_run
 
     def start_or_get(
         self,
@@ -779,18 +843,23 @@ class ChatRunManager:
                 except Exception:
                     pass
             # A shell-exit wake may have been queued while this chat was busy.
-            try:
-                from cyrene.runtime.shell_wake import get_shell_wake_service
+            if run.termination_reason != "chat_deleted":
+                try:
+                    from cyrene.runtime.shell_wake import get_shell_wake_service
 
-                await get_shell_wake_service().try_dispatch(run.chat_id)
-            except Exception:
-                logger.exception(
-                    "Failed to dispatch pending shell wake for chat %s", run.chat_id
-                )
+                    await get_shell_wake_service().try_dispatch(run.chat_id)
+                except Exception:
+                    logger.exception(
+                        "Failed to dispatch pending shell wake for chat %s", run.chat_id
+                    )
             self._schedule_cleanup(run)
 
     def _schedule_cleanup(self, run: ChatRun) -> None:
         """Drop a finished run from the registry after the retention window."""
+        if run.termination_reason == "chat_deleted":
+            if self.runs.get(run.chat_id) is run:
+                self.runs.pop(run.chat_id, None)
+            return
         if self._retention_seconds <= 0:
             if self.runs.get(run.chat_id) is run:
                 self.runs.pop(run.chat_id, None)

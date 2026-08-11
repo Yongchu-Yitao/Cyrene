@@ -941,11 +941,19 @@ async def execute_wire_tool(
             else "success"
         )
         if resolution.wire_name in module_wire_names() or resolution.concrete_compat:
+            wire_result: Any = result
+            if isinstance(result, str):
+                try:
+                    wire_result = json.loads(result)
+                except (TypeError, ValueError, json.JSONDecodeError):
+                    wire_result = result
+            if isinstance(wire_result, dict) and str(wire_result.get("status") or ""):
+                status = str(wire_result["status"])
             return json.dumps(
                 {
                     "status": status,
                     "capability_id": resolution.capability_id,
-                    "result": str(result),
+                    "result": wire_result,
                 },
                 ensure_ascii=False,
             )

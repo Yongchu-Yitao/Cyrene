@@ -1,8 +1,35 @@
 from __future__ import annotations
 
 import json
+from pathlib import Path
 
 from cyrene.workbench import notifications as notifications
+
+
+ROOT = Path(__file__).resolve().parents[1]
+
+
+def _css_rule(styles: str, selector: str) -> str:
+    return styles.split(f"{selector} {{", 1)[1].split("}", 1)[0]
+
+
+def test_notification_panel_wraps_long_content_without_horizontal_scroll() -> None:
+    styles = (ROOT / "src/webui/frontend/workbench.css").read_text(encoding="utf-8")
+    notification_styles = styles.split(".workbench-notif-popover {", 1)[1].split(
+        "/* ── Help & Support center", 1
+    )[0]
+
+    notification_list = _css_rule(styles, ".workbench-notif-list")
+    notification_body = _css_rule(styles, ".workbench-notif-item-body")
+    notification_tab = _css_rule(styles, ".workbench-notif-tab")
+
+    assert "overflow-x: hidden;" in notification_list
+    assert "overflow-y: auto;" in notification_list
+    assert "touch-action: pan-y;" in notification_list
+    assert "overflow-wrap: anywhere;" in notification_body
+    assert "flex: 1 1 0;" in notification_tab
+    assert "min-width: 0;" in notification_tab
+    assert "overflow-x: auto;" not in notification_styles
 
 
 def test_visible_session_notification_is_not_returned_or_counted(tmp_path, monkeypatch) -> None:

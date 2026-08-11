@@ -20,26 +20,32 @@
 
 ## What Cyrene can do
 
-- **Remember across sessions** — maintain a durable personality and memory while
-  keeping project work separate.
-- **Complete multi-step work** — plan, use tools, delegate to parallel
-  subagents, verify results, and resume interrupted tasks.
-- **Research and reflect** — conduct cited deep research, generate PDF reports,
-  and use deep reflection when a task is stuck.
-- **Organize projects** — manage project workspaces, chats, tasks, memories,
-  knowledge, entities, schedules, and literature collections.
-- **Understand files** — ingest and search text, PDFs, Office documents,
-  Markdown, images, audio, video, and other attachments.
-- **Work with literature** — manage collections, tags, notes, annotations,
-  citations, attachments, relations, CSL JSON, RIS, BibTeX, and read-only Zotero
-  Desktop imports.
-- **Use the web and local tools** — search and browse the web, edit files, run
-  shell and Git operations, connect MCP servers, and use installed skills.
-- **Automate recurring work** — run cron, interval, and one-shot tasks and send
-  optional desktop, Telegram, or WeChat notifications.
-- **Run in Workbench or Electron** — use the same Workbench experience in a
-  browser or desktop app, with Quick Chat, rich Markdown, code, diff, map, PDF,
-  file-preview, and browser views.
+- **An agent that grows with you** — Cyrene carries its personality and useful
+  memories across sessions, while keeping every project's context cleanly
+  isolated.
+- **Context that flows with the work** — Cyrene composes traceable, shareable
+  context blocks: project goals and outcomes flow across tasks, chat histories
+  stay isolated, and tasks and subagents receive only the plans, memory, and
+  execution state they need. Stable blocks remain reusable, and the full
+  composition stays inspectable.
+- **From conversation to verified results** — Cyrene can plan, browse, edit
+  files, run shell and Git operations, connect MCP servers, use skills, delegate
+  to parallel subagents, verify the result, and resume interrupted work.
+- **Research you can trace and reuse** — Cyrene combines cited web research with
+  your PDFs, Office files, media, and literature library, then turns the evidence
+  into structured knowledge or polished PDF reports.
+- **A browser the agent can actually operate** — watch Cyrene navigate, click,
+  type, upload, and inspect pages in a live view. When login, CAPTCHA, or 2FA
+  needs you, take over the same browser and hand it back without losing the
+  session.
+- **An agent that can manage itself** — through permissioned, auditable tools,
+  Cyrene can inspect and operate its own UI, adjust settings, manage projects and
+  chats, back up data, and handle updates.
+- **A workspace for long-running thinking** — projects bring chats, tasks,
+  memories, knowledge, entities, schedules, and literature together in one
+  Workbench, available in both the browser and desktop app.
+- **Automation that keeps working** — schedule one-shot or recurring tasks and
+  receive results through desktop, Telegram, or WeChat notifications.
 
 ## Quick start
 

@@ -21,7 +21,7 @@ Phase 1 (runtime policy allows use_tools / ask_user / quit)
     │   ├── code_tools / browser_tools / desktop_tools
     │   ├── memory_tools / knowledge_tools / task_tools
     │   ├── entity_tools / map_tools / subagent_tools
-    │   ├── delivery_tools / skill_tools / integration_tools
+    │   ├── delivery_tools / skill_tools / cyrene_tools / integration_tools
     │   ├── Each module: discover → describe → invoke
     │   └── quit → end interaction
     │
@@ -137,6 +137,46 @@ to the fixed wire bundle. Manage servers via the Web UI or CLI.
 
 Create cron, interval, or one-shot tasks with `task.schedule` through
 `task_tools`. Tasks persist in SQLite with execution history.
+
+### Cyrene self-management control plane
+
+`cyrene_tools` is a main-agent-only progressive package. The model-facing wire
+contains one stable gateway; concrete schemas are disclosed through
+`discover → describe → invoke`. Its public capabilities are app status/window,
+current-surface snapshot/inspect/click/double-click/type/scroll/drag, and typed settings
+describe/read/update.
+
+UI control is bound to the Electron renderer that originated the current local
+turn. A snapshot exposes only the active layer and current viewport; inspect
+reads one component and its paginated subtree. Mutations bind the exact
+`snapshot_id`, revision, node and action, and never accept selectors, scripts,
+raw events, or arbitrary coordinates. Explicit semantic nodes and the bounded
+DOM projection are de-duplicated. Transcript text, streaming output, and
+message-control re-renders remain readable but do not advance the actionable
+revision; approvals, questions, layers, and action-set changes still do.
+If an unrelated global revision nevertheless advances, a bounded renderer-side
+action lease lets an earlier snapshot act only when that node's action, risk,
+scope, and safety-relevant state are unchanged. The agent must still pass the
+original revision verbatim.
+Double-click is a separate gesture capability: it accepts only an `invoke`
+action that explicitly advertises `double_press` or `double_click`. For example,
+the Browser PiP titlebar advertises `maximize + double_press`, so the agent can
+maximize it through the registered renderer handler without window focus or
+screen coordinates. Ordinary single-click actions are rejected by this tool.
+Composer send is an explicit R2 action while
+interrupting the current run is R1.
+
+Project, chat, backup, update, lifecycle, and cross-session message handlers are
+internal services and are blocked from every agent catalog. The only persistent
+backend mutation exposed to the agent is the typed, revisioned non-model
+settings service. R2/R3 delegation is reviewed against the exact real local-user
+turn and, for a batch, consumed in argument-bound order.
+The model may provide an exact quote; if it omits one, the same permission
+reviewer evaluates the full current desktop-local request. A missing client
+request ID does not invalidate a trusted session/round identity. Permission
+cards render structured metadata through the current UI language, normalize
+risk-qualified operation IDs to localized capability names, and hide internal
+correlation fingerprints.
 
 ### Web UI
 

@@ -85,6 +85,33 @@ async def test_finished_run_remains_replayable_during_retention_window():
     await manager.shutdown()
 
 
+async def test_deleted_chat_run_is_cancelled_awaited_and_forgotten(tmp_path):
+    from cyrene.workbench.chat_runs import ChatRunManager
+
+    manager = ChatRunManager(retention_seconds=45)
+    manager.configure(str(tmp_path / "deleted-run.sqlite3"))
+    started = asyncio.Event()
+    stopped = asyncio.Event()
+
+    async def runner(_run):
+        started.set()
+        try:
+            await asyncio.Event().wait()
+        finally:
+            stopped.set()
+
+    run, _ = manager.start_or_get(
+        "chat_deleted", {"type": "ack", "chatId": "chat_deleted"}, runner
+    )
+    await asyncio.wait_for(started.wait(), timeout=1)
+
+    assert await manager.terminate("chat_deleted") is True
+    assert stopped.is_set()
+    assert run.task is not None and run.task.done()
+    assert manager.get("chat_deleted") is None
+    assert manager.get_replayable("chat_deleted") is None
+
+
 async def test_finished_run_events_reload_from_sqlite_after_memory_cleanup(
     tmp_path,
 ):

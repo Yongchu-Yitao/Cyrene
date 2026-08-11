@@ -10,6 +10,20 @@ def register_settings_routes(router: APIRouter, bot: Any, db_path: str) -> None:
     _bot = bot
     _db_path = db_path
 
+    async def _publish_settings_changed(
+        namespace: str,
+        revision: int | None,
+        changed: list[str],
+    ) -> None:
+        from cyrene.observability import debug
+
+        await debug.publish_event({
+            "type": "settings_changed",
+            "namespace": namespace,
+            "revision": revision,
+            "changed": list(changed),
+        })
+
     # ---- Settings API ----
 
     @router.get("/api/onboarding")
@@ -884,10 +898,13 @@ def register_settings_routes(router: APIRouter, bot: Any, db_path: str) -> None:
 
     @router.put("/api/settings/tools")
     async def api_update_tools(request: Request):
+        from cyrene.runtime import config_store
         from cyrene.runtime.settings_store import (
             get_enabled_tool_packs,
-            save_enabled_tool_packs,
-            save_enabled_tools,
+        )
+        from cyrene.runtime.settings_service import (
+            SettingsServiceError,
+            update as update_settings,
         )
         from cyrene.tooling.packs import PACK_BY_WIRE_NAME
 
@@ -965,166 +982,136 @@ def register_settings_routes(router: APIRouter, bot: Any, db_path: str) -> None:
                 status_code=400,
             )
 
+        changes = {}
         if has_tools:
-            save_enabled_tools({
-                str(name): value
-                for name, value in tool_updates.items()
-            })
-        updated_packages = []
+            changes["enabled_tools"] = {
+                str(name): value for name, value in tool_updates.items()
+                if str(name) != "quit"
+            }
         if has_packages:
             next_packages = get_enabled_tool_packs()
             next_packages.update({
                 str(name): value
                 for name, value in package_updates.items()
             })
-            save_enabled_tool_packs(next_packages)
-            updated_packages = list(package_updates)
+            changes["enabled_tool_packs"] = next_packages
+        try:
+            result = update_settings(
+                "runtime",
+                changes,
+                actor="ui",
+                expected_revision=body.get("expected_revision"),
+            )
+        except config_store.SettingsRevisionConflict as exc:
+            return JSONResponse(
+                {"error": str(exc), "revision": exc.actual},
+                status_code=409,
+            )
+        except SettingsServiceError as exc:
+            return JSONResponse({"error": str(exc)}, status_code=400)
+        await _publish_settings_changed(
+            "runtime", result["revision"], list(changes),
+        )
         return {
             "ok": True,
             "updated": list(tool_updates or {}),
-            "updated_packages": updated_packages,
+            "updated_packages": list(package_updates or {}),
+            "revision": result["revision"],
         }
 
     @router.get("/api/settings/config")
     async def api_get_config():
         return _build_config()
 
+    @router.get("/api/settings/namespaces/{namespace}")
+    async def api_get_settings_namespace(namespace: str):
+        from cyrene.runtime.host_bridge import HostBridgeError, call_host
+        from cyrene.runtime.settings_service import SettingsServiceError, read_public
+        try:
+            if namespace == "desktop":
+                result = await call_host("desktop.settings.get", {})
+                if result.get("ok") is False:
+                    return JSONResponse(result, status_code=409)
+                settings = dict(result.get("settings") or {})
+                revision = settings.pop("settingsRevision", None)
+                return {"revision": revision, "values": settings}
+            return read_public(namespace)
+        except HostBridgeError as exc:
+            return JSONResponse({"error": exc.code}, status_code=503)
+        except SettingsServiceError as exc:
+            return JSONResponse({"error": str(exc)}, status_code=400)
+
+    @router.put("/api/settings/namespaces/{namespace}")
+    async def api_update_settings_namespace(namespace: str, request: Request):
+        from cyrene.runtime import config_store
+        from cyrene.runtime.host_bridge import HostBridgeError, call_host
+        from cyrene.runtime.settings_service import SettingsServiceError, update as update_settings, validate_changes
+        body = await request.json()
+        changes = body.get("changes")
+        try:
+            if namespace == "desktop":
+                normalized, _specs = validate_changes("desktop", changes, actor="ui")
+                result = await call_host(
+                    "desktop.settings.update",
+                    {"changes": normalized, "expectedRevision": body.get("expected_revision")},
+                )
+                if result.get("ok") is False:
+                    return JSONResponse(
+                        result,
+                        status_code=409 if result.get("error") == "revision_conflict" else 400,
+                    )
+                settings = result.get("settings") or {}
+                await _publish_settings_changed(
+                    "desktop", settings.get("settingsRevision"), list(normalized),
+                )
+                return result
+            result = update_settings(
+                namespace,
+                changes,
+                actor="ui",
+                expected_revision=body.get("expected_revision"),
+            )
+            await _publish_settings_changed(
+                namespace, result["revision"], result["changed"],
+            )
+            return {
+                "ok": True,
+                **result,
+            }
+        except config_store.SettingsRevisionConflict as exc:
+            return JSONResponse({"error": str(exc), "revision": exc.actual}, status_code=409)
+        except HostBridgeError as exc:
+            return JSONResponse({"error": exc.code}, status_code=503)
+        except SettingsServiceError as exc:
+            return JSONResponse({"error": str(exc)}, status_code=400)
+
     @router.put("/api/settings/config")
     async def api_update_config(request: Request):
-        from cyrene.runtime.settings_store import set_ as set_setting
+        from cyrene.runtime import config_store
+        from cyrene.runtime.settings_service import (
+            SettingsServiceError,
+            update as update_settings,
+        )
         body = await request.json()
-        changed = []
-        if "spawn_policy" in body:
-            value = str(body.get("spawn_policy") or "").strip().lower()
-            if value not in {"aggressive", "conservative", "off"}:
-                return JSONResponse({"error": "invalid spawn_policy"}, status_code=400)
-            set_setting("spawn_policy", value)
-            changed.append("spawn_policy")
-        if "heartbeat_interval" in body:
-            value = int(body.get("heartbeat_interval") or 0)
-            if value < 60:
-                return JSONResponse({"error": "heartbeat_interval must be at least 60"}, status_code=400)
-            set_setting("heartbeat_interval", value)
-            changed.append("heartbeat_interval")
-        if "agent_proactive" in body:
-            set_setting("agent_proactive", bool(body["agent_proactive"]))
-            changed.append("agent_proactive")
-        if "app_language" in body:
-            value = str(body.get("app_language") or "").strip().lower()
-            if value not in {"", "en", "zh"}:
-                return JSONResponse({"error": "invalid app_language"}, status_code=400)
-            set_setting("app_language", value)
-            changed.append("app_language")
-        if "timezone" in body:
-            value = str(body.get("timezone") or "").strip()
-            supported_timezones = {
-                "Pacific/Honolulu", "America/Los_Angeles", "America/Denver",
-                "America/Chicago", "America/New_York", "America/Sao_Paulo",
-                "UTC", "Europe/London", "Europe/Paris", "Africa/Cairo",
-                "Asia/Dubai", "Asia/Kolkata", "Asia/Bangkok", "Asia/Shanghai",
-                "Asia/Tokyo", "Australia/Sydney", "Pacific/Auckland",
-            }
-            if value not in supported_timezones:
-                return JSONResponse({"error": "invalid timezone"}, status_code=400)
-            set_setting("timezone", value)
-            changed.append("timezone")
-        subagent_integer_settings = {
-            "subagent_execution_max_tool_calls": (1, 5000),
-            "subagent_execution_max_wall_seconds": (30, 86400),
-            "subagent_execution_no_progress_turns": (1, 20),
-            "subagent_execution_checkpoint_calls": (1, 500),
-            "subagent_execution_max_context_tokens": (0, 4000000),
-            "subagent_discussion_max_rounds": (1, 50),
-            "subagent_discussion_max_messages_per_agent": (1, 50),
-            "subagent_discussion_max_total_messages": (1, 500),
-            "subagent_discussion_max_message_chars": (100, 20000),
-            "subagent_discussion_max_wall_seconds": (30, 86400),
-            "subagent_discussion_max_tool_calls": (1, 1000),
-            "subagent_discussion_no_new_info_rounds": (1, 20),
-        }
-        for key, (minimum, maximum) in subagent_integer_settings.items():
-            if key not in body:
-                continue
-            try:
-                value = int(body.get(key))
-            except (TypeError, ValueError):
-                return JSONResponse({"error": f"{key} must be an integer"}, status_code=400)
-            if value < minimum or value > maximum:
-                return JSONResponse(
-                    {"error": f"{key} must be between {minimum} and {maximum}"},
-                    status_code=400,
-                )
-            set_setting(key, value)
-            changed.append(key)
-        if "subagent_execution_max_cost_usd" in body:
-            try:
-                value = float(body.get("subagent_execution_max_cost_usd"))
-            except (TypeError, ValueError):
-                return JSONResponse(
-                    {"error": "subagent_execution_max_cost_usd must be a number"},
-                    status_code=400,
-                )
-            if not math.isfinite(value) or value < 0 or value > 1000:
-                return JSONResponse(
-                    {"error": "subagent_execution_max_cost_usd must be between 0 and 1000"},
-                    status_code=400,
-                )
-            set_setting("subagent_execution_max_cost_usd", value)
-            changed.append("subagent_execution_max_cost_usd")
-        if "notify_telegram" in body:
-            set_setting("notify_telegram", bool(body["notify_telegram"]))
-            changed.append("notify_telegram")
-        if "notify_wechat" in body:
-            set_setting("notify_wechat", bool(body["notify_wechat"]))
-            changed.append("notify_wechat")
-        if "redact_secrets" in body:
-            set_setting("redact_secrets", bool(body["redact_secrets"]))
-            changed.append("redact_secrets")
-        if "beta_updates" in body:
-            set_setting("beta_updates", bool(body["beta_updates"]))
-            changed.append("beta_updates")
-        if "auto_update" in body:
-            set_setting("auto_update", bool(body["auto_update"]))
-            changed.append("auto_update")
-        if "budget_enabled" in body:
-            set_setting("budget_enabled", bool(body["budget_enabled"]))
-            changed.append("budget_enabled")
-        if "codex_budget_enabled" in body:
-            set_setting(
-                "codex_budget_enabled", bool(body["codex_budget_enabled"])
+        expected_revision = body.pop("expected_revision", None)
+        try:
+            result = update_settings(
+                "runtime",
+                body,
+                actor="ui",
+                expected_revision=expected_revision,
             )
-            changed.append("codex_budget_enabled")
-        if "budget_monthly" in body:
-            value = float(body.get("budget_monthly") or 0)
-            if not math.isfinite(value) or value < 0:
-                return JSONResponse({"error": "budget_monthly must be a non-negative number"}, status_code=400)
-            set_setting("budget_monthly", value)
-            changed.append("budget_monthly")
-        if "budget_currency" in body:
-            value = str(body.get("budget_currency") or "").strip().upper()
-            if value not in {"CNY", "USD"}:
-                return JSONResponse({"error": "invalid budget_currency"}, status_code=400)
-            set_setting("budget_currency", value)
-            changed.append("budget_currency")
-        if "budget_action" in body:
-            value = str(body.get("budget_action") or "").strip().lower()
-            if value not in {"warn", "block"}:
-                return JSONResponse({"error": "invalid budget_action"}, status_code=400)
-            set_setting("budget_action", value)
-            changed.append("budget_action")
-        if "budget_mode" in body:
-            value = str(body.get("budget_mode") or "").strip().lower()
-            if value not in {"economy", "normal"}:
-                return JSONResponse({"error": "invalid budget_mode"}, status_code=400)
-            set_setting("budget_mode", value)
-            changed.append("budget_mode")
-        if "budget_start_day" in body:
-            value = int(body.get("budget_start_day") or 1)
-            if value < 1 or value > 28:
-                return JSONResponse({"error": "budget_start_day must be between 1 and 28"}, status_code=400)
-            set_setting("budget_start_day", value)
-            changed.append("budget_start_day")
-        return {"ok": True, "changed": changed}
+        except config_store.SettingsRevisionConflict as exc:
+            return JSONResponse(
+                {"error": str(exc), "revision": exc.actual},
+                status_code=409,
+            )
+        except SettingsServiceError as exc:
+            return JSONResponse({"error": str(exc)}, status_code=400)
+        await _publish_settings_changed(
+            "runtime", result["revision"], result["changed"],
+        )
+        return {"ok": True, **result}
 
     @router.get("/api/settings/integrations")
     async def api_get_integration_settings():
@@ -1209,33 +1196,46 @@ def register_settings_routes(router: APIRouter, bot: Any, db_path: str) -> None:
     @router.put("/api/profile")
     async def api_update_profile(request: Request):
         """Persist the user's custom identity (name / avatar / bio)."""
-        from cyrene.runtime.settings_store import set_ as set_setting
+        from cyrene.runtime import config_store
+        from cyrene.runtime.settings_service import (
+            SettingsServiceError,
+            update as update_settings,
+        )
         body = await request.json()
-        changed: list[str] = []
-        if "name" in body:
-            set_setting("profile_name", str(body.get("name") or "").strip()[:60])
-            changed.append("name")
-        if "bio" in body:
-            set_setting("profile_bio", str(body.get("bio") or "").strip()[:120])
-            changed.append("bio")
-        if "avatar" in body:
-            avatar = str(body.get("avatar") or "").strip()
-            if avatar and not avatar.startswith("data:image/"):
-                return JSONResponse({"error": "avatar must be a data:image/ URL"}, status_code=400)
-            if len(avatar) > 700_000:
-                return JSONResponse({"error": "avatar too large (max ~512KB)"}, status_code=400)
-            set_setting("profile_avatar", avatar)
-            changed.append("avatar")
-        if "avatar_emoji" in body:
-            set_setting("profile_avatar_emoji", str(body.get("avatar_emoji") or "").strip()[:8])
-            changed.append("avatar_emoji")
-        if "avatar_color" in body:
-            color = str(body.get("avatar_color") or "").strip()
-            if color and not re.match(r"^#[0-9a-fA-F]{6}$", color):
-                return JSONResponse({"error": "avatar_color must be #rrggbb"}, status_code=400)
-            set_setting("profile_avatar_color", color)
-            changed.append("avatar_color")
-        return {"ok": True, "changed": changed, "user": _build_user()}
+        key_map = {
+            "name": "profile_name",
+            "bio": "profile_bio",
+            "avatar": "profile_avatar",
+            "avatar_emoji": "profile_avatar_emoji",
+            "avatar_color": "profile_avatar_color",
+        }
+        changes = {
+            setting_key: body[public_key]
+            for public_key, setting_key in key_map.items()
+            if public_key in body
+        }
+        try:
+            result = update_settings(
+                "profile",
+                changes,
+                actor="ui",
+                expected_revision=body.get("expected_revision"),
+            )
+        except config_store.SettingsRevisionConflict as exc:
+            return JSONResponse(
+                {"error": str(exc), "revision": exc.actual}, status_code=409,
+            )
+        except SettingsServiceError as exc:
+            return JSONResponse({"error": str(exc)}, status_code=400)
+        await _publish_settings_changed(
+            "profile", result["revision"], result["changed"],
+        )
+        return {
+            "ok": True,
+            "changed": [key for key in key_map if key in body],
+            "revision": result["revision"],
+            "user": _build_user(),
+        }
 
     @router.post("/api/settings/reset-data")
     async def api_reset_data():

@@ -111,6 +111,8 @@ async def initialize_runtime(
             ensure_soul()
             ensure_inbox("cyrene")
             init_short_term(context.paths.data)
+            from cyrene.runtime.host_actions import reconcile_startup
+            reconcile_startup()
             context.initialized_components.add("core")
 
         if events and "events" not in context.initialized_components:

@@ -33,6 +33,22 @@ open bugs.
   or reset.
 - The HTTP API is not yet versioned as a stable public API.
 
+## Cyrene self-control boundaries
+
+- UI snapshot and inspect expose the current rendered surface, not hypothetical
+  future screens. The agent must perform an action and take a new snapshot after
+  navigation, expansion, scrolling, or opening a context menu.
+- Stable semantic controls are preferred; generic DOM projection covers visible,
+  operable HTML controls. Canvas/WebGL-only controls require a dedicated semantic
+  adapter and raw screen coordinates are intentionally not exposed.
+- Model selection, secrets, account ceremonies, destructive reset/delete flows,
+  and human-only confirmations are outside typed self-management settings.
+- Sending the current composer is an explicit R2 action and requires a matching
+  user request or normal authorization. Stopping the current run remains R1.
+- Background business services remain internal. The public agent surface controls
+  visible UI and typed non-model settings rather than exposing project, chat, or
+  data management APIs directly.
+
 ## Features not yet implemented
 
 - Literature DOI and title lookup is not implemented.

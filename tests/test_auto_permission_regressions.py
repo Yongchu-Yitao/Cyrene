@@ -39,6 +39,40 @@ async def test_auto_review_rejects_string_false(monkeypatch):
     assert schema["parameters"]["additionalProperties"] is False
 
 
+async def test_delegation_review_uses_semantics_with_cache_stable_system_prompt(monkeypatch):
+    from cyrene.agent import auto_review, state
+
+    calls = []
+
+    async def approve(messages, **kwargs):
+        calls.append((messages, kwargs))
+        return {
+            "tool_calls": [{
+                "function": {
+                    "name": "decide",
+                    "arguments": '{"approve":true,"rationale":"用户直接要求创建对话"}',
+                }
+            }]
+        }
+
+    monkeypatch.setattr(state, "_call_llm", approve)
+    approved, rationale = await auto_review.review_user_delegation(
+        user_request="你新建一个对话，查明天深圳天气",
+        delegation_quote="你新建一个对话",
+        operations_json='[{"operation_id":"cyrene.chat.manage","arguments":{"action":"create"}}]',
+        reason="Create the requested chat.",
+    )
+
+    assert approved is True
+    assert rationale == "用户直接要求创建对话"
+    messages, kwargs = calls[0]
+    assert "不要求出现‘代我’、‘帮我’等固定措辞" in messages[0]["content"]
+    assert "你新建一个对话" not in messages[0]["content"]
+    assert "你新建一个对话" in messages[1]["content"]
+    assert kwargs["secondary"] is True
+    assert kwargs["thinking"] == "disabled"
+
+
 async def test_auto_approval_is_bound_to_one_exact_path(monkeypatch, tmp_path):
     from cyrene.agent import auto_review, state
     from cyrene.observability import debug
@@ -138,6 +172,27 @@ def test_permission_fingerprint_binds_command_or_external_arguments():
     )
 
     assert first != second
+
+
+def test_self_configuration_fingerprint_ignores_retry_reason_paraphrase():
+    from cyrene.agent.context import permission_elevation_fingerprint
+
+    common = {
+        "tool_name": "cyrene.ui.click",
+        "permission_kind": "self_configuration_confirmation",
+        "path_hint": "cyrene-setting:exact-operation-hash",
+        "operation": "cyrene.ui.click.r2",
+    }
+    first = permission_elevation_fingerprint(
+        **common,
+        reason="提交用户要求的搜索请求",
+    )
+    second = permission_elevation_fingerprint(
+        **common,
+        reason="发送已经输入的新对话搜索请求",
+    )
+
+    assert first == second
 
 
 async def test_default_mode_blocks_unknown_mcp_until_exact_approval(

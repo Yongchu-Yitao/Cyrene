@@ -9,7 +9,7 @@ def _names(defs):
     return [item["function"]["name"] for item in defs]
 
 
-def test_main_wire_bundle_is_the_fixed_29_tool_contract(monkeypatch):
+def test_main_wire_bundle_is_the_fixed_30_tool_contract(monkeypatch):
     from cyrene.runtime import settings_store
     from cyrene.tooling import get_main_wire_tool_defs
 
@@ -26,7 +26,7 @@ def test_main_wire_bundle_is_the_fixed_29_tool_contract(monkeypatch):
         "AnalyzeAttachment", "code_tools", "browser_tools",
         "desktop_tools", "memory_tools", "knowledge_tools", "task_tools",
         "entity_tools", "map_tools", "subagent_tools", "delivery_tools",
-        "skill_tools", "remote_tools", "integration_tools",
+        "skill_tools", "remote_tools", "cyrene_tools", "integration_tools",
     ]
     assert json.dumps(defs, sort_keys=True) == json.dumps(
         get_main_wire_tool_defs(),
@@ -62,6 +62,25 @@ def test_renderer_contract_tool_is_exposed_only_for_workbench_surface():
         )
     finally:
         state.response_capabilities.reset(token)
+
+
+def test_cyrene_self_management_gateway_is_main_only():
+    from cyrene.tooling import get_main_wire_tool_defs, get_subagent_wire_tool_defs
+
+    assert "cyrene_tools" in _names(get_main_wire_tool_defs())
+    assert "cyrene_tools" not in _names(get_subagent_wire_tool_defs())
+
+
+def test_browser_click_text_is_not_exposed_to_agents():
+    from cyrene.tooling import catalog
+    from cyrene.tooling.packs import CAPABILITY_BINDINGS
+
+    browser_capabilities = {
+        capability_id
+        for capability_id, _concrete_name in CAPABILITY_BINDINGS["browser_tools"]
+    }
+    assert "browser.click_text" not in browser_capabilities
+    assert "browser_click_text" not in catalog.get_tool_names()
 
 
 @pytest.mark.asyncio
@@ -139,6 +158,7 @@ async def test_renderer_contract_is_loaded_as_a_tail_tool_result(monkeypatch):
 
 def test_every_native_tool_is_either_direct_or_in_exactly_one_pack():
     from cyrene.tooling.catalog import all_capabilities
+    from cyrene.tooling.packs import INTERNAL_ONLY_CONCRETE_TOOL_NAMES
     from cyrene.tooling.wire import DIRECT_TOOL_NAMES
     from cyrene.tooling.catalog import TOOL_DEFS
 
@@ -155,7 +175,9 @@ def test_every_native_tool_is_either_direct_or_in_exactly_one_pack():
 
     assert len(concrete_names) == len(set(concrete_names))
     assert direct_names.isdisjoint(concrete_names)
-    assert native_names == direct_names | set(concrete_names)
+    assert native_names == (
+        direct_names | set(concrete_names) | set(INTERNAL_ONLY_CONCRETE_TOOL_NAMES)
+    )
 
 
 def test_send_message_is_direct_even_when_delivery_package_is_disabled(

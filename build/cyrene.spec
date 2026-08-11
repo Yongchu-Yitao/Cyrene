@@ -77,7 +77,7 @@ _hidden += [
     "starlette", "typing_extensions", "annotated_types",
     "dotenv", "telegram", "mcp", "httpx_sse", "sse_starlette", "requests",
     "packaging", "pypdf", "pypdfium2", "reportlab", "PIL",
-    "numpy", "onnxruntime", "rapidocr", "tokenizers",
+    "numpy", "onnxruntime", "rapidocr", "sherpa_onnx", "soundfile", "tokenizers",
     # simplexng runtime deps (vendored searx pulls these in transitively;
     # listed explicitly so PyInstaller collects compiled extensions correctly)
     "waitress", "flask", "brotli", "lxml", "msgspec",
@@ -153,6 +153,8 @@ for _package in (
     "numpy",
     "onnxruntime",
     "rapidocr",
+    "sherpa_onnx",
+    "soundfile",
     "tokenizers",
     "openai_codex",
     "codex_cli_bin",

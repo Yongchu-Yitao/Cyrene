@@ -17,7 +17,8 @@ PACKS = (
     PackSpec("delivery", "delivery_tools", "Progress updates, notifications, messages, and file delivery.", ("delivery.",), 1000),
     PackSpec("skill", "skill_tools", "Discover, install, remove, inspect, and run Agent Skills.", ("skill.",), 1100),
     PackSpec("remote", "remote_tools", "Operate paired Cyrene devices explicitly selected in the current chat.", ("remote.",), 1200),
-    PackSpec("integration", "integration_tools", "Dynamically connected MCP and external integration capabilities.", ("integration.",), 1300),
+    PackSpec("application", "cyrene_tools", "Snapshot and inspect the current Cyrene UI, then control declared components with focus-independent click, double-click, type, scroll, and drag gestures.", ("cyrene.",), 1300),
+    PackSpec("integration", "integration_tools", "Dynamically connected MCP and external integration capabilities.", ("integration.",), 1400),
 )
 
 CAPABILITY_BINDINGS: dict[str, tuple[tuple[str, str], ...]] = {
@@ -48,7 +49,6 @@ CAPABILITY_BINDINGS: dict[str, tuple[tuple[str, str], ...]] = {
         ("browser.screenshot", "browser_screenshot"),
         ("browser.click", "browser_click"),
         ("browser.click_ref", "browser_click_ref"),
-        ("browser.click_text", "browser_click_text"),
         ("browser.click_at", "browser_click_at"),
         ("browser.type", "browser_type"),
         ("browser.type_ref", "browser_type_ref"),
@@ -131,11 +131,34 @@ CAPABILITY_BINDINGS: dict[str, tuple[tuple[str, str], ...]] = {
         ("remote.action", "RemoteCyreneAction"),
         ("remote.run", "RunRemoteCyrene"),
     ),
+    "cyrene_tools": (
+        ("cyrene.app.status", "CyreneAppStatus"),
+        ("cyrene.app.window", "CyreneWindowControl"),
+        ("cyrene.ui.snapshot", "CyreneUISnapshot"),
+        ("cyrene.ui.inspect", "CyreneUIInspect"),
+        ("cyrene.ui.click", "CyreneUIClick"),
+        ("cyrene.ui.double_click", "CyreneUIDoubleClick"),
+        ("cyrene.ui.type", "CyreneUIType"),
+        ("cyrene.ui.scroll", "CyreneUIScroll"),
+        ("cyrene.ui.drag", "CyreneUIDrag"),
+        ("cyrene.settings.describe", "CyreneSettingsDescribe"),
+        ("cyrene.settings.read", "CyreneSettingsRead"),
+        ("cyrene.settings.update", "CyreneSettingsUpdate"),
+    ),
     "integration_tools": (),
 }
 
 PACK_BY_WIRE_NAME = {pack.wire_name: pack for pack in PACKS}
 MODULE_TOOL_NAMES = tuple(pack.wire_name for pack in PACKS)
+MAIN_ONLY_MODULE_TOOL_NAMES = frozenset({"cyrene_tools"})
+INTERNAL_ONLY_CONCRETE_TOOL_NAMES = frozenset({
+    "CyreneSessionMessage",
+    "CyreneProjectControl",
+    "CyreneChatControl",
+    "CyreneDataControl",
+    "CyreneUpdateControl",
+    "CyreneLifecycleControl",
+})
 WIRE_NAME_BY_PACK_ID = {
     pack.pack_id: pack.wire_name
     for pack in PACKS

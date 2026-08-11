@@ -22,7 +22,19 @@ const os = require('os');
 const crypto = require('crypto');
 const { spawn } = require('child_process');
 const { AppUseManager } = require('./app-use');
+const {
+  AGENT_CURSOR_FADE_IN_MS,
+  AGENT_CURSOR_MOVE_MS,
+  AGENT_CURSOR_PRESS_MS,
+  agentCursorCommand,
+  agentCursorHideCommand,
+  agentCursorOverlayHtml,
+  agentCursorRunningCommand,
+  agentCursorVisualScaleForZoom,
+} = require('./agent-cursor');
 const { buildBrowserTypeTargetScript } = require('./browser-input');
+const { BROWSER_FIND_TARGET_SCRIPT } = require('./browser-target');
+const { HostControl } = require('./host-control');
 
 const APP_NAME = 'Cyrene';
 const TEMP_ARTIFACT_TTL_MS = 24 * 60 * 60 * 1000;
@@ -183,6 +195,12 @@ const isWindows = process.platform === 'win32';
 const isLinux = process.platform === 'linux';
 const supportsLoginItem = process.platform === 'darwin' || process.platform === 'win32';
 
+// Spoken replies are generated asynchronously, after Chromium's transient
+// click activation has expired.  Cyrene owns this local audio surface and the
+// user explicitly enables or starts speech, so allow the delayed playback and
+// automatic-read setting to produce sound reliably.
+app.commandLine.appendSwitch('autoplay-policy', 'no-user-gesture-required');
+
 // Chromium aborts with SIGTRAP when its Linux SUID sandbox helper exists but
 // is not root-owned with mode 4755. deb/rpm installers repair that permission;
 // portable/AppImage or manually copied builds cannot rely on a privileged
@@ -218,6 +236,7 @@ let pendingQuickChatScreenshot = null;
 let registeredQuickChatShortcut = '';
 let quickChatShortcutError = '';
 let pythonProcess = null;
+let isBackendRestarting = false;
 let pendingPortResolve = null;
 let backendPort = null;
 let isShuttingDown = false;
@@ -230,9 +249,56 @@ let browserSurfaceObscured = false;
 let activeVideoFullscreenManager = null;
 let appUseManager = null;
 let appUsePointerWindow = null;
-let appUsePointerHideTimer = null;
+let appUsePointerOwnerTargetId = '';
+let agentCursorRunning = false;
+const agentCursorRunningSources = new Map();
 let electronRpcServer = null;
 let electronRpcPort = null;
+let hostControl = null;
+
+function getHostControl() {
+  if (!hostControl) {
+    hostControl = new HostControl({
+      app,
+      screen,
+      getMainWindow: () => mainWindow,
+      getQuickChatWindow: () => quickChatWindow,
+      revealMainWindow,
+      openQuickChat,
+      getDesktopSettings,
+      updateDesktopSettings: saveDesktopSettings,
+      lifecycleExecutor: executeApprovedLifecycle,
+    });
+  }
+  return hostControl;
+}
+
+function executeApprovedLifecycle(actionId, action, receipt) {
+  const id = String(actionId || '');
+  const normalized = String(action || '');
+  if (!/^host_action_[0-9a-f]{32}$/.test(id)) {
+    return { ok: false, error: 'invalid_action_receipt' };
+  }
+  if (!['restart_backend', 'restart_app', 'quit', 'update_install'].includes(normalized)) {
+    return { ok: false, error: 'unsupported_lifecycle_action' };
+  }
+  if (!receipt || String(receipt.expectedAppVersion || '') !== String(app.getVersion())
+      || !/^[0-9a-f]{64}$/.test(String(receipt.parameterHash || ''))) {
+    return { ok: false, error: 'invalid_action_receipt' };
+  }
+  setTimeout(() => {
+    if (normalized === 'restart_backend') {
+      restartPythonBackend();
+      return;
+    }
+    isQuitting = true;
+    if (normalized === 'restart_app') {
+      app.relaunch();
+    }
+    app.quit();
+  }, 1000);
+  return { ok: true, summary: `accepted ${normalized}` };
+}
 const isDesktopSmokeTest = process.argv.includes('--desktop-smoke-test');
 if (isDesktopSmokeTest) {
   // Keep release smoke tests independent from any resident desktop instance
@@ -243,6 +309,7 @@ const BROWSER_USER_EVENT_CONSOLE_PREFIX = '__CYRENE_BROWSER_USER_EVENT__';
 const BROWSER_RESIZE_EDGE_PREFIX = '__CYRENE_RESIZE_EDGE__';
 
 const DEFAULT_DESKTOP_SETTINGS = Object.freeze({
+  settingsRevision: 0,
   launchAtLogin: false,
   runInBackground: false,
   language: '',
@@ -640,6 +707,27 @@ const PAGE_CSS_TARGET_WIDTH = 1100;
 const PAGE_CSS_MAX_FIT_WIDTH = 1920;
 const PAGE_MIN_ZOOM = 0.1;
 
+function validatePngBuffer(buffer) {
+  if (!Buffer.isBuffer(buffer) || buffer.length <= 0) {
+    throw new Error('screenshot data is empty');
+  }
+  const signature = Buffer.from('89504e470d0a1a0a', 'hex');
+  if (buffer.length < 24 || !buffer.subarray(0, signature.length).equals(signature)) {
+    throw new Error('screenshot data is not PNG format');
+  }
+  if (buffer.subarray(12, 16).toString('ascii') !== 'IHDR') {
+    throw new Error('screenshot PNG has no IHDR header');
+  }
+  const headerWidth = buffer.readUInt32BE(16);
+  const headerHeight = buffer.readUInt32BE(20);
+  const decoded = nativeImage.createFromBuffer(buffer);
+  const size = decoded && !decoded.isEmpty() ? decoded.getSize() : { width: 0, height: 0 };
+  if (headerWidth <= 0 || headerHeight <= 0 || size.width <= 0 || size.height <= 0) {
+    throw new Error('screenshot PNG cannot be decoded');
+  }
+  return { byteLength: buffer.length, width: size.width, height: size.height };
+}
+
 const BROWSER_VISIBLE_ELEMENTS_SCRIPT = `
 (function(maxArg, textArg) {
   const maxElements = Math.max(1, Math.min(200, Number(maxArg) || 80));
@@ -690,16 +778,59 @@ const BROWSER_VISIBLE_ELEMENTS_SCRIPT = `
     if (tag === 'a' && href) return 'a[href="' + href.replace(/"/g, '\\\\"') + '"]';
     return '[data-cyrene-ref="' + index + '"]';
   };
+  const interactiveRect = (el) => {
+    if (el.hidden || el.closest('[hidden],[inert],[aria-hidden="true"]')) return null;
+    if (typeof el.checkVisibility === 'function' && !el.checkVisibility({
+      checkOpacity: true,
+      checkVisibilityCSS: true,
+      contentVisibilityAuto: true,
+    })) return null;
+    for (let node = el; node instanceof Element; node = node.parentElement) {
+      if (node.hidden || node.hasAttribute('inert')
+          || String(node.getAttribute('aria-hidden') || '').toLowerCase() === 'true') return null;
+      const style = window.getComputedStyle(node);
+      if (!style || style.display === 'none' || style.visibility === 'hidden' || style.visibility === 'collapse'
+          || style.contentVisibility === 'hidden' || Number(style.opacity) <= 0.001) return null;
+    }
+    const rect = el.getBoundingClientRect();
+    if (!rect || rect.width <= 0 || rect.height <= 0) return null;
+    const left = Math.max(0, rect.left);
+    const top = Math.max(0, rect.top);
+    const right = Math.min(viewportW, rect.right);
+    const bottom = Math.min(viewportH, rect.bottom);
+    if (right <= left || bottom <= top) return null;
+    const insetX = Math.min(1, (right - left) / 4);
+    const insetY = Math.min(1, (bottom - top) / 4);
+    const points = [
+      [(left + right) / 2, (top + bottom) / 2],
+      [left + insetX, top + insetY],
+      [right - insetX, top + insetY],
+      [left + insetX, bottom - insetY],
+      [right - insetX, bottom - insetY],
+    ];
+    const hittable = points.some(([x, y]) => {
+      const hits = typeof document.elementsFromPoint === 'function'
+        ? document.elementsFromPoint(x, y)
+        : [document.elementFromPoint(x, y)].filter(Boolean);
+      return hits.some((hit) => hit === el || el.contains(hit));
+    });
+    return hittable ? rect : null;
+  };
   for (const el of candidates) {
     if (!(el instanceof Element) || seen.has(el)) continue;
     seen.add(el);
-    const style = window.getComputedStyle(el);
-    if (!style || style.display === 'none' || style.visibility === 'hidden' || Number(style.opacity) === 0) continue;
-    const rect = el.getBoundingClientRect();
-    if (!rect || rect.width <= 0 || rect.height <= 0) continue;
-    if (rect.bottom < 0 || rect.right < 0 || rect.top > viewportH || rect.left > viewportW) continue;
+    const rect = interactiveRect(el);
+    if (!rect) continue;
     const tag = String(el.tagName || '').toLowerCase();
     const role = roleOf(el, tag);
+    const disabled = el.matches(':disabled') || String(el.getAttribute('aria-disabled') || '').toLowerCase() === 'true';
+    const style = window.getComputedStyle(el);
+    const interactive = !disabled && (
+      ['a', 'button', 'input', 'textarea', 'select', 'summary'].includes(tag)
+      || el.isContentEditable || el.tabIndex >= 0 || typeof el.onclick === 'function'
+      || ['button', 'link', 'textbox', 'searchbox', 'combobox', 'checkbox', 'radio', 'switch', 'menuitem', 'tab'].includes(role)
+      || (style && style.cursor === 'pointer')
+    );
     const inputType = tag === 'input' ? clean(el.getAttribute('type') || 'text', 40).toLowerCase() : '';
     const text = tag === 'input' || tag === 'textarea'
       ? (inputType === 'password' ? '' : clean(el.value))
@@ -716,6 +847,9 @@ const BROWSER_VISIBLE_ELEMENTS_SCRIPT = `
       ref,
       tag,
       role,
+      visible: true,
+      interactive,
+      disabled,
       inputType,
       accept: tag === 'input' ? clean(el.getAttribute('accept'), 240) : '',
       multiple: tag === 'input' && el.hasAttribute('multiple'),
@@ -734,56 +868,9 @@ const BROWSER_VISIBLE_ELEMENTS_SCRIPT = `
     ok: true,
     url: location.href,
     title: document.title || '',
-    text: clean(document.body ? document.body.innerText : '', 2000),
+    text: clean(Array.from(new Set(out.map((item) => item.text).filter(Boolean))).join(' '), 2000),
     viewport: { width: viewportW, height: viewportH, scrollX: window.scrollX || 0, scrollY: window.scrollY || 0 },
     elements: out,
-  };
-})
-`;
-
-const BROWSER_FIND_TARGET_SCRIPT = `
-(function(modeArg, valueArg, exactArg, visibleOnlyArg) {
-  const mode = String(modeArg || 'selector');
-  const value = String(valueArg || '');
-  const exact = exactArg === true;
-  const visibleOnly = visibleOnlyArg !== false;
-  const norm = (v) => String(v || '').replace(/\\s+/g, ' ').trim();
-  const isVisible = (el) => {
-    if (!(el instanceof Element)) return false;
-    const style = window.getComputedStyle(el);
-    if (!style || style.display === 'none' || style.visibility === 'hidden' || Number(style.opacity) === 0) return false;
-    const r = el.getBoundingClientRect();
-    return !!r && r.width > 0 && r.height > 0;
-  };
-  let el = null;
-  if (mode === 'ref') {
-    const n = value.replace(/^e/i, '');
-    el = document.querySelector('[data-cyrene-ref="' + n.replace(/"/g, '\\\\"') + '"]');
-  } else if (mode === 'text') {
-    const needle = norm(value).toLowerCase();
-    const nodes = Array.from(document.querySelectorAll('a,button,input,textarea,select,[role],[tabindex],label,summary,[contenteditable="true"],div,span,section,article'));
-    el = nodes.find((node) => {
-      if (visibleOnly && !isVisible(node)) return false;
-      const hay = norm(node.innerText || node.textContent || node.getAttribute('aria-label') || node.getAttribute('title') || node.getAttribute('placeholder') || node.getAttribute('value')).toLowerCase();
-      return exact ? hay === needle : hay.includes(needle);
-    }) || null;
-  } else {
-    el = document.querySelector(value);
-  }
-  if (!el) return { ok: false, error: 'nf' };
-  if (visibleOnly && !isVisible(el)) return { ok: false, error: 'not visible' };
-  el.scrollIntoView({ block: 'center', inline: 'center' });
-  const r = el.getBoundingClientRect();
-  if (!r || r.width <= 0 || r.height <= 0) return { ok: false, error: 'not visible' };
-  return {
-    ok: true,
-    x: Math.round(r.left + r.width / 2),
-    y: Math.round(r.top + r.height / 2),
-    box: { x: Math.round(r.left), y: Math.round(r.top), w: Math.round(r.width), h: Math.round(r.height) },
-    tag: String(el.tagName || '').toLowerCase(),
-    inputType: String(el.getAttribute && el.getAttribute('type') || '').toLowerCase(),
-    accept: String(el.getAttribute && el.getAttribute('accept') || ''),
-    multiple: !!(el.hasAttribute && el.hasAttribute('multiple')),
   };
 })
 `;
@@ -854,6 +941,9 @@ class BrowserTabManager {
     this._tabPickerHideTimer = null;
     this.visible = false;
     this.obscured = browserSurfaceObscured;
+    this.zoomEnabled = true;
+    this.resizeEdgeHintEnabled = false;
+    this.resizeEdgeHintActive = false;
     this.attachedTabId = '';
     this.attachedWindow = null;
     this._syncTimer = null;
@@ -868,11 +958,53 @@ class BrowserTabManager {
     this._fullscreenResizeHandler = null;
     this._mainFullscreenLeaveHandler = null;
     this.browserContext = { sessionId: this.sessionId, roundId: '' };
+    this.activeAgentRoundId = '';
+    this.agentOwnedTabIdsByRound = new Map();
     this.latestSnapshot = null;
+    this.agentCursorRunning = agentCursorRunning;
   }
 
   invalidateSnapshot() {
     this.latestSnapshot = null;
+  }
+
+  async showAgentCursor(tab, x, y, { press = false, moveDurationMs = AGENT_CURSOR_MOVE_MS } = {}) {
+    if (
+      !tab || tab.id !== this.activeTabId || !this.visible || this.obscured
+      || !tab.view || !tab.view.webContents || tab.view.webContents.isDestroyed()
+    ) return null;
+    let dipWidth = 0;
+    try { dipWidth = Math.max(0, Math.round(Number(tab.view.getBounds().width) || 0)); } catch (_) {}
+    const zoom = await this.pageZoomOf(tab.view.webContents, dipWidth);
+    if (
+      tab.id !== this.activeTabId || !this.visible || this.obscured
+      || tab.view.webContents.isDestroyed()
+    ) return null;
+    // The cursor lives in the page DOM, so Chromium's page zoom would also
+    // shrink it in a narrow browser pane. Counter-scale only the cursor art;
+    // its CSS target coordinates and the trusted click coordinates stay intact.
+    const visualScale = agentCursorVisualScaleForZoom(zoom);
+    return tab.view.webContents.executeJavaScript(agentCursorCommand({
+      x, y, press, moveDurationMs, running: this.agentCursorRunning, visualScale,
+    }), true).catch(() => null);
+  }
+
+  setAgentCursorRunning(running) {
+    this.agentCursorRunning = running === true;
+    const command = agentCursorRunningCommand(this.agentCursorRunning);
+    return Promise.all(Array.from(this.tabs.values()).map((tab) => {
+      if (!tab || !tab.view || !tab.view.webContents || tab.view.webContents.isDestroyed()) return false;
+      return tab.view.webContents.executeJavaScript(command, true).catch(() => false);
+    }));
+  }
+
+  async hideAgentCursor(tab, sequence = null) {
+    if (!tab || !tab.view || !tab.view.webContents || tab.view.webContents.isDestroyed()) return false;
+    return tab.view.webContents.executeJavaScript(agentCursorHideCommand(sequence), true).catch(() => false);
+  }
+
+  hideAllAgentCursors() {
+    for (const tab of this.tabs.values()) this.hideAgentCursor(tab).catch(() => {});
   }
 
   ownerWindow() {
@@ -1080,13 +1212,21 @@ class BrowserTabManager {
     // Electron 35 + macOS 26 when combined with WebContentsView viewport changes.
     // The UA override alone serves mobile content to most sites.
     wc.setWindowOpenHandler(({ url }) => {
-      this.createTab({ url, activate: true }).catch((err) => {
+      const opener = this._tabForView(view);
+      const agentOwnerRoundId = opener && opener.agentClickInFlight
+        ? String(opener.agentOwnerRoundId || this.browserContext.roundId || '')
+        : '';
+      this.createTab({ url, activate: true, agentOwnerRoundId }).catch((err) => {
         console.error('[electron] Failed to open browser popup tab:', err);
       });
       return { action: 'deny' };
     });
     const update = () => this.emitState();
-    wc.on('did-start-loading', update);
+    wc.on('did-start-loading', () => {
+      update();
+      const tab = this._tabForView(view);
+      if (tab) this.hideAgentCursor(tab).catch(() => {});
+    });
     wc.on('did-stop-loading', update);
     wc.on('did-navigate', update);
     wc.on('did-navigate-in-page', update);
@@ -1182,6 +1322,85 @@ class BrowserTabManager {
     const roundId = String(info.roundId || info.round_id || '').trim();
     this.browserContext.roundId = roundId;
     return this.state();
+  }
+
+  _agentTabs() {
+    return Array.from(this.tabs.values()).filter((tab) => tab.agentCreated === true);
+  }
+
+  _recordAgentTab(tab, roundId) {
+    const normalized = String(roundId || '').trim();
+    if (!tab || !normalized) return;
+    if (!this.agentOwnedTabIdsByRound.has(normalized)) {
+      this.agentOwnedTabIdsByRound.set(normalized, new Set());
+    }
+    this.agentOwnedTabIdsByRound.get(normalized).add(tab.id);
+  }
+
+  _reduceAgentTabs(candidates, { activateKept = false } = {}) {
+    const tabs = Array.from(candidates || []).filter((tab) => tab && this.tabs.has(tab.id));
+    if (!tabs.length) return { keptTab: null, closedTabIds: [] };
+    const active = tabs.find((tab) => tab.id === this.activeTabId);
+    const keptTab = active || tabs[tabs.length - 1];
+    const closedTabIds = [];
+    for (const tab of tabs) {
+      if (tab.id === keptTab.id) continue;
+      closedTabIds.push(tab.id);
+      this.closeTab(tab.id);
+    }
+    if (activateKept && keptTab.id !== this.activeTabId && this.tabs.has(keptTab.id)) {
+      this.activateTab(keptTab.id);
+    }
+    return { keptTab, closedTabIds };
+  }
+
+  beginAgentRound(roundId) {
+    const normalized = String(roundId || '').trim();
+    if (!normalized) return this.state();
+    this.browserContext.roundId = normalized;
+    if (this.activeAgentRoundId === normalized) return this.state();
+    // A process interruption may skip finishAgentRound. Collapse stale
+    // agent-created tabs before assigning the reusable survivor to this run.
+    const { keptTab } = this._reduceAgentTabs(this._agentTabs(), { activateKept: true });
+    if (keptTab) {
+      keptTab.agentOwnerRoundId = normalized;
+      keptTab.lastAgentRoundId = normalized;
+      this._recordAgentTab(keptTab, normalized);
+    }
+    for (const ownedRoundId of this.agentOwnedTabIdsByRound.keys()) {
+      if (ownedRoundId !== normalized) this.agentOwnedTabIdsByRound.delete(ownedRoundId);
+    }
+    this.activeAgentRoundId = normalized;
+    this.emitState();
+    return this.state();
+  }
+
+  finishAgentRound(roundId) {
+    const normalized = String(roundId || '').trim();
+    if (!normalized) return { ok: false, error: 'roundId is required.' };
+    const recordedIds = this.agentOwnedTabIdsByRound.get(normalized) || new Set();
+    const ownedTabs = this._agentTabs().filter((tab) => (
+      tab.agentOwnerRoundId === normalized || recordedIds.has(tab.id)
+    ));
+    const { keptTab, closedTabIds } = this._reduceAgentTabs(ownedTabs, { activateKept: false });
+    if (keptTab) {
+      keptTab.agentOwnerRoundId = '';
+      keptTab.lastAgentRoundId = normalized;
+    }
+    if (this.activeAgentRoundId === normalized) {
+      this.activeAgentRoundId = '';
+      if (this.browserContext.roundId === normalized) this.browserContext.roundId = '';
+    }
+    this.agentOwnedTabIdsByRound.delete(normalized);
+    this.emitState();
+    return {
+      ok: true,
+      sessionId: this.sessionId,
+      roundId: normalized,
+      keptTabId: keptTab ? keptTab.id : '',
+      closedTabIds,
+      state: this.state(),
+    };
   }
 
   _tabForView(view) {
@@ -1374,7 +1593,7 @@ class BrowserTabManager {
           'html[data-cyrene-resize-edge-active] * { cursor: col-resize !important; }';
         document.documentElement.appendChild(resizeEdgeCursorStyle);
         const resizeEdgePrefix = ${JSON.stringify(BROWSER_RESIZE_EDGE_PREFIX)};
-        let resizeEdgeHintEnabled = ${JSON.stringify(this.zoomEnabled === false)};
+        let resizeEdgeHintEnabled = ${JSON.stringify(this.resizeEdgeHintEnabled === true)};
         let resizeEdgeHintLocal = false;
         let resizeEdgeHintExternal = false;
         const renderResizeEdgeHint = () => {
@@ -1497,7 +1716,7 @@ class BrowserTabManager {
 
   applyResizeEdgeHint(view) {
     if (!view || !view.webContents || view.webContents.isDestroyed()) return;
-    const enabled = this.zoomEnabled === false;
+    const enabled = this.resizeEdgeHintEnabled === true;
     const active = this.resizeEdgeHintActive === true;
     view.webContents.executeJavaScript(
       `window.__cyreneSetResizeEdgeHint && window.__cyreneSetResizeEdgeHint(${JSON.stringify(enabled)}, ${JSON.stringify(active)})`,
@@ -1570,6 +1789,9 @@ class BrowserTabManager {
       canGoForward: wc.canGoForward(),
       muted: typeof wc.isAudioMuted === 'function' ? wc.isAudioMuted() : !!wc.audioMuted,
       audible: typeof wc.isCurrentlyAudible === 'function' ? wc.isCurrentlyAudible() : false,
+      agentCreated: tab.agentCreated === true,
+      agentOwnerRoundId: String(tab.agentOwnerRoundId || ''),
+      lastAgentRoundId: String(tab.lastAgentRoundId || ''),
     };
   }
 
@@ -1610,7 +1832,7 @@ class BrowserTabManager {
     return this.createTab({ url, activate: true });
   }
 
-  async createTab({ url = 'about:blank', activate = true } = {}) {
+  async createTab({ url = 'about:blank', activate = true, agentOwnerRoundId = '' } = {}) {
     if (!WebContentsView) throw new Error('Electron WebContentsView is unavailable.');
     // Warm the tiny picker renderer alongside the first page so opening the
     // menu never waits for a new preload/data-document navigation.
@@ -1628,9 +1850,15 @@ class BrowserTabManager {
       uploadTargets: new Map(),
       lastAgentFileChooser: null,
       agentFileChooserResolver: null,
+      agentCreated: Boolean(String(agentOwnerRoundId || '').trim()),
+      agentOwnerRoundId: String(agentOwnerRoundId || '').trim(),
+      lastAgentRoundId: String(agentOwnerRoundId || '').trim(),
     };
     this.tabs.set(id, tab);
+    this._recordAgentTab(tab, tab.agentOwnerRoundId);
     if (activate || !this.activeTabId) {
+      const previous = this.tabs.get(this.activeTabId);
+      if (previous && previous.id !== id) this.hideAgentCursor(previous).catch(() => {});
       this.activeTabId = id;
       this.invalidateSnapshot();
     }
@@ -1658,6 +1886,8 @@ class BrowserTabManager {
   activateTab(tabId) {
     const id = String(tabId || '').trim();
     if (!this.tabs.has(id)) throw new Error('Browser tab not found.');
+    const previous = this.tabs.get(this.activeTabId);
+    if (previous && previous.id !== id) this.hideAgentCursor(previous).catch(() => {});
     this.activeTabId = id;
     this.invalidateSnapshot();
     this.syncAttachedView();
@@ -2546,12 +2776,14 @@ class BrowserTabManager {
     };
     this.borderRadius = Math.max(0, Math.min(24, Math.round(Number(info.borderRadius) || 0)));
     this.pageCornerRadius = Math.max(0, Math.min(24, Math.round(Number(info.pageCornerRadius) || 0)));
-    // Sidebar-docked browser panes keep the native (unzoomed) page; only the
-    // floating agent browser converges on the desktop-width CSS viewport.
-    // Only update the flag when the payload carries it: hide/transition
-    // bounds (visible:false) must not reset the active surface's preference.
+    // Floating and split browser surfaces can independently select fit-width
+    // zoom and the split-divider cursor bridge. Only update either preference
+    // when the payload carries it: hide-only bounds must preserve both.
     if (Object.prototype.hasOwnProperty.call(info, 'zoomEnabled')) {
       this.zoomEnabled = info.zoomEnabled !== false;
+    }
+    if (Object.prototype.hasOwnProperty.call(info, 'resizeEdgeHintEnabled')) {
+      this.resizeEdgeHintEnabled = info.resizeEdgeHintEnabled === true;
     }
     if (Object.prototype.hasOwnProperty.call(info, 'resizeEdgeHintActive')) {
       this.resizeEdgeHintActive = info.resizeEdgeHintActive === true;
@@ -2565,6 +2797,7 @@ class BrowserTabManager {
       this._boundsTransitioning = false;
     }
     this.visible = info.visible === true && width > 8 && height > 8;
+    if (!this.visible) this.hideAllAgentCursors();
     // Preserve the in-app host geometry while a video owns the fullscreen
     // surface, but never let renderer layout churn resize the fullscreen View.
     if (this.videoFullscreen.active) return this.state();
@@ -2598,16 +2831,38 @@ class BrowserTabManager {
 
   setObscured(obscured = false) {
     this.obscured = obscured === true;
+    if (this.obscured) this.hideAllAgentCursors();
     this.syncAttachedView();
     this.emitState();
     return this.state();
   }
 
-  async navigate({ url, tabId = '', maxChars = 8000 } = {}) {
+  async navigate({ url, tabId = '', maxChars = 8000, agentOwnerRoundId = '' } = {}) {
     this.invalidateSnapshot();
     const targetUrl = normalizeBrowserUrl(url);
+    const ownerRoundId = String(agentOwnerRoundId || '').trim();
     let tab = tabId ? this.tabs.get(String(tabId)) : this.tabs.get(this.activeTabId);
-    if (!tab) tab = await this.createTab({ url: 'about:blank', activate: true });
+    if (!tabId && ownerRoundId && (!tab || tab.agentCreated !== true)) {
+      const reusable = this._agentTabs().slice(-1)[0];
+      tab = reusable || await this.createTab({
+        url: 'about:blank',
+        activate: true,
+        agentOwnerRoundId: ownerRoundId,
+      });
+    }
+    if (!tab) tab = await this.createTab({
+      url: 'about:blank',
+      activate: true,
+      agentOwnerRoundId: ownerRoundId,
+    });
+    if (ownerRoundId && tab.agentCreated === true) {
+      tab.agentOwnerRoundId = ownerRoundId;
+      tab.lastAgentRoundId = ownerRoundId;
+      this._recordAgentTab(tab, ownerRoundId);
+    }
+    const previous = this.tabs.get(this.activeTabId);
+    if (previous && previous.id !== tab.id) await this.hideAgentCursor(previous);
+    await this.hideAgentCursor(tab);
     this.activeTabId = tab.id;
     this.syncAttachedView();
     try {
@@ -2797,7 +3052,7 @@ class BrowserTabManager {
           ok: false,
           allowed: false,
           code: 'VISIBLE_LINK_AVAILABLE',
-          error: 'Target URL is available through visible page UI. Use browser_click_ref or browser_click_text.',
+          error: 'Target URL is available through visible page UI. Use browser_click_ref from a fresh browser_snapshot.',
           targetUrl: normalizedTarget,
           matches,
         };
@@ -2807,14 +3062,69 @@ class BrowserTabManager {
   }
 
   async _findTarget(wc, { mode = 'selector', value = '', exact = false, visibleOnly = true } = {}) {
+    const script = `${BROWSER_FIND_TARGET_SCRIPT}(${JSON.stringify(mode)}, ${JSON.stringify(value)}, ${exact ? 'true' : 'false'}, ${visibleOnly === false ? 'false' : 'true'})`;
     try {
-      return await wc.executeJavaScript(
-        `${BROWSER_FIND_TARGET_SCRIPT}(${JSON.stringify(mode)}, ${JSON.stringify(value)}, ${exact ? 'true' : 'false'}, ${visibleOnly === false ? 'false' : 'true'})`,
-        true
-      );
+      const first = await wc.executeJavaScript(script, true);
+      if (!first || !first.ok) return first;
+      // scrollIntoView may trigger sticky headers, virtualized lists, or a
+      // framework render. Wait two frames and resolve the target again so the
+      // returned center belongs to the settled layout.
+      await wc.executeJavaScript(`new Promise((resolve) => {
+        const frame = window.requestAnimationFrame || ((callback) => setTimeout(callback, 16));
+        frame(() => frame(resolve));
+      })`, true);
+      return await wc.executeJavaScript(script, true);
     } catch (err) {
       return { ok: false, error: 'js execution failed: ' + String((err && err.message) || err) };
     }
+  }
+
+  async _pointTarget(wc, x, y) {
+    try {
+      return await wc.executeJavaScript(`(() => {
+        const x = ${JSON.stringify(Math.round(Number(x) || 0))};
+        const y = ${JSON.stringify(Math.round(Number(y) || 0))};
+        const el = document.elementFromPoint ? document.elementFromPoint(x, y) : null;
+        if (!el) return { ok: false, code: 'TARGET_NOT_VISIBLE', error: 'No element is present at the click point.' };
+        const norm = (value) => String(value || '').replace(/\\s+/g, ' ').trim();
+        const tag = String(el.tagName || '').toLowerCase();
+        const role = norm(el.getAttribute && el.getAttribute('role')).slice(0, 60);
+        const href = String((el.href || (el.getAttribute && el.getAttribute('href'))) || '').slice(0, 300);
+        const id = norm(el.id).slice(0, 120);
+        const ref = norm(el.getAttribute && el.getAttribute('data-cyrene-ref')).slice(0, 40);
+        const text = norm(el.innerText || el.textContent || el.getAttribute('aria-label') || el.getAttribute('title')).slice(0, 160);
+        return { ok: true, x, y, signature: JSON.stringify({ tag, role, href, id, ref, text }) };
+      })()`, true);
+    } catch (err) {
+      return { ok: false, code: 'TARGET_CHECK_FAILED', error: String((err && err.message) || err) };
+    }
+  }
+
+  _targetFailure(tab, info, fallback = 'Target is unavailable.') {
+    const wc = tab.view.webContents;
+    return {
+      ok: false,
+      code: String(info && info.code || 'TARGET_UNAVAILABLE'),
+      error: String(info && info.error || fallback),
+      matches: Array.isArray(info && info.matches) ? info.matches : undefined,
+      url: wc.getURL(),
+      title: wc.getTitle(),
+      tabId: tab.id,
+    };
+  }
+
+  async _waitForAgentCursor(tab, x, y) {
+    const result = await this.showAgentCursor(tab, x, y, { press: false });
+    const fallback = result && result.first ? AGENT_CURSOR_FADE_IN_MS + 34 : AGENT_CURSOR_MOVE_MS;
+    const waitMs = Math.max(0, Number(result && result.waitMs) || (result && result.moved ? fallback : 0));
+    if (waitMs > 0) await new Promise((resolve) => setTimeout(resolve, waitMs));
+    return result;
+  }
+
+  async _pressAgentCursor(tab, x, y) {
+    const result = await this.showAgentCursor(tab, x, y, { press: true, moveDurationMs: 0 });
+    if (result) await new Promise((resolve) => setTimeout(resolve, AGENT_CURSOR_PRESS_MS));
+    return result;
   }
 
   // Wait for navigation after a click or form submit.  Listens for both
@@ -2898,7 +3208,7 @@ class BrowserTabManager {
     return null;
   }
 
-  async _dispatchClick(tab, info) {
+  async _dispatchClick(tab, info, targetRequest = null) {
     this.invalidateSnapshot();
     const blocked = this._beginClick(tab);
     if (blocked) return blocked;
@@ -2919,14 +3229,78 @@ class BrowserTabManager {
       const before = await this._contentState(wc);
       tab.lastAgentFileChooser = null;
       const chooserPromise = new Promise((resolve) => { tab.agentFileChooserResolver = resolve; });
+      let candidate = info;
+      let pointSignature = '';
+      if (!targetRequest) {
+        const initialPoint = await this._pointTarget(wc, candidate.x, candidate.y);
+        if (!initialPoint || !initialPoint.ok) return this._targetFailure(tab, initialPoint);
+        pointSignature = String(initialPoint.signature || '');
+      }
+      let ready = false;
+      for (let attempt = 0; attempt < 3; attempt += 1) {
+        await this._waitForAgentCursor(tab, Number(candidate.x) || 0, Number(candidate.y) || 0);
+        const settled = targetRequest
+          ? await this._findTarget(wc, targetRequest)
+          : await this._pointTarget(wc, candidate.x, candidate.y);
+        if (!settled || !settled.ok) return this._targetFailure(tab, settled);
+        if (targetRequest) {
+          if (settled.hitMatches !== true) {
+            return this._targetFailure(tab, {
+              code: 'TARGET_OBSCURED',
+              error: 'The target is covered at its click point; no click was sent.',
+            });
+          }
+          if (Number(settled.x) !== Number(candidate.x) || Number(settled.y) !== Number(candidate.y)) {
+            candidate = settled;
+            continue;
+          }
+        } else if (String(settled.signature || '') !== pointSignature) {
+          return this._targetFailure(tab, {
+            code: 'TARGET_CHANGED',
+            error: 'The element at the coordinate changed while the pointer was moving; no click was sent.',
+          });
+        }
+
+        await this._pressAgentCursor(tab, Number(candidate.x) || 0, Number(candidate.y) || 0);
+        const finalTarget = targetRequest
+          ? await this._findTarget(wc, targetRequest)
+          : await this._pointTarget(wc, candidate.x, candidate.y);
+        if (!finalTarget || !finalTarget.ok) return this._targetFailure(tab, finalTarget);
+        if (targetRequest) {
+          if (finalTarget.hitMatches !== true) {
+            return this._targetFailure(tab, {
+              code: 'TARGET_OBSCURED',
+              error: 'The target became covered before the click; no click was sent.',
+            });
+          }
+          if (Number(finalTarget.x) !== Number(candidate.x) || Number(finalTarget.y) !== Number(candidate.y)) {
+            candidate = finalTarget;
+            continue;
+          }
+          candidate = finalTarget;
+        } else if (String(finalTarget.signature || '') !== pointSignature) {
+          return this._targetFailure(tab, {
+            code: 'TARGET_CHANGED',
+            error: 'The element at the coordinate changed before the click; no click was sent.',
+          });
+        }
+        ready = true;
+        break;
+      }
+      if (!ready) {
+        return this._targetFailure(tab, {
+          code: 'TARGET_UNSTABLE',
+          error: 'The target kept moving; no click was sent.',
+        });
+      }
       this._markAgentInput(tab);
       // Target coordinates are CSS pixels (getBoundingClientRect); input
       // events are delivered in DIP pixels, scaled by the page zoom.
       let dipWidth = 0;
       try { dipWidth = Math.max(0, Math.round(Number(tab.view.getBounds().width) || 0)); } catch (_) {}
       const zoom = await this.pageZoomOf(wc, dipWidth);
-      const x = Math.round((Number(info.x) || 0) * zoom);
-      const y = Math.round((Number(info.y) || 0) * zoom);
+      const x = Math.round((Number(candidate.x) || 0) * zoom);
+      const y = Math.round((Number(candidate.y) || 0) * zoom);
       wc.sendInputEvent({ type: 'mouseMove', x, y });
       wc.sendInputEvent({ type: 'mouseDown', x, y, button: 'left', clickCount: 1 });
       wc.sendInputEvent({ type: 'mouseUp', x, y, button: 'left', clickCount: 1 });
@@ -2957,7 +3331,7 @@ class BrowserTabManager {
           box: info && info.box ? info.box : null,
         };
       }
-      return this._finishClick(tab, info);
+      return this._finishClick(tab, candidate);
     } finally {
       tab.agentFileChooserResolver = null;
       await this._setFileChooserInterception(tab, false).catch(() => {});
@@ -3081,11 +3455,11 @@ class BrowserTabManager {
     // Find element via JS — coordinates are sent as real OS-level input events
     // to bypass isTrusted=false restrictions (SPAs like Vue/React reject JS clicks).
     const info = await this._findTarget(wc, { mode: 'selector', value: String(selector || '') });
-    if (!info || !info.ok) return { ok: false, error: 'Element ' + ((info && info.error) || 'not found'), url: wc.getURL(), title: wc.getTitle(), tabId: tab.id };
+    if (!info || !info.ok) return this._targetFailure(tab, info, 'Element not found.');
     // sendInputEvent dispatches trusted OS-level events.  Chromium's input
     // pipeline generates the full click chain (pointerdown → mousedown →
     // pointerup → mouseup → click) with isTrusted=true.
-    return this._dispatchClick(tab, info);
+    return this._dispatchClick(tab, info, { mode: 'selector', value: String(selector || '') });
   }
 
   async clickRef({ ref, tabId = '' } = {}) {
@@ -3093,8 +3467,8 @@ class BrowserTabManager {
     if (!tab) return { ok: false, error: 'No page open. Call browser_navigate first.' };
     const wc = tab.view.webContents;
     const info = await this._findTarget(wc, { mode: 'ref', value: String(ref || '') });
-    if (!info || !info.ok) return { ok: false, error: 'Element ' + ((info && info.error) || 'not found'), url: wc.getURL(), title: wc.getTitle(), tabId: tab.id };
-    return this._dispatchClick(tab, info);
+    if (!info || !info.ok) return this._targetFailure(tab, info, 'Element not found.');
+    return this._dispatchClick(tab, info, { mode: 'ref', value: String(ref || '') });
   }
 
   async clickText({ text, exact = false, tabId = '' } = {}) {
@@ -3102,8 +3476,8 @@ class BrowserTabManager {
     if (!tab) return { ok: false, error: 'No page open. Call browser_navigate first.' };
     const wc = tab.view.webContents;
     const info = await this._findTarget(wc, { mode: 'text', value: String(text || ''), exact: exact === true });
-    if (!info || !info.ok) return { ok: false, error: 'Element ' + ((info && info.error) || 'not found'), url: wc.getURL(), title: wc.getTitle(), tabId: tab.id };
-    return this._dispatchClick(tab, info);
+    if (!info || !info.ok) return this._targetFailure(tab, info, 'Element not found.');
+    return this._dispatchClick(tab, info, { mode: 'text', value: String(text || ''), exact: exact === true });
   }
 
   async clickAt({ x, y, tabId = '' } = {}) {
@@ -3122,6 +3496,11 @@ class BrowserTabManager {
     if (!tab) return { ok: false, error: 'No page open. Call browser_navigate first.' };
     const wc = tab.view.webContents;
     const desiredText = String(text ?? '');
+    const pointerInfo = await this._findTarget(wc, { mode, value });
+    if (!pointerInfo || !pointerInfo.ok) {
+      return { ok: false, error: 'Element ' + ((pointerInfo && pointerInfo.error) || 'not found'), url: wc.getURL(), title: wc.getTitle(), tabId: tab.id };
+    }
+    await this.showAgentCursor(tab, pointerInfo.x, pointerInfo.y);
     const runPageOperation = (operation) => wc.executeJavaScript(
       buildBrowserTypeTargetScript(BROWSER_FIND_TARGET_SCRIPT, {
         mode,
@@ -3290,9 +3669,22 @@ class BrowserTabManager {
       const image = await tab.view.webContents.capturePage();
       pngBase64 = image.toPNG().toString('base64');
     }
+    let validation;
+    try {
+      validation = validatePngBuffer(Buffer.from(pngBase64, 'base64'));
+    } catch (err) {
+      return {
+        ok: false,
+        error: `Browser screenshot validation failed: ${String((err && err.message) || err)}`,
+        title: tab.view.webContents.getTitle(),
+        url: tab.view.webContents.getURL(),
+        tabId: tab.id,
+      };
+    }
     return {
       ok: true,
       pngBase64,
+      ...validation,
       title: tab.view.webContents.getTitle(),
       url: tab.view.webContents.getURL(),
       tabId: tab.id,
@@ -3357,6 +3749,7 @@ class BrowserTabManager {
     if (!Number.isFinite(py)) py = Math.floor(cssHeight / 2);
     px = Math.max(0, Math.min(Math.max(0, cssWidth - 1), Math.round(px)));
     py = Math.max(0, Math.min(Math.max(0, cssHeight - 1), Math.round(py)));
+    await this.showAgentCursor(tab, px, py);
 
     // Mark the nearest scrollable ancestor under the pointer so the result can
     // report whether Chromium actually moved it. The wheel event itself is sent
@@ -3448,6 +3841,7 @@ class BrowserTabManager {
   }
 
   closeAll() {
+    this.hideAllAgentCursors();
     if (this.videoFullscreen.active) this.finishVideoFullscreen();
     if (this._syncTimer) clearTimeout(this._syncTimer);
     this._syncTimer = null;
@@ -3512,6 +3906,7 @@ function activateBrowserSession(info = {}) {
   if (sessionId !== activeBrowserSessionId) {
     const previous = browserTabManagers.get(activeBrowserSessionId);
     if (previous) {
+      previous.hideAllAgentCursors();
       previous.visible = false;
       previous.syncAttachedView();
     }
@@ -3536,6 +3931,34 @@ function setBrowserSurfaceObscured(obscured = false) {
     manager.setObscured(browserSurfaceObscured);
   }
   return getBrowserTabManager(activeBrowserSessionId).state();
+}
+
+async function setAgentCursorRunning(running) {
+  agentCursorRunning = running === true;
+  const updates = Array.from(browserTabManagers.values()).map((manager) => (
+    manager.setAgentCursorRunning(agentCursorRunning)
+  ));
+  if (appUsePointerWindow && !appUsePointerWindow.isDestroyed()) {
+    updates.push(appUsePointerWindow.webContents.executeJavaScript(
+      agentCursorRunningCommand(agentCursorRunning),
+      true,
+    ).catch(() => false));
+  }
+  await Promise.all(updates);
+  return { ok: true, running: agentCursorRunning };
+}
+
+function updateAgentCursorRunningSource(webContents, running) {
+  const sourceId = Number(webContents && webContents.id);
+  if (!Number.isFinite(sourceId)) return setAgentCursorRunning(running);
+  if (!agentCursorRunningSources.has(sourceId) && webContents && typeof webContents.once === 'function') {
+    webContents.once('destroyed', () => {
+      agentCursorRunningSources.delete(sourceId);
+      setAgentCursorRunning(Array.from(agentCursorRunningSources.values()).some(Boolean)).catch(() => {});
+    });
+  }
+  agentCursorRunningSources.set(sourceId, running === true);
+  return setAgentCursorRunning(Array.from(agentCursorRunningSources.values()).some(Boolean));
 }
 
 function closeAllBrowserSessions() {
@@ -3563,6 +3986,7 @@ function getAppUseManager() {
       ownAppNames: [APP_NAME],
       captureTarget: captureAppUseTarget,
       showVirtualPointer: showAppUseVirtualPointer,
+      hideVirtualPointer: hideAppUseVirtualPointer,
       isHostForeground: () => Boolean(mainWindow && !mainWindow.isDestroyed() && mainWindow.isFocused()),
       focusHost: async () => { await revealMainWindow(); },
     });
@@ -3571,12 +3995,28 @@ function getAppUseManager() {
   return appUseManager;
 }
 
-async function showAppUseVirtualPointer({ x = 0, y = 0, durationMs = 1200 } = {}) {
+function appUsePointerDesktopBounds() {
+  const displays = screen.getAllDisplays();
+  if (!displays.length) return { x: 0, y: 0, width: 1, height: 1 };
+  const left = Math.min(...displays.map((display) => Number(display.bounds.x) || 0));
+  const top = Math.min(...displays.map((display) => Number(display.bounds.y) || 0));
+  const right = Math.max(...displays.map((display) => (Number(display.bounds.x) || 0) + (Number(display.bounds.width) || 0)));
+  const bottom = Math.max(...displays.map((display) => (Number(display.bounds.y) || 0) + (Number(display.bounds.height) || 0)));
+  return { x: left, y: top, width: Math.max(1, right - left), height: Math.max(1, bottom - top) };
+}
+
+async function showAppUseVirtualPointer({
+  x = 0,
+  y = 0,
+  press = false,
+  moveDurationMs = AGENT_CURSOR_MOVE_MS,
+  target = null,
+} = {}) {
   if (!app.isReady()) return;
+  const desktopBounds = appUsePointerDesktopBounds();
   if (!appUsePointerWindow || appUsePointerWindow.isDestroyed()) {
     appUsePointerWindow = new BrowserWindow({
-      width: 24,
-      height: 24,
+      ...desktopBounds,
       frame: false,
       transparent: true,
       resizable: false,
@@ -3598,22 +4038,27 @@ async function showAppUseVirtualPointer({ x = 0, y = 0, durationMs = 1200 } = {}
     appUsePointerWindow.setIgnoreMouseEvents(true, { forward: true });
     appUsePointerWindow.setAlwaysOnTop(true, 'floating');
     if (isMac) appUsePointerWindow.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true });
-    const pointerHtml = `<!doctype html><meta charset="utf-8"><style>
-      html,body{margin:0;width:24px;height:24px;overflow:hidden;background:transparent}
-      .p{position:absolute;left:4px;top:4px;box-sizing:border-box;width:16px;height:16px;
-        border:2px solid rgba(255,255,255,.96);border-radius:50%;background:#2684ff;
-        box-shadow:0 0 0 1px rgba(22,93,200,.85),0 3px 9px rgba(0,0,0,.38)}
-    </style><div class="p"></div>`;
-    await appUsePointerWindow.loadURL(`data:text/html;charset=utf-8,${encodeURIComponent(pointerHtml)}`);
+    await appUsePointerWindow.loadURL(`data:text/html;charset=utf-8,${encodeURIComponent(agentCursorOverlayHtml())}`);
+  } else {
+    appUsePointerWindow.setBounds(desktopBounds, false);
   }
-  const pointerX = Math.round(Number(x) || 0) - 12;
-  const pointerY = Math.round(Number(y) || 0) - 12;
-  appUsePointerWindow.setPosition(pointerX, pointerY, false);
+  appUsePointerOwnerTargetId = String(target && (target.target_id || target.targetId) || '');
   appUsePointerWindow.showInactive();
-  if (appUsePointerHideTimer) clearTimeout(appUsePointerHideTimer);
-  appUsePointerHideTimer = setTimeout(() => {
-    if (appUsePointerWindow && !appUsePointerWindow.isDestroyed()) appUsePointerWindow.hide();
-  }, Math.max(100, Math.min(10000, Number(durationMs) || 1200)));
+  return appUsePointerWindow.webContents.executeJavaScript(agentCursorCommand({
+    x: (Number(x) || 0) - desktopBounds.x,
+    y: (Number(y) || 0) - desktopBounds.y,
+    press: press === true,
+    moveDurationMs,
+    running: agentCursorRunning,
+  }), true);
+}
+
+async function hideAppUseVirtualPointer({ target = null } = {}) {
+  if (!appUsePointerWindow || appUsePointerWindow.isDestroyed()) return false;
+  const targetId = String(target && (target.target_id || target.targetId) || '');
+  if (targetId && appUsePointerOwnerTargetId && targetId !== appUsePointerOwnerTargetId) return false;
+  appUsePointerOwnerTargetId = '';
+  return appUsePointerWindow.webContents.executeJavaScript(agentCursorHideCommand(), true).catch(() => false);
 }
 
 async function captureAppUseTarget(target) {
@@ -3666,7 +4111,12 @@ async function handleBrowserRpc(method, args, context = {}) {
   }
   const manager = getBrowserTabManager(browserRpcSessionId(args, context));
   const roundId = String(context.roundId || context.round_id || args && (args.roundId || args.round_id) || '').trim();
-  if (roundId) manager.setContext({ roundId });
+  const agentRequest = context.agentRequest === true;
+  if (method === 'finishRound') return manager.finishAgentRound(roundId);
+  if (roundId) {
+    if (agentRequest) manager.beginAgentRound(roundId);
+    else manager.setContext({ roundId });
+  }
   switch (method) {
     case 'state':
       return manager.state();
@@ -3679,14 +4129,20 @@ async function handleBrowserRpc(method, args, context = {}) {
     case 'setObscured':
       return setBrowserSurfaceObscured(args && args.obscured);
     case 'createTab':
-      await manager.createTab(args || {});
+      await manager.createTab({
+        ...(args || {}),
+        agentOwnerRoundId: agentRequest ? roundId : '',
+      });
       return manager.state();
     case 'activateTab':
       return manager.activateTab(args && args.tabId);
     case 'closeTab':
       return manager.closeTab(args && args.tabId);
     case 'navigate':
-      return manager.navigate(args || {});
+      return manager.navigate({
+        ...(args || {}),
+        agentOwnerRoundId: agentRequest ? roundId : '',
+      });
     case 'snapshot':
       return manager.pageSnapshot(args && args.tabId, args && args.maxChars);
     case 'inspect':
@@ -3736,6 +4192,10 @@ async function handleAppUseRpc(method, args) {
   return getAppUseManager().handle(method, args || {});
 }
 
+async function handleHostRpc(method, args) {
+  return getHostControl().handle(method, args || {});
+}
+
 function startElectronRpcServer() {
   if (electronRpcServer && electronRpcPort) return Promise.resolve(electronRpcPort);
   const MAX_RETRIES = 3;
@@ -3743,7 +4203,7 @@ function startElectronRpcServer() {
     return new Promise((resolve, reject) => {
       const server = http.createServer((req, res) => {
         const rpcPath = String(req.url || '');
-        if (req.method !== 'POST' || !['/browser/rpc', '/app/rpc'].includes(rpcPath)) {
+        if (req.method !== 'POST' || !['/browser/rpc', '/app/rpc', '/host/rpc'].includes(rpcPath)) {
           res.writeHead(404, { 'Content-Type': 'application/json' });
           res.end(JSON.stringify({ ok: false, error: 'not_found' }));
           return;
@@ -3763,12 +4223,15 @@ function startElectronRpcServer() {
             const payload = JSON.parse(body || '{}');
             const result = rpcPath === '/app/rpc'
               ? await handleAppUseRpc(String(payload.method || ''), payload.args || {})
-              : await handleBrowserRpc(
+              : rpcPath === '/host/rpc'
+                ? await handleHostRpc(String(payload.method || ''), payload.args || {})
+                : await handleBrowserRpc(
                   String(payload.method || ''),
                   payload.args || {},
                   {
                     sessionId: Object.prototype.hasOwnProperty.call(payload, 'sessionId') ? payload.sessionId : '',
                     roundId: payload.roundId || '',
+                    agentRequest: true,
                   }
                 );
             res.writeHead(200, { 'Content-Type': 'application/json' });
@@ -4009,6 +4472,7 @@ function readDesktopSettings() {
     const parsed = JSON.parse(raw);
     const runInBackground = parsed.runInBackground === true;
     return {
+      settingsRevision: Number.isInteger(parsed.settingsRevision) && parsed.settingsRevision >= 0 ? parsed.settingsRevision : 0,
       launchAtLogin: parsed.launchAtLogin === true,
       runInBackground,
       language: normalizeDesktopLanguage(parsed.language),
@@ -4024,6 +4488,7 @@ function readDesktopSettings() {
 function writeDesktopSettings(settings) {
   const runInBackground = settings.runInBackground === true;
   const payload = {
+    settingsRevision: Number.isInteger(settings.settingsRevision) && settings.settingsRevision >= 0 ? settings.settingsRevision : 0,
     launchAtLogin: settings.launchAtLogin === true,
     runInBackground,
     language: normalizeDesktopLanguage(settings.language),
@@ -4074,11 +4539,46 @@ function appStaysResident() {
   }
 }
 
-function saveDesktopSettings(updates) {
+function saveDesktopSettings(updates, expectedRevision) {
   const current = readDesktopSettings();
+  const allowed = new Set(['launchAtLogin', 'runInBackground', 'language', 'quickChatEnabled', 'quickChatShortcut']);
+  const input = updates && typeof updates === 'object' && !Array.isArray(updates) ? updates : {};
+  const unknown = Object.keys(input).filter((key) => !allowed.has(key));
+  if (unknown.length) {
+    const error = new Error(`unknown desktop setting(s): ${unknown.join(', ')}`);
+    error.code = 'validation_error';
+    throw error;
+  }
+  const expected = expectedRevision == null ? null : Number(expectedRevision);
+  if (expected !== null && (!Number.isInteger(expected) || expected < 0)) {
+    const error = new Error('expected desktop settings revision must be a non-negative integer');
+    error.code = 'validation_error';
+    throw error;
+  }
+  if (expected !== null && expected !== current.settingsRevision) {
+    const error = new Error(`desktop settings revision conflict: expected ${expected}, actual ${current.settingsRevision}`);
+    error.code = 'revision_conflict';
+    error.actualRevision = current.settingsRevision;
+    throw error;
+  }
+  for (const key of ['launchAtLogin', 'runInBackground', 'quickChatEnabled']) {
+    if (Object.prototype.hasOwnProperty.call(input, key) && typeof input[key] !== 'boolean') {
+      const error = new Error(`${key} must be a boolean`);
+      error.code = 'validation_error';
+      throw error;
+    }
+  }
+  for (const key of ['language', 'quickChatShortcut']) {
+    if (Object.prototype.hasOwnProperty.call(input, key) && typeof input[key] !== 'string') {
+      const error = new Error(`${key} must be a string`);
+      error.code = 'validation_error';
+      throw error;
+    }
+  }
   const next = {
     ...current,
-    ...updates,
+    ...input,
+    settingsRevision: current.settingsRevision + 1,
   };
   next.quickChatShortcut = normalizeQuickChatShortcut(next.quickChatShortcut);
   next.language = normalizeDesktopLanguage(next.language);
@@ -4300,7 +4800,14 @@ function spawnPython() {
     pythonProcess = null;
     backendPort = null;
     clearCliConnection();
-    if (code === 42) {
+    if (isBackendRestarting) {
+      isBackendRestarting = false;
+      isShuttingDown = false;
+      spawnPython();
+      createMainWindow().catch((err) => {
+        appendErrorLog(`[electron] Failed to recreate window after backend restart: ${String(err && err.stack || err)}\n`);
+      });
+    } else if (code === 42) {
       // Exit code 42 = intentional restart after update.
       // Exit immediately to release the single-instance lock so the
       // detached updater script can launch the new version.
@@ -4322,6 +4829,37 @@ function spawnPython() {
       app.quit();
     }
   });
+}
+
+function restartPythonBackend() {
+  if (!pythonProcess) {
+    spawnPython();
+    createMainWindow().catch(() => {});
+    return;
+  }
+  isBackendRestarting = true;
+  const proc = pythonProcess;
+  // Recreate renderer surfaces after the backend reports its new port. This
+  // also invalidates every old UI tree and ui_instance_id.
+  if (mainWindow && !mainWindow.isDestroyed()) mainWindow.destroy();
+  mainWindow = null;
+  if (quickChatWindow && !quickChatWindow.isDestroyed()) quickChatWindow.destroy();
+  quickChatWindow = null;
+  quickChatWindowReady = null;
+  try {
+    if (isWindows) {
+      spawn('taskkill', ['/pid', String(proc.pid), '/f', '/t'], {
+        stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true,
+      });
+    } else {
+      proc.kill('SIGTERM');
+      setTimeout(() => {
+        try { if (proc.exitCode === null) proc.kill('SIGKILL'); } catch (_) {}
+      }, 5000);
+    }
+  } catch (_) {
+    isBackendRestarting = false;
+  }
 }
 
 function killPython() {
@@ -4374,21 +4912,43 @@ function waitForPort(timeoutMs = 30000) {
 // Auth header injection
 // ---------------------------------------------------------------------------
 
-// Inject the shared X-Cyrene-Token header on every request to the local
-// backend — document loads, fetch, SSE, and WebSocket upgrades all go through
+// Inject the shared X-Cyrene-Token header only on requests to the exact local
+// backend port. The wildcard filter is required because the backend port is
+// discovered after this listener is installed; the callback must not leak the
+// renderer-hidden token to an unrelated process listening on another loopback
+// port. Document loads, fetch, SSE, and WebSocket upgrades all pass through
 // onBeforeSendHeaders. Must be registered BEFORE the window loads the URL.
 function installAuthHeaderInjector() {
   session.defaultSession.webRequest.onBeforeSendHeaders(
     { urls: ['http://127.0.0.1:*/*', 'ws://127.0.0.1:*/*'] },
     (details, callback) => {
+      let isLocalBackend = false;
+      try {
+        const target = new URL(String(details.url || ''));
+        isLocalBackend = target.hostname === '127.0.0.1'
+          && target.port === String(backendPort || '');
+      } catch (_) {}
+      if (!isLocalBackend) {
+        callback({ requestHeaders: details.requestHeaders });
+        return;
+      }
       const requestHeaders = { ...details.requestHeaders, 'X-Cyrene-Token': AUTH_TOKEN };
       callback({ requestHeaders });
     }
   );
 
-  // Deny all permission requests (camera, microphone, geolocation, etc.)
-  session.defaultSession.setPermissionRequestHandler((_webContents, _permission, callback) => {
-    callback(false);
+  // Keep the renderer permission boundary closed except for audio-only capture
+  // requested by Cyrene's own loopback origin. Browser tabs use a separate
+  // partition and remain unable to request microphone or camera access.
+  session.defaultSession.setPermissionRequestHandler((webContents, permission, callback, details = {}) => {
+    let isLocalBackend = false;
+    try {
+      const target = new URL(String((webContents && webContents.getURL()) || details.requestingUrl || ''));
+      isLocalBackend = target.hostname === '127.0.0.1' && target.port === String(backendPort || '');
+    } catch (_) {}
+    const mediaTypes = Array.isArray(details.mediaTypes) ? details.mediaTypes : [];
+    const audioOnly = mediaTypes.length > 0 && mediaTypes.every((mediaType) => mediaType === 'audio');
+    callback(permission === 'media' && isLocalBackend && audioOnly);
   });
   installBrowserSessionGuards();
 }
@@ -4647,6 +5207,336 @@ async function openQuickChat() {
   }
 }
 
+function findDesktopSmokeNode(node, predicate) {
+  if (!node || typeof node !== 'object') return null;
+  if (predicate(node)) return node;
+  for (const child of Array.isArray(node.children) ? node.children : []) {
+    const found = findDesktopSmokeNode(child, predicate);
+    if (found) return found;
+  }
+  return null;
+}
+
+async function waitForDesktopSmokeTree(uiInstanceId, predicate, label, timeoutMs = 12000) {
+  const deadline = Date.now() + timeoutMs;
+  let last = null;
+  while (Date.now() < deadline) {
+    last = await getHostControl().requestSurface(
+      uiInstanceId,
+      'snapshot',
+      { max_depth: 12 },
+      2500,
+    );
+    if (last && last.ok !== false && predicate(last)) return last;
+    await new Promise((resolve) => setTimeout(resolve, 100));
+  }
+  throw new Error(`Timed out waiting for semantic UI state ${label}: ${JSON.stringify(last)}`);
+}
+
+async function runDesktopSmokeAction(uiInstanceId, tree, node, actionId, input = {}) {
+  const nodeId = String(node && node.node_id || '');
+  let currentTree = tree;
+  let currentNode = node;
+  for (let attempt = 0; attempt < 20; attempt += 1) {
+    const action = Array.isArray(currentNode && currentNode.actions)
+      ? currentNode.actions.find((item) => item && item.action_id === actionId)
+      : null;
+    if (!currentNode || !action) {
+      throw new Error(`Semantic smoke action is unavailable: ${String(actionId || '')}`);
+    }
+    const result = await getHostControl().handle('ui.gesture.execute_current', {
+      uiInstanceId,
+      snapshot_id: currentTree.snapshot_id,
+      revision: currentTree.revision,
+      node_id: nodeId,
+      action_id: actionId,
+      input,
+    });
+    if (result && result.ok !== false) return result;
+    if (!result || result.error !== 'stale_snapshot') {
+      // A lost acknowledgement may follow an already executed action. Only a
+      // conclusive stale-snapshot rejection is safe for this smoke driver to retry.
+      throw new Error(`Semantic smoke action failed: ${JSON.stringify(result)}`);
+    }
+    currentTree = await waitForDesktopSmokeTree(
+      uiInstanceId,
+      (candidate) => !!findDesktopSmokeNode(candidate.root, (item) => (
+        item.node_id === nodeId
+        && Array.isArray(item.actions)
+        && item.actions.some((candidateAction) => candidateAction.action_id === actionId)
+      )),
+      `fresh ${nodeId}.${actionId}`,
+    );
+    currentNode = findDesktopSmokeNode(
+      currentTree.root,
+      (item) => item.node_id === nodeId,
+    );
+  }
+  throw new Error(`Semantic smoke action stayed stale: ${nodeId}.${actionId}`);
+}
+
+async function runDesktopSettingsSmokeTest() {
+  const before = await getHostControl().handle('desktop.settings.get', {});
+  if (!before || before.ok === false || !before.settings) {
+    throw new Error(`Desktop settings smoke read failed: ${JSON.stringify(before)}`);
+  }
+  const initialRevision = Number(before.settings.settingsRevision);
+  if (!Number.isInteger(initialRevision) || initialRevision < 0) {
+    throw new Error(`Desktop settings smoke received invalid revision: ${JSON.stringify(before)}`);
+  }
+  const initialLanguage = String(before.settings.language || '');
+  const smokeLanguage = initialLanguage === 'en' ? 'zh' : 'en';
+  const changed = await getHostControl().handle('desktop.settings.update', {
+    changes: { language: smokeLanguage },
+    expectedRevision: initialRevision,
+  });
+  if (
+    !changed
+    || changed.ok === false
+    || !changed.settings
+    || changed.settings.language !== smokeLanguage
+    || changed.settings.settingsRevision !== initialRevision + 1
+  ) {
+    throw new Error(`Desktop settings smoke update failed: ${JSON.stringify(changed)}`);
+  }
+  const stale = await getHostControl().handle('desktop.settings.update', {
+    changes: { language: initialLanguage },
+    expectedRevision: initialRevision,
+  });
+  if (!stale || stale.ok !== false || stale.error !== 'revision_conflict') {
+    throw new Error(`Desktop settings smoke accepted a stale revision: ${JSON.stringify(stale)}`);
+  }
+  const restored = await getHostControl().handle('desktop.settings.update', {
+    changes: { language: initialLanguage },
+    expectedRevision: changed.settings.settingsRevision,
+  });
+  if (
+    !restored
+    || restored.ok === false
+    || !restored.settings
+    || restored.settings.language !== initialLanguage
+    || restored.settings.settingsRevision !== initialRevision + 2
+  ) {
+    throw new Error(`Desktop settings smoke restore failed: ${JSON.stringify(restored)}`);
+  }
+  return 'desktop_settings_cas';
+}
+
+async function runShortcutSettingsSmokeTest(window) {
+  const result = await window.webContents.executeJavaScript(`(async () => {
+    const read = async () => {
+      const response = await fetch('/api/settings/namespaces/shortcuts');
+      if (!response.ok) throw new Error('shortcut read failed');
+      return response.json();
+    };
+    const write = async (bindings, expectedRevision) => {
+      const response = await fetch('/api/settings/namespaces/shortcuts', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          changes: { shortcut_bindings: bindings },
+          expected_revision: expectedRevision,
+        }),
+      });
+      const payload = await response.json();
+      if (!response.ok) throw new Error('shortcut write failed: ' + JSON.stringify(payload));
+      return payload;
+    };
+    const waitForBinding = async (action, keys) => {
+      const deadline = Date.now() + 4000;
+      while (Date.now() < deadline) {
+        const service = window.CyreneUI.require('shortcuts');
+        if (JSON.stringify(service.get(action)) === JSON.stringify(keys)) return true;
+        await new Promise((resolve) => setTimeout(resolve, 50));
+      }
+      return false;
+    };
+    const before = await read();
+    const original = { ...((before.values && before.values.shortcut_bindings) || {}) };
+    const userKeys = ['mod', 'ctrl', 'alt', 'shift', 'F11'];
+    const smokeKeys = ['mod', 'ctrl', 'alt', 'shift', 'F12'];
+    const userChanged = await write({ 'new-chat': userKeys }, before.revision);
+    if (!(await waitForBinding('new-chat', userKeys))) throw new Error('user shortcut renderer sync failed');
+    const staleResponse = await fetch('/api/settings/namespaces/shortcuts', {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        changes: { shortcut_bindings: { search: smokeKeys } },
+        expected_revision: before.revision,
+      }),
+    });
+    if (staleResponse.status !== 409) {
+      throw new Error('stale shortcut update was not rejected: ' + await staleResponse.text());
+    }
+    const afterStale = await read();
+    if (JSON.stringify(afterStale.values.shortcut_bindings['new-chat']) !== JSON.stringify(userKeys)) {
+      throw new Error('stale Agent update changed the user shortcut');
+    }
+    const changed = await write({ search: smokeKeys }, userChanged.revision);
+    if (!(await waitForBinding('search', smokeKeys))) throw new Error('shortcut renderer sync failed');
+    if (!(await waitForBinding('new-chat', userKeys))) throw new Error('Agent update erased user shortcut');
+    const restored = await write({
+      search: original.search || null,
+      'new-chat': original['new-chat'] || null,
+    }, changed.revision);
+    const expected = original.search || ['mod', 'K'];
+    if (!(await waitForBinding('search', expected))) throw new Error('shortcut renderer restore failed');
+    const expectedNewChat = original['new-chat'] || ['mod', 'N'];
+    if (!(await waitForBinding('new-chat', expectedNewChat))) throw new Error('user shortcut restore failed');
+    return {
+      ok: restored.ok === true,
+      changedRevision: changed.revision,
+      restoredRevision: restored.revision,
+    };
+  })()`, true);
+  if (
+    !result
+    || result.ok !== true
+    || !Number.isInteger(result.changedRevision)
+    || result.restoredRevision !== result.changedRevision + 1
+  ) {
+    throw new Error(`Shortcut settings smoke failed: ${JSON.stringify(result)}`);
+  }
+  return 'shortcut_settings_sync';
+}
+
+async function runDesktopSemanticSmokeTest(window) {
+  window.show();
+  window.focus();
+  const uiInstanceId = await window.webContents.executeJavaScript(`(() => {
+    const service = window.CyreneUI && window.CyreneUI.has('uiSurface')
+      ? window.CyreneUI.require('uiSurface')
+      : null;
+    return service ? service.getInstanceId() : '';
+  })()`, true);
+  if (!uiInstanceId) throw new Error('Semantic UI surface did not register');
+
+  let tree = await waitForDesktopSmokeTree(
+    uiInstanceId,
+    (candidate) => candidate.surface && candidate.surface.kind === 'main'
+      && !!findDesktopSmokeNode(candidate.root, (node) => node.node_id === 'project_switcher')
+      && !!findDesktopSmokeNode(candidate.root, (node) => node.node_id === 'navigation_chat')
+      && !!findDesktopSmokeNode(candidate.root, (node) => node.node_id === 'workspace_sidebar'),
+    'main project/navigation tree',
+  );
+  let sidebar = findDesktopSmokeNode(tree.root, (node) => node.node_id === 'workspace_sidebar');
+  if (sidebar && sidebar.state && sidebar.state.collapsed === true) {
+    await runDesktopSmokeAction(uiInstanceId, tree, sidebar, 'toggle');
+    tree = await waitForDesktopSmokeTree(
+      uiInstanceId,
+      (candidate) => {
+        const node = findDesktopSmokeNode(candidate.root, (item) => item.node_id === 'workspace_sidebar');
+        return !!node && (!node.state || node.state.collapsed !== true);
+      },
+      'expanded workspace sidebar',
+    );
+  }
+  const projectSwitcher = findDesktopSmokeNode(tree.root, (node) => node.node_id === 'project_switcher');
+  await runDesktopSmokeAction(uiInstanceId, tree, projectSwitcher, 'open_menu');
+
+  tree = await waitForDesktopSmokeTree(
+    uiInstanceId,
+    (candidate) => candidate.surface && candidate.surface.scope === 'project_menu'
+      && !!findDesktopSmokeNode(candidate.root, (node) => (
+        node.role === 'menuitemradio'
+        && Array.isArray(node.actions)
+        && node.actions.some((action) => action.action_id === 'select')
+      )),
+    'project menu',
+  );
+  const projectItem = findDesktopSmokeNode(tree.root, (node) => (
+    node.role === 'menuitemradio'
+    && Array.isArray(node.actions)
+    && node.actions.some((action) => action.action_id === 'select')
+  ));
+  await runDesktopSmokeAction(uiInstanceId, tree, projectItem, 'select');
+
+  tree = await waitForDesktopSmokeTree(
+    uiInstanceId,
+    (candidate) => candidate.surface && candidate.surface.scope === 'main'
+      && !!findDesktopSmokeNode(candidate.root, (node) => node.node_id === 'navigation_chat'),
+    'main tree after project selection',
+  );
+  const chatNavigation = findDesktopSmokeNode(tree.root, (node) => node.node_id === 'navigation_chat');
+  await runDesktopSmokeAction(uiInstanceId, tree, chatNavigation, 'open');
+
+  tree = await waitForDesktopSmokeTree(
+    uiInstanceId,
+    (candidate) => !!findDesktopSmokeNode(candidate.root, (node) => node.node_id === 'chat_search_input'),
+    'chat project search',
+  );
+  let search = findDesktopSmokeNode(tree.root, (node) => node.node_id === 'chat_search_input');
+  const marker = '__cyrene_semantic_smoke__';
+  await runDesktopSmokeAction(uiInstanceId, tree, search, 'set_value', { value: marker });
+
+  tree = await waitForDesktopSmokeTree(
+    uiInstanceId,
+    (candidate) => {
+      const node = findDesktopSmokeNode(candidate.root, (item) => item.node_id === 'chat_search_input');
+      return !!node && node.value_summary === marker
+        && Number(node.state && node.state.query_length) === marker.length;
+    },
+    'chat search value',
+  );
+  search = findDesktopSmokeNode(tree.root, (node) => node.node_id === 'chat_search_input');
+  await runDesktopSmokeAction(uiInstanceId, tree, search, 'clear_value');
+  await waitForDesktopSmokeTree(
+    uiInstanceId,
+    (candidate) => {
+      const node = findDesktopSmokeNode(candidate.root, (item) => item.node_id === 'chat_search_input');
+      return !!node && node.value_summary === ''
+        && Number(node.state && node.state.query_length) === 0;
+    },
+    'cleared chat search',
+  );
+  tree = await waitForDesktopSmokeTree(
+    uiInstanceId,
+    (candidate) => !!findDesktopSmokeNode(candidate.root, (node) => node.node_id === 'open_settings'),
+    'settings launcher',
+  );
+  const settingsLauncher = findDesktopSmokeNode(tree.root, (node) => node.node_id === 'open_settings');
+  await runDesktopSmokeAction(uiInstanceId, tree, settingsLauncher, 'open');
+  tree = await waitForDesktopSmokeTree(
+    uiInstanceId,
+    (candidate) => candidate.surface && candidate.surface.scope === 'settings'
+      && !!findDesktopSmokeNode(candidate.root, (node) => node.node_id === 'settings_tab_shortcuts')
+      && !!findDesktopSmokeNode(candidate.root, (node) => (
+        String(node.node_id || '').startsWith('dom_')
+        && Array.isArray(node.actions)
+        && node.actions.some((action) => action.action_id === 'invoke')
+      )),
+    'projected settings controls',
+  );
+  const shortcutTab = findDesktopSmokeNode(tree.root, (node) => node.node_id === 'settings_tab_shortcuts');
+  await runDesktopSmokeAction(uiInstanceId, tree, shortcutTab, 'open');
+  tree = await waitForDesktopSmokeTree(
+    uiInstanceId,
+    (candidate) => {
+      const selected = findDesktopSmokeNode(candidate.root, (node) => node.node_id === 'settings_tab_shortcuts');
+      return !!selected && !!(selected.state && selected.state.selected)
+        && !!findDesktopSmokeNode(candidate.root, (node) => (
+          Array.isArray(node.actions)
+          && node.actions.some((action) => action.action_id === 'scroll_page')
+        ));
+    },
+    'shortcut settings and scrollable list',
+  );
+  const scrollable = findDesktopSmokeNode(tree.root, (node) => (
+    Array.isArray(node.actions)
+    && node.actions.some((action) => action.action_id === 'scroll_page')
+  ));
+  await runDesktopSmokeAction(uiInstanceId, tree, scrollable, 'scroll_page', { delta: 240 });
+  const settingsCheck = await runDesktopSettingsSmokeTest();
+  const shortcutCheck = await runShortcutSettingsSmokeTest(window);
+  return {
+    uiInstanceId,
+    checks: [
+      'tree', 'project_switch', 'chat_navigation', 'chat_search',
+      'settings_controls', 'list_scroll', settingsCheck, shortcutCheck,
+    ],
+  };
+}
+
 async function runDesktopSmokeTest(window) {
   const state = await window.webContents.executeJavaScript(`new Promise((resolve) => {
     const startedAt = Date.now();
@@ -4692,7 +5582,6 @@ async function runDesktopSmokeTest(window) {
     || !state.hasRoot
     || state.rootChildren < 1
     || state.launchScreenPresent
-    || !state.bodyText.includes('Cyrene')
     || image.isEmpty()
     || nonWhitePixels < 100
   ) {
@@ -4702,7 +5591,8 @@ async function runDesktopSmokeTest(window) {
       nonWhitePixels,
     })}`);
   }
-  console.log(`DESKTOP_SMOKE_TEST=ok nonWhitePixels=${nonWhitePixels}`);
+  const semantic = await runDesktopSemanticSmokeTest(window);
+  console.log(`DESKTOP_SMOKE_TEST=ok nonWhitePixels=${nonWhitePixels} semantic=${semantic.checks.join(',')}`);
   isQuitting = true;
   app.quit();
 }
@@ -4940,6 +5830,18 @@ if (!gotSingleInstanceLock) {
     }
     ipcMain.handle('desktop-settings:get', () => getDesktopSettings());
     ipcMain.handle('desktop-settings:update', (_event, updates) => saveDesktopSettings(updates || {}));
+    ipcMain.handle('agent-cursor:set-running', (event, info) => (
+      updateAgentCursorRunningSource(event.sender, info && info.running === true)
+    ));
+    ipcMain.handle('ui-surface:register', (event, payload) => (
+      getHostControl().registerSurface(payload && payload.uiInstanceId, event.sender)
+    ));
+    ipcMain.handle('ui-surface:unregister', (event, payload) => (
+      getHostControl().unregisterSurface(payload && payload.uiInstanceId, event.sender)
+    ));
+    ipcMain.on('ui-surface:response', (event, payload) => {
+      getHostControl().receiveSurfaceResponse(payload || {}, event.sender);
+    });
     ipcMain.handle('quick-chat:get-launch-context', () => getQuickChatLaunchContext());
     ipcMain.handle('quick-chat:get-screenshot', () => {
       if (!pendingQuickChatScreenshot) return null;
@@ -5136,6 +6038,10 @@ if (!gotSingleInstanceLock) {
   });
 
   app.on('window-all-closed', () => {
+    // restartPythonBackend deliberately tears down every renderer so stale
+    // ui_instance_id/tree revisions cannot survive the backend boundary. Do
+    // not interpret that temporary zero-window state as an application quit.
+    if (isBackendRestarting) return;
     // Keep the backend alive while the app stays resident for the global
     // shortcut / background mode; otherwise tear it down and quit on non-mac.
     if (appStaysResident()) return;
@@ -5150,10 +6056,9 @@ if (!gotSingleInstanceLock) {
     destroyTray();
     globalShortcut.unregisterAll();
     if (appUseManager) appUseManager.stop();
-    if (appUsePointerHideTimer) clearTimeout(appUsePointerHideTimer);
-    appUsePointerHideTimer = null;
     if (appUsePointerWindow && !appUsePointerWindow.isDestroyed()) appUsePointerWindow.destroy();
     appUsePointerWindow = null;
+    appUsePointerOwnerTargetId = '';
     closeAllBrowserSessions();
     killPython();
   });

@@ -15,10 +15,11 @@ import time
 from pathlib import Path
 from typing import Any
 
-from fastapi import APIRouter, Request
+from fastapi import APIRouter, Form, Request, UploadFile
 from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 
 from cyrene.workbench import chat as _service
+from cyrene.workbench.inbox import GuidanceAdmissionClosed
 from cyrene.workbench.workspace_changes import (
     delete_chat_change_sets,
     get_chat_file_change,
@@ -353,6 +354,118 @@ def register_workbench_chat_routes(
                 elapsed_ms,
             )
         return {"ok": True, "chat": _public_chat_full(chat)}
+
+    @router.post("/api/workbench/voice-command")
+    async def api_workbench_voice_command(
+        audio: UploadFile,
+        lang: str = Form(""),
+        ui_instance_id: str = Form(""),
+    ):
+        """Transcribe first, then silently create and dispatch a default-project chat.
+
+        Keeping ASR and chat creation in one backend operation guarantees that
+        empty/silence-only captures never leave an orphan conversation behind.
+        """
+        from cyrene.voice import engine as voice_engine
+
+        try:
+            voice_status = await asyncio.to_thread(voice_engine.status)
+            if not voice_status.get("asr_ready") or not voice_status.get("tts_ready"):
+                return JSONResponse(
+                    {"error": "voice models are not ready", "created": False},
+                    status_code=409,
+                )
+            audio_payload = await audio.read(voice_engine.MAX_AUDIO_BYTES + 1)
+            if len(audio_payload) > voice_engine.MAX_AUDIO_BYTES:
+                raise ValueError("audio file is too large")
+            transcript = await asyncio.to_thread(voice_engine.transcribe, audio_payload)
+        except (ValueError, RuntimeError, OSError) as exc:
+            return JSONResponse(
+                {"error": str(exc), "created": False},
+                status_code=409 if isinstance(exc, RuntimeError) else 400,
+            )
+
+        text = str((transcript or {}).get("text") or "").strip()
+        if not text or bool((transcript or {}).get("silence_only")):
+            return {"ok": True, "created": False, "text": ""}
+
+        R = _routes()
+        store = await asyncio.to_thread(R._read_workbench_store)
+        projects = store.get("projects", []) or []
+        default_project = next(
+            (project for project in projects if R._workbench_project_data_key(project) == "default"),
+            None,
+        )
+        if default_project is None and projects:
+            default_project = projects[0]
+        project_id = str((default_project or {}).get("id") or "")
+        if not project_id:
+            return JSONResponse(
+                {"error": "default project not found", "created": False},
+                status_code=404,
+            )
+
+        from cyrene.workbench.project_memory_prompt import current_snapshot
+        memory_snapshot = await asyncio.to_thread(current_snapshot, project_id)
+
+        def create_and_persist() -> dict[str, Any]:
+            payload = _read_chats_store()
+            chat = _new_chat(
+                project_id,
+                "",
+                R._get_model(),
+                project_memory_snapshot=memory_snapshot,
+            )
+            chat["permissionMode"] = "auto"
+            payload.setdefault("chats", []).insert(0, chat)
+            _write_chats_store(payload)
+            return chat
+
+        chat = await asyncio.to_thread(create_and_persist)
+        chat_id = str(chat.get("id") or "")
+        from cyrene.observability import debug
+        await debug.publish_event({
+            "type": "workbench_chat_changed",
+            "change": "created",
+            "session_id": chat_id,
+            "chat_id": chat_id,
+            "project_id": project_id,
+        }, session_id=chat_id)
+
+        dispatch = await _workbench_chat_send_impl(
+            chat_id,
+            {
+                "message": text,
+                "mode": "auto",
+                "lang": lang if lang in {"en", "zh"} else "",
+                "stream": True,
+                "uiInstanceId": str(ui_instance_id or ""),
+                "voiceCommand": True,
+            },
+            detached=True,
+        )
+        if isinstance(dispatch, JSONResponse):
+            try:
+                dispatch_payload = json.loads(bytes(dispatch.body).decode("utf-8"))
+            except Exception:
+                dispatch_payload = {"error": "voice command dispatch failed"}
+            if not 200 <= dispatch.status_code < 300:
+                return JSONResponse(
+                    {
+                        **dispatch_payload,
+                        "created": True,
+                        "chat_id": chat_id,
+                        "text": text,
+                    },
+                    status_code=dispatch.status_code,
+                )
+            return {
+                "ok": True,
+                "created": True,
+                "text": text,
+                **dispatch_payload,
+            }
+        return {"ok": True, "created": True, "text": text, "chat_id": chat_id}
 
     @router.get("/api/workbench/chats/{chat_id}/side-agents")
     async def api_workbench_list_side_agents(chat_id: str):
@@ -792,6 +905,7 @@ def register_workbench_chat_routes(
         body = api_models.body_dict(body_model)
         message = str(body.get("message") or "").strip()
         client_request_id = str(body.get("clientRequestId") or "").strip()
+        ui_instance_id = str(body.get("uiInstanceId") or "").strip()
         if not message:
             return JSONResponse(
                 {"error": "guidance message is empty", "code": "guidance_empty"},
@@ -826,6 +940,15 @@ def register_workbench_chat_routes(
                 public_message_id=public_message_id,
                 public_created_at=now,
             )
+        except GuidanceAdmissionClosed:
+            # The UI promotes this text to a normal follow-up. Do not release
+            # that retry while the sealed run is still finalizing, otherwise it
+            # can immediately bounce with ``chat_run_in_progress``.
+            await run.done.wait()
+            return JSONResponse(
+                {"error": "chat has no running reply", "code": "chat_not_running"},
+                status_code=409,
+            )
         except RuntimeError:
             logger.exception("Failed to persist guidance for chat %s", chat_id)
             return JSONResponse(
@@ -836,10 +959,30 @@ def register_workbench_chat_routes(
                 status_code=503,
             )
         if event.get("duplicate"):
-            return {
+            duplicate_message = next(
+                (
+                    item
+                    for item in reversed(chat.get("messages") or [])
+                    if isinstance(item, dict)
+                    and (
+                        str(item.get("guidanceEventId") or "")
+                        == str(event.get("event_id") or "")
+                        or (
+                            client_request_id
+                            and str(item.get("clientRequestId") or "")
+                            == client_request_id
+                        )
+                    )
+                ),
+                None,
+            )
+            response = {
                 "queued": True, "duplicate": True, "eventId": event["event_id"],
                 "runId": run.run_id,
             }
+            if duplicate_message is not None:
+                response["userMessage"] = _public_message(duplicate_message)
+            return response
 
         user_entry = {
             "id": public_message_id,
@@ -1014,7 +1157,6 @@ def register_workbench_chat_routes(
 
     @router.delete("/api/workbench/chats/{chat_id}")
     async def api_workbench_delete_chat(chat_id: str):
-        from cyrene.agent import clear_session_id, interrupt_active_run
         if chat_id.startswith("legacy:"):
             _prefix, project_id, session_id = (chat_id.split(":", 2) + ["", ""])[:3]
             if not project_id or not session_id or _project_data_key(project_id) != "default":
@@ -1047,6 +1189,14 @@ def register_workbench_chat_routes(
                 and str(chat.get("parentChatId") or "") == chat_id
             ],
         }
+        try:
+            await terminate_chat_agents(removed_chat_ids)
+        except Exception:
+            logger.exception("Failed to terminate agents for deleted chat %s", chat_id)
+            return JSONResponse(
+                {"error": "chat agents could not be terminated"},
+                status_code=503,
+            )
         next_chats = [
             chat
             for chat in chats
@@ -1077,15 +1227,6 @@ def register_workbench_chat_routes(
             except Exception:
                 logger.exception(
                     "Failed to delete workspace change history for chat %s",
-                    removed_chat_id,
-                )
-            try:
-                _CHAT_RUN_MANAGER.interrupt(removed_chat_id)
-                interrupt_active_run(session_id=removed_chat_id)
-                await clear_session_id(session_id=removed_chat_id)
-            except Exception:
-                logger.exception(
-                    "Failed to clear agent state for chat %s",
                     removed_chat_id,
                 )
             try:
@@ -1127,6 +1268,7 @@ def register_workbench_chat_routes(
 
         message = str(body.get("message") or "").strip()
         client_request_id = str(body.get("clientRequestId") or "").strip()
+        ui_instance_id = str(body.get("uiInstanceId") or "").strip()
         attachments = body.get("attachments") if isinstance(body.get("attachments"), list) else []
         if attachments:
             attachments = [
@@ -1142,6 +1284,7 @@ def register_workbench_chat_routes(
         requested_model = str(body.get("model") or "").strip()
         requested_effort = str(body.get("reasoningEffort") or "").strip().lower()
         lang = str(body.get("lang") or "").strip().lower()
+        voice_command = body.get("voiceCommand") is True
         # Persist the UI language so server-side flows (the proactive scheduler)
         # can reply in the same language even with no HTTP request to read.
         if lang in {"en", "zh"}:
@@ -1153,6 +1296,30 @@ def register_workbench_chat_routes(
                 pass
 
         R = _routes()
+
+        def notify_voice_command_attention(pending: Any) -> None:
+            if not voice_command:
+                return
+            question = pending if isinstance(pending, dict) else {}
+            prompt = next(
+                (
+                    str(question.get(key) or "").strip()
+                    for key in ("text", "prompt", "question", "title")
+                    if str(question.get(key) or "").strip()
+                ),
+                "Agent 正在等待你的回答。",
+            )
+            append_notification(
+                title="语音命令需要你的回答",
+                body=prompt,
+                tab="mention",
+                project_ref=project_id,
+                source="voice_command_attention",
+                source_label="语音命令",
+                link_label=str(chat.get("title") or "新对话"),
+                meta={"chatId": chat_id, "voiceCommand": True},
+            )
+
         normalized = R._workbench_normalize_attachments(attachments)
         public_attachments = [R.build_public_attachment_payload(item) for item in normalized]
         if not retry and not message and not normalized:
@@ -1451,6 +1618,9 @@ def register_workbench_chat_routes(
 
         async def _run() -> str:
             from cyrene.workbench.project_memory_prompt import build_main_agent_suffix
+            from cyrene.runtime.host_bridge import resolve_conversation_source
+
+            conversation_source = await resolve_conversation_source(ui_instance_id)
 
             return await run_agent(
                 user_message=agent_message,
@@ -1470,6 +1640,8 @@ def register_workbench_chat_routes(
                     include_trigger=not is_side_agent,
                 ),
                 response_capabilities=("interactive_blocks",),
+                ui_instance_id=ui_instance_id,
+                conversation_source=conversation_source,
             )
 
         def _finalize(reply_text: str) -> dict[str, Any]:
@@ -1704,6 +1876,7 @@ def register_workbench_chat_routes(
                     await asyncio.to_thread(commit_retry)
                 pending = await asyncio.to_thread(R._workbench_pending_question_for, chat_id)
                 awaiting_messages = await asyncio.to_thread(_stash_chat_pending, pending)
+                await asyncio.to_thread(notify_voice_command_attention, pending)
                 run.outcome = {"kind": "awaiting", "pending": pending}
                 run.outcome["assistantMessages"] = awaiting_messages
                 return
@@ -1716,6 +1889,12 @@ def register_workbench_chat_routes(
                 run=run,
             )
             finalized = await _finalize_async(reply)
+            from cyrene.runtime.host_actions import finalize_origin
+            asyncio.create_task(finalize_origin(
+                chat_id,
+                "",
+                origin_run_id=client_request_id,
+            ))
             run.outcome = {
                 "kind": "reply",
                 "payload": finalized,
@@ -1848,6 +2027,7 @@ def register_workbench_chat_routes(
                         await asyncio.to_thread(commit_stream_retry)
                     pending = await asyncio.to_thread(R._workbench_pending_question_for, chat_id)
                     awaiting_messages = await asyncio.to_thread(_stash_chat_pending, pending)
+                    await asyncio.to_thread(notify_voice_command_attention, pending)
                     run.outcome = {"kind": "awaiting", "pending": pending}
                     await run.publish({
                         "type": "awaiting_user",
@@ -1896,6 +2076,12 @@ def register_workbench_chat_routes(
                 }
                 run.outcome = {"kind": "reply", "payload": saved_event}
                 await run.publish(saved_event)
+                from cyrene.runtime.host_actions import finalize_origin
+                asyncio.create_task(finalize_origin(
+                    chat_id,
+                    "",
+                    origin_run_id=client_request_id,
+                ))
             finally:
                 if not live_segments_stop.is_set():
                     live_segments_stop.set()
@@ -2296,7 +2482,14 @@ def register_workbench_chat_routes(
                             saw_reply_events = True
                         yield json.dumps(event, ensure_ascii=False) + "\n"
 
-                    response = await task
+                    try:
+                        response = await task
+                    except asyncio.CancelledError:
+                        yield json.dumps({
+                            "type": "interrupted",
+                            "chatId": chat_id,
+                        }, ensure_ascii=False) + "\n"
+                        return
                     if isinstance(response, JSONResponse):
                         try:
                             error_payload = json.loads(bytes(response.body).decode("utf-8"))
@@ -2318,6 +2511,12 @@ def register_workbench_chat_routes(
                             "type": "error",
                             "error": "invalid_answer_response",
                             "message": "Invalid answer response from the daemon.",
+                        }, ensure_ascii=False) + "\n"
+                        return
+                    if bool(response.get("interrupted")):
+                        yield json.dumps({
+                            "type": "interrupted",
+                            "chatId": chat_id,
                         }, ensure_ascii=False) + "\n"
                         return
                     if bool(response.get("awaitingUser")):
@@ -2363,6 +2562,7 @@ def register_workbench_chat_routes(
 
         question_id = str(body.get("question_id") or "").strip()
         answer_text = str(body.get("answer") or body.get("selected_option") or "").strip()
+        ui_instance_id = str(body.get("uiInstanceId") or "").strip()
         processing_started_at = time.monotonic()
         from cyrene.agent.state import PERMISSION_MODES
         requested_mode = str(body.get("mode") or "").strip().lower()
@@ -2415,15 +2615,22 @@ def register_workbench_chat_routes(
         changes_before = await _capture_workspace_changes_baseline(
             workspace_dir, resume_run_id
         )
+        from cyrene.runtime.host_bridge import resolve_conversation_source
+
+        conversation_source = await resolve_conversation_source(ui_instance_id)
         try:
             if mode == "default":
                 reply = await R._workbench_answer_pending(
                     chat_id, question_id, answer_text, workspace_dir,
+                    ui_instance_id=ui_instance_id,
+                    conversation_source=conversation_source,
                 )
             else:
                 reply = await R._workbench_answer_pending(
                     chat_id, question_id, answer_text, workspace_dir,
                     permission_mode=mode,
+                    ui_instance_id=ui_instance_id,
+                    conversation_source=conversation_source,
                 )
         except asyncio.CancelledError:
             await _finalize_workspace_changes(
@@ -2433,7 +2640,31 @@ def register_workbench_chat_routes(
                 before=changes_before,
                 status="cancelled",
             )
-            raise
+            # The answer itself has already been accepted and persisted.  Do
+            # not resurrect its consumed question after the resumed slice is
+            # stopped; doing so leaves the UI offering an answer that the agent
+            # state no longer recognizes.  Project the interruption just like a
+            # ChatRunManager-owned run so list/topbar state also settles.
+            await asyncio.to_thread(
+                _stash_chat_pending_for,
+                chat_id,
+                None,
+            )
+            await asyncio.to_thread(
+                _record_chat_run_outcome,
+                chat_id,
+                run_id=resume_run_id,
+                status="cancelled",
+                termination_reason="user_interrupted",
+                outcome_kind="interrupted",
+                created_at=now,
+            )
+            return {
+                "ok": True,
+                "interrupted": True,
+                "awaitingUser": False,
+                "userMessage": _public_message(answer_entry),
+            }
         except Exception as exc:
             await _finalize_workspace_changes(
                 chat_id=chat_id,
@@ -2553,6 +2784,8 @@ def register_workbench_chat_routes(
         fresh_chat.pop("pendingQuestion", None)
         fresh_chat["updatedAt"] = assistant_entry["createdAt"]
         await asyncio.to_thread(_write_chats_store, fresh)
+        from cyrene.runtime.host_actions import finalize_origin
+        asyncio.create_task(finalize_origin(chat_id, ""))
         await asyncio.to_thread(complete_chat_plan, chat_id)
         # Answer-resume runs do not pass through ChatRunManager, whose normal
         # finalizer projects the terminal outcome into ``lastRun``.  Record the

@@ -143,6 +143,22 @@ FastAPI Adapter 位于 `src/route/`；领域代码不得依赖 Route 或 Web UI�
    必须有明确理由；
 5. 增加 Policy、Schema、Actor 和 UI/Setting 测试。
 
+Cyrene 自管理的公开能力只能加入 Main-only `cyrene_tools`。UI Action 必须在
+`uiSurface` 注册稳定 Node/Action ID、受限语义 Handler、Risk 和 Outcome；禁止
+增加 Selector、Script、Raw Event、任意坐标或 Route 调用逃生口。显式节点使用
+`get_element` 与 DOM Projection 去重。Project/Chat/Data/Update/Lifecycle/
+Session-message 后台 handler 必须保留在 `INTERNAL_ONLY_CONCRETE_TOOL_NAMES`。
+
+源码和仓库内 Compiled WebUI Output 必须同步。聚焦验证为：
+
+```bash
+node --test electron/ui-surface.test.js electron/host-control.test.js
+uv run pytest -q tests/test_app_control.py \
+  tests/test_progressive_tool_packages.py \
+  tests/test_tool_package_settings.py \
+  tests/test_webui_consolidation_contract.py
+```
+
 MCP Server 通过 Settings 或 `cyrene mcp add` 配置。
 
 ## Electron 开发

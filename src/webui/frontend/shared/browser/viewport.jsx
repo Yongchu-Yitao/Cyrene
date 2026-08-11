@@ -63,11 +63,12 @@ function BrowserIcon({ name, size }) {
   if (name === "close") return <svg {...common}><path d="M18 6 6 18" /><path d="m6 6 12 12" /></svg>;
   if (name === "volume") return <svg {...common}><path d="M11 5 6 9H3v6h3l5 4V5Z" /><path d="M15.5 8.5a5 5 0 0 1 0 7" /></svg>;
   if (name === "muted") return <svg {...common}><path d="M11 5 6 9H3v6h3l5 4V5Z" /><path d="m16 9 5 5" /><path d="m21 9-5 5" /></svg>;
+  if (name === "microphone") return <svg {...common}><rect x="9" y="3" width="6" height="11" rx="3" /><path d="M5.5 10.5a6.5 6.5 0 0 0 13 0M12 17v4M9 21h6" /></svg>;
   if (name === "fullscreen") return <svg {...common}><path d="M8 3H3v5M16 3h5v5M8 21H3v-5M21 16v5h-5" /></svg>;
   return null;
 }
 
-function ElectronBrowserViewportPanel({ roundId, browserSessionId, onClose, browserState, desiredTabId, zoomEnabled = true, hideTabStrip = false, hideReload = false, hideMute = false, splitChrome = false }) {
+function ElectronBrowserViewportPanel({ roundId, browserSessionId, onClose, browserState, desiredTabId, zoomEnabled = true, resizeEdgeHintEnabled = false, hideTabStrip = false, hideReload = false, hideMute = false, splitChrome = false }) {
   browserState = browserState || window.CyreneUI.require("data").state.browser;
   const bridge = window.cyrene && window.cyrene.browser;
   const electronSessionId = String(browserSessionId || (browserState && browserState.sessionId) || "").trim();
@@ -177,6 +178,7 @@ function ElectronBrowserViewportPanel({ roundId, browserSessionId, onClose, brow
       borderRadius: borderRadius,
       pageCornerRadius: pageCornerRadius,
       zoomEnabled: zoomEnabled !== false,
+      resizeEdgeHintEnabled: resizeEdgeHintEnabled === true,
       // A PiP -> portal/maximized handoff remounts this renderer surface. The
       // previous owner may have left Electron in a prepared (hidden) bounds
       // transition after its event listeners unmounted. Every newly measured
@@ -231,6 +233,7 @@ function ElectronBrowserViewportPanel({ roundId, browserSessionId, onClose, brow
       borderRadius: 0,
       pageCornerRadius: pageCornerRadius,
       zoomEnabled: zoomEnabled !== false,
+      resizeEdgeHintEnabled: resizeEdgeHintEnabled === true,
       resizeEdgeHintActive: resizeEdgeHintActiveRef.current,
     };
     lastBoundsRef.current = "";
@@ -290,6 +293,7 @@ function ElectronBrowserViewportPanel({ roundId, browserSessionId, onClose, brow
       borderRadius: borderRadius,
       pageCornerRadius: pageCornerRadius,
       zoomEnabled: zoomEnabled !== false,
+      resizeEdgeHintEnabled: resizeEdgeHintEnabled === true,
       resizeEdgeHintActive: resizeEdgeHintActiveRef.current,
     }).then(function () {
       if (interactionPreviewTokenRef.current !== token) return;
@@ -321,6 +325,7 @@ function ElectronBrowserViewportPanel({ roundId, browserSessionId, onClose, brow
       visible: true,
       transition: "commit",
       zoomEnabled: zoomEnabled !== false,
+      resizeEdgeHintEnabled: resizeEdgeHintEnabled === true,
     }).then(function () {
       if (interactionPreviewTokenRef.current !== token) return;
       modePreparedRef.current = false;
@@ -364,6 +369,7 @@ function ElectronBrowserViewportPanel({ roundId, browserSessionId, onClose, brow
       visible: true,
       transition: "prepare",
       zoomEnabled: zoomEnabled !== false,
+      resizeEdgeHintEnabled: resizeEdgeHintEnabled === true,
     }).then(function (result) {
       if (!windowInteractionRef.current
         || interactionPreviewTokenRef.current !== previewToken) return;
@@ -925,7 +931,7 @@ function ElectronBrowserViewportPanel({ roundId, browserSessionId, onClose, brow
       {!hideTabStrip && <div className="browser-tabs-strip">
         {tabs.map(function (tab) {
           return (
-            <button key={tab.id} type="button" className={"browser-tab" + (tab.id === state.activeTabId ? " active" : "")} onClick={function () { run(function () { return bridge.activateTab({ sessionId: electronSessionId, tabId: tab.id }); }); }} onContextMenu={function (event) { openTabContextMenu(tab, event); }} title={(tab.title || tab.url || "Browser") + (tab.audible ? " · audible" : "")}>
+            <button key={tab.id} type="button" data-cyrene-context-menu="true" className={"browser-tab" + (tab.id === state.activeTabId ? " active" : "")} onClick={function () { run(function () { return bridge.activateTab({ sessionId: electronSessionId, tabId: tab.id }); }); }} onContextMenu={function (event) { openTabContextMenu(tab, event); }} title={(tab.title || tab.url || "Browser") + (tab.audible ? " · audible" : "")}>
               <span className="browser-tab-title">{tab.title || tab.url || "New tab"}</span>
               {tab.audible && <span className="browser-tab-audio" aria-hidden="true"><BrowserIcon name="volume" size={13} /></span>}
               <span

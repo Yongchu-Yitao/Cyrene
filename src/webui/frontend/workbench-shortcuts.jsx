@@ -9,8 +9,9 @@
 //     from the event's metaKey/ctrlKey flags so a Mac user with a Windows
 //     keyboard still triggers correctly.
 //   • User-customizable: every action's binding can be rebound from the
-//     Shortcuts settings tab. Custom bindings are persisted to
-//     `localStorage` under `cyrene-shortcuts` and survive reloads.
+//     Shortcuts settings tab. The versioned backend namespace is authoritative;
+//     `localStorage` under `cyrene-shortcuts` is only the immediate startup and
+//     optimistic UI cache.
 //   • Display helpers (`describe`, `keysToLabel`) render the same binding the
 //     help center and the settings panel show, in the user's OS style.
 //
@@ -20,6 +21,10 @@
 
 (function () {
   var STORAGE_KEY = "cyrene-shortcuts";
+  var remoteRevision = 0;
+  var remoteWriteQueue = Promise.resolve();
+  var localMutationGeneration = 0;
+  var pendingRemoteWrites = 0;
 
   // ---- platform detection -------------------------------------------------
 
@@ -158,6 +163,14 @@
       keys: ["mod", ","],
     },
     {
+      id: "voice-command",
+      labelKey: "shortcut.action.voiceCommand",
+      descKey: "shortcut.action.voiceCommandDesc",
+      group: "global",
+      allowRebind: true,
+      keys: ["mod", "shift", "M"],
+    },
+    {
       id: "composer-send",
       labelKey: "shortcut.action.composerSend",
       descKey: "shortcut.action.composerSendDesc",
@@ -188,10 +201,84 @@
     }
   }
 
-  function saveCustom(map) {
+  function saveCustomLocal(map) {
     try { localStorage.setItem(STORAGE_KEY, JSON.stringify(map || {})); } catch (e) {}
     // Notify listeners (settings panel) that bindings changed.
     try { window.dispatchEvent(new Event("cyrene-shortcuts-change")); } catch (e) {}
+  }
+
+  function readRemote(applyLocal) {
+    if (typeof window.fetch !== "function") return Promise.resolve(null);
+    return window.fetch("/api/settings/namespaces/shortcuts").then(function (response) {
+      if (!response.ok) throw new Error("shortcut_settings_read_failed");
+      return response.json();
+    }).then(function (payload) {
+      remoteRevision = Number(payload.revision || 0);
+      var values = payload.values || {};
+      var bindings = values.shortcut_bindings;
+      if (!bindings || typeof bindings !== "object" || Array.isArray(bindings)) bindings = {};
+      if (applyLocal !== false) saveCustomLocal(bindings);
+      return bindings;
+    }).catch(function () { return null; });
+  }
+
+  function persistRemote(patch, retry) {
+    if (typeof window.fetch !== "function") return Promise.resolve();
+    return window.fetch("/api/settings/namespaces/shortcuts", {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        changes: { shortcut_bindings: patch || {} },
+        expected_revision: remoteRevision,
+      }),
+    }).then(function (response) {
+      if (response.status === 409 && retry !== false) {
+        // Re-read the winning revision but do not overwrite the user's current
+        // optimistic UI. Replaying only this action-level patch preserves
+        // unrelated Agent/user changes made since our previous read.
+        return readRemote(false).then(function () { return persistRemote(patch, false); });
+      }
+      if (!response.ok) throw new Error("shortcut_settings_update_failed");
+      return response.json();
+    }).then(function (payload) {
+      if (payload) {
+        remoteRevision = Number(payload.revision || remoteRevision || 0);
+      }
+    }).catch(function () { return readRemote(pendingRemoteWrites === 0); });
+  }
+
+  function shortcutPatch(before, after, resetEverything) {
+    var patch = {};
+    ACTIONS.forEach(function (action) {
+      var id = action.id;
+      var hadBefore = Object.prototype.hasOwnProperty.call(before || {}, id);
+      var hasAfter = Object.prototype.hasOwnProperty.call(after || {}, id);
+      var beforeKeys = hadBefore ? normalizeKeys(before[id]) : null;
+      var afterKeys = hasAfter ? normalizeKeys(after[id]) : null;
+      if (resetEverything === true) patch[id] = null;
+      else if (JSON.stringify(beforeKeys) !== JSON.stringify(afterKeys)) {
+        patch[id] = hasAfter ? afterKeys : null;
+      }
+    });
+    return patch;
+  }
+
+  function saveCustom(map, resetEverything) {
+    var before = loadCustom();
+    var desired = map && typeof map === "object" && !Array.isArray(map) ? map : {};
+    var patch = shortcutPatch(before, desired, resetEverything === true);
+    saveCustomLocal(desired);
+    if (!Object.keys(patch).length) return;
+    localMutationGeneration += 1;
+    var generation = localMutationGeneration;
+    pendingRemoteWrites += 1;
+    remoteWriteQueue = remoteWriteQueue.catch(function () {}).then(function () {
+      return persistRemote(patch, true);
+    }).then(function () {
+      pendingRemoteWrites = Math.max(0, pendingRemoteWrites - 1);
+      if (generation === localMutationGeneration) return readRemote(true);
+      return null;
+    });
   }
 
   // actionId -> normalized keys array (always uppercase literals, tokens from
@@ -342,7 +429,11 @@
   }
 
   function resetAll() {
-    saveCustom({});
+    saveCustom({}, true);
+  }
+
+  function replaceAll(bindings) {
+    saveCustom(bindings && typeof bindings === "object" ? bindings : {});
   }
 
   function list() {
@@ -380,6 +471,8 @@
     set: set,
     reset: reset,
     resetAll: resetAll,
+    replaceAll: replaceAll,
+    reloadRemote: readRemote,
     matches: matches,
     describe: describe,
     keysToLabel: keysToLabel,
@@ -388,4 +481,18 @@
     captureEvent: captureEvent,
     isCustom: isCustom,
   });
+
+  // Backend settings are authoritative so Agent and UI mutations converge.
+  // localStorage remains an immediate startup cache and migration fallback.
+  readRemote(true);
+  try {
+    var events = window.CyreneUI.has("events") ? window.CyreneUI.require("events") : null;
+    if (events && typeof events.subscribe === "function") {
+      events.subscribe(function (event) {
+        if (event && event.type === "settings_changed" && event.namespace === "shortcuts") {
+          readRemote(pendingRemoteWrites === 0);
+        }
+      });
+    }
+  } catch (e) {}
 })();

@@ -452,6 +452,8 @@ test('virtual coordinate click activates a background accessible control without
   assert.equal(provider.hitTests.length, 2);
   assert.deepEqual(displayed[0].x, 180);
   assert.deepEqual(displayed[0].y, 145);
+  assert.equal(displayed[0].press, false);
+  assert.equal(displayed[1].press, true);
 });
 
 test('virtual coordinate click sends no input when the point has no accessible action', async () => {
@@ -905,6 +907,68 @@ test('coordinate actions focus once, restore, and report screenshot differences'
   assert.equal(result.visual_verification.available, true);
   assert.equal(result.visual_verification.changed, true);
   assert.deepEqual(provider.focused, ['200', '100']);
+});
+
+test('coordinate feedback persists across actions, animates drag, and excludes keyboard-only input', async () => {
+  const provider = new FakeProvider();
+  const displayed = [];
+  const timeline = [];
+  provider.perform = async (target, capability, nativeRef, parameters) => {
+    timeline.push(`perform:${capability}`);
+    return {
+      ok: true, verified: true, skipSnapshot: true,
+      summary: `${capability} injected`, diagnostics: { parameters },
+    };
+  };
+  const manager = new AppUseManager({
+    provider,
+    ownPid: 999,
+    showVirtualPointer: async (event) => {
+      displayed.push(event);
+      timeline.push(`pointer:${event.press ? 'press' : 'move'}`);
+      return { first: displayed.length === 1, moved: event.press !== true, waitMs: 0 };
+    },
+  });
+  const listed = await manager.handle('list_targets', {});
+  const connected = await manager.handle('connect', {
+    target_id: listed.targets.find((target) => target.app_name === 'TextEdit').target_id,
+    parameters: { focus_policy: 'when_required' },
+  });
+  await manager.handle('call', {
+    session_id: connected.session_id,
+    capability: 'click_at',
+    parameters: { x: 20, y: 30, allow_foreground_input: true },
+  });
+  await manager.handle('call', {
+    session_id: connected.session_id,
+    capability: 'scroll_at',
+    parameters: { x: 40, y: 50, direction: 'down', amount: 30, allow_foreground_input: true },
+  });
+  await manager.handle('call', {
+    session_id: connected.session_id,
+    capability: 'drag',
+    parameters: {
+      from_x: 60, from_y: 70, to_x: 160, to_y: 170,
+      duration_ms: 420, allow_foreground_input: true,
+    },
+  });
+  const beforeKeyboard = displayed.length;
+  await manager.handle('call', {
+    session_id: connected.session_id,
+    capability: 'key_sequence',
+    parameters: { allow_foreground_input: true, steps: [{ type: 'key', key: 'escape' }] },
+  });
+  assert.equal(displayed[0].press, false);
+  assert.equal(displayed[1].press, true);
+  assert.equal(displayed[1].moveDurationMs, 0);
+  assert.deepEqual(timeline.slice(0, 3), ['pointer:move', 'pointer:press', 'perform:click_at']);
+  assert.notEqual(displayed[2].press, true);
+  assert.deepEqual(
+    displayed.slice(3, 5).map((event) => [event.x, event.y]),
+    [[160, 170], [260, 270]],
+  );
+  assert.equal(displayed[4].moveDurationMs, 420);
+  assert.equal(displayed.length, beforeKeyboard);
 });
 
 test('coordinate action with no visual change is uncertain', async () => {

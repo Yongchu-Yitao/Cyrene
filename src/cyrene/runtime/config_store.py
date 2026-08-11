@@ -54,7 +54,7 @@ _DEFAULT_ENV: dict[str, str] = {
     "EMBEDDING_MODEL": "",
     "ASSISTANT_NAME": "Cyrene",
     "MAX_HISTORY_MESSAGES": "40",
-    "MAX_TOOL_OUTPUT_CHARS": "12000",
+    "MAX_TOOL_OUTPUT_CHARS": "0",
     "HEARTBEAT_INTERVAL": "300",
     "HEARTBEAT_LOTTERY_INTERVAL": "1800",
     "SCHEDULER_INTERVAL": "60",
@@ -73,6 +73,13 @@ _DEFAULT_ENV: dict[str, str] = {
 }
 
 _REMOVED_ENV_KEYS = frozenset({"MAX_TOOL_ROUNDS"})
+
+# Older installs persisted the former 12k global tool-output default into the
+# encrypted store.  Changing _DEFAULT_ENV to zero did not affect those stores,
+# so large structured results such as Cyrene UI snapshots were still cut off.
+# This key was never user-editable in Settings; treat the old default as legacy
+# state while preserving any other explicitly supplied value.
+_LEGACY_MAX_TOOL_OUTPUT_CHARS = "12000"
 
 _DEFAULT_MODELS: list[dict[str, str]] = []
 
@@ -143,6 +150,7 @@ _DEFAULT_SETTINGS: dict = {
     "redact_secrets": True,
     "notify_telegram": True,
     "notify_wechat": True,
+    "shortcut_bindings": {},
     "zotero": {
         "base_url": "http://127.0.0.1:23119/api",
         "auto_sync": False,
@@ -261,6 +269,7 @@ def _recover_config_without_key() -> dict:
     config = {
         "env": deepcopy(_DEFAULT_ENV),
         "settings": deepcopy(_DEFAULT_SETTINGS),
+        "settings_revision": 0,
     }
     _persist(config)
     _migrated = True
@@ -309,7 +318,11 @@ def _parse_legacy_settings(path: Path) -> dict:
 def _migrate_if_needed() -> dict:
     global _migrated
     if _migrated:
-        return _cache or {"env": dict(_DEFAULT_ENV), "settings": dict(_DEFAULT_SETTINGS)}
+        return _cache or {
+            "env": dict(_DEFAULT_ENV),
+            "settings": dict(_DEFAULT_SETTINGS),
+            "settings_revision": 0,
+        }
 
     env_from_legacy: dict[str, str] = {}
     settings_from_legacy: dict = {}
@@ -333,7 +346,7 @@ def _migrate_if_needed() -> dict:
             else:
                 merged_settings[key] = val
 
-    config = {"env": merged_env, "settings": merged_settings}
+    config = {"env": merged_env, "settings": merged_settings, "settings_revision": 0}
     _generate_key_if_missing()
     _persist(config)
 
@@ -419,11 +432,26 @@ def _apply_settings_migrations(config: dict) -> dict:
     settings = config.setdefault("settings", {})
     changed = False
 
+    revision = config.get("settings_revision", 0)
+    if (
+        "settings_revision" not in config
+        or not isinstance(revision, int)
+        or isinstance(revision, bool)
+        or revision < 0
+    ):
+        config["settings_revision"] = 0
+        changed = True
+
     for key in _REMOVED_ENV_KEYS:
         if key in env:
             env.pop(key)
             os.environ.pop(key, None)
             changed = True
+
+    if str(env.get("MAX_TOOL_OUTPUT_CHARS", "")).strip() == _LEGACY_MAX_TOOL_OUTPUT_CHARS:
+        env["MAX_TOOL_OUTPUT_CHARS"] = "0"
+        os.environ.pop("MAX_TOOL_OUTPUT_CHARS", None)
+        changed = True
 
     # v1 → v2: wechat_notify_scheduled merged into notify_wechat
     if "wechat_notify_scheduled" in settings and "notify_wechat" not in settings:
@@ -472,9 +500,10 @@ def _apply_settings_migrations(config: dict) -> dict:
 
 def _ensure_loaded() -> dict:
     global _cache
-    if _cache is None:
-        _cache = _read_config()
-    return _cache
+    with _PERSIST_LOCK:
+        if _cache is None:
+            _cache = _read_config()
+        return _cache
 
 
 def export_snapshot() -> dict:
@@ -502,7 +531,14 @@ def _normalize_restored_snapshot(snapshot: dict) -> dict:
         for key, value in env.items()
         if key not in _REMOVED_ENV_KEYS
     }
-    return {"env": normalized_env, "settings": deepcopy(settings)}
+    revision = snapshot.get("settings_revision", 0)
+    if not isinstance(revision, int) or isinstance(revision, bool) or revision < 0:
+        raise ValueError("configuration settings_revision must be a non-negative integer")
+    return {
+        "env": normalized_env,
+        "settings": deepcopy(settings),
+        "settings_revision": revision,
+    }
 
 
 def prepare_restored_snapshot(snapshot: dict) -> tuple[dict, bytes]:
@@ -517,9 +553,10 @@ def activate_restored_snapshot(snapshot: dict) -> None:
     """Make an already-persisted restored snapshot active in this process."""
     normalized = _normalize_restored_snapshot(snapshot)
     global _cache, _migrated
-    previous_env = set((_cache or {}).get("env", {}))
-    _cache = normalized
-    _migrated = True
+    with _PERSIST_LOCK:
+        previous_env = set((_cache or {}).get("env", {}))
+        _cache = normalized
+        _migrated = True
     restored_env = normalized["env"]
     for key in previous_env - set(restored_env):
         os.environ.pop(key, None)
@@ -543,9 +580,12 @@ def get_env(key: str, default: str = "") -> str:
 def set_env(key: str, value: str) -> None:
     if key in _REMOVED_ENV_KEYS:
         raise ValueError(f"Environment setting `{key}` has been removed.")
-    config = _ensure_loaded()
-    config.setdefault("env", {})[key] = str(value)
-    _persist(config)
+    with _PERSIST_LOCK:
+        config = deepcopy(_ensure_loaded())
+        config.setdefault("env", {})[key] = str(value)
+        _persist(config)
+        global _cache
+        _cache = config
     os.environ[key] = str(value)
 
 
@@ -555,11 +595,15 @@ def set_env_many(updates: dict[str, str]) -> None:
         raise ValueError(
             "Environment setting(s) have been removed: " + ", ".join(removed)
         )
-    config = _ensure_loaded()
+    with _PERSIST_LOCK:
+        config = deepcopy(_ensure_loaded())
+        for key, value in updates.items():
+            config.setdefault("env", {})[key] = str(value)
+        _persist(config)
+        global _cache
+        _cache = config
     for key, value in updates.items():
-        config.setdefault("env", {})[key] = str(value)
         os.environ[key] = str(value)
-    _persist(config)
 
 
 def get_all_env() -> dict[str, str]:
@@ -608,9 +652,91 @@ def get_setting(key: str, default=None):
 
 
 def set_setting(key: str, value) -> None:
-    config = _ensure_loaded()
-    config.setdefault("settings", {})[key] = value
-    _persist(config)
+    update_settings_atomic({key: value})
+
+
+class SettingsRevisionConflict(ValueError):
+    """Raised when a settings compare-and-swap revision is stale."""
+
+    def __init__(self, expected: int, actual: int):
+        super().__init__(f"settings revision conflict: expected {expected}, actual {actual}")
+        self.expected = expected
+        self.actual = actual
+
+
+def get_settings_revision() -> int:
+    """Return the monotonic revision of the persisted settings namespace."""
+    with _PERSIST_LOCK:
+        value = _ensure_loaded().get("settings_revision", 0)
+        return int(value) if isinstance(value, int) and not isinstance(value, bool) else 0
+
+
+def update_settings_atomic(
+    updates: dict[str, object],
+    *,
+    expected_revision: int | None = None,
+) -> tuple[int, dict[str, object]]:
+    """Persist one detached settings patch with compare-and-swap semantics.
+
+    Callers must validate and normalize the complete patch before entering this
+    function.  The cache is replaced only after the encrypted temp-file replace
+    succeeds, so validation or persistence failures leave memory and disk intact.
+    """
+    revision, _before, settings = patch_settings_atomic(
+        updates,
+        expected_revision=expected_revision,
+    )
+    return revision, settings
+
+
+def patch_settings_atomic(
+    updates: dict[str, object],
+    *,
+    expected_revision: int | None = None,
+    merge_mapping_keys: frozenset[str] = frozenset(),
+    merge_mapping_delete_none_keys: frozenset[str] = frozenset(),
+) -> tuple[int, dict[str, object], dict[str, object]]:
+    """Apply a patch and return the exact in-lock before/after values.
+
+    ``merge_mapping_keys`` is used for product-level map patches such as tool
+    switches. Keys in ``merge_mapping_delete_none_keys`` additionally treat a
+    nested ``None`` as an explicit deletion. The merge happens while holding
+    the same lock as CAS and disk replacement, preventing one client from
+    erasing another client's update to a different map entry.
+    """
+    if not isinstance(updates, dict) or not updates:
+        raise ValueError("settings patch must be a non-empty object")
+    with _PERSIST_LOCK:
+        current = _ensure_loaded()
+        actual_revision = int(current.get("settings_revision", 0) or 0)
+        if expected_revision is not None and expected_revision != actual_revision:
+            raise SettingsRevisionConflict(expected_revision, actual_revision)
+        candidate = deepcopy(current)
+        candidate_settings = candidate.setdefault("settings", {})
+        before: dict[str, object] = {}
+        for key, value in updates.items():
+            if not isinstance(key, str) or not key:
+                raise ValueError("settings patch keys must be non-empty strings")
+            before[key] = deepcopy(candidate_settings.get(key, _DEFAULT_SETTINGS.get(key)))
+            next_value = deepcopy(value)
+            if key in merge_mapping_keys:
+                current_map = candidate_settings.get(key, _DEFAULT_SETTINGS.get(key, {}))
+                if not isinstance(current_map, dict) or not isinstance(next_value, dict):
+                    raise ValueError(f"settings patch value for {key} must be an object")
+                merged = deepcopy(current_map)
+                for nested_key, nested_value in next_value.items():
+                    if key in merge_mapping_delete_none_keys and nested_value is None:
+                        merged.pop(nested_key, None)
+                    else:
+                        merged[nested_key] = nested_value
+                next_value = merged
+            candidate_settings[key] = next_value
+        next_revision = actual_revision + 1
+        candidate["settings_revision"] = next_revision
+        _persist(candidate)
+        global _cache
+        _cache = candidate
+        return next_revision, before, deepcopy(candidate_settings)
 
 
 def get_all_settings() -> dict:
@@ -627,8 +753,15 @@ def get_all_settings() -> dict:
 
 def reset_all() -> None:
     global _cache
-    _cache = {"env": dict(_DEFAULT_ENV), "settings": dict(_DEFAULT_SETTINGS)}
-    _persist(_cache)
+    with _PERSIST_LOCK:
+        current_revision = int((_cache or {}).get("settings_revision", 0) or 0)
+        candidate = {
+            "env": deepcopy(_DEFAULT_ENV),
+            "settings": deepcopy(_DEFAULT_SETTINGS),
+            "settings_revision": current_revision + 1,
+        }
+        _persist(candidate)
+        _cache = candidate
 
 
 # ---------------------------------------------------------------------------

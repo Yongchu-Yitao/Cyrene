@@ -3,7 +3,7 @@
 [English](CONTEXT_DEV_PROGRESS.md) ·
 [简体中文](CONTEXT_DEV_PROGRESS.zh-CN.md)
 
-Updated: 2026-07-28
+Updated: 2026-08-11
 
 Branch: `feature/project-literature-library`
 
@@ -57,6 +57,26 @@ level:
   execution.
 - The detailed implementation and acceptance baseline is maintained in
   [Topbar Work Tabs and Pinned Resources Handoff](topbar-work-tabs-design.zh-CN.md).
+
+## Current Cyrene Self-Control Checkpoint
+
+- `cyrene_tools` is a progressively disclosed package with 12 public agent
+  capabilities: UI snapshot/inspect, five gesture tools (including explicit,
+  focus-independent double-click), typed settings
+  describe/read/write/control, and host window control.
+- Snapshot exposes only the current rendered viewport. Stable global and
+  composer nodes are deduplicated from DOM projection; chat menu actions appear
+  only while their context menu is open. Lists continue through real scrolling
+  instead of a hard-coded result cap.
+- Composer submit is an explicit R2 action and run interruption is R1. Existing
+  permission reviewers and exact-operation batch tickets authorize control;
+  project/chat/data services remain internal.
+- Typed settings cover every non-model family, including Soul, MCP,
+  integrations, Remote, channels, Voice, and shortcuts. Compare-and-set writes
+  update only requested fields and surface concurrent user edits as conflicts.
+- Electron owns the authenticated host bridge and stale renderer cleanup. The
+  current implementation handoff and acceptance matrix are in
+  [Cyrene App Control Handoff](cyrene-app-control-handoff.zh-CN.md).
 
 ## Audit of the Original 2026-06-01 Goals
 

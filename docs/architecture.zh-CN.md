@@ -19,7 +19,7 @@ Phase 1（Policy 只允许 use_tools / ask_user / quit）
     Phase 2（同一份固定 Wire Tool 定义）
     │   ├── Direct：文件、Bash、WebSearch/WebFetch、附件分析
     │   ├── code/browser/desktop/memory/knowledge/task
-    │   ├── entity/map/subagent/delivery/skill/integration
+    │   ├── entity/map/subagent/delivery/skill/cyrene/integration
     │   ├── 每个 Package：discover → describe → invoke
     │   └── quit → 结束交互
     ▼
@@ -122,6 +122,37 @@ Claude Code Session。实现位于 `cyrene.tooling.backends`。
 
 `task_tools` 的 `task.schedule` 创建 Cron、Interval、One-shot Task，并在
 SQLite 保存执行历史。
+
+### Cyrene 自管理控制面
+
+`cyrene_tools` 是只给 Main Agent 的渐进式工具包。模型 Wire 只包含一个稳定
+Gateway，具体 Schema 通过 `discover → describe → invoke` 披露。公开能力仅包括
+App Status/Window、当前 Surface 的 Snapshot/Inspect/Click/Double Click/Type/Scroll/Drag，
+以及 Typed Settings Describe/Read/Update。
+
+UI 控制绑定发起当前本地轮次的 Electron Renderer。Snapshot 只暴露当前层和当前
+视口，Inspect 读取一个组件和分页子树；Mutation 绑定确切 `snapshot_id`、Revision、
+Node 和 Action，不接受 Selector、Script、Raw Event 或任意坐标。显式语义节点与
+受限 DOM 投影会去重。消息正文、流式输出和消息控件重渲染仍可读取，但不会推进
+可操作 Revision；审批、问题、Layer 和 Action 集合变化仍会推进。Composer Send
+是显式 R2 动作，停止当前运行是 R1。若无关的全局 Revision 仍然推进，Renderer
+会用有界节点级动作租约核对 Node、Action、Risk、Scope 和安全关键状态；完全未变
+才允许旧 Snapshot 执行，Agent 仍须原样传递旧 Revision。
+
+Double Click 是独立 Gesture Capability，只接受显式声明 `double_press` 或
+`double_click` 的 `invoke` Action。例如 Browser PiP 标题栏声明
+`maximize + double_press`，Agent 可直接调用 Renderer 注册的 Handler 完成最大化，
+不依赖窗口焦点和屏幕坐标；普通单击 Action 会被该工具拒绝。
+
+Project、Chat、Backup、Update、Lifecycle 和 Cross-session Message handler 都是
+Internal Service，并从所有 Agent Catalog 屏蔽。唯一公开的持久后台 Mutation 是
+带 Revision 的非模型 Typed Settings Service。R2/R3 委托根据真实本地用户本轮
+原文审核；批量票据按参数绑定顺序逐项消费。
+
+Agent 可提供精确用户引用；若省略，则由同一个 Permission Reviewer 审查当前完整
+`desktop_local` 用户请求。缺少 Client Request ID 不会使已绑定的可信 Session/Round
+身份失效。Permission Card 根据结构化 Meta 和当前界面语言生成文案，把带风险后缀
+的 Operation ID 映射为本地化 Capability 名称，并隐藏内部关联 Fingerprint。
 
 ### Web UI
 

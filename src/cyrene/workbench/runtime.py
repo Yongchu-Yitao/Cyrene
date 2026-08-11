@@ -2900,6 +2900,7 @@ def _launch_update_restart(
     *,
     get_restart_script_fn: Callable[[Path], str] | None = None,
     popen_fn: Any | None = None,
+    validate_only: bool = False,
 ) -> tuple[bool, str, str, int]:
     """Write and spawn the updater script.
 
@@ -2981,6 +2982,9 @@ def _launch_update_restart(
             "update_package_unverified",
             409,
         )
+
+    if validate_only:
+        return True, "", "", 200
 
     if get_restart_script_fn is None:
         get_restart_script_fn = importlib.import_module(
@@ -6143,6 +6147,28 @@ def _public_pending_question(q: dict[str, Any] | None) -> dict[str, Any] | None:
         "allowCustom": bool(q.get("allow_custom", True)),
         "kind": str(meta.get("kind") or ""),
     }
+    # Permission cards render from structured fields so tool/capability names
+    # can be localized instead of displaying the backend's preformatted text.
+    # Keep this allowlisted: arbitrary pending-question metadata may contain
+    # internal plans or implementation details.
+    if str(meta.get("kind") or "") in {
+        "scope_elevation",
+        "write_permission_request",
+        "read_elevation",
+        "subshell_elevation",
+        "external_delivery_request",
+        "external_upload_confirmation",
+        "delete_confirmation",
+        "destructive_confirmation",
+        "self_configuration_confirmation",
+        "host_lifecycle_confirmation",
+        "task_permission_request",
+        "git_commit",
+    }:
+        public["meta"] = {
+            key: str(meta.get(key) or "")
+            for key in ("kind", "tool_name", "operation", "path_hint", "reason")
+        }
     # Plan-mode confirmations carry the proposed plan in meta — surface it so the
     # chat UI can render it in the right-side 计划 tab (the prompt text refers to
     # "右侧「计划」标签"). Only the structured {title, summary, steps} dict.
@@ -6223,6 +6249,8 @@ async def _workbench_answer_pending(
     answer_text: str,
     workspace_dir: str,
     permission_mode: str = "default",
+    ui_instance_id: str = "",
+    conversation_source: str = "",
 ) -> str:
     """Resume a paused Workbench round with the user's answer. Binds the session
     + workspace ContextVars so ``answer_pending_question`` (which calls
@@ -6236,14 +6264,22 @@ async def _workbench_answer_pending(
     """
     binding = bind_run_context(
         session_id=str(session_id or ""),
+        user_request_text=str(answer_text or ""),
+        conversation_source=str(conversation_source or ""),
+        ui_instance_id=str(ui_instance_id or ""),
         workspace_dir=workspace_dir or "",
         response_capabilities=frozenset({"interactive_blocks"}),
     )
     try:
-        return await answer_pending_question(
-            question_id, answer_text, _bot, _CHAT_ID, _db_path,
-            permission_mode=permission_mode,
-        )
+        from cyrene.agent.coordinator import run_session_operation
+
+        async def resume_pending_round() -> str:
+            return await answer_pending_question(
+                question_id, answer_text, _bot, _CHAT_ID, _db_path,
+                permission_mode=permission_mode,
+            )
+
+        return await run_session_operation(session_id, resume_pending_round)
     finally:
         binding.reset()
 
@@ -6299,6 +6335,9 @@ async def _workbench_agent_reply(
     ephemeral_system: str = "",
     volatile_ephemeral_system: str = "",
     static_system_extra: str = "",
+    conversation_source: str = "",
+    ui_instance_id: str = "",
+    client_request_id: str = "",
 ) -> str:
     """Execute a real agent run for a workbench session.
 
@@ -6391,12 +6430,19 @@ async def _workbench_agent_reply(
                 att_map[parts[1]] = full_path
         attachment_binding = bind_run_context(attachment_paths=att_map)
 
+    resolved_conversation_source = str(conversation_source or "")
+    if not resolved_conversation_source and ui_instance_id:
+        from cyrene.runtime.host_bridge import resolve_conversation_source
+
+        resolved_conversation_source = await resolve_conversation_source(ui_instance_id)
+
     try:
         return await run_agent(
             user_message=message,
             bot=_bot,
             chat_id=_CHAT_ID,
             db_path=_db_path,
+            client_request_id=str(client_request_id or ""),
             session_id=session_id,
             permission_mode=mode,
             command=str(command or "").strip(),
@@ -6411,6 +6457,8 @@ async def _workbench_agent_reply(
             volatile_ephemeral_system=str(volatile_ephemeral_system or ""),
             static_system_extra=str(static_system_extra or ""),
             response_capabilities=("interactive_blocks",),
+            ui_instance_id=str(ui_instance_id or ""),
+            conversation_source=resolved_conversation_source,
         )
     except asyncio.CancelledError:
         raise
@@ -7325,7 +7373,8 @@ _cc_preview_cache: dict[str, list] = {}
 async def _delete_chat_session(session_id: str) -> tuple[dict[str, Any], int]:
     """Delete/reset a legacy chat session and return its API payload/status."""
     if session_id == "run_live":
-        await clear_session_id()
+        interrupt_active_run()
+        await clear_session_id(deleting=True)
         return {"ok": True, "sessions": _build_sessions()}, 200
 
     if session_id.startswith("archive_"):
@@ -8903,8 +8952,10 @@ def _build_settings_meta() -> dict:
 
 def _build_config() -> dict:
     settings = get_web_settings()
+    from cyrene.runtime.config_store import get_settings_revision
     live_model, live_base_url = _live_llm_config()
     return {
+        "revision": get_settings_revision(),
         "model": live_model,
         "base_url": live_base_url,
         "assistant_name": ASSISTANT_NAME,

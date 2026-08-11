@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import asyncio
 
-from fastapi import APIRouter
+from fastapi import APIRouter, Request
 from fastapi.responses import JSONResponse
 
 from cyrene.workbench import chat as chat_service
@@ -95,7 +95,7 @@ def register_project_memory_routes(router: APIRouter, db_path: str = "") -> None
             return error_response("Memory prompt restore failed", 500, "memory_prompt_restore_failed")
 
     @router.post("/api/workbench/chats/{chat_id}/memory-learning")
-    async def trigger_chat_memory_learning(chat_id: str):
+    async def trigger_chat_memory_learning(chat_id: str, request: Request):
         if str(chat_id or "").startswith("legacy:"):
             return JSONResponse(
                 {"error": "legacy chats do not have an exact model-context snapshot", "code": "no_completed_context"},
@@ -107,6 +107,11 @@ def register_project_memory_routes(router: APIRouter, db_path: str = "") -> None
             return JSONResponse({"error": "chat not found"}, status_code=404)
         if str(chat.get("kind") or "chat") != "chat":
             return JSONResponse({"error": "only root conversations can generate project memory"}, status_code=400)
+        try:
+            body = await request.json()
+        except Exception:  # Empty bodies from older clients remain valid.
+            body = {}
+        language = str(body.get("lang") or "").strip().lower() if isinstance(body, dict) else ""
         project_id = str(chat.get("projectId") or "")
         result = memory_prompt.schedule_learning_from_completed_chat(
             project_id,
@@ -114,6 +119,7 @@ def register_project_memory_routes(router: APIRouter, db_path: str = "") -> None
             source="conversation_menu",
             reason="manual_menu",
             chat=chat,
+            language=language,
         )
         if result.get("status") == "error":
             status = 409 if result.get("type") == "no_completed_context" else 400

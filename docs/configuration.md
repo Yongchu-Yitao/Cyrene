@@ -55,7 +55,7 @@ The following variables are read at startup. Most can also be edited at runtime 
 |---|---|---|
 | `ASSISTANT_NAME` | Agent display name | `Cyrene` |
 | `MAX_HISTORY_MESSAGES` | Messages kept in the context window | `40` |
-| `MAX_TOOL_OUTPUT_CHARS` | Character cap for tool results sent to the LLM | `12000` |
+| `MAX_TOOL_OUTPUT_CHARS` | Optional character cap for tool results sent to the LLM (`0` disables the global cap) | `0` |
 
 ### Telegram (optional)
 
@@ -152,6 +152,21 @@ Most settings can be edited at runtime through the Web UI **Settings** page with
 - **SOUL.md** — Edit the personality document directly
 - **Budget** — Configure estimated-cost tracking, CNY/USD display, billing
   start day, adaptive mode, and warn/block behavior
+
+### Agent-visible typed settings
+
+`cyrene.settings.describe`, `cyrene.settings.read`, and
+`cyrene.settings.update` are available only to the main agent through
+`cyrene_tools`. The registry contains 52 scalar settings and 31 complex-control
+coverage entries across every non-model Settings tab. The namespaces are
+`runtime`, `desktop`, `appearance`, `profile`, and `shortcuts`.
+
+Updates are atomic compare-and-swap patches and require the latest
+`expected_revision`. A stale revision returns a conflict and preserves the
+user's newer edit. Shortcut patches preserve unspecified actions and use
+`null` only to reset a named binding. Models, secret values, secret redaction,
+and the availability of `cyrene_tools` itself cannot be changed through this
+control plane.
 
 ## Browser Configuration
 

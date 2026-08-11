@@ -51,6 +51,11 @@ Browser PiP 整个标题栏和最小化 Browser 按钮都可拖到顶栏资源 S
 固定会保留原页面和 Owner Session，不移动或复制 Tab。所有 Session 的后续
 Agent Turn 都能发现该固定 Browser 的 Resource ID。
 
+Browser Frame 本身也以稳定 Cyrene UI Component 暴露。Agent 可通过
+`cyrene.ui.snapshot` / `cyrene.ui.inspect` 点击标题栏按钮、拖动浮窗，并执行最大化
+或还原（包括双击标题栏手势）；操作不依赖当前键盘焦点。这一层控制的是 Cyrene
+浮窗，网页内部自动化仍由独立的 `browser_*` Tool Family 完成。
+
 把 PiP 标题栏、最小化 favicon 按钮或顶栏固定 Browser 图标拖到另一个
 Conversation Tab，会在目标 Session 的 Browser Manager 中创建同 URL 的新
 页面。该操作复制页面入口而不是转移 Owner/控制权；登录态因共享 Partition
@@ -135,7 +140,6 @@ File Upload 更严格：
 | `browser_screenshot` | 截图到 Temp PNG |
 | `browser_click` | CSS Selector Click |
 | `browser_click_ref` | Snapshot Ref Click |
-| `browser_click_text` | Visible Text/Accessible Label Click |
 | `browser_click_at` | Viewport Coordinate Click |
 | `browser_type` | 输入，可选 Submit |
 | `browser_type_ref` | 向 Ref Element 输入 |

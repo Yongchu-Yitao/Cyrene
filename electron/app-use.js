@@ -6,6 +6,9 @@ const { execFile } = require('child_process');
 const MANIFEST_VERSION = 'app-use-semantic-v2';
 const DEFAULT_SESSION_TTL_MS = 5 * 60 * 1000;
 const MAX_SCROLL_AT_AMOUNT = 50_000;
+const AGENT_CURSOR_FADE_IN_MS = 150;
+const AGENT_CURSOR_MOVE_MS = 180;
+const AGENT_CURSOR_PRESS_MS = 100;
 const SEMANTIC_TREE_CAPABILITIES = new Set([
   'snapshot', 'inspect', 'find', 'press', 'set_value', 'select', 'toggle', 'scroll',
   'type_text', 'select_text', 'set_selection_range', 'wait',
@@ -404,6 +407,7 @@ class AppUseManager {
     ownAppNames = ['Cyrene'],
     captureTarget = null,
     showVirtualPointer = null,
+    hideVirtualPointer = null,
     isHostForeground = null,
     focusHost = null,
     sessionTtlMs = DEFAULT_SESSION_TTL_MS,
@@ -415,6 +419,7 @@ class AppUseManager {
     this.ownAppNames = new Set(ownAppNames.map((value) => String(value).toLowerCase()));
     this.captureTarget = captureTarget;
     this.showVirtualPointer = showVirtualPointer;
+    this.hideVirtualPointer = hideVirtualPointer;
     this.isHostForeground = isHostForeground;
     this.focusHost = focusHost;
     this.sessionTtlMs = sessionTtlMs;
@@ -438,6 +443,9 @@ class AppUseManager {
   stop() {
     if (this.trackerTimer) clearInterval(this.trackerTimer);
     this.trackerTimer = null;
+    if (typeof this.hideVirtualPointer === 'function') {
+      Promise.resolve(this.hideVirtualPointer({})).catch(() => {});
+    }
     this.sessions.clear();
     this.targets.clear();
   }
@@ -463,6 +471,16 @@ class AppUseManager {
         if (target.foreground) this.lastExternalTargetId = targetId;
       }
       this.targets = next;
+      if (typeof this.hideVirtualPointer === 'function') {
+        for (const activeSession of this.sessions.values()) {
+          const current = next.get(activeSession.target.targetId);
+          if (!current || current.minimized === true) {
+            Promise.resolve(this.hideVirtualPointer({
+              target: publicTarget(activeSession.target, activeSession.target.targetId),
+            })).catch(() => {});
+          }
+        }
+      }
       this._expireSessions();
       return [...next.values()];
     })();
@@ -602,8 +620,18 @@ class AppUseManager {
     await this.refreshTargets();
     const current = this.targets.get(session.target.targetId);
     if (!current || current.identity !== session.targetIdentity) {
+      if (typeof this.hideVirtualPointer === 'function') {
+        await this.hideVirtualPointer({
+          target: publicTarget(session.target, session.target.targetId),
+        }).catch(() => {});
+      }
       this.sessions.delete(session.sessionId);
       throw new AppUseError('stale_session', 'The connected application window changed or closed. Reconnect before acting.');
+    }
+    if (current.minimized === true && typeof this.hideVirtualPointer === 'function') {
+      await this.hideVirtualPointer({
+        target: publicTarget(current, current.targetId),
+      }).catch(() => {});
     }
     session.target = { ...current };
     session.lastUsedAt = Date.now();
@@ -744,16 +772,16 @@ class AppUseManager {
     return { ...snapshot, nodes, matched: nodes.length, total_nodes: snapshot.nodes.length };
   }
 
-  _coordinatePoint(session, parameters = {}) {
+  _coordinatePoint(session, parameters = {}, xKey = 'x', yKey = 'y') {
     const bounds = session.target.bounds || {};
     const left = Number(bounds.x);
     const top = Number(bounds.y);
     const width = Number(bounds.width);
     const height = Number(bounds.height);
-    let x = Number(parameters.x);
-    let y = Number(parameters.y);
+    let x = Number(parameters[xKey]);
+    let y = Number(parameters[yKey]);
     if (![left, top, width, height, x, y].every(Number.isFinite) || width <= 0 || height <= 0) {
-      throw new AppUseError('invalid_arguments', 'virtual_click_at requires finite coordinates and valid target window bounds.');
+      throw new AppUseError('invalid_arguments', 'The coordinate action requires finite coordinates and valid target window bounds.');
     }
     const coordinateSpace = String(parameters.coordinate_space || 'window').toLowerCase();
     if (coordinateSpace === 'window') {
@@ -768,9 +796,82 @@ class AppUseManager {
     return { screen: { x, y }, window: { x: x - left, y: y - top } };
   }
 
+  async _showCoordinatePointer(session, capability, parameters = {}) {
+    if (typeof this.showVirtualPointer !== 'function') return;
+    const target = publicTarget(session.target, session.target.targetId);
+    const requestedDuration = Number.parseInt(parameters.duration_ms, 10);
+    const durationMs = Number.isFinite(requestedDuration) && requestedDuration > 0
+      ? Math.min(5000, requestedDuration)
+      : 350;
+    if (capability === 'drag') {
+      const from = this._coordinatePoint(session, parameters, 'from_x', 'from_y');
+      const to = this._coordinatePoint(session, parameters, 'to_x', 'to_y');
+      const first = await this.showVirtualPointer({ x: from.screen.x, y: from.screen.y, target });
+      await delay(first && first.first ? 150 : 180);
+      await this.showVirtualPointer({
+        x: to.screen.x, y: to.screen.y, moveDurationMs: durationMs, target,
+      });
+      return;
+    }
+    if (capability === 'swipe') {
+      const from = this._coordinatePoint(session, parameters);
+      const direction = String(parameters.direction || '').toLowerCase();
+      const distance = Math.max(1, Math.min(2000, Number(parameters.distance || 240)));
+      const delta = { up: [0, -distance], down: [0, distance], left: [-distance, 0], right: [distance, 0] }[direction];
+      if (!delta) return;
+      const to = this._coordinatePoint(session, {
+        coordinate_space: 'screen',
+        x: from.screen.x + delta[0],
+        y: from.screen.y + delta[1],
+      });
+      const first = await this.showVirtualPointer({ x: from.screen.x, y: from.screen.y, target });
+      await delay(first && first.first ? 150 : 180);
+      await this.showVirtualPointer({
+        x: to.screen.x, y: to.screen.y, moveDurationMs: durationMs, target,
+      });
+      return;
+    }
+    const point = this._coordinatePoint(session, parameters);
+    if (['click_at', 'double_click', 'right_click'].includes(capability)) {
+      await this._showPointerClickFeedback(
+        point,
+        publicTarget(session.target, session.target.targetId),
+      );
+      return;
+    }
+    await this.showVirtualPointer({
+      x: point.screen.x,
+      y: point.screen.y,
+      moveDurationMs: capability === 'hover_at' ? durationMs : undefined,
+      target,
+    });
+  }
+
+  async _showPointerClickFeedback(point, target) {
+    if (typeof this.showVirtualPointer !== 'function') return;
+    const moved = await this.showVirtualPointer({
+      x: point.screen.x,
+      y: point.screen.y,
+      press: false,
+      target,
+    });
+    const fallbackWait = moved && moved.first
+      ? AGENT_CURSOR_FADE_IN_MS + 34
+      : AGENT_CURSOR_MOVE_MS;
+    const waitMs = Math.max(0, Number(moved && moved.waitMs) || (moved && moved.moved !== false ? fallbackWait : 0));
+    if (waitMs > 0) await delay(waitMs);
+    await this.showVirtualPointer({
+      x: point.screen.x,
+      y: point.screen.y,
+      press: true,
+      moveDurationMs: 0,
+      target,
+    });
+    await delay(AGENT_CURSOR_PRESS_MS);
+  }
+
   async _virtualClickAt(session, parameters = {}) {
     const point = this._coordinatePoint(session, parameters);
-    const pointerDurationMs = clampInteger(parameters.pointer_duration_ms, 1200, 100, 10000);
     const requestedActions = Array.isArray(parameters.preferred_actions)
       ? parameters.preferred_actions.map((value) => String(value || '').toLowerCase())
       : ['press', 'select', 'toggle'];
@@ -834,12 +935,10 @@ class AppUseManager {
       );
     }
     if (typeof this.showVirtualPointer === 'function') {
-      await this.showVirtualPointer({
-        x: point.screen.x,
-        y: point.screen.y,
-        durationMs: pointerDurationMs,
-        target: publicTarget(session.target, session.target.targetId),
-      }).catch(() => {});
+      await this._showPointerClickFeedback(
+        point,
+        publicTarget(session.target, session.target.targetId),
+      ).catch(() => {});
     }
     const result = await this.provider.hitTest(session.target, point.screen, [probe.action], true);
     if (!result || result.found !== true || result.performed !== true) {
@@ -920,14 +1019,13 @@ class AppUseManager {
     if (operation === 'pid_type_at' && typeof effectiveParameters.text !== 'string') {
       throw new AppUseError('invalid_arguments', 'virtual_type_at requires text as a string.');
     }
-    const pointerDurationMs = clampInteger(effectiveParameters.pointer_duration_ms, 1200, 100, 10000);
     const beforeVisual = effectiveParameters.verify_effect !== false && typeof this.captureTarget === 'function'
       ? captureFingerprint(await this.captureTarget(session.target).catch(() => null)) : null;
     if (typeof this.showVirtualPointer === 'function') {
-      await this.showVirtualPointer({
-        x: point.screen.x, y: point.screen.y, durationMs: pointerDurationMs,
-        target: publicTarget(session.target, session.target.targetId),
-      }).catch(() => {});
+      await this._showPointerClickFeedback(
+        point,
+        publicTarget(session.target, session.target.targetId),
+      ).catch(() => {});
     }
     const result = await this.provider.pidEvent(session.target, operation, point.screen, effectiveParameters, true);
     if (!result || result.performed !== true) {
@@ -1093,7 +1191,7 @@ class AppUseManager {
       'hover_at', 'drag', 'swipe', 'scroll_at', 'key_chord', 'key_sequence',
     ]);
     const visualCapabilities = new Set([
-      'click_at', 'double_click', 'right_click', 'hover_at', 'drag', 'swipe', 'scroll_at', 'key_sequence',
+      'click_at', 'double_click', 'right_click', 'hover_at', 'drag', 'swipe', 'scroll_at',
     ]);
     const needsFocus = focusCapabilities.has(capability);
     let focusedTemporarily = false;
@@ -1129,6 +1227,9 @@ class AppUseManager {
       beforeVisual = captureFingerprint(await this.captureTarget(session.target).catch(() => null));
     }
     try {
+      if (visualCapabilities.has(capability)) {
+        await this._showCoordinatePointer(session, capability, parameters).catch(() => {});
+      }
       result = await this.provider.perform(session.target, capability, nativeRef, parameters);
       if (visualCapabilities.has(capability) && typeof this.captureTarget === 'function') {
         await delay(120);
@@ -1265,6 +1366,11 @@ class AppUseManager {
   async disconnect(sessionId) {
     const session = this.sessions.get(String(sessionId || ''));
     if (!session) return { status: 'success', summary: 'App Use session was already disconnected.' };
+    if (typeof this.hideVirtualPointer === 'function') {
+      await this.hideVirtualPointer({
+        target: publicTarget(session.target, session.target.targetId),
+      }).catch(() => {});
+    }
     this.sessions.delete(session.sessionId);
     return { status: 'success', summary: `Disconnected from ${session.target.appName || 'application window'}.` };
   }

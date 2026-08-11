@@ -536,7 +536,7 @@ cd src/webui && npm install && node build-jsx.mjs && cd ../..</code></pre></div>
             <tbody>
               <tr><td><code>ASSISTANT_NAME</code></td><td>代理显示名称</td><td><code>Cyrene</code></td></tr>
               <tr><td><code>MAX_HISTORY_MESSAGES</code></td><td>上下文窗口保留的消息条数</td><td><code>40</code></td></tr>
-              <tr><td><code>MAX_TOOL_OUTPUT_CHARS</code></td><td>工具结果发送给 LLM 的字符上限</td><td><code>12000</code></td></tr>
+              <tr><td><code>MAX_TOOL_OUTPUT_CHARS</code></td><td>工具结果可选字符上限（0 表示不设全局限制）</td><td><code>0</code></td></tr>
             </tbody>
           </table>
         </div>
@@ -680,7 +680,7 @@ cd src/webui && npm install && node build-jsx.mjs && cd ../..</code></pre></div>
           <tbody>
             <tr><td><code>ASSISTANT_NAME</code></td><td>Agent display name</td><td><code>Cyrene</code></td></tr>
             <tr><td><code>MAX_HISTORY_MESSAGES</code></td><td>Context window size</td><td><code>40</code></td></tr>
-            <tr><td><code>MAX_TOOL_OUTPUT_CHARS</code></td><td>Tool output char limit</td><td><code>12000</code></td></tr>
+            <tr><td><code>MAX_TOOL_OUTPUT_CHARS</code></td><td>Optional tool output char limit (0 disables the global cap)</td><td><code>0</code></td></tr>
           </tbody>
         </table></div>
       </section>
@@ -1011,6 +1011,12 @@ cyrene stop</code></pre></div>
       </section>
 
       <section>
+        <h2>Cyrene 自控制</h2>
+        <p><code>cyrene_tools</code> 是渐进披露的桌面自管理工具包。Agent 先用 <code>cyrene.ui.snapshot</code> 读取当前已渲染、当前视口中的稳定语义组件，再用 <code>cyrene.ui.inspect</code> 查看某个组件此刻可执行的动作，最后通过 <code>click</code>、<code>type</code>、<code>scroll</code> 或 <code>drag</code> 操作。导航、滚动、展开或打开右键菜单后必须重新读取 Snapshot；Inspect 不预测未渲染的下一页。</p>
+        <p>当前输入框的发送是显式 R2 动作，停止运行是 R1。项目、对话和数据后台 Service 保持 Internal，不直接暴露给 Agent。非模型设置通过 Typed Describe/Read/Write/Control 接口管理，写入使用版本比较并只更新指定字段，以免覆盖用户并发修改。</p>
+      </section>
+
+      <section>
         <h2>项目结构</h2>
         <div class="code-block"><pre><code>src/
 ├── cyrene/                           # 核心领域与 Runtime
@@ -1052,6 +1058,11 @@ cyrene stop</code></pre></div>
       <section>
         <h2>Two-Phase Decision Loop</h2>
         <p>Both ordinary phases receive the same deterministic wire bundle for the current package settings. Runtime policy restricts Phase 1 to <code>use_tools</code>, <code>ask_user</code>, and <code>quit</code>; Phase 2 keeps the same schemas and progressively discovers concrete capabilities through enabled gateways. Disabling a package omits its schema and package-specific prompt instructions, intentionally starting a new cache prefix. Deep Research keeps its specialized flow.</p>
+      </section>
+      <section>
+        <h2>Cyrene Self-Control</h2>
+        <p><code>cyrene_tools</code> is the progressively disclosed desktop self-management package. The agent reads stable semantic components in the current rendered viewport with <code>cyrene.ui.snapshot</code>, inspects a component's currently available actions with <code>cyrene.ui.inspect</code>, then uses <code>click</code>, <code>type</code>, <code>scroll</code>, or <code>drag</code>. Navigation, scrolling, expansion, and context menus require a fresh snapshot; inspect does not predict an unrendered next screen.</p>
+        <p>Submitting the current composer is an explicit R2 action; stopping a run is R1. Project, chat, and data business services remain internal. Non-model settings use typed describe/read/write/control operations with compare-and-set writes that update only named fields, preserving concurrent user edits.</p>
       </section>
       <section>
         <h2>Project Structure</h2>

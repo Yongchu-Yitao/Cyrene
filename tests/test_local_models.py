@@ -1,4 +1,8 @@
 import hashlib
+import io
+import sys
+import tarfile
+from types import SimpleNamespace
 from pathlib import Path
 
 import pytest
@@ -6,15 +10,42 @@ import pytest
 from cyrene.knowledge import local_models
 
 
-def test_both_local_models_prefer_domestic_mirror_and_keep_fallbacks():
+def test_sherpa_provider_prefers_cuda_then_apple_coreml(monkeypatch):
+    monkeypatch.setitem(sys.modules, "onnxruntime", SimpleNamespace(
+        get_available_providers=lambda: ["CUDAExecutionProvider", "CPUExecutionProvider"],
+    ))
+    assert local_models.sherpa_provider("fireredasr2-aed-int8") == "cuda"
+
+    monkeypatch.setitem(sys.modules, "onnxruntime", SimpleNamespace(
+        get_available_providers=lambda: ["CoreMLExecutionProvider", "CPUExecutionProvider"],
+    ))
+    monkeypatch.setattr(local_models.sys, "platform", "darwin")
+    monkeypatch.setattr(local_models.platform, "machine", lambda: "arm64")
+    assert local_models.sherpa_provider("zipvoice-zh-en") == "coreml"
+    assert local_models.sherpa_provider("fireredasr2-aed-int8") == "cpu"
+
+
+def test_local_models_prefer_domestic_mirror_and_keep_fallbacks():
     for model in local_models.MODEL_CATALOG.values():
         for item in model["files"]:
             sources = item["sources"]
             assert any(
                 host in sources[0]["url"]
-                for host in ("modelscope.cn", "hf-mirror.com")
+                for host in ("modelscope.cn", "hf-mirror.com", "ghfast.top", "gh-proxy.com")
             )
             assert len(sources) >= 2
+
+
+def test_zipvoice_uses_fp32_distill_pack_within_one_gib_budget():
+    model = local_models.MODEL_CATALOG["zipvoice-zh-en"]
+
+    assert model["download_bytes"] < 1024 ** 3
+    archive = model["files"][0]
+    assert "distill-fp32" in archive["path"]
+    assert archive["sha256"] == "3b6729d03bf4ba64deeec113048bdbbe55dbc30580b609be76342e0099fd23a8"
+    outputs = archive["extract"]["outputs"]
+    assert any(item["path"] == "encoder.onnx" for item in outputs)
+    assert any(item["path"] == "decoder.onnx" for item in outputs)
 
 
 @pytest.mark.asyncio
@@ -66,3 +97,70 @@ async def test_download_switches_mirror_after_failure(tmp_path, monkeypatch):
 
     assert destination.read_bytes() == payload
     assert local_models._PROGRESS["test-model"]["source"] == "fallback.example"
+
+
+def test_archive_model_publishes_only_declared_outputs(tmp_path):
+    archive = tmp_path / "model.tar.bz2"
+    payload = b"declared model payload"
+    with tarfile.open(archive, "w:bz2") as bundle:
+        info = tarfile.TarInfo("bundle/model.onnx")
+        info.size = len(payload)
+        bundle.addfile(info, io.BytesIO(payload))
+        ignored = tarfile.TarInfo("bundle/ignored.txt")
+        ignored.size = 7
+        bundle.addfile(ignored, io.BytesIO(b"ignored"))
+
+    item = {
+        "extract": {
+            "root": "bundle",
+            "outputs": [
+                {"source": "model.onnx", "path": "runtime/model.onnx", "min_bytes": len(payload)},
+            ],
+        }
+    }
+    local_models._extract_archive(archive, tmp_path, item)
+
+    assert (tmp_path / "runtime" / "model.onnx").read_bytes() == payload
+    assert not (tmp_path / "ignored.txt").exists()
+    assert not list(tmp_path.glob(".extract-*"))
+
+
+@pytest.mark.asyncio
+async def test_download_reuses_valid_archive_after_extraction_failure(tmp_path, monkeypatch):
+    model_id = "test-archive-model"
+    root = tmp_path / model_id
+    archive = root / ".downloads" / "model.tar.bz2"
+    archive.parent.mkdir(parents=True)
+    payload = b"reusable model payload"
+    with tarfile.open(archive, "w:bz2") as bundle:
+        info = tarfile.TarInfo("bundle/model.onnx")
+        info.size = len(payload)
+        bundle.addfile(info, io.BytesIO(payload))
+    digest = hashlib.sha256(archive.read_bytes()).hexdigest()
+    monkeypatch.setattr(local_models, "MODEL_ROOT", tmp_path)
+    monkeypatch.setitem(local_models.MODEL_CATALOG, model_id, {
+        "name": "Test archive",
+        "kind": "test",
+        "description": "",
+        "runtime": "test",
+        "download_bytes": archive.stat().st_size,
+        "files": [{
+            "path": ".downloads/model.tar.bz2",
+            "min_bytes": archive.stat().st_size,
+            "download_bytes": archive.stat().st_size,
+            "sha256": digest,
+            "sources": [{"url": "https://invalid.example/model.tar.bz2"}],
+            "extract": {
+                "root": "bundle",
+                "outputs": [
+                    {"source": "model.onnx", "path": "model.onnx", "min_bytes": len(payload)},
+                ],
+            },
+        }],
+    })
+
+    await local_models._download(model_id)
+
+    assert (root / "model.onnx").read_bytes() == payload
+    assert (root / ".ready.json").is_file()
+    assert not archive.exists()

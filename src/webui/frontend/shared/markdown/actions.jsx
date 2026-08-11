@@ -198,6 +198,7 @@
       _watched[selector].observer.disconnect();
       delete _watched[selector];
     });
+    window.removeEventListener("cyrene:page-invalidated", dispose);
   }
 
   if (document.readyState === "loading") {
@@ -206,4 +207,5 @@
     init();
   }
   window.addEventListener("beforeunload", dispose, { once: true });
+  window.addEventListener("cyrene:page-invalidated", dispose, { once: true });
 })();

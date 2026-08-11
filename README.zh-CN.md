@@ -20,26 +20,26 @@
 
 ## Cyrene 能做什么
 
-- **跨 Session 记忆**：保留长期 Personality 和 Memory，同时隔离不同 Project
-  的工作上下文。
-- **完成多步骤任务**：规划、调用 Tool、并行委派 Subagent、验证结果，并恢复
-  中断的任务。
-- **研究与反思**：执行带引用的 Deep Research、生成 PDF Report，并在任务受阻
-  时进行 Deep Reflection。
-- **管理 Project**：统一管理 Workspace、Chat、Task、Memory、Knowledge、
-  Entity、Schedule 和 Literature Collection。
-- **理解文件**：导入并检索文本、PDF、Office Document、Markdown、Image、
-  Audio、Video 和其他 Attachment。
-- **管理文献**：支持 Collection、Tag、Note、Annotation、Citation、
-  Attachment、Relation、CSL JSON、RIS、BibTeX，以及只读 Zotero Desktop
-  Import。
-- **使用网页与本地工具**：搜索和浏览网页、编辑文件、执行 Shell/Git、连接
-  MCP Server，并使用已安装 Skill。
-- **自动执行重复工作**：运行 Cron、Interval 和 One-shot Task，并可发送
-  Desktop、Telegram 或 WeChat Notification。
-- **使用 Workbench 或 Electron**：在 Browser 与 Desktop App 中使用同一套
-  Workbench，包含 Quick Chat、Markdown、Code、Diff、Map、PDF、File Preview
-  和 Browser View。
+- **一个会与你共同成长的 Agent**：Cyrene 能跨会话延续 Personality 与有价值
+  的长期记忆，同时让每个 Project 的上下文保持清晰隔离。
+- **让上下文随工作流动**：Cyrene 将上下文编排为可追踪、可共享的 Block：
+  Project Goal 与成果跨 Task 流转，Chat 历史彼此隔离，Task 与 Subagent 只获取
+  所需的 Plan、Memory 和执行状态；稳定 Block 持续复用，完整构成随时可查。
+- **从对话一路做到结果验收**：Cyrene 能规划任务、操作浏览器、编辑文件、执行
+  Shell 与 Git、连接 MCP Server、调用 Skill、并行委派 Subagent、验证结果，并
+  在中断后继续执行。
+- **研究过程可追溯，成果可复用**：Cyrene 能把带引用的网页研究与你的 PDF、
+  Office 文档、音视频和文献库结合起来，沉淀为结构化知识或精美的 PDF 报告。
+- **真正会操作浏览器**：你可以实时看到 Cyrene 浏览页面、点击、输入、上传和
+  检查内容；遇到登录、CAPTCHA 或 2FA 时，可在同一个浏览器中接管，完成后再
+  交还给 Agent，无需丢失会话状态。
+- **一个能管理自己的 Agent**：通过受权限约束且可审计的工具，Cyrene 可以查看
+  和操作自己的界面、调整设置、管理 Project 与 Chat、备份数据并处理更新。
+- **承载长期思考的一体化工作空间**：Project 将 Chat、Task、Memory、
+  Knowledge、Entity、Schedule 与 Literature 汇集到同一个 Workbench，并可在
+  浏览器或桌面端使用。
+- **离开之后也会继续工作**：支持一次性与周期性自动任务，并可通过桌面、
+  Telegram 或微信接收结果通知。
 
 ## 快速开始
 

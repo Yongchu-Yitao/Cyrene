@@ -9,7 +9,7 @@ Tools exposed to the agent (see ``tools.py``):
   - ``browser_navigate`` — open a page in the shared session, return readable text
   - ``browser_snapshot`` — inspect visible elements with refs and boxes
   - ``browser_screenshot`` — screenshot the current page or a provided URL
-  - ``browser_click`` / ``browser_click_ref`` / ``browser_click_text`` / ``browser_click_at``
+  - ``browser_click`` / ``browser_click_ref`` / ``browser_click_at``
   - ``browser_type`` / ``browser_type_ref``
   - ``browser_wait`` / ``browser_network_log``
 
@@ -23,6 +23,7 @@ from __future__ import annotations
 import asyncio
 import base64
 import hashlib
+import importlib
 import ipaddress
 import json
 import logging
@@ -34,6 +35,7 @@ import socket
 import tempfile
 import time
 from html.parser import HTMLParser
+from pathlib import Path
 from typing import Any
 from urllib.parse import urljoin, urlparse
 
@@ -357,6 +359,26 @@ async def close_electron_browser_session(session_id: str) -> dict[str, Any]:
     )
 
 
+async def finish_electron_browser_round(session_id: str, round_id: str) -> dict[str, Any]:
+    """Finalize tabs created by one agent run while preserving one reusable tab."""
+    normalized_session_id = str(session_id or "").strip()
+    normalized_round_id = str(round_id or "").strip()
+    if not electron_browser_available() or not normalized_round_id:
+        return {
+            "ok": True,
+            "sessionId": normalized_session_id,
+            "roundId": normalized_round_id,
+            "closedTabIds": [],
+        }
+    return await _electron_browser_rpc(
+        "finishRound",
+        {},
+        timeout=10.0,
+        session_id=normalized_session_id,
+        round_id=normalized_round_id,
+    )
+
+
 async def electron_current_url() -> str:
     """Best-effort current URL for the Electron-hosted browser tab."""
     if not electron_browser_available():
@@ -366,6 +388,33 @@ async def electron_current_url() -> str:
     if isinstance(active, dict):
         return str(active.get("url") or "")
     return ""
+
+
+def _validate_screenshot_file(path: str) -> dict[str, int | str]:
+    """Require a non-empty, decodable PNG before exposing a screenshot path."""
+    screenshot_path = Path(path)
+    if not screenshot_path.is_file():
+        raise ValueError("screenshot file does not exist")
+    size = screenshot_path.stat().st_size
+    if size <= 0:
+        raise ValueError("screenshot file is empty")
+    try:
+        image_module = importlib.import_module("PIL.Image")
+        with image_module.open(screenshot_path) as image:
+            image_format = str(image.format or "").upper()
+            width, height = image.size
+            if image_format != "PNG":
+                raise ValueError(f"expected PNG format, got {image_format or 'unknown'}")
+            if width <= 0 or height <= 0:
+                raise ValueError("screenshot has invalid dimensions")
+            image.verify()
+        with image_module.open(screenshot_path) as decoded:
+            decoded.load()
+    except ValueError:
+        raise
+    except Exception as exc:
+        raise ValueError(f"screenshot PNG cannot be decoded: {exc}") from exc
+    return {"format": "PNG", "size": size, "width": width, "height": height}
 
 
 _BROWSER_INSPECT_JS = r"""
@@ -418,16 +467,59 @@ _BROWSER_INSPECT_JS = r"""
     if (tag === 'a' && href) return 'a[href="' + href.replace(/"/g, '\\"') + '"]';
     return '[data-cyrene-ref="' + index + '"]';
   };
+  const interactiveRect = (el) => {
+    if (el.hidden || el.closest('[hidden],[inert],[aria-hidden="true"]')) return null;
+    if (typeof el.checkVisibility === 'function' && !el.checkVisibility({
+      checkOpacity: true,
+      checkVisibilityCSS: true,
+      contentVisibilityAuto: true,
+    })) return null;
+    for (let node = el; node instanceof Element; node = node.parentElement) {
+      if (node.hidden || node.hasAttribute('inert')
+          || String(node.getAttribute('aria-hidden') || '').toLowerCase() === 'true') return null;
+      const style = window.getComputedStyle(node);
+      if (!style || style.display === 'none' || style.visibility === 'hidden' || style.visibility === 'collapse'
+          || style.contentVisibility === 'hidden' || Number(style.opacity) <= 0.001) return null;
+    }
+    const rect = el.getBoundingClientRect();
+    if (!rect || rect.width <= 0 || rect.height <= 0) return null;
+    const left = Math.max(0, rect.left);
+    const top = Math.max(0, rect.top);
+    const right = Math.min(viewportW, rect.right);
+    const bottom = Math.min(viewportH, rect.bottom);
+    if (right <= left || bottom <= top) return null;
+    const insetX = Math.min(1, (right - left) / 4);
+    const insetY = Math.min(1, (bottom - top) / 4);
+    const points = [
+      [(left + right) / 2, (top + bottom) / 2],
+      [left + insetX, top + insetY],
+      [right - insetX, top + insetY],
+      [left + insetX, bottom - insetY],
+      [right - insetX, bottom - insetY],
+    ];
+    const hittable = points.some(([x, y]) => {
+      const hits = typeof document.elementsFromPoint === 'function'
+        ? document.elementsFromPoint(x, y)
+        : [document.elementFromPoint(x, y)].filter(Boolean);
+      return hits.some((hit) => hit === el || el.contains(hit));
+    });
+    return hittable ? rect : null;
+  };
   for (const el of candidates) {
     if (!(el instanceof Element) || seen.has(el)) continue;
     seen.add(el);
-    const style = window.getComputedStyle(el);
-    if (!style || style.display === 'none' || style.visibility === 'hidden' || Number(style.opacity) === 0) continue;
-    const rect = el.getBoundingClientRect();
-    if (!rect || rect.width <= 0 || rect.height <= 0) continue;
-    if (rect.bottom < 0 || rect.right < 0 || rect.top > viewportH || rect.left > viewportW) continue;
+    const rect = interactiveRect(el);
+    if (!rect) continue;
     const tag = String(el.tagName || '').toLowerCase();
     const role = roleOf(el, tag);
+    const disabled = el.matches(':disabled') || String(el.getAttribute('aria-disabled') || '').toLowerCase() === 'true';
+    const style = window.getComputedStyle(el);
+    const interactive = !disabled && (
+      ['a', 'button', 'input', 'textarea', 'select', 'summary'].includes(tag)
+      || el.isContentEditable || el.tabIndex >= 0 || typeof el.onclick === 'function'
+      || ['button', 'link', 'textbox', 'searchbox', 'combobox', 'checkbox', 'radio', 'switch', 'menuitem', 'tab'].includes(role)
+      || (style && style.cursor === 'pointer')
+    );
     const inputType = tag === 'input' ? clean(el.getAttribute('type') || 'text', 40).toLowerCase() : '';
     const text = tag === 'input' || tag === 'textarea'
       ? (inputType === 'password' ? '' : clean(el.value))
@@ -444,6 +536,9 @@ _BROWSER_INSPECT_JS = r"""
       ref,
       tag,
       role,
+      visible: true,
+      interactive,
+      disabled,
       inputType,
       accept: tag === 'input' ? clean(el.getAttribute('accept'), 240) : '',
       multiple: tag === 'input' && el.hasAttribute('multiple'),
@@ -462,7 +557,7 @@ _BROWSER_INSPECT_JS = r"""
     ok: true,
     url: location.href,
     title: document.title || '',
-    text: clean(document.body ? document.body.innerText : '', 2000),
+    text: clean(Array.from(new Set(out.map((item) => item.text).filter(Boolean))).join(' '), 2000),
     viewport: { width: viewportW, height: viewportH, scrollX: window.scrollX || 0, scrollY: window.scrollY || 0 },
     elements: out,
   };
@@ -1079,7 +1174,7 @@ class _BrowserSession:
                     "ok": False,
                     "allowed": False,
                     "code": "VISIBLE_LINK_AVAILABLE",
-                    "error": "Target URL is available through visible page UI. Use browser_click_ref or browser_click_text.",
+                    "error": "Target URL is available through visible page UI. Use browser_click_ref from a fresh browser_snapshot.",
                     "targetUrl": normalized_target,
                     "matches": matches,
                 }
@@ -1510,6 +1605,7 @@ class _BrowserSession:
         tmp.close()  # Playwright writes via path; release fd immediately
         try:
             await page.screenshot(path=tmp.name, full_page=full_page)
+            _validate_screenshot_file(tmp.name)
         except Exception:
             try:
                 os.unlink(tmp.name)
@@ -1998,20 +2094,21 @@ async def screenshot(
             tmp = tempfile.NamedTemporaryFile(suffix=".png", dir=TEMP_DIR, delete=False)
             tmp.close()
             try:
-                data = base64.b64decode(str(result.get("pngBase64") or ""), validate=False)
+                data = base64.b64decode(str(result.get("pngBase64") or ""), validate=True)
                 with open(tmp.name, "wb") as fh:
                     fh.write(data)
-            except Exception:
+                _validate_screenshot_file(tmp.name)
+            except Exception as exc:
                 try:
                     os.unlink(tmp.name)
                 except OSError:
                     pass
-                raise
+                raise ValueError(f"Browser screenshot validation failed: {exc}") from exc
             await _emit_electron_frame("screenshot", result)
             return {"ok": True, "path": tmp.name, "title": str(result.get("title") or nav.get("title") or "")}
         except Exception as exc:
             logger.warning("Electron screenshot failed (%s)", exc)
-            return _electron_browser_failure(exc)
+            return {"ok": False, "error": str(exc)}
     if _ensure_playwright() is None:
         return {"ok": False, "error": browser_runtime_unavailable_message()}
     try:
@@ -2021,11 +2118,12 @@ async def screenshot(
         elif session._page is None:
             return {"ok": False, "error": "No page open. Call browser_navigate first."}
         path = await session.screenshot_path(full_page=full_page)
+        _validate_screenshot_file(path)
         title = await (await session.page()).title()
         return {"ok": True, "path": path, "title": title}
     except Exception as exc:
         logger.exception("screenshot failed for %s", url)
-        return {"ok": False, "error": browser_runtime_unavailable_message(exc)}
+        return {"ok": False, "error": f"Browser screenshot failed: {exc}"}
 
 
 async def inspect_page(

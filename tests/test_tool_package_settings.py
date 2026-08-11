@@ -5,7 +5,7 @@ from route.registry import register_routes
 
 
 def _client(monkeypatch):
-    from cyrene.runtime import settings_store
+    from cyrene.runtime import settings_service, settings_store
 
     state = {
         "packages": {"browser_tools": False},
@@ -43,6 +43,24 @@ def _client(monkeypatch):
         lambda value: state["saved_tools"].append(dict(value)),
     )
 
+    def fake_update(_namespace, changes, **_kwargs):
+        if "enabled_tool_packs" in changes:
+            value = dict(changes["enabled_tool_packs"])
+            state["saved_packages"].append(value)
+            state["packages"] = value
+        if "enabled_tools" in changes:
+            value = dict(changes["enabled_tools"])
+            state["saved_tools"].append(value)
+            state["tools"] = value
+        return {
+            "revision": 1,
+            "apply_mode": "next_run",
+            "changed": list(changes),
+            "diff": {},
+        }
+
+    monkeypatch.setattr(settings_service, "update", fake_update)
+
     app = FastAPI()
     register_routes(app, bot=None, db_path="test.db")
     return TestClient(app), state
@@ -68,10 +86,11 @@ def test_settings_api_exposes_stable_package_groups(monkeypatch):
         "delivery_tools",
         "skill_tools",
         "remote_tools",
+        "cyrene_tools",
         "integration_tools",
     ]
     groups = payload["tool_groups"]
-    assert len(groups) == 13
+    assert len(groups) == 14
     assert all(item["kind"] == "package" for item in groups)
     browser = next(
         item for item in payload["packages"]

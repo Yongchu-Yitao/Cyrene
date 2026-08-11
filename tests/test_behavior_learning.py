@@ -855,7 +855,7 @@ async def test_purpose_assignment_is_project_scoped(tmp_path, monkeypatch):
     assert project_b[0]["status"] == "observing"
 
 
-async def test_assignment_agent_receives_complete_purpose_catalog_in_one_call(tmp_path, monkeypatch):
+async def test_assignment_agent_receives_retrieved_candidate_shortlist(tmp_path, monkeypatch):
     bl = await _init_behavior(tmp_path, monkeypatch)
     assignments = []
 
@@ -900,12 +900,45 @@ async def test_assignment_agent_receives_complete_purpose_catalog_in_one_call(tm
 
     assert len(assignments) == 3
     assert [item["purpose"] for item in assignments[2]["existing_candidates"]] == ["修复导出逻辑", "整理导出文档"]
-    # A single-tool lookup is not reusable skill evidence and must not spend a
-    # background LLM call merely to populate the historical purpose catalog.
-    assert [item["purpose"] for item in assignments[2]["all_historical_purposes"]] == ["修复导出逻辑", "整理导出文档"]
+    assert "all_historical_purposes" not in assignments[2]
     candidates = sorted(await bl.list_skill_candidates(), key=lambda item: item["purpose"])
     assert len(candidates) == 2
     assert next(item for item in candidates if item["purpose"] == "修复导出逻辑")["occurrence_count"] == 2
+
+
+async def test_candidate_retrieval_uses_text_and_keywords_and_limits_top_five(tmp_path, monkeypatch):
+    bl = await _init_behavior(tmp_path, monkeypatch)
+    now = bl._now_iso()
+    purposes = [
+        ("candidate-exact", "修好导出并验证"),
+        ("candidate-export", "修复导出逻辑"),
+        ("candidate-docs", "整理导出文档"),
+        ("candidate-weather", "查询城市天气"),
+        ("candidate-video", "播放在线视频"),
+        ("candidate-calendar", "创建日程提醒"),
+        ("candidate-sales", "分析销售数据"),
+    ]
+    async with bl._conn() as conn:
+        await conn.executemany(
+            """
+            INSERT INTO behavior_skill_candidates
+            (candidate_id, project_id, project_key, purpose, status,
+             occurrence_count, created_at, updated_at)
+            VALUES (?, 'project-search', 'project-search', ?, 'observing', 1, ?, ?)
+            """,
+            [(candidate_id, purpose, now, now) for candidate_id, purpose in purposes],
+        )
+        await conn.commit()
+
+    retrieved = await bl._retrieve_candidate_ids(
+        "project-search",
+        "修好导出并验证",
+    )
+
+    assert len(retrieved) == 5
+    assert retrieved[0] == "candidate-exact"
+    assert "candidate-export" in retrieved
+    assert "candidate-docs" in retrieved
 
 
 async def test_behavior_learning_patch_application(tmp_path, monkeypatch):

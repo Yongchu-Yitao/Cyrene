@@ -533,7 +533,10 @@ def test_main_chat_composer_uses_a_glass_dock_and_readable_input_card():
     input_css = styles.split(".wbc-composer-box {", 1)[1].split("}", 1)[0]
     scroll_css = styles.split(".wbc-scroll-to-bottom {", 1)[1].split("}", 1)[0]
 
-    assert "--wbc-thread-inset-bottom: calc(198px * var(--wb-ui-font-scale, 1));" in stage_css
+    assert (
+        "--wbc-thread-inset-bottom: calc(var(--wbc-shared-glass-height) + "
+        "34px * var(--wb-ui-font-scale, 1));"
+    ) in stage_css
     assert "position: absolute;" in dock_css
     assert "inset: auto 0 0;" in dock_css
     assert "background:" not in dock_css
@@ -3899,6 +3902,7 @@ def test_workbench_chat_delete_detaches_local_fork_markers():
     assert ".map(detachDeletedForkSource)" in handler
     assert "setActiveChat(function (prev) { return detachDeletedForkSource(prev); })" in handler
     assert handler.index("setChats(function (prev)") < handler.index("model.deleteChat(chatId)")
+    assert handler.index("WbcVoice.stop()") < handler.index("model.deleteChat(chatId)")
     assert "next.splice(Math.min(Math.max(deletedIndex, 0), next.length), 0, deletedItem)" in handler
 
 
@@ -4093,6 +4097,23 @@ def test_workbench_chat_switches_stop_to_guidance_while_running():
     ).read_text(encoding="utf-8")
     assert "workbench-chat.js?v=0.7.1" in index
     assert "workbench-i18n.js?v=0.7.1" in index
+
+
+def test_task_answer_resume_uses_interrupt_not_pause_and_suppresses_cancel_error():
+    root = Path(__file__).resolve().parent.parent
+    source = (root / "src" / "webui" / "frontend" / "workbench.jsx").read_text(
+        encoding="utf-8"
+    )
+    answer = source.split("answer: function (questionId, optionText)", 1)[1].split(
+        "promoteToPlan: function", 1
+    )[0]
+    header = source.split("function TaskHeader", 1)[1].split(
+        "function TaskBriefCard", 1
+    )[0]
+
+    assert "interruptedRef.current = false" in answer
+    assert 'if (interruptedRef.current || (err && err.name === "AbortError"))' in answer
+    assert 'status === "running" || session.agentBusy ? controller.interrupt() : controller.pause()' in header
 
 
 def test_workbench_guidance_is_optimistic_and_completed_tools_do_not_spin():
@@ -4297,6 +4318,10 @@ def test_collapsed_chat_rail_maps_actionable_conversation_states():
     assert 'role="navigation"' in rail
     assert 'className="wbc-conversation-status-track"' in rail
     assert "onMouseEnter={function () { openStatusPreview(chat.id); }}" in rail
+    assert "onMouseMove={function () { if (!previewOpen) openStatusPreview(chat.id); }}" in rail
+    status_marker = rail.split('className={"wbc-conversation-status-marker', 1)[1].split(">", 1)[0]
+    assert "title={title}" not in status_marker
+    assert "aria-label={title}" in status_marker
     assert "onSelect(chat.id);" in rail
     assert "onToggleCollapsed" not in rail.split('className="wbc-conversation-status-track"', 1)[1]
     assert "answerFromStatusPreview(chat" in rail
@@ -4521,6 +4546,68 @@ def test_workbench_split_chat_renders_and_answers_pending_question():
     assert "chat.pendingQuestion" in split_chat
     assert "<WbcQuestionPrompt" in split_chat
     assert "onAnswer={answerPendingQuestion}" in split_chat
+
+
+def test_permission_prompt_localizes_capability_ids_and_hides_internal_fingerprint():
+    root = Path(__file__).resolve().parents[1]
+    chat = (root / "src/webui/frontend/workbench-chat.jsx").read_text(encoding="utf-8")
+    i18n = (root / "src/webui/frontend/workbench-i18n.jsx").read_text(encoding="utf-8")
+    model = (root / "src/webui/frontend/workbench-model.jsx").read_text(encoding="utf-8")
+    runtime = (root / "src/cyrene/workbench/runtime.py").read_text(encoding="utf-8")
+
+    assert "function wbcPermissionQuestionText(pending)" in chat
+    assert "i18n.permissionQuestionText(pending, i18n.getLang())" in chat
+    assert "function workbenchPermissionQuestionText(pending, lang)" in i18n
+    assert '/^cyrene-(?:setting|lifecycle):/' in i18n
+    assert "legacyTool" in i18n
+    assert 'wbcPermissionOptionLabel(opt, i, permissionOptions.length)' in chat
+    assert '? wbcPermissionQuestionText(pending)' in chat
+    assert 'value: wbcQuestionOptionValue(option)' in chat
+    assert 'raw = raw.replace(/\\.r[23]$/, "");' in i18n
+    assert 'toolName = toolName.replace(/\\.r[23]$/, "");' in i18n
+    assert '"cyrene.ui.click": "CyreneUIClick"' in i18n
+    assert '"cyrene.ui.double_click": "CyreneUIDoubleClick"' in i18n
+    assert '"toolName.CyreneUIDoubleClick": "双击界面组件"' in i18n
+    for kind in (
+        "external_delivery_request",
+        "external_upload_confirmation",
+        "destructive_confirmation",
+        "self_configuration_confirmation",
+        "host_lifecycle_confirmation",
+    ):
+        assert f"{kind}: true" in model
+        assert f'"{kind}"' in runtime
+
+
+def test_agent_chat_flow_glint_is_semantic_transient_and_reduced_motion_safe():
+    root = Path(__file__).resolve().parents[1]
+    chat = (root / "src/webui/frontend/workbench-chat.jsx").read_text(encoding="utf-8")
+    css = (root / "src/webui/frontend/workbench.css").read_text(encoding="utf-8")
+    i18n = (root / "src/webui/frontend/workbench-i18n.jsx").read_text(encoding="utf-8")
+    surface = (root / "src/webui/frontend/platform/ui-surface.jsx").read_text(encoding="utf-8")
+
+    assert 'WBC_AGENT_CHAT_FLOW_EVENT = "cyrene:agent-chat-flow"' in chat
+    assert "WBC_AGENT_CHAT_FLOW_STATE = Object.create(null)" in chat
+    assert "function wbcAgentChatFlowSnapshot(chatId)" in chat
+    assert 'wbcNotifyAgentChatFlow("created", chat.id)' in chat
+    assert 'wbcNotifyAgentChatFlow("typing", chatId)' not in chat
+    assert "WBC_AGENT_CHAT_FLOW_TTLS = { created: 4200, typing: 3200 }" in chat
+    assert "applyFlow(wbcAgentChatFlowSnapshot(chatId))" in chat
+    assert "get_highlight_element: function () { return composerBoxRef.current; }" in chat
+    assert 'data-agent-flow={agentFlow || undefined}' in chat
+    assert ".wbc-rail .wbc-chat-card.agent-flow::after" in css
+    assert ".wbc-composer-box.agent-flow::before" in css
+    assert "@keyframes wbc-agent-chat-flow" in css
+    assert "@keyframes wbc-agent-composer-flow" in css
+    assert "wbc-agent-chat-flow 3.2s" in css
+    assert "wbc-agent-composer-flow 3.2s" in css
+    assert "function showAgentControlHighlight(element, nodeId, actionId)" in surface
+    assert "entryHighlightElement(item), nodeId, actionId" in surface
+    assert "settleAgentControlHighlight(controlHighlightSequence)" in surface
+    assert "AGENT_CONTROL_FLOW_CYCLE_MS = 3200" in surface
+    assert "prefers-reduced-motion:reduce" in surface
+    assert "@media (prefers-reduced-motion: reduce)" in css
+    assert '"workbenchChat.agentFlow.typing": "Agent 正在输入消息"' in i18n
 
 
 def test_workbench_context_tab_has_live_session_inbox_card():
@@ -5059,7 +5146,7 @@ def test_workbench_keeps_one_persistent_module_dock_across_workspace_switches():
     assert "border-radius: var(--wb-floating-rail-radius);" in integrated_rail_css
     assert "background: var(--wb-floating-rail-bg);" in integrated_rail_css
     assert "box-shadow: var(--wb-floating-rail-shadow);" in integrated_rail_css
-    assert "color-mix(in srgb, var(--wb-card-bg) 88%, var(--wb-surface))" in integrated_grid_css
+    assert "color-mix(in srgb, var(--wb-floating-rail-tint) 65%, transparent)" in integrated_grid_css
     assert ".workbench-grid.integrated-sidebars.rail-collapsed {" in styles
     collapsed_grid_css = styles.split(
         ".workbench-grid.integrated-sidebars.rail-collapsed {", 1
@@ -6264,6 +6351,45 @@ def test_electron_browser_tabs_are_per_session_while_login_state_is_shared():
     assert "await close_electron_browser_session(chat_id)" in chat_routes
 
 
+def test_browser_snapshot_filters_non_interactable_page_nodes():
+    root = Path(__file__).resolve().parent.parent
+    main = (root / "electron" / "main.js").read_text(encoding="utf-8")
+    browser = (root / "src" / "cyrene" / "browser.py").read_text(encoding="utf-8")
+
+    for source in (main, browser):
+        assert "el.closest('[hidden],[inert],[aria-hidden=\"true\"]')" in source
+        assert "el.checkVisibility" in source
+        assert "style.contentVisibility === 'hidden'" in source
+        assert "Number(style.opacity) <= 0.001" in source
+        assert "document.elementsFromPoint(x, y)" in source
+        assert "right <= left || bottom <= top" in source
+        assert "visible: true" in source
+        assert "interactive," in source
+        assert "disabled," in source
+        assert "new Set(out.map((item) => item.text)" in source
+
+
+def test_agent_browser_tabs_are_owned_reused_and_finalized_per_round():
+    root = Path(__file__).resolve().parent.parent
+    main = (root / "electron" / "main.js").read_text(encoding="utf-8")
+    browser = (root / "src" / "cyrene" / "browser.py").read_text(encoding="utf-8")
+    coordinator = (root / "src" / "cyrene" / "agent" / "coordinator.py").read_text(encoding="utf-8")
+
+    assert "this.activeAgentRoundId = ''" in main
+    assert "this.agentOwnedTabIdsByRound = new Map()" in main
+    assert "_recordAgentTab(tab, roundId)" in main
+    assert "agentCreated: Boolean(String(agentOwnerRoundId" in main
+    assert "beginAgentRound(roundId)" in main
+    assert "finishAgentRound(roundId)" in main
+    assert "this._reduceAgentTabs(this._agentTabs(), { activateKept: true })" in main
+    assert "tab.agentOwnerRoundId === normalized" in main
+    assert "agentRequest: true" in main
+    assert "if (method === 'finishRound')" in main
+    assert "opener && opener.agentClickInFlight" in main
+    assert '"finishRound"' in browser
+    assert "finish_electron_browser_round(_current_session_id.get(), round_id)" in coordinator
+
+
 def test_electron_browser_user_events_are_recorded_for_learning():
     root = Path(__file__).resolve().parent.parent
     main = (root / "electron" / "main.js").read_text(encoding="utf-8")
@@ -6601,7 +6727,12 @@ def test_workbench_chat_exposes_browser_live_view_and_takeover():
     assert 'window.CyreneUI.require("browser").ViewportPanel' in source
     assert "function WbcBrowserSplit(" in source
     assert "onTakeoverComplete: onTakeoverComplete" in source
-    assert "desiredTabId: active.id || tabId" in source
+    browser_split = source.split("function WbcBrowserSplit(", 1)[1].split("function WbcSubagentsSplitHost", 1)[0]
+    assert "desiredTabId" not in browser_split
+    assert "bridge.activateTab({ sessionId: browserSessionId, tabId: tab.id })" in browser_split
+    assert "zoomEnabled: true" in browser_split
+    assert "resizeEdgeHintEnabled: true" in browser_split
+    assert "zoomEnabled: false" not in browser_split
     assert "handleAnswer(pending.id" in source
 
 
@@ -8149,3 +8280,94 @@ def test_settings_controls_share_memory_floating_material():
     assert ".wb-accent-custom-button" not in styles
     assert ".wb-skill-detail-card" not in styles
     assert ".settings-overlay .wb-export-session-select" not in styles
+
+
+def test_profile_rail_displays_budget_in_existing_spacer():
+    root = Path(__file__).resolve().parent.parent
+    source = (root / "src" / "webui" / "frontend" / "workbench.jsx").read_text(
+        encoding="utf-8"
+    )
+    styles = (root / "src" / "webui" / "frontend" / "workbench.css").read_text(
+        encoding="utf-8"
+    )
+    i18n = (
+        root / "src" / "webui" / "frontend" / "workbench-i18n.jsx"
+    ).read_text(encoding="utf-8")
+
+    profile_rail = source[source.index("function WorkbenchProfileRail"):source.index("// Temporarily keep sign-out")]
+    assert 'fetch("/api/budget/status")' in profile_rail
+    assert 'fetch("/api/settings/openai-oauth/limits")' in profile_rail
+    assert "WorkbenchModel.codexQuotaWindows(payload.limits)" in profile_rail
+    assert "codexQuotaState.connected" in profile_rail
+    assert 'className="workbench-profile-codex-quota"' in profile_rail
+    assert 'window.addEventListener("budget-saved", onBudgetSaved)' in profile_rail
+    assert 'window.addEventListener("cyrene:codex-auth-changed", onCodexAuthChanged)' in profile_rail
+    assert 'className="workbench-profile-rail-spacer"' in profile_rail
+    assert 'className="workbench-profile-budget-stack"' in profile_rail
+    assert profile_rail.count('className="workbench-profile-budget workbench-profile-') == 2
+    assert 'workbench-profile-codex-card' in profile_rail
+    assert 'workbench-profile-currency-card' in profile_rail
+    assert 't("profile.budgetDisabled")' in profile_rail
+    assert ".workbench-profile-budget {" in styles
+    budget_stack_rule = styles.split(".workbench-profile-budget-stack {", 1)[1].split("}", 1)[0]
+    assert "position: absolute;" in budget_stack_rule
+    assert "gap: 12px;" in budget_stack_rule
+    assert '"profile.budgetDisabled": "Budget is not enabled"' in i18n
+    assert '"profile.budgetDisabled": "未开启预算功能"' in i18n
+
+
+def test_task_board_scroll_canvas_reaches_behind_floating_rail_gutter():
+    root = Path(__file__).resolve().parent.parent
+    styles = (root / "src" / "webui" / "frontend" / "workbench.css").read_text(
+        encoding="utf-8"
+    )
+
+    columns_rule = styles.split(
+        ".workbench-grid.integrated-sidebars.is-task-board .wb-board-columns {", 1
+    )[1].split("}", 1)[0]
+    scroll_rule = styles.split(
+        ".workbench-grid.integrated-sidebars.is-task-board .wb-board-scroll {", 1
+    )[1].split("}", 1)[0]
+    floating_rail_rule = styles.rsplit(
+        ".workbench-grid.integrated-sidebars .workbench-integrated-rail {", 1
+    )[1].split("}", 1)[0]
+
+    assert "--wb-task-board-canvas-gutter: 22px;" in styles
+    assert 'html[data-theme="dark"] .workbench-grid.integrated-sidebars.is-task-board {' in styles
+    assert "--wb-floating-rail-tint: #24323f;" in styles
+    assert "padding-left: calc(var(--wb-task-board-rail-reserve) + var(--wb-task-board-canvas-gutter));" in columns_rule
+    assert "margin-inline: calc(0px - var(--wb-task-board-canvas-gutter));" in scroll_rule
+    assert "background: var(--wb-floating-rail-bg);" in floating_rail_rule
+    assert "opacity:" not in floating_rail_rule
+
+
+def test_conversation_status_preview_controls_share_floating_material():
+    root = Path(__file__).resolve().parent.parent
+    styles = (root / "src" / "webui" / "frontend" / "workbench.css").read_text(
+        encoding="utf-8"
+    )
+
+    option_rule = styles.split(
+        ".wbc-conversation-status-preview-option {", 1
+    )[1].split("}", 1)[0]
+    reply_rule = styles.split(
+        ".wbc-conversation-status-preview-reply {", 1
+    )[1].split("}", 1)[0]
+    input_rule = styles.split(
+        ".wbc-conversation-status-preview-reply input {", 1
+    )[1].split("}", 1)[0]
+    send_rule = styles.split(
+        ".wbc-conversation-status-preview-reply button {", 1
+    )[1].split("}", 1)[0]
+
+    assert "min-height: 38px;" in option_rule
+    assert "var(--wb-floating-control-border" in option_rule
+    assert "var(--wb-floating-control-bg" in option_rule
+    assert "var(--wb-floating-control-shadow" in option_rule
+    assert "grid-template-columns: minmax(0, 1fr) 38px;" in reply_rule
+    assert "height: 38px;" in input_rule
+    assert "border-radius: var(--wb-floating-control-radius, 12px);" in input_rule
+    assert "width: 38px;" in send_rule
+    assert "height: 38px;" in send_rule
+    assert "color: var(--wb-text);" in send_rule
+    assert "color-mix(in srgb, var(--wb-accent) 26%" in send_rule

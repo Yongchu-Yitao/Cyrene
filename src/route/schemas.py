@@ -150,6 +150,7 @@ class ReflectionBody(APIBody):
 class AgentInputBody(APIBody):
     input: str | None = Field(default=None, max_length=200_000)
     message: str | None = Field(default=None, max_length=200_000)
+    clientRequestId: str | None = Field(default=None, max_length=200)
     attachments: list[Any] = Field(default_factory=list, max_length=100)
     mode: str | None = Field(default=None, max_length=80)
     command: str | None = Field(default=None, max_length=20_000)
@@ -161,6 +162,7 @@ class AgentInputBody(APIBody):
     meta: dict[str, Any] | None = None
     planDefinitionRevision: int | None = Field(default=None, ge=0)
     basePlanRevision: int | None = Field(default=None, ge=0)
+    uiInstanceId: str | None = Field(default=None, max_length=200)
 
 
 class AnswerBody(APIBody):
@@ -169,6 +171,7 @@ class AnswerBody(APIBody):
     selected_option: str | None = Field(default=None, max_length=200_000)
     mode: str | None = Field(default=None, max_length=80)
     stream: bool = False
+    uiInstanceId: str | None = Field(default=None, max_length=200)
 
 
 class InitSubmitBody(APIBody):
@@ -230,11 +233,13 @@ class ChatMessageBody(APIBody):
     mode: str | None = Field(default=None, max_length=80)
     lang: Literal["", "en", "zh"] = ""
     workspaceOverride: str | None = Field(default=None, max_length=4096)
+    uiInstanceId: str | None = Field(default=None, max_length=200)
 
 
 class ChatGuidanceBody(APIBody):
     message: str = Field(min_length=1, max_length=200_000)
     clientRequestId: str | None = Field(default=None, max_length=200)
+    uiInstanceId: str | None = Field(default=None, max_length=200)
 
 
 class ChatActionBody(APIBody):
@@ -289,6 +294,7 @@ class ScheduleCreateBody(APIBody):
     prompt: str = Field(min_length=1, max_length=200_000)
     schedule_type: Literal["once", "cron", "interval"]
     schedule_value: str = Field(min_length=1, max_length=500)
+    schedule_timezone: str | None = Field(default=None, min_length=1, max_length=100)
     next_run: str | None = Field(default=None, max_length=200)
     chat_id: int = -1
 
@@ -297,6 +303,7 @@ class ScheduleUpdateBody(APIBody):
     prompt: str | None = Field(default=None, min_length=1, max_length=200_000)
     schedule_type: Literal["once", "cron", "interval"] | None = None
     schedule_value: str | None = Field(default=None, min_length=1, max_length=500)
+    schedule_timezone: str | None = Field(default=None, min_length=1, max_length=100)
     next_run: str | None = Field(default=None, max_length=200)
     status: Literal["active", "paused"] | None = None
 

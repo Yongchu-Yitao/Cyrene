@@ -167,13 +167,46 @@ def register_update_routes(router: APIRouter, bot: Any, db_path: str) -> None:
 
     @router.post("/api/update/restart")
     async def api_update_restart():
-        """写入重启脚本并退出进程（安装更新后调用）。"""
+        """Queue verified installation after this HTTP response has flushed."""
+        import hashlib
+        import json
+        import uuid
+
+        from cyrene.runtime.host_actions import finalize_origin, schedule_action
+        from cyrene.runtime.host_bridge import HostBridgeError, call_host
         from cyrene.runtime.updater import _download_progress
 
-        ok, message, code, status_code = _launch_update_restart(_download_progress)
+        ok, message, code, status_code = _launch_update_restart(
+            _download_progress, validate_only=True,
+        )
         if not ok:
             return error_response(message, status_code, code)
-
-        # 只有 updater 脚本成功启动后才退出，通知 Electron 释放 single-instance lock。
-        import os as _os
-        _os._exit(42)
+        parameter_hash = hashlib.sha256(json.dumps(
+            {
+                "path": str(_download_progress.get("path") or ""),
+                "size": int(_download_progress.get("total") or 0),
+                "sha256": str(_download_progress.get("actual_sha256") or ""),
+            },
+            sort_keys=True,
+        ).encode("utf-8")).hexdigest()
+        try:
+            host_status = await call_host("host.status")
+        except HostBridgeError:
+            return error_response("Electron host is unavailable", 409, "unsupported_host")
+        if host_status.get("hostKind") != "electron":
+            return error_response("Electron host is unavailable", 409, "unsupported_host")
+        action = schedule_action(
+            "update_install",
+            idempotency_key=f"ui-update-{uuid.uuid4().hex}",
+            parameter_hash=parameter_hash,
+            expected_app_version=str(host_status.get("appVersion") or ""),
+            approval_receipt="local_ui_update_restart",
+            revalidation={
+                "sha256": str(_download_progress.get("actual_sha256") or ""),
+                "size": int(_download_progress.get("total") or 0),
+            },
+        )
+        # The coordinator performs its own delay before launching the updater
+        # and asking Electron to quit, so the successful response is observable.
+        asyncio.create_task(finalize_origin("", ""))
+        return {"ok": True, "status": "scheduled", "action_id": action["action_id"]}

@@ -9,6 +9,7 @@ Covers the live-view foundation without launching a real browser:
 """
 
 import asyncio
+import base64
 import json
 import sys
 import time
@@ -21,8 +22,11 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 
 # Patch missing optional deps before any cyrene import (mirrors test_runtime_fixes).
 sys.modules.setdefault("PIL", MagicMock())
-sys.modules["PIL"].Image = MagicMock()
 sys.modules.setdefault("pypdf", MagicMock())
+
+_VALID_PNG = base64.b64decode(
+    "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII="
+)
 
 
 class _FakePage:
@@ -45,8 +49,11 @@ class _FakePage:
             "<a href='/watch/123'>Readable video</a></body></html>"
         )
 
-    async def screenshot(self, **_kw):
-        return b"\xff\xd8\xff\xe0fake-jpeg-bytes"
+    async def screenshot(self, **kw):
+        path = kw.get("path")
+        if path:
+            Path(path).write_bytes(_VALID_PNG)
+        return _VALID_PNG
 
     async def wait_for_load_state(self, *_a, **_k):
         return None
@@ -327,7 +334,7 @@ def test_click_debounce_is_short_lived_and_session_scoped():
     assert session._click_debounced() is False
 
 
-async def test_screenshot_normalizes_bare_domain(monkeypatch):
+async def test_screenshot_normalizes_bare_domain(monkeypatch, tmp_path):
     from cyrene import browser
 
     monkeypatch.setattr(browser, "_PLAYWRIGHT_AVAILABLE", True)
@@ -340,7 +347,9 @@ async def test_screenshot_normalizes_bare_domain(monkeypatch):
             return {"url": url, "status": 200, "title": "x", "text": "", "error": None}
 
         async def screenshot_path(self, full_page=True):
-            return "/tmp/fake.png"
+            path = tmp_path / "fake.png"
+            path.write_bytes(_VALID_PNG)
+            return str(path)
 
         async def page(self):
             return _FakePage("https://example.com/")
@@ -902,6 +911,7 @@ async def test_tool_browser_screenshot_returns_tmp_file(monkeypatch):
 
     # Create a real temp file to simulate what screenshot() returns.
     tmp = tempfile.NamedTemporaryFile(suffix=".png", delete=False)
+    tmp.write(_VALID_PNG)
     tmp.close()
 
     async def fake_screenshot(url, **_kw):
@@ -932,7 +942,7 @@ async def test_tool_browser_screenshot_returns_primary_model_visual_observation(
     from cyrene.tool_impl.browser import browser_screenshot as _mod
 
     tmp = tempfile.NamedTemporaryFile(suffix=".png", delete=False)
-    tmp.write(b"not-decoded-in-this-mocked-test")
+    tmp.write(_VALID_PNG)
     tmp.close()
 
     async def fake_screenshot(url, **_kw):
@@ -993,6 +1003,46 @@ async def test_screenshot_path_cleans_up_on_failure(monkeypatch):
 
     assert recorded, "no temp file was created"
     assert not os.path.exists(recorded[0]), "temp file leaked on failure"
+
+
+def test_screenshot_validation_requires_png_format_and_decodability(tmp_path, real_pillow_modules):
+    from cyrene import browser
+
+    valid = tmp_path / "valid.png"
+    valid.write_bytes(_VALID_PNG)
+    assert browser._validate_screenshot_file(str(valid))["format"] == "PNG"
+
+    empty = tmp_path / "empty.png"
+    empty.touch()
+    with pytest.raises(ValueError, match="empty"):
+        browser._validate_screenshot_file(str(empty))
+
+    jpeg = tmp_path / "wrong.png"
+    real_pillow_modules.new("RGB", (2, 2), "red").save(jpeg, format="JPEG")
+    with pytest.raises(ValueError, match="expected PNG format, got JPEG"):
+        browser._validate_screenshot_file(str(jpeg))
+
+    truncated = tmp_path / "truncated.png"
+    truncated.write_bytes(_VALID_PNG[:32])
+    with pytest.raises(ValueError, match="cannot be decoded"):
+        browser._validate_screenshot_file(str(truncated))
+
+
+async def test_tool_browser_screenshot_rejects_invalid_artifact(monkeypatch, tmp_path):
+    from cyrene import browser as _browser
+    from cyrene.tool_impl.browser import browser_screenshot as _mod
+
+    invalid = tmp_path / "invalid.png"
+    invalid.touch()
+
+    async def fake_screenshot(_url, **_kw):
+        return {"ok": True, "path": str(invalid), "title": "Broken"}
+
+    monkeypatch.setattr(_browser, "screenshot", fake_screenshot)
+    result = await _mod._tool_browser_screenshot({}, None, 0, "db", None)
+
+    assert "Screenshot failed: Browser screenshot validation failed" in result
+    assert "Screenshot taken" not in result
 
 
 # --- S3: user live-control (CDP input) + native-window escape hatch ---------
@@ -1271,6 +1321,30 @@ async def test_close_electron_browser_session_targets_only_requested_chat(monkey
     ]
 
 
+async def test_finish_electron_browser_round_targets_requested_run(monkeypatch):
+    from cyrene import browser
+
+    calls = []
+
+    async def fake_rpc(method, args=None, **kwargs):
+        calls.append((method, args or {}, kwargs))
+        return {"ok": True, "closedTabIds": ["tab_1"], "keptTabId": "tab_2"}
+
+    monkeypatch.setattr(browser, "electron_browser_available", lambda: True)
+    monkeypatch.setattr(browser, "_electron_browser_rpc", fake_rpc)
+
+    result = await browser.finish_electron_browser_round("chat-a", "round-a")
+
+    assert result["keptTabId"] == "tab_2"
+    assert calls == [
+        (
+            "finishRound",
+            {},
+            {"timeout": 10.0, "session_id": "chat-a", "round_id": "round-a"},
+        )
+    ]
+
+
 async def test_click_and_type_use_electron_rpc_when_available(monkeypatch):
     from cyrene import browser
 
@@ -1344,7 +1418,7 @@ async def test_current_page_screenshot_uses_electron_without_navigation(monkeypa
         if method == "screenshot":
             return {
                 "ok": True,
-                "pngBase64": "iVBORw0KGgo=",
+                "pngBase64": base64.b64encode(_VALID_PNG).decode(),
                 "title": "Current Page",
                 "url": "https://example.com/current",
             }
@@ -1357,6 +1431,27 @@ async def test_current_page_screenshot_uses_electron_without_navigation(monkeypa
     assert result["ok"] is True
     assert result["title"] == "Current Page"
     assert calls == [("screenshot", {})]
+
+
+async def test_electron_screenshot_rejects_empty_data_and_removes_artifact(monkeypatch, tmp_path):
+    from cyrene import browser
+
+    monkeypatch.setenv("CYRENE_ELECTRON_RPC_PORT", "12345")
+    monkeypatch.setenv("CYRENE_ELECTRON_RPC_TOKEN", "token")
+    monkeypatch.setattr(browser, "TEMP_DIR", tmp_path)
+
+    async def fake_rpc(method, args=None, **_kw):
+        assert method == "screenshot"
+        return {"ok": True, "pngBase64": "", "title": "Broken"}
+
+    monkeypatch.setattr(browser, "_electron_browser_rpc", fake_rpc)
+
+    result = await browser.screenshot("")
+
+    assert result["ok"] is False
+    assert "Browser screenshot validation failed" in result["error"]
+    assert "empty" in result["error"]
+    assert list(tmp_path.iterdir()) == []
 
 
 async def test_electron_ok_false_does_not_fall_back_to_playwright(monkeypatch):
@@ -1673,13 +1768,11 @@ async def test_screenshot_uses_electron_rpc_and_writes_png(monkeypatch, tmp_path
     monkeypatch.setattr(browser, "_PLAYWRIGHT_AVAILABLE", False)
 
     calls = []
-    import base64
-
     async def fake_rpc(method, args=None, **_kw):
         calls.append((method, args or {}))
         if method == "navigate":
             return {"ok": True, "url": args["url"], "title": "Page"}
-        return {"ok": True, "pngBase64": base64.b64encode(b"PNG data").decode(), "title": "Page"}
+        return {"ok": True, "pngBase64": base64.b64encode(_VALID_PNG).decode(), "title": "Page"}
 
     monkeypatch.setattr(browser, "_electron_browser_rpc", fake_rpc)
 

@@ -32,7 +32,8 @@ def build_pending_question(raw_pending: Any) -> dict[str, Any] | None:
                     "label": label,
                 }
             )
-    return {
+    meta = raw_pending.get("meta") if isinstance(raw_pending.get("meta"), dict) else {}
+    result = {
         "id": question_id,
         "text": text,
         "askedAt": str(raw_pending.get("asked_at", "")).strip(),
@@ -41,9 +42,28 @@ def build_pending_question(raw_pending: Any) -> dict[str, Any] | None:
         "clientRequestId": str(raw_pending.get("client_request_id", "")).strip(),
         "allowCustom": bool(raw_pending.get("allow_custom", True)),
         "hideAnswerInChat": bool(raw_pending.get("hide_answer_in_chat")),
-        "kind": str((raw_pending.get("meta") or {}).get("kind", "")).strip(),
+        "kind": str(meta.get("kind", "")).strip(),
         "options": options_out,
     }
+    if result["kind"] in {
+        "scope_elevation",
+        "write_permission_request",
+        "read_elevation",
+        "subshell_elevation",
+        "external_delivery_request",
+        "external_upload_confirmation",
+        "delete_confirmation",
+        "destructive_confirmation",
+        "self_configuration_confirmation",
+        "host_lifecycle_confirmation",
+        "task_permission_request",
+        "git_commit",
+    }:
+        result["meta"] = {
+            key: str(meta.get(key) or "")
+            for key in ("kind", "tool_name", "operation", "path_hint", "reason")
+        }
+    return result
 
 
 def has_recent_main_agent_activity(

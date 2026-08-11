@@ -12,7 +12,6 @@ from typing import Any
 
 logger = logging.getLogger(__name__)
 
-_MAX_TOOL_OUTPUT_CHARS = 12000
 _JSON_FENCE_RE = re.compile(
     r"^\s*```(?:json|javascript|js)?\s*(?P<body>.*?)\s*```\s*$",
     re.IGNORECASE | re.DOTALL,
@@ -20,14 +19,28 @@ _JSON_FENCE_RE = re.compile(
 _TRAILING_JSON_COMMA_RE = re.compile(r",(?=\s*[}\]])")
 
 
-def _truncate(text: str, limit: int = _MAX_TOOL_OUTPUT_CHARS) -> str:
+def _configured_tool_output_limit() -> int:
+    """Return the optional runtime cap; zero means no global truncation."""
+    try:
+        from cyrene.config import MAX_TOOL_OUTPUT_CHARS
+
+        return max(0, int(MAX_TOOL_OUTPUT_CHARS))
+    except (ImportError, TypeError, ValueError):
+        return 0
+
+
+def _truncate(text: str, limit: int | None = None) -> str:
+    if limit is None:
+        limit = _configured_tool_output_limit()
+    if limit <= 0:
+        return text
     if len(text) <= limit:
         return text
     return text[:limit] + f"\n...[truncated {len(text) - limit} chars]"
 
 
-def truncate(text: str, limit: int = _MAX_TOOL_OUTPUT_CHARS) -> str:
-    """Public bounded-output helper used at transport and tool boundaries."""
+def truncate(text: str, limit: int | None = None) -> str:
+    """Apply an explicit or configured cap; unlimited when the cap is zero."""
     return _truncate(text, limit)
 
 

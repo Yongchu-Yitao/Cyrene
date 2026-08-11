@@ -294,3 +294,11 @@ candidate，因此不会走 fallback。模型配置已删除或变化时 job 失
   入口，历史版本改为同界面的修改时间选择器；后端结构化记忆 API 保留给
   原记忆页和其他调用方使用。
 - 除上述实现层适配和后续视觉要求外，无功能目标差异。
+
+### 14.4 与 Cyrene 自控制 Prompt 的关系（2026-08-11）
+
+- 项目记忆的冻结注入顺序和 `memory_tools` 网关契约不变。
+- `cyrene_tools` 的 UI/Setting 操作说明属于工具包专用渐进披露 Prompt，只在该包
+  启用时进入稳定 Wire/Prompt 前缀，不写入项目记忆，也不复制到基础 Main Prompt。
+- 项目记忆 Agent 仍然无工具；它不能借助 Cyrene UI 或 Typed Setting 接口修改
+  应用状态。主 Agent 只有在用户任务确实需要控制 Cyrene 时才发现并使用该包。

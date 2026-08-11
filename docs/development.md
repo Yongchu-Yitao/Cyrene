@@ -165,6 +165,25 @@ Web UI modules.
    intentional addition to the fixed wire contract
 5. Add policy metadata/tests and optionally a UI/settings entry
 
+For Cyrene self-management, add public capabilities only to the main-only
+`cyrene_tools` pack. UI actions must be registered on `uiSurface` with a stable
+node/action ID, a bounded semantic handler, risk, and outcome; never add a
+selector, script, raw-event, arbitrary-coordinate, or route-calling escape
+hatch. Use `get_element` to de-duplicate an explicit node from DOM projection.
+Background project/chat/data/update/lifecycle/session-message handlers remain
+in `INTERNAL_ONLY_CONCRETE_TOOL_NAMES`.
+
+Keep source and checked-in compiled WebUI output synchronized. The focused
+control-plane checks are:
+
+```bash
+node --test electron/ui-surface.test.js electron/host-control.test.js
+uv run pytest -q tests/test_app_control.py \
+  tests/test_progressive_tool_packages.py \
+  tests/test_tool_package_settings.py \
+  tests/test_webui_consolidation_contract.py
+```
+
 For MCP server support, add servers through the Settings UI or `cyrene mcp add`.
 
 ## CI / Release

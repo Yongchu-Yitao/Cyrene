@@ -22,6 +22,16 @@ def test_main_agent_prompt_requires_final_deliverable_verification():
     assert "report any failed or unavailable checks" in _MAIN_AGENT_PROMPT
 
 
+def test_user_facing_prompts_hide_internal_runtime_details():
+    from cyrene.agent.prompts import _EXECUTION_SYSTEM_PROMPT, _MAIN_AGENT_PROMPT
+
+    for prompt in (_MAIN_AGENT_PROMPT, _EXECUTION_SYSTEM_PROMPT):
+        assert "Never expose internal tool, function, gateway" in prompt
+        assert "Describe work in natural, outcome-oriented language" in prompt
+        assert "omit implementation details about the agent runtime itself" in prompt
+        assert "do not paste raw internal errors or identifiers" in prompt
+
+
 def test_main_agent_prompt_proactively_consults_knowledge_base():
     from cyrene.agent.prompts import (
         _EXECUTION_SYSTEM_PROMPT,
@@ -62,7 +72,7 @@ def test_browser_prompts_prefer_visible_clicks_over_direct_url_navigation():
         assert "prefer" in prompt.lower()
         assert "browser.snapshot" in prompt
         assert "browser.click_ref" in prompt
-        assert "browser.click_text" in prompt
+        assert "browser.click_text" not in prompt
         assert "exact URL requested by the user" in prompt
 
     assert "Prefer clicking visible page UI over navigating by URL" in _MAIN_AGENT_PROMPT

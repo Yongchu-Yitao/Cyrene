@@ -70,6 +70,9 @@
     "mac": {
       "category": "public.app-category.productivity",
       "icon": "../build/icon.icns",
+      "extendInfo": {
+        "NSMicrophoneUsageDescription": "Cyrene uses the microphone only when you start local voice input."
+      },
       "target": [
         "dmg"
       ],
@@ -126,7 +129,9 @@
     },
     "files": [
       "main.js",
+      "host-control.js",
       "browser-input.js",
+      "agent-cursor.js",
       "preload.js",
       "browser-chat-overlay-preload.js",
       "browser-tab-picker-preload.js",

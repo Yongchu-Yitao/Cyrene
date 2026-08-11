@@ -5,7 +5,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 
 
-def test_onboarding_timezone_row_uses_wrapping_long_value_layout():
+def test_onboarding_timezone_row_uses_single_line_layout():
     source = (ROOT / "src" / "webui" / "frontend" / "workbench-welcome.jsx").read_text(
         encoding="utf-8"
     )
@@ -13,11 +13,14 @@ def test_onboarding_timezone_row_uses_wrapping_long_value_layout():
         encoding="utf-8"
     )
 
-    assert 'row.id === "timezone" ? " is-long-value" : ""' in source
+    assert 'className="wb-wel-pref"' in source
+    assert "is-long-value" not in source
     assert "title={row.value}" in source
-    assert ".wb-wel-pref.is-long-value" in styles
-    assert "grid-template-rows: auto auto;" in styles
-    assert "overflow-wrap: anywhere;" in styles
+    pref_rule = styles.split(".wb-wel-pref {", 1)[1].split("}", 1)[0]
+    value_rule = styles.split(".wb-wel-pref-value {", 1)[1].split("}", 1)[0]
+    assert "grid-template-columns: 30px minmax(0, auto) minmax(0, 1fr) 16px;" in pref_rule
+    assert "text-overflow: ellipsis;" in value_rule
+    assert "white-space: nowrap;" in value_rule
 
 
 def test_ui_timezone_resolver_accepts_browser_iana_timezone():

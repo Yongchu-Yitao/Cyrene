@@ -7,6 +7,16 @@ The Chinese edition remains the most detailed record for older releases.
 
 ## [0.7.1] - 2026-08-11
 
+### Cyrene self-control and settings
+
+- Added the progressively disclosed `cyrene_tools` package. Agents can snapshot the current rendered viewport, inspect one semantic component, and operate Cyrene through click, explicit double-click, type, scroll, and drag gestures.
+- New chat, search, project switching, and the active composer use stable nodes. Chat context actions appear only after the menu opens; stable nodes are deduplicated from generic DOM projection, and lists continue through real scrolling without a hard-coded item cap.
+- Browser frame titlebar controls, dragging, and double-click maximize/restore use the same focus-independent UI control layer. The dedicated double-click capability accepts only actions that explicitly advertise a double-click gesture, so ordinary buttons cannot be mis-triggered.
+- Added typed describe/read/write/control operations for every non-model setting family, including scalar settings, Soul, MCP, integrations, Remote, channels, Voice, and shortcuts. Compare-and-set and field-scoped writes surface conflicts instead of overwriting concurrent user changes.
+- Project, chat, and data business services remain available for internal orchestration but are no longer directly exposed to agents. Existing permission reviewers authorize actions, and batch tickets bind an exact operation list.
+- Composer submit is an explicit R2 action while stopping a run remains R1. Package-specific prompt text is disclosed only with `cyrene_tools` to retain a stable prompt-cache prefix.
+- Explicit desktop requests now reach the existing permission-review agent even when a legacy or renderer-originated turn has no client request ID, and the full current user request is reviewed when the model omits a quote. Permission cards localize capability and operation names, options, and labels from structured metadata instead of showing raw risk-qualified IDs or internal fingerprints.
+
 ### Remote collaboration and file workflows
 
 - Paired devices now have a complete project file channel for listing files and folders, uploading, downloading, resuming transfers, synchronizing directories, creating, copying, moving, patching, and deleting content, with conflict handling and transfer progress.

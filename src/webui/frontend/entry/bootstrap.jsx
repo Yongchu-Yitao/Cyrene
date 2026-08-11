@@ -94,6 +94,40 @@ function WorkbenchRoot() {
   }, []);
 
   useEffectBootstrap(function () {
+    function refreshAppearance() {
+      fetch("/api/settings/namespaces/appearance").then(function (response) {
+        return response.ok ? response.json() : Promise.reject(new Error("appearance unavailable"));
+      }).then(function (payload) {
+        var values = payload.values || {};
+        if (!values.appearance_migrated) return;
+        var next = {
+          theme: values.theme || "system",
+          accent: values.accent || null,
+          backgroundLight: values.background_light || null,
+          backgroundDark: values.background_dark || null,
+          textSize: values.text_size || "default",
+        };
+        try {
+          Object.keys(next).forEach(function (key) {
+            localStorage.setItem("cyrene-tweak-" + key, JSON.stringify(next[key]));
+          });
+        } catch (error) {}
+        setThemeMode(next.theme);
+        setAccent(next.accent);
+        setLightBackground(next.backgroundLight);
+        setDarkBackground(next.backgroundDark);
+        setTextSize(next.textSize);
+      }).catch(function () {});
+    }
+    refreshAppearance();
+    return window.CyreneUI.require("events").subscribe(function (event) {
+      if (event && event.type === "settings_changed" && event.namespace === "appearance") {
+        refreshAppearance();
+      }
+    });
+  }, []);
+
+  useEffectBootstrap(function () {
     try {
       localStorage.setItem("cyrene-tweak-theme", JSON.stringify(themeMode));
       localStorage.setItem("cyrene-theme-mode", themeMode);
@@ -211,4 +245,17 @@ window.CyreneUI.bootstrap = window.CyreneUI.register(
   WorkbenchBootstrapService,
 );
 
-ReactDOM.createRoot(document.getElementById("root")).render(<WorkbenchBootstrap />);
+var workbenchReactRoot = ReactDOM.createRoot(document.getElementById("root"));
+function disposeInvalidatedWorkbenchPage() {
+  try { workbenchReactRoot.unmount(); } catch (error) {}
+}
+window.addEventListener(
+  "cyrene:page-invalidated",
+  disposeInvalidatedWorkbenchPage,
+  { once: true },
+);
+if (window.CyrenePageLifecycle && window.CyrenePageLifecycle.isInvalidated()) {
+  disposeInvalidatedWorkbenchPage();
+} else {
+  workbenchReactRoot.render(<WorkbenchBootstrap />);
+}

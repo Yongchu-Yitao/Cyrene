@@ -99,6 +99,8 @@ __all__ = [
     "_request_external_delivery_confirmation",
     "_request_external_upload_confirmation",
     "_request_read_elevation",
+    "_request_self_configuration_confirmation",
+    "_request_host_lifecycle_confirmation",
     "_request_scope_elevation",
     "_request_write_elevation",
     "_resolve_exportable_path",
@@ -287,6 +289,8 @@ async def _request_scope_elevation(
     requires_human_confirmation = permission_kind in {
         "destructive_confirmation",
         "external_upload_confirmation",
+        "self_configuration_confirmation",
+        "host_lifecycle_confirmation",
     }
     # A paired controller may pre-authorize one exact, argument-hashed capability
     # invocation. That bounded receipt carries the controller chat's local path
@@ -296,6 +300,8 @@ async def _request_scope_elevation(
         and permission_kind not in {
             "destructive_confirmation",
             "external_upload_confirmation",
+            "self_configuration_confirmation",
+            "host_lifecycle_confirmation",
         }
     ):
         return None
@@ -412,6 +418,68 @@ async def _request_read_elevation(
     )
 
 
+async def _request_self_configuration_confirmation(
+    *,
+    tool_name: str,
+    operation: str,
+    fingerprint: str,
+    reason: str = "",
+) -> str | None:
+    """Require one exact desktop-local human approval for an R2 mutation."""
+    from cyrene.agent.context import current_run_context, publish_runtime_event
+
+    context = current_run_context()
+    if context.conversation_source != "desktop_local":
+        return "Tool unavailable: global Cyrene settings can only be approved from the local desktop."
+    await publish_runtime_event({
+        "type": "self_configuration_confirmation",
+        "decision": "requested",
+        "tool_name": tool_name,
+        "operation": operation,
+        "fingerprint": str(fingerprint or ""),
+    })
+    return await _request_scope_elevation(
+        tool_name=tool_name,
+        path_hint=f"cyrene-setting:{str(fingerprint or '')[:64]}",
+        operation=operation,
+        reason=reason,
+        permission_kind="self_configuration_confirmation",
+        options=["允许这一次", "拒绝"],
+        scope_hint="本机全局设置的 ",
+    )
+
+
+async def _request_host_lifecycle_confirmation(
+    *,
+    tool_name: str,
+    operation: str,
+    fingerprint: str,
+    reason: str = "",
+) -> str | None:
+    """Require one exact desktop-local human approval for an R3 host action."""
+    from cyrene.agent.context import current_run_context, publish_runtime_event
+
+    context = current_run_context()
+    if context.conversation_source != "desktop_local":
+        return "Tool unavailable: Cyrene lifecycle changes can only be approved from the local desktop."
+    await publish_runtime_event({
+        "type": "host_lifecycle_confirmation",
+        "decision": "requested",
+        "tool_name": tool_name,
+        "operation": operation,
+        "fingerprint": str(fingerprint or ""),
+    })
+    return await _request_scope_elevation(
+        tool_name=tool_name,
+        path_hint=f"cyrene-lifecycle:{str(fingerprint or '')[:64]}",
+        operation=operation,
+        reason=reason,
+        permission_kind="host_lifecycle_confirmation",
+        options=["允许这一次", "拒绝"],
+        scope_hint="主机生命周期的 ",
+    )
+
+
 def _command_is_file_deletion(command: str) -> bool:
     """Check if a shell command includes file deletion operations."""
     raw = str(command or "").strip()
@@ -471,6 +539,7 @@ async def _request_destructive_confirmation(
     destructive_kind: str = "destructive_operation",
     risk_level: str = "high",
     meta_extra: dict[str, Any] | None = None,
+    single_use: bool = False,
 ) -> str | None:
     """Require human confirmation before irreversible/destructive side effects."""
     from cyrene.agent.context import (
@@ -504,7 +573,11 @@ async def _request_destructive_confirmation(
         operation=operation,
         reason=detail,
         permission_kind="destructive_confirmation",
-        options=["允许这次", "本次会话内总是允许", "拒绝"],
+        options=(
+            ["允许这次", "拒绝"]
+            if single_use
+            else ["允许这次", "本次会话内总是允许", "拒绝"]
+        ),
         scope_hint="破坏性/不可逆的 ",
         meta_extra={
             "fingerprint": fingerprint,

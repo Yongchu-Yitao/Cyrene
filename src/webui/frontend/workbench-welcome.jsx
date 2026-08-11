@@ -191,7 +191,7 @@
               <button
                 key={row.id}
                 type="button"
-                className={"wb-wel-pref" + (row.id === "timezone" ? " is-long-value" : "")}
+                className="wb-wel-pref"
                 onClick={row.action}
               >
                 <span className="wb-wel-pref-ico">{row.icon}</span>
@@ -426,6 +426,9 @@
       post("/api/onboarding/personality", { mode: mode, name: pName, content: soul })
         .then(function (p) {
           setNotice(T("welcome.setup.personality.applied", null, "Personality applied"));
+          if (p && p.onboarding && !p.onboarding.needsOnboarding && props.onComplete) {
+            props.onComplete();
+          }
           return applyResponse(p);
         })
         .catch(function (e) { setError(e.message || String(e)); })
@@ -602,7 +605,7 @@
   function WorkbenchWelcomePage(props) {
     // First-run onboarding takes over the page until LLM + personality are set.
     if (props.onboarding && props.onboarding.needsOnboarding) {
-      return <OnboardingFlow onboarding={props.onboarding} />;
+      return <OnboardingFlow onboarding={props.onboarding} onComplete={props.onComplete} />;
     }
     var i18n = window.CyreneUI.require("i18n").use();
     var name = (window.CyreneUI.require("data").state.user || {}).name || "";

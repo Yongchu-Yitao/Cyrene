@@ -40,11 +40,13 @@ def test_sidebar_browser_keeps_resize_cursor_without_native_page_handle():
     assert "cursor: col-resize !important" in main
     assert 'toggleAttribute("data-cyrene-resize-edge-active", active)' in main
     assert "window.__cyreneSetResizeEdgeHint" in main
-    assert "resizeEdgeHintEnabled = ${JSON.stringify(this.zoomEnabled === false)}" in main
+    assert "resizeEdgeHintEnabled = ${JSON.stringify(this.resizeEdgeHintEnabled === true)}" in main
+    assert "const enabled = this.resizeEdgeHintEnabled === true;" in main
     assert "resizeEdgeHintColor" not in main
     assert "resizeEdgeHintColor" not in viewport
     assert 'window.dispatchEvent(new CustomEvent("workbench:right-resize-hint"' in workbench
     assert 'window.addEventListener("workbench:right-resize-hint"' in viewport
+    assert "resizeEdgeHintEnabled: resizeEdgeHintEnabled === true" in viewport
     assert "resizeEdgeHintActive: resizeEdgeHintActiveRef.current" in viewport
     assert "BROWSER_RESIZE_EDGE_PREFIX" in main
     assert 'classList.toggle("wb-col-resize-hover"' in main

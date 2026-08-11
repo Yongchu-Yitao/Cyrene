@@ -28,6 +28,18 @@
 - 数据没有自动 Retention Period，除非用户明确删除或 Reset。
 - HTTP API 尚未作为稳定 Public API 版本化。
 
+## Cyrene 自控制边界
+
+- Snapshot 与 Inspect 只暴露当前已经渲染的界面，不预测尚未出现的未来页面。
+  导航、展开、滚动或打开右键菜单后，Agent 必须重新读取 Snapshot。
+- 优先使用稳定语义控件；通用 DOM Projection 只覆盖当前可见且可操作的 HTML
+  控件。仅存在于 Canvas/WebGL 的控件需要专用语义 Adapter，且不会暴露裸屏幕坐标。
+- Model Selection、Secret、Account Ceremony、破坏性 Reset/Delete 和 Human-only
+  Confirmation 不属于 Typed Self-management Setting。
+- 发送当前输入框是显式 R2 操作，需要匹配的用户请求或正常授权；停止当前运行仍为 R1。
+- 后台业务 Service 保持 Internal。公开给 Agent 的能力用于控制可见 UI 和非模型
+  Typed Setting，不直接暴露 Project、Chat 或 Data Management API。
+
 ## 尚未实现的功能
 
 - Literature DOI 与 Title Lookup 尚未实现。

@@ -66,6 +66,10 @@ class SessionContext:
 # Per‑session identifier carried by ContextVar — set at entry to run_agent()
 _current_session_id: ContextVar[str] = ContextVar("_current_session_id", default="")
 
+# Opaque renderer instance that submitted the current desktop-local turn.  It
+# is run-local state, never model prompt text and never a tool argument.
+_ui_instance_id: ContextVar[str] = ContextVar("_ui_instance_id", default="")
+
 # Per‑run workspace root for the agent's FILE operations (Read/Write/Edit/Glob)
 # and Bash cwd. Empty → fall back to the global WORKSPACE_DIR. Set at run_agent()
 # entry from the active Workbench project's workspacePath so each project's agent
@@ -178,6 +182,24 @@ _deep_research_first_round: ContextVar[bool] = ContextVar("_deep_research_first_
 _economy_mode: ContextVar[bool] = ContextVar("_economy_mode", default=False)
 _current_command: ContextVar[str] = ContextVar("_current_command", default="")
 _conversation_source: ContextVar[str] = ContextVar("_conversation_source", default="")
+# Exact public text supplied by the real caller for this run.  This is kept
+# separate from ``_current_command`` because Workbench commands and internal
+# run prompts are not evidence that a user delegated an approval or answer.
+_user_request_text: ContextVar[str] = ContextVar("_user_request_text", default="")
+# Single-use delegation quotes consumed by Cyrene self-management policy.  The
+# set is initialized at ``run_agent`` entry so copied/background contexts cannot
+# mint or recycle receipts across runs.
+_explicit_delegation_receipts: ContextVar[set[str] | None] = ContextVar(
+    "_explicit_delegation_receipts",
+    default=None,
+)
+# Ordered, argument-bound operation batches approved from one explicit local
+# user quote.  Each entry stores the immutable operation-key plan and the next
+# index to consume; it is initialized and discarded with the surrounding run.
+_explicit_delegation_batches: ContextVar[dict[str, dict[str, Any]] | None] = ContextVar(
+    "_explicit_delegation_batches",
+    default=None,
+)
 # Map from filename (and original name without uuid prefix) → full absolute path
 # Populated by the chat route adapter when the user sends attachments.
 # Allows tools to auto-resolve agent-guessed paths (e.g. /tmp/file.txt) to the

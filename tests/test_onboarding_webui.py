@@ -393,3 +393,27 @@ async def test_save_personality_setup_marks_setup_done(monkeypatch, tmp_path):
     assert (tmp_path / ".setup_done").exists()
     assert payload["onboarding"]["needsOnboarding"] is False
     fake_agent.clear_session_id.assert_awaited_once()
+
+
+def test_completed_onboarding_enters_chat_instead_of_welcome():
+    root = Path(__file__).resolve().parent.parent
+    welcome_source = (
+        root / "src" / "webui" / "frontend" / "workbench-welcome.jsx"
+    ).read_text(encoding="utf-8")
+    workbench_source = (
+        root / "src" / "webui" / "frontend" / "workbench.jsx"
+    ).read_text(encoding="utf-8")
+
+    assert (
+        "p.onboarding && !p.onboarding.needsOnboarding && props.onComplete"
+        in welcome_source
+    )
+    assert "props.onComplete();" in welcome_source
+    assert "onComplete={props.onComplete}" in welcome_source
+
+    completion_handler = workbench_source.split(
+        "function handleOnboardingComplete() {", 1
+    )[1].split("}", 1)[0]
+    assert "wbRememberWelcomeHandled();" in completion_handler
+    assert 'setFullPage("chat");' in completion_handler
+    assert "onComplete: handleOnboardingComplete" in workbench_source

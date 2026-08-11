@@ -14,6 +14,7 @@ from cyrene.tool_impl import NATIVE_TOOL_MODULES
 from cyrene.runtime.settings_store import is_tool_pack_enabled
 from cyrene.tooling.packs import (
     CAPABILITY_BINDINGS,
+    INTERNAL_ONLY_CONCRETE_TOOL_NAMES,
     MODULE_TOOL_NAMES,
     PACK_BY_WIRE_NAME,
     WIRE_NAME_BY_CONCRETE_TOOL,
@@ -47,7 +48,6 @@ _MAIN_ONLY_TOOLS = {
     "browser_screenshot",
     "browser_click",
     "browser_click_ref",
-    "browser_click_text",
     "browser_click_at",
     "browser_type",
     "browser_type_ref",
@@ -68,6 +68,24 @@ _MAIN_ONLY_TOOLS = {
     "RemoteCyreneJobs",
     "RemoteHarness",
     "RunRemoteCyrene",
+    "CyreneAppStatus",
+    "CyreneWindowControl",
+    "CyreneUISnapshot",
+    "CyreneUIInspect",
+    "CyreneUIClick",
+    "CyreneUIDoubleClick",
+    "CyreneUIType",
+    "CyreneUIScroll",
+    "CyreneUIDrag",
+    "CyreneSessionMessage",
+    "CyreneSettingsDescribe",
+    "CyreneSettingsRead",
+    "CyreneSettingsUpdate",
+    "CyreneProjectControl",
+    "CyreneChatControl",
+    "CyreneDataControl",
+    "CyreneUpdateControl",
+    "CyreneLifecycleControl",
 }
 
 AGENT_TOOL_GROUPS: dict[str, set[str]] = {
@@ -89,11 +107,13 @@ _READ_ONLY_TOOLS = {
     "LintCode", "CodeReview", "browser_snapshot", "browser_network_log",
     "browser_tab_list",
     "ListRemoteDevices", "RemoteCyreneStatus",
+    "CyreneAppStatus", "CyreneUISnapshot", "CyreneUIInspect",
+    "CyreneSettingsDescribe", "CyreneSettingsRead",
 }
 
 _REQUIRES_ORDER_TOOLS = {
     "browser_navigate", "browser_snapshot", "browser_screenshot", "browser_click",
-    "browser_click_ref", "browser_click_text", "browser_click_at", "browser_type",
+    "browser_click_ref", "browser_click_at", "browser_type",
     "browser_type_ref", "browser_wait", "browser_network_log", "browser_tab_list",
     "browser_upload_files",
     "browser_tab_new", "browser_tab_select", "browser_tab_close", "browser_scroll",
@@ -144,6 +164,24 @@ _RESOURCE_KEY_TEMPLATES: dict[str, tuple[str, ...]] = {
     "RemoteHarness": ("remote:{device_id}",),
     "RemoteCyreneAction": ("remote:{device_id}",),
     "RunRemoteCyrene": ("remote:{device_id}",),
+    "CyreneAppStatus": ("cyrene:status",),
+    "CyreneWindowControl": ("cyrene:current-window",),
+    "CyreneUISnapshot": ("cyrene:current-surface",),
+    "CyreneUIInspect": ("cyrene:current-surface",),
+    "CyreneUIClick": ("cyrene:current-surface",),
+    "CyreneUIDoubleClick": ("cyrene:current-surface",),
+    "CyreneUIType": ("cyrene:current-surface",),
+    "CyreneUIScroll": ("cyrene:current-surface",),
+    "CyreneUIDrag": ("cyrene:current-surface",),
+    "CyreneSessionMessage": ("cyrene:current-surface", "cyrene:sessions"),
+    "CyreneSettingsDescribe": ("cyrene:settings",),
+    "CyreneSettingsRead": ("cyrene:settings",),
+    "CyreneSettingsUpdate": ("cyrene:settings",),
+    "CyreneProjectControl": ("cyrene:projects",),
+    "CyreneChatControl": ("cyrene:chats",),
+    "CyreneDataControl": ("cyrene:backups",),
+    "CyreneUpdateControl": ("cyrene:update",),
+    "CyreneLifecycleControl": ("cyrene:lifecycle",),
 }
 for _browser_tool_name in _REQUIRES_ORDER_TOOLS:
     if _browser_tool_name.startswith("browser_"):
@@ -297,7 +335,10 @@ def get_active_tool_defs() -> list[dict[str, Any]]:
 
 
 def _tool_blocklist_for_actor(actor: str) -> set[str]:
-    return set(_MAIN_ONLY_TOOLS) if actor == "subagent" else set()
+    blocked = set(INTERNAL_ONLY_CONCRETE_TOOL_NAMES)
+    if actor == "subagent":
+        blocked.update(_MAIN_ONLY_TOOLS)
+    return blocked
 
 
 def is_tool_allowed_for_actor(name: str, actor: str = "main") -> bool:

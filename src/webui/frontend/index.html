@@ -86,7 +86,49 @@
   let launchIdleTimer = 0;
   let launchDeadlineTimer = 0;
   let launchFontsPending = true;
+  let pageInvalidated = false;
   const nativeFetch = window.fetch.bind(window);
+
+  function isSameOriginApiRequest(input) {
+    try {
+      const raw = typeof input === "string" ? input : String(input && input.url || "");
+      const target = new URL(raw, window.location.href);
+      return target.origin === window.location.origin && target.pathname.startsWith("/api/");
+    } catch (error) {
+      return false;
+    }
+  }
+
+  function invalidatePage(reason) {
+    if (pageInvalidated) return;
+    pageInvalidated = true;
+    try {
+      if (window.CyreneUI && window.CyreneUI.has("data")) {
+        window.CyreneUI.require("data").dispose();
+      }
+    } catch (error) {}
+    window.dispatchEvent(new CustomEvent("cyrene:page-invalidated", {
+      detail: { reason: reason || "authentication_expired" },
+    }));
+  }
+
+  function guardedFetch(...args) {
+    const apiRequest = isSameOriginApiRequest(args[0]);
+    if (pageInvalidated && apiRequest) {
+      const error = new Error("This Cyrene page is no longer authorized.");
+      error.name = "AbortError";
+      error.code = "page_invalidated";
+      return Promise.reject(error);
+    }
+    return nativeFetch(...args).then((response) => {
+      if (apiRequest && response.status === 401) invalidatePage("authentication_expired");
+      return response;
+    });
+  }
+  window.CyrenePageLifecycle = Object.freeze({
+    isInvalidated: () => pageInvalidated,
+    invalidate: invalidatePage,
+  });
 
   function finishLaunch(force = false) {
     if (launchFinished) return;
@@ -94,7 +136,7 @@
     launchFinished = true;
     window.clearTimeout(launchIdleTimer);
     window.clearTimeout(launchDeadlineTimer);
-    window.fetch = nativeFetch;
+    window.fetch = guardedFetch;
     requestAnimationFrame(() => requestAnimationFrame(() => {
       delete document.documentElement.dataset.booting;
       const launchScreen = document.getElementById("cyrene-launch-screen");
@@ -113,10 +155,10 @@
   }
 
   window.fetch = (...args) => {
-    if (launchFinished) return nativeFetch(...args);
+    if (launchFinished) return guardedFetch(...args);
     launchRequestsInFlight += 1;
     window.clearTimeout(launchIdleTimer);
-    return nativeFetch(...args).finally(() => {
+    return guardedFetch(...args).finally(() => {
       launchRequestsInFlight = Math.max(0, launchRequestsInFlight - 1);
       scheduleLaunchFinish();
     });
@@ -181,6 +223,7 @@ window.pdfjsLib.GlobalWorkerOptions.workerSrc = '/static/app/pdfjs/pdf.worker.mi
 <script src="compiled/platform/readiness.js?v=0.7.1"></script>
 <script src="compiled/platform/events.js?v=0.7.1"></script>
 <script src="compiled/platform/navigation.js?v=0.7.1"></script>
+<script src="compiled/platform/ui-surface.js?v=0.7.1"></script>
 <script src="compiled/workbench-i18n.js?v=0.7.1"></script>
 <script src="compiled/shared/i18n/format.js?v=0.7.1"></script>
 <script src="compiled/shared/i18n/translations.js?v=0.7.1"></script>

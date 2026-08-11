@@ -164,6 +164,72 @@ final result: passed
 
 ---
 
+# Compact Local Model List Design QA — 2026-08-11
+
+- Source visual truth: `/var/folders/zm/qgh_rgw903j0b9t01yg2l0mc0000gn/T/codex-clipboard-64e29a13-79cc-45fc-9ddc-f3d7581c7071.png` (`1594 × 918 px`).
+- Browser-rendered implementation: `/Users/syw/Documents/playground/Cyrene/output/local-models-compact-implementation.png` (`1280 × 720 px`).
+- Focused implementation crop: `/Users/syw/Documents/playground/Cyrene/output/local-models-compact-crop.png`.
+- Combined focused comparison: `/Users/syw/Documents/playground/Cyrene/output/local-models-compact-comparison.png`.
+- Browser viewport: `1280 × 720` CSS px, dark theme. The source is a focused high-density crop; the implementation section was cropped and normalized to the same comparison width.
+- State: Settings / Models, Qwen and OCR ready, FireRedASR2 and ZipVoice optional, no download active.
+
+## Findings
+
+No actionable P0, P1, or P2 mismatch remains for the requested density and surface change.
+
+- Spacing/layout: all four rows now use a consistent `62 px` height, `34 px` icon target, tighter copy rhythm, compact actions, and single-pixel separators. The complete model list fits comfortably in one section.
+- Colors/tokens: every model row computes to `rgba(0, 0, 0, 0)` and therefore no longer paints a separate dark card background. The enclosing Settings surface remains the only large background layer.
+- Typography: the existing font family and hierarchy remain intact; titles reduce only from `13 px` to `12.5 px`, descriptions to `10.5 px`, and names/statuses keep their existing secondary emphasis.
+- Image/asset fidelity: existing model-type icons are reused unchanged and remain vector-sharp; no new raster, generated, placeholder, or replacement asset is introduced.
+- Copy/content: model names, sizes, runtime badges, download state, button labels, and accessible names remain unchanged.
+- Interaction/responsiveness: two Download and two Delete actions remain available in the inspected state; the existing narrow layout now uses a `32 px` icon target and aligned action row.
+
+## Comparison History
+
+- Earlier P2: four individually filled, `82 px`-tall cards created a heavy stack of dark slabs and made the optional model area disproportionately tall.
+- Fix: remove row fills and shadows, replace rounded cards with lightweight separators, reduce row/icon/action dimensions, and keep color only in runtime/status semantics.
+- Post-fix evidence: the browser-rendered list shows four transparent rows at `62 px` each; the combined comparison demonstrates the reduced density and removal of the dark card surfaces.
+
+## Verification
+
+- Frontend production build: passed (`34` JSX entry files compiled).
+- In-app browser DOM: four model rows, two Download actions, and two Delete actions present.
+- Browser console errors: none.
+- Focused visual comparison: passed.
+
+final result: passed
+
+---
+
+# Local Voice Controls Design QA — 2026-08-11
+
+- Composer reference: `/var/folders/zm/qgh_rgw903j0b9t01yg2l0mc0000gn/T/codex-clipboard-af85a912-e316-462e-b575-8e4744145f21.png`.
+- Message-action reference: `/var/folders/zm/qgh_rgw903j0b9t01yg2l0mc0000gn/T/codex-clipboard-9f47a09c-2948-43a7-aeb4-7eb923292ddd.png`.
+- Combined composer comparison input: `/tmp/cyrene-voice-comparison.png`.
+- Combined message-action comparison input: `/tmp/cyrene-message-comparison.png`.
+- Browser viewport: `908 × 864` CSS px, dark theme; voice readiness was overridden only inside the temporary preview process so the conditional controls could be inspected without downloading weights or changing persisted settings.
+
+## Findings
+
+No actionable P0, P1, or P2 mismatch remains.
+
+- The microphone uses the existing icon language and sits directly between the model selector and Send, as requested. It is absent while FireRedASR2-AED is not ready.
+- Assistant message actions preserve the existing compact baseline; Read Aloud is immediately left of Copy and is absent while ZipVoice or its reference voice is not ready.
+- Settings / Capabilities adds one compact Voice card using the existing settings material, typography, switch, file input, text area, disabled-state, and readiness-chip patterns.
+- Settings / Models exposes FireRedASR2-AED and ZipVoice through the existing local-model download surface rather than adding a separate download flow.
+- Existing chat, model selector, attachment, command, and Send geometry remains unchanged apart from the one requested microphone slot.
+
+## Verification
+
+- Frontend production build: passed.
+- Focused backend and frontend voice regressions: `10 passed`.
+- In-app browser checks: model cards, disabled preconfiguration state, configured microphone, per-message Read Aloud action, and requested control order all passed.
+- Reference and implementation crops were reviewed together in the combined comparison inputs above.
+
+final result: passed
+
+---
+
 # Settings Controls / Primary Actions / Backup Flow Design QA — 2026-08-11
 
 - Settings control reference: `/var/folders/zm/qgh_rgw903j0b9t01yg2l0mc0000gn/T/codex-clipboard-80a06dc2-cb29-42c9-a86d-2a70915a5473.png`
@@ -221,6 +287,43 @@ No actionable P0, P1, or P2 mismatch remains for the requested selector refresh.
 - `git diff --check`: passed.
 - Isolated render measurement: `466 × 40 px`, `12 px` radius, `13 px` text.
 - Browser console errors: none.
+
+final result: passed
+
+---
+
+# Voice Button Equal-Spacing Design QA — 2026-08-11
+
+- Source visual truth: `/var/folders/zm/qgh_rgw903j0b9t01yg2l0mc0000gn/T/codex-clipboard-7b51f019-d8a0-45aa-a729-3fdd07bc4dfe.png` (`682 × 130 px`).
+- Browser-rendered implementation: `/Users/syw/Documents/playground/Cyrene/output/voice-spacing-implementation.png` (`1280 × 720 px`).
+- Focused implementation crop: `/Users/syw/Documents/playground/Cyrene/output/voice-spacing-implementation-crop.png`.
+- Combined focused comparison: `/Users/syw/Documents/playground/Cyrene/output/voice-spacing-comparison.png`.
+- Browser viewport: `1280 × 720` CSS px; browser-reported device scale factor `2`. The source is a 2× focused crop, so the implementation control region was enlarged to the same visual density for comparison.
+- State: dark theme, FireRedASR2 readiness enabled only inside the temporary preview process, idle composer, Send disabled.
+
+## Findings
+
+No actionable P0, P1, or P2 mismatch remains.
+
+- Spacing/layout: the rendered model-to-microphone gap and microphone-to-Send gap both measure exactly `12 CSS px`.
+- Typography: model name, reasoning-effort label, and Send label retain the existing family, weights, sizes, line heights, and truncation behavior.
+- Colors/tokens: no color, opacity, border, radius, elevation, hover, focus, disabled-state, or semantic token changed.
+- Image/asset fidelity: the existing microphone and Send icons are reused unchanged; this adjustment introduces no raster, generated, placeholder, or replacement asset.
+- Copy/content: all labels and accessible names remain unchanged.
+- Responsive state: below the existing `420 px` composer breakpoint, both neighboring gaps resolve to the shared `6 px` row gap after the model button's special trailing margin is removed.
+
+## Comparison History
+
+- Earlier P2: the model button contributed `6 px` of trailing margin in addition to the action-row's `6 px` gap, while the microphone had only the row gap before Send. The microphone therefore appeared closer to Send than to the model selector.
+- Fix: mirror the model button's trailing margin on the microphone in the normal layout, and clear it at the existing narrow composer breakpoint.
+- Post-fix evidence: live geometry reports `leftGap: 12` and `rightGap: 12`; the combined comparison shows the microphone centered between its two neighbors without changing control sizes.
+
+## Verification
+
+- Frontend production build: passed (`34` JSX entry files compiled).
+- In-app browser DOM: model selector, Voice Input, and Send remain in the requested order.
+- Browser console errors: none.
+- Focused comparison: passed.
 
 final result: passed
 
@@ -837,3 +940,33 @@ No actionable P0, P1, or P2 mismatch remains.
 - Browser console errors: none.
 
 final result: passed
+
+---
+
+# Conversation Attention Card Controls Design QA — 2026-08-11
+
+- Source visual truth: `/var/folders/zm/qgh_rgw903j0b9t01yg2l0mc0000gn/T/codex-clipboard-5820c8e2-eeed-4598-a875-1bdd88a0ab37.png`.
+- Source pixels: `574 × 642`; the screenshot is a dark-theme focused crop of the conversation attention preview.
+- Intended implementation state: the same attention card, with option buttons, custom-reply input, and send button using Cyrene's shared floating glass controls.
+- Implementation screenshot: unavailable.
+- Browser viewport and density normalization: unavailable because the in-app browser blocked all local preview URLs before rendering.
+- Full-view comparison evidence: blocked; no browser-rendered implementation image could be captured.
+- Focused comparison evidence: blocked for the same reason.
+
+## Findings
+
+- [Blocked] Visual fidelity cannot be certified from browser evidence. The source and implementation could not be placed into the required combined comparison input because the in-app browser rejected the local Cyrene preview before navigation.
+- Static implementation review confirms that copy, content order, card geometry, and interactions are unchanged. Only the three requested control surfaces were updated to the shared `38px` height, `12px` radius, neutral/primary glass fills, normal foreground color, and complete hover/focus/active/disabled states.
+
+## Verification
+
+- Frontend production build: passed (`34` JSX entries).
+- Focused interaction and style regressions: `2 passed`.
+- `git diff --check`: passed.
+- Primary interactions and browser console errors: not available because the local preview did not render in the selected browser.
+
+## Comparison History
+
+- No visual iteration was possible. Browser-rendered evidence remains the only blocker; no actionable code-level P0/P1/P2 issue was found in the focused implementation review.
+
+final result: blocked

@@ -2331,7 +2331,7 @@ async def test_schedule_task_once_normalizes_naive_local_time_to_utc(monkeypatch
     seen = {}
     local_timezone = timezone(timedelta(hours=8))
 
-    async def fake_create_task(db_path, chat_id, prompt, schedule_type, schedule_value, next_run, permission_mode="workspace_only", project_id="default"):
+    async def fake_create_task(db_path, chat_id, prompt, schedule_type, schedule_value, next_run, permission_mode="workspace_only", project_id="default", schedule_timezone="UTC"):
         seen["db_path"] = db_path
         seen["chat_id"] = chat_id
         seen["prompt"] = prompt
@@ -2340,6 +2340,7 @@ async def test_schedule_task_once_normalizes_naive_local_time_to_utc(monkeypatch
         seen["next_run"] = next_run
         seen["permission_mode"] = permission_mode
         seen["project_id"] = project_id
+        seen["schedule_timezone"] = schedule_timezone
         return "task_local"
 
     class _FakeLocalNow(datetime):
@@ -2370,6 +2371,7 @@ async def test_schedule_task_once_normalizes_naive_local_time_to_utc(monkeypatch
     assert seen["next_run"] == "2026-05-20T11:35:35+00:00"
     assert seen["permission_mode"] == "workspace_only"
     assert seen["project_id"] == "default"
+    assert seen["schedule_timezone"] == "UTC"
 
 
 async def test_schedule_task_uses_workbench_project_scope(monkeypatch, tmp_path):
@@ -2399,8 +2401,9 @@ async def test_schedule_task_uses_workbench_project_scope(monkeypatch, tmp_path)
         ]
     }), encoding="utf-8")
 
-    async def fake_create_task(db_path, chat_id, prompt, schedule_type, schedule_value, next_run, permission_mode="workspace_only", project_id="default"):
+    async def fake_create_task(db_path, chat_id, prompt, schedule_type, schedule_value, next_run, permission_mode="workspace_only", project_id="default", schedule_timezone="UTC"):
         seen["project_id"] = project_id
+        seen["schedule_timezone"] = schedule_timezone
         return "task_scope"
 
     monkeypatch.setattr(workbench_context, "_WORKBENCH_STORE", projects_store)
@@ -2627,7 +2630,13 @@ async def test_answer_pending_question_resumes_same_round(monkeypatch, tmp_path)
         command="",
         permission_mode="default",
     ):
+        from cyrene.agent.context import current_user_request_text
+        from cyrene.agent import state as agent_state
+
         seen["user_message"] = user_message
+        seen["authorization_user_request"] = current_user_request_text()
+        seen["delegation_receipts_ready"] = agent_state._explicit_delegation_receipts.get() == set()
+        seen["delegation_batches_ready"] = agent_state._explicit_delegation_batches.get() == {}
         seen["ephemeral_system"] = ephemeral_system
         seen["forced_round_id"] = forced_round_id
         seen["history_override"] = history_override
@@ -2655,6 +2664,12 @@ async def test_answer_pending_question_resumes_same_round(monkeypatch, tmp_path)
     assert result == "继续完成后的最终答案"
     assert "pending_question" not in state
     assert seen["user_message"] == "我更偏向城市"
+    assert seen["authorization_user_request"] == (
+        "做一个旅游计划\n\n用户随后澄清：我更偏向城市"
+    )
+    assert "你更偏向城市还是自然" not in seen["authorization_user_request"]
+    assert seen["delegation_receipts_ready"] is True
+    assert seen["delegation_batches_ready"] is True
     assert "answers your earlier clarification question" in seen["ephemeral_system"]
     assert seen["forced_round_id"] == "round_1"
     assert [msg["content"] for msg in seen["history_override"]] == ["做一个旅游计划", "你更偏向城市还是自然？"]
@@ -2663,6 +2678,183 @@ async def test_answer_pending_question_resumes_same_round(monkeypatch, tmp_path)
     assert seen["client_request_id"] == "req_answer_1"
     assert seen["persist_user_message"] is True
     assert seen["command"] == "deep-research"
+
+
+async def test_clarification_resume_can_auto_review_original_cyrene_ui_request(
+    monkeypatch, tmp_path
+):
+    from cyrene import agent
+    from cyrene.agent import auto_review
+    from cyrene.agent import coordinator as _agent_coordinator
+    from cyrene.agent.context import bind_run_context
+    from cyrene.workbench.app_control import authorize
+
+    _patch_state_file(monkeypatch, tmp_path / "state.json")
+    _patch_data_dir(monkeypatch, tmp_path)
+    original = "帮我新建一个对话，然后在新的对话里面搜索野生小熊猫攻略。"
+    agent.STATE_FILE.write_text(json.dumps({
+        "messages": [
+            {"role": "user", "content": original, "round_id": "round_ui", "message_id": "u1"},
+            {
+                "role": "assistant",
+                "content": "你指的是哪个应用？",
+                "round_id": "round_ui",
+                "question_prompt": True,
+                "question_id": "question_ui",
+                "message_id": "a1",
+            },
+        ],
+        "pending_question": {
+            "id": "question_ui",
+            "text": "你指的是哪个应用？",
+            "round_id": "round_ui",
+            "allow_custom": True,
+            "options": [],
+            "asked_at": "2026-08-11T00:00:00+00:00",
+            "meta": {},
+        },
+    }, ensure_ascii=False), encoding="utf-8")
+
+    reviews = []
+    fallbacks = []
+
+    async def approve_delegation(**kwargs):
+        reviews.append(kwargs)
+        return True, "原始请求与澄清共同明确授权提交搜索。"
+
+    async def fallback(**_kwargs):
+        fallbacks.append(True)
+        return "approval-required"
+
+    async def fake_run_chat_agent(
+        user_message,
+        bot,
+        chat_id,
+        db_path,
+        forced_round_id="",
+        **_kwargs,
+    ):
+        binding = bind_run_context(
+            agent_id="main",
+            caller="main_agent",
+            round_id=forced_round_id,
+            session_id="wbchat_ui",
+            conversation_source="desktop_local",
+        )
+        try:
+            result = await authorize(
+                "cyrene.ui.click.r2",
+                {
+                    "snapshot_id": "tree_ui",
+                    "revision": 4,
+                    "node_id": "chat_composer_submit",
+                    "action_id": "submit",
+                },
+                reason="提交已输入的新对话搜索请求",
+                delegation_quote=original,
+            )
+        finally:
+            binding.reset()
+        return "continued" if result is None else result
+
+    monkeypatch.setattr(auto_review, "review_user_delegation", approve_delegation)
+    monkeypatch.setattr(
+        "cyrene.workbench.app_control.request_self_configuration_confirmation",
+        fallback,
+    )
+    monkeypatch.setattr(_agent_coordinator, "_run_chat_agent", fake_run_chat_agent)
+    outer = bind_run_context(
+        conversation_source="desktop_local",
+        user_request_text="在 Cyrene 应用里新建对话",
+    )
+    try:
+        result = await agent.answer_pending_question(
+            "question_ui",
+            "在 Cyrene 应用里新建对话",
+            None,
+            0,
+            "db.sqlite3",
+            permission_mode="auto",
+        )
+    finally:
+        outer.reset()
+
+    assert result == "continued"
+    assert fallbacks == []
+    assert len(reviews) == 1
+    assert reviews[0]["delegation_quote"] == original
+    assert reviews[0]["user_request"] == (
+        original + "\n\n用户随后澄清：在 Cyrene 应用里新建对话"
+    )
+
+
+async def test_workbench_pending_answer_resume_is_session_owned_and_interruptible(
+    monkeypatch,
+):
+    from cyrene.agent.coordinator import (
+        interrupt_active_run,
+        is_session_running,
+    )
+    from cyrene.workbench import runtime as workbench_runtime
+
+    started = asyncio.Event()
+    cancelled = asyncio.Event()
+
+    async def fake_answer_pending_question(*_args, **_kwargs):
+        started.set()
+        try:
+            await asyncio.Event().wait()
+        except asyncio.CancelledError:
+            cancelled.set()
+            raise
+
+    monkeypatch.setattr(
+        workbench_runtime,
+        "answer_pending_question",
+        fake_answer_pending_question,
+    )
+
+    task = asyncio.create_task(workbench_runtime._workbench_answer_pending(
+        "chat_answer_interrupt",
+        "question_1",
+        "继续",
+        "",
+    ))
+    await asyncio.wait_for(started.wait(), timeout=1)
+
+    assert is_session_running("chat_answer_interrupt") is True
+    assert interrupt_active_run("chat_answer_interrupt") is True
+    with pytest.raises(asyncio.CancelledError):
+        await task
+    assert cancelled.is_set()
+    assert is_session_running("chat_answer_interrupt") is False
+
+
+def test_pending_permission_public_shape_keeps_only_localizable_meta():
+    from cyrene.workbench.session_view import build_pending_question
+
+    result = build_pending_question({
+        "id": "question_ui",
+        "text": "legacy text",
+        "meta": {
+            "kind": "self_configuration_confirmation",
+            "tool_name": "cyrene.ui.click",
+            "operation": "cyrene.ui.click.r2",
+            "path_hint": "cyrene-setting:argument-hash",
+            "reason": "提交搜索请求",
+            "secret_internal_plan": "must not leak",
+        },
+        "options": ["允许这一次", "拒绝"],
+    })
+
+    assert result is not None
+    assert result["meta"] == {
+        "kind": "self_configuration_confirmation",
+        "tool_name": "cyrene.ui.click",
+        "operation": "cyrene.ui.click.r2",
+        "path_hint": "cyrene-setting:argument-hash",
+        "reason": "提交搜索请求",
+    }
 
 
 async def test_answer_permission_question_is_hidden_from_context(monkeypatch, tmp_path):

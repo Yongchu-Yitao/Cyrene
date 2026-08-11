@@ -109,6 +109,11 @@ uv run python -m cyrene
 
 Open `http://localhost:4242`. You should see the onboarding wizard on first launch.
 
+The `cyrene_tools` self-management package is available only when the Electron
+host and a Workbench renderer are both connected. A browser-only Web UI or CLI
+process can still run normal agent tools, but it cannot borrow an Electron UI
+surface that is not registered to that runtime.
+
 The active runtime database is `store/cyrene.runtime.database`. If an older
 checkout has `store/cyrene.db`, first startup migrates it with SQLite's backup
 API, verifies the new database, and retains the old file for rollback. A

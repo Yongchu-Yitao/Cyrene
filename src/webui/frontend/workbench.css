@@ -25,6 +25,7 @@
   --wb-active-bg: color-mix(in srgb, var(--accent) 15%, var(--bg-2));
   --wb-active-border: color-mix(in srgb, var(--accent) 40%, transparent);
   --wb-card-bg: #ffffff;
+  --wb-floating-rail-tint: var(--wb-card-bg);
   --wb-card-bg-strong: #ffffff;
   /* Shared elevation language for every compact menu and modal.  These tokens
      are intentionally derived from the foreground colour: theme line tokens
@@ -1752,6 +1753,32 @@ html[data-platform="darwin"] .workbench-top-project-menu {
   color: var(--wb-text);
 }
 
+.workbench-voice-command-btn:disabled {
+  cursor: default;
+  opacity: 1;
+}
+
+.workbench-voice-command-btn.recording {
+  color: var(--wb-red);
+  background: color-mix(in srgb, var(--wb-red) 12%, transparent);
+  animation: wb-voice-command-pulse 1.4s ease-in-out infinite;
+}
+
+.workbench-voice-command-btn.starting,
+.workbench-voice-command-btn.recognizing {
+  color: var(--wb-accent);
+  background: color-mix(in srgb, var(--wb-accent) 10%, transparent);
+}
+
+@keyframes wb-voice-command-pulse {
+  0%, 100% { transform: scale(1); }
+  50% { transform: scale(1.08); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .workbench-voice-command-btn.recording { animation: none; }
+}
+
 .workbench-notif-btn {
   position: relative;
 }
@@ -1843,7 +1870,9 @@ html[data-platform="darwin"] .workbench-top-project-menu {
   display: flex;
   align-items: center;
   gap: 2px;
+  min-width: 0;
   padding: 0 8px;
+  overflow: hidden;
   border-bottom: 1px solid color-mix(in srgb, var(--wb-line) 88%, transparent);
 }
 
@@ -1858,9 +1887,12 @@ html[data-platform="darwin"] .workbench-top-project-menu {
 
 .workbench-notif-tab {
   position: relative;
-  padding: 0 12px;
+  flex: 1 1 0;
+  min-width: 0;
+  padding: 0 6px;
   display: inline-flex;
   align-items: center;
+  justify-content: center;
   font-size: calc(13px * var(--wb-ui-font-scale, 1));
   font-weight: 740;
 }
@@ -1883,6 +1915,7 @@ html[data-platform="darwin"] .workbench-top-project-menu {
 .workbench-notif-settings {
   margin-left: auto;
   width: 40px;
+  flex: 0 0 40px;
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -1892,7 +1925,10 @@ html[data-platform="darwin"] .workbench-top-project-menu {
 .workbench-notif-list {
   max-height: min(58vh, 400px);
   min-height: 152px;
-  overflow: auto;
+  overflow-x: hidden;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  touch-action: pan-y;
   background: var(--wb-notif-pop-bg);
 }
 
@@ -1909,6 +1945,8 @@ html[data-platform="darwin"] .workbench-top-project-menu {
 
 .workbench-notif-item {
   width: 100%;
+  min-width: 0;
+  max-width: 100%;
   border: 0;
   background: transparent;
   display: grid;
@@ -1981,6 +2019,7 @@ html[data-theme="dark"] .workbench-notif-item-icon.system { background: rgba(255
 }
 
 .workbench-notif-item-top {
+  min-width: 0;
   display: flex;
   align-items: baseline;
   justify-content: space-between;
@@ -1988,6 +2027,9 @@ html[data-theme="dark"] .workbench-notif-item-icon.system { background: rgba(255
 }
 
 .workbench-notif-item-top b {
+  min-width: 0;
+  overflow-wrap: anywhere;
+  word-break: break-word;
   font-size: calc(14px * var(--wb-ui-font-scale, 1));
   font-weight: 800;
   color: var(--wb-notif-title);
@@ -2001,6 +2043,10 @@ html[data-theme="dark"] .workbench-notif-item-icon.system { background: rgba(255
 }
 
 .workbench-notif-item-body {
+  min-width: 0;
+  max-width: 100%;
+  overflow-wrap: anywhere;
+  word-break: break-word;
   color: var(--wb-notif-body);
   font-size: calc(13px * var(--wb-ui-font-scale, 1));
   font-weight: 650;
@@ -2057,7 +2103,6 @@ html[data-theme="dark"] .workbench-notif-item-icon.system { background: rgba(255
 
   .workbench-notif-tabs {
     padding: 0 8px;
-    overflow-x: auto;
   }
 }
 
@@ -7095,6 +7140,9 @@ html[data-theme="dark"] .workbench-shell {
   --wb-link: #6fb4ff;
   --wb-link-hover: #9ccbff;
   --wb-card-bg: #232e3e;
+  /* Compensate for the blue canvas below the 65% glass so the perceived rail
+     colour still matches the composer surface without making it opaque. */
+  --wb-floating-rail-tint: #282f3b;
   --wb-card-bg-strong: #283447;
   --wb-flyout-border: color-mix(in srgb, var(--wb-text) 16%, var(--wb-line-2));
   --wb-flyout-shadow:
@@ -9307,6 +9355,165 @@ html[data-theme] .settings-overlay .wb-toggle.on {
   color: var(--wb-green);
 }
 
+.wb-voice-settings {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.wb-voice-settings > .wb-field {
+  padding-top: 0;
+}
+
+.wb-voice-profile {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 12px;
+  padding: 16px 0 2px;
+  border: 0;
+  border-top: 1px solid color-mix(in srgb, var(--wb-line-2) 58%, transparent);
+  border-radius: 0;
+  background: transparent;
+}
+
+.wb-voice-profile-copy {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.wb-voice-profile-copy b {
+  color: var(--wb-text);
+  font-size: calc(13px * var(--wb-ui-font-scale, 1));
+}
+
+.wb-voice-profile-copy small {
+  color: var(--wb-muted);
+  font-size: calc(11.5px * var(--wb-ui-font-scale, 1));
+  line-height: 1.45;
+}
+
+.wb-voice-mode-switch {
+  justify-self: end;
+}
+
+.wb-voice-preset-row {
+  grid-column: 1 / -1;
+  min-height: 58px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 10px 12px;
+  border: 1px solid color-mix(in srgb, var(--wb-line-2) 62%, transparent);
+  border-radius: 11px;
+  background: transparent;
+}
+
+.wb-voice-preset-row > span {
+  flex: 0 0 auto;
+  padding: 4px 8px;
+  border-radius: 999px;
+  color: var(--wb-muted);
+  background: color-mix(in srgb, var(--wb-muted) 9%, transparent);
+  font-size: calc(10.5px * var(--wb-ui-font-scale, 1));
+  font-weight: 650;
+}
+
+.wb-voice-preset-row > span.ready {
+  color: var(--wb-green);
+  background: color-mix(in srgb, var(--wb-green) 12%, transparent);
+}
+
+.wb-voice-custom-fields {
+  grid-column: 1 / -1;
+  display: grid;
+  gap: 12px;
+  padding-top: 2px;
+}
+
+.wb-voice-file {
+  min-height: 44px;
+  padding: 0 14px;
+  border: 1px dashed var(--wb-line-2);
+  border-radius: var(--wb-settings-control-radius, 12px);
+  color: var(--wb-muted);
+  background: color-mix(in srgb, var(--wb-text) 3%, transparent);
+  display: flex;
+  align-items: center;
+  cursor: pointer;
+  font-size: calc(12px * var(--wb-ui-font-scale, 1));
+  transition: background .16s, border-color .16s, color .16s;
+}
+
+.wb-voice-file:hover {
+  border-color: color-mix(in srgb, var(--wb-accent) 62%, var(--wb-line-2));
+  color: var(--wb-accent);
+  background: color-mix(in srgb, var(--wb-accent) 5%, transparent);
+}
+
+.wb-voice-file:focus-within {
+  border-color: color-mix(in srgb, var(--wb-accent) 72%, var(--wb-line-2));
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--wb-accent) 20%, transparent);
+}
+
+.wb-voice-file input {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  opacity: 0;
+  pointer-events: none;
+}
+
+.wb-voice-reference-text {
+  width: 100%;
+  min-height: 76px;
+  resize: vertical;
+  font-family: inherit;
+  line-height: 1.45;
+  background: color-mix(in srgb, var(--wb-text) 3%, transparent);
+}
+
+.wb-voice-profile .wb-save-actions {
+  padding: 0;
+  flex-wrap: wrap;
+}
+
+.wb-voice-profile > .wb-hint {
+  grid-column: 1 / -1;
+}
+
+@media (max-width: 620px) {
+  .wb-voice-profile {
+    grid-template-columns: 1fr;
+  }
+
+  .wb-voice-mode-switch {
+    justify-self: start;
+  }
+}
+
+.wb-voice-readiness {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.wb-voice-readiness span {
+  padding: 5px 9px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--wb-muted) 10%, transparent);
+  color: var(--wb-muted);
+  font-size: calc(10.5px * var(--wb-ui-font-scale, 1));
+  font-weight: 650;
+}
+
+.wb-voice-readiness span.ready {
+  background: color-mix(in srgb, var(--wb-green) 12%, transparent);
+  color: var(--wb-green);
+}
+
 /* Color swatches */
 .wb-accent-picker {
   position: relative;
@@ -10002,52 +10209,51 @@ details.wb-model-section > .wb-model-section-head::marker {
 
 .wb-local-model {
   display: grid;
-  grid-template-columns: 42px minmax(0, 1fr) auto;
+  grid-template-columns: 34px minmax(0, 1fr) auto;
   align-items: center;
-  gap: 14px;
+  gap: 10px;
 }
 
 .wb-model-section.is-local-models .wb-model-section-body {
   display: grid;
-  gap: 10px;
-  padding: 12px 14px 14px;
+  gap: 0;
+  padding: 6px 14px 10px;
 }
 
 .wb-model-section.is-local-models .wb-model-section-body > .wb-model-card {
-  min-height: 82px;
-  padding: 13px;
-  border: 1px solid color-mix(in srgb, var(--wb-line-2) 62%, transparent);
-  border-radius: 13px;
-  background: color-mix(in srgb, var(--wb-control-bg) 64%, transparent);
-  box-shadow: inset 0 1px 0 color-mix(in srgb, #fff 4%, transparent);
+  min-height: 62px;
+  padding: 9px 4px;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  box-shadow: none;
   box-sizing: border-box;
 }
 
 .wb-model-section.is-local-models .wb-model-section-body > .wb-model-card + .wb-model-card {
   margin-top: 0;
-  border-top: 1px solid color-mix(in srgb, var(--wb-line-2) 62%, transparent);
+  border-top: 1px solid color-mix(in srgb, var(--wb-line) 70%, transparent);
 }
 
 .wb-model-section.is-local-models .wb-model-section-body > .wb-model-card.is-ready {
-  border-color: color-mix(in srgb, var(--wb-accent) 30%, var(--wb-line-2));
-  background: color-mix(in srgb, var(--wb-accent) 5%, var(--wb-control-bg));
+  background: transparent;
 }
 
 .wb-local-model-icon {
-  width: 42px;
-  height: 42px;
+  width: 34px;
+  height: 34px;
   display: inline-grid;
   place-items: center;
-  border: 1px solid color-mix(in srgb, var(--wb-line-2) 68%, transparent);
-  border-radius: 12px;
-  background: var(--wb-card-bg);
+  border: 1px solid color-mix(in srgb, var(--wb-line-2) 52%, transparent);
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--wb-text) 3%, transparent);
   color: var(--wb-muted);
-  box-shadow: 0 4px 12px color-mix(in srgb, #06101d 6%, transparent);
+  box-shadow: none;
 }
 
 .wb-local-model.is-ready .wb-local-model-icon {
-  border-color: color-mix(in srgb, var(--wb-accent) 30%, var(--wb-line-2));
-  background: color-mix(in srgb, var(--wb-accent) 10%, var(--wb-card-bg));
+  border-color: color-mix(in srgb, var(--wb-accent) 24%, var(--wb-line-2));
+  background: color-mix(in srgb, var(--wb-accent) 7%, transparent);
   color: var(--wb-accent);
 }
 
@@ -10055,7 +10261,7 @@ details.wb-model-section > .wb-model-section-head::marker {
   min-width: 0;
   display: flex;
   flex-direction: column;
-  gap: 4px;
+  gap: 2px;
 }
 
 .wb-local-model-heading {
@@ -10068,9 +10274,9 @@ details.wb-model-section > .wb-model-section-head::marker {
 
 .wb-local-model-copy strong {
   color: var(--wb-text);
-  font-size: calc(13px * var(--wb-ui-font-scale, 1));
+  font-size: calc(12.5px * var(--wb-ui-font-scale, 1));
   font-weight: 720;
-  line-height: 1.3;
+  line-height: 1.25;
 }
 
 .wb-local-model-name {
@@ -10081,8 +10287,8 @@ details.wb-model-section > .wb-model-section-head::marker {
 
 .wb-local-model-copy small {
   color: var(--wb-muted);
-  font-size: calc(11px * var(--wb-ui-font-scale, 1));
-  line-height: 1.4;
+  font-size: calc(10.5px * var(--wb-ui-font-scale, 1));
+  line-height: 1.35;
 }
 
 .wb-local-model-progress {
@@ -10113,15 +10319,15 @@ details.wb-model-section > .wb-model-section-head::marker {
   display: flex;
   align-items: center;
   justify-content: flex-end;
-  gap: 10px;
+  gap: 7px;
 }
 
 .wb-local-model-actions > .wb-model-status {
   display: inline-flex;
   align-items: center;
   gap: 6px;
-  padding: 5px 8px;
-  font-size: calc(10.5px * var(--wb-ui-font-scale, 1));
+  padding: 3px 7px;
+  font-size: calc(10px * var(--wb-ui-font-scale, 1));
   white-space: nowrap;
 }
 
@@ -10169,36 +10375,36 @@ html[data-theme="dark"] .wb-local-model-actions > .wb-runtime-badge.is-cuda { co
 html[data-theme="dark"] .wb-local-model-actions > .wb-runtime-badge.is-onnx { color: #7dd3fc; }
 
 .wb-local-model-actions > .wb-btn.compact {
-  height: 34px;
-  min-height: 34px;
-  padding: 0 13px;
-  border-radius: 9px;
-  font-size: calc(11.5px * var(--wb-ui-font-scale, 1));
-}
-
-@media (max-width: 760px) {
-  .wb-local-model {
-    grid-template-columns: 38px minmax(0, 1fr);
-    align-items: start;
-    gap: 11px;
-  }
-
-  .wb-local-model-icon {
-    width: 38px;
-    height: 38px;
-    border-radius: 10px;
-  }
-
-  .wb-local-model-actions {
-    grid-column: 1 / -1;
-    justify-content: space-between;
-    padding-left: 49px;
-  }
+  height: 30px;
+  min-height: 30px;
+  padding: 0 11px;
+  border-radius: 8px;
+  font-size: calc(11px * var(--wb-ui-font-scale, 1));
 }
 
 .wb-model-section.is-codex .wb-model-status {
   background: color-mix(in srgb, var(--wb-accent) 12%, transparent);
   color: var(--wb-accent);
+}
+
+@media (max-width: 760px) {
+  .wb-local-model {
+    grid-template-columns: 32px minmax(0, 1fr);
+    align-items: start;
+    gap: 9px;
+  }
+
+  .wb-local-model-icon {
+    width: 32px;
+    height: 32px;
+    border-radius: 9px;
+  }
+
+  .wb-local-model-actions {
+    grid-column: 1 / -1;
+    justify-content: space-between;
+    padding-left: 41px;
+  }
 }
 
 .wb-codex-auth {
@@ -16633,6 +16839,38 @@ span.wbc-chat-group-toggle {
     0 5px 14px color-mix(in srgb, var(--wb-accent) 8%, transparent);
 }
 
+/* Semantic Agent actions receive a quiet, transient perimeter glint. */
+.wbc-rail .wbc-chat-card.agent-flow::after {
+  content: "";
+  position: absolute;
+  inset: 1px;
+  z-index: 2;
+  border-radius: 10px;
+  padding: 1px;
+  pointer-events: none;
+  background: linear-gradient(
+    108deg,
+    transparent 34%,
+    color-mix(in srgb, var(--wb-accent) 58%, transparent) 50%,
+    transparent 66%
+  );
+  background-size: 240% 100%;
+  background-position: 135% 0;
+  opacity: .72;
+  -webkit-mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
+  -webkit-mask-composite: xor;
+  mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
+  mask-composite: exclude;
+  animation: wbc-agent-chat-flow 3.2s cubic-bezier(.4, 0, .2, 1) infinite;
+}
+
+@keyframes wbc-agent-chat-flow {
+  0% { background-position: 135% 0; opacity: 0; }
+  18% { opacity: .68; }
+  76% { opacity: .46; }
+  100% { background-position: -135% 0; opacity: 0; }
+}
+
 .wbc-rail .wbc-chat-card.active .wbc-chat-row-icon,
 .wbc-rail .wbc-chat-card.active .wbc-chat-card-title,
 .wbc-rail .wbc-chat-card.active .wbc-chat-card-menu-btn {
@@ -16980,6 +17218,18 @@ span.wbc-chat-group-toggle {
   .workbench-session-tab:focus-visible .wbc-hover-marquee.overflow .wbc-hover-marquee-track {
     transition: none;
     animation: none;
+  }
+
+  .wbc-rail .wbc-chat-card.agent-flow::after {
+    animation: none;
+    background: color-mix(in srgb, var(--wb-accent) 36%, transparent);
+    opacity: .62;
+  }
+
+  .wbc-composer-box.agent-flow::before {
+    animation: none !important;
+    background: color-mix(in srgb, var(--wb-accent) 44%, transparent) !important;
+    opacity: .72 !important;
   }
 }
 
@@ -18433,7 +18683,11 @@ body.wbc-resizing-side-agent .wbc-page.wbc-split-left .wbc-side-agent-split-moti
 .wbc-thread-stage {
   --wbc-thread-inset-top: 76px;
   --wbc-thread-inset-inline: 28px;
-  --wbc-thread-inset-bottom: calc(198px * var(--wb-ui-font-scale, 1));
+  /* The composer is absolutely positioned over the transcript and can grow
+     when context chips, attachments, or controls wrap in a narrow window.
+     Reuse its measured glass height so the final message always scrolls fully
+     above the composer; the extra 34px preserves the existing visual gap. */
+  --wbc-thread-inset-bottom: calc(var(--wbc-shared-glass-height) + 34px * var(--wb-ui-font-scale, 1));
   position: relative;
   flex: 1 1 auto;
   min-width: 0;
@@ -20418,6 +20672,11 @@ button.wbc-attach-file:focus-visible {
   color: var(--wb-text);
 }
 
+.wbc-msg-action.is-speaking {
+  background: color-mix(in srgb, var(--wb-accent) 12%, transparent);
+  color: var(--wb-accent);
+}
+
 /* ---- user message edit (fork) ---- */
 
 /* Edit action sits in a footer below the bubble, right-aligned — mirrors the
@@ -21130,6 +21389,40 @@ button.wbc-attach-file:focus-visible {
   backdrop-filter: blur(18px) saturate(120%) contrast(102%);
 }
 
+/* Agent-created chats and Agent-entered drafts get one quiet, moving edge on
+   the composer itself. It stays on the 1.5px perimeter and never affects
+   layout, content opacity, or pointer behavior. */
+.wbc-composer-box.agent-flow::before {
+  content: "";
+  position: absolute;
+  inset: -1px;
+  z-index: 4;
+  border-radius: 15px;
+  padding: 1.5px;
+  pointer-events: none;
+  background: linear-gradient(
+    104deg,
+    transparent 24%,
+    color-mix(in srgb, var(--wb-accent) 82%, transparent) 45%,
+    color-mix(in srgb, #22d3ee 72%, var(--wb-accent)) 52%,
+    transparent 76%
+  );
+  background-size: 260% 100%;
+  background-position: 140% 0;
+  opacity: .9;
+  -webkit-mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
+  -webkit-mask-composite: xor;
+  mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
+  mask-composite: exclude;
+  animation: wbc-agent-composer-flow 3.2s cubic-bezier(.4, 0, .2, 1) infinite;
+}
+
+@keyframes wbc-agent-composer-flow {
+  0% { background-position: 140% 0; opacity: .28; }
+  45% { opacity: .92; }
+  100% { background-position: -140% 0; opacity: .28; }
+}
+
 .wbc-composer-box textarea {
   width: 100%;
   border: 0;
@@ -21361,6 +21654,23 @@ button.wbc-attach-file:focus-visible {
   cursor: default;
 }
 
+.wbc-voice-input {
+  /* The model button already carries 6px of trailing space in addition to the
+     action-row gap. Mirror it on the microphone so both neighboring gaps are
+     visually identical without changing the compact icon target. */
+  margin-right: 6px;
+}
+
+.wbc-voice-input.recording {
+  background: color-mix(in srgb, var(--wb-red) 12%, transparent);
+  color: var(--wb-red);
+}
+
+.wbc-voice-input.transcribing {
+  background: color-mix(in srgb, var(--wb-accent) 10%, transparent);
+  color: var(--wb-accent);
+}
+
 .wbc-composer-spacer {
   flex: 1;
 }
@@ -21520,6 +21830,10 @@ html[data-theme="dark"] .wbc-model-button.active {
     margin-right: 0;
     padding-inline: 7px;
     justify-content: center;
+  }
+
+  .wbc-voice-input {
+    margin-right: 0;
   }
 
   .wbc-model-button-icon {
@@ -26148,40 +26462,6 @@ html[data-theme="dark"] .wbc-map .leaflet-control-zoom a {
 
 .wb-wel-pref-caret { color: var(--wb-faint); display: grid; place-items: center; }
 
-.wb-wel-pref.is-long-value {
-  grid-template-columns: 30px minmax(0, 1fr) 16px;
-  grid-template-rows: auto auto;
-  column-gap: 10px;
-  row-gap: 2px;
-}
-
-.wb-wel-pref.is-long-value .wb-wel-pref-ico,
-.wb-wel-pref.is-long-value .wb-wel-pref-caret {
-  grid-row: 1 / span 2;
-  align-self: center;
-}
-
-.wb-wel-pref.is-long-value .wb-wel-pref-label {
-  grid-column: 2;
-  grid-row: 1;
-}
-
-.wb-wel-pref.is-long-value .wb-wel-pref-value {
-  grid-column: 2;
-  grid-row: 2;
-  justify-self: stretch;
-  text-align: left;
-  line-height: 1.35;
-  white-space: normal;
-  overflow: visible;
-  text-overflow: clip;
-  overflow-wrap: anywhere;
-}
-
-.wb-wel-pref.is-long-value .wb-wel-pref-caret {
-  grid-column: 3;
-}
-
 /* ── bottom panels: templates + import ── */
 .wb-wel-bottom {
   display: grid;
@@ -28192,11 +28472,13 @@ html[data-density="compact"] .workbench-shell :where(.wb-budget-model-head, .wb-
   --wb-sidebar-motion-ease: cubic-bezier(.22, 1.14, .36, 1);
   --wb-floating-rail-border: 1px solid color-mix(in srgb, var(--wb-line-2) 72%, transparent);
   --wb-floating-rail-radius: 18px;
-  --wb-floating-rail-bg: color-mix(in srgb, var(--wb-card-bg) 88%, var(--wb-surface));
   /* Resolve the composer's translucent fill against its normal canvas first.
      Floating rails sit above varied content, so using that stable result keeps
      them neutral instead of letting blue board columns tint the whole card. */
   --wb-composer-surface-color: color-mix(in srgb, var(--wb-card-bg) 72%, var(--wb-surface));
+  /* Apply the requested alpha to the original card colour. Reusing the
+     pre-mixed composer surface here would compound both blends and darken it. */
+  --wb-floating-rail-bg: color-mix(in srgb, var(--wb-floating-rail-tint) 65%, transparent);
   --wb-floating-rail-shadow:
     0 8px 22px rgba(9, 17, 30, .055),
     inset 0 1px 0 color-mix(in srgb, #fff 9%, transparent),
@@ -28719,8 +29001,158 @@ html[data-density="compact"] .workbench-shell :where(.wb-budget-model-head, .wb-
 }
 
 .workbench-profile-rail-spacer {
+  position: relative;
   min-height: 0;
   flex: 1 1 auto;
+}
+
+.workbench-profile-budget-stack {
+  position: absolute;
+  inset: 10px 18px auto;
+  display: grid;
+  gap: 12px;
+}
+
+.workbench-profile-budget {
+  box-sizing: border-box;
+  padding: 16px;
+  border: 1px solid color-mix(in srgb, var(--wb-text) 9%, var(--wb-line));
+  border-radius: 14px;
+  background: color-mix(in srgb, var(--wb-card-bg) 62%, transparent);
+  color: var(--wb-text);
+}
+
+.workbench-profile-budget-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: calc(13px * var(--wb-ui-font-scale, 1));
+}
+
+.workbench-profile-budget-icon {
+  display: inline-grid;
+  place-items: center;
+  color: var(--wb-accent-strong);
+}
+
+.workbench-profile-budget-empty {
+  padding: 24px 0 10px;
+  color: var(--wb-muted);
+  font-size: calc(13px * var(--wb-ui-font-scale, 1));
+  text-align: center;
+}
+
+.workbench-profile-budget-content {
+  margin-top: 16px;
+}
+
+.workbench-profile-codex-quota {
+  margin-top: 16px;
+}
+
+.workbench-profile-codex-head,
+.workbench-profile-codex-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.workbench-profile-codex-head strong {
+  font-size: calc(13px * var(--wb-ui-font-scale, 1));
+}
+
+.workbench-profile-codex-head small,
+.workbench-profile-codex-window > small,
+.workbench-profile-codex-row > span,
+.workbench-profile-codex-empty {
+  color: var(--wb-muted);
+  font-size: calc(10px * var(--wb-ui-font-scale, 1));
+}
+
+.workbench-profile-codex-window {
+  margin-top: 12px;
+}
+
+.workbench-profile-codex-row b {
+  font-size: calc(11px * var(--wb-ui-font-scale, 1));
+  font-variant-numeric: tabular-nums;
+}
+
+.workbench-profile-codex-window .workbench-profile-budget-progress {
+  margin: 7px 0 5px;
+}
+
+.workbench-profile-codex-empty {
+  padding: 14px 0 2px;
+}
+
+.workbench-profile-budget-monthly {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: baseline;
+  gap: 4px 10px;
+}
+
+.workbench-profile-budget-monthly > span,
+.workbench-profile-budget-monthly > small,
+.workbench-profile-budget-rows span {
+  color: var(--wb-muted);
+  font-size: calc(11px * var(--wb-ui-font-scale, 1));
+}
+
+.workbench-profile-budget-monthly > strong {
+  grid-row: span 2;
+  font-size: calc(20px * var(--wb-ui-font-scale, 1));
+  font-variant-numeric: tabular-nums;
+}
+
+.workbench-profile-budget-progress {
+  height: 6px;
+  margin: 12px 0 14px;
+  overflow: hidden;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--wb-text) 8%, transparent);
+}
+
+.workbench-profile-budget-progress > span {
+  display: block;
+  width: 0;
+  height: 100%;
+  border-radius: inherit;
+  background: var(--wb-accent);
+  transition: width 260ms ease;
+}
+
+.workbench-profile-budget-progress > span.high {
+  background: var(--warning, #d89a2b);
+}
+
+.workbench-profile-budget-progress > span.over {
+  background: var(--danger, #d95757);
+}
+
+.workbench-profile-budget-rows {
+  display: grid;
+  gap: 9px;
+}
+
+.workbench-profile-budget-rows > div {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.workbench-profile-budget-rows b {
+  font-size: calc(12px * var(--wb-ui-font-scale, 1));
+  font-variant-numeric: tabular-nums;
+}
+
+.workbench-grid.integrated-sidebars .workbench-profile-rail.is-collapsed .workbench-profile-budget-stack {
+  opacity: 0;
+  visibility: hidden;
+  pointer-events: none;
 }
 
 .workbench-sidebar-dock {
@@ -29361,38 +29793,61 @@ html[data-density="compact"] .workbench-shell :where(.wb-budget-model-head, .wb-
 .wbc-conversation-status-preview-actions {
   display: flex;
   flex-wrap: wrap;
-  gap: 6px;
+  gap: 8px;
   margin-top: 11px;
   padding-top: 10px;
   border-top: 1px solid color-mix(in srgb, var(--wb-line) 76%, transparent);
 }
 
 .wbc-conversation-status-preview-option {
-  min-height: 30px;
+  min-height: 38px;
   max-width: 100%;
-  padding: 5px 9px;
-  border: 1px solid color-mix(in srgb, var(--wb-line-2) 76%, transparent);
-  border-radius: 9px;
-  background: var(--wb-control-bg);
+  padding: 7px 12px;
+  border: var(--wb-floating-control-border, 1px solid color-mix(in srgb, var(--wb-line-2) 70%, transparent));
+  border-radius: var(--wb-floating-control-radius, 12px);
+  background: var(--wb-floating-control-bg, var(--wb-control-bg));
   color: var(--wb-text);
+  box-shadow: var(--wb-floating-control-shadow, var(--wbc-control-shadow));
   font: inherit;
-  font-size: calc(10.5px * var(--wb-ui-font-scale, 1));
+  font-size: calc(11px * var(--wb-ui-font-scale, 1));
+  font-weight: 620;
   line-height: 1.35;
   white-space: normal;
   cursor: pointer;
+  transition:
+    transform 180ms cubic-bezier(.22, 1, .36, 1),
+    border-color 160ms ease,
+    background-color 160ms ease,
+    box-shadow 160ms ease;
 }
 
 .wbc-conversation-status-preview-option:hover:not(:disabled),
 .wbc-conversation-status-preview-option:focus-visible {
-  border-color: color-mix(in srgb, var(--wb-amber) 42%, var(--wb-line-2));
-  background: color-mix(in srgb, var(--wb-amber) 8%, var(--wb-control-bg));
+  transform: translateY(-1px);
+  outline: none;
+  border-color: color-mix(in srgb, var(--wb-accent) 38%, var(--wb-line-2));
+  background: var(--wb-floating-control-hover-bg, color-mix(in srgb, var(--wb-accent) 6%, var(--wb-control-bg)));
+  box-shadow:
+    0 8px 18px rgba(9, 17, 30, .07),
+    inset 0 1px 0 color-mix(in srgb, #fff 10%, transparent);
 }
 
 .wbc-conversation-status-preview-option.primary {
-  border-color: color-mix(in srgb, var(--wb-amber) 34%, var(--wb-line));
-  background: color-mix(in srgb, var(--wb-amber) 12%, var(--wb-control-bg));
-  color: color-mix(in srgb, var(--wb-amber) 82%, var(--wb-text));
+  border-color: color-mix(in srgb, var(--wb-accent) 56%, var(--wb-line-2));
+  background: color-mix(in srgb, var(--wb-accent) 26%, var(--wb-floating-control-bg, var(--wb-control-bg)));
+  color: var(--wb-text);
   font-weight: 650;
+}
+
+.wbc-conversation-status-preview-option.primary:hover:not(:disabled),
+.wbc-conversation-status-preview-option.primary:focus-visible {
+  border-color: color-mix(in srgb, var(--wb-accent) 72%, var(--wb-line-2));
+  background: color-mix(in srgb, var(--wb-accent) 34%, var(--wb-floating-control-bg, var(--wb-control-bg)));
+}
+
+.wbc-conversation-status-preview-option:active:not(:disabled),
+.wbc-conversation-status-preview-option.primary:active:not(:disabled) {
+  transform: translateY(0);
 }
 
 .wbc-conversation-status-preview-option:disabled,
@@ -29404,40 +29859,71 @@ html[data-density="compact"] .workbench-shell :where(.wb-budget-model-head, .wb-
 .wbc-conversation-status-preview-reply {
   width: 100%;
   display: grid;
-  grid-template-columns: minmax(0, 1fr) 32px;
-  gap: 6px;
+  grid-template-columns: minmax(0, 1fr) 38px;
+  gap: 8px;
 }
 
 .wbc-conversation-status-preview-reply input {
   min-width: 0;
-  height: 32px;
+  height: 38px;
   box-sizing: border-box;
-  padding: 0 9px;
-  border: 1px solid color-mix(in srgb, var(--wb-line-2) 76%, transparent);
-  border-radius: 9px;
+  padding: 0 12px;
+  border: var(--wb-floating-control-border, 1px solid color-mix(in srgb, var(--wb-line-2) 70%, transparent));
+  border-radius: var(--wb-floating-control-radius, 12px);
   outline: 0;
-  background: var(--wb-control-bg);
+  background: var(--wb-floating-control-bg, var(--wb-control-bg));
   color: var(--wb-text);
+  box-shadow: var(--wb-floating-control-shadow, var(--wbc-control-shadow));
   font: inherit;
   font-size: calc(11px * var(--wb-ui-font-scale, 1));
+  transition: border-color 160ms ease, background-color 160ms ease, box-shadow 160ms ease;
+}
+
+.wbc-conversation-status-preview-reply input:hover:not(:disabled) {
+  border-color: color-mix(in srgb, var(--wb-accent) 34%, var(--wb-line-2));
+  background: var(--wb-floating-control-hover-bg, color-mix(in srgb, var(--wb-accent) 6%, var(--wb-control-bg)));
 }
 
 .wbc-conversation-status-preview-reply input:focus {
-  border-color: color-mix(in srgb, var(--wb-amber) 48%, var(--wb-line));
-  box-shadow: 0 0 0 3px color-mix(in srgb, var(--wb-amber) 10%, transparent);
+  border-color: color-mix(in srgb, var(--wb-accent) 62%, var(--wb-line-2));
+  background: var(--wb-floating-control-bg, var(--wb-control-bg));
+  box-shadow:
+    0 7px 18px rgba(9, 17, 30, .065),
+    inset 0 0 0 1px color-mix(in srgb, var(--wb-accent) 18%, transparent);
 }
 
 .wbc-conversation-status-preview-reply button {
-  width: 32px;
-  height: 32px;
+  width: 38px;
+  height: 38px;
   display: grid;
   place-items: center;
   padding: 0;
-  border: 0;
-  border-radius: 9px;
-  background: color-mix(in srgb, var(--wb-green) 18%, var(--wb-control-bg));
-  color: var(--wb-green);
+  border: 1px solid color-mix(in srgb, var(--wb-accent) 56%, var(--wb-line-2));
+  border-radius: var(--wb-floating-control-radius, 12px);
+  background: color-mix(in srgb, var(--wb-accent) 26%, var(--wb-floating-control-bg, var(--wb-control-bg)));
+  color: var(--wb-text);
+  box-shadow: var(--wb-floating-control-shadow, var(--wbc-control-shadow));
   cursor: pointer;
+  transition:
+    transform 180ms cubic-bezier(.22, 1, .36, 1),
+    border-color 160ms ease,
+    background-color 160ms ease,
+    box-shadow 160ms ease;
+}
+
+.wbc-conversation-status-preview-reply button:hover:not(:disabled),
+.wbc-conversation-status-preview-reply button:focus-visible {
+  transform: translateY(-1px);
+  outline: none;
+  border-color: color-mix(in srgb, var(--wb-accent) 72%, var(--wb-line-2));
+  background: color-mix(in srgb, var(--wb-accent) 34%, var(--wb-floating-control-bg, var(--wb-control-bg)));
+  box-shadow:
+    0 8px 18px rgba(9, 17, 30, .07),
+    inset 0 1px 0 color-mix(in srgb, #fff 12%, transparent);
+}
+
+.wbc-conversation-status-preview-reply button:active:not(:disabled) {
+  transform: translateY(0);
 }
 
 .wbc-conversation-status-preview-feedback {
@@ -29657,9 +30143,16 @@ html[data-density="compact"] .workbench-shell :where(.wb-budget-model-head, .wb-
 .workbench-grid.integrated-sidebars.is-task-board {
   --wb-task-board-rail-reserve: 300px;
   --wb-task-board-edge-gap: 12px;
+  --wb-task-board-canvas-gutter: 22px;
   position: relative;
   isolation: isolate;
   grid-template-columns: minmax(0, 1fr);
+}
+
+html[data-theme="dark"] .workbench-grid.integrated-sidebars.is-task-board {
+  /* The coloured board lives below this 65% glass. Counter its warmer canvas
+     so the resolved rail colour matches the same glass on neutral modules. */
+  --wb-floating-rail-tint: #24323f;
 }
 
 .workbench-grid.integrated-sidebars.rail-collapsed.is-task-board {
@@ -29671,7 +30164,7 @@ html[data-density="compact"] .workbench-shell :where(.wb-budget-model-head, .wb-
    deliberately matches the empty composer area, while geometry remains
    module-owned so applying the material never changes card height or insets. */
 .workbench-grid.integrated-sidebars .workbench-integrated-rail {
-  background: color-mix(in srgb, var(--wb-composer-surface-color) 94%, transparent);
+  background: var(--wb-floating-rail-bg);
   -webkit-backdrop-filter: blur(32px) saturate(170%) contrast(102%);
   backdrop-filter: blur(32px) saturate(170%) contrast(102%);
   box-shadow:
@@ -29704,9 +30197,9 @@ html[data-density="compact"] .workbench-shell :where(.wb-budget-model-head, .wb-
 
 .workbench-grid.integrated-sidebars.is-task-board .wb-board-columns {
   box-sizing: border-box;
-  min-width: calc(1748px + var(--wb-task-board-rail-reserve) + var(--wb-task-board-edge-gap));
+  min-width: calc(1748px + var(--wb-task-board-rail-reserve) + var(--wb-task-board-edge-gap) + var(--wb-task-board-canvas-gutter));
   grid-template-columns: repeat(5, minmax(340px, 1fr));
-  padding-left: var(--wb-task-board-rail-reserve);
+  padding-left: calc(var(--wb-task-board-rail-reserve) + var(--wb-task-board-canvas-gutter));
   padding-right: var(--wb-task-board-edge-gap);
   transition:
     min-width var(--wb-sidebar-motion-duration) var(--wb-sidebar-motion-ease),
@@ -29714,7 +30207,7 @@ html[data-density="compact"] .workbench-shell :where(.wb-budget-model-head, .wb-
 }
 
 .workbench-grid.integrated-sidebars.is-task-board .wb-board-scroll {
-  margin-right: -22px;
+  margin-inline: calc(0px - var(--wb-task-board-canvas-gutter));
   scrollbar-width: none;
 }
 
@@ -29725,10 +30218,7 @@ html[data-density="compact"] .workbench-shell :where(.wb-budget-model-head, .wb-
 @media (max-width: 1040px) {
   .workbench-grid.integrated-sidebars.is-task-board {
     --wb-task-board-edge-gap: 12px;
-  }
-
-  .workbench-grid.integrated-sidebars.is-task-board .wb-board-scroll {
-    margin-right: -16px;
+    --wb-task-board-canvas-gutter: 16px;
   }
 }
 

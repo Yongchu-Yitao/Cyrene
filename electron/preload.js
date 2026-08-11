@@ -1,5 +1,21 @@
 const { clipboard, contextBridge, ipcRenderer } = require('electron');
 
+let uiSurfaceHandler = null;
+ipcRenderer.on('ui-surface:request', async (_event, payload) => {
+  let result;
+  try {
+    result = uiSurfaceHandler
+      ? await uiSurfaceHandler(String(payload.method || ''), payload.args || {})
+      : { ok: false, error: 'surface_not_ready' };
+  } catch (error) {
+    result = { ok: false, error: String((error && error.message) || error) };
+  }
+  ipcRenderer.send('ui-surface:response', {
+    requestId: String(payload.requestId || ''),
+    result,
+  });
+});
+
 contextBridge.exposeInMainWorld('cyrene', {
   platform: process.platform,
   version: process.env.npm_package_version || '0.0.0',
@@ -11,6 +27,20 @@ contextBridge.exposeInMainWorld('cyrene', {
   },
   getDesktopSettings: () => ipcRenderer.invoke('desktop-settings:get'),
   updateDesktopSettings: (updates) => ipcRenderer.invoke('desktop-settings:update', updates),
+  agentCursor: {
+    setRunning: (running) => ipcRenderer.invoke('agent-cursor:set-running', { running: running === true }),
+  },
+  uiSurface: {
+    register: (uiInstanceId, handler) => {
+      if (typeof handler !== 'function') throw new Error('UI surface handler is required');
+      uiSurfaceHandler = handler;
+      return ipcRenderer.invoke('ui-surface:register', { uiInstanceId: String(uiInstanceId || '') });
+    },
+    unregister: (uiInstanceId) => {
+      uiSurfaceHandler = null;
+      return ipcRenderer.invoke('ui-surface:unregister', { uiInstanceId: String(uiInstanceId || '') });
+    },
+  },
   showNotification: ({ title, body }) => ipcRenderer.invoke('notification:show', { title, body }),
   writeClipboardText: (text) => {
     clipboard.writeText(String(text == null ? '' : text));

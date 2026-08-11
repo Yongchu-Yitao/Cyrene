@@ -17,6 +17,7 @@ from cyrene.agent.context import (
     AWAITING_USER_SENTINEL as _AWAITING_USER_SENTINEL,
     MAIN_AGENT_ID as _MAIN_INBOX_AGENT_ID,
     allow_all_destructive_operations_for_run,
+    bind_run_context,
     current_session_id,
     default_agent_lock,
     default_session_state_lock,
@@ -67,6 +68,37 @@ def _original_round_user_prompt(context: dict[str, Any]) -> str:
         if content:
             return content
     return ""
+
+
+def _clarification_authorization_request(
+    context: dict[str, Any],
+    answer_text: str,
+) -> str:
+    """Build the trusted user-authored request for a clarification resume.
+
+    A clarification answer refines the original request; it does not replace
+    it.  Keep both user-authored strings available to exact Cyrene-operation
+    review without incorporating the assistant's question (which is context,
+    not authorization evidence).
+    """
+    user_parts: list[str] = []
+    for message in context.get("round_history") or []:
+        if str(message.get("role") or "") != "user":
+            continue
+        content = str(
+            message.get("public_content") or message.get("content") or ""
+        ).strip()
+        if content and content not in user_parts:
+            user_parts.append(content)
+    answer = str(answer_text or "").strip()
+    if answer and answer not in user_parts:
+        user_parts.append(answer)
+    if not user_parts:
+        return answer
+    return "\n\n".join(
+        part if index == 0 else f"用户随后澄清：{part}"
+        for index, part in enumerate(user_parts)
+    )
 
 # Historical private helpers remained importable from this module before the
 # reply synthesizer was extracted.  Keep the exact function objects so direct
@@ -897,6 +929,9 @@ async def answer_pending_question(
     pending = context.get("pending_question", {})
     if not pending:
         raise ValueError("Pending question not found.")
+    client_request_id = str(
+        client_request_id or context.get("client_request_id") or ""
+    ).strip()
 
     content = str(answer_text or "").strip()
     if not content:
@@ -966,6 +1001,13 @@ async def answer_pending_question(
         f"Original clarification question: {str(pending.get('text', '')).strip()}\n"
         "Treat the new user message as the answer and continue the same round."
     )
+    import cyrene.agent.state as _state
+
+    delegation_receipts_token = _state._explicit_delegation_receipts.set(set())
+    delegation_batches_token = _state._explicit_delegation_batches.set({})
+    authorization_binding = bind_run_context(
+        user_request_text=_clarification_authorization_request(context, content),
+    )
     try:
         return await _run_chat_agent(
             content,
@@ -986,6 +1028,10 @@ async def answer_pending_question(
     except Exception:
         await _restore_pending_question(pending)
         raise
+    finally:
+        authorization_binding.reset()
+        _state._explicit_delegation_batches.reset(delegation_batches_token)
+        _state._explicit_delegation_receipts.reset(delegation_receipts_token)
 
 
 def _is_affirmative_answer(text: str) -> bool:
@@ -1231,6 +1277,25 @@ async def _handle_permission_elevation_answer(
             system = (
                 "The user denied the external browser file upload. Do not retry it or choose another "
                 "file or destination unless the user explicitly asks."
+            )
+    elif permission_kind in {"self_configuration_confirmation", "host_lifecycle_confirmation"}:
+        await _publish_runtime_event({
+            "type": permission_kind,
+            "decision": "approved" if granted else "denied",
+            "tool_name": tool_name,
+            "operation": operation,
+            "fingerprint": permission_fingerprint,
+        })
+        if granted:
+            grant_permission_elevation(permission_fingerprint)
+            system = (
+                "The user approved exactly this Cyrene self-management operation once. "
+                "Retry it with identical arguments if it is still required."
+            )
+        else:
+            system = (
+                "The user denied this Cyrene self-management operation. "
+                "Do not retry it or change the arguments to evade the decision."
             )
     elif allow_for_session:
         grant_temporary_full_access()

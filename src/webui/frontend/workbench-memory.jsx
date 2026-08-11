@@ -1392,6 +1392,7 @@
       return h("button", {
         key: m.id,
         type: "button",
+        "data-cyrene-context-menu": "true",
         className: "wb-mem-item" + (!activePanel && selectedId === m.id ? " active" : "") + (m.stale ? " stale" : ""),
         onClick: function () { setActivePanel(""); setSelectedId(m.id); },
         onContextMenu: function (event) { openMemoryContextMenu(m, event); },

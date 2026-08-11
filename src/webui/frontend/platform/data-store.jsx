@@ -318,7 +318,10 @@ let __eventReconnectTimer = null;
 let __eventsClosed = false;
 
 function connectEvents() {
-  if (__eventsClosed) return;
+  if (
+    __eventsClosed
+    || (window.CyrenePageLifecycle && window.CyrenePageLifecycle.isInvalidated())
+  ) return;
   try {
     // Close any existing EventSource before creating a new one.
     const es = new EventSource("/api/events");
@@ -455,11 +458,28 @@ function connectEvents() {
       es.close();
       if (__eventsClosed) return;
       window.clearTimeout(__eventReconnectTimer);
-      __eventReconnectTimer = window.setTimeout(function () {
-        __eventReconnectTimer = null;
-        connectEvents();
-      }, _retryDelay);
-      _retryDelay = Math.min(_retryDelay * 2, 15000);
+      // EventSource hides the HTTP status. Probe one authenticated endpoint so
+      // a renderer holding an obsolete Electron token stops permanently on 401
+      // instead of reconnecting forever. Transient network failures still use
+      // bounded exponential backoff.
+      fetch("/api/status", { cache: "no-store" }).then(function (response) {
+        if (__eventsClosed) return;
+        __eventReconnectTimer = window.setTimeout(function () {
+          __eventReconnectTimer = null;
+          connectEvents();
+        }, _retryDelay);
+        _retryDelay = Math.min(_retryDelay * 2, 15000);
+      }).catch(function () {
+        if (
+          __eventsClosed
+          || (window.CyrenePageLifecycle && window.CyrenePageLifecycle.isInvalidated())
+        ) return;
+        __eventReconnectTimer = window.setTimeout(function () {
+          __eventReconnectTimer = null;
+          connectEvents();
+        }, _retryDelay);
+        _retryDelay = Math.min(_retryDelay * 2, 15000);
+      });
     };
     es.onopen = () => { _retryDelay = 1000; };
   } catch (e) {
@@ -491,6 +511,7 @@ var DATA_REFRESH_INTERVAL = window.setInterval(function () {
 }, 15000);
 
 function disposeDataStore() {
+  if (__eventsClosed) return;
   __eventsClosed = true;
   window.clearInterval(DATA_REFRESH_INTERVAL);
   window.clearTimeout(__refreshTimer);
@@ -500,6 +521,9 @@ function disposeDataStore() {
   UI_EVENTS.close();
 }
 
-window.addEventListener("beforeunload", function () {
+function disposePageData() {
   disposeDataStore();
-}, { once: true });
+}
+window.addEventListener("beforeunload", disposePageData, { once: true });
+window.addEventListener("pagehide", disposePageData, { once: true });
+window.addEventListener("unload", disposePageData, { once: true });

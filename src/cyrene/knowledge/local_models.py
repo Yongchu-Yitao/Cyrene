@@ -13,6 +13,8 @@ import os
 import platform
 import shutil
 import sys
+import tarfile
+import uuid
 from pathlib import Path
 from typing import Any, Callable
 
@@ -94,6 +96,111 @@ MODEL_CATALOG: dict[str, dict[str, Any]] = {
             },
         ],
     },
+    "fireredasr2-aed-int8": {
+        "name": "FireRedASR2 AED (INT8)",
+        "kind": "asr",
+        "description": "Chinese, English and 20+ Chinese dialects with local punctuation and VAD",
+        "runtime": "sherpa-onnx",
+        "download_bytes": 903_950_678,
+        "files": [
+            {
+                "path": ".downloads/fireredasr2-aed-int8.tar.bz2",
+                "sources": [
+                    {"url": "https://ghfast.top/https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/sherpa-onnx-fire-red-asr2-zh_en-int8-2026-02-26.tar.bz2", "resume_key": "fireredasr2-aed-int8"},
+                    {"url": "https://gh-proxy.com/https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/sherpa-onnx-fire-red-asr2-zh_en-int8-2026-02-26.tar.bz2", "resume_key": "fireredasr2-aed-int8"},
+                    {"url": "https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/sherpa-onnx-fire-red-asr2-zh_en-int8-2026-02-26.tar.bz2", "resume_key": "fireredasr2-aed-int8"},
+                ],
+                "min_bytes": 838_000_000,
+                "download_bytes": 838_589_068,
+                "sha256": "43015b3f1643a5688b4821e8ed323473d38b798c4ec291471fe00df1bcfc4f1c",
+                "extract": {
+                    "root": "sherpa-onnx-fire-red-asr2-zh_en-int8-2026-02-26",
+                    "outputs": [
+                        {"source": "encoder.int8.onnx", "path": "encoder.int8.onnx", "min_bytes": 700_000_000},
+                        {"source": "decoder.int8.onnx", "path": "decoder.int8.onnx", "min_bytes": 350_000_000},
+                        {"source": "tokens.txt", "path": "tokens.txt", "min_bytes": 50_000},
+                    ],
+                },
+            },
+            {
+                "path": ".downloads/punctuation-int8.tar.bz2",
+                "sources": [
+                    {"url": "https://ghfast.top/https://github.com/k2-fsa/sherpa-onnx/releases/download/punctuation-models/sherpa-onnx-punct-ct-transformer-zh-en-vocab272727-2024-04-12-int8.tar.bz2", "resume_key": "sherpa-punctuation-int8"},
+                    {"url": "https://gh-proxy.com/https://github.com/k2-fsa/sherpa-onnx/releases/download/punctuation-models/sherpa-onnx-punct-ct-transformer-zh-en-vocab272727-2024-04-12-int8.tar.bz2", "resume_key": "sherpa-punctuation-int8"},
+                    {"url": "https://github.com/k2-fsa/sherpa-onnx/releases/download/punctuation-models/sherpa-onnx-punct-ct-transformer-zh-en-vocab272727-2024-04-12-int8.tar.bz2", "resume_key": "sherpa-punctuation-int8"},
+                ],
+                "min_bytes": 64_000_000,
+                "download_bytes": 64_717_756,
+                "sha256": "c0d5aa5f8eeb686032345e180bedf39319dc2e0556781c6264bcadba8328a6e1",
+                "extract": {
+                    "root": "sherpa-onnx-punct-ct-transformer-zh-en-vocab272727-2024-04-12-int8",
+                    "outputs": [
+                        {"source": "model.int8.onnx", "path": "punctuation.int8.onnx", "min_bytes": 60_000_000},
+                    ],
+                },
+            },
+            {
+                "path": "silero_vad.onnx",
+                "sources": [
+                    {"url": "https://ghfast.top/https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/silero_vad.onnx", "resume_key": "silero-vad-v5"},
+                    {"url": "https://gh-proxy.com/https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/silero_vad.onnx", "resume_key": "silero-vad-v5"},
+                    {"url": "https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/silero_vad.onnx", "resume_key": "silero-vad-v5"},
+                ],
+                "min_bytes": 600_000,
+                "download_bytes": 643_854,
+                "sha256": "9e2449e1087496d8d4caba907f23e0bd3f78d91fa552479bb9c23ac09cbb1fd6",
+            },
+        ],
+    },
+    "zipvoice-zh-en": {
+        "name": "ZipVoice Distill Chinese-English (FP32)",
+        "kind": "tts",
+        "description": "Higher-fidelity Chinese-English synthesis without INT8 quantization",
+        "runtime": "sherpa-onnx",
+        "download_bytes": 531_957_872,
+        "obsolete_paths": [
+            "encoder.int8.onnx",
+            "decoder.int8.onnx",
+            "preset.wav",
+            ".downloads/zipvoice-zh-en.tar.bz2.part",
+            ".downloads/zipvoice-zh-en.tar.bz2.part.source",
+        ],
+        "files": [
+            {
+                "path": ".downloads/zipvoice-distill-fp32.tar.bz2",
+                "sources": [
+                    {"url": "https://ghfast.top/https://github.com/k2-fsa/sherpa-onnx/releases/download/tts-models/sherpa-onnx-zipvoice-distill-fp32-zh-en-emilia.tar.bz2", "resume_key": "zipvoice-distill-fp32"},
+                    {"url": "https://gh-proxy.com/https://github.com/k2-fsa/sherpa-onnx/releases/download/tts-models/sherpa-onnx-zipvoice-distill-fp32-zh-en-emilia.tar.bz2", "resume_key": "zipvoice-distill-fp32"},
+                    {"url": "https://github.com/k2-fsa/sherpa-onnx/releases/download/tts-models/sherpa-onnx-zipvoice-distill-fp32-zh-en-emilia.tar.bz2", "resume_key": "zipvoice-distill-fp32"},
+                ],
+                "min_bytes": 477_000_000,
+                "download_bytes": 477_800_463,
+                "sha256": "3b6729d03bf4ba64deeec113048bdbbe55dbc30580b609be76342e0099fd23a8",
+                "extract": {
+                    "root": "sherpa-onnx-zipvoice-distill-fp32-zh-en-emilia",
+                    "outputs": [
+                        {"source": "encoder.onnx", "path": "encoder.onnx", "min_bytes": 17_000_000},
+                        {"source": "decoder.onnx", "path": "decoder.onnx", "min_bytes": 450_000_000},
+                        {"source": "tokens.txt", "path": "tokens.txt", "min_bytes": 1_000},
+                        {"source": "lexicon.txt", "path": "lexicon.txt", "min_bytes": 1_000_000},
+                        {"source": "test_wavs/leijun-1.wav", "path": "preset-default.wav", "min_bytes": 100_000},
+                        {"source": "espeak-ng-data", "path": "espeak-ng-data", "type": "dir"},
+                    ],
+                },
+            },
+            {
+                "path": "vocos_24khz.onnx",
+                "sources": [
+                    {"url": "https://ghfast.top/https://github.com/k2-fsa/sherpa-onnx/releases/download/vocoder-models/vocos_24khz.onnx", "resume_key": "vocos-24khz"},
+                    {"url": "https://gh-proxy.com/https://github.com/k2-fsa/sherpa-onnx/releases/download/vocoder-models/vocos_24khz.onnx", "resume_key": "vocos-24khz"},
+                    {"url": "https://github.com/k2-fsa/sherpa-onnx/releases/download/vocoder-models/vocos_24khz.onnx", "resume_key": "vocos-24khz"},
+                ],
+                "min_bytes": 54_000_000,
+                "download_bytes": 54_157_409,
+                "sha256": "bcb3b970e384161c4d634f0bb9e999ff1c471b34c9bc0b1049a5014065ed3cc0",
+            },
+        ],
+    },
 }
 
 # The same public model identity can have hardware-specific packs. Apple
@@ -131,6 +238,31 @@ _VALIDATED: set[str] = set()
 _RESETTERS: dict[str, Callable[[], None]] = {}
 
 
+def sherpa_provider(model_id: str = "") -> str:
+    """Return the fastest compatible sherpa-onnx provider for a model."""
+    try:
+        import onnxruntime as ort
+
+        available = set(ort.get_available_providers())
+    except Exception:
+        available = set()
+    if "CUDAExecutionProvider" in available:
+        return "cuda"
+    if (
+        model_id == "zipvoice-zh-en"
+        and sys.platform == "darwin"
+        and platform.machine().lower() == "arm64"
+        and "CoreMLExecutionProvider" in available
+    ):
+        return "coreml"
+    return "cpu"
+
+
+def sherpa_runtime(model_id: str = "") -> str:
+    provider = sherpa_provider(model_id)
+    return provider if provider != "cpu" else "onnx-cpu"
+
+
 def register_resetter(model_id: str, resetter: Callable[[], None]) -> None:
     """Register cleanup for an inference adapter that has been loaded."""
     if model_id not in MODEL_CATALOG:
@@ -161,6 +293,65 @@ def _file_valid(path: Path, spec: dict[str, Any]) -> bool:
         return False
 
 
+def _output_valid(root: Path, spec: dict[str, Any]) -> bool:
+    path = root / str(spec["path"])
+    if spec.get("type") == "dir":
+        try:
+            return path.is_dir() and any(path.iterdir())
+        except OSError:
+            return False
+    return _file_valid(path, spec)
+
+
+def _item_ready(root: Path, item: dict[str, Any]) -> bool:
+    extract = item.get("extract")
+    if isinstance(extract, dict):
+        outputs = extract.get("outputs") or []
+        return bool(outputs) and all(_output_valid(root, output) for output in outputs)
+    return _file_valid(root / item["path"], item)
+
+
+def _extract_archive(archive: Path, root: Path, item: dict[str, Any]) -> None:
+    """Safely unpack a validated tar bundle and publish only declared outputs."""
+    extract = item.get("extract") or {}
+    outputs = extract.get("outputs") or []
+    if not outputs:
+        raise RuntimeError("archive has no declared outputs")
+    staging = root / f".extract-{uuid.uuid4().hex}"
+    staging.mkdir(parents=True, exist_ok=False)
+    try:
+        with tarfile.open(archive, mode="r:bz2") as bundle:
+            bundle.extractall(staging, filter="data")
+        source_root = staging / str(extract.get("root") or "")
+        for output in outputs:
+            source = source_root / str(output.get("source") or output["path"])
+            if not _output_valid(source.parent, {**output, "path": source.name}):
+                raise RuntimeError(f"archive output is missing or invalid: {output['path']}")
+            destination = root / str(output["path"])
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            if destination.is_dir():
+                shutil.rmtree(destination)
+            else:
+                destination.unlink(missing_ok=True)
+            os.replace(source, destination)
+        if not all(_output_valid(root, output) for output in outputs):
+            raise RuntimeError("extracted model validation failed")
+    finally:
+        shutil.rmtree(staging, ignore_errors=True)
+
+
+def _remove_obsolete_paths(root: Path, spec: dict[str, Any]) -> None:
+    for value in spec.get("obsolete_paths") or []:
+        relative = Path(str(value))
+        if relative.is_absolute() or ".." in relative.parts:
+            raise RuntimeError("invalid obsolete model path")
+        target = root / relative
+        if target.is_dir():
+            shutil.rmtree(target)
+        else:
+            target.unlink(missing_ok=True)
+
+
 def is_ready(model_id: str) -> bool:
     spec = MODEL_CATALOG.get(model_id)
     if not spec:
@@ -170,12 +361,8 @@ def is_ready(model_id: str) -> bool:
         _VALIDATED.discard(model_id)
         return False
     if model_id in _VALIDATED:
-        return all(
-            (root / item["path"]).is_file()
-            and (root / item["path"]).stat().st_size >= int(item.get("min_bytes") or 1)
-            for item in spec["files"]
-        )
-    valid = all(_file_valid(root / item["path"], item) for item in spec["files"])
+        return all(_item_ready(root, item) for item in spec["files"])
+    valid = all(_item_ready(root, item) for item in spec["files"])
     if valid:
         _VALIDATED.add(model_id)
     return valid
@@ -187,7 +374,9 @@ def status() -> dict[str, Any]:
         progress = _PROGRESS.get(model_id, {})
         task = _TASKS.get(model_id)
         runtime = str(spec.get("runtime") or "onnx")
-        if model_id == "qwen3-embedding-0.6b" and runtime == "onnx":
+        if runtime == "sherpa-onnx":
+            runtime = sherpa_runtime(model_id)
+        elif model_id == "qwen3-embedding-0.6b" and runtime == "onnx":
             try:
                 import onnxruntime as ort
 
@@ -209,6 +398,7 @@ def status() -> dict[str, Any]:
             "downloading": bool(task and not task.done()),
             "downloaded_bytes": int(progress.get("downloaded_bytes") or 0),
             "total_bytes": int(progress.get("total_bytes") or 0),
+            "download_bytes": int(spec.get("download_bytes") or 0),
             "error": str(progress.get("error") or ""),
         })
     return {"models": models}
@@ -237,7 +427,8 @@ async def _download_file(client: httpx.AsyncClient, item: dict[str, Any], destin
                 response.raise_for_status()
                 content_length = int(response.headers.get("content-length") or 0)
                 progress = _PROGRESS[model_id]
-                progress["total_bytes"] += existing + content_length
+                if not progress.get("planned_total"):
+                    progress["total_bytes"] += existing + content_length
                 progress["downloaded_bytes"] += existing
                 mode = "ab" if existing else "wb"
                 with part.open(mode) as handle:
@@ -261,17 +452,42 @@ async def _download(model_id: str) -> None:
     spec = MODEL_CATALOG[model_id]
     root = model_dir(model_id)
     root.mkdir(parents=True, exist_ok=True)
-    _PROGRESS[model_id] = {"downloaded_bytes": 0, "total_bytes": 0, "error": ""}
+    planned_total = int(spec.get("download_bytes") or 0)
+    _PROGRESS[model_id] = {
+        "downloaded_bytes": 0,
+        "total_bytes": planned_total,
+        "planned_total": planned_total,
+        "error": "",
+    }
     try:
         async with httpx.AsyncClient() as client:
             for item in spec["files"]:
                 destination = root / item["path"]
-                if _file_valid(destination, item):
-                    size = destination.stat().st_size
+                if _item_ready(root, item):
+                    size = int(item.get("download_bytes") or 0)
                     _PROGRESS[model_id]["downloaded_bytes"] += size
-                    _PROGRESS[model_id]["total_bytes"] += size
+                    if not planned_total:
+                        _PROGRESS[model_id]["total_bytes"] += size
                     continue
-                await _download_file(client, item, destination, model_id)
+                reusable_archive = bool(
+                    item.get("extract")
+                    and destination.is_file()
+                    and _file_valid(destination, item)
+                )
+                if reusable_archive:
+                    _PROGRESS[model_id]["downloaded_bytes"] += int(item.get("download_bytes") or 0)
+                else:
+                    await _download_file(client, item, destination, model_id)
+                if item.get("extract"):
+                    await asyncio.to_thread(_extract_archive, destination, root, item)
+                    destination.unlink(missing_ok=True)
+                    part = destination.with_suffix(destination.suffix + ".part")
+                    part.unlink(missing_ok=True)
+                    part.with_suffix(part.suffix + ".source").unlink(missing_ok=True)
+        resetter = _RESETTERS.get(model_id)
+        if resetter is not None:
+            await asyncio.to_thread(resetter)
+        _remove_obsolete_paths(root, spec)
         marker = root / ".ready.json"
         marker.write_text(json.dumps({"id": model_id, "version": 1}), encoding="utf-8")
         _VALIDATED.add(model_id)

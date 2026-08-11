@@ -20,19 +20,20 @@ WEBUI_ROOT = ROOT / "src" / "webui"
 WORKBENCH_ROOT = WEBUI_ROOT / "frontend"
 INDEX = WORKBENCH_ROOT / "index.html"
 
-OPENAPI_OPERATION_COUNT = 321
+OPENAPI_OPERATION_COUNT = 329
 OPENAPI_BASELINE_FASTAPI = "0.136.1"
 OPENAPI_BASELINE_PYDANTIC = "2.13.4"
-OPENAPI_SHA256 = "f325eff96b111c62465fabaaba4c7369531db6e43cd91b470d20fd16e168c717"
-TOOL_REGISTRY_SHA256 = "55018c652d7101ae9eff35e5af9e66d03295c0de3179b85cd4a8ecb631f4b74f"
-MAIN_WIRE_SHA256 = "f8fa3f2b0c53ae9059ac763792a9a218fa7c8f30c5c2335a0ab2f332816e4136"
+OPENAPI_SHA256 = "b77b0ab0d799cf14b445d8bf5b3cdeecdcdcc0de5048c9ff6a6c5fa0fb3be360"
+TOOL_REGISTRY_SHA256 = "ccdc45378db2b46750c661288b677ecbfebfd9a18a4bc9c4102f5bac32a6ad0a"
+MAIN_WIRE_SHA256 = "c3c6f094cfa771515d8f0e9daf49058824d41c34e2989ff4358ef5b1deb21ec9"
 SUBAGENT_WIRE_SHA256 = "4d2f207b6508c148e5756826b435c4ca95830b3b8441198e2066cc7529ae27ad"
 
-# CyreneUI is the sole application-owned browser global. Every cross-script
-# capability is registered under its explicit service name.
-REGISTERED_WORKBENCH_GLOBALS = {"CyreneUI"}
+# CyreneUI owns runtime services. The launch lifecycle is the sole bootstrap
+# global because it must guard fetch before the platform registry is loaded.
+REGISTERED_WORKBENCH_GLOBALS = {"CyreneUI", "CyrenePageLifecycle"}
 
 BROWSER_AND_VENDOR_GLOBALS = {
+    "AudioContext",
     "DOMPurify",
     "L",
     "addEventListener",
@@ -64,6 +65,10 @@ BROWSER_AND_VENDOR_GLOBALS = {
     "clearInterval",
     "setTimeout",
     "clearTimeout",
+    "cancelAnimationFrame",
+    "fetch",
+    "requestAnimationFrame",
+    "webkitAudioContext",
 }
 
 
@@ -108,12 +113,12 @@ def test_tool_registry_wire_and_actor_policy_contracts_are_unchanged(monkeypatch
         "get_models",
         lambda: [{"provider": "openai_compatible", "model": "custom-model"}],
     )
-    assert len(catalog.TOOL_DEFS) == 105
-    assert len(catalog.TOOL_HANDLERS) == 105
-    assert len(catalog._MAIN_ONLY_TOOLS) == 44
+    assert len(catalog.TOOL_DEFS) == 123
+    assert len(catalog.TOOL_HANDLERS) == 123
+    assert len(catalog._MAIN_ONLY_TOOLS) == 62
     assert _sha256_json(catalog.TOOL_DEFS) == TOOL_REGISTRY_SHA256
 
-    assert len(wire.get_main_wire_tool_defs()) == 29
+    assert len(wire.get_main_wire_tool_defs()) == 30
     assert wire.get_wire_bundle_hash("main") == MAIN_WIRE_SHA256
     assert len(wire.get_subagent_wire_tool_defs()) == 23
     assert wire.get_wire_bundle_hash("subagent") == SUBAGENT_WIRE_SHA256
@@ -140,9 +145,9 @@ def test_workbench_cross_script_globals_are_registered():
     inline_assignments = set(
         re.findall(r"\bwindow\.([A-Za-z_$][A-Za-z0-9_$]*)\s*=", index)
     )
-    # The launch gate temporarily wraps the native fetch function and restores
-    # it after the initial request set settles; it does not expose an app API.
-    assert inline_assignments <= {"fetch"}
+    # The launch gate wraps fetch and publishes the one bootstrap lifecycle
+    # object needed before the CyreneUI registry script has loaded.
+    assert inline_assignments <= {"fetch", "CyrenePageLifecycle"}
 
 
 def test_workbench_runtime_dependencies_keep_their_relative_script_order():

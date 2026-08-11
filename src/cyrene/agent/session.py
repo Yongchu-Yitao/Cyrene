@@ -986,6 +986,8 @@ _PERMISSION_ELEVATION_KINDS: frozenset[str] = frozenset({
     "external_upload_confirmation",
     "delete_confirmation",
     "destructive_confirmation",
+    "self_configuration_confirmation",
+    "host_lifecycle_confirmation",
     "task_permission_request",
     "git_commit",
 })
@@ -1353,13 +1355,18 @@ Output format (one per line, no explanations):
             continue
 
 
-async def clear_session_id(session_id: str = "") -> None:
+async def clear_session_id(session_id: str = "", *, deleting: bool = False) -> None:
     import cyrene.agent.state as _state
     from cyrene.subagent import clear as _clear_subagents
     from cyrene.runtime.inbox import clear_all_inboxes
 
     ctx = _ensure_session(session_id)
 
+    if deleting:
+        await cancel_and_wait(ctx.pending_compressors)
+        ctx.pending_compressors.clear()
+        await cancel_and_wait(ctx.pending_housekeeping)
+        ctx.pending_housekeeping.clear()
     await cancel_and_wait(ctx.pending_interrupt_clearers)
     ctx.pending_interrupt_clearers.clear()
     await cancel_and_wait(ctx.pending_label_refreshes)
@@ -1377,7 +1384,7 @@ async def clear_session_id(session_id: str = "") -> None:
     state_file = _session_state_file(session_id)
     try:
         data = read_json_safe(state_file)
-        if data:
+        if data and not deleting:
             msgs = data.get("messages", [])
             if msgs:
                 _schedule_memory_compression(msgs, session_id=session_id)
@@ -1389,17 +1396,18 @@ async def clear_session_id(session_id: str = "") -> None:
     # Keep module-level epoch in sync for the default session
     if not session_id:
         _state._session_epoch = ctx.session_epoch
-    try:
-        from cyrene import learning as _pattern_module
-        task = asyncio.create_task(_pattern_module.scan_for_session_start())
-        track_task(
-            task,
-            ctx.pending_housekeeping,
-            logger=logger,
-            label="post-clear behavior scan",
-        )
-    except Exception:
-        logger.debug("Failed to schedule post-clear behavior scan", exc_info=True)
+    if not deleting:
+        try:
+            from cyrene import learning as _pattern_module
+            task = asyncio.create_task(_pattern_module.scan_for_session_start())
+            track_task(
+                task,
+                ctx.pending_housekeeping,
+                logger=logger,
+                label="post-clear behavior scan",
+            )
+        except Exception:
+            logger.debug("Failed to schedule post-clear behavior scan", exc_info=True)
 
     if session_id:
         def _retire_context_when_idle(_completed: asyncio.Task[Any]) -> None:

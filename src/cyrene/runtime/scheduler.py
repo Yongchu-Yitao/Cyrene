@@ -665,6 +665,7 @@ async def _execute_task(task: dict, bot, db_path: str) -> None:
     # same cadence the REST API and agent tool promised at creation time.
     stype = task["schedule_type"]
     svalue = task["schedule_value"]
+    schedule_timezone = task.get("schedule_timezone") or "UTC"
     now = datetime.now(timezone.utc)
 
     try:
@@ -673,7 +674,12 @@ async def _execute_task(task: dict, bot, db_path: str) -> None:
                 db_path, task_id, result, None, "completed",
             )
         else:
-            next_run = compute_next_run(stype, svalue, now=now)
+            next_run = compute_next_run(
+                stype,
+                svalue,
+                now=now,
+                timezone_name=schedule_timezone,
+            )
             await db.update_task_after_run(
                 db_path, task_id, result, next_run, "active",
             )

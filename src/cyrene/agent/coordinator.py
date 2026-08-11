@@ -54,6 +54,8 @@ from cyrene.agent.state import (
     _current_command,
     _current_round_id,
     _current_session_id,
+    _ui_instance_id,
+    _conversation_source,
     _deep_research_first_round,
     _deep_research_mode,
     _economy_mode,
@@ -262,6 +264,34 @@ async def _run_execution_agent_locked(task: str, bot: Any, chat_id: int, db_path
 # Chat agent (entry point with lock)
 # ---------------------------------------------------------------------------
 
+
+async def run_session_operation(
+    session_id: str,
+    operation: Callable[[], Awaitable[Any]],
+) -> Any:
+    """Run an agent continuation under the session's interrupt ownership.
+
+    Every user-visible slice of agent work, including a continuation resumed
+    from a pending question, must hold the session lock and expose its task via
+    ``active_task``.  ``interrupt_active_run`` deliberately relies on those two
+    fields; calling ``_run_chat_agent`` directly without this boundary creates a
+    run that looks active in the UI but cannot be stopped.
+    """
+    normalized_session_id = str(session_id or "")
+    ctx = _ensure_session(normalized_session_id)
+    if ctx.lock.locked():
+        interrupt_active_run(session_id=normalized_session_id)
+    async with ctx.lock:
+        ctx.interrupt_event.clear()
+        current_task = asyncio.current_task()
+        ctx.active_task = current_task
+        try:
+            return await operation()
+        finally:
+            if ctx.active_task is current_task:
+                ctx.active_task = None
+
+
 async def run_agent(
     user_message: str,
     bot: Any,
@@ -282,6 +312,8 @@ async def run_agent(
     static_system_extra: str = "",
     final_system_extra: str = "",
     response_capabilities: tuple[str, ...] | frozenset[str] = (),
+    ui_instance_id: str = "",
+    conversation_source: str = "",
 ) -> str:
     """Main entry point. Runs the main agent loop with stable tool gateways.
 
@@ -308,6 +340,13 @@ async def run_agent(
     ``interactive_blocks`` to expose ``LoadRendererContract``.
     """
     session_token = _current_session_id.set(session_id)
+    ui_instance_token = _ui_instance_id.set(str(ui_instance_id or ""))
+    conversation_source_token = _conversation_source.set(str(conversation_source or ""))
+    user_request_text_token = _state._user_request_text.set(str(
+        public_user_message if public_user_message is not None else user_message or ""
+    ))
+    delegation_receipts_token = _state._explicit_delegation_receipts.set(set())
+    delegation_batches_token = _state._explicit_delegation_batches.set({})
     workspace_token = _active_workspace_dir.set(workspace_dir or "")
     response_capabilities_token = response_capabilities_context.set(frozenset(
         str(item or "").strip()
@@ -315,30 +354,27 @@ async def run_agent(
         if str(item or "").strip()
     ))
     try:
-        ctx = _ensure_session(session_id)
-        if ctx.lock.locked():
-            interrupt_active_run(session_id=session_id)
-        async with ctx.lock:
-            ctx.interrupt_event.clear()
-            current_task = asyncio.current_task()
-            ctx.active_task = current_task
-            try:
-                return await _run_chat_agent(
-                    user_message, bot, chat_id, db_path,
-                    client_request_id=client_request_id, lang=lang, command=command,
-                    public_user_message=public_user_message, public_attachments=public_attachments,
-                    llm_user_content=llm_user_content,
-                    permission_mode=permission_mode, ephemeral_system=ephemeral_system,
-                    fixed_ephemeral_system=fixed_ephemeral_system,
-                    volatile_ephemeral_system=volatile_ephemeral_system,
-                    static_system_extra=static_system_extra,
-                    final_system_extra=final_system_extra,
-                )
-            finally:
-                if ctx.active_task is current_task:
-                    ctx.active_task = None
+        async def run_chat() -> str:
+            return await _run_chat_agent(
+                user_message, bot, chat_id, db_path,
+                client_request_id=client_request_id, lang=lang, command=command,
+                public_user_message=public_user_message, public_attachments=public_attachments,
+                llm_user_content=llm_user_content,
+                permission_mode=permission_mode, ephemeral_system=ephemeral_system,
+                fixed_ephemeral_system=fixed_ephemeral_system,
+                volatile_ephemeral_system=volatile_ephemeral_system,
+                static_system_extra=static_system_extra,
+                final_system_extra=final_system_extra,
+            )
+
+        return await run_session_operation(session_id, run_chat)
     finally:
+        _state._explicit_delegation_batches.reset(delegation_batches_token)
+        _state._explicit_delegation_receipts.reset(delegation_receipts_token)
+        _state._user_request_text.reset(user_request_text_token)
         response_capabilities_context.reset(response_capabilities_token)
+        _conversation_source.reset(conversation_source_token)
+        _ui_instance_id.reset(ui_instance_token)
         _current_session_id.reset(session_token)
         _active_workspace_dir.reset(workspace_token)
 
@@ -1043,6 +1079,16 @@ async def _run_chat_agent(
                 logger.warning("Failed to finalize behavior-learning turn", exc_info=True)
         return final_output
     finally:
+        try:
+            from cyrene.browser import finish_electron_browser_round
+
+            await asyncio.shield(
+                finish_electron_browser_round(_current_session_id.get(), round_id)
+            )
+        except asyncio.CancelledError:
+            logger.warning("Browser tab finalization was cancelled for round %s", round_id)
+        except Exception:
+            logger.warning("Failed to finalize browser tabs for round %s", round_id, exc_info=True)
         if behavior_turn_context is not None:
             try:
                 from cyrene.learning import engine as _behavior_learning

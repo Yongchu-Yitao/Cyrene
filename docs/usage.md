@@ -106,6 +106,40 @@ model/tool/MCP/API-key settings, theme controls, and the other established
 Workbench capabilities remain available through its pages, panels, and settings
 overlay.
 
+### Agent control of the Cyrene UI
+
+In a local Electron Workbench turn, the main agent can use `cyrene_tools` to
+snapshot and inspect the current visible Cyrene surface, then invoke only the
+click, double-click, type, scroll, or drag actions declared by that exact
+snapshot revision.
+This does not use App Use and is independent of keyboard focus. New Chat,
+Search, project switching, the visible chat list, context menus, settings tabs,
+and the floating Browser titlebar have stable semantic nodes; other visible
+standard controls are added through a bounded current-viewport projection.
+Streaming message/content updates do not expire those stable actions; newly
+available approvals, questions, layers, or action sets do. If an unrelated
+global revision changes, the renderer can still execute an unchanged target
+through its bounded node-specific action lease; callers must pass the snapshot
+revision verbatim rather than substituting the latest number.
+
+Double-click uses its own capability and is accepted only when the inspected
+action advertises `double_press` or `double_click`. The Browser PiP titlebar
+advertises `maximize + double_press`, so the agent can double-click it to
+maximize the window without focusing Cyrene or supplying coordinates. A normal
+single-click button is rejected by the double-click capability.
+
+The agent may fill the visible composer. Sending or sending guidance is an R2
+action and requires an exact request from the same real local user turn (or the
+normal local confirmation UI); stopping a running response is R1. The agent
+cannot use a hidden background dispatcher. To send to another task or chat it
+must switch there in the visible UI, fill that composer, and invoke its visible
+submit action.
+
+Typed settings cover every non-model Settings tab. Direct changes use a
+revision value, so a concurrent user edit causes a conflict instead of being
+overwritten. Secrets, OAuth, QR login, file selection, OS permissions, and the
+Models tab remain user-controlled ceremonies.
+
 Verbose context traces are intentionally inspected outside the Web UI through
 `cyrene flow`, `/api/context-debug/events`, or
 `python -m cyrene.observability.context_debug`.

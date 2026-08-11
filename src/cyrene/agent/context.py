@@ -29,9 +29,11 @@ class AgentRunContext:
     caller: str
     client_request_id: str
     command: str
+    user_request_text: str
     conversation_source: str
     round_id: str
     session_id: str
+    ui_instance_id: str
     permission_mode: str
     response_capabilities: frozenset[str]
     deep_research: bool
@@ -64,9 +66,11 @@ def current_run_context() -> AgentRunContext:
         caller=str(_state._caller_type.get() or "main_agent"),
         client_request_id=str(_state._current_client_request_id.get() or ""),
         command=str(_state._current_command.get() or ""),
+        user_request_text=str(_state._user_request_text.get() or ""),
         conversation_source=str(_state._conversation_source.get() or ""),
         round_id=str(_state._current_round_id.get() or ""),
         session_id=str(_state._current_session_id.get() or ""),
+        ui_instance_id=str(_state._ui_instance_id.get() or ""),
         permission_mode=str(_state._permission_mode.get() or "default"),
         response_capabilities=frozenset(_state.response_capabilities.get()),
         deep_research=bool(_state._deep_research_mode.get()),
@@ -83,9 +87,11 @@ def bind_run_context(
     caller: object = _UNSET,
     client_request_id: object = _UNSET,
     command: object = _UNSET,
+    user_request_text: object = _UNSET,
     conversation_source: object = _UNSET,
     round_id: object = _UNSET,
     session_id: object = _UNSET,
+    ui_instance_id: object = _UNSET,
     workspace_dir: object = _UNSET,
     permission_mode: object = _UNSET,
     response_capabilities: object = _UNSET,
@@ -104,9 +110,11 @@ def bind_run_context(
         (_state._caller_type, caller),
         (_state._current_client_request_id, client_request_id),
         (_state._current_command, command),
+        (_state._user_request_text, user_request_text),
         (_state._conversation_source, conversation_source),
         (_state._current_round_id, round_id),
         (_state._current_session_id, session_id),
+        (_state._ui_instance_id, ui_instance_id),
         (_state._active_workspace_dir, workspace_dir),
         (_state._permission_mode, permission_mode),
         (_state.response_capabilities, response_capabilities),
@@ -159,6 +167,10 @@ def current_command() -> str:
     return current_run_context().command
 
 
+def current_user_request_text() -> str:
+    return current_run_context().user_request_text
+
+
 def current_conversation_source() -> str:
     return current_run_context().conversation_source
 
@@ -171,15 +183,21 @@ def current_session_id() -> str:
     return current_run_context().session_id
 
 
+def current_ui_instance_id() -> str:
+    return current_run_context().ui_instance_id
+
+
 # Verbose getter aliases avoid shadowing common local variables such as
 # ``current_session_id`` in adapters while keeping the concise query API.
 get_current_agent_id = current_agent_id
 get_current_caller = current_caller
 get_current_client_request_id = current_client_request_id
 get_current_command = current_command
+get_current_user_request_text = current_user_request_text
 get_current_conversation_source = current_conversation_source
 get_current_round_id = current_round_id
 get_current_session_id = current_session_id
+get_current_ui_instance_id = current_ui_instance_id
 
 
 def current_permission_mode() -> str:
@@ -200,6 +218,73 @@ def has_temporary_full_access() -> bool:
 
 def grant_temporary_full_access() -> None:
     _state._temporary_full_access.set(True)
+
+
+def consume_explicit_delegation_receipt(receipt_id: str) -> bool:
+    """Consume one exact user-delegation quote once in the current run."""
+    normalized = str(receipt_id or "").strip()
+    if not normalized:
+        return False
+    consumed = _state._explicit_delegation_receipts.get()
+    if consumed is None:
+        return False
+    if normalized in consumed:
+        return False
+    consumed.add(normalized)
+    return True
+
+
+def explicit_delegation_batch_status(
+    batch_id: str,
+    operation_keys: tuple[str, ...],
+) -> str:
+    """Return missing, ready, exhausted, or invalid for one run-local batch."""
+    normalized = str(batch_id or "").strip()
+    batches = _state._explicit_delegation_batches.get()
+    if not normalized or batches is None:
+        return "invalid"
+    entry = batches.get(normalized)
+    if entry is None:
+        return "missing"
+    if tuple(entry.get("operation_keys") or ()) != tuple(operation_keys):
+        return "invalid"
+    index = int(entry.get("next_index") or 0)
+    return "exhausted" if index >= len(operation_keys) else "ready"
+
+
+def grant_explicit_delegation_batch(
+    batch_id: str,
+    operation_keys: tuple[str, ...],
+) -> bool:
+    """Register one immutable ordered operation plan after semantic review."""
+    normalized = str(batch_id or "").strip()
+    keys = tuple(str(item or "").strip() for item in operation_keys)
+    batches = _state._explicit_delegation_batches.get()
+    if not normalized or not keys or any(not item for item in keys) or batches is None:
+        return False
+    existing = batches.get(normalized)
+    if existing is not None:
+        return tuple(existing.get("operation_keys") or ()) == keys
+    batches[normalized] = {"operation_keys": keys, "next_index": 0}
+    return True
+
+
+def consume_explicit_delegation_batch(
+    batch_id: str,
+    operation_keys: tuple[str, ...],
+    operation_key: str,
+) -> int:
+    """Consume the next exact operation and return its one-based position."""
+    normalized = str(batch_id or "").strip()
+    batches = _state._explicit_delegation_batches.get()
+    entry = batches.get(normalized) if batches is not None else None
+    if entry is None or tuple(entry.get("operation_keys") or ()) != tuple(operation_keys):
+        return 0
+    index = int(entry.get("next_index") or 0)
+    if index >= len(operation_keys) or operation_keys[index] != str(operation_key or ""):
+        return 0
+    entry["next_index"] = index + 1
+    return index + 1
 
 
 def _add_one_shot_grant(variable: Any, value: str) -> None:
@@ -238,13 +323,25 @@ def permission_elevation_fingerprint(
     reason: str = "",
 ) -> str:
     """Return the stable identity of one exact permission request."""
+    # Cyrene self-management and lifecycle confirmations already bind the
+    # exact canonical operation hash in ``path_hint``.  ``reason`` is merely
+    # user-facing explanation and models may paraphrase it on retry; including
+    # that prose would invalidate an otherwise identical one-shot approval.
+    bound_reason = (
+        ""
+        if str(permission_kind or "").strip() in {
+            "self_configuration_confirmation",
+            "host_lifecycle_confirmation",
+        }
+        else str(reason or "").strip()
+    )
     payload = json.dumps(
         {
             "tool": str(tool_name or "").strip(),
             "kind": str(permission_kind or "").strip(),
             "path": str(path_hint or "").strip(),
             "operation": str(operation or "").strip(),
-            "reason": str(reason or "").strip(),
+            "reason": bound_reason,
         },
         ensure_ascii=False,
         sort_keys=True,
@@ -424,11 +521,13 @@ __all__ = [
     "current_caller",
     "current_client_request_id",
     "current_command",
+    "current_user_request_text",
     "current_conversation_source",
     "current_permission_mode",
     "current_round_id",
     "current_run_context",
     "current_session_id",
+    "current_ui_instance_id",
     "current_session_state_lock",
     "deep_research_enabled",
     "default_agent_lock",
@@ -443,9 +542,11 @@ __all__ = [
     "get_current_caller",
     "get_current_client_request_id",
     "get_current_command",
+    "get_current_user_request_text",
     "get_current_conversation_source",
     "get_current_round_id",
     "get_current_session_id",
+    "get_current_ui_instance_id",
     "has_external_upload_grant",
     "has_destructive_confirmation",
     "has_temporary_full_access",
@@ -454,6 +555,10 @@ __all__ = [
     "is_permission_mode",
     "permission_elevation_fingerprint",
     "consume_external_upload_grant",
+    "consume_explicit_delegation_receipt",
+    "consume_explicit_delegation_batch",
+    "explicit_delegation_batch_status",
+    "grant_explicit_delegation_batch",
     "publish_runtime_event",
     "session_interrupt_event",
     "session_state_file",

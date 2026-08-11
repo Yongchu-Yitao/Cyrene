@@ -23,6 +23,8 @@ _PERMISSION_EVENT_TYPES = frozenset({
     "permission_decision",
     "destructive_confirmation",
     "external_upload_confirmation",
+    "self_configuration_confirmation",
+    "host_lifecycle_confirmation",
 })
 
 

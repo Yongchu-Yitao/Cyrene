@@ -88,6 +88,32 @@ Browser 状态、Session History、Memory、Knowledge/Search、Schedule、Map、
 Model/Tool/MCP/API Key 设置和主题能力都通过 Workbench 的页面、面板或
 Settings Overlay 提供。
 
+### Agent 操作 Cyrene 界面
+
+在本地 Electron Workbench 轮次中，Main Agent 可以通过 `cyrene_tools` Snapshot
+和 Inspect 当前可见 Cyrene Surface，再执行该确切 Snapshot Revision 声明的
+Click、Double Click、Type、Scroll 或 Drag。它不使用 App Use，也不依赖键盘焦点。New Chat、
+Search、项目切换、当前视口 Chat List、右键菜单、Settings Tab 和 Browser 浮窗
+标题栏使用稳定语义节点；其他当前视口标准控件由受限 DOM Projection 补充。
+流式消息和内容更新不会使这些稳定动作过期；新出现的审批、问题、Layer 或 Action
+集合仍会使 Revision 变化。若无关的全局 Revision 变化，Renderer 会通过有界的
+节点级动作租约继续执行未变化的目标；调用方仍须原样传入 Snapshot Revision，不能
+自行替换成最新数字。
+
+Double Click 使用独立能力，只有 Inspect 到的 Action 明确声明 `double_press` 或
+`double_click` 时才会执行。Browser PiP 小窗标题栏会声明
+`maximize + double_press`，因此 Agent 可在不聚焦 Cyrene、不提供坐标的情况下双击
+标题栏完成最大化；普通单击按钮会被 Double Click 能力拒绝。
+
+Agent 可以填写当前可见 Composer。发送或发送 Guidance 是 R2，必须由同一真实
+本地用户轮次精确要求，或经过普通本机确认；停止当前运行是 R1。Agent 不能调用
+隐藏后台 Dispatcher。向其他 Task/Chat 发送时，必须在可见 UI 中切换过去、填写
+目标 Composer，再调用其显式 Submit。
+
+Typed Settings 覆盖全部非模型 Settings Tab。直接修改携带 Revision；若用户同时
+修改，Agent 会得到冲突而不是覆盖用户新值。Secret、OAuth、扫码、文件选择、
+系统权限和 Models Tab 仍由用户亲自完成。
+
 Verbose Context Trace 不属于 WebUI；通过 `cyrene flow`、
 `/api/context-debug/events` 或
 `python -m cyrene.observability.context_debug` 检查。

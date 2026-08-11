@@ -69,6 +69,13 @@ preserves the original page and owner session; it does not move or duplicate
 the tab. Later Agent turns in every session can discover the pinned Browser
 resource ID.
 
+The Browser frame itself is also represented by stable Cyrene UI components.
+Through `cyrene.ui.snapshot` / `cyrene.ui.inspect`, the agent can click the
+titlebar controls, drag the floating frame, and maximize or restore it (including
+the titlebar double-click gesture) without depending on whichever input currently
+has keyboard focus. This controls Cyrene's frame; browser-page automation remains
+in the separate `browser_*` tool family.
+
 Dropping the PiP titlebar, minimized favicon button, or pinned Browser chip on
 another conversation creates a new same-URL page in that session's Browser
 manager. This copies the page entry instead of transferring ownership or
@@ -168,7 +175,6 @@ changed source file; the snapshot is removed after at most 15 minutes.
 | `browser_screenshot` | Screenshot the current page or a provided URL to a temp PNG. |
 | `browser_click` | Click an element by CSS selector. |
 | `browser_click_ref` | Click an element ref returned by `browser_snapshot`. |
-| `browser_click_text` | Click a visible element by text or accessible label. |
 | `browser_click_at` | Click viewport coordinates. |
 | `browser_type` | Type into an input (optionally submit). |
 | `browser_type_ref` | Type into an editable element ref returned by `browser_snapshot`. |

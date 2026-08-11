@@ -199,18 +199,22 @@ def test_manual_chat_memory_learning_http_contract_queues_root_chat(monkeypatch)
     monkeypatch.setattr(chat_service, "_read_chats_store", lambda: {"chats": [chat]})
     monkeypatch.setattr(chat_service, "_find_chat", lambda _payload, chat_id: chat if chat_id == "chat-a" else None)
 
-    def fake_schedule(project_id, chat_id, *, source, reason, chat):
+    def fake_schedule(project_id, chat_id, *, source, reason, chat, language):
         captured.update(
             project_id=project_id,
             chat_id=chat_id,
             source=source,
             reason=reason,
             chat=chat,
+            language=language,
         )
         return {"status": "queued", "job": {"id": "job-a"}}
 
     monkeypatch.setattr(memory_prompt, "schedule_learning_from_completed_chat", fake_schedule)
-    response = client.post("/api/workbench/chats/chat-a/memory-learning")
+    response = client.post(
+        "/api/workbench/chats/chat-a/memory-learning",
+        json={"lang": "zh"},
+    )
     assert response.status_code == 202
     assert response.json()["status"] == "queued"
     assert captured == {
@@ -219,6 +223,7 @@ def test_manual_chat_memory_learning_http_contract_queues_root_chat(monkeypatch)
         "source": "conversation_menu",
         "reason": "manual_menu",
         "chat": chat,
+        "language": "zh",
     }
 
 
@@ -334,6 +339,7 @@ def test_pre_snapshot_chat_recovers_persisted_model_messages_and_identity(monkey
         "baseUrl": "",
         "reasoningEffort": "high",
     }
+    assert snapshot["language"] in {"en", "zh"}
     assert [message["role"] for message in snapshot["messages"]] == [
         "user", "assistant", "tool", "assistant"
     ]
@@ -378,10 +384,46 @@ def test_manual_learning_recovers_old_chat_when_snapshot_is_missing(monkeypatch)
         source="conversation_menu",
         reason="manual_menu",
         chat=chat,
+        language="en",
     )
 
     assert result["status"] == "queued"
-    assert captured["snapshot"] == recovered
+    assert captured["snapshot"] == {**recovered, "language": "en"}
+    assert captured["snapshot"]["language"] == "en"
+
+
+def test_memory_agent_instruction_edits_existing_memory_in_app_language_and_stays_compact():
+    current = "Project work: keep this verified decision."
+    chinese = memory_prompt._memory_agent_instruction(current, "zh")
+    english = memory_prompt._memory_agent_instruction(current, "en")
+
+    assert "Simplified Chinese" in chinese
+    assert "English" in english
+    assert current in chinese
+    assert "add, rewrite, merge, compress, or delete" in chinese
+    assert "no bias toward preserving or only adding" in chinese
+    assert "Never replace existing memory" in chinese
+    assert "compact instruction block" in chinese
+    assert "one-off task results" in chinese
+    assert "generic tool/environment capabilities" in chinese
+    assert "max characters" not in chinese.lower()
+
+
+def test_same_context_can_learn_again_after_app_language_changes():
+    snapshot = {
+        "chatId": "chat-a",
+        "roundId": "round-a",
+        "contextHash": "hash-a",
+        "language": "zh",
+    }
+    job = {
+        "chatId": "chat-a",
+        "roundId": "round-a",
+        "contextHash": "hash-a",
+        "language": "zh",
+    }
+    assert memory_prompt._job_matches(job, snapshot)
+    assert not memory_prompt._job_matches(job, {**snapshot, "language": "en"})
 
 
 def test_all_structured_memories_can_include_internal_categories(monkeypatch):
@@ -449,16 +491,24 @@ async def test_memory_agent_reuses_exact_candidate_and_submits_with_one_user_mes
 
     monkeypatch.setattr("cyrene.call_llm.call_llm", fake_call_llm)
     learned, summary, used_model = await memory_prompt._learn_prompt(
-        {"projectId": "project-a", "messages": original_messages, "model": identity},
+        {
+            "projectId": "project-a",
+            "messages": original_messages,
+            "model": identity,
+            "language": "zh",
+        },
         "Existing project memory.",
     )
 
     assert captured["messages"][:-1] == original_messages
     assert captured["messages"][-1]["role"] == "user"
     assert "Current project memory:\nExisting project memory." in captured["messages"][-1]["content"]
+    assert "Simplified Chinese" in captured["messages"][-1]["content"]
+    assert "Never replace existing memory" in captured["messages"][-1]["content"]
     assert captured["kwargs"]["tools"][0]["function"]["name"] == "submit_project_memory"
     assert captured["kwargs"]["candidates"] == [candidate]
     assert "response_format" not in captured["kwargs"]
+    assert "max_tokens" not in captured["kwargs"]
     assert learned.startswith("Errors and lessons")
     assert summary == "Recorded parser recovery."
     assert used_model["candidateId"] == "candidate-2"

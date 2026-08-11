@@ -12,6 +12,7 @@ from route.agent.chat import register_chat_routes
 from route.agent.claude_code import register_claude_code_routes
 from route.agent.collaboration import register_collaboration_routes
 from route.agent.sessions import register_session_routes
+from route.app_control import register_app_control_routes
 from route.backup import register_backup_routes
 from route.channels.wechat import register_wechat_routes
 from route.code import router as code_router
@@ -35,6 +36,7 @@ from route.system.shell import register_shell_routes
 from route.system.updates import register_update_routes
 from route.tasks import register_task_routes
 from route.usage import register_usage_routes
+from route.voice import register_voice_routes
 from route.workbench.chat import register_workbench_chat_routes
 from route.workbench.goal_loop import register_goal_loop_routes
 from route.workbench.knowledge import register_workbench_knowledge_routes
@@ -90,6 +92,7 @@ def register_routes(app: FastAPI, bot: Any, db_path: str) -> None:
 
     router = APIRouter()
     register_instance_routes(router)
+    register_app_control_routes(router)
 
     # Small, independent domain adapters.
     register_map_routes(router)
@@ -134,6 +137,7 @@ def register_routes(app: FastAPI, bot: Any, db_path: str) -> None:
         goal_loop_adapter=goal_loop_control_adapter,
     )
     register_pdf_routes(router)
+    register_voice_routes(router)
     router.include_router(code_router)
 
     # Routes split from the former monolithic adapter.

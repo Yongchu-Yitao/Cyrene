@@ -20,6 +20,36 @@ function wbcWorkspaceDisplayName(path) {
 var WBC_RESOURCE_DRAG_MIME = "application/x-cyrene-work-resource+json";
 var WBC_CHAT_DRAG_MIME = "application/x-cyrene-chat+json";
 var WBC_CHAT_GROUP_DRAG_MIME = "application/x-cyrene-chat-group+json";
+var WBC_AGENT_CHAT_FLOW_EVENT = "cyrene:agent-chat-flow";
+var WBC_AGENT_CHAT_FLOW_TTLS = { created: 4200, typing: 3200 };
+var WBC_AGENT_CHAT_FLOW_STATE = Object.create(null);
+
+function wbcAgentChatFlowSnapshot(chatId) {
+  var normalizedChatId = String(chatId || "").trim();
+  var current = normalizedChatId ? WBC_AGENT_CHAT_FLOW_STATE[normalizedChatId] : null;
+  if (!current) return null;
+  if (Number(current.expiresAt || 0) <= Date.now()) {
+    delete WBC_AGENT_CHAT_FLOW_STATE[normalizedChatId];
+    return null;
+  }
+  return { chatId: normalizedChatId, kind: current.kind, expiresAt: current.expiresAt };
+}
+
+function wbcNotifyAgentChatFlow(kind, chatId) {
+  var normalizedKind = String(kind || "").trim();
+  var normalizedChatId = String(chatId || "").trim();
+  var ttl = Number(WBC_AGENT_CHAT_FLOW_TTLS[normalizedKind] || 0);
+  if (!ttl || !normalizedChatId) return;
+  var expiresAt = Date.now() + ttl;
+  WBC_AGENT_CHAT_FLOW_STATE[normalizedChatId] = {
+    kind: normalizedKind,
+    expiresAt: expiresAt,
+  };
+  if (typeof window.CustomEvent !== "function") return;
+  window.dispatchEvent(new window.CustomEvent(WBC_AGENT_CHAT_FLOW_EVENT, {
+    detail: { kind: normalizedKind, chatId: normalizedChatId, expiresAt: expiresAt },
+  }));
+}
 
 function wbcSetChatDrag(event, chat) {
   var transfer = event && (event.dataTransfer || (event.nativeEvent && event.nativeEvent.dataTransfer));
@@ -531,9 +561,11 @@ var WorkbenchChatModel = (function () {
     });
   }
 
-  function generateMemory(chatId) {
+  function generateMemory(chatId, lang) {
     return apiJson("/api/workbench/chats/" + encodeURIComponent(chatId) + "/memory-learning", {
       method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ lang: lang === "zh" ? "zh" : "en" }),
     });
   }
 
@@ -638,6 +670,9 @@ var WorkbenchChatModel = (function () {
       forkReplay: !!input.forkReplay,
       stream: true,
       lang: window.CyreneUI.require("i18n").getLang(),
+      uiInstanceId: window.CyreneUI.has("uiSurface")
+        ? window.CyreneUI.require("uiSurface").getInstanceId()
+        : "",
     };
     if (Object.prototype.hasOwnProperty.call(input, "workspaceOverride")) {
       body.workspaceOverride = input.workspaceOverride || "";
@@ -665,7 +700,13 @@ var WorkbenchChatModel = (function () {
     return apiJson("/api/workbench/chats/" + encodeURIComponent(chatId) + "/guidance", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ message: message || "", clientRequestId: clientRequestId || "" }),
+      body: JSON.stringify({
+        message: message || "",
+        clientRequestId: clientRequestId || "",
+        uiInstanceId: window.CyreneUI.has("uiSurface")
+          ? window.CyreneUI.require("uiSurface").getInstanceId()
+          : "",
+      }),
       // Guidance is optimistically visible and idempotent. Do not turn a slow
       // durable acknowledgement into a false failure after the agent accepted it.
       timeout: 0,
@@ -681,7 +722,14 @@ var WorkbenchChatModel = (function () {
     return window.CyreneUI.require("api").json("/api/workbench/chats/" + encodeURIComponent(chatId) + "/answer", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ question_id: questionId || "", answer: answerText || "", mode: options.mode || undefined }),
+      body: JSON.stringify({
+        question_id: questionId || "",
+        answer: answerText || "",
+        mode: options.mode || undefined,
+        uiInstanceId: window.CyreneUI.has("uiSurface")
+          ? window.CyreneUI.require("uiSurface").getInstanceId()
+          : "",
+      }),
       timeout: 0,
       toast: false,
     });
@@ -1654,6 +1702,975 @@ var WBC_ICONS = {
   windowRestore: <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><rect x="7" y="7" width="13" height="13" rx="2"/><path d="M4 16V6a2 2 0 0 1 2-2h10"/></svg>,
 };
 
+var WbcVoice = (function () {
+  var currentStatus = {
+    asr_ready: false,
+    tts_ready: false,
+    auto_read: false,
+    auto_send_after_asr: false,
+    auto_stop_on_silence: true,
+  };
+  var statusPromise = null;
+  var listeners = new Set();
+  var activeAudio = null;
+  var activeUrl = "";
+  var activeKey = "";
+  var activeRequest = null;
+  var activePlaybackCancel = null;
+  var activeSequenceId = 0;
+  var autoStreamState = null;
+  var autoStreamFinalText = new Map();
+
+  function snapshot() {
+    return { status: currentStatus, activeKey: activeKey };
+  }
+
+  function notify() {
+    var value = snapshot();
+    listeners.forEach(function (listener) { listener(value); });
+  }
+
+  function setStatus(next) {
+    currentStatus = Object.assign({}, currentStatus, next || {});
+    notify();
+    return currentStatus;
+  }
+
+  function refresh(force) {
+    if (statusPromise && !force) return statusPromise;
+    statusPromise = fetch("/api/voice/status")
+      .then(function (response) { return response.ok ? response.json() : Promise.reject(new Error("voice unavailable")); })
+      .then(setStatus)
+      .catch(function () { return currentStatus; })
+      .finally(function () { statusPromise = null; });
+    return statusPromise;
+  }
+
+  function subscribe(listener) {
+    listeners.add(listener);
+    listener(snapshot());
+    refresh(false);
+    return function () { listeners.delete(listener); };
+  }
+
+  function releaseAudio() {
+    if (activeAudio) {
+      activeAudio.pause();
+      activeAudio.onended = null;
+      activeAudio.onerror = null;
+      activeAudio.src = "";
+      activeAudio = null;
+    }
+    if (activeUrl) URL.revokeObjectURL(activeUrl);
+    activeUrl = "";
+  }
+
+  function stop() {
+    activeSequenceId += 1;
+    autoStreamState = null;
+    if (activeRequest) {
+      activeRequest.abort();
+      activeRequest = null;
+    }
+    if (activePlaybackCancel) {
+      var cancelPlayback = activePlaybackCancel;
+      activePlaybackCancel = null;
+      cancelPlayback();
+    }
+    releaseAudio();
+    activeKey = "";
+    notify();
+  }
+
+  function responseError(response) {
+    return response.json().catch(function () { return {}; }).then(function (payload) {
+      throw new Error(payload.error || payload.detail || ("HTTP " + response.status));
+    });
+  }
+
+  function voicePlainText(value) {
+    var content = String(value || "")
+      // Emoji are visual-only here.  Sending them to ZipVoice makes the model
+      // pronounce Unicode names such as "WHITE HEAVY CHECK MARK" or invent a
+      // Chinese-sounding syllable before the visible sentence.
+      .replace(/(?:[#*0-9]\uFE0F?\u20E3)/g, " ")
+      .replace(/[\u{1F000}-\u{1FAFF}\u{1FC00}-\u{1FFFF}\u2600-\u27BF\u00A9\u00AE\u2122]/gu, " ")
+      .replace(/[\uFE0E\uFE0F\u200D\u20E3\u{E0020}-\u{E007F}]/gu, "")
+      .replace(/<!--[\s\S]*?-->/g, " ")
+      .replace(/```[\s\S]*?(?:```|$)/g, " ")
+      .replace(/~~~[\s\S]*?(?:~~~|$)/g, " ")
+      .replace(/\$\$[\s\S]*?\$\$/g, " ")
+      .replace(/\$[^$\n]+\$/g, " ")
+      .replace(/^\s*::[a-zA-Z][\w-]*\{[^\n}]*\}\s*$/gm, " ")
+      .replace(/!\[[^\]]*\]\([^)]*\)/g, " ")
+      .replace(/\[([^\]]+)\]\([^)]*\)/g, "$1")
+      .replace(/^\s*\[\^[^\]]+\]:.*$/gm, "")
+      .replace(/\[\^[^\]]+\]/g, "")
+      .replace(/\[([^\]\n]+)\]/g, "$1")
+      .replace(/`([^`]+)`/g, "$1")
+      .replace(/^\s{0,3}(?:#{1,6}\s*|(?:>\s*)+)/gm, "")
+      .replace(/^\s{0,3}(?:[-*+]|\d+[.)])\s+(?:\[[ xX]\]\s*)?/gm, "")
+      .replace(/^\s*\|?(?:\s*:?-{3,}:?\s*\|)+\s*$/gm, "")
+      .replace(/^\s*(?:[-*_]\s*){3,}$/gm, "")
+      .replace(/\s+#{1,6}\s*$/gm, "")
+      .replace(/<\/?(?:br|p|div|li|h[1-6])\b[^>]*>/gi, "\n")
+      .replace(/<https?:\/\/[^>]+>/g, " ")
+      .replace(/<[^>]+>/g, " ")
+      .replace(/[*_~]+/g, "")
+      .replace(/\\([\\`*{}\[\]()#+.!_>~-])/g, "$1")
+      .replace(/https?:\/\/\S+/g, "")
+      .replace(/\|/g, "，")
+      .replace(/[ \t]+/g, " ")
+      .replace(/\s*\n+\s*/g, "\n")
+      .trim();
+    if (content && typeof document === "object" && document.createElement) {
+      var decoder = document.createElement("textarea");
+      decoder.innerHTML = content;
+      content = decoder.value;
+    }
+    return content.trim();
+  }
+
+  function voiceTextChunks(value) {
+    var content = voicePlainText(value);
+    if (!content) return [];
+    var sentences = [];
+    var clauses = content.match(/[^。！？!?；;\n]+[。！？!?；;\n]*/g) || [content];
+    clauses.forEach(function (clause) {
+      var segmented = [];
+      if (typeof Intl === "object" && typeof Intl.Segmenter === "function") {
+        try {
+          var segmenter = new Intl.Segmenter(undefined, { granularity: "sentence" });
+          segmented = Array.from(segmenter.segment(clause), function (item) { return item.segment; });
+        } catch (e) {}
+      }
+      sentences = sentences.concat(segmented.length ? segmented : [clause]);
+    });
+    var chunks = [];
+    // Long model sentences are internally divided at natural clause breaks so
+    // the first audible result does not wait for an entire paragraph-length
+    // sentence. Completed short sentences remain one synthesis request.
+    var maxChars = 60;
+    sentences.forEach(function (sentence) {
+      var remaining = String(sentence || "").trim();
+      while (remaining.length > maxChars) {
+        var windowText = remaining.slice(0, maxChars + 1);
+        var breakAt = Math.max(
+          windowText.lastIndexOf("，"), windowText.lastIndexOf(","),
+          windowText.lastIndexOf("；"), windowText.lastIndexOf(";"),
+          windowText.lastIndexOf("："), windowText.lastIndexOf(":"),
+          windowText.lastIndexOf(" ")
+        );
+        if (breakAt < 24) breakAt = maxChars;
+        else breakAt += 1;
+        var chunk = remaining.slice(0, breakAt).trim();
+        if (chunk) chunks.push(chunk);
+        remaining = remaining.slice(breakAt).trim();
+      }
+      if (remaining) chunks.push(remaining);
+    });
+    return chunks;
+  }
+
+  function requestSpeechChunk(content, sequenceId, numSteps) {
+    if (sequenceId !== activeSequenceId) return Promise.reject(new DOMException("Aborted", "AbortError"));
+    var controller = typeof AbortController === "function" ? new AbortController() : null;
+    activeRequest = controller;
+    return fetch("/api/voice/tts", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ text: content, num_steps: numSteps === 4 ? 4 : 6 }),
+      signal: controller ? controller.signal : undefined,
+    }).then(function (response) {
+      if (!response.ok) return responseError(response);
+      return response.blob();
+    }).then(function (blob) {
+      if (sequenceId !== activeSequenceId) throw new DOMException("Aborted", "AbortError");
+      return blob;
+    }).finally(function () {
+      if (activeRequest === controller) activeRequest = null;
+    });
+  }
+
+  function playSpeechBlob(blob, sequenceId, onStarted) {
+    if (sequenceId !== activeSequenceId) return Promise.resolve(false);
+    releaseAudio();
+    activeUrl = URL.createObjectURL(blob);
+    activeAudio = new Audio(activeUrl);
+    return new Promise(function (resolve, reject) {
+      var settled = false;
+      function finish(played, error) {
+        if (settled) return;
+        settled = true;
+        if (activePlaybackCancel === cancel) activePlaybackCancel = null;
+        releaseAudio();
+        if (error) reject(error);
+        else resolve(played);
+      }
+      function cancel() { finish(false); }
+      activePlaybackCancel = cancel;
+      activeAudio.onended = function () { finish(true); };
+      activeAudio.onerror = function () { finish(false, new Error("audio playback failed")); };
+      activeAudio.play().then(function () {
+        if (typeof onStarted === "function") onStarted();
+      }).catch(function (error) { finish(false, error); });
+    });
+  }
+
+  function playSpeechChunks(chunks, index, targetKey, sequenceId, preparedBlob) {
+    if (sequenceId !== activeSequenceId || activeKey !== targetKey) return Promise.resolve(false);
+    var blobPromise = preparedBlob
+      ? Promise.resolve(preparedBlob)
+      : requestSpeechChunk(chunks[index], sequenceId, index === 0 ? 4 : 6);
+    return blobPromise.then(function (blob) {
+      if (sequenceId !== activeSequenceId || activeKey !== targetKey) return false;
+      var nextResultPromise = null;
+      return playSpeechBlob(blob, sequenceId, function () {
+        if (index + 1 < chunks.length) {
+          nextResultPromise = requestSpeechChunk(chunks[index + 1], sequenceId, 6).then(
+            function (nextBlob) { return { blob: nextBlob }; },
+            function (error) { return { error: error }; }
+          );
+        }
+      }).then(function (played) {
+        if (!played || sequenceId !== activeSequenceId || activeKey !== targetKey) return false;
+        if (index + 1 >= chunks.length) {
+          activeKey = "";
+          notify();
+          return true;
+        }
+        var pending = nextResultPromise || requestSpeechChunk(chunks[index + 1], sequenceId, 6).then(
+          function (nextBlob) { return { blob: nextBlob }; },
+          function (error) { return { error: error }; }
+        );
+        return pending.then(function (result) {
+          if (result.error) throw result.error;
+          return playSpeechChunks(chunks, index + 1, targetKey, sequenceId, result.blob);
+        });
+      });
+    });
+  }
+
+  function speechResult(content, sequenceId, numSteps) {
+    return requestSpeechChunk(content, sequenceId, numSteps).then(
+      function (blob) { return { blob: blob }; },
+      function (error) { return { error: error }; }
+    );
+  }
+
+  function streamReadyChunks(value, finished) {
+    var source = String(value || "");
+    var fences = source.match(/```/g) || [];
+    if (fences.length % 2 === 1) source = source.slice(0, source.lastIndexOf("```"));
+    var chunks = voiceTextChunks(source);
+    if (finished || !chunks.length) return chunks;
+    source = source.trim();
+    var inlineSource = source.replace(/```[\s\S]*?(?:```|$)|~~~[\s\S]*?(?:~~~|$)/g, "");
+    var openSquare = (inlineSource.match(/(^|[^\\])\[/g) || []).length;
+    var closeSquare = (inlineSource.match(/(^|[^\\])\]/g) || []).length;
+    var markdownStable = openSquare <= closeSquare
+      && (inlineSource.match(/`/g) || []).length % 2 === 0
+      && (inlineSource.split("**").length - 1) % 2 === 0
+      && (inlineSource.split("__").length - 1) % 2 === 0
+      && (inlineSource.split("~~").length - 1) % 2 === 0
+      && !/\]\([^)]*$/.test(inlineSource)
+      && !/<[^>]*$/.test(inlineSource)
+      && !/\\$/.test(inlineSource);
+    var plainSource = voicePlainText(source);
+    var endsAtSentence = markdownStable && /[。！？!?；;\n]\s*$/.test(plainSource);
+    // Keep the unfinished tail buffered. Once it grows beyond maxChars,
+    // voiceTextChunks yields stable clause-sized prefixes and only the final
+    // partial chunk remains withheld.
+    if (!endsAtSentence) chunks.pop();
+    return chunks;
+  }
+
+  function prepareAutoStreamNext(state) {
+    if (
+      !state
+      || state !== autoStreamState
+      || state.sequenceId !== activeSequenceId
+      || !state.playing
+      || !state.queue.length
+      || state.queue[0].resultPromise
+    ) return;
+    state.queue[0].resultPromise = speechResult(
+      state.queue[0].text,
+      state.sequenceId,
+      state.queue[0].numSteps
+    );
+  }
+
+  function completeAutoStream(state) {
+    if (state !== autoStreamState || state.sequenceId !== activeSequenceId) return;
+    autoStreamState = null;
+    activeKey = "";
+    notify();
+  }
+
+  function pumpAutoStream(state) {
+    if (
+      !state
+      || state !== autoStreamState
+      || state.sequenceId !== activeSequenceId
+      || activeKey !== state.key
+      || state.busy
+    ) return;
+    if (!state.queue.length) {
+      if (state.closed) completeAutoStream(state);
+      return;
+    }
+    var item = state.queue.shift();
+    state.busy = true;
+    var pending = item.resultPromise || speechResult(item.text, state.sequenceId, item.numSteps);
+    pending.then(function (result) {
+      if (result.error) throw result.error;
+      if (state !== autoStreamState || state.sequenceId !== activeSequenceId) return false;
+      return playSpeechBlob(result.blob, state.sequenceId, function () {
+        state.playing = true;
+        prepareAutoStreamNext(state);
+      });
+    }).then(function (played) {
+      if (state !== autoStreamState || state.sequenceId !== activeSequenceId) return;
+      state.busy = false;
+      state.playing = false;
+      if (!played) return;
+      pumpAutoStream(state);
+    }).catch(function (error) {
+      if (error && error.name === "AbortError") return;
+      stop();
+      try {
+        window.CyreneUI.require("feedback").showToast(
+          wbcT("workbenchChat.voicePlaybackFailed", "Could not play speech: {error}", { error: error.message || String(error) }),
+          "error"
+        );
+      } catch (e) {}
+    });
+  }
+
+  function newAutoStreamState(targetKey) {
+    return {
+      key: targetKey,
+      sequenceId: activeSequenceId,
+      queue: [],
+      produced: [],
+      streamGeneration: 0,
+      streamSentenceCount: 0,
+      queuedKeys: new Set(),
+      busy: false,
+      playing: false,
+      closed: false,
+    };
+  }
+
+  function autoStream(text, key, finished, restart) {
+    var targetKey = String(key || "auto-stream");
+    return refresh(false).then(function (voiceStatus) {
+      if (!voiceStatus.auto_read || !voiceStatus.tts_ready) return false;
+      if (restart) autoStreamFinalText.delete(targetKey);
+      var state = autoStreamState;
+      if (!state || state.key !== targetKey) {
+        stop();
+        state = newAutoStreamState(targetKey);
+        autoStreamState = state;
+        activeKey = targetKey;
+        notify();
+      } else if (restart) {
+        // A visible reply stream can begin after one or more intermediate
+        // messages. Reset only the stream cursor so those queued messages
+        // finish speaking instead of being cut off by reply_start.
+        state.produced = [];
+        state.streamGeneration += 1;
+        state.streamSentenceCount = 0;
+        state.closed = false;
+      }
+      var chunks = streamReadyChunks(text, finished === true);
+      if (
+        finished === true
+        && state.closed
+        && JSON.stringify(state.produced) !== JSON.stringify(chunks)
+      ) {
+        // Some providers emit a provisional reply_done before Cyrene publishes
+        // the authoritative terminal reply.  Restart the terminal cursor when
+        // their content differs so the actual final answer is never skipped.
+        state.produced = [];
+        state.streamGeneration += 1;
+        state.streamSentenceCount = 0;
+      }
+      for (var i = state.produced.length; i < chunks.length; i += 1) {
+        var streamItemKey = "stream:" + state.streamGeneration + ":" + i + ":" + chunks[i];
+        if (state.queuedKeys.has(streamItemKey)) continue;
+        state.queuedKeys.add(streamItemKey);
+        state.queue.push({
+          text: chunks[i],
+          numSteps: state.streamSentenceCount === 0 ? 4 : 6,
+          resultPromise: null,
+        });
+        state.streamSentenceCount += 1;
+      }
+      if (chunks.length > state.produced.length) state.produced = chunks.slice();
+      if (finished === true) {
+        state.closed = true;
+        autoStreamFinalText.set(targetKey, voicePlainText(text));
+      }
+      if (state.playing) prepareAutoStreamNext(state);
+      pumpAutoStream(state);
+      return true;
+    });
+  }
+
+  function speak(text, key) {
+    var chunks = voiceTextChunks(text);
+    var targetKey = String(key || "voice");
+    if (!chunks.length || !currentStatus.tts_ready) return Promise.resolve(false);
+    if (activeKey === targetKey) {
+      stop();
+      return Promise.resolve(false);
+    }
+    stop();
+    activeKey = targetKey;
+    var sequenceId = activeSequenceId;
+    notify();
+    return playSpeechChunks(chunks, 0, targetKey, sequenceId, null).catch(function (error) {
+      if (error && error.name === "AbortError") return false;
+      stop();
+      try {
+        window.CyreneUI.require("feedback").showToast(
+          wbcT("workbenchChat.voicePlaybackFailed", "Could not play speech: {error}", { error: error.message || String(error) }),
+          "error"
+        );
+      } catch (e) {}
+      return false;
+    });
+  }
+
+  function queueAutoSpeech(text, key, itemKey, voiceStatus) {
+    if (!voiceStatus.auto_read || !voiceStatus.tts_ready) return false;
+    var chunks = voiceTextChunks(text);
+    if (!chunks.length) return false;
+    var targetKey = String(key || "auto-speech");
+    var state = autoStreamState;
+    if (!state || state.key !== targetKey) {
+      stop();
+      state = newAutoStreamState(targetKey);
+      state.closed = true;
+      autoStreamState = state;
+      activeKey = targetKey;
+      notify();
+    }
+    var sourceKey = String(itemKey || text || "message");
+    chunks.forEach(function (chunk, index) {
+      var chunkKey = "message:" + sourceKey + ":" + index;
+      if (state.queuedKeys.has(chunkKey)) return;
+      state.queuedKeys.add(chunkKey);
+      state.queue.push({ text: chunk, numSteps: index === 0 ? 4 : 6, resultPromise: null });
+    });
+    if (state.playing) prepareAutoStreamNext(state);
+    pumpAutoStream(state);
+    return true;
+  }
+
+  function autoSpeak(text, key, itemKey) {
+    return refresh(false).then(function (voiceStatus) {
+      return queueAutoSpeech(text, key, itemKey, voiceStatus);
+    });
+  }
+
+  function autoSpeakFinal(text, key, itemKey) {
+    var targetKey = String(key || "auto-speech");
+    return refresh(false).then(function (voiceStatus) {
+      if (!voiceStatus.auto_read || !voiceStatus.tts_ready) return false;
+      var finalText = voicePlainText(text);
+      var streamedText = autoStreamFinalText.get(targetKey);
+      autoStreamFinalText.delete(targetKey);
+      // reply_done already queued this exact terminal snapshot.  The durable
+      // saved event is a fallback for providers/reconnects that did not deliver
+      // a usable final stream, not a request to read the same answer twice.
+      if (finalText && streamedText === finalText) return true;
+      return queueAutoSpeech(text, targetKey, itemKey, voiceStatus);
+    });
+  }
+
+  window.addEventListener("cyrene:voice-status-changed", function (event) {
+    var detail = event && event.detail;
+    if (detail && typeof detail === "object") setStatus(detail);
+    else refresh(true);
+  });
+  window.addEventListener("cyrene:voice-stop", function () {
+    if (typeof WbVoiceCommand !== "undefined" && WbVoiceCommand && WbVoiceCommand.clearSpeechQueue) {
+      WbVoiceCommand.clearSpeechQueue();
+    }
+    stop();
+  });
+
+  return {
+    autoSpeak: autoSpeak,
+    autoSpeakFinal: autoSpeakFinal,
+    autoStream: autoStream,
+    refresh: refresh,
+    speak: speak,
+    plainText: voicePlainText,
+    splitText: voiceTextChunks,
+    getSnapshot: snapshot,
+    stop: stop,
+    subscribe: subscribe,
+  };
+})();
+
+function wbcResampleVoice(samples, sourceRate, targetRate) {
+  if (sourceRate === targetRate) return samples;
+  var targetLength = Math.max(1, Math.round(samples.length * targetRate / sourceRate));
+  var output = new Float32Array(targetLength);
+  var scale = (samples.length - 1) / Math.max(1, targetLength - 1);
+  for (var i = 0; i < targetLength; i += 1) {
+    var position = i * scale;
+    var left = Math.floor(position);
+    var right = Math.min(samples.length - 1, left + 1);
+    var weight = position - left;
+    output[i] = samples[left] * (1 - weight) + samples[right] * weight;
+  }
+  return output;
+}
+
+function wbcVoiceWavBlob(chunks, sourceRate) {
+  var length = chunks.reduce(function (total, chunk) { return total + chunk.length; }, 0);
+  var merged = new Float32Array(length);
+  var offset = 0;
+  chunks.forEach(function (chunk) { merged.set(chunk, offset); offset += chunk.length; });
+  var samples = wbcResampleVoice(merged, sourceRate, 16000);
+  var buffer = new ArrayBuffer(44 + samples.length * 2);
+  var view = new DataView(buffer);
+  function writeString(at, value) {
+    for (var i = 0; i < value.length; i += 1) view.setUint8(at + i, value.charCodeAt(i));
+  }
+  writeString(0, "RIFF");
+  view.setUint32(4, 36 + samples.length * 2, true);
+  writeString(8, "WAVE");
+  writeString(12, "fmt ");
+  view.setUint32(16, 16, true);
+  view.setUint16(20, 1, true);
+  view.setUint16(22, 1, true);
+  view.setUint32(24, 16000, true);
+  view.setUint32(28, 32000, true);
+  view.setUint16(32, 2, true);
+  view.setUint16(34, 16, true);
+  writeString(36, "data");
+  view.setUint32(40, samples.length * 2, true);
+  for (var sampleIndex = 0; sampleIndex < samples.length; sampleIndex += 1) {
+    var value = Math.max(-1, Math.min(1, samples[sampleIndex]));
+    view.setInt16(44 + sampleIndex * 2, value < 0 ? value * 32768 : value * 32767, true);
+  }
+  return new Blob([buffer], { type: "audio/wav" });
+}
+
+var WBC_VOICE_SILENCE_MS = 1600;
+var WBC_VOICE_MIN_SPEECH_MS = 240;
+var WBC_VOICE_SPEECH_RMS = 0.012;
+var WBC_VOICE_SPEECH_PEAK = 0.08;
+
+function wbcCreateVoiceSilenceDetector(onSilence, options) {
+  var detectorOptions = options || {};
+  var initialSilenceMs = Math.max(0, Number(detectorOptions.initialSilenceMs) || 0);
+  var speechMs = 0;
+  var silenceMs = 0;
+  var elapsedBeforeSpeechMs = 0;
+  var speechStarted = false;
+  var triggered = false;
+  return function (samples, sampleRate) {
+    if (triggered || !samples.length || !sampleRate) return;
+    var sumSquares = 0;
+    var peak = 0;
+    for (var i = 0; i < samples.length; i += 1) {
+      var amplitude = Math.abs(samples[i]);
+      sumSquares += amplitude * amplitude;
+      if (amplitude > peak) peak = amplitude;
+    }
+    var rms = Math.sqrt(sumSquares / samples.length);
+    var durationMs = samples.length * 1000 / sampleRate;
+    if (!speechStarted) elapsedBeforeSpeechMs += durationMs;
+    var voiced = rms >= WBC_VOICE_SPEECH_RMS || peak >= WBC_VOICE_SPEECH_PEAK;
+    if (voiced) {
+      speechMs += durationMs;
+      silenceMs = 0;
+      if (speechMs >= WBC_VOICE_MIN_SPEECH_MS) speechStarted = true;
+    } else if (speechStarted) {
+      silenceMs += durationMs;
+    } else {
+      speechMs = Math.max(0, speechMs - durationMs);
+    }
+    if (
+      (speechStarted && silenceMs >= WBC_VOICE_SILENCE_MS)
+      || (!speechStarted && initialSilenceMs > 0 && elapsedBeforeSpeechMs >= initialSilenceMs)
+    ) {
+      triggered = true;
+      onSilence();
+    }
+  };
+}
+
+function wbcStartVoiceRecorder(options) {
+  var recorderOptions = options || {};
+  if (!navigator.mediaDevices || typeof navigator.mediaDevices.getUserMedia !== "function") {
+    return Promise.reject(new Error(wbcT("workbenchChat.microphoneUnavailable", "Microphone access is unavailable")));
+  }
+  return navigator.mediaDevices.getUserMedia({
+    audio: { channelCount: 1, echoCancellation: true, noiseSuppression: true },
+  }).then(function (stream) {
+    var AudioContextClass = window.AudioContext || window.webkitAudioContext;
+    if (!AudioContextClass) {
+      stream.getTracks().forEach(function (track) { track.stop(); });
+      throw new Error(wbcT("workbenchChat.microphoneUnavailable", "Microphone access is unavailable"));
+    }
+    var context = new AudioContextClass();
+    var source = context.createMediaStreamSource(stream);
+    var processor = context.createScriptProcessor(4096, 1, 1);
+    var silent = context.createGain();
+    var chunks = [];
+    var stopped = false;
+    var stopPromise = null;
+    var controller = null;
+    var detectSilence = recorderOptions.autoStopOnSilence
+      ? wbcCreateVoiceSilenceDetector(function () {
+          setTimeout(function () {
+            if (!stopped && controller && typeof recorderOptions.onSilence === "function") {
+              recorderOptions.onSilence(controller);
+            }
+          }, 0);
+        }, { initialSilenceMs: recorderOptions.initialSilenceMs })
+      : null;
+    silent.gain.value = 0;
+    processor.onaudioprocess = function (event) {
+      var chunk = new Float32Array(event.inputBuffer.getChannelData(0));
+      chunks.push(chunk);
+      if (detectSilence) detectSilence(chunk, context.sampleRate);
+    };
+    source.connect(processor);
+    processor.connect(silent);
+    silent.connect(context.destination);
+    controller = {
+      stop: function () {
+        if (stopPromise) return stopPromise;
+        stopped = true;
+        processor.onaudioprocess = null;
+        try { source.disconnect(); processor.disconnect(); silent.disconnect(); } catch (e) {}
+        stream.getTracks().forEach(function (track) { track.stop(); });
+        var sourceRate = context.sampleRate;
+        stopPromise = Promise.resolve(context.close()).catch(function () {}).then(function () {
+          if (!chunks.length) throw new Error(wbcT("workbenchChat.noRecordedAudio", "No audio was recorded"));
+          return wbcVoiceWavBlob(chunks, sourceRate);
+        });
+        return stopPromise;
+      },
+    };
+    return controller;
+  });
+}
+
+var WBC_TOPBAR_INITIAL_SILENCE_MS = 5000;
+
+// App-wide voice-command entry point used by both the titlebar button and its
+// focused-window shortcut. It deliberately owns no navigation state: a valid
+// transcript is sent to a silently-created chat and monitored by run id.
+var WbVoiceCommand = (function () {
+  var phase = "";
+  var ready = false;
+  var recorder = null;
+  var listeners = new Set();
+  var voiceSnapshot = WbcVoice.getSnapshot();
+  var speechQueue = [];
+  var speaking = false;
+  var runStates = new Map();
+  var statusToastId = 0;
+
+  function snapshot() {
+    return { phase: phase, ready: ready };
+  }
+
+  function notify() {
+    var value = snapshot();
+    listeners.forEach(function (listener) { listener(value); });
+  }
+
+  function setPhase(next) {
+    phase = next;
+    notify();
+  }
+
+  function showStatusToast(message, type, duration) {
+    var feedback = window.CyreneUI.require("feedback");
+    if (statusToastId) feedback.dismissToast(statusToastId);
+    statusToastId = feedback.showToast(message, type || "info", {
+      duration: duration == null ? 0 : duration,
+    });
+  }
+
+  function showError(error) {
+    var message = error && error.message ? error.message : String(error || "");
+    showStatusToast(
+      wbcT("topbar.voiceCommandFailed", "Voice command failed: {error}", { error: message }),
+      "error",
+      6000
+    );
+  }
+
+  function responsePayload(response) {
+    return response.json().catch(function () { return {}; }).then(function (payload) {
+      if (!response.ok) throw new Error(payload.error || payload.detail || ("HTTP " + response.status));
+      return payload;
+    });
+  }
+
+  function currentLanguage() {
+    try { return window.CyreneUI.require("i18n").getLang(); } catch (e) { return ""; }
+  }
+
+  function currentUiInstanceId() {
+    try {
+      if (window.CyreneUI.has("uiSurface")) return window.CyreneUI.require("uiSurface").getInstanceId();
+    } catch (e) {}
+    return "";
+  }
+
+  function clearSpeechQueue() {
+    speechQueue = [];
+  }
+
+  function speechEnabled() {
+    var status = voiceSnapshot && voiceSnapshot.status;
+    return !!(status && status.auto_read && status.tts_ready);
+  }
+
+  function drainSpeechQueue() {
+    if (speaking || !speechQueue.length || !speechEnabled()) return;
+    if (voiceSnapshot && voiceSnapshot.activeKey) return;
+    var item = speechQueue.shift();
+    speaking = true;
+    WbcVoice.speak(item.text, "voice-command:" + item.runId + ":" + item.id)
+      .finally(function () {
+        speaking = false;
+        drainSpeechQueue();
+      });
+  }
+
+  function enqueueSpeech(state, text, kind) {
+    var plain = WbcVoice.plainText(text);
+    if (!plain || !speechEnabled()) return;
+    var dedupeKey = kind + ":" + plain;
+    if (state.seen.has(dedupeKey)) return;
+    state.seen.add(dedupeKey);
+    speechQueue.push({
+      id: state.sequence += 1,
+      runId: state.runId,
+      kind: kind,
+      text: plain,
+    });
+    drainSpeechQueue();
+  }
+
+  function replaceQueuedRunSpeech(state, text, kind) {
+    // Never interrupt an item that has already started. Everything for this
+    // run that is still waiting is provisional and can be replaced atomically.
+    speechQueue = speechQueue.filter(function (item) { return item.runId !== state.runId; });
+    enqueueSpeech(state, text, kind);
+  }
+
+  function pendingQuestionText(pending) {
+    var question = pending && typeof pending === "object" ? pending : {};
+    var prompt = String(question.text || question.prompt || question.question || question.title || "").trim();
+    var values = Array.isArray(question.options) ? question.options : (Array.isArray(question.choices) ? question.choices : []);
+    var options = values.map(function (item) {
+      if (item && typeof item === "object") return String(item.label || item.text || item.title || item.value || "").trim();
+      return String(item || "").trim();
+    }).filter(Boolean);
+    if (!options.length) return prompt;
+    return prompt + (currentLanguage() === "zh" ? "。可选项：" : ". Options: ") + options.join(currentLanguage() === "zh" ? "；" : "; ");
+  }
+
+  function latestAssistantText(chatId) {
+    return fetch("/api/workbench/chats/" + encodeURIComponent(chatId))
+      .then(responsePayload)
+      .then(function (payload) {
+        var messages = payload && payload.chat && Array.isArray(payload.chat.messages) ? payload.chat.messages : [];
+        for (var i = messages.length - 1; i >= 0; i -= 1) {
+          if (messages[i] && messages[i].role === "assistant" && String(messages[i].content || "").trim()) {
+            return String(messages[i].content || "");
+          }
+        }
+        return "";
+      })
+      .catch(function () { return ""; });
+  }
+
+  function handleRunEvent(state, event) {
+    var data = event && event.data && typeof event.data === "object" ? event.data : {};
+    if (event.type === "intermediate_message" && !state.finalSeen) {
+      var message = data.message && typeof data.message === "object" ? data.message : {};
+      if (!message.role || message.role === "assistant") {
+        enqueueSpeech(state, message.content || message.text || "", "intermediate");
+      }
+      return;
+    }
+    if (event.type === "reply_done") {
+      var finalText = String(data.response || "").trim();
+      if (finalText) {
+        state.finalSeen = true;
+        replaceQueuedRunSpeech(state, finalText, "final");
+      }
+      return;
+    }
+    if (event.type === "awaiting_user") {
+      var questionText = pendingQuestionText(data.pending_question || data.pendingQuestion);
+      state.finalSeen = true;
+      replaceQueuedRunSpeech(state, questionText, "question");
+      return;
+    }
+    if (event.type === "error") {
+      showError(new Error(data.message || data.error || data.code || "Agent run failed"));
+    }
+  }
+
+  function pollRun(state) {
+    if (!runStates.has(state.runId)) return;
+    fetch(
+      "/v1/control/runs/" + encodeURIComponent(state.runId)
+      + "/events?after=" + encodeURIComponent(state.cursor) + "&limit=200"
+    ).then(responsePayload).then(function (payload) {
+      var events = Array.isArray(payload.events) ? payload.events : [];
+      events.forEach(function (event) {
+        state.cursor = Math.max(state.cursor, Number(event.cursor) || 0);
+        handleRunEvent(state, event);
+      });
+      state.cursor = Math.max(state.cursor, Number(payload.next_cursor) || 0);
+      if (!payload.completed) {
+        state.timer = setTimeout(function () { pollRun(state); }, 350);
+        return;
+      }
+      runStates.delete(state.runId);
+      if (state.finalSeen) return;
+      latestAssistantText(state.chatId).then(function (text) {
+        if (text) replaceQueuedRunSpeech(state, text, "final-fallback");
+      });
+    }).catch(function (error) {
+      runStates.delete(state.runId);
+      showError(error);
+    });
+  }
+
+  function monitorRun(runId, chatId, cursor) {
+    if (!runId || runStates.has(runId)) return;
+    var state = {
+      runId: String(runId),
+      chatId: String(chatId || ""),
+      cursor: Number(cursor) || 0,
+      finalSeen: false,
+      sequence: 0,
+      seen: new Set(),
+      timer: 0,
+    };
+    runStates.set(state.runId, state);
+    pollRun(state);
+  }
+
+  function finishRecording(controller) {
+    if (phase !== "recording" && phase !== "starting") return Promise.resolve(false);
+    var activeRecorder = controller || recorder;
+    recorder = null;
+    setPhase("recognizing");
+    showStatusToast(
+      wbcT("topbar.voiceCommandRecognizingNotice", "Recognizing speech…"),
+      "info",
+      0
+    );
+    if (!activeRecorder) {
+      setPhase("");
+      return Promise.resolve(false);
+    }
+    return activeRecorder.stop().then(function (blob) {
+      var form = new FormData();
+      form.append("audio", blob, "voice-command.wav");
+      form.append("lang", currentLanguage());
+      form.append("ui_instance_id", currentUiInstanceId());
+      return fetch("/api/workbench/voice-command", { method: "POST", body: form });
+    }).then(responsePayload).then(function (payload) {
+      if (payload.created) {
+        showStatusToast(
+          wbcT("topbar.voiceCommandComplete", "Recognized and sent to a new chat"),
+          "success",
+          3600
+        );
+        monitorRun(payload.run_id, payload.chat_id, payload.event_cursor);
+      } else {
+        showStatusToast(
+          wbcT("topbar.voiceCommandNoSpeech", "No speech recognized; no chat was created"),
+          "warning",
+          3600
+        );
+      }
+      return !!payload.created;
+    }).catch(function (error) {
+      showError(error);
+      return false;
+    }).finally(function () {
+      setPhase("");
+    });
+  }
+
+  function start() {
+    if (phase) return Promise.resolve(false);
+    clearSpeechQueue();
+    WbcVoice.stop();
+    setPhase("starting");
+    showStatusToast(
+      wbcT("topbar.voiceCommandStartingNotice", "Starting voice input…"),
+      "info",
+      0
+    );
+    return WbcVoice.refresh(true).then(function (status) {
+      ready = !!(status && status.asr_ready && status.tts_ready);
+      notify();
+      if (!ready) throw new Error(wbcT("topbar.voiceModelsNotReady", "Configure both local voice models first"));
+      return wbcStartVoiceRecorder({
+        autoStopOnSilence: true,
+        initialSilenceMs: WBC_TOPBAR_INITIAL_SILENCE_MS,
+        onSilence: finishRecording,
+      });
+    }).then(function (controller) {
+      recorder = controller;
+      setPhase("recording");
+      showStatusToast(
+        wbcT("topbar.voiceCommandListening", "Listening; start speaking"),
+        "info",
+        0
+      );
+      return true;
+    }).catch(function (error) {
+      recorder = null;
+      setPhase("");
+      showError(error);
+      return false;
+    });
+  }
+
+  function subscribe(listener) {
+    listeners.add(listener);
+    listener(snapshot());
+    return function () { listeners.delete(listener); };
+  }
+
+  WbcVoice.subscribe(function (nextSnapshot) {
+    voiceSnapshot = nextSnapshot;
+    var status = nextSnapshot && nextSnapshot.status;
+    var nextReady = !!(status && status.asr_ready && status.tts_ready);
+    if (ready !== nextReady) {
+      ready = nextReady;
+      notify();
+    }
+    drainSpeechQueue();
+  });
+
+  return { clearSpeechQueue: clearSpeechQueue, start: start, subscribe: subscribe, snapshot: snapshot };
+})();
+
 // Conversation-panel icons share one 18px optical grid and stroke language.
 // They are intentionally panel-specific instead of borrowing generic toolbar
 // glyphs whose proportions and metaphors differ from the selected design.
@@ -2142,11 +3159,12 @@ var WorkbenchChatRuntimes = (function () {
     // interruption and repaired the persisted chat status. If the interrupted
     // event wins the race it clears the runtime directly; otherwise aborting
     // here makes ownStream perform one authoritative re-pull.
-    return Promise.resolve(request).catch(function (err) {
+    return Promise.resolve(request).then(function (result) {
+      abort(chatId);
+      return result;
+    }).catch(function (err) {
       fire("onError", chatId, err);
       return null;
-    }).finally(function () {
-      abort(chatId);
     });
   }
 
@@ -2160,6 +3178,14 @@ var WorkbenchChatRuntimes = (function () {
       nextInput = { ...nextInput, message: [previousText, nextText].filter(Boolean).join("\n\n") };
     }
     deferredSends[chatId] = { input: nextInput, model: model };
+    // A sealed guidance endpoint waits for the old run to finish before
+    // returning ``chat_not_running``. If its stream already closed first,
+    // there will be no later terminal callback to wake this deferred send.
+    if (!runtimes[chatId]) {
+      var ready = deferredSends[chatId];
+      delete deferredSends[chatId];
+      return start(chatId, ready.input, ready.model);
+    }
     return true;
   }
 
@@ -2219,6 +3245,7 @@ var WorkbenchChatRuntimes = (function () {
 
   function appendIntermediate(chatId, message) {
     if (!chatId || !message || !message.id) return;
+    fire("onIntermediateMessage", chatId, message);
     update(chatId, function (cur) {
       if (!cur) return null;
       var segments = Array.isArray(cur.segments) ? cur.segments : [];
@@ -2300,6 +3327,7 @@ var WorkbenchChatRuntimes = (function () {
       },
       onReplyStart: function () {
         update(chatId, function (cur) { return cur ? { ...cur, replying: true, lastEventAt: Date.now() } : null; });
+        fire("onReplyStream", chatId, { text: "", start: true, done: false });
       },
       onReasoningStart: function (event) {
         update(chatId, function (cur) {
@@ -2391,10 +3419,12 @@ var WorkbenchChatRuntimes = (function () {
         });
       },
       onReplyDelta: function (delta) {
-        update(chatId, function (cur) { return cur ? { ...cur, replying: true, streamDone: false, text: cur.text + delta, lastEventAt: Date.now() } : null; }, true);
+        var next = update(chatId, function (cur) { return cur ? { ...cur, replying: true, streamDone: false, text: cur.text + delta, lastEventAt: Date.now() } : null; }, true);
+        if (next) fire("onReplyStream", chatId, { text: next.text, start: false, done: false });
       },
       onReplyDone: function (text) {
-        update(chatId, function (cur) { return cur ? { ...cur, streamDone: true, text: text || cur.text, lastEventAt: Date.now() } : null; });
+        var next = update(chatId, function (cur) { return cur ? { ...cur, streamDone: true, text: text || cur.text, lastEventAt: Date.now() } : null; });
+        if (next) fire("onReplyStream", chatId, { text: next.text, start: false, done: true });
       },
       onFinalizing: function () {
         update(chatId, function (cur) {
@@ -3951,7 +4981,44 @@ function WorkbenchChatPage({ active, project, newChatRequestId, onOpenTask, onAc
           return { ...prev, messages: list.slice(0, cut + 1) };
         });
       },
+      onReplyStream: function (chatId, event) {
+        if (String(activeChatIdRef.current || "") !== String(chatId || "")) return;
+        var payload = event && typeof event === "object" ? event : {};
+        WbcVoice.autoStream(
+          String(payload.text || ""),
+          "auto-chat:" + String(chatId || ""),
+          payload.done === true,
+          payload.start === true
+        );
+      },
+      onIntermediateMessage: function (chatId, message) {
+        if (String(activeChatIdRef.current || "") !== String(chatId || "")) return;
+        var item = message && typeof message === "object" ? message : {};
+        WbcVoice.autoSpeak(
+          String(item.content || ""),
+          "auto-chat:" + String(chatId || ""),
+          "intermediate:" + String(item.id || item.content || "")
+        );
+      },
       onAssistantSaved: function (chatId, assistantMessages) {
+        if (String(activeChatIdRef.current || "") === String(chatId || "")) {
+          var terminalMessages = Array.isArray(assistantMessages) ? assistantMessages : [];
+          var terminalMessage = null;
+          for (var ti = terminalMessages.length - 1; ti >= 0; ti -= 1) {
+            var candidate = terminalMessages[ti];
+            if (candidate && candidate.role === "assistant" && String(candidate.content || "").trim()) {
+              terminalMessage = candidate;
+              break;
+            }
+          }
+          if (terminalMessage) {
+            WbcVoice.autoSpeakFinal(
+              String(terminalMessage.content || ""),
+              "auto-chat:" + String(chatId || ""),
+              "final:" + String(terminalMessage.id || terminalMessage.content || "")
+            );
+          }
+        }
         // A background conversation has no active React transcript to patch.
         // Persist the terminal messages into its detail cache before the
         // runtime is cleared so switching to it never paints a stale snapshot.
@@ -3970,6 +5037,13 @@ function WorkbenchChatPage({ active, project, newChatRequestId, onOpenTask, onAc
       onAwaitingUser: function (chatId, pendingQuestion) {
         // The run paused for a permission / clarification answer — stash the
         // question so the composer shows an answer prompt instead of a reply.
+        if (String(activeChatIdRef.current || "") === String(chatId || "") && pendingQuestion) {
+          WbcVoice.autoSpeak(
+            wbcVoiceQuestionText(pendingQuestion),
+            "auto-chat:" + String(chatId || ""),
+            "question:" + String(pendingQuestion.id || pendingQuestion.text || "")
+          );
+        }
         setActiveChat(function (prev) {
           if (!prev || prev.id !== chatId) return prev;
           return { ...prev, status: "idle", pendingQuestion: pendingQuestion || null };
@@ -3983,11 +5057,13 @@ function WorkbenchChatPage({ active, project, newChatRequestId, onOpenTask, onAc
           if (!prev || prev.id !== chatId) return prev;
           return { ...prev, status: "idle" };
         });
+        if (String(activeChatIdRef.current || "") === String(chatId || "")) WbcVoice.stop();
         refreshChats();
       },
       onError: function (chatId, err) {
         setErrorKind("message");
         setError(wbcErrorText(err));
+        if (String(activeChatIdRef.current || "") === String(chatId || "")) WbcVoice.stop();
       },
       onSettled: function (chatId) {
         var hydrationSequence = beginChatHydration(chatId);
@@ -4024,6 +5100,7 @@ function WorkbenchChatPage({ active, project, newChatRequestId, onOpenTask, onAc
   }, [activeChat && activeChat.id, activeChat && activeChat.status]);
 
   function handleSend(input) {
+    WbcVoice.stop();
     setError("");
     setErrorKind("load");
     var preparedInput = Object.assign({}, input || {});
@@ -4087,6 +5164,7 @@ function WorkbenchChatPage({ active, project, newChatRequestId, onOpenTask, onAc
   function deleteSideAgent(agentId) {
     var id = String(agentId || "");
     if (!id) return Promise.resolve();
+    WbcVoice.stop();
     return model.deleteChat(id).then(function () {
       setSideAgents(function (current) {
         var next = current.filter(function (item) { return item.id !== id; });
@@ -4722,6 +5800,7 @@ function WorkbenchChatPage({ active, project, newChatRequestId, onOpenTask, onAc
   function answerQuestionForChat(chatId, questionId, optionText, resumeMode) {
     chatId = String(chatId || "");
     if (!chatId || !questionId || !optionText) return Promise.resolve(null);
+    WbcVoice.stop();
     var targetSummary = chatsRef.current.find(function (chat) { return String(chat && chat.id || "") === chatId; }) || {};
     if (activeChatIdRef.current === chatId) setError("");
     var optimisticAnswer = {
@@ -4847,6 +5926,7 @@ function WorkbenchChatPage({ active, project, newChatRequestId, onOpenTask, onAc
       skipNextHydrationChatIdRef.current = chat.id;
       selectChat(chat.id);
       setActiveChat(chat);
+      return chat;
     }).catch(function (err) { setError(wbcErrorText(err)); });
   }
 
@@ -4965,6 +6045,7 @@ function WorkbenchChatPage({ active, project, newChatRequestId, onOpenTask, onAc
       danger: true,
     }).then(function (ok) {
       if (!ok) return;
+      WbcVoice.stop();
       var deletedIndex = chats.findIndex(function (item) { return item.id === chatId; });
       var deletedItem = deletedIndex >= 0 ? chats[deletedIndex] : null;
       var deletedActiveChat = deletingActiveChat ? activeChat : null;
@@ -5079,7 +6160,8 @@ function WorkbenchChatPage({ active, project, newChatRequestId, onOpenTask, onAc
     setMemoryLearningBusy(true);
     setErrorKind("memory");
     setError("");
-    model.generateMemory(activeChat.id).then(function (payload) {
+    var memoryLanguage = window.CyreneUI.require("i18n").getLang();
+    model.generateMemory(activeChat.id, memoryLanguage).then(function (payload) {
       setErrorKind("load");
       var duplicate = payload && payload.status === "deduplicated";
       window.CyreneUI.require("feedback").showToast(
@@ -5686,7 +6768,7 @@ function WbcRenameDialog({ chat, onClose, onRename, entity }) {
           <button type="button" className="wb-btn" disabled={saving} onClick={close}>
             {wbcT("common.cancel", "Cancel")}
           </button>
-          <button type="submit" className="wb-btn primary" disabled={!canSave}>
+          <button type="submit" className="wb-btn primary" data-cyrene-risk="R2" disabled={!canSave}>
             {saving ? wbcT("common.saving", "Saving...") : wbcT("common.save", "Save")}
           </button>
         </div>
@@ -6066,7 +7148,14 @@ function WbcConversationStatusPreview({ chat, state, runtime, busy, result, erro
   var kind = String(pending && pending.kind || "");
   var isPermission = window.CyreneUI.require("model").isPermissionQuestionKind(kind);
   var actionOptions = options.length
-    ? options.map(function (option) { return { value: option, label: option }; })
+    ? options.map(function (option, index) {
+      return {
+        value: wbcQuestionOptionValue(option),
+        label: isPermission
+          ? wbcPermissionOptionLabel(option, index, options.length)
+          : wbcQuestionOptionValue(option),
+      };
+    })
     : (isPermission ? [
       { value: "在本次会话同意", label: wbcT("workbenchChat.permissionSession", "Allow for this session") },
       { value: "同意一次", label: wbcT("workbenchChat.permissionOnce", "Allow once") },
@@ -6083,7 +7172,9 @@ function WbcConversationStatusPreview({ chat, state, runtime, busy, result, erro
   var detail = state.kind === "running"
     ? (wbcConversationTrackRuntimeText(runtime, chat) || wbcT("workbenchChat.track.runningDetail", "Agent is working in the background."))
     : state.kind === "attention"
-      ? String(pending && pending.text || wbcT("workbenchChat.track.attentionDetail", "Open this conversation or respond here to continue."))
+      ? String(isPermission
+        ? wbcPermissionQuestionText(pending)
+        : (pending && pending.text || wbcT("workbenchChat.track.attentionDetail", "Open this conversation or respond here to continue.")))
       : state.kind === "result"
         ? String(chat && chat.preview || wbcT("workbenchChat.track.resultDetail", "A background reply is ready."))
         : wbcT("workbenchChat.track.failedDetail", "The latest run stopped with an error. Open the conversation for details.");
@@ -6142,6 +7233,36 @@ function WbcConversationStatusPreview({ chat, state, runtime, busy, result, erro
   );
 }
 
+function wbcViewportChatIds(list) {
+  if (!list || typeof list.getBoundingClientRect !== "function" || typeof list.querySelectorAll !== "function") return [];
+  var viewport = list.getBoundingClientRect();
+  var viewportRight = Number.isFinite(Number(viewport.right)) ? Number(viewport.right) : Number(viewport.left || 0) + Number(viewport.width || 0);
+  var viewportBottom = Number.isFinite(Number(viewport.bottom)) ? Number(viewport.bottom) : Number(viewport.top || 0) + Number(viewport.height || 0);
+  var seen = new Set();
+  var result = [];
+  list.querySelectorAll(".wbc-chat-card[data-chat-id]").forEach(function (card) {
+    if (card.hidden || card.getAttribute("aria-hidden") === "true") return;
+    var hiddenLayer = card.closest && card.closest('[aria-hidden="true"], [inert]');
+    if (hiddenLayer) return;
+    var rect = card.getBoundingClientRect();
+    var right = Number.isFinite(Number(rect.right)) ? Number(rect.right) : Number(rect.left || 0) + Number(rect.width || 0);
+    var bottom = Number.isFinite(Number(rect.bottom)) ? Number(rect.bottom) : Number(rect.top || 0) + Number(rect.height || 0);
+    if (
+      Number(rect.width || 0) <= 0
+      || Number(rect.height || 0) <= 0
+      || right <= Number(viewport.left || 0)
+      || Number(rect.left || 0) >= viewportRight
+      || bottom <= Number(viewport.top || 0)
+      || Number(rect.top || 0) >= viewportBottom
+    ) return;
+    var chatId = String(card.getAttribute("data-chat-id") || "");
+    if (!chatId || seen.has(chatId)) return;
+    seen.add(chatId);
+    result.push(chatId);
+  });
+  return result;
+}
+
 function WbcRail({ projectId, chats, pinnedChatIds, activeChatId, loading, runningChatIds, runtimeEngine, onSelect, onAnswer, onCreate, onRename, onDelete, onToTask, toTaskBusy, onTogglePinned, collapsed, onToggleCollapsed, collapseControl, moduleDock }) {
   var [query, setQuery] = useWbcState("");
   var [showAllRecent, setShowAllRecent] = useWbcState(false);
@@ -6169,7 +7290,9 @@ function WbcRail({ projectId, chats, pinnedChatIds, activeChatId, loading, runni
   var [newResultChatIds, setNewResultChatIds] = useWbcState({});
   var [previewAnswerState, setPreviewAnswerState] = useWbcState({ chatId: "", busy: false, result: "", error: "" });
   var [trackGeometryByChatId, setTrackGeometryByChatId] = useWbcState({});
+  var [agentFlowByChatId, setAgentFlowByChatId] = useWbcState({});
   var [railMotionPhase, setRailMotionPhase] = useWbcState("");
+  var [uiViewportRevision, setUiViewportRevision] = useWbcState(0);
   var railMotionCollapsedRef = useWbcRef(!!collapsed);
   /* Derive the phase during the first render that sees the new collapsed prop.
      Waiting for an Effect (or scheduling state while rendering) leaves one
@@ -6180,6 +7303,9 @@ function WbcRail({ projectId, chats, pinnedChatIds, activeChatId, loading, runni
     : railMotionPhase;
   var trackLifecycleRef = useWbcRef({ projectId: "", chats: {} });
   var railRef = useWbcRef(null);
+  var chatListRef = useWbcRef(null);
+  var chatSearchRef = useWbcRef(null);
+  var newChatButtonRef = useWbcRef(null);
   var trackRef = useWbcRef(null);
   var trackMeasuredExpandedRef = useWbcRef(false);
   var railDragWasActiveRef = useWbcRef(false);
@@ -6191,6 +7317,7 @@ function WbcRail({ projectId, chats, pinnedChatIds, activeChatId, loading, runni
   var suppressClickRef = useWbcRef("");
   var suppressGroupClickRef = useWbcRef("");
   var groupMetadataRequestRef = useWbcRef({ sequence: 0, active: {} });
+  var agentFlowTimersRef = useWbcRef({});
   var groupBackendLoadRef = useWbcRef(0);
   var groupBackendWriteRef = useWbcRef({ projectId: String(projectId || ""), sequence: 0, chain: Promise.resolve(), baseGroups: [] });
   var groupMetadataLang = window.CyreneUI.require("i18n").getLang();
@@ -6231,6 +7358,46 @@ function WbcRail({ projectId, chats, pinnedChatIds, activeChatId, loading, runni
   useWbcEffect(function () {
     return function () { cancelPreviewClose(); };
   }, []);
+
+  useWbcEffect(function () {
+    function onAgentChatFlow(event) {
+      var detail = event && event.detail && typeof event.detail === "object" ? event.detail : {};
+      var chatId = String(detail.chatId || "").trim();
+      var kind = String(detail.kind || "").trim();
+      if (!chatId || ["created", "typing"].indexOf(kind) < 0) return;
+      var expiresAt = Number(detail.expiresAt || 0);
+      var remaining = Math.max(0, expiresAt - Date.now());
+      if (!remaining) return;
+      var timers = agentFlowTimersRef.current;
+      if (timers[chatId]) window.clearTimeout(timers[chatId]);
+      setAgentFlowByChatId(function (current) { return { ...current, [chatId]: kind }; });
+      timers[chatId] = window.setTimeout(function () {
+        delete timers[chatId];
+        setAgentFlowByChatId(function (current) {
+          if (!current[chatId]) return current;
+          var next = { ...current };
+          delete next[chatId];
+          return next;
+        });
+      }, remaining);
+    }
+    window.addEventListener(WBC_AGENT_CHAT_FLOW_EVENT, onAgentChatFlow);
+    return function () {
+      window.removeEventListener(WBC_AGENT_CHAT_FLOW_EVENT, onAgentChatFlow);
+      Object.keys(agentFlowTimersRef.current).forEach(function (chatId) {
+        window.clearTimeout(agentFlowTimersRef.current[chatId]);
+      });
+      agentFlowTimersRef.current = {};
+    };
+  }, []);
+
+  useWbcEffect(function () {
+    Object.keys(agentFlowTimersRef.current).forEach(function (chatId) {
+      window.clearTimeout(agentFlowTimersRef.current[chatId]);
+    });
+    agentFlowTimersRef.current = {};
+    setAgentFlowByChatId({});
+  }, [projectId]);
 
   useWbcEffect(function () {
     return function () { clearRailDragImage(); };
@@ -6864,10 +8031,21 @@ function WbcRail({ projectId, chats, pinnedChatIds, activeChatId, loading, runni
     });
     var isDragging = dragState && dragState.movingId === String(chat.id);
     var isGroupTarget = dragState && dragState.mode === "group" && dragState.targetId === String(chat.id);
+    var agentFlow = String(agentFlowByChatId[String(chat.id)] || "");
+    var agentFlowLabel = agentFlow === "created"
+      ? wbcT("workbenchChat.agentFlow.created", "Agent created this chat")
+      : agentFlow === "typing"
+        ? wbcT("workbenchChat.agentFlow.typing", "Agent is entering a message")
+        : "";
+    var chatLabel = chat.title || wbcT("workbenchChat.newChat", "New chat");
+    var dragTitle = wbcT("workbenchChat.dragChat", "Drag to reorder, overlap another chat to group, or drop in the conversation area to open {title}.", {
+      title: chatLabel,
+    });
     return (
       <div
         key={chat.id}
         data-chat-id={String(chat.id)}
+        data-cyrene-node-id={"chat_" + String(chat.id)}
         role="button"
         tabIndex={0}
         draggable="true"
@@ -6878,10 +8056,12 @@ function WbcRail({ projectId, chats, pinnedChatIds, activeChatId, loading, runni
           + (isDragging ? " dragging" : "")
           + (isGroupTarget ? " group-drop-target" : "")
           + (chatTrackMarkerReady ? " track-marker-ready" : "")
+          + (agentFlow ? (" agent-flow agent-flow-" + agentFlow) : "")
           + chatStatusTone}
-        title={wbcT("workbenchChat.dragChat", "Drag to reorder, overlap another chat to group, or drop in the conversation area to open {title}.", {
-          title: chat.title || wbcT("workbenchChat.newChat", "New chat"),
-        })}
+        title={agentFlowLabel ? (dragTitle + " · " + agentFlowLabel) : dragTitle}
+        aria-label={agentFlowLabel ? (chatLabel + " · " + agentFlowLabel) : chatLabel}
+        data-agent-flow={agentFlow || undefined}
+        data-cyrene-context-menu="true"
         onClick={function () {
           if (suppressClickRef.current === String(chat.id)) return;
           setMenuId("");
@@ -7066,8 +8246,8 @@ function WbcRail({ projectId, chats, pinnedChatIds, activeChatId, loading, runni
                 {WBC_ICONS.dots}
               </button>
               {isMenuOpen && (
-                <div className="wb-card-menu" role="menu">
-                  <button type="button" role="menuitem" className="wbc-chat-pin-action" onClick={function (e) {
+                <div className="wb-card-menu" role="menu" data-cyrene-node-id="chat_context_menu">
+                  <button type="button" role="menuitem" data-cyrene-node-id="chat_menu_pin" className="wbc-chat-pin-action" onClick={function (e) {
                     e.stopPropagation();
                     setMenuId("");
                     if (onTogglePinned) onTogglePinned(chat, !isPinned);
@@ -7078,7 +8258,7 @@ function WbcRail({ projectId, chats, pinnedChatIds, activeChatId, loading, runni
                       : wbcT("workbenchChat.pin", "Pin chat")}</span>
                   </button>
                   {!chat.legacy && (
-                    <button type="button" role="menuitem" className="wbc-chat-menu-action" onClick={function (e) {
+                    <button type="button" role="menuitem" data-cyrene-node-id="chat_menu_rename" className="wbc-chat-menu-action" onClick={function (e) {
                       e.stopPropagation();
                       setMenuId("");
                       setRenameChat(chat);
@@ -7087,7 +8267,7 @@ function WbcRail({ projectId, chats, pinnedChatIds, activeChatId, loading, runni
                       <span>{wbcT("workbenchChat.rename", "Rename chat")}</span>
                     </button>
                   )}
-                  <button type="button" role="menuitem" className="wbc-chat-menu-action" disabled={toTaskBusy} onClick={function (e) {
+                  <button type="button" role="menuitem" data-cyrene-node-id="chat_menu_to_task" className="wbc-chat-menu-action" disabled={toTaskBusy} onClick={function (e) {
                     e.stopPropagation();
                     setMenuId("");
                     if (onToTask) onToTask(chat.id);
@@ -7095,7 +8275,7 @@ function WbcRail({ projectId, chats, pinnedChatIds, activeChatId, loading, runni
                     <span className="wbc-chat-menu-icon" aria-hidden="true">{WBC_ICONS.task}</span>
                     <span>{wbcT(toTaskBusy ? "workbenchChat.toTaskBusy" : "workbenchChat.toTask", toTaskBusy ? "Analyzing chat…" : "Convert to task")}</span>
                   </button>
-                  <button type="button" role="menuitem" className="wbc-chat-menu-action danger" onClick={function (e) {
+                  <button type="button" role="menuitem" data-cyrene-node-id="chat_menu_delete" className="wbc-chat-menu-action danger" onClick={function (e) {
                     e.stopPropagation();
                     setMenuId("");
                     onDelete && onDelete(chat.id);
@@ -7151,6 +8331,7 @@ function WbcRail({ projectId, chats, pinnedChatIds, activeChatId, loading, runni
       <section
         key={group.id}
         className={"wbc-chat-group" + (isCollapsed ? " collapsed" : " expanded") + (groupDropReady ? " drop-ready" : "") + (isMenuOpen ? " menu-open" : "") + (isGroupDragging ? " dragging" : "")}
+        data-cyrene-context-menu="true"
         onContextMenu={openGroupMenu}
         onDragOver={function (event) {
           if (!dragState || !wbcHasChatRailDrag(event)) return;
@@ -7334,6 +8515,30 @@ function WbcRail({ projectId, chats, pinnedChatIds, activeChatId, loading, runni
   var railDragActive = !!dragState;
 
   useWbcLayoutEffect(function () {
+    var list = chatListRef.current;
+    if (!list) return undefined;
+    var frame = 0;
+    function refreshViewport() {
+      if (frame) return;
+      frame = window.requestAnimationFrame(function () {
+        frame = 0;
+        setUiViewportRevision(function (value) { return value + 1; });
+      });
+    }
+    list.addEventListener("scroll", refreshViewport, { passive: true });
+    window.addEventListener("resize", refreshViewport);
+    var observer = typeof ResizeObserver === "function" ? new ResizeObserver(refreshViewport) : null;
+    if (observer) observer.observe(list);
+    refreshViewport();
+    return function () {
+      if (frame) window.cancelAnimationFrame(frame);
+      list.removeEventListener("scroll", refreshViewport);
+      window.removeEventListener("resize", refreshViewport);
+      if (observer) observer.disconnect();
+    };
+  }, [projectId, query, showAllRecent, visibleTrackLayoutKey, collapsed]);
+
+  useWbcLayoutEffect(function () {
     if (railDragActive) {
       railDragWasActiveRef.current = true;
       return;
@@ -7509,6 +8714,212 @@ function WbcRail({ projectId, chats, pinnedChatIds, activeChatId, loading, runni
     );
   }
 
+  useWbcEffect(function () {
+    if (!window.CyreneUI.has("uiSurface")) return undefined;
+    var uiSurface = window.CyreneUI.require("uiSurface");
+    var unregister = [];
+    unregister.push(uiSurface.register({
+        node_id: "new_chat",
+        parent_id: "root",
+        scope: "main",
+        order: 30,
+        get_element: function () { return newChatButtonRef.current; },
+        get_node: function () { return { role: "button", name: wbcT("workbenchChat.newChat", "New chat") }; },
+        actions: [{
+          action_id: "invoke", kind: "invoke", risk: "R1", gesture_aliases: ["press", "keyboard"],
+          outcome: { effect: "creates_and_opens_surface", target_scope: "chat", inspect_after: true },
+        }],
+        handlers: {
+          invoke: function () {
+            return Promise.resolve(onCreate && onCreate()).then(function (chat) {
+              if (chat && chat.id) wbcNotifyAgentChatFlow("created", chat.id);
+              return chat && chat.id ? { chat_id: String(chat.id), created_by_agent: true } : {};
+            });
+          },
+        },
+      }));
+    unregister.push(uiSurface.register({
+        node_id: "chat_search_input",
+        parent_id: "root",
+        scope: "main",
+        order: 40,
+        get_element: function () { return chatSearchRef.current; },
+        get_node: function () {
+          return {
+            role: "searchbox",
+            name: wbcT("workbenchChat.searchCurrentProject", "Search current project..."),
+            value_summary: query,
+            state: {
+              project_id: String(projectId || ""),
+              query_length: String(query || "").length,
+              result_count: filtered.length,
+            },
+          };
+        },
+        actions: [
+          { action_id: "set_value", kind: "set_value", risk: "R1", gesture_aliases: ["text_input"], input_schema: { value: "text<=500" } },
+          { action_id: "clear_value", kind: "set_value", risk: "R1", gesture_aliases: ["semantic_clear"], input_schema: {} },
+        ],
+        handlers: {
+          set_value: function (input) { setQuery(String(input.value || "")); },
+          clear_value: function () { setQuery(""); },
+        },
+      }));
+    var visibleChatIds = wbcViewportChatIds(chatListRef.current);
+    var visibleChats = visibleChatIds.map(function (chatId) { return chatMap.get(chatId); }).filter(Boolean);
+    unregister.push(uiSurface.register({
+      node_id: "chat_list",
+      parent_id: "root",
+      scope: "main",
+      order: 100,
+      get_element: function () { return chatListRef.current; },
+      get_node: function () {
+        var list = chatListRef.current;
+        var scrollTop = Number(list && list.scrollTop || 0);
+        var scrollHeight = Number(list && list.scrollHeight || 0);
+        var clientHeight = Number(list && list.clientHeight || 0);
+        return {
+          role: "list",
+          name: wbcT("rail.chat", "Chats"),
+          state: {
+            total_count: filtered.length,
+            visible_count: wbcViewportChatIds(list).length,
+            query: query,
+            scroll_top: scrollTop,
+            scroll_height: scrollHeight,
+            client_height: clientHeight,
+            can_page_previous: scrollTop > 1,
+            can_page_next: scrollTop + clientHeight < scrollHeight - 1 || recentOverflowCount > 0,
+            hidden_result_count: recentOverflowCount,
+            all_recent_rendered: showAllRecent,
+          },
+        };
+      },
+      actions: [
+        { action_id: "scroll_page", kind: "scroll", risk: "R1", gesture_aliases: ["wheel", "keyboard"], input_schema: { delta: "-2000..2000" } },
+        { action_id: "page_previous", kind: "invoke", risk: "R1", gesture_aliases: ["page_up", "keyboard"] },
+        { action_id: "page_next", kind: "invoke", risk: "R1", gesture_aliases: ["page_down", "keyboard"] },
+        { action_id: "search", kind: "set_value", risk: "R1", gesture_aliases: ["text_input"], input_schema: { value: "text<=500" } },
+        { action_id: "clear_search", kind: "set_value", risk: "R1", gesture_aliases: ["semantic_clear"], input_schema: {} },
+      ].concat(recentOverflowCount > 0 ? [
+        { action_id: "show_all_results", kind: "invoke", risk: "R1", gesture_aliases: ["press", "keyboard"] },
+      ] : []),
+      handlers: {
+        scroll_page: function (input) {
+          var list = chatListRef.current;
+          if (list && typeof list.scrollBy === "function") list.scrollBy({ top: Number(input.delta || 0), behavior: "auto" });
+          setUiViewportRevision(function (value) { return value + 1; });
+        },
+        page_previous: function () {
+          var list = chatListRef.current;
+          if (list && typeof list.scrollBy === "function") list.scrollBy({ top: -Math.max(1, Number(list.clientHeight || 0) * 0.9), behavior: "auto" });
+          setUiViewportRevision(function (value) { return value + 1; });
+        },
+        page_next: function () {
+          var list = chatListRef.current;
+          if (recentOverflowCount > 0 && list && Number(list.scrollTop || 0) + Number(list.clientHeight || 0) >= Number(list.scrollHeight || 0) - 1) {
+            setShowAllRecent(true);
+            setUiViewportRevision(function (value) { return value + 1; });
+            return;
+          }
+          if (list && typeof list.scrollBy === "function") list.scrollBy({ top: Math.max(1, Number(list.clientHeight || 0) * 0.9), behavior: "auto" });
+          setUiViewportRevision(function (value) { return value + 1; });
+        },
+        search: function (input) { setQuery(String(input.value || "")); },
+        clear_search: function () { setQuery(""); },
+        show_all_results: function () { setShowAllRecent(true); },
+      },
+    }));
+    visibleChats.forEach(function (chat) {
+      var chatId = String(chat.id || "");
+      var nodeId = "chat_" + chatId;
+      unregister.push(uiSurface.register({
+        node_id: nodeId,
+        parent_id: "chat_list",
+        scope: "main",
+        order: 1000 + visibleChats.indexOf(chat),
+        get_node: function () {
+          return chatId && wbcViewportChatIds(chatListRef.current).indexOf(chatId) >= 0 ? {
+            role: "listitem",
+            name: chat.title || wbcT("workbenchChat.newChat", "New chat"),
+            value_summary: chat.preview || "",
+            state: {
+              selected: chatId === String(activeChatId || ""),
+              pinned: (Array.isArray(pinnedChatIds) ? pinnedChatIds : []).map(String).indexOf(chatId) >= 0,
+              grouped: !!wbcFindChatGroup(groups, chatId),
+            },
+          } : null;
+        },
+        actions: [
+          { action_id: "open", kind: "invoke", risk: "R1", gesture_aliases: ["press", "keyboard"] },
+          { action_id: "open_menu", kind: "open_menu", risk: "R1", gesture_aliases: ["context_menu", "more_button"] },
+        ],
+        handlers: {
+          open: function () { setMenuId(""); return onSelect(chatId); },
+          open_menu: function () { setMenuId(chatId); },
+        },
+      }));
+    });
+    if (menuId && String(menuId).indexOf("group:") !== 0) {
+      var menuChat = chatMap.get(String(menuId));
+      if (menuChat) {
+        var menuChatId = String(menuChat.id || "");
+        var pinned = (Array.isArray(pinnedChatIds) ? pinnedChatIds : []).map(String).indexOf(menuChatId) >= 0;
+        uiSurface.setScope("chat_menu");
+        unregister.push(uiSurface.register({
+          node_id: "chat_context_menu",
+          parent_id: "root",
+          scope: "chat_menu",
+          order: 10,
+          get_node: function () { return { role: "menu", name: menuChat.title || wbcT("workbenchChat.newChat", "New chat") }; },
+          actions: [{ action_id: "dismiss", kind: "dismiss", risk: "R1", gesture_aliases: ["escape_key", "scrim"] }],
+          handlers: { dismiss: function () { setMenuId(""); } },
+        }));
+        unregister.push(uiSurface.register({
+          node_id: "chat_menu_pin",
+          parent_id: "chat_context_menu",
+          scope: "chat_menu",
+          order: 20,
+          get_node: function () { return { role: "menuitem", name: pinned ? wbcT("workbenchChat.unpin", "Unpin chat") : wbcT("workbenchChat.pin", "Pin chat") }; },
+          actions: [{ action_id: "invoke", kind: "invoke", risk: "R1", gesture_aliases: ["press", "keyboard"] }],
+          handlers: { invoke: function () { setMenuId(""); return onTogglePinned && onTogglePinned(menuChat, !pinned); } },
+        }));
+        if (!menuChat.legacy) {
+          unregister.push(uiSurface.register({
+            node_id: "chat_menu_rename",
+            parent_id: "chat_context_menu",
+            scope: "chat_menu",
+            order: 30,
+            get_node: function () { return { role: "menuitem", name: wbcT("workbenchChat.rename", "Rename chat") }; },
+            actions: [{ action_id: "invoke", kind: "invoke", risk: "R1", gesture_aliases: ["press", "keyboard"] }],
+            handlers: { invoke: function () { setMenuId(""); setRenameChat(menuChat); } },
+          }));
+        }
+        unregister.push(uiSurface.register({
+          node_id: "chat_menu_to_task",
+          parent_id: "chat_context_menu",
+          scope: "chat_menu",
+          order: 40,
+          get_node: function () { return { role: "menuitem", name: wbcT(toTaskBusy ? "workbenchChat.toTaskBusy" : "workbenchChat.toTask", toTaskBusy ? "Analyzing chat..." : "Convert to task"), state: { disabled: !!toTaskBusy } }; },
+          actions: toTaskBusy ? [] : [{ action_id: "invoke", kind: "invoke", risk: "R1", gesture_aliases: ["press", "keyboard"] }],
+          handlers: { invoke: function () { setMenuId(""); return onToTask && onToTask(menuChatId); } },
+        }));
+        unregister.push(uiSurface.register({
+          node_id: "chat_menu_delete",
+          parent_id: "chat_context_menu",
+          scope: "chat_menu",
+          order: 50,
+          get_node: function () { return { role: "menuitem", name: wbcT("workbenchChat.delete", "Delete chat") }; },
+          actions: [{ action_id: "invoke", kind: "invoke", risk: "R1", gesture_aliases: ["press", "keyboard"] }],
+          handlers: { invoke: function () { setMenuId(""); return onDelete && onDelete(menuChatId); } },
+        }));
+      }
+    } else if (uiSurface.getScope() === "chat_menu") {
+      uiSurface.setScope("main");
+    }
+    return function () { unregister.forEach(function (remove) { remove(); }); };
+  }, [projectId, defaultOrderKey, filtered, query, collapsed, groups, menuId, activeChatId, pinnedChatIds, onSelect, onCreate, onDelete, onToTask, toTaskBusy, onTogglePinned, showAllRecent, recentOverflowCount, uiViewportRevision]);
+
   return (
     <aside ref={railRef} className={"wbc-rail workbench-integrated-rail"
       + (collapsed ? " is-collapsed" : "")
@@ -7520,6 +8931,8 @@ function WbcRail({ projectId, chats, pinnedChatIds, activeChatId, loading, runni
               <div className="wbc-search">
                 <span className="wbc-search-icon">{WBC_ICONS.search}</span>
                 <input
+                  ref={chatSearchRef}
+                  data-cyrene-node-id="chat_search_input"
                   value={query}
                   onChange={function (e) { setQuery(e.target.value); }}
                   placeholder={wbcT("workbenchChat.searchCurrentProject", "Search current project...")}
@@ -7528,6 +8941,8 @@ function WbcRail({ projectId, chats, pinnedChatIds, activeChatId, loading, runni
             )}
             {!collapsed && (
               <button
+                ref={newChatButtonRef}
+                data-cyrene-node-id="new_chat"
                 type="button"
                 className="wbc-project-new-chat"
                 onClick={onCreate}
@@ -7550,6 +8965,8 @@ function WbcRail({ projectId, chats, pinnedChatIds, activeChatId, loading, runni
       </div>
       {menuId && <div className="wb-card-menu-scrim" onClick={function () { setMenuId(""); }} />}
       <div
+        ref={chatListRef}
+        data-cyrene-node-id="chat_list"
         className={"wbc-chat-list workbench-integrated-rail-body" + (loading ? " is-loading" : "") + (!loading && visibleRailItemCount === 0 ? " is-empty" : "") + (menuId ? " menu-active" : "") + (!loading && visibleGroupRailItems.length ? " has-groups" : "")}
         onDragOver={function (event) {
           if (!dragState || !wbcHasChatRailDrag(event)) return;
@@ -7644,6 +9061,7 @@ function WbcRail({ projectId, chats, pinnedChatIds, activeChatId, loading, runni
                 "--wbc-track-collapse-y": (Number.isFinite(item.collapseY) ? item.collapseY : 0) + "px",
               }}
               onMouseEnter={function () { openStatusPreview(chat.id); }}
+              onMouseMove={function () { if (!previewOpen) openStatusPreview(chat.id); }}
               onMouseLeave={closeStatusPreviewSoon}
               onFocusCapture={function () { openStatusPreview(chat.id); }}
               onBlurCapture={function (event) {
@@ -7662,7 +9080,6 @@ function WbcRail({ projectId, chats, pinnedChatIds, activeChatId, loading, runni
               <button
                 type="button"
                 className={"wbc-conversation-status-marker is-" + item.state.kind + (item.state.urgent ? " is-urgent" : "")}
-                title={title}
                 aria-label={title}
                 aria-expanded={previewOpen}
                 onClick={function () {
@@ -8720,6 +10137,83 @@ function WbcBrowserFloatingSurface({ browserState, browserSessionId, visible, mo
     };
   }, []);
 
+  function maximizeBrowserWindow() {
+    return runModeTransition(onMaximize, "maximized");
+  }
+
+  function restoreBrowserWindow() {
+    setMaximizedBrowserPicker(false);
+    return runModeTransition(onRestore, "pip");
+  }
+
+  useWbcEffect(function () {
+    if (!window.CyreneUI.has("uiSurface")) return undefined;
+    var uiSurface = window.CyreneUI.require("uiSurface");
+    var isPresent = visible && !hasNoBrowserTabs && (effectiveMode === "pip" || effectiveMode === "maximized");
+    var actions = effectiveMode === "pip" ? [
+      {
+        action_id: "maximize",
+        kind: "invoke",
+        gesture_aliases: ["double_press", "maximize_button"],
+        risk: "R1",
+      },
+      {
+        action_id: "set_frame",
+        kind: "set_frame",
+        gesture_aliases: ["pointer_move_resize"],
+        risk: "R1",
+        input_schema: {
+          x_ratio: "0..1", y_ratio: "0..1",
+          width_ratio: "0.2..1", height_ratio: "0.2..1",
+        },
+      },
+    ] : [{
+      action_id: "restore",
+      kind: "invoke",
+      gesture_aliases: ["double_press", "restore_button", "escape_key"],
+      risk: "R1",
+    }];
+    return uiSurface.register({
+      node_id: "browser_window_titlebar",
+      parent_id: "root",
+      get_node: function () {
+        return isPresent ? {
+          role: "window_titlebar",
+          name: wbcT("workbenchChat.browserWindowTitle", "Browser"),
+          state: { mode: effectiveMode },
+        } : null;
+      },
+      actions: actions,
+      handlers: {
+        maximize: maximizeBrowserWindow,
+        restore: restoreBrowserWindow,
+        set_frame: function (input) {
+          var area = shellRef.current && shellRef.current.parentElement;
+          if (!area || effectiveMode !== "pip") throw new Error("browser PiP is not available");
+          var xRatio = Number(input.x_ratio);
+          var yRatio = Number(input.y_ratio);
+          var widthRatio = Number(input.width_ratio);
+          var heightRatio = Number(input.height_ratio);
+          var values = [xRatio, yRatio, widthRatio, heightRatio];
+          if (values.some(function (value) { return !Number.isFinite(value) || value < 0 || value > 1; })
+              || widthRatio < 0.2 || heightRatio < 0.2) {
+            throw new Error("normalized browser frame is outside allowed bounds");
+          }
+          var width = area.clientWidth * widthRatio;
+          var height = area.clientHeight * heightRatio;
+          var next = {
+            x: (area.clientWidth - width) * xRatio,
+            y: (area.clientHeight - height) * yRatio,
+            width: width,
+            height: height,
+          };
+          commitFrame(next, area);
+          return { frame: frameRef.current };
+        },
+      },
+    });
+  }, [visible, hasNoBrowserTabs, effectiveMode, browserSessionId, onMaximize, onRestore]);
+
   if (!visible) return null;
   if (hasNoBrowserTabs && (effectiveMode === "pip" || effectiveMode === "minimized")) return null;
   if (effectiveMode === "minimized") {
@@ -8780,7 +10274,7 @@ function WbcBrowserFloatingSurface({ browserState, browserSessionId, visible, mo
         <div
           className={"wbc-browser-window-bar" + (effectiveMode === "maximized" ? " wbc-browser-maximized-head" : "")}
           onPointerDown={effectiveMode === "pip" ? function (event) { beginInteraction(event, "drag", ""); } : undefined}
-          onDoubleClick={effectiveMode === "pip" ? function () { runModeTransition(onMaximize, "maximized"); } : undefined}
+          onDoubleClick={effectiveMode === "pip" ? maximizeBrowserWindow : undefined}
         >
           {effectiveMode === "maximized" ? (
             <button type="button" className="wbc-browser-maximized-picker" onClick={function () {
@@ -8801,12 +10295,12 @@ function WbcBrowserFloatingSurface({ browserState, browserSessionId, visible, mo
           )}
           <div className="wbc-browser-window-actions" onPointerDown={function (event) { event.stopPropagation(); }}>
             {effectiveMode === "pip" ? (
-              <button type="button" onClick={function () { runModeTransition(onMaximize, "maximized"); }} title={wbcT("workbenchChat.browserMaximize", "Maximize")} aria-label={wbcT("workbenchChat.browserMaximize", "Maximize")}>{WBC_ICONS.windowMaximize}</button>
+              <button type="button" onClick={maximizeBrowserWindow} title={wbcT("workbenchChat.browserMaximize", "Maximize")} aria-label={wbcT("workbenchChat.browserMaximize", "Maximize")}>{WBC_ICONS.windowMaximize}</button>
             ) : (
               <React.Fragment>
                 <button type="button" className="wbc-browser-split-action" onClick={function (event) { refreshMaximizedBrowserTab(displayActiveBrowserTab, event); }} title={wbcT("browser.context.reload", "Reload")} aria-label={wbcT("browser.context.reload", "Reload")}>{FloatingBrowserIcon ? <FloatingBrowserIcon name="reload" size={15} /> : WBC_ICONS.retry}</button>
                 <button type="button" className={"wbc-browser-split-action" + (displayActiveBrowserTab.muted ? " active" : "")} onClick={function (event) { toggleMaximizedBrowserMute(displayActiveBrowserTab, event); }} title={displayActiveBrowserTab.muted ? wbcT("browser.context.unmute", "Unmute") : wbcT("browser.context.mute", "Mute")} aria-label={displayActiveBrowserTab.muted ? wbcT("browser.context.unmute", "Unmute") : wbcT("browser.context.mute", "Mute")}>{FloatingBrowserIcon ? <FloatingBrowserIcon name={displayActiveBrowserTab.muted ? "muted" : "volume"} size={15} /> : null}</button>
-                <button type="button" onClick={function () { setMaximizedBrowserPicker(false); runModeTransition(onRestore, "pip"); }} title={wbcT("workbenchChat.browserRestoreSize", "Restore")} aria-label={wbcT("workbenchChat.browserRestoreSize", "Restore")}>{WBC_ICONS.x}</button>
+                <button type="button" onClick={restoreBrowserWindow} title={wbcT("workbenchChat.browserRestoreSize", "Restore")} aria-label={wbcT("workbenchChat.browserRestoreSize", "Restore")}>{WBC_ICONS.x}</button>
               </React.Fragment>
             )}
             {effectiveMode === "pip" && <button type="button" onClick={onMinimize} title={wbcT("workbenchChat.browserMinimize", "Minimize")} aria-label={wbcT("workbenchChat.browserMinimize", "Minimize")}>{WBC_ICONS.windowMinimize}</button>}
@@ -9042,7 +10536,7 @@ function WbcConversationNavigator({ threadRef, chatId }) {
 
   if (!snapshot.visible) return null;
   return (
-    <nav className="wbc-conversation-nav" aria-label={wbcT("workbenchChat.navigation.label", "Conversation navigation")}>
+    <nav className="wbc-conversation-nav" data-cyrene-revision-volatile="true" aria-label={wbcT("workbenchChat.navigation.label", "Conversation navigation")}>
       <button
         type="button"
         className="wbc-conversation-nav-trigger"
@@ -9103,6 +10597,28 @@ function WbcMain({ project, chat, chatSummary, loading, runtime, error, errorKin
     lastEventAt: 0,
     waitingForIdle: false,
   });
+
+  function syncAgentCursorRunning(isRunning) {
+    try {
+      if (window.CyreneUI.has("uiSurface")) {
+        window.CyreneUI.require("uiSurface").setAgentRunning(isRunning === true);
+      }
+    } catch (error) {}
+    var cursorBridge = window.cyrene && window.cyrene.agentCursor;
+    if (cursorBridge && typeof cursorBridge.setRunning === "function") {
+      cursorBridge.setRunning(isRunning === true).catch(function () {});
+    }
+  }
+
+  useWbcEffect(function () {
+    syncAgentCursorRunning(running === true);
+  }, [running]);
+
+  useWbcEffect(function () {
+    return function () {
+      syncAgentCursorRunning(false);
+    };
+  }, []);
   var durableMessages = wbcReconcileLiveUserMessages(
     chat && Array.isArray(chat.messages) ? chat.messages : [],
     runtime && runtime.userMessages
@@ -9595,6 +11111,7 @@ function WbcMain({ project, chat, chatSummary, loading, runtime, error, errorKin
       >
       <div
         className="wbc-thread"
+        data-cyrene-revision-volatile="true"
         ref={scrollRef}
         onScroll={onScroll}
         onWheel={handleConversationHorizontalWheel}
@@ -9738,6 +11255,45 @@ function WbcMain({ project, chat, chatSummary, loading, runtime, error, errorKin
   );
 }
 
+function wbcQuestionOptionValue(option) {
+  if (typeof option === "string") return option;
+  return String(option && (option.label || option.title || option.value || option.description) || "").trim();
+}
+
+function wbcPermissionOptionLabel(option, index, total) {
+  if (total <= 2) {
+    return index === 0
+      ? wbcT("workbenchChat.permissionOnce", "Allow once")
+      : wbcT("workbenchChat.reject", "Reject");
+  }
+  if (index === 0) return wbcT("workbenchChat.permissionSession", "Allow for this session");
+  if (index === 1) return wbcT("workbenchChat.permissionOnce", "Allow once");
+  return wbcT("workbenchChat.reject", "Reject");
+}
+
+function wbcPermissionQuestionText(pending) {
+  var i18n = window.CyreneUI.require("i18n");
+  return i18n.permissionQuestionText(pending, i18n.getLang());
+}
+
+function wbcVoiceQuestionText(pending) {
+  var question = pending && typeof pending === "object" ? pending : {};
+  var kind = String(question.kind || "");
+  var isPermission = window.CyreneUI.require("model").isPermissionQuestionKind(kind);
+  var text = String(isPermission
+    ? wbcPermissionQuestionText(question)
+    : (question.text || wbcT("workbenchChat.questionFallback", "Agent needs your confirmation to continue."))).trim();
+  var options = Array.isArray(question.options) ? question.options : [];
+  if (isPermission && !options.length) {
+    options = ["在本次会话同意", "同意一次", "拒绝"];
+  }
+  var optionText = options.map(function (option, index) {
+    if (isPermission) return wbcPermissionOptionLabel(option, index, options.length);
+    return wbcQuestionOptionValue(option);
+  }).filter(Boolean).join("。 ");
+  return [text, optionText].filter(Boolean).join("。 ");
+}
+
 // A paused chat run awaiting the user's answer to a permission elevation or a
 // clarification (ask_user). Renders the question + option buttons inline at the
 // bottom of the thread; each answer resumes the same round server-side.
@@ -9747,8 +11303,74 @@ function WbcQuestionPrompt({ pending, onAnswer, busy, trace }) {
   var kind = String(pq.kind || "");
   var isPermission = window.CyreneUI.require("model").isPermissionQuestionKind(kind);
   var isPlanConfirmation = kind === "plan_confirmation";
+  var treeOptions = isPermission && !options.length ? ["在本次会话同意", "同意一次", "拒绝"] : options;
   var customState = useWbcState("");
   var customText = customState[0], setCustomText = customState[1];
+  var optionSignature = JSON.stringify(treeOptions);
+  useWbcEffect(function () {
+    if (!pq.id || busy || !onAnswer || !window.CyreneUI.has("uiSurface")) return undefined;
+    var uiSurface = window.CyreneUI.require("uiSurface");
+    var risk = isPermission ? "R3" : "R2";
+    var actions = treeOptions.map(function (_opt, index) {
+      return {
+        action_id: "answer_option_" + index,
+        kind: "invoke",
+        risk: risk,
+        gesture_aliases: ["press"],
+        input_schema: {},
+      };
+    });
+    if (pq.allowCustom && !isPermission) {
+      actions.push({
+        action_id: "answer_custom",
+        kind: "set_value",
+        risk: "R2",
+        gesture_aliases: ["text_input"],
+        input_schema: { value: "text<=20000" },
+      });
+    }
+    var handlers = {};
+    treeOptions.forEach(function (opt, index) {
+      handlers["answer_option_" + index] = function () {
+        var resumeMode = isPlanConfirmation && index === 0 ? "auto" : undefined;
+        return Promise.resolve(onAnswer(pq.id, wbcQuestionOptionValue(opt), resumeMode)).then(function () {
+          return { question_id: String(pq.id), answered: true, option_index: index };
+        });
+      };
+    });
+    if (pq.allowCustom && !isPermission) {
+      handlers.answer_custom = function (input) {
+        var answer = String(input.value || "").trim();
+        if (!answer) throw new Error("answer is empty");
+        return Promise.resolve(onAnswer(pq.id, answer)).then(function () {
+          return { question_id: String(pq.id), answered: true, custom: true };
+        });
+      };
+    }
+    return uiSurface.register({
+      node_id: "chat_question_" + String(pq.id).replace(/[^a-zA-Z0-9_-]/g, "").slice(0, 100),
+      parent_id: "root",
+      scope: "main",
+      get_node: function () {
+        if (busy) return null;
+        return {
+          role: isPermission ? "approval" : "question",
+          name: String(isPermission
+            ? wbcPermissionQuestionText(pq)
+            : (pq.text || wbcT("workbenchChat.questionFallback", "Agent needs your confirmation to continue."))),
+          value_summary: treeOptions.length + " options",
+          state: {
+            question_id: String(pq.id),
+            question_kind: kind,
+            permission: isPermission,
+            allow_custom: !!pq.allowCustom && !isPermission,
+          },
+        };
+      },
+      actions: actions,
+      handlers: handlers,
+    });
+  }, [pq.id, pq.allowCustom, kind, busy, onAnswer, optionSignature, isPermission, isPlanConfirmation]);
   function submitCustom() {
     var t = String(customText || "").trim();
     if (!t || busy || !onAnswer) return;
@@ -9763,11 +11385,14 @@ function WbcQuestionPrompt({ pending, onAnswer, busy, trace }) {
           <span className="wbc-question-ico">{WBC_ICONS.alert}</span>
           <b>{isPermission ? wbcT("workbenchChat.permissionTitle", "Authorization needed") : wbcT("workbenchChat.questionTitle", "Confirmation needed")}</b>
         </div>
-        <p className="wbc-question-text">{pq.text || wbcT("workbenchChat.questionFallback", "Agent needs your confirmation to continue.")}</p>
+        <p className="wbc-question-text">{isPermission
+          ? wbcPermissionQuestionText(pq)
+          : (pq.text || wbcT("workbenchChat.questionFallback", "Agent needs your confirmation to continue."))}</p>
         {isPermission ? (
           <div className="wbc-question-options">
             {(options.length ? options : ["在本次会话同意", "同意一次", "拒绝"]).map(function (opt, i) {
-              return <button key={i} type="button" className={"wbc-question-opt" + (i === 0 ? " primary" : "")} disabled={busy} onClick={function () { if (!busy && onAnswer) onAnswer(pq.id, opt); }}>{opt}</button>;
+              var permissionOptions = options.length ? options : ["在本次会话同意", "同意一次", "拒绝"];
+              return <button key={i} type="button" className={"wbc-question-opt" + (i === 0 ? " primary" : "")} disabled={busy} onClick={function () { if (!busy && onAnswer) onAnswer(pq.id, wbcQuestionOptionValue(opt)); }}>{wbcPermissionOptionLabel(opt, i, permissionOptions.length)}</button>;
             })}
           </div>
         ) : (
@@ -10228,12 +11853,18 @@ function WbcTraceCard({ trace, live, running, label, reasoning, showReasoning, o
 
 function WbcAssistantMessage({ msg, onOpenFile, onRetryMessage, chatId }) {
   var [copied, setCopied] = useWbcState(false);
+  var [voiceSnapshot, setVoiceSnapshot] = useWbcState({ status: {}, activeKey: "" });
+  var messageVoiceKey = "message:" + String(msg && msg.id || "");
+  var BrowserIcon = window.CyreneUI.require("browser").Icon;
   var processingDuration = wbcFormatProcessingDuration(msg.processingDurationMs);
   // Parse each finalized message's markdown once and reuse it: the whole thread
   // re-renders on every streaming frame, so without this every prior message
   // would be re-parsed + re-sanitized per frame.
   var bodyHtml = useWbcMemo(function () { return wbcRenderMarkdown(msg.content); }, [msg.content]);
   var bodyRef = useWbcRef(null);
+  useWbcEffect(function () {
+    return WbcVoice.subscribe(setVoiceSnapshot);
+  }, []);
   useWbcEffect(function () {
     if (!bodyRef.current) return undefined;
     var chartService = window.CyreneUI && window.CyreneUI.chart;
@@ -10261,12 +11892,31 @@ function WbcAssistantMessage({ msg, onOpenFile, onRetryMessage, chatId }) {
       console.error("Failed to copy workbench message:", e);
     }
   }
+  function toggleSpeech() {
+    WbcVoice.speak(msg.content, messageVoiceKey);
+  }
+  var messageSpeaking = voiceSnapshot.activeKey === messageVoiceKey;
   return (
     <div className="wbc-msg assistant">
       {msg.trace && msg.trace.length > 0 && <WbcTraceCard trace={msg.trace} />}
       <div className="wbc-msg-body markdown" ref={bodyRef} dangerouslySetInnerHTML={{ __html: bodyHtml }} />
       <WbcAgentFiles files={msg.attachments} onOpenFile={onOpenFile} />
       <div className="wbc-msg-foot">
+        {voiceSnapshot.status.tts_ready && (
+          <button
+            type="button"
+            className={"wbc-msg-action" + (messageSpeaking ? " is-speaking" : "")}
+            onClick={toggleSpeech}
+            title={messageSpeaking
+              ? wbcT("workbenchChat.voicePlaybackStop", "Stop reading")
+              : wbcT("workbenchChat.voicePlayback", "Read aloud")}
+            aria-label={messageSpeaking
+              ? wbcT("workbenchChat.voicePlaybackStop", "Stop reading")
+              : wbcT("workbenchChat.voicePlayback", "Read aloud")}
+          >
+            {BrowserIcon ? <BrowserIcon name={messageSpeaking ? "muted" : "volume"} size={14} /> : null}
+          </button>
+        )}
         <button type="button" className="wbc-msg-action" onClick={copyText} title={wbcT("workbenchChat.copy", "Copy")}>
           {copied ? WBC_ICONS.check : WBC_ICONS.copy}
         </button>
@@ -10696,7 +12346,14 @@ function WbcComposer({ chat, project, runtime, running, onSend, onGuidance, onIn
   var [remoteDevices, setRemoteDevices] = useWbcState([]);
   var [remoteDeviceIds, setRemoteDeviceIds] = useWbcState([]);
   var [ctxPickerOpen, setCtxPickerOpen] = useWbcState(false);
+  var [voiceSnapshot, setVoiceSnapshot] = useWbcState({ status: {}, activeKey: "" });
+  var [voicePhase, setVoicePhase] = useWbcState("");
+  var [agentFlowState, setAgentFlowState] = useWbcState(function () {
+    return wbcAgentChatFlowSnapshot(chatId) || { chatId: "", kind: "", expiresAt: 0 };
+  });
   var taRef = useWbcRef(null);
+  var composerBoxRef = useWbcRef(null);
+  var sendButtonRef = useWbcRef(null);
   var fileRef = useWbcRef(null);
   var slashPickerRef = useWbcRef(null);
   var modePickerRef = useWbcRef(null);
@@ -10713,11 +12370,66 @@ function WbcComposer({ chat, project, runtime, running, onSend, onGuidance, onIn
   // Last payload snapshot for optimistic clear with restore on error
   var lastSentRef = useWbcRef(null);
   var prevRunningRef = useWbcRef(running);
+  var voiceRecorderRef = useWbcRef(null);
+  var agentFlowTimerRef = useWbcRef(null);
+  var ComposerBrowserIcon = window.CyreneUI.require("browser").Icon;
+  var agentFlow = agentFlowState.chatId === String(chatId || "")
+    ? String(agentFlowState.kind || "")
+    : "";
 
   useWbcEffect(function () { draftRef.current = draft; });
   useWbcEffect(function () { attachRef.current = attachments; });
   useWbcEffect(function () { workspaceOverrideRef.current = workspaceOverride; });
   useWbcEffect(function () { remoteDeviceIdsRef.current = remoteDeviceIds; });
+
+  useWbcEffect(function () {
+    return WbcVoice.subscribe(setVoiceSnapshot);
+  }, []);
+
+  useWbcEffect(function () {
+    function clearTimer() {
+      if (!agentFlowTimerRef.current) return;
+      window.clearTimeout(agentFlowTimerRef.current);
+      agentFlowTimerRef.current = null;
+    }
+    function applyFlow(detail) {
+      var next = detail && typeof detail === "object" ? detail : null;
+      if (!next || String(next.chatId || "") !== String(chatId || "")) return;
+      var expiresAt = Number(next.expiresAt || 0);
+      var remaining = Math.max(0, expiresAt - Date.now());
+      clearTimer();
+      if (!remaining) {
+        setAgentFlowState({ chatId: String(chatId || ""), kind: "", expiresAt: 0 });
+        return;
+      }
+      setAgentFlowState({
+        chatId: String(chatId || ""),
+        kind: String(next.kind || ""),
+        expiresAt: expiresAt,
+      });
+      agentFlowTimerRef.current = window.setTimeout(function () {
+        agentFlowTimerRef.current = null;
+        setAgentFlowState({ chatId: String(chatId || ""), kind: "", expiresAt: 0 });
+      }, remaining);
+    }
+    function onAgentChatFlow(event) {
+      applyFlow(event && event.detail);
+    }
+    applyFlow(wbcAgentChatFlowSnapshot(chatId));
+    window.addEventListener(WBC_AGENT_CHAT_FLOW_EVENT, onAgentChatFlow);
+    return function () {
+      window.removeEventListener(WBC_AGENT_CHAT_FLOW_EVENT, onAgentChatFlow);
+      clearTimer();
+    };
+  }, [chatId]);
+
+  useWbcEffect(function () {
+    return function () {
+      var recorder = voiceRecorderRef.current;
+      voiceRecorderRef.current = null;
+      if (recorder && typeof recorder.stop === "function") recorder.stop().catch(function () {});
+    };
+  }, []);
 
   useWbcEffect(function () {
     if (!modelOpen) return undefined;
@@ -10984,8 +12696,8 @@ function WbcComposer({ chat, project, runtime, running, onSend, onGuidance, onIn
     ta.style.height = Math.min(ta.scrollHeight, 180) + "px";
   }
 
-  function submit() {
-    var text = draft.trim();
+  function submit(messageOverride) {
+    var text = String(typeof messageOverride === "string" ? messageOverride : draft).trim();
     if (running) {
       if (!text || !onGuidance) return;
       setDraft("");
@@ -11043,6 +12755,105 @@ function WbcComposer({ chat, project, runtime, running, onSend, onGuidance, onIn
   }
 
   function pickFiles() { if (fileRef.current) fileRef.current.click(); }
+
+  function showVoiceError(error) {
+    var message = error && error.message ? error.message : String(error || "");
+    try {
+      window.CyreneUI.require("feedback").showToast(
+        wbcT("workbenchChat.voiceInputFailed", "Could not recognize speech: {error}", { error: message }),
+        "error"
+      );
+    } catch (e) {}
+  }
+
+  function cleanVoiceTranscript(value) {
+    var content = String(value || "").trim();
+    if (!content) return "";
+    content = content.replace(
+      /(?:\*{1,3}|_{1,3})?\s*<\s*sil(?:ence)?\s*>\s*(?:\*{1,3}|_{1,3})?\s*[。.!！?？,，、;；:：…]*/gi,
+      " "
+    );
+    content = content.replace(/\s+/g, " ").trim();
+    if (/^[*_~。.!！?？,，、;；:：…\s]+$/.test(content)) return "";
+    return content;
+  }
+
+  function isVoiceSilenceTranscript(value) {
+    var content = String(value || "");
+    return /<\s*sil(?:ence)?\s*>/i.test(content) && !cleanVoiceTranscript(content);
+  }
+
+  function transcribeVoiceBlob(blob) {
+    var form = new FormData();
+    form.append("audio", blob, "voice-input.wav");
+    return fetch("/api/voice/asr", { method: "POST", body: form })
+      .then(function (response) {
+        return response.json().catch(function () { return {}; }).then(function (payload) {
+          if (!response.ok) throw new Error(payload.error || payload.detail || ("HTTP " + response.status));
+          return payload;
+        });
+      })
+      .then(function (payload) {
+        var rawTranscript = String(payload.text || "").trim();
+        var silenceOnly = payload.silence_only === true || isVoiceSilenceTranscript(rawTranscript);
+        var transcript = cleanVoiceTranscript(rawTranscript);
+        // FireRedASR can emit a literal <sil> token for a silent recording.
+        // Treat it as an intentional no-op: never touch the draft or auto-send.
+        if (silenceOnly) return false;
+        if (!transcript) throw new Error(wbcT("workbenchChat.noRecognizedSpeech", "No speech was recognized"));
+        var current = String(draftRef.current || "");
+        var combined = current && !/\s$/.test(current) ? current + " " + transcript : current + transcript;
+        setDraft(combined);
+        draftRef.current = combined;
+        if (voiceSnapshot.status.auto_send_after_asr === true) {
+          submit(combined);
+          return;
+        }
+        requestAnimationFrame(function () {
+          syncHeight();
+          if (taRef.current) taRef.current.focus();
+        });
+      });
+  }
+
+  function finishVoiceInput(recorder) {
+    if (!recorder || voiceRecorderRef.current !== recorder) return;
+    voiceRecorderRef.current = null;
+    setVoicePhase("transcribing");
+    recorder.stop()
+      .then(transcribeVoiceBlob)
+      .catch(showVoiceError)
+      .finally(function () { setVoicePhase(""); });
+  }
+
+  function toggleVoiceInput() {
+    if (voicePhase === "starting" || voicePhase === "transcribing") return;
+    if (voicePhase === "recording") {
+      var recorder = voiceRecorderRef.current;
+      if (!recorder) {
+        setVoicePhase("");
+        return;
+      }
+      finishVoiceInput(recorder);
+      return;
+    }
+    // Voice input is a barge-in action. Stop current playback and discard its
+    // queued sentences before opening the microphone so TTS is not re-recorded.
+    WbcVoice.stop();
+    setVoicePhase("starting");
+    wbcStartVoiceRecorder({
+      autoStopOnSilence: voiceSnapshot.status.auto_stop_on_silence !== false,
+      onSilence: finishVoiceInput,
+    })
+      .then(function (recorder) {
+        voiceRecorderRef.current = recorder;
+        setVoicePhase("recording");
+      })
+      .catch(function (error) {
+        setVoicePhase("");
+        showVoiceError(error);
+      });
+  }
   function addFiles(files) {
     if (!files || !files.length) return;
     uploadCountRef.current += 1;
@@ -11236,6 +13047,123 @@ function WbcComposer({ chat, project, runtime, running, onSend, onGuidance, onIn
   var sendDisabled = running ? false : (!draft.trim() && attachments.length === 0);
   var isLegacy = !!(chat && chat.legacy);
 
+  // Self-management may prepare text in the current visible composer. Submit
+  // is an explicit stable R2 action, so it is never inherited from the generic
+  // DOM projection and always passes exact local-user delegation review.
+  useWbcEffect(function () {
+    if (!window.CyreneUI.has("uiSurface")) return undefined;
+    var uiSurface = window.CyreneUI.require("uiSurface");
+    var unregister = [];
+    unregister.push(uiSurface.register({
+      node_id: "chat_composer_input",
+      parent_id: "root",
+      scope: "main",
+      get_element: function () { return taRef.current; },
+      get_highlight_element: function () { return composerBoxRef.current; },
+      get_node: function () {
+        if (isLegacy || (compact && running) || (chat && chat.pendingQuestion)) return null;
+        var currentDraft = String(draftRef.current || "");
+        return {
+          role: "textbox",
+          name: wbcT("workbenchChat.placeholder", "Message Cyrene..."),
+          value_summary: currentDraft ? "Draft present" : "Empty draft",
+          state: {
+            session_id: String(chatId || ""),
+            session_kind: "chat",
+            draft_empty: !currentDraft,
+            draft_length: currentDraft.length,
+            running: running === true,
+            submit_exposed: !sendDisabled,
+          },
+        };
+      },
+      actions: [{
+        action_id: "set_value",
+        kind: "set_value",
+        risk: "R1",
+        gesture_aliases: ["text_input"],
+        input_schema: { value: "text<=20000" },
+      }, {
+        action_id: "clear_value",
+        kind: "set_value",
+        risk: "R1",
+        gesture_aliases: ["semantic_clear"],
+        input_schema: { expected_value: "text<=20000" },
+      }],
+      handlers: {
+        set_value: function (input) {
+          var currentDraft = String(draftRef.current || "");
+          var nextDraft = String(input.value || "");
+          if (currentDraft && currentDraft !== nextDraft) {
+            throw new Error("composer draft is not empty");
+          }
+          draftRef.current = nextDraft;
+          setDraft(nextDraft);
+          return { draft_length: nextDraft.length, submitted: false };
+        },
+        clear_value: function (input) {
+          var currentDraft = String(draftRef.current || "");
+          if (currentDraft !== String(input.expected_value || "")) {
+            throw new Error("composer draft changed");
+          }
+          draftRef.current = "";
+          setDraft("");
+          return { draft_length: 0, cleared: true, submitted: false };
+        },
+      },
+    }));
+    var submitMode = running && !hasRuntimeGuidance ? "interrupt" : (running ? "guidance" : "send");
+    var submitRisk = submitMode === "interrupt" ? "R1" : "R2";
+    var submitActionId = submitMode === "interrupt" ? "interrupt" : "submit";
+    unregister.push(uiSurface.register({
+      node_id: "chat_composer_submit",
+      parent_id: "root",
+      scope: "main",
+      get_element: function () { return sendButtonRef.current; },
+      get_node: function () {
+        if (isLegacy || (compact && running) || (chat && chat.pendingQuestion)) return null;
+        return {
+          role: "button",
+          name: submitMode === "interrupt"
+            ? wbcT("workbenchChat.stop", "Stop")
+            : submitMode === "guidance"
+              ? wbcT("workbenchChat.sendGuidance", "Send guidance")
+              : wbcT("workbenchChat.send", "Send"),
+          state: {
+            session_id: String(chatId || ""),
+            session_kind: "chat",
+            mode: submitMode,
+            disabled: !!sendDisabled,
+          },
+        };
+      },
+      actions: sendDisabled ? [] : [{
+        action_id: submitActionId,
+        kind: "invoke",
+        risk: submitRisk,
+        gesture_aliases: ["press", "keyboard"],
+        outcome: {
+          effect: submitMode === "interrupt" ? "interrupts_current_run" : "submits_current_composer",
+          target_scope: "chat",
+          inspect_after: true,
+        },
+      }],
+      handlers: {
+        interrupt: function () {
+          var button = sendButtonRef.current;
+          if (!button || button.disabled) throw new Error("composer interrupt is unavailable");
+          button.click();
+        },
+        submit: function () {
+          var button = sendButtonRef.current;
+          if (!button || button.disabled) throw new Error("composer submit is unavailable");
+          button.click();
+        },
+      },
+    }));
+    return function () { unregister.forEach(function (remove) { remove(); }); };
+  }, [chatId, compact, running, isLegacy, chat && chat.pendingQuestion, hasRuntimeGuidance, sendDisabled]);
+
   if (isLegacy) {
     return (
       <div className={"wbc-composer" + (compact ? " compact" : "")}>
@@ -11258,7 +13186,11 @@ function WbcComposer({ chat, project, runtime, running, onSend, onGuidance, onIn
           </span>
         </div>
       )}
-      <div className="wbc-composer-box">
+      <div
+        ref={composerBoxRef}
+        className={"wbc-composer-box" + (agentFlow ? (" agent-flow agent-flow-" + agentFlow) : "")}
+        data-agent-flow={agentFlow || undefined}
+      >
         {topOverlay}
         {attachments.length > 0 && (
           <div className="wbc-attach-row">
@@ -11293,7 +13225,6 @@ function WbcComposer({ chat, project, runtime, running, onSend, onGuidance, onIn
           ref={taRef}
           value={draft}
           rows={compact ? 1 : 2}
-          disabled={compact && running}
           onChange={function (e) { setDraft(e.target.value); syncHeight(); }}
           onKeyDown={onKeyDown}
           onPaste={onPaste}
@@ -11490,7 +13421,32 @@ function WbcComposer({ chat, project, runtime, running, onSend, onGuidance, onIn
               )}
             </span>
           ) : null}
+          {!compact && voiceSnapshot.status.asr_ready ? (
+            <button
+              type="button"
+              className={"wbc-composer-icon wbc-voice-input" + (voicePhase ? " " + voicePhase : "")}
+              onClick={toggleVoiceInput}
+              disabled={voicePhase === "starting" || voicePhase === "transcribing"}
+              title={voicePhase === "recording"
+                ? (voiceSnapshot.status.auto_stop_on_silence !== false
+                    ? wbcT("workbenchChat.voiceInputAutoStop", "Recording · pauses automatically start recognition")
+                    : wbcT("workbenchChat.voiceInputStop", "Stop recording"))
+                : voicePhase === "starting"
+                  ? wbcT("workbenchChat.voiceInputStarting", "Accessing microphone…")
+                  : voicePhase === "transcribing"
+                  ? wbcT("workbenchChat.voiceTranscribing", "Recognizing speech…")
+                  : wbcT("workbenchChat.voiceInputStart", "Voice input")}
+              aria-label={voicePhase === "recording"
+                ? wbcT("workbenchChat.voiceInputStop", "Stop recording")
+                : wbcT("workbenchChat.voiceInputStart", "Voice input")}
+            >
+              {voicePhase === "starting" || voicePhase === "transcribing"
+                ? <span className="wb-spinner small" />
+                : ComposerBrowserIcon ? <ComposerBrowserIcon name="microphone" size={16} /> : null}
+            </button>
+          ) : null}
           <button
+            ref={sendButtonRef}
             type="button"
             className={"wbc-send" + (running && !hasRuntimeGuidance ? " stop" : "")}
             onClick={running && !hasRuntimeGuidance ? onInterrupt : submit}
@@ -12326,7 +14282,7 @@ function WbcBrowserSplit({ active: splitActive = true, tabId, tabs, browserState
         {!hasNativeTabPicker && pickerOpen && <div className="wbc-side-agent-split-menu wbc-resource-picker-menu wbc-browser-picker-menu open" role="listbox">{liveTabs.map(function (tab) { var selected = String(tab.id || "") === String(active.id || tabId || ""); return <div key={tab.id} className={"wbc-browser-picker-row" + (selected ? " active" : "")} role="option" aria-selected={selected}><button type="button" className="wbc-browser-picker-select" onClick={function () { selectTab(tab); }}><span className="wbc-browser-picker-favicon" aria-hidden="true"><span className="wbc-browser-picker-favicon-fallback">{WBC_SIDE_TAB_ICONS.browser}</span>{tab.favicon ? <img src={tab.favicon} alt="" draggable="false" onError={function (event) { event.currentTarget.hidden = true; }} /> : null}</span><b>{tab.title || tab.url || wbcT("chat.side.browser", "Browser")}</b></button><span className="wbc-browser-picker-actions"><button type="button" onClick={function (event) { refreshTab(tab, event); }} aria-label={wbcT("browser.context.reload", "Reload")} title={wbcT("browser.context.reload", "Reload")}>{BrowserIcon ? <BrowserIcon name="reload" size={14} /> : WBC_ICONS.retry}</button><button type="button" className={tab.muted ? "active" : ""} onClick={function (event) { toggleMute(tab, event); }} aria-label={tab.muted ? wbcT("browser.context.unmute", "Unmute") : wbcT("browser.context.mute", "Mute")} title={tab.muted ? wbcT("browser.context.unmute", "Unmute") : wbcT("browser.context.mute", "Mute")}>{BrowserIcon ? <BrowserIcon name={tab.muted ? "muted" : "volume"} size={14} /> : null}</button><button type="button" onClick={function (event) { closeTab(tab, event); }} aria-label={wbcT("browser.context.closeTab", "Close tab")} title={wbcT("browser.context.closeTab", "Close tab")}>{WBC_ICONS.x}</button></span></div>; })}</div>}
       </div>
       <div className="wbc-resource-split-body wbc-browser-split-body">
-        {splitActive && window.CyreneUI.require("browser").ViewportPanel ? React.createElement(window.CyreneUI.require("browser").ViewportPanel, { browserState: liveState, browserSessionId: browserSessionId, roundId: liveState && liveState.roundId || browserState && browserState.roundId || "", desiredTabId: active.id || tabId, onClose: onClose, onTakeoverComplete: onTakeoverComplete, zoomEnabled: false, hideTabStrip: true, hideReload: true, hideMute: true, splitChrome: true }) : null}
+        {splitActive && window.CyreneUI.require("browser").ViewportPanel ? React.createElement(window.CyreneUI.require("browser").ViewportPanel, { browserState: liveState, browserSessionId: browserSessionId, roundId: liveState && liveState.roundId || browserState && browserState.roundId || "", onClose: onClose, onTakeoverComplete: onTakeoverComplete, zoomEnabled: true, resizeEdgeHintEnabled: true, hideTabStrip: true, hideReload: true, hideMute: true, splitChrome: true }) : null}
       </div>
     </aside>
   );
@@ -12493,6 +14449,16 @@ function WbcChatSplit({ chatId, project, onOpenContent, browserActiveByChat, onC
           setStreamText("");
         });
       },
+      onGuidanceReceived: function (event) {
+        if (disposedRef.current || !event || !event.userMessage) return;
+        setChat(function (prev) {
+          if (!prev || String(prev.id || "") !== String(chatIdRef.current || "")) return prev;
+          return {
+            ...prev,
+            messages: wbcMergeChronologicalMessages(prev.messages || [], [event.userMessage]),
+          };
+        });
+      },
       onError: function (err) {
         if (disposedRef.current) return;
         setError(wbcErrorText(err));
@@ -12549,8 +14515,36 @@ function WbcChatSplit({ chatId, project, onOpenContent, browserActiveByChat, onC
 
   function stop() {
     if (!running) return;
-    WorkbenchChatModel.interrupt(chatIdRef.current).catch(function () {});
-    setRunning(false);
+    setError("");
+    WorkbenchChatModel.interrupt(chatIdRef.current).catch(function (err) {
+      if (!disposedRef.current) setError(wbcErrorText(err));
+    });
+  }
+
+  function guide(message) {
+    var current = chatIdRef.current;
+    var text = String(message || "").trim();
+    if (!running || !current || !text) return Promise.resolve(null);
+    setError("");
+    return WorkbenchChatModel.sendGuidance(
+      current,
+      text,
+      "guide_" + Date.now() + "_" + Math.random().toString(36).slice(2, 8)
+    ).then(function (response) {
+      if (response && response.userMessage && !disposedRef.current) {
+        setChat(function (prev) {
+          if (!prev || String(prev.id || "") !== String(current)) return prev;
+          return {
+            ...prev,
+            messages: wbcMergeChronologicalMessages(prev.messages || [], [response.userMessage]),
+          };
+        });
+      }
+      return response;
+    }).catch(function (err) {
+      if (!disposedRef.current) setError(wbcErrorText(err));
+      throw err;
+    });
   }
 
   // Resume a clarification / permission request in the split conversation
@@ -12671,7 +14665,7 @@ function WbcChatSplit({ chatId, project, onOpenContent, browserActiveByChat, onC
         </div>
       )}
       <div className="wbc-thread-stage wbc-chat-split-stage">
-        <div className="wbc-thread" ref={scrollRef}>
+        <div className="wbc-thread" data-cyrene-revision-volatile="true" ref={scrollRef}>
         {loading && !messages.length && (
           <div className="wbc-chat-split-state" role="status">
             <span className="wbc-spinner" aria-hidden="true" />
@@ -12722,6 +14716,7 @@ function WbcChatSplit({ chatId, project, onOpenContent, browserActiveByChat, onC
         runtime={streamText ? { text: streamText } : null}
         running={running}
         onSend={submit}
+        onGuidance={guide}
         onInterrupt={stop}
         draftNamespace={"chat-split:"}
         autoFocus={false}
@@ -13039,6 +15034,17 @@ function WbcSideAgentTab({ agent, project, onOpenFile, onUpdate }) {
           }
         });
       },
+      onGuidanceReceived: function (event) {
+        if (!mountedRef.current || !event || !event.userMessage) return;
+        var current = agentRef.current;
+        if (!current || !current.id) return;
+        var next = {
+          ...current,
+          messages: wbcMergeChronologicalMessages(current.messages || [], [event.userMessage]),
+        };
+        agentRef.current = next;
+        onUpdate(next);
+      },
       onError: function (err) {
         if (mountedRef.current) setError(wbcErrorText(err));
       },
@@ -13115,6 +15121,32 @@ function WbcSideAgentTab({ agent, project, onOpenFile, onUpdate }) {
     });
   }
 
+  function guide(message) {
+    var current = agentRef.current;
+    var text = String(message || "").trim();
+    if (!running || !current || !current.id || !text) return Promise.resolve(null);
+    setError("");
+    return WorkbenchChatModel.sendGuidance(
+      current.id,
+      text,
+      "guide_" + Date.now() + "_" + Math.random().toString(36).slice(2, 8)
+    ).then(function (response) {
+      if (response && response.userMessage && mountedRef.current) {
+        var latest = agentRef.current;
+        var next = {
+          ...latest,
+          messages: wbcMergeChronologicalMessages(latest.messages || [], [response.userMessage]),
+        };
+        agentRef.current = next;
+        onUpdate(next);
+      }
+      return response;
+    }).catch(function (err) {
+      if (mountedRef.current) setError(wbcErrorText(err));
+      throw err;
+    });
+  }
+
   var messages = agent && Array.isArray(agent.messages) ? agent.messages : [];
   var hasAsked = messages.some(function (message) { return message.role === "user"; });
   return (
@@ -13123,7 +15155,7 @@ function WbcSideAgentTab({ agent, project, onOpenFile, onUpdate }) {
         <span>{wbcT("workbenchChat.sideAgent.quote", "Selected text")}</span>
         <p>{agent && agent.sourceQuote}</p>
       </blockquote>}
-      <div className="wbc-side-agent-thread wbc-thread" ref={scrollRef}>
+      <div className="wbc-side-agent-thread wbc-thread" data-cyrene-revision-volatile="true" ref={scrollRef}>
         {!messages.length && !running && (
           <div className="wbc-side-agent-empty">
             <b>{wbcT("workbenchChat.sideAgent.askTitle", "Ask about this text")}</b>
@@ -13158,6 +15190,7 @@ function WbcSideAgentTab({ agent, project, onOpenFile, onUpdate }) {
           runtime={streamText ? { text: streamText } : null}
           running={running}
           onSend={submit}
+          onGuidance={guide}
           onInterrupt={stop}
           draftNamespace="side-agent:"
           autoFocus={false}

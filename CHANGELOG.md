@@ -4,6 +4,16 @@
 
 ## [0.7.1] - 2026-08-11
 
+### Cyrene 自控制与设置
+
+- 新增渐进披露的 `cyrene_tools` 工具包；Agent 可读取当前渲染视口的语义 Snapshot、Inspect 单个组件，并以 Click、显式 Double Click、Type、Scroll 和 Drag 操作 Cyrene 桌面界面。
+- 新对话、搜索、项目切换和当前输入框使用稳定节点；对话右键操作只在菜单打开后披露。稳定节点会与通用 DOM Projection 去重，列表通过真实滚动继续读取而不使用硬编码数量截断。
+- Browser 浮窗标题栏、按钮、拖动和双击最大化/还原纳入相同的焦点无关 UI 控制层；专用 Double Click 能力只接受明确声明双击手势的 Action，不会误触普通按钮。
+- 新增非模型设置的 Typed Describe/Read/Write/Control 能力，覆盖普通标量、Soul、MCP、Integration、Remote、Channel、Voice 与快捷键；写入使用 Compare-and-set、按字段更新和版本冲突返回，避免覆盖用户并发修改。
+- Project、Chat、Data 等后台业务接口继续供内部编排使用，但不再直接暴露给 Agent；权限审核沿用现有 Reviewer，批量动作使用绑定精确操作列表的票据。
+- 当前输入框发送改为显式 R2 动作，停止当前运行保持 R1；工具 Prompt 只随 `cyrene_tools` 包渐进披露，以保持稳定的 Prompt Cache 前缀。
+- 明确的本地用户请求即使来自缺少 Client Request ID 的旧轮次或 Renderer 轮次，也会进入现有权限审核 Agent；模型未提供引用时改为审核完整当前用户原文。Permission Card 根据结构化 Meta 本地化 Capability/Operation 名称、选项与标签，不再显示带风险后缀的裸 ID 和内部 Fingerprint。
+
 ### 远程协作与文件工作流
 
 - 配对设备之间新增完整的项目文件通道，可查看目录与文件信息、上传、下载、断点续传、同步目录、创建、复制、移动、修改和删除内容，并提供冲突处理与传输进度。

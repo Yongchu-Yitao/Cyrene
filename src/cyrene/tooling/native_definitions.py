@@ -136,6 +136,10 @@ _NATIVE_TOOL_DEFS: tuple[dict[str, Any], ...] = tuple([{'type': 'function',
                                                                                "'3600' = hourly). For 'once': an "
                                                                                'ISO-8601 datetime, or empty to run as '
                                                                                'soon as possible.'},
+                                             'schedule_timezone': {'type': 'string',
+                                                                   'description': 'IANA timezone used for cron wall-clock '
+                                                                                  "fields (e.g. 'Asia/Shanghai'). Defaults "
+                                                                                  "to 'UTC'."},
                                              'permission_mode': {'type': 'string',
                                                                  'enum': ['workspace_only', 'full_access'],
                                                                  'description': "Permission scope. 'workspace_only' "
@@ -737,7 +741,7 @@ _NATIVE_TOOL_DEFS: tuple[dict[str, Any], ...] = tuple([{'type': 'function',
                               'links, clickable refs, and their real URLs. Use this for a starting page, an exact URL '
                               'explicitly requested by the user, or only when the target cannot be reached through '
                               'visible page UI. Once a page is open, prefer browser_snapshot followed by '
-                              'browser_click_ref or browser_click_text instead of navigating directly to a link URL. '
+                              'browser_click_ref instead of navigating directly to a link URL. '
                               'Always reuses the SAME tab — never opens a new one. Do NOT use browser_tab_new unless '
                               'the user explicitly says to keep a page open. In the desktop app (Electron) the page is '
                               'fully rendered (images, video, interactive) and the user can see and operate the live '

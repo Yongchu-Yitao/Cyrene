@@ -90,6 +90,50 @@ def test_cron_next_run():
     assert datetime.fromisoformat(nxt) == datetime(2026, 6, 5, 9, 0, tzinfo=timezone.utc)
 
 
+def test_cron_timezone_preserves_wall_clock_across_dst_transition():
+    from zoneinfo import ZoneInfo
+
+    from cyrene.runtime.schedule_spec import compute_next_run
+
+    new_york = ZoneInfo("America/New_York")
+    before_dst = datetime(2026, 3, 7, 15, 0, tzinfo=timezone.utc)
+    after_dst = datetime(2026, 3, 8, 14, 0, tzinfo=timezone.utc)
+
+    first = datetime.fromisoformat(
+        compute_next_run(
+            "cron",
+            "0 9 * * *",
+            now=before_dst,
+            timezone_name="America/New_York",
+        )
+    )
+    second = datetime.fromisoformat(
+        compute_next_run(
+            "cron",
+            "0 9 * * *",
+            now=after_dst,
+            timezone_name="America/New_York",
+        )
+    )
+
+    assert first.astimezone(new_york).hour == 9
+    assert second.astimezone(new_york).hour == 9
+    assert first.utcoffset() == timedelta(0)
+    assert second.utcoffset() == timedelta(0)
+
+
+def test_invalid_cron_timezone_raises_valueerror():
+    from cyrene.runtime.schedule_spec import compute_next_run
+
+    with pytest.raises(ValueError, match="invalid schedule timezone"):
+        compute_next_run(
+            "cron",
+            "0 9 * * *",
+            now=FIXED_NOW,
+            timezone_name="Mars/Olympus_Mons",
+        )
+
+
 @pytest.mark.parametrize(
     "stype,svalue",
     [
@@ -674,7 +718,7 @@ def test_update_restart_api_missing_package_keeps_process_running(monkeypatch, t
     exit_mock.assert_not_called()
 
 
-def test_update_restart_api_spawn_failure_keeps_process_running(monkeypatch, tmp_path):
+def test_update_restart_api_requires_electron_host_before_scheduling(monkeypatch, tmp_path):
     from cyrene.runtime import updater
     from cyrene.workbench import runtime as routes
 
@@ -687,20 +731,22 @@ def test_update_restart_api_spawn_failure_keeps_process_running(monkeypatch, tmp
     monkeypatch.setitem(updater._download_progress, "expected_sha256", "0" * 64)
     monkeypatch.setitem(updater._download_progress, "actual_sha256", "0" * 64)
     monkeypatch.setitem(updater._download_progress, "verified", True)
-    monkeypatch.setattr(updater, "get_restart_script", lambda _path: "echo ok\n")
-    monkeypatch.setattr(routes.subprocess, "Popen", MagicMock(side_effect=OSError("spawn denied")))
+    launch = MagicMock(return_value=(True, "", "", 200))
+    monkeypatch.setattr(routes, "_launch_update_restart", launch)
     exit_mock = MagicMock()
     monkeypatch.setattr(os, "_exit", exit_mock)
 
     response = _update_restart_client(tmp_path).post("/api/update/restart")
 
-    assert response.status_code == 500
-    assert response.json()["code"] == "update_restart_launch_failed"
+    assert response.status_code == 409
+    assert response.json()["code"] == "unsupported_host"
+    launch.assert_called_once_with(updater._download_progress, validate_only=True)
     exit_mock.assert_not_called()
 
 
-def test_update_restart_api_success_exits_with_restart_code(monkeypatch, tmp_path):
+def test_update_restart_api_schedules_verified_install_without_exiting_in_route(monkeypatch, tmp_path):
     from cyrene.runtime import updater
+    from cyrene.runtime import host_actions, host_bridge
     from cyrene.workbench import runtime as routes
 
     monkeypatch.setitem(updater._download_progress, "downloaded", 1)
@@ -712,14 +758,25 @@ def test_update_restart_api_success_exits_with_restart_code(monkeypatch, tmp_pat
     monkeypatch.setitem(updater._download_progress, "verified", True)
     launch = MagicMock(return_value=(True, "", "", 200))
     monkeypatch.setattr(routes, "_launch_update_restart", launch)
+    call_host = AsyncMock(return_value={
+        "ok": True, "hostKind": "electron", "appVersion": "0.7.1",
+    })
+    schedule = MagicMock(return_value={"action_id": "host_action_" + "a" * 32})
+    finalize = AsyncMock()
+    monkeypatch.setattr(host_bridge, "call_host", call_host)
+    monkeypatch.setattr(host_actions, "schedule_action", schedule)
+    monkeypatch.setattr(host_actions, "finalize_origin", finalize)
     exit_mock = MagicMock()
     monkeypatch.setattr(os, "_exit", exit_mock)
 
     response = _update_restart_client(tmp_path).post("/api/update/restart")
 
     assert response.status_code == 200
-    launch.assert_called_once_with(updater._download_progress)
-    exit_mock.assert_called_once_with(42)
+    assert response.json()["status"] == "scheduled"
+    launch.assert_called_once_with(updater._download_progress, validate_only=True)
+    schedule.assert_called_once()
+    finalize.assert_awaited_once_with("", "")
+    exit_mock.assert_not_called()
 
 
 # ---------------------------------------------------------------------------
@@ -732,7 +789,6 @@ BROWSER_TOOLS = [
     "browser_screenshot",
     "browser_click",
     "browser_click_ref",
-    "browser_click_text",
     "browser_click_at",
     "browser_type",
     "browser_type_ref",
