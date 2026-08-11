@@ -21,6 +21,7 @@ The Chinese edition remains the most detailed record for older releases.
 - The command-line reset uses the same explicit confirmation requirement to prevent accidental irreversible deletion.
 - Saved model settings now take effect immediately, so new conversations do not continue using an old model, endpoint, or previous failure state.
 - When no model is configured, chat shows a localized prompt directing the user to Settings → Models instead of returning an empty reply.
+- The Custom Model and OpenAI OAuth choices in first-run setup now expose their selected state clearly to accessibility tools and Agent control.
 - The Soul editor is taller so more of a long personality definition remains visible while editing.
 
 ### Voice and conversation experience

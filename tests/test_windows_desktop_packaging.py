@@ -14,7 +14,7 @@ def test_windows_release_installs_required_native_runtime_packages():
 
     assert "numpy>=2.1.0" in requirements
     assert "onnxruntime>=1.27,<1.28" in requirements
-    assert "sherpa-onnx==1.13.4" in requirements
+    assert "sherpa-onnx==1.13.5" in requirements
     assert workflow.count(
         "pip install -r build/requirements-windows-release.txt"
     ) == 2

@@ -125,10 +125,15 @@ def test_current_tree_exposes_project_switch_chat_search_and_shared_pip_maximize
     assert 'data-cyrene-node-id="onboarding"' in welcome
     assert 'data-cyrene-node-id="onboarding_base_url"' in welcome
     assert 'data-cyrene-node-id="onboarding_model"' in welcome
+    assert 'aria-pressed={llmSource === "custom"}' in welcome
+    assert 'aria-pressed={llmSource === "codex"}' in welcome
     assert 'domNodeIds.set(element, explicitNodeId)' in ui_surface
     assert 'return explicitNodeId;' in ui_surface
+    assert '"disabled", "checked", "pressed", "selected"' in ui_surface
+    assert 'pressed: element.getAttribute("aria-pressed") == null' in ui_surface
     assert "isDesktopOnboardingTree(candidate)" in electron
     assert "runDesktopOnboardingSmokeTest(window, uiInstanceId, tree)" in electron
+    assert "'onboarding custom model endpoint after scroll'" in electron
     assert "'onboarding model field after scroll'" in electron
 
 

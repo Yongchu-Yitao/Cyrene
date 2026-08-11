@@ -54,7 +54,7 @@
     + 'L30.5 40.6 C31.6 38.9 32.7 38.2 34.7 37.8 L45.8 35.7 C50.8 34.8 51.9 30.3 47.5 27.8 L16.8 11.1Z" '
     + 'fill="url(#cyrene-ui-agent-cursor-fill)" stroke="#FFFFFF" stroke-width="2.5" stroke-linejoin="round"/></svg>';
   var STABLE_STATE_KEYS = [
-    "disabled", "checked", "selected", "expanded", "mode",
+    "disabled", "checked", "pressed", "selected", "expanded", "mode",
     "project_id", "session_id", "session_kind", "draft_empty",
     "submit_exposed", "pinned", "grouped",
   ];
@@ -953,6 +953,9 @@
           var state = {
             disabled: !!element.disabled,
             checked: typeof element.checked === "boolean" ? element.checked : undefined,
+            pressed: element.getAttribute("aria-pressed") == null
+              ? undefined
+              : element.getAttribute("aria-pressed") === "true",
             expanded: element.getAttribute("aria-expanded") == null
               ? undefined
               : element.getAttribute("aria-expanded") === "true",

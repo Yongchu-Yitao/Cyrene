@@ -473,10 +473,10 @@
                 <h2>{T("welcome.setup.llm.title", null, "Connect your model")}</h2>
                 <p className="wb-ob-sub">{T("welcome.setup.llm.subtitle", null, "Choose a custom endpoint or use the models included with your OpenAI account.")}</p>
                 <div className="wb-ob-seg wb-ob-source-seg">
-                  <button type="button" data-cyrene-node-id="onboarding_custom_model_source" className={"wb-ob-seg-btn" + (llmSource === "custom" ? " active" : "")} onClick={function () { setLlmSource("custom"); setError(""); setNotice(""); }}>
+                  <button type="button" data-cyrene-node-id="onboarding_custom_model_source" aria-pressed={llmSource === "custom"} className={"wb-ob-seg-btn" + (llmSource === "custom" ? " active" : "")} onClick={function () { setLlmSource("custom"); setError(""); setNotice(""); }}>
                     {T("welcome.setup.llm.customSource", null, "Custom model")}
                   </button>
-                  <button type="button" data-cyrene-node-id="onboarding_oauth_source" className={"wb-ob-seg-btn" + (llmSource === "codex" ? " active" : "")} onClick={function () { setLlmSource("codex"); setError(""); setNotice(""); }}>
+                  <button type="button" data-cyrene-node-id="onboarding_oauth_source" aria-pressed={llmSource === "codex"} className={"wb-ob-seg-btn" + (llmSource === "codex" ? " active" : "")} onClick={function () { setLlmSource("codex"); setError(""); setNotice(""); }}>
                     OpenAI OAuth
                   </button>
                 </div>

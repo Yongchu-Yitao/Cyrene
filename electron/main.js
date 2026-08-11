@@ -123,6 +123,23 @@ function appendErrorLog(text) {
 function installWindowDiagnostics(window, label) {
   if (!window || !window.webContents) return;
   const prefix = `[electron:${label}]`;
+  window.webContents.on('console-message', (details, legacyLevel, legacyMessage, legacyLine, legacySourceId) => {
+    const level = String(details && details.level || legacyLevel || 'info');
+    const reportable = level === 'error' || level === 'warning' || Number(legacyLevel) >= 2;
+    if (!reportable) return;
+    const message = String(details && details.message || legacyMessage || 'renderer console message');
+    const line = Number(details && details.lineNumber || legacyLine || 0);
+    const sourceId = String(details && details.sourceId || legacySourceId || '');
+    const text = `${prefix} renderer-${level} ${sourceId}${line ? `:${line}` : ''} ${message}\n`;
+    appendErrorLog(text);
+    if (isDesktopSmokeTest) process.stderr.write(text);
+  });
+  window.webContents.on('preload-error', (_event, preloadPath, error) => {
+    const detail = error && error.stack ? error.stack : String(error || 'unknown preload error');
+    const text = `${prefix} preload-error ${preloadPath}: ${detail}\n`;
+    appendErrorLog(text);
+    if (isDesktopSmokeTest) process.stderr.write(text);
+  });
   window.webContents.on('did-fail-load', (_event, code, description, targetUrl, isMainFrame) => {
     // ERR_ABORTED is expected when a navigation is replaced or the app quits.
     if (isMainFrame === false || Number(code) === -3) return;
@@ -5460,8 +5477,15 @@ async function runDesktopOnboardingSmokeTest(window, uiInstanceId, initialTree) 
   await runDesktopSmokeAction(uiInstanceId, tree, oauthSource, 'invoke');
   tree = await waitForDesktopSmokeTree(
     uiInstanceId,
-    (candidate) => isDesktopOnboardingTree(candidate)
-      && !findDesktopSmokeNode(candidate.root, (node) => node.node_id === 'onboarding_base_url'),
+    (candidate) => {
+      const source = findDesktopSmokeNode(
+        candidate.root,
+        (node) => node.node_id === 'onboarding_oauth_source',
+      );
+      return isDesktopOnboardingTree(candidate)
+        && !!source
+        && !!(source.state && source.state.pressed);
+    },
     'onboarding OAuth source',
   );
 
@@ -5472,9 +5496,34 @@ async function runDesktopOnboardingSmokeTest(window, uiInstanceId, initialTree) 
   await runDesktopSmokeAction(uiInstanceId, tree, customSource, 'invoke');
   tree = await waitForDesktopSmokeTree(
     uiInstanceId,
+    (candidate) => {
+      const source = findDesktopSmokeNode(
+        candidate.root,
+        (node) => node.node_id === 'onboarding_custom_model_source',
+      );
+      return isDesktopOnboardingTree(candidate)
+        && !!source
+        && !!(source.state && source.state.pressed);
+    },
+    'onboarding custom model source',
+  );
+
+  let onboarding = findDesktopSmokeNode(
+    tree.root,
+    (node) => node.node_id === 'onboarding',
+  );
+  await runDesktopSmokeAction(
+    uiInstanceId,
+    tree,
+    onboarding,
+    'scroll_page',
+    { delta: 320 },
+  );
+  tree = await waitForDesktopSmokeTree(
+    uiInstanceId,
     (candidate) => isDesktopOnboardingTree(candidate)
       && !!findDesktopSmokeNode(candidate.root, (node) => node.node_id === 'onboarding_base_url'),
-    'onboarding custom model endpoint',
+    'onboarding custom model endpoint after scroll',
   );
 
   let endpoint = findDesktopSmokeNode(
@@ -5530,7 +5579,7 @@ async function runDesktopOnboardingSmokeTest(window, uiInstanceId, initialTree) 
     },
     'scrollable onboarding surface',
   );
-  const onboarding = findDesktopSmokeNode(tree.root, (node) => node.node_id === 'onboarding');
+  onboarding = findDesktopSmokeNode(tree.root, (node) => node.node_id === 'onboarding');
   await runDesktopSmokeAction(
     uiInstanceId,
     tree,

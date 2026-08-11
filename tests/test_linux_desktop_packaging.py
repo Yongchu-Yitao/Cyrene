@@ -81,7 +81,13 @@ def test_release_pipeline_smoke_tests_and_publishes_all_linux_packages():
         encoding="utf-8"
     )
     assert "dnf install -y" in rpm_smoke
+    assert "dbus-daemon" in rpm_smoke
+    assert "/opt/Cyrene/resources/python-bundle/Cyrene --smoke-test" in rpm_smoke
+    assert "Cyrene smoke test OK: v0.7.3" in rpm_smoke
+    assert "numpy=[0-9]+\\.[0-9]+" in rpm_smoke
+    assert "dbus-run-session" in rpm_smoke
     assert "/opt/Cyrene/cyrene --no-sandbox --desktop-smoke-test" in rpm_smoke
+    assert 'CYRENE_TEMP_DIR/cyrene_error.log' in rpm_smoke
     assert "SMOKE TEST FAILED|DESKTOP_SMOKE_TEST=failed" in rpm_smoke
     assert "DESKTOP_SMOKE_TEST=ok" in rpm_smoke
     assert "LINUX_RPM_INSTALL_SMOKE_TEST=ok" in rpm_smoke
@@ -96,6 +102,9 @@ def test_linux_desktop_uses_software_rendering_and_reports_renderer_failures():
     assert "(sandboxStat.mode & 0o4000) !== 0" in main
     assert "app.commandLine.appendSwitch('no-sandbox')" in main
     assert "function installWindowDiagnostics(window, label)" in main
+    assert "'console-message'" in main
+    assert "'preload-error'" in main
+    assert "renderer-${level}" in main
     assert "'did-fail-load'" in main
     assert "'render-process-gone'" in main
     assert "app.setPath('userData', path.join(getCyreneTempDir(), 'electron-smoke-profile'))" in main
