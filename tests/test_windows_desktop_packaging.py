@@ -18,8 +18,16 @@ def test_windows_release_installs_required_native_runtime_packages():
     assert workflow.count(
         "pip install -r build/requirements-windows-release.txt"
     ) == 2
-    assert workflow.count("python -m pip check") >= 2
+    assert workflow.count("python build/check_windows_dependencies.py") == 2
     assert workflow.count("numpy._core._multiarray_umath") >= 2
+
+    dependency_check = (
+        ROOT / "build" / "check_windows_dependencies.py"
+    ).read_text(encoding="utf-8")
+    assert '[sys.executable, "-m", "pip", "check"]' in dependency_check
+    assert "simplexng" in dependency_check
+    assert "requires uvloop, which is not installed" in dependency_check
+    assert "Unexpected Windows dependency conflicts" in dependency_check
 
 
 def test_windows_release_installs_and_runs_the_built_nsis_package():
