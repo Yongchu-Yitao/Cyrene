@@ -754,7 +754,9 @@ def get_all_settings() -> dict:
 def reset_all() -> None:
     global _cache
     with _PERSIST_LOCK:
-        current_revision = int((_cache or {}).get("settings_revision", 0) or 0)
+        current = _ensure_loaded()
+        current_revision = int(current.get("settings_revision", 0) or 0)
+        previous_env_keys = set(current.get("env", {}))
         candidate = {
             "env": deepcopy(_DEFAULT_ENV),
             "settings": deepcopy(_DEFAULT_SETTINGS),
@@ -762,6 +764,16 @@ def reset_all() -> None:
         }
         _persist(candidate)
         _cache = candidate
+    # Persisted defaults and the live process must cross the reset boundary
+    # together. Otherwise code reading os.environ keeps the pre-reset model or
+    # credentials until the backend is restarted.
+    for key in previous_env_keys - set(_DEFAULT_ENV):
+        os.environ.pop(key, None)
+    for key, value in _DEFAULT_ENV.items():
+        if value:
+            os.environ[key] = value
+        else:
+            os.environ.pop(key, None)
 
 
 # ---------------------------------------------------------------------------

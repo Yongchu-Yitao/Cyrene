@@ -3,6 +3,7 @@
   "version": "0.7.2",
   "license": "Apache-2.0",
   "description": "Cyrene AI Agent — self-evolving AI companion",
+  "desktopName": "cyrene.desktop",
   "author": {
     "name": "Cyrene",
     "email": "ikerrrrrrrrrrr@users.noreply.github.com"
@@ -98,6 +99,7 @@
     },
     "linux": {
       "icon": "../build/icon.png",
+      "syncDesktopName": true,
       "target": [
         {
           "target": "AppImage",

@@ -1067,7 +1067,7 @@ def test_workbench_side_question_opens_the_existing_conversation_ui_in_a_split()
     assert "min-width: 0;" in split_composer_css
     assert "box-sizing: border-box;" in split_composer_css
     split_glass_css = styles.split(
-        ".wbc-conversation-split::after {", 1
+        ".wbc-conversation-split::after,\n.workbench-grid.is-task-detail .workbench-main::after {", 1
     )[1].split("}", 1)[0]
     assert "height: var(--wbc-shared-glass-height);" in split_glass_css
     assert "background: color-mix(in srgb, var(--wb-topbar-bg) 58%, transparent);" in split_glass_css
@@ -1870,7 +1870,29 @@ def test_memory_detail_uses_shared_floating_card_and_animated_accordion():
     assert 'html[data-theme="dark"] .wb-workbench-filterbar::before {' in styles
     assert ".wb-lib-commandbar::before {" in styles
     assert 'html[data-theme="dark"] .wb-lib-commandbar::before {' in styles
-    assert "radial-gradient(ellipse 112% 118% at 50% 0%" in styles
+    dark_filterbar_css = styles.split(
+        'html[data-theme="dark"] .wb-workbench-filterbar::before {', 1
+    )[1].split("}", 1)[0]
+    library_glass_css = styles.split(".wb-lib-commandbar::before {", 1)[1].split(
+        "}", 1
+    )[0]
+    dark_library_glass_css = styles.split(
+        'html[data-theme="dark"] .wb-lib-commandbar::before {', 1
+    )[1].split("}", 1)[0]
+    assert "inset: 0 0 -10px;" in dark_filterbar_css
+    assert "border-radius: 0;" in dark_filterbar_css
+    assert "var(--wb-main-bg, var(--wb-surface)) 96%" in dark_filterbar_css
+    assert "blur(34px) saturate(128%)" in dark_filterbar_css
+    assert "#000 84%" in dark_filterbar_css
+    assert "transparent 100%" in dark_filterbar_css
+    assert "inset: 0 0 -6px;" in library_glass_css
+    assert "border-radius: 0;" in library_glass_css
+    assert "mask-image: linear-gradient(to bottom" in library_glass_css
+    assert "radial-gradient" not in library_glass_css
+    assert "var(--wb-card-bg)" not in dark_library_glass_css
+    assert "inset: 0 0 -10px;" in dark_library_glass_css
+    assert "var(--wb-main-bg, var(--wb-surface)) 96%" in dark_library_glass_css
+    assert "blur(40px) saturate(138%)" in dark_library_glass_css
     assert ".wb-lib-search," in styles
     assert ".wb-lib-view-toggle," in styles
 
@@ -3340,6 +3362,34 @@ process.stdout.write(JSON.stringify(result));
     return json.loads(completed.stdout)
 
 
+def _run_conversation_stick_sequence(steps):
+    root = Path(__file__).resolve().parent.parent
+    source = (root / "src" / "webui" / "frontend" / "workbench-chat.jsx").read_text(
+        encoding="utf-8"
+    )
+    function_source = "function wbcShouldStickToConversationBottom" + source.split(
+        "function wbcShouldStickToConversationBottom", 1
+    )[1].split("\nfunction WbcConversationNavigator", 1)[0]
+    script = f"""
+{function_source}
+let sticking = true;
+let previous = 900;
+const results = [];
+for (const step of {json.dumps(steps)}) {{
+  sticking = wbcShouldStickToConversationBottom(
+    sticking, previous, step.scrollTop, 1000, 100
+  );
+  previous = step.scrollTop;
+  results.push(sticking);
+}}
+process.stdout.write(JSON.stringify(results));
+"""
+    completed = subprocess.run(
+        ["node", "-e", script], check=True, capture_output=True, text=True
+    )
+    return json.loads(completed.stdout)
+
+
 def test_browser_avoidance_plan_uses_the_wider_readable_lane():
     assert _run_browser_avoidance_plan(100, 800, 650, 200, 14) == {
         "side": "left",
@@ -3351,6 +3401,15 @@ def test_browser_avoidance_plan_uses_the_wider_readable_lane():
         "start": 264,
         "end": 0,
     }
+
+
+def test_workbench_chat_upward_scroll_immediately_releases_sticky_bottom():
+    assert _run_conversation_stick_sequence([
+        {"scrollTop": 870},
+        {"scrollTop": 870},
+        {"scrollTop": 897},
+        {"scrollTop": 900},
+    ]) == [False, False, False, True]
 
 
 def test_browser_avoidance_plan_declines_centered_or_too_narrow_layouts():
@@ -3382,6 +3441,7 @@ def test_workbench_chat_reflows_only_entries_intersecting_the_browser_pip():
     assert "if (!preserveViewport) return;" in source
     on_scroll_block = source.split("  function onScroll() {", 1)[1].split("\n  useWbcEffect", 1)[0]
     assert "scheduleBrowserAvoidance();" in on_scroll_block
+    assert "scheduleStickyViewportRestore();" not in on_scroll_block
     assert "scheduleBrowserAvoidance(false);" not in on_scroll_block
     assert "avoidanceScrollingRef.current = true;" in on_scroll_block
     assert "}, 120);" in on_scroll_block
@@ -6072,32 +6132,65 @@ def test_workbench_artifact_rows_download_registered_files():
     routes = (root / "src" / "route" / "workbench" / "task_sessions.py").read_text(encoding="utf-8")
 
     assert "WorkbenchModel.ensureArtifacts(session)" in source
-    assert 'className="workbench-artifact-row wb-artifact-download"' in source
+    artifacts_tab = source.split("function ArtifactsTab", 1)[1].split(
+        "function SideSection", 1
+    )[0]
+    assert 'className="wbc-artifact-list wb-task-artifact-list"' in artifacts_tab
+    assert 'className="wbc-artifact-list-row wb-task-artifact-download"' in artifacts_tab
+    assert "<SideSection" not in artifacts_tab
     assert 'download={artifact.name || true}' in source
     assert '"/artifacts/" + encodeURIComponent(artifact.id) + "/download"' in source
     assert "artifact.type !== \"file_change\"" in model
     assert 'name: "task-summary.md"' not in model
-    assert ".wb-artifact-download:hover" in styles
+    assert ".wb-task-detail-tab-panel:last-child.open" in styles
+    assert ".wb-task-artifact-list" in styles
     assert '@router.get("/api/task-sessions/{session_id}/artifacts/{artifact_id}/download")' in routes
     assert "_workbench_artifact_download_target(project, session, artifact_id)" in routes
 
 
-def test_workbench_right_tabs_do_not_shrink_for_long_run_logs():
+def test_workbench_task_details_reuse_floating_animated_accordion():
     root = Path(__file__).resolve().parent.parent
+    source = (root / "src" / "webui" / "frontend" / "workbench.jsx").read_text(encoding="utf-8")
     styles = (root / "src" / "webui" / "frontend" / "workbench.css").read_text(encoding="utf-8")
+    i18n = (root / "src" / "webui" / "frontend" / "workbench-i18n.jsx").read_text(encoding="utf-8")
     index = (root / "src" / "webui" / "frontend" / "index.html").read_text(encoding="utf-8")
 
-    tabs_rule = styles.split(".workbench-right-tabs {", 1)[1].split("}", 1)[0]
-    body_rule = styles.split(".workbench-right-body {", 1)[1].split("}", 1)[0]
-    compact_tabs = styles.split("@container (max-width: 320px) {", 1)[1].split("}", 2)
-
-    assert "flex: 0 0 48px;" in tabs_rule
-    assert "flex: 1 1 auto;" in body_rule
-    assert "container-type: inline-size;" in styles
-    assert "gap: 2px;" in compact_tabs[0]
-    assert "padding-inline: 8px;" in compact_tabs[0]
-    assert "padding-inline: 2px;" in compact_tabs[1]
-    assert "font-size: calc(12px * var(--wb-ui-font-scale, 1));" in compact_tabs[1]
+    panel = source.split("function RightContextPanel", 1)[1].split("function ReflectionSection", 1)[0]
+    assert 'className="workbench-right-panel wb-floating-detail-shell wb-task-detail-shell"' in panel
+    assert 'className="wb-floating-detail-card wb-task-detail-card"' in panel
+    assert "<WbColResizer cardEdge />" in panel
+    assert 'className="wb-detail-accordion wb-task-detail-tabs"' in panel
+    assert 'aria-expanded={expanded}' in panel
+    assert 'onTabChange(expanded ? "" : item.id)' in panel
+    assert 'className={"wb-detail-accordion-panel wb-task-detail-tab-panel"' in panel
+    assert 'className="workbench-right-body"' in panel
+    files_tab = source.split("function FilesTab", 1)[1].split("function LogsTab", 1)[0]
+    logs_tab = source.split("function LogsTab", 1)[1].split("function AcceptanceTab", 1)[0]
+    acceptance_tab = source.split("function AcceptanceTab", 1)[1].split("function ArtifactsTab", 1)[0]
+    context_tab = source.split("function ContextTab", 1)[1].split("function FilesTab", 1)[0]
+    assert "<SideSection" not in files_tab
+    assert "<SideSection" not in logs_tab
+    assert "<SideSection" not in acceptance_tab
+    assert 'className="workbench-side-stack wb-task-context-tab"' in context_tab
+    assert 'className="wb-task-overview-meta"' in context_tab
+    assert 'className="wb-task-context-goal"' in context_tab
+    assert 'className="workbench-muted wb-task-context-empty"' in context_tab
+    assert "activeBodyRef.current.scrollTop = 0" in panel
+    assert ".workbench-grid.integrated-sidebars.is-task-detail .workbench-main" in styles
+    assert ".workbench-grid.integrated-sidebars.is-task-detail .wb-task-detail-shell" in styles
+    assert "max-height: calc(100vh - 82px);" in styles
+    assert ".wb-task-detail-tab-panel.open" in styles
+    assert "max-height: calc(100vh - 330px);" in styles
+    assert ".wb-task-detail-card .workbench-side-section + .workbench-side-section" in styles
+    assert ".wb-task-overview-meta" in styles
+    assert ".wb-task-detail-card .wb-task-context-tab" in styles
+    assert "@container (min-width: 430px)" in styles
+    assert ".wb-task-context-empty" in styles
+    assert ".wb-task-detail-card .wb-accept-toggle:hover" in styles
+    assert "background: var(--wb-row-hover-bg);" in styles
+    assert 'html[data-theme="dark"] .wb-task-detail-card' in styles
+    assert '"task.side.detailPanel": "Task details"' in i18n
+    assert '"task.side.detailPanel": "任务详情"' in i18n
     assert "workbench.css?v=0.7.2" in index
 
 
@@ -6973,6 +7066,45 @@ def test_workbench_task_composer_includes_model_and_reasoning_picker():
     assert task_work_area.index("applyInitialModels(options);") < task_work_area.index(
         "return catalogRequest.then"
     )
+
+
+def test_workbench_task_composer_reuses_chat_voice_input_flow():
+    root = Path(__file__).resolve().parent.parent
+    workbench = (root / "src" / "webui" / "frontend" / "workbench.jsx").read_text(encoding="utf-8")
+    chat = (root / "src" / "webui" / "frontend" / "workbench-chat.jsx").read_text(encoding="utf-8")
+
+    composer = workbench.split("function TaskComposer(", 1)[1].split(
+        "function ComposerDisclaimer", 1
+    )[0]
+    assert "WbcVoice.subscribe(setVoiceSnapshot)" in composer
+    assert "wbcStartVoiceRecorder" in composer
+    assert "wbcTranscribeVoiceBlob(blob)" in composer
+    assert "voiceSnapshot.status.auto_send_after_asr" in composer
+    assert 'ComposerBrowserIcon name="microphone"' in composer
+    assert 'className={"wb-composer-icon wbc-voice-input"' in composer
+    assert "function wbcTranscribeVoiceBlob(blob)" in chat
+
+
+def test_workbench_task_composer_matches_chat_bottom_glass_material():
+    root = Path(__file__).resolve().parent.parent
+    styles = (root / "src" / "webui" / "frontend" / "workbench.css").read_text(encoding="utf-8")
+
+    shared_glass = styles.split(
+        ".wbc-conversation-split::after,\n.workbench-grid.is-task-detail .workbench-main::after {",
+        1,
+    )[1].split("}", 1)[0]
+    task_box = styles.split(".workbench-composer-box {", 1)[1].split("}", 1)[0]
+    chat_box = styles.split(".wbc-composer-box {", 1)[1].split("}", 1)[0]
+
+    assert "blur(32px) saturate(170%) contrast(102%)" in shared_glass
+    assert "linear-gradient(to top, #000 0%, #000 82%, transparent 100%)" in shared_glass
+    for declaration in (
+        "border-radius: 14px;",
+        "background: color-mix(in srgb, var(--wb-card-bg) 72%, transparent);",
+        "blur(18px) saturate(120%) contrast(102%)",
+    ):
+        assert declaration in task_box
+        assert declaration in chat_box
 
 
 def test_workbench_model_picker_compacts_without_overlapping_send_button():

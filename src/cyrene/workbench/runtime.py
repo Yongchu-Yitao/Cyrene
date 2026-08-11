@@ -6439,7 +6439,7 @@ async def _workbench_agent_reply(
         resolved_conversation_source = await resolve_conversation_source(ui_instance_id)
 
     try:
-        return await run_agent(
+        reply = await run_agent(
             user_message=message,
             bot=_bot,
             chat_id=_CHAT_ID,
@@ -6462,7 +6462,19 @@ async def _workbench_agent_reply(
             ui_instance_id=str(ui_instance_id or ""),
             conversation_source=resolved_conversation_source,
         )
+        if not str(reply or "").strip():
+            from cyrene.model_runtime.client import _resolve_llm_candidates
+
+            if not _resolve_llm_candidates():
+                raise _WorkbenchAgentRunError(
+                    "model_not_configured",
+                    "No model is configured. Configure one in Settings → Models, then try again.",
+                    status_code=400,
+                )
+        return reply
     except asyncio.CancelledError:
+        raise
+    except _WorkbenchAgentRunError:
         raise
     except Exception as exc:
         logger.exception("Workbench agent run failed for session %s", session_id)
@@ -6488,6 +6500,57 @@ def _remove_path(path: Path) -> None:
         pass
 
 
+def _remove_path_checked(path: Path) -> None:
+    """Remove one reset target and surface failures instead of hiding them."""
+    if path.is_symlink() or path.is_file():
+        path.unlink(missing_ok=True)
+    elif path.exists():
+        shutil.rmtree(path)
+
+
+def _remove_directory_children(
+    root: Path,
+    *,
+    preserve: frozenset[str] = frozenset(),
+) -> None:
+    root.mkdir(parents=True, exist_ok=True)
+    for child in list(root.iterdir()):
+        if child.name in preserve:
+            continue
+        _remove_path_checked(child)
+
+
+async def _reset_process_runtime_state() -> None:
+    """Stop live owners of data files and discard every stale memory cache."""
+    from cyrene.agent.session import shutdown_session_tasks
+    from cyrene.model_runtime.client import reset_runtime_state
+    from cyrene.runtime.shell_wake import get_shell_wake_service
+    from cyrene.tooling.backends.mcp_manager import stop_mcp_async
+    from cyrene.workbench import chat as workbench_chat
+    from cyrene.workbench import goal_loop
+
+    manager = workbench_chat._CHAT_RUN_MANAGER
+    for chat_id in list(manager.runs):
+        await manager.terminate(chat_id, termination_reason="application_data_reset")
+    for task in list(manager._cleanup_tasks):
+        task.cancel()
+    if manager._cleanup_tasks:
+        await asyncio.gather(*manager._cleanup_tasks, return_exceptions=True)
+    manager._cleanup_tasks.clear()
+
+    for goal_manager in list(goal_loop._MANAGERS.values()):
+        await goal_manager.shutdown()
+        # The database is recreated below; keep the registered manager usable
+        # for new goals without requiring a backend restart.
+        goal_manager.closed = False
+    get_shell_wake_service().clear_pending()
+
+    await shutdown_session_tasks()
+    _agent_state._sessions.clear()
+    await stop_mcp_async()
+    await reset_runtime_state()
+
+
 async def _clear_knowledge_data(store_dir: Path) -> None:
     """Stop indexing and remove every workspace-scoped knowledge database."""
     from cyrene.knowledge import ingest
@@ -6505,70 +6568,53 @@ async def _clear_knowledge_data(store_dir: Path) -> None:
 
 
 async def _reset_app_data() -> dict[str, Any]:
-    """Wipe user-modifiable runtime data and restore first-run defaults."""
-    from cyrene import agent as cy_agent
-    from cyrene.config import write_env_keys
+    """Wipe all Cyrene-owned user data and restore first-run defaults."""
+    from cyrene.config import CACHE_DIR, STORE_DIR, write_env_keys
+    from cyrene.browser import clear_browser_data
+    from cyrene.knowledge.local_models import delete_all_models
     from cyrene.runtime.database import init_db, init_knowledge_db
     from cyrene.runtime.inbox import clear_all_inboxes
     from cyrene.runtime.settings_store import reset_all as reset_web_settings
 
-    await clear_session_id()
-
-    for task in list(cy_agent._pending_compressors):
-        task.cancel()
-    cy_agent._pending_compressors.clear()
-    await asyncio.sleep(0)
-
+    await _reset_process_runtime_state()
+    browser_result = await clear_browser_data()
+    await delete_all_models()
+    await _clear_knowledge_data(STORE_DIR)
     _scheduler_service().reset_lottery()
     await clear_all_inboxes()
+
+    # The encrypted config and its installation-local key are retained only as
+    # a container. reset_all replaces their contents with the canonical
+    # defaults. Every other root-level or nested data artifact is deleted,
+    # including sessions, skills, generated media, diagnostics and migrations.
+    _remove_directory_children(
+        DATA_DIR,
+        preserve=frozenset({"config.enc", ".config_key"}),
+    )
     reset_web_settings()
     reset_onboarding_state()
 
-    from cyrene.config import STORE_DIR
+    # SQLite, knowledge indexes, legacy backups, and per-workspace memories are
+    # all Cyrene-owned store data; recreating the two current databases avoids
+    # a later migration resurrecting anything from the reset installation.
+    _remove_directory_children(STORE_DIR)
 
     for path in (
-        STATE_FILE,
-        DATA_DIR / "short_term.json",
-        DATA_DIR / "lottery_state.json",
-        DATA_DIR / "web_settings.json",
-        DATA_DIR / "onboarding_state.json",
-        DATA_DIR / ".setup_done",
-        # Legacy Workbench JSON exports. The authoritative rows are removed
-        # below when the SQLite database itself is reset.
-        _WORKBENCH_STORE,
-        DATA_DIR / "workbench_chats.json",
-        DATA_DIR / "workbench_notifications.json",
+        WORKSPACE_DIR / "conversations",
+        WORKSPACE_DIR / "patterns",
+        WORKSPACE_DIR / "plan",
+        WORKSPACE_DIR / "deliverables",
+        WORKSPACE_DIR / "projects",
+        BASE_DIR / "backups",
+        CACHE_DIR / "voice",
     ):
-        _remove_path(path)
-
-    # Legacy per-workspace memory exports.
-    for mem_path in STORE_DIR.glob("wb_memory_*.json"):
-        _remove_path(mem_path)
-
-    # Remove both the pre-refactor database name and retained rollback copies.
-    # Otherwise the next launch would correctly interpret them as upgrade data
-    # and undo the user's explicit full reset.
-    _remove_path(STORE_DIR / "cyrene.db")
-    for legacy_db_backup in STORE_DIR.glob(
-        "cyrene.db.pre-runtime-database-migration*.bak*"
-    ):
-        _remove_path(legacy_db_backup)
-
-    await _clear_knowledge_data(STORE_DIR)
-    await init_knowledge_db(str(STORE_DIR / "kb_default.db"))
-
-    for path in (
-        CONVERSATIONS_DIR,
-        _UPLOADS_DIR,
-        _EXPORTS_DIR,
-        PATTERNS_DIR,
-    ):
-        _remove_path(path)
+        _remove_path_checked(path)
 
     db_path = Path(_db_path or str(DB_PATH))
-    _remove_path(db_path)
+    _remove_path_checked(db_path)
     db_path.parent.mkdir(parents=True, exist_ok=True)
     await init_db(str(db_path))
+    await init_knowledge_db(str(STORE_DIR / "kb_default.db"))
 
     WORKSPACE_DIR.mkdir(parents=True, exist_ok=True)
     CONVERSATIONS_DIR.mkdir(parents=True, exist_ok=True)
@@ -6581,10 +6627,26 @@ async def _reset_app_data() -> dict[str, Any]:
         "OPENAI_BASE_URL": DEFAULT_OPENAI_BASE_URL,
         "OPENAI_MODEL": DEFAULT_OPENAI_MODEL,
         "TELEGRAM_BOT_TOKEN": "",
+        "WECHAT_BOT_TOKEN": "",
+        "WECHAT_OWNER_ID": "",
+        "AMAP_API_KEY": "",
+        "EMBEDDING_BASE_URL": "",
+        "EMBEDDING_API_KEY": "",
+        "EMBEDDING_MODEL": "",
     })
+
+    # Clear presentation caches that otherwise survive the disk reset inside
+    # this process and can momentarily repopulate a fresh UI with old records.
+    _cc_preview_cache.clear()
 
     return {
         "ok": True,
+        "cleared": {
+            "settings": True,
+            "local_models": True,
+            "browser_logins": bool(browser_result.get("ok")),
+            "runtime_state": True,
+        },
         "onboarding": get_onboarding_status(),
         "sessions": _build_sessions(),
     }

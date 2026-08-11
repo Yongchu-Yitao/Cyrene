@@ -438,6 +438,7 @@ _WORKBENCH_CHAT_ERROR_I18N_KEYS = {
     "quota_exhausted": "workbenchChat.error.quotaExhausted",
     "authentication_expired": "workbenchChat.error.authenticationExpired",
     "model_unavailable": "workbenchChat.error.modelUnavailable",
+    "model_not_configured": "workbenchChat.error.modelNotConfigured",
 }
 
 
@@ -449,6 +450,11 @@ def _workbench_chat_error_metadata(exc: Exception) -> dict[str, str]:
     error code/key to render the banner in its current language. Unknown errors
     intentionally return no metadata and keep their diagnostic message.
     """
+    direct_code = str(getattr(exc, "code", "") or "").strip()
+    direct_key = _WORKBENCH_CHAT_ERROR_I18N_KEYS.get(direct_code, "")
+    if direct_code and direct_key:
+        return {"code": direct_code, "detail_key": direct_key}
+
     try:
         from cyrene.model_runtime.codex_provider import codex_availability_error
 

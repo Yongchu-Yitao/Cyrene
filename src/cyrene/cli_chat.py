@@ -2463,7 +2463,7 @@ class InteractiveChat:
             if confirm == "RESET CYRENE DATA":
                 await self.transport.update_setting(
                     "/api/settings/reset-data",
-                    {},
+                    {"confirmation": "RESET CYRENE DATA"},
                     method="POST",
                 )
                 self.renderer.info(

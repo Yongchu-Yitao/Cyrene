@@ -526,3 +526,24 @@ async def delete_model(model_id: str) -> dict[str, Any]:
     _PROGRESS.pop(model_id, None)
     _VALIDATED.discard(model_id)
     return status()
+
+
+async def delete_all_models() -> dict[str, Any]:
+    """Cancel downloads, unload adapters, and remove every local model pack."""
+    active = [task for task in _TASKS.values() if not task.done()]
+    for task in active:
+        task.cancel()
+    if active:
+        await asyncio.gather(*active, return_exceptions=True)
+    for resetter in list(_RESETTERS.values()):
+        try:
+            resetter()
+        except Exception:
+            # Deleting the on-disk pack must still proceed if an optional
+            # inference adapter has already partially torn itself down.
+            pass
+    await asyncio.to_thread(shutil.rmtree, MODEL_ROOT, True)
+    _TASKS.clear()
+    _PROGRESS.clear()
+    _VALIDATED.clear()
+    return status()

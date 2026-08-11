@@ -3480,14 +3480,37 @@ function DataPanel(p) {
   }
 
   function resetData() {
-    setResetting(true);
-    setResetStatus(t("settings.resettingData"));
-    settingsFetch("/api/settings/reset-data", { method: "POST" }).then(function (r) { return r.json(); }).then(function (p) {
-      if (p.ok) {
-        try { Object.keys(localStorage).forEach(function (k) { if (k.indexOf("cyrene-") === 0) localStorage.removeItem(k); }); } catch (e) {}
+    var title = t("settings.resetConfirmTitle");
+    var body = t("settings.resetConfirmBody");
+    var feedback = window.CyreneUI && window.CyreneUI.require
+      ? window.CyreneUI.require("feedback")
+      : null;
+    var confirmed = feedback && typeof feedback.confirmModal === "function"
+      ? feedback.confirmModal({
+        title: title,
+        body: body,
+        confirmLabel: t("settings.resetConfirmAction"),
+        danger: true,
+      })
+      : Promise.resolve(window.confirm([title, "", body].join("\n")));
+    confirmed.then(function (ok) {
+      if (!ok) return;
+      setResetting(true);
+      setResetStatus(t("settings.resettingData"));
+      return settingsFetch("/api/settings/reset-data", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ confirmation: "RESET CYRENE DATA" }),
+      }).then(function (r) { return r.json(); }).then(function (payload) {
+        if (!payload.ok) throw new Error(payload.detail || payload.error || t("settings.resetAppDataFailed"));
+        try { localStorage.clear(); } catch (e) {}
+        try { sessionStorage.clear(); } catch (e) {}
         window.location.reload();
-      } else { setResetStatus(t("settings.resetAppDataFailed")); setResetting(false); }
-    }).catch(function (e) { setResetStatus(t("settings.resetAppDataFailed") + ": " + e.message); setResetting(false); });
+      });
+    }).catch(function (e) {
+      setResetStatus(t("settings.resetAppDataFailed") + ": " + (e.message || String(e)));
+      setResetting(false);
+    });
   }
 
   function backupDefaultName() {

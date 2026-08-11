@@ -4103,6 +4103,20 @@ function browserRpcSessionId(args = {}, context = {}) {
 }
 
 async function handleBrowserRpc(method, args, context = {}) {
+  if (method === 'clearStorage') {
+    closeAllBrowserSessions();
+    const browserSessions = new Set([
+      session.fromPartition(BROWSER_PARTITION),
+      session.defaultSession,
+    ]);
+    for (const browserSession of browserSessions) {
+      await browserSession.clearStorageData();
+      if (typeof browserSession.clearCache === 'function') await browserSession.clearCache();
+      if (typeof browserSession.clearAuthCache === 'function') await browserSession.clearAuthCache();
+    }
+    resetDesktopSettings();
+    return { ok: true, cleared: true, desktopSettingsReset: true };
+  }
   if (method === 'setContext') {
     return activateBrowserSession(args || {}).state();
   }
@@ -4618,6 +4632,21 @@ function saveDesktopSettings(updates, expectedRevision) {
   };
 }
 
+function resetDesktopSettings() {
+  const current = readDesktopSettings();
+  const next = {
+    ...DEFAULT_DESKTOP_SETTINGS,
+    settingsRevision: current.settingsRevision + 1,
+  };
+  writeDesktopSettings(next);
+  applyLaunchAtLogin(false);
+  unregisterQuickChatShortcut();
+  destroyQuickChatWindow();
+  syncTrayWithSettings(next);
+  rebuildApplicationMenu(next);
+  return next;
+}
+
 function unregisterQuickChatShortcut() {
   if (registeredQuickChatShortcut) {
     try { globalShortcut.unregister(registeredQuickChatShortcut); } catch (_) {}
@@ -4713,6 +4742,17 @@ function getPythonArgs() {
   return ['--launch-web', '--electron'];
 }
 
+function getCurrentAppExecutablePath() {
+  // Electron's executable lives inside AppImage's temporary SquashFS mount
+  // (for example /tmp/.mount_Cyrene.../cyrene).  That path is read-only and
+  // disappears when the app exits, so it cannot be used as the updater's
+  // replacement target.  AppImage exports the original image path explicitly.
+  if (isLinux && process.env.APPIMAGE) {
+    return path.resolve(process.env.APPIMAGE);
+  }
+  return app.getPath('exe');
+}
+
 function spawnPython() {
   if (pythonProcess) return;
   clearCliConnection();
@@ -4721,7 +4761,7 @@ function spawnPython() {
   const cwd = isDev ? path.join(__dirname, '..') : undefined;
   const childEnv = {
     ...process.env,
-    CYRENE_APP_EXECUTABLE: app.getPath('exe'),
+    CYRENE_APP_EXECUTABLE: getCurrentAppExecutablePath(),
     CYRENE_AUTH_TOKEN: AUTH_TOKEN,
     CYRENE_ELECTRON_RPC_PORT: electronRpcPort ? String(electronRpcPort) : '',
     CYRENE_ELECTRON_RPC_TOKEN: AUTH_TOKEN,
@@ -5767,6 +5807,10 @@ async function createMainWindow() {
       sandbox: false,
     },
   };
+  if (isLinux) {
+    const iconPath = getNotificationIconPath();
+    if (iconPath) windowOptions.icon = iconPath;
+  }
   if (useInsetTitleBar) {
     windowOptions.titleBarStyle = 'hidden';
     // Electron's macOS traffic-light image renders slightly below its nominal

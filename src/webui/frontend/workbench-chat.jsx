@@ -1516,7 +1516,7 @@ function wbcCanOpenPageContextMenu(event) {
     ".wbc-selection-menu",
     ".wbc-conversation-nav",
     ".wbc-chat-card",
-    ".workbench-right-tabs",
+    ".wb-task-detail-tabs",
     ".workbench-confirm-modal",
   ].join(","));
 }
@@ -1616,6 +1616,7 @@ var WORKBENCH_ERROR_I18N_KEYS = {
   quota_exhausted: "workbenchChat.error.quotaExhausted",
   authentication_expired: "workbenchChat.error.authenticationExpired",
   model_unavailable: "workbenchChat.error.modelUnavailable",
+  model_not_configured: "workbenchChat.error.modelNotConfigured",
   process_restarted: "workbenchChat.error.processRestarted",
   chat_run_driver_failed: "workbenchChat.error.driverFailed",
   chat_not_found: "workbenchChat.error.chatNotFound",
@@ -2261,6 +2262,99 @@ function wbcVoiceWavBlob(chunks, sourceRate) {
     view.setInt16(44 + sampleIndex * 2, value < 0 ? value * 32768 : value * 32767, true);
   }
   return new Blob([buffer], { type: "audio/wav" });
+}
+
+// Shared by every composer that supports local voice input. Keep FireRedASR's
+// silence-token handling and response parsing in one place so task and chat
+// inputs cannot drift into subtly different behavior.
+function wbcCleanVoiceTranscript(value) {
+  var content = String(value || "").trim();
+  if (!content) return "";
+  content = content.replace(
+    /(?:\*{1,3}|_{1,3})?\s*<\s*sil(?:ence)?\s*>\s*(?:\*{1,3}|_{1,3})?\s*[。.!！?？,，、;；:：…]*/gi,
+    " "
+  );
+  content = content.replace(/\s+/g, " ").trim();
+  if (/^[*_~。.!！?？,，、;；:：…\s]+$/.test(content)) return "";
+  return content;
+}
+
+function wbcIsVoiceSilenceTranscript(value) {
+  var content = String(value || "");
+  return /<\s*sil(?:ence)?\s*>/i.test(content) && !wbcCleanVoiceTranscript(content);
+}
+
+function wbcTranscribeVoiceBlob(blob) {
+  var form = new FormData();
+  form.append("audio", blob, "voice-input.wav");
+  return fetch("/api/voice/asr", { method: "POST", body: form })
+    .then(function (response) {
+      return response.json().catch(function () { return {}; }).then(function (payload) {
+        if (!response.ok) throw new Error(payload.error || payload.detail || ("HTTP " + response.status));
+        return payload;
+      });
+    })
+    .then(function (payload) {
+      var rawTranscript = String(payload.text || "").trim();
+      var silenceOnly = payload.silence_only === true || wbcIsVoiceSilenceTranscript(rawTranscript);
+      var transcript = wbcCleanVoiceTranscript(rawTranscript);
+      // FireRedASR can emit a literal <sil> token for a silent recording.
+      // Treat it as an intentional no-op: never touch a draft or auto-send.
+      if (silenceOnly) return false;
+      if (!transcript) throw new Error(wbcT("workbenchChat.noRecognizedSpeech", "No speech was recognized"));
+      return transcript;
+    });
+}
+
+// Composer voice input uses the same persistent, replacing status-toast
+// pattern as the top-bar voice command. Each mounted composer owns its toast
+// id so a phase change updates one notice instead of stacking several.
+function wbcCreateComposerVoiceFeedback() {
+  var statusToastId = 0;
+
+  function dismiss() {
+    if (!statusToastId) return;
+    try { window.CyreneUI.require("feedback").dismissToast(statusToastId); } catch (e) {}
+    statusToastId = 0;
+  }
+
+  function show(message, type, duration) {
+    dismiss();
+    try {
+      statusToastId = window.CyreneUI.require("feedback").showToast(message, type || "info", {
+        duration: duration == null ? 0 : duration,
+      });
+    } catch (e) {
+      statusToastId = 0;
+    }
+  }
+
+  return {
+    starting: function () {
+      show(wbcT("topbar.voiceCommandStartingNotice", "Starting voice input…"), "info", 0);
+    },
+    listening: function () {
+      show(wbcT("topbar.voiceCommandListening", "Listening; start speaking"), "info", 0);
+    },
+    transcribing: function () {
+      show(wbcT("topbar.voiceCommandRecognizingNotice", "Recognizing speech…"), "info", 0);
+    },
+    complete: function () {
+      show(wbcT("workbenchChat.voiceInputComplete", "Voice recognition complete"), "success", 3600);
+    },
+    noSpeech: function () {
+      show(wbcT("workbenchChat.noRecognizedSpeech", "No speech was recognized"), "warning", 3600);
+    },
+    error: function (error) {
+      var message = error && error.message ? error.message : String(error || "");
+      show(
+        wbcT("workbenchChat.voiceInputFailed", "Could not recognize speech: {error}", { error: message }),
+        "error",
+        6000
+      );
+    },
+    dismiss: dismiss,
+  };
 }
 
 var WBC_VOICE_SILENCE_MS = 1600;
@@ -10435,6 +10529,18 @@ function WbcThreadItem({ children, navigation }) {
   );
 }
 
+function wbcShouldStickToConversationBottom(wasSticking, previousScrollTop, scrollTop, scrollHeight, clientHeight) {
+  var currentTop = Number(scrollTop) || 0;
+  var previousTop = Number(previousScrollTop);
+  var hasPreviousTop = previousScrollTop !== null
+    && previousScrollTop !== undefined
+    && Number.isFinite(previousTop);
+  var bottomDistance = Math.max(0, (Number(scrollHeight) || 0) - currentTop - (Number(clientHeight) || 0));
+  if (bottomDistance <= 2) return true;
+  if (hasPreviousTop && currentTop < previousTop - 1) return false;
+  return wasSticking === true;
+}
+
 function WbcConversationNavigator({ threadRef, chatId }) {
   var [snapshot, setSnapshot] = useWbcState({
     visible: false,
@@ -10577,6 +10683,7 @@ function WbcMain({ project, chat, chatSummary, loading, runtime, error, errorKin
   var scrollRef = useWbcRef(null);
   var selectionMenuRef = useWbcRef(null);
   var stickRef = useWbcRef(true);
+  var lastObservedScrollTopRef = useWbcRef(null);
   var [showScrollToBottom, setShowScrollToBottom] = useWbcState(false);
   var [selectionMenu, setSelectionMenu] = useWbcState(null);
   var [chatDropActive, setChatDropActive] = useWbcState(false);
@@ -10845,11 +10952,19 @@ function WbcMain({ project, chat, chatSummary, loading, runtime, error, errorKin
     });
   }, [applyBrowserAvoidance]);
 
-  // Track whether the user is reading scrollback; only auto-stick near bottom.
+  // Moving toward older messages immediately releases the live-tail anchor,
+  // even within the small bottom tolerance. Re-enable it only at the bottom.
   function onScroll() {
     var el = scrollRef.current;
     if (!el) return;
-    stickRef.current = el.scrollHeight - el.scrollTop - el.clientHeight < 80;
+    stickRef.current = wbcShouldStickToConversationBottom(
+      stickRef.current,
+      lastObservedScrollTopRef.current,
+      el.scrollTop,
+      el.scrollHeight,
+      el.clientHeight
+    );
+    lastObservedScrollTopRef.current = el.scrollTop;
     setShowScrollToBottom(!stickRef.current);
     if (!stickRef.current && stickyRestoreRafRef.current) {
       cancelAnimationFrame(stickyRestoreRafRef.current);
@@ -10863,7 +10978,6 @@ function WbcMain({ project, chat, chatSummary, loading, runtime, error, errorKin
     avoidanceScrollTimerRef.current = setTimeout(function () {
       avoidanceScrollTimerRef.current = null;
       avoidanceScrollingRef.current = false;
-      scheduleStickyViewportRestore();
       scheduleBrowserAvoidance();
     }, 120);
   }
@@ -10880,7 +10994,10 @@ function WbcMain({ project, chat, chatSummary, loading, runtime, error, errorKin
     stickRef.current = true;
     setShowScrollToBottom(false);
     var el = scrollRef.current;
-    if (el) el.scrollTop = el.scrollHeight;
+    if (el) {
+      el.scrollTop = el.scrollHeight;
+      lastObservedScrollTopRef.current = el.scrollTop;
+    }
     scheduleStickyViewportRestore();
     scheduleBrowserAvoidance();
   }, [chat && chat.id]);
@@ -11044,6 +11161,7 @@ function WbcMain({ project, chat, chatSummary, loading, runtime, error, errorKin
     stickRef.current = true;
     setShowScrollToBottom(false);
     var reducedMotion = window.matchMedia && window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+    lastObservedScrollTopRef.current = el.scrollTop;
     el.scrollTo({ top: el.scrollHeight, behavior: reducedMotion ? "auto" : "smooth" });
     scheduleStickyViewportRestore();
   }
@@ -12371,8 +12489,11 @@ function WbcComposer({ chat, project, runtime, running, onSend, onGuidance, onIn
   var lastSentRef = useWbcRef(null);
   var prevRunningRef = useWbcRef(running);
   var voiceRecorderRef = useWbcRef(null);
+  var voiceChatIdRef = useWbcRef(String(chatId || ""));
+  var voiceFeedbackRef = useWbcRef(null);
   var agentFlowTimerRef = useWbcRef(null);
   var ComposerBrowserIcon = window.CyreneUI.require("browser").Icon;
+  if (!voiceFeedbackRef.current) voiceFeedbackRef.current = wbcCreateComposerVoiceFeedback();
   var agentFlow = agentFlowState.chatId === String(chatId || "")
     ? String(agentFlowState.kind || "")
     : "";
@@ -12424,12 +12545,15 @@ function WbcComposer({ chat, project, runtime, running, onSend, onGuidance, onIn
   }, [chatId]);
 
   useWbcEffect(function () {
+    voiceChatIdRef.current = String(chatId || "");
+    setVoicePhase("");
     return function () {
       var recorder = voiceRecorderRef.current;
       voiceRecorderRef.current = null;
+      voiceFeedbackRef.current.dismiss();
       if (recorder && typeof recorder.stop === "function") recorder.stop().catch(function () {});
     };
-  }, []);
+  }, [chatId]);
 
   useWbcEffect(function () {
     if (!modelOpen) return undefined;
@@ -12757,54 +12881,21 @@ function WbcComposer({ chat, project, runtime, running, onSend, onGuidance, onIn
   function pickFiles() { if (fileRef.current) fileRef.current.click(); }
 
   function showVoiceError(error) {
-    var message = error && error.message ? error.message : String(error || "");
-    try {
-      window.CyreneUI.require("feedback").showToast(
-        wbcT("workbenchChat.voiceInputFailed", "Could not recognize speech: {error}", { error: message }),
-        "error"
-      );
-    } catch (e) {}
-  }
-
-  function cleanVoiceTranscript(value) {
-    var content = String(value || "").trim();
-    if (!content) return "";
-    content = content.replace(
-      /(?:\*{1,3}|_{1,3})?\s*<\s*sil(?:ence)?\s*>\s*(?:\*{1,3}|_{1,3})?\s*[。.!！?？,，、;；:：…]*/gi,
-      " "
-    );
-    content = content.replace(/\s+/g, " ").trim();
-    if (/^[*_~。.!！?？,，、;；:：…\s]+$/.test(content)) return "";
-    return content;
-  }
-
-  function isVoiceSilenceTranscript(value) {
-    var content = String(value || "");
-    return /<\s*sil(?:ence)?\s*>/i.test(content) && !cleanVoiceTranscript(content);
+    voiceFeedbackRef.current.error(error);
   }
 
   function transcribeVoiceBlob(blob) {
-    var form = new FormData();
-    form.append("audio", blob, "voice-input.wav");
-    return fetch("/api/voice/asr", { method: "POST", body: form })
-      .then(function (response) {
-        return response.json().catch(function () { return {}; }).then(function (payload) {
-          if (!response.ok) throw new Error(payload.error || payload.detail || ("HTTP " + response.status));
-          return payload;
-        });
-      })
-      .then(function (payload) {
-        var rawTranscript = String(payload.text || "").trim();
-        var silenceOnly = payload.silence_only === true || isVoiceSilenceTranscript(rawTranscript);
-        var transcript = cleanVoiceTranscript(rawTranscript);
-        // FireRedASR can emit a literal <sil> token for a silent recording.
-        // Treat it as an intentional no-op: never touch the draft or auto-send.
-        if (silenceOnly) return false;
-        if (!transcript) throw new Error(wbcT("workbenchChat.noRecognizedSpeech", "No speech was recognized"));
+    return wbcTranscribeVoiceBlob(blob)
+      .then(function (transcript) {
+        if (transcript === false) {
+          voiceFeedbackRef.current.noSpeech();
+          return false;
+        }
         var current = String(draftRef.current || "");
         var combined = current && !/\s$/.test(current) ? current + " " + transcript : current + transcript;
         setDraft(combined);
         draftRef.current = combined;
+        voiceFeedbackRef.current.complete();
         if (voiceSnapshot.status.auto_send_after_asr === true) {
           submit(combined);
           return;
@@ -12820,6 +12911,7 @@ function WbcComposer({ chat, project, runtime, running, onSend, onGuidance, onIn
     if (!recorder || voiceRecorderRef.current !== recorder) return;
     voiceRecorderRef.current = null;
     setVoicePhase("transcribing");
+    voiceFeedbackRef.current.transcribing();
     recorder.stop()
       .then(transcribeVoiceBlob)
       .catch(showVoiceError)
@@ -12841,13 +12933,20 @@ function WbcComposer({ chat, project, runtime, running, onSend, onGuidance, onIn
     // queued sentences before opening the microphone so TTS is not re-recorded.
     WbcVoice.stop();
     setVoicePhase("starting");
+    voiceFeedbackRef.current.starting();
+    var startedForChat = String(chatId || "");
     wbcStartVoiceRecorder({
       autoStopOnSilence: voiceSnapshot.status.auto_stop_on_silence !== false,
       onSilence: finishVoiceInput,
     })
       .then(function (recorder) {
+        if (voiceChatIdRef.current !== startedForChat) {
+          recorder.stop().catch(function () {});
+          return;
+        }
         voiceRecorderRef.current = recorder;
         setVoicePhase("recording");
+        voiceFeedbackRef.current.listening();
       })
       .catch(function (error) {
         setVoicePhase("");
@@ -13439,6 +13538,8 @@ function WbcComposer({ chat, project, runtime, running, onSend, onGuidance, onIn
               aria-label={voicePhase === "recording"
                 ? wbcT("workbenchChat.voiceInputStop", "Stop recording")
                 : wbcT("workbenchChat.voiceInputStart", "Voice input")}
+              aria-pressed={voicePhase === "recording"}
+              aria-busy={voicePhase === "starting" || voicePhase === "transcribing"}
             >
               {voicePhase === "starting" || voicePhase === "transcribing"
                 ? <span className="wb-spinner small" />

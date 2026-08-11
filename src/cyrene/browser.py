@@ -31,6 +31,7 @@ import os
 import platform
 import re
 import secrets
+import shutil
 import socket
 import tempfile
 import time
@@ -357,6 +358,28 @@ async def close_electron_browser_session(session_id: str) -> dict[str, Any]:
         session_id=str(session_id or "").strip(),
         round_id="",
     )
+
+
+async def clear_browser_data() -> dict[str, Any]:
+    """Close both browser implementations and erase their shared login state."""
+    from cyrene.config import DATA_DIR
+
+    electron_cleared = False
+    if electron_browser_available():
+        result = await _electron_browser_rpc(
+            "clearStorage",
+            {},
+            timeout=20.0,
+            session_id="",
+            round_id="",
+        )
+        if result.get("ok") is False:
+            raise RuntimeError(str(result.get("error") or "Electron browser data reset failed"))
+        electron_cleared = True
+
+    await close_session()
+    await asyncio.to_thread(shutil.rmtree, DATA_DIR / "browser_profile", True)
+    return {"ok": True, "electron": electron_cleared, "playwright": True}
 
 
 async def finish_electron_browser_round(session_id: str, round_id: str) -> dict[str, Any]:

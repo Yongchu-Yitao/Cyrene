@@ -5294,7 +5294,15 @@ html[data-theme="dark"] .workbench-project-memory-modal {
 .workbench-composer-box {
   /* visible so the slash / mode popover menus can extend above the box */
   overflow: visible;
-  border-color: color-mix(in srgb, var(--accent) 52%, transparent);
+  border: 1px solid color-mix(in srgb, var(--wb-line-2) 64%, transparent);
+  border-radius: 14px;
+  background: color-mix(in srgb, var(--wb-card-bg) 72%, transparent);
+  box-shadow:
+    var(--wbc-control-shadow),
+    inset 0 1px 0 color-mix(in srgb, #fff 10%, transparent),
+    inset 0 0 0 1px color-mix(in srgb, var(--wb-line) 14%, transparent);
+  -webkit-backdrop-filter: blur(18px) saturate(120%) contrast(102%);
+  backdrop-filter: blur(18px) saturate(120%) contrast(102%);
 }
 
 .workbench-composer textarea {
@@ -5348,61 +5356,8 @@ html[data-theme="dark"] .workbench-project-memory-modal {
   container-type: inline-size;
 }
 
-.workbench-right-tabs {
-  height: 48px;
-  flex: 0 0 48px;
-  display: flex;
-  align-items: flex-end;
-  gap: 6px;
-  padding: 0 12px;
-  border-bottom: 1px solid var(--wb-line);
-  overflow-x: auto;
-  overflow-y: hidden;
-  scrollbar-width: none;
-  overscroll-behavior-x: contain;
-  -webkit-overflow-scrolling: touch;
-}
-
-.workbench-right-tabs::-webkit-scrollbar {
-  display: none;
-}
-
-.workbench-right-tabs button {
-  flex: 0 0 auto;
-  height: 38px;
-  border: 0;
-  border-bottom: 2px solid transparent;
-  background: transparent;
-  color: var(--wb-muted);
-  padding: 0 5px;
-  cursor: pointer;
-  font-size: calc(12.5px * var(--wb-ui-font-scale, 1));
-  line-height: 1;
-  white-space: nowrap;
-}
-
-.workbench-right-tabs button.active,
-.workbench-right-tabs button:hover {
-  color: var(--wb-text);
-  border-bottom-color: var(--wb-accent);
-}
-
-/* Keep all five Chinese task tabs visible at the 280px resize floor. The
-   regular spacing remains unchanged once the panel has enough room. */
-@container (max-width: 320px) {
-  .workbench-right-tabs {
-    gap: 2px;
-    padding-inline: 8px;
-  }
-
-  .workbench-right-tabs button {
-    padding-inline: 2px;
-    font-size: calc(12px * var(--wb-ui-font-scale, 1));
-  }
-}
-
 .workbench-right-body {
-  padding: 12px;
+  padding: 0;
 }
 
 .workbench-side-stack {
@@ -9142,7 +9097,7 @@ html[data-theme] .settings-overlay .wb-toggle.on {
 
 .wb-textarea-soul {
   width: 100%;
-  min-height: 240px;
+  min-height: 280px;
   resize: vertical;
   font-size: calc(12px * var(--wb-ui-font-scale, 1));
   line-height: 1.5;
@@ -10240,22 +10195,32 @@ details.wb-model-section > .wb-model-section-head::marker {
 }
 
 .wb-local-model-icon {
+  --wb-local-model-icon-color: var(--wb-muted);
   width: 34px;
   height: 34px;
   display: inline-grid;
   place-items: center;
-  border: 1px solid color-mix(in srgb, var(--wb-line-2) 52%, transparent);
+  border: 1px solid color-mix(in srgb, var(--wb-local-model-icon-color) 24%, var(--wb-line-2));
   border-radius: 10px;
-  background: color-mix(in srgb, var(--wb-text) 3%, transparent);
-  color: var(--wb-muted);
+  background: color-mix(in srgb, var(--wb-local-model-icon-color) 7%, transparent);
+  color: var(--wb-local-model-icon-color);
   box-shadow: none;
 }
 
+.wb-local-model-icon.is-embedding { --wb-local-model-icon-color: #7c3aed; }
+.wb-local-model-icon.is-ocr { --wb-local-model-icon-color: #0284c7; }
+.wb-local-model-icon.is-asr { --wb-local-model-icon-color: #e11d48; }
+.wb-local-model-icon.is-tts { --wb-local-model-icon-color: #d97706; }
+
 .wb-local-model.is-ready .wb-local-model-icon {
-  border-color: color-mix(in srgb, var(--wb-accent) 24%, var(--wb-line-2));
-  background: color-mix(in srgb, var(--wb-accent) 7%, transparent);
-  color: var(--wb-accent);
+  border-color: color-mix(in srgb, var(--wb-local-model-icon-color) 40%, var(--wb-line-2));
+  background: color-mix(in srgb, var(--wb-local-model-icon-color) 12%, transparent);
 }
+
+html[data-theme="dark"] .wb-local-model-icon.is-embedding { --wb-local-model-icon-color: #c4b5fd; }
+html[data-theme="dark"] .wb-local-model-icon.is-ocr { --wb-local-model-icon-color: #7dd3fc; }
+html[data-theme="dark"] .wb-local-model-icon.is-asr { --wb-local-model-icon-color: #fda4af; }
+html[data-theme="dark"] .wb-local-model-icon.is-tts { --wb-local-model-icon-color: #fbbf24; }
 
 .wb-local-model-copy {
   min-width: 0;
@@ -13190,41 +13155,36 @@ html[data-theme] .settings-overlay .wb-wechat-status-row {
   mask-image: linear-gradient(to bottom, #000 0%, #000 78%, rgba(0, 0, 0, 0.9) 90%, transparent 100%);
 }
 html[data-theme="dark"] .wb-workbench-filterbar::before {
-  background: linear-gradient(
-    to bottom,
-    color-mix(in srgb, var(--wb-main-bg, var(--wb-surface)) 18%, transparent) 0%,
-    color-mix(in srgb, var(--wb-main-bg, var(--wb-surface)) 12%, transparent) 68%,
-    color-mix(in srgb, var(--wb-main-bg, var(--wb-surface)) 5%, transparent) 86%,
-    transparent 100%
-  );
+  inset: 0 0 -10px;
+  border-radius: 0;
+  background: color-mix(in srgb, var(--wb-main-bg, var(--wb-surface)) 96%, transparent);
   -webkit-backdrop-filter: blur(34px) saturate(128%);
   backdrop-filter: blur(34px) saturate(128%);
+  -webkit-mask-image: linear-gradient(to bottom, #000 0%, #000 84%, rgba(0, 0, 0, .94) 94%, transparent 100%);
+  mask-image: linear-gradient(to bottom, #000 0%, #000 84%, rgba(0, 0, 0, .94) 94%, transparent 100%);
 }
 .wb-lib-commandbar::before {
-  inset: 0 6px -6px;
-  border-radius: 20px;
+  inset: 0 0 -6px;
+  border-radius: 0;
   background: linear-gradient(
     to bottom,
-    color-mix(in srgb, var(--wb-card-bg) 44%, transparent) 0%,
+    color-mix(in srgb, var(--wb-main-bg, var(--wb-surface)) 66%, transparent) 0%,
     color-mix(in srgb, var(--wb-main-bg, var(--wb-surface)) 30%, transparent) 64%,
     color-mix(in srgb, var(--wb-main-bg, var(--wb-surface)) 10%, transparent) 84%,
     transparent 100%
   );
   -webkit-backdrop-filter: blur(42px) saturate(150%);
   backdrop-filter: blur(42px) saturate(150%);
-  -webkit-mask-image: radial-gradient(ellipse 112% 118% at 50% 0%, #000 0%, #000 66%, rgba(0, 0, 0, .88) 78%, transparent 100%);
-  mask-image: radial-gradient(ellipse 112% 118% at 50% 0%, #000 0%, #000 66%, rgba(0, 0, 0, .88) 78%, transparent 100%);
+  -webkit-mask-image: linear-gradient(to bottom, #000 0%, #000 66%, rgba(0, 0, 0, .88) 78%, transparent 100%);
+  mask-image: linear-gradient(to bottom, #000 0%, #000 66%, rgba(0, 0, 0, .88) 78%, transparent 100%);
 }
 html[data-theme="dark"] .wb-lib-commandbar::before {
-  background: linear-gradient(
-    to bottom,
-    color-mix(in srgb, var(--wb-card-bg) 30%, transparent) 0%,
-    color-mix(in srgb, var(--wb-main-bg, var(--wb-surface)) 20%, transparent) 64%,
-    color-mix(in srgb, var(--wb-main-bg, var(--wb-surface)) 7%, transparent) 84%,
-    transparent 100%
-  );
+  inset: 0 0 -10px;
+  background: color-mix(in srgb, var(--wb-main-bg, var(--wb-surface)) 96%, transparent);
   -webkit-backdrop-filter: blur(40px) saturate(138%);
   backdrop-filter: blur(40px) saturate(138%);
+  -webkit-mask-image: linear-gradient(to bottom, #000 0%, #000 84%, rgba(0, 0, 0, .94) 94%, transparent 100%);
+  mask-image: linear-gradient(to bottom, #000 0%, #000 84%, rgba(0, 0, 0, .94) 94%, transparent 100%);
 }
 .wb-workbench-filterbar .wb-workbench-searchbox {
   flex: 1 1 auto;
@@ -14605,6 +14565,226 @@ html[data-theme="dark"] .wb-lib-commandbar::before {
 @media (prefers-reduced-motion: reduce) {
   .wb-detail-accordion-panel,
   .wb-detail-accordion-trigger > svg { transition: none; }
+}
+
+/* Task details use the same inset glass inspector and animated accordion as
+   memory, knowledge, schedule and skill-learning details. */
+.workbench-grid.is-task-detail .workbench-main {
+  --wbc-shared-glass-height: calc(164px * var(--wb-ui-font-scale, 1));
+  --wbc-control-shadow:
+    0 1px 2px rgba(15, 23, 42, 0.028),
+    0 5px 14px rgba(15, 23, 42, 0.02);
+  position: relative;
+  isolation: isolate;
+}
+.workbench-grid.is-task-detail .workbench-main > .workbench-composer {
+  position: relative;
+  z-index: 24;
+}
+.workbench-grid.integrated-sidebars.is-task-detail .workbench-main {
+  border-right: 0;
+}
+.workbench-grid.integrated-sidebars.is-task-detail .wb-task-detail-shell {
+  border-right: 0;
+}
+.wb-task-detail-card {
+  width: 100%;
+  height: auto;
+  max-height: calc(100vh - 82px);
+}
+.wb-task-detail-tabs {
+  padding-block: 8px;
+}
+.wb-task-detail-head {
+  min-height: 42px;
+  padding-inline: 16px;
+  color: var(--wb-muted);
+}
+.wb-task-detail-tab-list {
+  flex: 0 1 auto;
+}
+.wb-task-detail-tab {
+  min-height: 44px;
+  font-size: calc(12px * var(--wb-ui-font-scale, 1));
+}
+.wb-task-detail-tab-icon svg {
+  width: 17px;
+  height: 17px;
+}
+.wb-task-detail-tab-panel.open {
+  flex: 0 1 auto;
+  max-height: calc(100vh - 330px);
+}
+.wb-task-detail-tab-panel:last-child.open {
+  border-bottom: 0;
+}
+.wb-task-detail-tab-panel .workbench-right-body {
+  flex: 1 1 auto;
+  min-height: 0;
+  padding: 0;
+  overscroll-behavior: contain;
+}
+.wb-task-detail-card .workbench-side-stack { gap: 0; }
+.wb-task-detail-card .workbench-side-section {
+  padding: 14px 16px;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  box-shadow: none;
+}
+.wb-task-detail-card .workbench-side-section + .workbench-side-section {
+  border-top: 1px solid color-mix(in srgb, var(--wb-line) 54%, transparent);
+}
+.wb-task-detail-card .workbench-side-section h3 {
+  margin-bottom: 10px;
+  font-size: calc(12.5px * var(--wb-ui-font-scale, 1));
+}
+.wb-task-detail-card .workbench-side-section p {
+  font-size: calc(12px * var(--wb-ui-font-scale, 1));
+}
+.wb-task-detail-card .wb-task-context-tab {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  align-content: start;
+  gap: 8px;
+  box-sizing: border-box;
+  padding: 10px 12px 12px;
+}
+.wb-task-detail-card .wb-task-context-tab > .workbench-side-section {
+  min-width: 0;
+  padding: 11px 12px;
+  border: 1px solid color-mix(in srgb, var(--wb-line-2) 56%, transparent);
+  border-radius: 12px;
+  background: color-mix(in srgb, var(--wb-card-bg) 56%, transparent);
+  box-shadow: inset 0 1px 0 color-mix(in srgb, #fff 5%, transparent);
+}
+.wb-task-detail-card .wb-task-context-tab > .workbench-side-section + .workbench-side-section {
+  border-top: 1px solid color-mix(in srgb, var(--wb-line-2) 56%, transparent);
+}
+.workbench-shell .wb-task-context-tab .workbench-side-section h3 {
+  margin-bottom: 8px;
+  color: var(--wb-text);
+  font-size: calc(12.5px * var(--wb-ui-font-scale, 1)) !important;
+  font-weight: 680;
+  letter-spacing: .01em;
+}
+.workbench-shell .wb-task-context-tab .workbench-side-section p {
+  font-size: calc(12px * var(--wb-ui-font-scale, 1)) !important;
+}
+.wb-task-overview-meta {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+  margin-bottom: 12px;
+}
+.wb-task-overview-meta .wb-kv {
+  min-width: 0;
+  min-height: 52px;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  gap: 4px;
+  padding: 8px 10px;
+  border: 1px solid color-mix(in srgb, var(--wb-line) 58%, transparent);
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--wb-text) 3%, transparent);
+}
+.wb-task-overview-meta .wb-kv span {
+  font-size: calc(10.5px * var(--wb-ui-font-scale, 1));
+}
+.wb-task-overview-meta .wb-kv b {
+  overflow: hidden;
+  color: var(--wb-text);
+  font-size: calc(12.5px * var(--wb-ui-font-scale, 1));
+  font-weight: 650;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.wb-task-context-goal {
+  color: var(--wb-text) !important;
+  font-size: calc(12.5px * var(--wb-ui-font-scale, 1)) !important;
+  line-height: 1.65 !important;
+}
+.wb-task-context-project .wb-agent-body {
+  margin-top: 0;
+  padding: 9px 10px;
+  border: 1px solid color-mix(in srgb, var(--wb-line) 52%, transparent);
+  border-radius: 9px;
+  background: color-mix(in srgb, var(--wb-text) 3%, transparent);
+  color: var(--wb-muted);
+  font-size: calc(12px * var(--wb-ui-font-scale, 1)) !important;
+  line-height: 1.65;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+.wb-task-context-project .wb-agent-body > :first-child { margin-top: 0; }
+.wb-task-context-project .wb-agent-body > :last-child { margin-bottom: 0; }
+.wb-task-context-constraints .wb-constraint-row {
+  margin-top: 6px;
+  padding: 8px 10px;
+  border: 0;
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--wb-text) 3%, transparent);
+}
+.wb-task-context-empty {
+  padding: 9px 10px;
+  border-radius: 9px;
+  background: color-mix(in srgb, var(--wb-text) 3%, transparent);
+  color: var(--wb-muted) !important;
+  line-height: 1.55 !important;
+}
+.wb-task-context-relations .wb-brief-row,
+.wb-task-context-dependencies .wb-brief-row,
+.wb-task-context-reflection .wb-brief-row {
+  padding-block: 6px;
+}
+@container (min-width: 430px) {
+  .wb-task-detail-card .wb-task-context-tab {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+  .wb-task-context-overview,
+  .wb-task-context-reflection,
+  .wb-task-context-project,
+  .wb-task-context-dependencies {
+    grid-column: 1 / -1;
+  }
+}
+.wb-task-tab-content {
+  padding: 12px 16px 14px;
+}
+.wb-task-tab-content > :first-child {
+  border-top: 0;
+}
+.wb-task-detail-card .wb-accept-toggle {
+  width: calc(100% + 16px);
+  margin-inline: -8px;
+  padding-inline: 8px;
+  border-radius: 10px;
+  transition: background 140ms ease;
+}
+.wb-task-detail-card .wb-accept-toggle:hover {
+  background: var(--wb-row-hover-bg);
+}
+.wb-task-artifact-list {
+  padding: 8px 12px 10px;
+}
+.wb-task-artifact-list .wb-task-artifact-download {
+  text-decoration: none;
+}
+.wb-task-artifact-empty {
+  margin: 0;
+  padding: 14px 4px 16px;
+  line-height: 1.55;
+}
+html[data-theme="dark"] .wb-task-detail-card {
+  background: color-mix(in srgb, var(--wb-card-bg) 82%, transparent);
+  border-color: color-mix(in srgb, var(--wb-line-2) 58%, transparent);
+}
+@container (max-width: 320px) {
+  .wb-task-detail-head,
+  .wb-task-detail-tab {
+    padding-inline: 14px;
+  }
 }
 @keyframes wb-floating-detail-in {
   from { opacity: 0; transform: translateY(-5px) scale(.985); }
@@ -17467,7 +17647,8 @@ body.wbc-resizing-side-agent .wbc-page.wbc-split-left .wbc-side-agent-split-moti
    It is rendered inside the split because the page-level L-shaped glass stops
    at the split boundary. The transcript can continue beneath it while the
    composer card remains on the clear foreground layer. */
-.wbc-conversation-split::after {
+.wbc-conversation-split::after,
+.workbench-grid.is-task-detail .workbench-main::after {
   content: "";
   position: absolute;
   z-index: 20;
@@ -21664,11 +21845,22 @@ button.wbc-attach-file:focus-visible {
 .wbc-voice-input.recording {
   background: color-mix(in srgb, var(--wb-red) 12%, transparent);
   color: var(--wb-red);
+  animation: wb-voice-command-pulse 1.4s ease-in-out infinite;
 }
 
+.wbc-voice-input.starting,
 .wbc-voice-input.transcribing {
   background: color-mix(in srgb, var(--wb-accent) 10%, transparent);
   color: var(--wb-accent);
+}
+
+.wbc-voice-input.starting:disabled,
+.wbc-voice-input.transcribing:disabled {
+  opacity: 1;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .wbc-voice-input.recording { animation: none; }
 }
 
 .wbc-composer-spacer {
@@ -22049,7 +22241,8 @@ html[data-theme="dark"] .wbc-model-button.active {
   pointer-events: auto;
 }
 
-.wbc-side-card > .wb-col-resizer.card-edge {
+.wbc-side-card > .wb-col-resizer.card-edge,
+.wb-floating-detail-card > .wb-col-resizer.card-edge {
   z-index: 30;
   top: 0;
   bottom: 0;
@@ -22061,7 +22254,11 @@ html[data-theme="dark"] .wbc-model-button.active {
 .wbc-side-card > .wb-col-resizer.card-edge::after,
 .wbc-side-card > .wb-col-resizer.card-edge:hover::after,
 body.wb-col-resize-hover .wbc-side-card > .wb-col-resizer.card-edge::after,
-body.wb-col-resizing .wbc-side-card > .wb-col-resizer.card-edge::after {
+body.wb-col-resizing .wbc-side-card > .wb-col-resizer.card-edge::after,
+.wb-floating-detail-card > .wb-col-resizer.card-edge::after,
+.wb-floating-detail-card > .wb-col-resizer.card-edge:hover::after,
+body.wb-col-resize-hover .wb-floating-detail-card > .wb-col-resizer.card-edge::after,
+body.wb-col-resizing .wb-floating-detail-card > .wb-col-resizer.card-edge::after {
   content: none;
   display: none;
 }
@@ -27535,7 +27732,7 @@ html[data-density="compact"] :where(.workbench-confirm-modal, .workbench-toast-h
   .workbench-task-main b,
   .workbench-task-status,
   .workbench-account-name,
-  .workbench-right-tabs button,
+  .wb-task-detail-tab,
   .workbench-side-section h3,
   .workbench-side-section p,
   .settings-overlay-tab,
@@ -30132,7 +30329,7 @@ html[data-density="compact"] .workbench-shell :where(.wb-budget-model-head, .wb-
     grid-template-columns: var(--wb-rail-w) minmax(0, 1fr);
   }
 
-  .workbench-grid.integrated-sidebars.is-task-detail > .workbench-right-panel {
+  .workbench-grid.integrated-sidebars.is-task-detail .workbench-right-panel {
     display: none;
   }
 }

@@ -17,6 +17,8 @@ def test_linux_packages_include_appimage_deb_and_rpm():
     assert ("deb", ("x64",)) in targets
     assert ("rpm", ("x64",)) in targets
     assert package["build"]["linux"]["artifactName"] == "Cyrene-${version}-x64.${ext}"
+    assert package["desktopName"] == "cyrene.desktop"
+    assert package["build"]["linux"]["syncDesktopName"] is True
     assert package["build"]["deb"]["afterInstall"] == "linux-after-install.sh"
     assert package["build"]["rpm"]["afterInstall"] == "linux-after-install.sh"
 
@@ -88,6 +90,24 @@ def test_linux_desktop_uses_software_rendering_and_reports_renderer_failures():
     assert "state.rootChildren < 1" in main
     assert "state.launchScreenPresent" in main
     assert "nonWhitePixels < 100" in main
+    window_options = main.split("const windowOptions = {", 1)[1].split(
+        "mainWindow = new BrowserWindow(windowOptions);", 1
+    )[0]
+    assert "if (isLinux)" in window_options
+    assert "const iconPath = getNotificationIconPath();" in window_options
+    assert "if (iconPath) windowOptions.icon = iconPath;" in window_options
+
+
+def test_linux_appimage_update_targets_the_image_instead_of_temporary_mount():
+    main = (ROOT / "electron" / "main.js").read_text(encoding="utf-8")
+
+    resolver = main.split("function getCurrentAppExecutablePath() {", 1)[1].split(
+        "\n}", 1
+    )[0]
+    assert "isLinux && process.env.APPIMAGE" in resolver
+    assert "path.resolve(process.env.APPIMAGE)" in resolver
+    assert "return app.getPath('exe');" in resolver
+    assert "CYRENE_APP_EXECUTABLE: getCurrentAppExecutablePath()," in main
 
 
 def test_linux_install_script_repairs_chromium_sandbox_permissions():

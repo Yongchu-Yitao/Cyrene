@@ -285,11 +285,15 @@ class ShellWakeService:
             },
         }
 
-    def reset_for_tests(self) -> None:
-        """Clear in-memory wake state (test helper)."""
+    def clear_pending(self) -> None:
+        """Discard all queued shell wake records while preserving dispatch wiring."""
         self._wakes.clear()
         self._by_shell.clear()
         self._pending_by_chat.clear()
+
+    def reset_for_tests(self) -> None:
+        """Clear in-memory wake state (test helper)."""
+        self.clear_pending()
         self._dispatcher = None
         self._is_busy = None
 

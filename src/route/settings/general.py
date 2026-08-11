@@ -723,6 +723,11 @@ def register_settings_routes(router: APIRouter, bot: Any, db_path: str) -> None:
                 }
             )
         write_env_keys(env_updates)
+        # Settings are live without a backend restart. Drop affinities and
+        # cooldowns derived from the previous configuration before the first
+        # conversation uses the newly saved model.
+        from cyrene.model_runtime.client import invalidate_model_configuration
+        invalidate_model_configuration()
         saved_secondary = get_secondary_model()
         sec_model = str(saved_secondary.get("model") or "").strip()
         ctx_limit = int(saved_secondary.get("ctx_limit") or 0)
@@ -1238,8 +1243,31 @@ def register_settings_routes(router: APIRouter, bot: Any, db_path: str) -> None:
         }
 
     @router.post("/api/settings/reset-data")
-    async def api_reset_data():
-        return await _reset_app_data()
+    async def api_reset_data(request: Request):
+        try:
+            body = await request.json()
+        except (ValueError, json.JSONDecodeError):
+            body = {}
+        if not isinstance(body, dict) or body.get("confirmation") != "RESET CYRENE DATA":
+            return JSONResponse(
+                {
+                    "error": "explicit reset confirmation is required",
+                    "code": "reset_confirmation_required",
+                },
+                status_code=400,
+            )
+        try:
+            return await _reset_app_data()
+        except Exception as exc:
+            logger.exception("Application data reset failed")
+            return JSONResponse(
+                {
+                    "error": "application data reset failed",
+                    "detail": str(exc) or exc.__class__.__name__,
+                    "code": "reset_failed",
+                },
+                status_code=500,
+            )
 
     @router.get("/api/settings/search")
     async def api_get_search():

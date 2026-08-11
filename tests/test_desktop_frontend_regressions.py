@@ -113,7 +113,13 @@ def test_calendar_expansion_uses_the_same_timezone_across_dst():
 
 @pytest.mark.parametrize(
     "filename",
-    ["settings-overlay.jsx", "workbench-schedule.jsx", "workbench-library.jsx"],
+    [
+        "settings-overlay.jsx",
+        "workbench-schedule.jsx",
+        "workbench-library.jsx",
+        "workbench.jsx",
+        "workbench-chat.jsx",
+    ],
 )
 def test_changed_frontend_sources_compile_with_esbuild(filename, tmp_path):
     esbuild = ROOT / "src" / "webui" / "node_modules" / ".bin" / "esbuild"

@@ -970,3 +970,46 @@ final result: passed
 - No visual iteration was possible. Browser-rendered evidence remains the only blocker; no actionable code-level P0/P1/P2 issue was found in the focused implementation review.
 
 final result: blocked
+
+---
+
+# Task Detail Inspector Design QA — 2026-08-12
+
+- Source visual truth: `/var/folders/zm/qgh_rgw903j0b9t01yg2l0mc0000gn/T/codex-clipboard-1235fde0-3220-4379-a106-5e1ffdb02d2d.png` (`626 × 1800 px`).
+- Artifact follow-up reference: `/var/folders/zm/qgh_rgw903j0b9t01yg2l0mc0000gn/T/codex-clipboard-12cb375f-68eb-4019-a64d-3261345c40a2.png` (`570 × 347 px`).
+- Acceptance-hover reference: `/var/folders/zm/qgh_rgw903j0b9t01yg2l0mc0000gn/T/codex-clipboard-cceb12a2-316a-4177-8399-9592f7147117.png` (`538 × 334 px`).
+- Repeated file-heading reference: `/var/folders/zm/qgh_rgw903j0b9t01yg2l0mc0000gn/T/codex-clipboard-ebca08d7-550a-4803-8e6d-766db9d69ecd.png` (`557 × 222 px`).
+- Task-card spacing defect reference: `/var/folders/zm/qgh_rgw903j0b9t01yg2l0mc0000gn/T/codex-clipboard-01d66b65-cf63-4a92-aea1-522057172092.png` (`734 × 1598 px`).
+- Knowledge-card geometry reference: `/var/folders/zm/qgh_rgw903j0b9t01yg2l0mc0000gn/T/codex-clipboard-8e6a77fa-d2b8-4c59-9e01-6057ffd4d119.png` (`700 × 1598 px`).
+- Context-layout defect reference: `/var/folders/zm/qgh_rgw903j0b9t01yg2l0mc0000gn/T/codex-clipboard-03bdac63-062f-4965-9c17-d3dfbf9e8969.png` (`504 × 956 px`).
+- Intended implementation state: dark-theme task details with the Context section expanded, plus the Artifacts section expanded in its empty state.
+- Implementation screenshot: unavailable.
+- CSS viewport, implementation pixels, and density normalization: unavailable because the in-app browser rejected `http://localhost:4242` with `ERR_BLOCKED_BY_CLIENT` before rendering; Chrome was not available as the permitted fallback.
+- Full-view comparison evidence: blocked; no browser-rendered task inspector could be captured.
+- Focused comparison evidence: blocked for the same reason.
+
+## Findings
+
+- [Blocked] Visual fidelity cannot be certified from browser evidence. The reference and rendered implementation could not be combined into the required comparison input.
+- Static implementation review confirms that the task inspector now uses the same inset floating-card and accordion classes as Memory, Knowledge, Schedule, and Skill Learning. The main/detail divider is removed, all four outer insets are equal, expanded rows stay transparent, and later rows remain below the expanded content.
+- The Artifacts body no longer repeats its section heading. Its rows reuse the Conversation panel's file-list structure, and the last expanded section removes the otherwise redundant bottom divider.
+- Files, Run Logs, Acceptance, and Artifacts now keep their labels only in the accordion row. Their expanded bodies begin directly with content or empty-state copy.
+- Acceptance-row hover uses the shared neutral row-hover token and rounded interaction target instead of the previous accent-purple slab.
+- Context uses a compact two-column Status/Priority summary, clearer goal hierarchy, lightweight constraint rows, and consistent section rhythm while preserving every existing task field.
+- Context now uses a responsive information-card grid: overview, project context, reflection, and step dependencies span the available width; constraints and task relations share a row when the inspector is widened and fall back to a single column when narrow. Long project paths wrap inside an inset surface, empty states use compact neutral surfaces, and opening a tab resets its scroll position so content is not clipped at the top.
+- Typography uses the shared 12 px detail-tab scale, existing product font stack, and existing icon assets. Colors, border, radius, shadow, blur, and dark glass surface are derived from the shared Workbench tokens. No new raster or placeholder asset is involved.
+- Copy is localized in English and Simplified Chinese through `task.side.detailPanel`.
+
+## Verification
+
+- Frontend production build: passed (`34` JSX entries compiled).
+- Focused task-detail, artifact, and JSX compilation regressions: `7 passed`.
+- Primary interactions and browser console errors: unavailable because the local preview did not render in the selected browser.
+
+## Comparison History
+
+- Earlier P1: the Task detail shell used direct-child layout selectors, but the mounted task surface is wrapped by `WorkbenchStableSurface`. The shell padding and divider-removal rules therefore never matched, leaving the panel visually attached to the right and bottom edges.
+- Fix: the task panel now opts into the same shared floating-detail shell as Knowledge, uses a `12 px` border-box inset on all four sides, and caps its card at the same `calc(100vh - 82px)` height. The resize target moved onto the card edge and no longer draws a separate full-height divider.
+- Browser-rendered comparison remains blocked by the local preview restriction; the updated selector and shared-class path are covered by focused regression checks.
+
+final result: blocked

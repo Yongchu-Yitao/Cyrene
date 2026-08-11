@@ -293,6 +293,7 @@ def test_integration_settings_routes_hide_secrets_and_probe_drafts(monkeypatch, 
 def test_settings_ui_keeps_zotero_in_general_and_embedding_in_models():
     root = Path(__file__).resolve().parent.parent
     source = (root / "src" / "webui" / "frontend" / "settings-overlay.jsx").read_text(encoding="utf-8")
+    styles = (root / "src" / "webui" / "frontend" / "workbench.css").read_text(encoding="utf-8")
     translations = (root / "src" / "webui" / "frontend" / "workbench-i18n.jsx").read_text(encoding="utf-8")
 
     assert 'settingsFetch("/api/settings/integrations")' in source
@@ -314,6 +315,10 @@ def test_settings_ui_keeps_zotero_in_general_and_embedding_in_models():
     assert 'React.createElement(EmbeddingSettingsSection, {' in models_panel
     assert 'settings.localModels' in models_panel
     assert 'settings.localModelOptional' in models_panel
+    assert 'className: "wb-local-model-icon is-" + kind' in models_panel
+    for kind in ("embedding", "ocr", "asr", "tts"):
+        assert f".wb-local-model-icon.is-{kind}" in styles
+    assert "var(--wb-local-model-icon-color)" in styles
     assert '!coverage.configured' in models_panel
     assert 'saveAllModels' in models_panel
     assert 'settings.reembedPromptTitle' in models_panel

@@ -92,6 +92,30 @@ async def shutdown_background_tasks() -> None:
     await get_codex_provider().close()
 
 
+async def reset_runtime_state() -> None:
+    """Drop process-local model state after settings are factory-reset.
+
+    A data reset used to replace the persisted model configuration while the
+    HTTP pools, endpoint affinity, per-session preferences, and failure
+    cooldowns from the old configuration remained alive.  The first request
+    after configuring a new model could therefore use stale state until the
+    process was restarted.  Keep this boundary explicit so a reset behaves
+    like a fresh process without requiring one.
+    """
+    await shutdown_background_tasks()
+    invalidate_model_configuration()
+
+
+def invalidate_model_configuration() -> None:
+    """Force the next request to resolve the just-persisted model settings."""
+    global _last_success_cache, _session_model_preference_cache
+
+    _last_success_cache = None
+    _session_model_preference_cache = None
+    _candidate_cooldowns.clear()
+    _published_fallback_notices.clear()
+
+
 def _get_http_client(timeout: float) -> tuple[httpx.AsyncClient, str, bool]:
     loop = asyncio.get_running_loop()
     timeout_key = float(timeout)

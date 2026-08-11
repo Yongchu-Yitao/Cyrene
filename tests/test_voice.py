@@ -155,9 +155,10 @@ def test_voice_controls_follow_existing_chat_layout():
     assert "/api/voice/settings" in settings
     assert "auto_send_after_asr" in composer
     assert "auto_stop_on_silence" in composer
-    assert "payload.silence_only === true" in composer
-    assert "if (silenceOnly) return false" in composer
-    assert "function cleanVoiceTranscript" in composer
+    assert "wbcTranscribeVoiceBlob(blob)" in composer
+    assert "payload.silence_only === true" in chat
+    assert "if (silenceOnly) return false" in chat
+    assert "function wbcCleanVoiceTranscript" in chat
     voice_start_index = composer.index('WbcVoice.stop();\n    setVoicePhase("starting")')
     recorder_start_index = composer.index("wbcStartVoiceRecorder", voice_start_index)
     assert voice_start_index < recorder_start_index
@@ -203,6 +204,34 @@ def test_voice_controls_follow_existing_chat_layout():
     assert 'wbcT("topbar.voiceCommandRecognizingNotice"' in chat
     assert 'wbcT("topbar.voiceCommandComplete"' in chat
     assert 'wbcT("topbar.voiceCommandNoSpeech"' in chat
+    assert "function wbcCreateComposerVoiceFeedback()" in chat
+    assert 'wbcT("topbar.voiceCommandStartingNotice"' in chat
+    assert 'wbcT("topbar.voiceCommandListening"' in chat
+    assert 'wbcT("topbar.voiceCommandRecognizingNotice"' in chat
+    assert 'wbcT("workbenchChat.voiceInputComplete"' in chat
+    assert "voiceFeedbackRef.current.starting();" in composer
+    assert "voiceFeedbackRef.current.listening();" in composer
+    assert "voiceFeedbackRef.current.transcribing();" in composer
+    assert "voiceFeedbackRef.current.noSpeech();" in composer
+    assert "voiceFeedbackRef.current.complete();" in composer
+    assert 'aria-pressed={voicePhase === "recording"}' in composer
+    assert 'aria-busy={voicePhase === "starting" || voicePhase === "transcribing"}' in composer
+
+    task_composer = shell.split("function TaskComposer(", 1)[1].split(
+        "function ComposerDisclaimer", 1
+    )[0]
+    assert "wbcCreateComposerVoiceFeedback()" in task_composer
+    assert "voiceFeedbackRef.current.starting();" in task_composer
+    assert "voiceFeedbackRef.current.listening();" in task_composer
+    assert "voiceFeedbackRef.current.transcribing();" in task_composer
+    assert "voiceFeedbackRef.current.noSpeech();" in task_composer
+    assert "voiceFeedbackRef.current.complete();" in task_composer
+
+    styles = (root / "src/webui/frontend/workbench.css").read_text(encoding="utf-8")
+    composer_recording_css = styles.split(".wbc-voice-input.recording {", 1)[1].split("}", 1)[0]
+    assert "animation: wb-voice-command-pulse 1.4s ease-in-out infinite;" in composer_recording_css
+    assert ".wbc-voice-input.starting," in styles
+    assert ".wbc-voice-input.transcribing:disabled" in styles
 
     electron_main = (root / "electron/main.js").read_text(encoding="utf-8")
     assert "autoplay-policy" in electron_main

@@ -8665,11 +8665,18 @@ function TaskComposer({
   var [modelOpen, setModelOpen] = useWorkbenchState(false);
   var [modelPanel, setModelPanel] = useWorkbenchState("root");
   var [uploading, setUploading] = useWorkbenchState(false);
+  var [voiceSnapshot, setVoiceSnapshot] = useWorkbenchState({ status: {}, activeKey: "" });
+  var [voicePhase, setVoicePhase] = useWorkbenchState("");
   var taRef = useWorkbenchRef(null);
   var draftRef = useWorkbenchRef(draft);
   var fileRef = useWorkbenchRef(null);
   var modelPickerRef = useWorkbenchRef(null);
   var uploadCountRef = useWorkbenchRef(0);
+  var voiceRecorderRef = useWorkbenchRef(null);
+  var voiceSessionIdRef = useWorkbenchRef(String(session.id || ""));
+  var voiceFeedbackRef = useWorkbenchRef(null);
+  var ComposerBrowserIcon = window.CyreneUI.require("browser").Icon;
+  if (!voiceFeedbackRef.current) voiceFeedbackRef.current = wbcCreateComposerVoiceFeedback();
   var status = String(session.status || "idle");
   var running = status === "running";
   // No plan yet → the composer is a free chat: every send goes through the
@@ -8679,6 +8686,21 @@ function TaskComposer({
   attachments = attachments || [];
 
   useWorkbenchEffect(function () { draftRef.current = draft; }, [draft]);
+
+  useWorkbenchEffect(function () {
+    return WbcVoice.subscribe(setVoiceSnapshot);
+  }, []);
+
+  useWorkbenchEffect(function () {
+    voiceSessionIdRef.current = String(session.id || "");
+    setVoicePhase("");
+    return function () {
+      var recorder = voiceRecorderRef.current;
+      voiceRecorderRef.current = null;
+      voiceFeedbackRef.current.dismiss();
+      if (recorder && typeof recorder.stop === "function") recorder.stop().catch(function () {});
+    };
+  }, [session.id]);
 
   useWorkbenchEffect(function () {
     function onFocus() { if (taRef.current) taRef.current.focus(); }
@@ -8729,9 +8751,9 @@ function TaskComposer({
     });
   }
 
-  function submit() {
+  function submit(overrideText) {
     if (running) { controller.interrupt(); return; }
-    var text = draft.trim();
+    var text = typeof overrideText === "string" ? overrideText.trim() : draft.trim();
     if ((!text && attachments.length === 0) || controller.busy) return;
     // Rule 2 — keep the agent inside the task only once a plan is committed.
     // Before that the task is still a free conversation, so don't gate it.
@@ -8772,6 +8794,79 @@ function TaskComposer({
   }
 
   function pickFiles() { if (fileRef.current) fileRef.current.click(); }
+
+  function showVoiceError(error) {
+    voiceFeedbackRef.current.error(error);
+  }
+
+  function transcribeVoiceBlob(blob) {
+    return wbcTranscribeVoiceBlob(blob).then(function (transcript) {
+      if (transcript === false) {
+        voiceFeedbackRef.current.noSpeech();
+        return false;
+      }
+      var current = String(draftRef.current || "");
+      var combined = current && !/\s$/.test(current) ? current + " " + transcript : current + transcript;
+      setDraft(combined);
+      draftRef.current = combined;
+      voiceFeedbackRef.current.complete();
+      if (voiceSnapshot.status.auto_send_after_asr === true) {
+        submit(combined);
+        return true;
+      }
+      requestAnimationFrame(function () {
+        syncHeight();
+        if (taRef.current) taRef.current.focus();
+      });
+      return true;
+    });
+  }
+
+  function finishVoiceInput(recorder) {
+    if (!recorder || voiceRecorderRef.current !== recorder) return;
+    voiceRecorderRef.current = null;
+    setVoicePhase("transcribing");
+    voiceFeedbackRef.current.transcribing();
+    recorder.stop()
+      .then(transcribeVoiceBlob)
+      .catch(showVoiceError)
+      .finally(function () { setVoicePhase(""); });
+  }
+
+  function toggleVoiceInput() {
+    if (disabled || voicePhase === "starting" || voicePhase === "transcribing") return;
+    if (voicePhase === "recording") {
+      var recorder = voiceRecorderRef.current;
+      if (!recorder) {
+        setVoicePhase("");
+        return;
+      }
+      finishVoiceInput(recorder);
+      return;
+    }
+    WbcVoice.stop();
+    setVoicePhase("starting");
+    voiceFeedbackRef.current.starting();
+    var startedForSession = String(session.id || "");
+    wbcStartVoiceRecorder({
+      autoStopOnSilence: voiceSnapshot.status.auto_stop_on_silence !== false,
+      onSilence: finishVoiceInput,
+    })
+      .then(function (recorder) {
+        if (voiceSessionIdRef.current !== startedForSession) {
+          recorder.stop().catch(function () {});
+          return;
+        }
+        voiceRecorderRef.current = recorder;
+        setVoicePhase("recording");
+        voiceFeedbackRef.current.listening();
+      })
+      .catch(function (error) {
+        setVoicePhase("");
+        showVoiceError(error);
+      });
+  }
+
   function addFiles(files) {
     if (!files || !files.length) return;
     uploadCountRef.current += 1;
@@ -9077,6 +9172,32 @@ function TaskComposer({
               )}
             </span>
           ) : null}
+          {voiceSnapshot.status.asr_ready ? (
+            <button
+              type="button"
+              className={"wb-composer-icon wbc-voice-input" + (voicePhase ? " " + voicePhase : "")}
+              onClick={toggleVoiceInput}
+              disabled={disabled || voicePhase === "starting" || voicePhase === "transcribing"}
+              title={voicePhase === "recording"
+                ? (voiceSnapshot.status.auto_stop_on_silence !== false
+                    ? wbT("workbenchChat.voiceInputAutoStop", "Recording · pauses automatically start recognition")
+                    : wbT("workbenchChat.voiceInputStop", "Stop recording"))
+                : voicePhase === "starting"
+                  ? wbT("workbenchChat.voiceInputStarting", "Accessing microphone…")
+                  : voicePhase === "transcribing"
+                  ? wbT("workbenchChat.voiceTranscribing", "Recognizing speech…")
+                  : wbT("workbenchChat.voiceInputStart", "Voice input")}
+              aria-label={voicePhase === "recording"
+                ? wbT("workbenchChat.voiceInputStop", "Stop recording")
+                : wbT("workbenchChat.voiceInputStart", "Voice input")}
+              aria-pressed={voicePhase === "recording"}
+              aria-busy={voicePhase === "starting" || voicePhase === "transcribing"}
+            >
+              {voicePhase === "starting" || voicePhase === "transcribing"
+                ? <span className="wb-spinner small" />
+                : ComposerBrowserIcon ? <ComposerBrowserIcon name="microphone" size={16} /> : null}
+            </button>
+          ) : null}
           <button
             type="button"
             className={"wb-composer-send" + (running ? " stop" : "")}
@@ -9101,6 +9222,7 @@ function ComposerDisclaimer() {
 }
 
 function RightContextPanel({ project, session, expandedStepId, tab, onTabChange, onRefresh }) {
+  var activeBodyRef = useWorkbenchRef(null);
   var steps = session && Array.isArray(session.plan) ? session.plan : [];
   var activeStep = steps.find(function (step) { return step.id === expandedStepId; }) || null;
   var isInit = !!(session && session.kind === "init");
@@ -9113,23 +9235,76 @@ function RightContextPanel({ project, session, expandedStepId, tab, onTabChange,
     { id: "acceptance", label: wbT("task.side.acceptance", "Acceptance") },
     { id: "artifacts", label: wbT("workbenchChat.artifacts", "Artifacts") },
   ];
+  useWorkbenchEffect(function () {
+    if (activeBodyRef.current) activeBodyRef.current.scrollTop = 0;
+  }, [tab, session && session.id]);
   if (!session) {
-    return <aside className="workbench-right-panel"><WbColResizer /><div className="workbench-right-body"><p className="workbench-muted">{wbT("task.noTaskSelected", "Select a task.")}</p></div></aside>;
+    return (
+      <aside className="workbench-right-panel wb-floating-detail-shell wb-task-detail-shell">
+        <div className="wb-floating-detail-card wb-task-detail-card empty">
+          <WbColResizer cardEdge />
+          <div className="wb-detail-empty-state">
+            {ICONS.target}
+            <p>{wbT("task.noTaskSelected", "Select a task.")}</p>
+          </div>
+        </div>
+      </aside>
+    );
+  }
+  var tabIcons = {
+    context: ICONS.target,
+    files: ICONS.attach,
+    logs: ICONS.cmdReflect,
+    acceptance: ICONS.check,
+    artifacts: ICONS.cmdCode,
+  };
+  function tabBody(id) {
+    if (id === "context") return <ContextTab project={project} session={session} activeStep={activeStep} />;
+    if (id === "files") return <FilesTab session={session} activeStep={activeStep} />;
+    if (id === "logs") return <LogsTab session={session} />;
+    if (id === "acceptance") return <AcceptanceTab session={session} onRefresh={onRefresh} />;
+    if (id === "artifacts") return <ArtifactsTab session={session} />;
+    return null;
   }
   return (
-    <aside className="workbench-right-panel">
-      <WbColResizer />
-      <div className="workbench-right-tabs">
-        {tabs.map(function (item) {
-          return <button key={item.id} type="button" className={tab === item.id ? "active" : ""} onClick={function () { onTabChange(item.id); }}>{item.label}</button>;
-        })}
-      </div>
-      <div className="workbench-right-body">
-        {tab === "context" && <ContextTab project={project} session={session} activeStep={activeStep} />}
-        {tab === "files" && <FilesTab session={session} activeStep={activeStep} />}
-        {tab === "logs" && <LogsTab session={session} />}
-        {tab === "acceptance" && <AcceptanceTab session={session} onRefresh={onRefresh} />}
-        {tab === "artifacts" && <ArtifactsTab session={session} />}
+    <aside className="workbench-right-panel wb-floating-detail-shell wb-task-detail-shell" aria-label={wbT("task.side.detailPanel", "Task details")}>
+      <div className="wb-floating-detail-card wb-task-detail-card">
+        <WbColResizer cardEdge />
+        <nav className="wb-detail-accordion wb-task-detail-tabs" aria-label={wbT("task.side.detailPanel", "Task details")}>
+          <div className="wb-detail-accordion-head wb-task-detail-head">
+            <span>{wbT("task.side.detailPanel", "Task details")}</span>
+          </div>
+          <div className="wb-detail-accordion-list wb-task-detail-tab-list">
+            {tabs.map(function (item) {
+              var expanded = tab === item.id;
+              var panelId = "wb-task-detail-panel-" + item.id;
+              return (
+                <React.Fragment key={item.id}>
+                  <button
+                    type="button"
+                    className={"wb-detail-accordion-trigger wb-task-detail-tab" + (expanded ? " active" : "")}
+                    aria-expanded={expanded}
+                    aria-controls={panelId}
+                    onClick={function () { onTabChange(expanded ? "" : item.id); }}
+                  >
+                    <span className="wb-detail-accordion-icon wb-task-detail-tab-icon" aria-hidden="true">{tabIcons[item.id]}</span>
+                    <span>{item.label}</span>
+                    {ICONS.chevronRight}
+                  </button>
+                  <div
+                    id={panelId}
+                    className={"wb-detail-accordion-panel wb-task-detail-tab-panel" + (expanded ? " open" : "")}
+                    aria-hidden={!expanded}
+                  >
+                    <div className="wb-detail-accordion-panel-inner">
+                      <div ref={expanded ? activeBodyRef : null} className="workbench-right-body">{tabBody(item.id)}</div>
+                    </div>
+                  </div>
+                </React.Fragment>
+              );
+            })}
+          </div>
+        </nav>
       </div>
     </aside>
   );
@@ -9146,7 +9321,7 @@ function ReflectionSection({ session }) {
     return <ul className="wb-bullet">{arr.map(function (x, i) { return <li key={i}>{String(x)}</li>; })}</ul>;
   }
   return (
-    <SideSection title={wbT("task.reflection.title", "Deep reflection")}>
+    <SideSection title={wbT("task.reflection.title", "Deep reflection")} className="wb-task-context-reflection">
       {packet.goal_gap && <div className="wb-brief-row"><label>{wbT("task.reflection.goalGap", "Goal gap")}</label><p>{String(packet.goal_gap)}</p></div>}
       {Array.isArray(packet.excluded_paths) && packet.excluded_paths.length > 0 && (
         <div className="wb-brief-row"><label>{wbT("task.reflection.excludedPaths", "Avoid")}</label>{bullets(packet.excluded_paths)}</div>
@@ -9190,39 +9365,41 @@ function ContextTab({ project, session, activeStep }) {
     );
   }
   return (
-    <div className="workbench-side-stack">
-      <SideSection title={wbT("task.side.overview", "Task overview")}>
-        <div className="wb-kv"><span>{wbT("workbenchChat.statusLabel", "Status")}</span><b>{WorkbenchModel.statusText(session.status)}</b></div>
-        {!isInit && <div className="wb-kv"><span>{wbT("create.task.priority", "Priority")}</span><b>{priorityText(session.priority)}</b></div>}
-        <p>{wbRealGoal(session) || wbT("task.noGoal", "No task goal yet")}</p>
+    <div className="workbench-side-stack wb-task-context-tab">
+      <SideSection title={wbT("task.side.overview", "Task overview")} className="wb-task-context-overview">
+        <div className="wb-task-overview-meta">
+          <div className="wb-kv"><span>{wbT("workbenchChat.statusLabel", "Status")}</span><b>{WorkbenchModel.statusText(session.status)}</b></div>
+          {!isInit && <div className="wb-kv"><span>{wbT("create.task.priority", "Priority")}</span><b>{priorityText(session.priority)}</b></div>}
+        </div>
+        <p className="wb-task-context-goal">{wbRealGoal(session) || wbT("task.noGoal", "No task goal yet")}</p>
       </SideSection>
       <ReflectionSection session={session} />
-      <SideSection title={wbT("task.side.projectContext", "Project context")}>
+      <SideSection title={wbT("task.side.projectContext", "Project context")} className="wb-task-context-project">
         {project && project.context && project.context.summary && !isInit && <div className="wb-agent-body markdown" dangerouslySetInnerHTML={{ __html: wbRenderMarkdown(project.context.summary) }} />}
       </SideSection>
-      <SideSection title={wbT("task.side.constraintsCount", "Constraints ({count})", { count: constraints.length })}>
+      <SideSection title={wbT("task.side.constraintsCount", "Constraints ({count})", { count: constraints.length })} className="wb-task-context-constraints">
         {constraints.length
           ? constraints.map(function (item, i) { return <div className="workbench-check wb-constraint-row" key={i}><span className="workbench-status-dot amber"></span><span className="wb-constraint-text">{item}</span></div>; })
-          : <p className="workbench-muted">{wbT("task.noConstraints", "No constraints yet. Phrases like \"do not\" or \"only\" in the task are recognized as constraints automatically.")}</p>}
+          : <p className="workbench-muted wb-task-context-empty">{wbT("task.noConstraints", "No constraints yet. Phrases like \"do not\" or \"only\" in the task are recognized as constraints automatically.")}</p>}
       </SideSection>
       {isInit && window.CyreneUI.require("create").InitProgress ? (
         <SideSection title={wbT("init.progress.title", "Initialization progress")}>
           {React.createElement(window.CyreneUI.require("create").InitProgress, { session: session })}
         </SideSection>
       ) : (
-        <SideSection title={wbT("task.side.taskRelations", "Task relations")}>
+        <SideSection title={wbT("task.side.taskRelations", "Task relations")} className="wb-task-context-relations">
           {parentSession ? (
             <div className="wb-brief-row">
               <label>{wbT("task.followUpSource", "Source task")}</label>
               <p>{parentSession.title || wbT("task.thisTask", "this task")}</p>
             </div>
           ) : (
-            <p className="workbench-muted">{wbT("task.noDependencies", "No dependent tasks yet.")}</p>
+            <p className="workbench-muted wb-task-context-empty">{wbT("task.noDependencies", "No dependent tasks yet.")}</p>
           )}
         </SideSection>
       )}
       {!isInit && (
-        <SideSection title={wbT("task.side.stepDependencies", "Step dependencies")}>
+        <SideSection title={wbT("task.side.stepDependencies", "Step dependencies")} className="wb-task-context-dependencies">
           {activeStep ? (
             <div className="wb-step-dependency-side">
               <div className="wb-brief-row">
@@ -9243,7 +9420,7 @@ function ContextTab({ project, session, activeStep }) {
               </div>
             </div>
           ) : (
-            <p className="workbench-muted">
+            <p className="workbench-muted wb-task-context-empty">
               {dependencyCount
                 ? wbT("task.plan.dependencySummary", "{count} dependencies. Select a step to inspect them.", { count: dependencyCount })
                 : wbT("task.noDependencies", "No dependent tasks yet.")}
@@ -9308,44 +9485,42 @@ function FilesTab({ session, activeStep }) {
       });
   }
   return (
-    <div className="workbench-side-stack">
-      <SideSection title={wbT("task.side.fileChangesCount", "File changes ({count})", { count: files.length })}>
-        {files.length ? files.map(function (file, i) {
-          var path = file.path || file.name || "";
-          var selected = selectedFile && String(selectedFile.path || selectedFile.name || "") === String(path);
-          return (
-            <div
-              className={"workbench-file-row wb-file-diff-card" + (selected ? " active" : "")}
-              key={file.id || file.path || file.name || i}
+    <div className="workbench-side-stack wb-task-tab-content">
+      {files.length ? files.map(function (file, i) {
+        var path = file.path || file.name || "";
+        var selected = selectedFile && String(selectedFile.path || selectedFile.name || "") === String(path);
+        return (
+          <div
+            className={"workbench-file-row wb-file-diff-card" + (selected ? " active" : "")}
+            key={file.id || file.path || file.name || i}
+          >
+            <button
+              type="button"
+              className="wb-file-diff-trigger"
+              onClick={function () { openDiff(file); }}
+              title={selected ? wbT("task.files.collapseDiff", "Collapse file diff") : wbT("task.files.viewDiff", "View file diff")}
             >
-              <button
-                type="button"
-                className="wb-file-diff-trigger"
-                onClick={function () { openDiff(file); }}
-                title={selected ? wbT("task.files.collapseDiff", "Collapse file diff") : wbT("task.files.viewDiff", "View file diff")}
-              >
-                <span>{path}</span>
-                <small>{file.status || file.changeType || file.type || ""}</small>
-              </button>
-              {selected && (
-                <div className="wb-file-diff-inline">
-                  {diffState.loading ? (
-                    <p className="workbench-muted">{wbT("task.files.loadingDiff", "Loading diff...")}</p>
-                  ) : diffState.error ? (
-                    <p className="workbench-muted">{diffState.error}</p>
-                  ) : window.CyreneUI.require("diff").Panel ? (
-                    <div className="wb-file-diff-panel">
-                      {React.createElement(window.CyreneUI.require("diff").Panel, { diff: diffState.diff, mode: "text" })}
-                    </div>
-                  ) : (
-                    <pre className="wb-file-diff-fallback">{diffState.diff}</pre>
-                  )}
-                </div>
-              )}
-            </div>
-          );
-        }) : <p className="workbench-muted">{wbT("task.files.empty", "No file changes recorded for this task yet.")}</p>}
-      </SideSection>
+              <span>{path}</span>
+              <small>{file.status || file.changeType || file.type || ""}</small>
+            </button>
+            {selected && (
+              <div className="wb-file-diff-inline">
+                {diffState.loading ? (
+                  <p className="workbench-muted">{wbT("task.files.loadingDiff", "Loading diff...")}</p>
+                ) : diffState.error ? (
+                  <p className="workbench-muted">{diffState.error}</p>
+                ) : window.CyreneUI.require("diff").Panel ? (
+                  <div className="wb-file-diff-panel">
+                    {React.createElement(window.CyreneUI.require("diff").Panel, { diff: diffState.diff, mode: "text" })}
+                  </div>
+                ) : (
+                  <pre className="wb-file-diff-fallback">{diffState.diff}</pre>
+                )}
+              </div>
+            )}
+          </div>
+        );
+      }) : <p className="workbench-muted">{wbT("task.files.empty", "No file changes recorded for this task yet.")}</p>}
     </div>
   );
 }
@@ -9353,9 +9528,8 @@ function FilesTab({ session, activeStep }) {
 function LogsTab({ session }) {
   var events = session && Array.isArray(session.events) ? session.events : [];
   return (
-    <div className="workbench-side-stack">
-      <SideSection title={wbT("task.side.runLogsCount", "Run logs ({count})", { count: events.length })}>
-        {events.length ? events.slice().reverse().slice(0, 60).map(function (event, i) {
+    <div className="workbench-side-stack wb-task-tab-content">
+      {events.length ? events.slice().reverse().slice(0, 60).map(function (event, i) {
           if (event.type === "ToolCallEvent") {
             return (
               <div className="workbench-log-row wb-log-tool" key={event.id || i}>
@@ -9376,8 +9550,7 @@ function LogsTab({ session }) {
           }
           var logBody = event.body || (event.stepCount != null ? wbT("task.logs.stepCount", "Steps {count}", { count: event.stepCount }) : "");
           return <div className="workbench-log-row" key={event.id || i}><time>{WorkbenchModel.formatTime(event.createdAt)}</time><span>{WorkbenchModel.eventLabel(event.type)}</span>{logBody && <div className="wb-agent-body markdown wb-log-body" dangerouslySetInnerHTML={{ __html: wbRenderMarkdown(logBody) }} />}</div>;
-        }) : <p className="workbench-muted">{wbT("task.logs.empty", "No run logs yet.")}</p>}
-      </SideSection>
+      }) : <p className="workbench-muted">{wbT("task.logs.empty", "No run logs yet.")}</p>}
     </div>
   );
 }
@@ -9388,7 +9561,6 @@ function AcceptanceTab({ session, onRefresh }) {
   var acceptanceFailure = hasAcceptanceFailure(session);
   var [editing, setEditing] = useWorkbenchState(acceptanceFailure);
   var [draft, setDraft] = useWorkbenchState(items.map(function (item) { return String((item && item.text) || ""); }));
-  var passed = items.filter(function (a) { return a.status === "passed" || a.status === "done"; }).length;
   useWorkbenchEffect(function () {
     setDraft(items.map(function (item) { return String((item && item.text) || ""); }));
     if (acceptanceFailure) setEditing(true);
@@ -9439,8 +9611,7 @@ function AcceptanceTab({ session, onRefresh }) {
     setEditing(false);
   }
   return (
-    <div className="workbench-side-stack">
-      <SideSection title={items.length ? wbT("task.side.acceptanceCount", "Acceptance criteria ({passed}/{count})", { passed: passed, count: items.length }) : wbT("task.field.acceptance", "Acceptance criteria")}>
+    <div className="workbench-side-stack wb-task-tab-content">
         {items.length ? (
           <React.Fragment>
             {acceptanceFailure && (
@@ -9488,7 +9659,6 @@ function AcceptanceTab({ session, onRefresh }) {
             <button type="button" className="wb-btn ghost" disabled={busy} onClick={generate}>{busy ? wbT("init.generating", "Generating...") : wbT("task.acceptance.generate", "Ask Agent to generate acceptance criteria")}</button>
           </div>
         )}
-      </SideSection>
     </div>
   );
 }
@@ -9496,47 +9666,39 @@ function AcceptanceTab({ session, onRefresh }) {
 function ArtifactsTab({ session }) {
   var artifacts = WorkbenchModel.ensureArtifacts(session);
   return (
-    <div className="workbench-side-stack">
-      <SideSection title={wbT("task.side.artifactsCount", "Artifacts ({count})", { count: artifacts.length })}>
-        {artifacts.length ? artifacts.map(function (artifact, i) {
-          var downloadUrl = "/api/task-sessions/" + encodeURIComponent(session.id) + "/artifacts/" + encodeURIComponent(artifact.id) + "/download";
-          var artifactPath = String(artifact.path || "").trim();
-          return (
-            <a
-              className="workbench-artifact-row wb-artifact-download"
-              href={downloadUrl}
-              download={artifact.name || true}
-              title={wbT("task.artifact.download", "Download {name}", { name: artifact.name || "" })}
-              key={artifact.id || i}
-            >
-              <span className="wb-artifact-file-icon" aria-hidden="true">
-                <svg viewBox="0 0 24 24">
-                  <path d="M7 3.75h6.4L18 8.35v11.9H7z"></path>
-                  <path d="M13.25 3.9v4.7h4.7"></path>
-                </svg>
-              </span>
-              <span className="wb-artifact-file-copy">
-                <b>{artifact.name}</b>
-                {artifactPath && artifactPath !== artifact.name ? <small>{artifactPath}</small> : null}
-              </span>
-              <span className="wb-artifact-download-icon" aria-hidden="true">
-                <svg viewBox="0 0 24 24">
-                  <path d="M12 4v11"></path>
-                  <path d="m8 11 4 4 4-4"></path>
-                  <path d="M5 19h14"></path>
-                </svg>
-              </span>
-            </a>
-          );
-        }) : <p className="workbench-muted">{wbT("task.artifacts.empty", "No artifacts generated for this task yet.")}</p>}
-      </SideSection>
+    <div className="wbc-artifact-list wb-task-artifact-list">
+      {artifacts.length ? artifacts.map(function (artifact, i) {
+        var downloadUrl = "/api/task-sessions/" + encodeURIComponent(session.id) + "/artifacts/" + encodeURIComponent(artifact.id) + "/download";
+        var artifactPath = String(artifact.path || "").trim();
+        return (
+          <a
+            className="wbc-artifact-list-row wb-task-artifact-download"
+            href={downloadUrl}
+            download={artifact.name || true}
+            title={wbT("task.artifact.download", "Download {name}", { name: artifact.name || "" })}
+            key={artifact.id || i}
+          >
+            <span className="wbc-artifact-list-icon" aria-hidden="true">
+              <svg viewBox="0 0 24 24">
+                <path d="M7 3.75h6.4L18 8.35v11.9H7z"></path>
+                <path d="M13.25 3.9v4.7h4.7"></path>
+              </svg>
+            </span>
+            <span className="wbc-artifact-list-copy">
+              <b>{artifact.name}</b>
+              {artifactPath && artifactPath !== artifact.name ? <small>{artifactPath}</small> : null}
+            </span>
+            <span className="wbc-artifact-list-chevron" aria-hidden="true">{ICONS.chevronRight}</span>
+          </a>
+        );
+      }) : <p className="workbench-muted wb-task-artifact-empty">{wbT("task.artifacts.empty", "No artifacts generated for this task yet.")}</p>}
     </div>
   );
 }
 
-function SideSection({ title, children }) {
+function SideSection({ title, children, className }) {
   return (
-    <section className="workbench-side-section">
+    <section className={"workbench-side-section" + (className ? " " + className : "")}>
       <h3>{title}</h3>
       {children}
     </section>
