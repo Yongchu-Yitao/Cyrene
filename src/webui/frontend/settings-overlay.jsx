@@ -93,7 +93,7 @@ async function readSettingsResponse(response) {
 }
 
 async function settingsFetch(input, init) {
-  var response = await window.fetch(input, init);
+  var response = await globalThis.fetch(input, init);
   if (response.ok) return response;
   var payload = {};
   try {

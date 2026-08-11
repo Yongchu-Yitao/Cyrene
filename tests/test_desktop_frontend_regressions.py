@@ -36,7 +36,7 @@ def test_electron_auth_header_is_limited_to_the_discovered_backend_port():
 def test_settings_requests_share_http_status_enforcement():
     source = _source(FRONTEND / "settings-overlay.jsx")
 
-    assert source.count("window.fetch(") == 1
+    assert source.count("globalThis.fetch(") == 1
     assert not re.search(r"(?<![.A-Za-z0-9_])fetch\(", source)
     assert "if (response.ok) return response;" in source
     assert "response.clone().json()" in source
