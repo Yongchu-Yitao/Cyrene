@@ -69,10 +69,22 @@ def test_release_pipeline_smoke_tests_and_publishes_all_linux_packages():
     assert "/opt/Cyrene/cyrene" in workflow
     assert "config.enc.missing-key.bak" in workflow
     assert "data/.config_key" in workflow
+    assert "Install and smoke test RPM package" in workflow
+    assert "fedora:latest" in workflow
+    assert "build/linux-rpm-release-smoke.sh" in workflow
     assert "name: linux-packages" in workflow
     assert "dist-electron/Cyrene-*-x64.AppImage" in workflow
     assert "dist-electron/Cyrene-*-x64.deb" in workflow
     assert "dist-electron/Cyrene-*-x64.rpm" in workflow
+
+    rpm_smoke = (ROOT / "build" / "linux-rpm-release-smoke.sh").read_text(
+        encoding="utf-8"
+    )
+    assert "dnf install -y" in rpm_smoke
+    assert "/opt/Cyrene/cyrene --no-sandbox --desktop-smoke-test" in rpm_smoke
+    assert "SMOKE TEST FAILED|DESKTOP_SMOKE_TEST=failed" in rpm_smoke
+    assert "DESKTOP_SMOKE_TEST=ok" in rpm_smoke
+    assert "LINUX_RPM_INSTALL_SMOKE_TEST=ok" in rpm_smoke
 
 
 def test_linux_desktop_uses_software_rendering_and_reports_renderer_failures():

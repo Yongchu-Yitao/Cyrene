@@ -5,6 +5,58 @@
 This English edition preserves the release history of the Chinese changelog.
 The Chinese edition remains the most detailed record for older releases.
 
+## [0.7.3] - 2026-08-12
+
+### Data reset and settings
+
+- Clear All App Data now restores a genuine first-run state instead of removing only selected conversations and settings.
+- The reset covers conversations, tasks, Cyrene-managed projects, memories, knowledge, schedules, notifications, uploads, backups, generated files, diagnostics, and onboarding state.
+- Installed skills and all local embedding, OCR, speech-recognition, and speech-generation models are removed, and active model downloads are stopped.
+- Embedded-browser tabs, sign-ins, cookies, caches, and authentication data are cleared together with the separate browser profile.
+- Model, integration, map, remote connection, and Channel credentials return to empty defaults and no longer remain active in the current session.
+- Launch at login, background residency, the Quick Chat shortcut, tray behavior, and other desktop preferences return to their defaults.
+- Local interface caches and temporary state are removed after a successful reset before Cyrene returns to the first-run flow, preventing deleted content from briefly reappearing.
+- A destructive confirmation dialog now lists the main categories that will be deleted and requires an explicit confirmation before reset begins.
+- A failed reset keeps the current page open and shows the actual failure instead of reporting an incomplete reset as successful.
+- The command-line reset uses the same explicit confirmation requirement to prevent accidental irreversible deletion.
+- Saved model settings now take effect immediately, so new conversations do not continue using an old model, endpoint, or previous failure state.
+- When no model is configured, chat shows a localized prompt directing the user to Settings → Models instead of returning an empty reply.
+- The Soul editor is taller so more of a long personality definition remains visible while editing.
+
+### Voice and conversation experience
+
+- The task-detail composer now provides the same local voice input as regular chat, allowing task instructions and follow-up guidance to be dictated directly.
+- Task voice input follows the existing automatic-stop and send-after-recognition preferences; when automatic sending is off, recognized text remains editable in the composer.
+- Chat and task composers now show distinct starting, listening, recognizing, completed, no-speech, and failure states throughout voice input.
+- Silence, empty recordings, and silence-only recognition results leave the existing draft unchanged and never trigger automatic sending.
+- Switching conversations or tasks during recording safely ends the old recording so its result cannot appear in the newly selected composer.
+- The microphone control gains clear recording animation, busy state, and pressed state; the animation is disabled when reduced motion is preferred.
+- Scrolling upward to read earlier messages immediately stops automatic following of a streaming reply instead of pulling the reader back to the bottom.
+- Automatic following resumes only after reaching the bottom again or explicitly choosing the scroll-to-bottom action.
+
+### Task details and interface changes
+
+- Task details now use the same inset floating glass card as Memory, Knowledge, Schedule, and Skill Learning, with consistent spacing, corners, and visual depth.
+- Context, File Changes, Run Logs, Acceptance, and Artifacts are now vertical accordion sections that can be expanded independently or collapsed with a second click.
+- Opening a detail section starts its content at the top instead of retaining a stale scroll position from the previous section.
+- Task Overview presents status and priority as side-by-side summary cards and gives the task goal a clearer visual hierarchy.
+- Project context, reflection, constraints, task relations, and step dependencies use lightweight information cards that become two columns in a wider inspector and return to one column when narrow.
+- Long project paths and text wrap inside their cards, while empty constraints, relations, and dependencies share the same neutral empty-state surface.
+- File Changes, Run Logs, Acceptance, and Artifacts no longer repeat their section heading after expansion, leaving more room for the actual content.
+- File diffs still expand directly in the list, while acceptance-item hover feedback now uses a neutral surface instead of a strong purple block.
+- Task artifacts now use the same file-row design as conversation artifacts, showing the file name, path, and navigation affordance with direct download support.
+- With no task selected, the inspector shows a complete empty state; resizing is aligned with the floating card edge.
+- The task composer now uses the same translucent glass material as the chat composer and blends smoothly into the bottom background.
+- Local embedding, OCR, speech-recognition, and speech-generation models now have distinct identifying icon colors in both light and dark themes.
+- In dark mode, the Workbench filter bar and Knowledge command bar use a flatter fading glass layer without the previous circular glow or separated edge.
+
+### Windows and Linux desktop experience
+
+- Windows x64 and Windows ARM64 installers now include the components required by local-model and media features, fixing the missing-NumPy startup error that prevented the app from opening.
+- The installed Windows backend and desktop interface now share the complete runtime available to the packaged application, avoiding cases where a portable build worked but the installed app did not.
+- Linux desktop windows now display the correct Cyrene application icon instead of relying on the desktop environment to infer one.
+- In-app updates for the Linux AppImage now update the original AppImage rather than attempting to replace the read-only executable inside its temporary mount.
+
 ## [0.7.2] - 2026-08-12
 
 ### Local voice interaction

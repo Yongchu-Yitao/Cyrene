@@ -873,7 +873,9 @@ def test_workbench_chat_sidebar_resizes_from_the_card_edge_without_a_guide_line(
     assert 'className={"wb-col-resizer" + (cardEdge ? " card-edge" : "")}' in shell
     assert "if (cardEdge) return;" in shell
     card_edge_css = styles.split(
-        ".wbc-side-card > .wb-col-resizer.card-edge {", 1
+        ".wbc-side-card > .wb-col-resizer.card-edge,\n"
+        ".wb-floating-detail-card > .wb-col-resizer.card-edge {",
+        1,
     )[1].split("}", 1)[0]
     assert "top: 0;" in card_edge_css
     assert "bottom: 0;" in card_edge_css
@@ -4156,8 +4158,8 @@ def test_workbench_chat_switches_stop_to_guidance_while_running():
     assert "输入内容以引导正在运行的 Agent" in (
         root / "src" / "webui" / "frontend" / "workbench-i18n.jsx"
     ).read_text(encoding="utf-8")
-    assert "workbench-chat.js?v=0.7.2" in index
-    assert "workbench-i18n.js?v=0.7.2" in index
+    assert "workbench-chat.js?v=0.7.3" in index
+    assert "workbench-i18n.js?v=0.7.3" in index
 
 
 def test_task_answer_resume_uses_interrupt_not_pause_and_suppresses_cancel_error():
@@ -6191,7 +6193,7 @@ def test_workbench_task_details_reuse_floating_animated_accordion():
     assert 'html[data-theme="dark"] .wb-task-detail-card' in styles
     assert '"task.side.detailPanel": "Task details"' in i18n
     assert '"task.side.detailPanel": "任务详情"' in i18n
-    assert "workbench.css?v=0.7.2" in index
+    assert "workbench.css?v=0.7.3" in index
 
 
 def test_workbench_collapsed_rail_keeps_labels_horizontal_during_expansion():
@@ -6213,7 +6215,7 @@ def test_workbench_collapsed_rail_keeps_labels_horizontal_during_expansion():
     assert "height: 63px;" in account_rule
     assert "grid-template-rows: 36px;" in account_rule
     assert "height: 36px;" in account_meta_rule
-    assert "workbench.css?v=0.7.2" in index
+    assert "workbench.css?v=0.7.3" in index
 
 
 def test_workbench_collapsed_rail_icons_stay_left_anchored_while_closing():
@@ -6286,7 +6288,7 @@ def test_workbench_wechat_channel_uses_qr_login_instead_of_token_input():
     assert "WECHAT_BOT_TOKEN" not in settings
     assert '"settings.wechatScanConnect": "扫描二维码连接"' in translations
     assert ".wb-wechat-qr-overlay" in styles
-    assert "settings-overlay.js?v=0.7.2" in index
+    assert "settings-overlay.js?v=0.7.3" in index
 
 
 def test_linux_desktop_uses_native_frame_and_directory_picker():
@@ -6597,7 +6599,7 @@ def test_workbench_context_picker_contains_long_workspace_paths():
     assert "text-overflow: ellipsis;" in text_rule
     assert "white-space: nowrap;" in text_rule
     assert 'className="wbc-popmenu-desc" title={p}' in chat
-    assert "workbench-chat.js?v=0.7.2" in index
+    assert "workbench-chat.js?v=0.7.3" in index
 
 
 def test_workbench_follow_up_uses_context_endpoint_without_native_prompt():
@@ -6613,8 +6615,8 @@ def test_workbench_follow_up_uses_context_endpoint_without_native_prompt():
     assert '"/api/task-sessions/{session_id}/follow-up"' in routes
     assert 'session["parentSessionId"] = session_id' in routes
     assert "followUpContext" in routes
-    assert "workbench-model.js?v=0.7.2" in index
-    assert "workbench.js?v=0.7.2" in index
+    assert "workbench-model.js?v=0.7.3" in index
+    assert "workbench.js?v=0.7.3" in index
 
 
 def test_workbench_regenerate_plan_failure_preserves_current_plan():
@@ -6742,7 +6744,7 @@ def test_workbench_model_settings_preserve_form_on_failed_response():
     assert "}).then(readSettingsResponse).then(function (p)" in save_block
     assert "p.custom_models || norm" in save_block
     assert "p.vision_models || p.vision_candidates || vNorm" in save_block
-    assert "settings-overlay.js?v=0.7.2" in index
+    assert "settings-overlay.js?v=0.7.3" in index
 
 
 def test_workbench_chat_subagent_page_is_independent_and_localized():
@@ -7249,7 +7251,7 @@ def test_workbench_settings_overlay_has_shortcuts_tab_and_panel():
     assert ".wb-shortcut-row" in styles
     assert ".wb-shortcut-capture" in styles
     # The new module is loaded before the panels that consume it
-    assert "compiled/workbench-shortcuts.js?v=0.7.2" in index
+    assert "compiled/workbench-shortcuts.js?v=0.7.3" in index
 
 
 def test_workbench_about_related_actions_only_click_right_button():
