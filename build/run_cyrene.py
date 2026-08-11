@@ -68,6 +68,7 @@ def _run_smoke_test() -> None:
         "pydantic_core": None,
         "starlette": None,
         "numpy": None,
+        "numpy._core._multiarray_umath": None,
     }
     for _name in _smoke_imports:
         try:
