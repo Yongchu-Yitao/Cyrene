@@ -288,40 +288,22 @@ async def _insert_guidance_ack(
     })
 
 
-async def _fan_out_guidance_to_subagents(target_round_id: str, content: str, bot: Any, chat_id: int, db_path: str) -> list[str]:
-    from cyrene.runtime.inbox import send_message as _send_inbox
-    from cyrene.subagent import (
-        get_raw_messages as _sub_raw_msgs,
-        get_snapshot as _sub_snapshot,
-        reactivate as _sub_reactivate,
-        run_subagent,
-        spawn_subagent_task,
+async def _fan_out_guidance_to_subagents(
+    target_round_id: str,
+    content: str,
+    bot: Any,
+    chat_id: int,
+    db_path: str,
+) -> list[str]:
+    from cyrene.subagent import fan_out_guidance_to_subagents
+
+    return await fan_out_guidance_to_subagents(
+        target_round_id,
+        content,
+        bot,
+        chat_id,
+        db_path,
     )
-
-    guidance_text = (
-        "Main agent received new user guidance for this round.\n"
-        "Adjust your work accordingly and revise your result if needed.\n\n"
-        f"User guidance:\n{content}"
-    )
-    snapshot = await _sub_snapshot(round_id=target_round_id)
-    if not snapshot:
-        return []
-
-    sent: list[str] = []
-    for agent_id in snapshot:
-        await _send_inbox(_MAIN_INBOX_AGENT_ID, agent_id, "guidance", guidance_text, round_id=target_round_id)
-        sent.append(agent_id)
-
-    for agent_id, info in snapshot.items():
-        if info.get("status") not in ("done", "timeout", "incomplete"):
-            continue
-        if await _sub_reactivate(agent_id):
-            raw_messages = await _sub_raw_msgs(agent_id)
-            spawn_subagent_task(
-                run_subagent(agent_id, str(info.get("task") or ""), bot, chat_id, db_path, resume_messages=raw_messages),
-                agent_id,
-            )
-    return sent
 
 
 async def _wait_for_subagent_round(round_id: str, bot: Any, chat_id: int, db_path: str) -> tuple[bool, str]:

@@ -1264,7 +1264,7 @@ async def _run_main_agent_impl(
                     timeout_subagents as _timeout_subagents,
                 )
                 from cyrene.runtime.inbox import get_unread_count as _inbox_unread_base
-                from cyrene.agent.guidance import _fan_out_guidance_to_subagents
+                from cyrene.subagent import fan_out_guidance_to_subagents
                 _agent_session_id = _current_session_id.get()
 
                 def _inbox_unread(agent_id: str) -> int:
@@ -1306,7 +1306,7 @@ async def _run_main_agent_impl(
                         )
                         await _inject_runtime_guidance(messages, live_guidance)
                         if guidance_text:
-                            await _fan_out_guidance_to_subagents(
+                            await fan_out_guidance_to_subagents(
                                 round_id, guidance_text, bot, chat_id, db_path
                             )
                     try:
@@ -1392,7 +1392,7 @@ async def _run_main_agent_impl(
                         )
                         await _inject_runtime_guidance(messages, live_guidance)
                         if guidance_text:
-                            await _fan_out_guidance_to_subagents(
+                            await fan_out_guidance_to_subagents(
                                 round_id, guidance_text, bot, chat_id, db_path
                             )
                         await _save(_session_messages_to_save(messages))
@@ -1479,7 +1479,7 @@ async def _run_main_agent_impl(
                     )
                     await _inject_runtime_guidance(messages, boundary_guidance)
                     if guidance_text:
-                        await _fan_out_guidance_to_subagents(
+                        await fan_out_guidance_to_subagents(
                             round_id, guidance_text, bot, chat_id, db_path
                         )
                     await _save(_session_messages_to_save(messages))

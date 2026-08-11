@@ -1974,7 +1974,8 @@ def test_workbench_chat_interrupt_waits_for_server_and_uses_live_status_everywhe
     )[0]
 
     assert "Promise.resolve(request)" in runtime_interrupt
-    assert ".finally(function () {" in runtime_interrupt
+    assert ".then(function (result)" in runtime_interrupt
+    assert ".finally(function () {" not in runtime_interrupt
     assert "abort(chatId);" in runtime_interrupt
     assert 'fire("onInterrupted", chatId);' in source
     assert 'return { ...prev, status: "idle" };' in source
