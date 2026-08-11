@@ -625,11 +625,9 @@ class ChatRunManager:
             asyncio.create_task(run.publish({"type": "interrupted", "chatId": run.chat_id}))
         except RuntimeError:
             pass
-        for queue in list(run.subscribers):
-            try:
-                queue.put_nowait(None)
-            except Exception:
-                pass
+        # Keep streams attached until the cancelled runner has closed its inbox
+        # and persisted the terminal outcome. ``publish`` provides immediate UI
+        # feedback; ``_drive`` sends the final wake after ``run.done`` is set.
         return True
 
     def start_or_get(

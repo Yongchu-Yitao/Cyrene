@@ -2142,11 +2142,12 @@ var WorkbenchChatRuntimes = (function () {
     // interruption and repaired the persisted chat status. If the interrupted
     // event wins the race it clears the runtime directly; otherwise aborting
     // here makes ownStream perform one authoritative re-pull.
-    return Promise.resolve(request).catch(function (err) {
+    return Promise.resolve(request).then(function (result) {
+      abort(chatId);
+      return result;
+    }).catch(function (err) {
       fire("onError", chatId, err);
       return null;
-    }).finally(function () {
-      abort(chatId);
     });
   }
 
@@ -2160,6 +2161,14 @@ var WorkbenchChatRuntimes = (function () {
       nextInput = { ...nextInput, message: [previousText, nextText].filter(Boolean).join("\n\n") };
     }
     deferredSends[chatId] = { input: nextInput, model: model };
+    // A sealed guidance endpoint waits for the old run to finish before
+    // returning ``chat_not_running``. If its stream already closed first,
+    // there will be no later terminal callback to wake this deferred send.
+    if (!runtimes[chatId]) {
+      var ready = deferredSends[chatId];
+      delete deferredSends[chatId];
+      return start(chatId, ready.input, ready.model);
+    }
     return true;
   }
 
@@ -11293,7 +11302,6 @@ function WbcComposer({ chat, project, runtime, running, onSend, onGuidance, onIn
           ref={taRef}
           value={draft}
           rows={compact ? 1 : 2}
-          disabled={compact && running}
           onChange={function (e) { setDraft(e.target.value); syncHeight(); }}
           onKeyDown={onKeyDown}
           onPaste={onPaste}
@@ -12493,6 +12501,16 @@ function WbcChatSplit({ chatId, project, onOpenContent, browserActiveByChat, onC
           setStreamText("");
         });
       },
+      onGuidanceReceived: function (event) {
+        if (disposedRef.current || !event || !event.userMessage) return;
+        setChat(function (prev) {
+          if (!prev || String(prev.id || "") !== String(chatIdRef.current || "")) return prev;
+          return {
+            ...prev,
+            messages: wbcMergeChronologicalMessages(prev.messages || [], [event.userMessage]),
+          };
+        });
+      },
       onError: function (err) {
         if (disposedRef.current) return;
         setError(wbcErrorText(err));
@@ -12549,8 +12567,36 @@ function WbcChatSplit({ chatId, project, onOpenContent, browserActiveByChat, onC
 
   function stop() {
     if (!running) return;
-    WorkbenchChatModel.interrupt(chatIdRef.current).catch(function () {});
-    setRunning(false);
+    setError("");
+    WorkbenchChatModel.interrupt(chatIdRef.current).catch(function (err) {
+      if (!disposedRef.current) setError(wbcErrorText(err));
+    });
+  }
+
+  function guide(message) {
+    var current = chatIdRef.current;
+    var text = String(message || "").trim();
+    if (!running || !current || !text) return Promise.resolve(null);
+    setError("");
+    return WorkbenchChatModel.sendGuidance(
+      current,
+      text,
+      "guide_" + Date.now() + "_" + Math.random().toString(36).slice(2, 8)
+    ).then(function (response) {
+      if (response && response.userMessage && !disposedRef.current) {
+        setChat(function (prev) {
+          if (!prev || String(prev.id || "") !== String(current)) return prev;
+          return {
+            ...prev,
+            messages: wbcMergeChronologicalMessages(prev.messages || [], [response.userMessage]),
+          };
+        });
+      }
+      return response;
+    }).catch(function (err) {
+      if (!disposedRef.current) setError(wbcErrorText(err));
+      throw err;
+    });
   }
 
   // Resume a clarification / permission request in the split conversation
@@ -12722,6 +12768,7 @@ function WbcChatSplit({ chatId, project, onOpenContent, browserActiveByChat, onC
         runtime={streamText ? { text: streamText } : null}
         running={running}
         onSend={submit}
+        onGuidance={guide}
         onInterrupt={stop}
         draftNamespace={"chat-split:"}
         autoFocus={false}
@@ -13039,6 +13086,17 @@ function WbcSideAgentTab({ agent, project, onOpenFile, onUpdate }) {
           }
         });
       },
+      onGuidanceReceived: function (event) {
+        if (!mountedRef.current || !event || !event.userMessage) return;
+        var current = agentRef.current;
+        if (!current || !current.id) return;
+        var next = {
+          ...current,
+          messages: wbcMergeChronologicalMessages(current.messages || [], [event.userMessage]),
+        };
+        agentRef.current = next;
+        onUpdate(next);
+      },
       onError: function (err) {
         if (mountedRef.current) setError(wbcErrorText(err));
       },
@@ -13115,6 +13173,32 @@ function WbcSideAgentTab({ agent, project, onOpenFile, onUpdate }) {
     });
   }
 
+  function guide(message) {
+    var current = agentRef.current;
+    var text = String(message || "").trim();
+    if (!running || !current || !current.id || !text) return Promise.resolve(null);
+    setError("");
+    return WorkbenchChatModel.sendGuidance(
+      current.id,
+      text,
+      "guide_" + Date.now() + "_" + Math.random().toString(36).slice(2, 8)
+    ).then(function (response) {
+      if (response && response.userMessage && mountedRef.current) {
+        var latest = agentRef.current;
+        var next = {
+          ...latest,
+          messages: wbcMergeChronologicalMessages(latest.messages || [], [response.userMessage]),
+        };
+        agentRef.current = next;
+        onUpdate(next);
+      }
+      return response;
+    }).catch(function (err) {
+      if (mountedRef.current) setError(wbcErrorText(err));
+      throw err;
+    });
+  }
+
   var messages = agent && Array.isArray(agent.messages) ? agent.messages : [];
   var hasAsked = messages.some(function (message) { return message.role === "user"; });
   return (
@@ -13158,6 +13242,7 @@ function WbcSideAgentTab({ agent, project, onOpenFile, onUpdate }) {
           runtime={streamText ? { text: streamText } : null}
           running={running}
           onSend={submit}
+          onGuidance={guide}
           onInterrupt={stop}
           draftNamespace="side-agent:"
           autoFocus={false}

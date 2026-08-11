@@ -586,6 +586,19 @@ def register_control_routes(
                 status_code=409,
             )
         interrupted = run_manager.interrupt(run.chat_id)
+        if interrupted and run.task is not None and not run.done.is_set():
+            try:
+                await asyncio.wait_for(
+                    asyncio.shield(run.done.wait()), timeout=8.0
+                )
+            except asyncio.TimeoutError:
+                return JSONResponse(
+                    {
+                        "error": "run interruption is still settling",
+                        "code": "control_interrupt_timeout",
+                    },
+                    status_code=504,
+                )
         return ControlInterruptResponse(
             interrupted=interrupted,
             run_id=run_id,

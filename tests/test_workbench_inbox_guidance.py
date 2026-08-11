@@ -339,6 +339,50 @@ async def test_guidance_persistence_failure_rejects_without_delivery(tmp_path, m
     await inbox.close()
 
 
+async def test_terminal_guidance_check_is_atomic_with_durable_admission(
+    tmp_path, monkeypatch
+):
+    from cyrene.workbench.inbox import (
+        GuidanceAdmissionClosed,
+        WorkbenchAgentInbox,
+    )
+
+    inbox = WorkbenchAgentInbox("chat_atomic_terminal", str(tmp_path / "workbench.db"))
+    persist_started = threading.Event()
+    release_persist = threading.Event()
+    original_persist = inbox._persist
+
+    def blocked_persist(event):
+        persist_started.set()
+        release_persist.wait(2)
+        return original_persist(event)
+
+    monkeypatch.setattr(inbox, "_persist", blocked_persist)
+    put_task = asyncio.create_task(
+        inbox.put_guidance("最后一刻改变方向", client_request_id="atomic-guide")
+    )
+    assert await asyncio.to_thread(persist_started.wait, 1)
+
+    terminal_task = asyncio.create_task(inbox.collect_guidance_or_seal())
+    await asyncio.sleep(0)
+    assert terminal_task.done() is False
+
+    release_persist.set()
+    accepted = await asyncio.wait_for(put_task, timeout=1)
+    terminal_guidance = await asyncio.wait_for(terminal_task, timeout=1)
+    assert [item["event_id"] for item in terminal_guidance] == [accepted["event_id"]]
+
+    inbox.acknowledge(terminal_guidance)
+    assert await inbox.collect_guidance_or_seal() == []
+    try:
+        await inbox.put_guidance("已经太迟", client_request_id="after-seal")
+    except GuidanceAdmissionClosed:
+        pass
+    else:
+        raise AssertionError("guidance was admitted after the terminal seal")
+    await inbox.close()
+
+
 async def test_claimed_guidance_is_recovered_after_run_restart(tmp_path):
     from cyrene.workbench.inbox import WorkbenchAgentInbox
 
@@ -845,6 +889,56 @@ async def test_workbench_guidance_endpoint_queues_into_live_chat(monkeypatch, tm
     assert idle_inbox.json()["tools"] == []
 
 
+async def test_workbench_guidance_endpoint_maps_sealed_admission_to_follow_up(
+    monkeypatch, tmp_path
+):
+    import httpx
+    from fastapi import FastAPI
+    from cyrene.workbench import chat as chat_service
+    from route.workbench import chat as chat_mod
+    from cyrene.workbench.chat_runs import ChatRunManager
+
+    chats_path = tmp_path / "workbench_chats.json"
+    chats_path.write_text(json.dumps({"chats": [{
+        "id": "chat_sealed",
+        "projectId": "project_1",
+        "status": "running",
+        "messages": [],
+    }]}), encoding="utf-8")
+    manager = ChatRunManager(retention_seconds=0)
+    monkeypatch.setattr(chat_service, "_CHATS_STORE", chats_path)
+    monkeypatch.setattr(chat_service, "_CONFIGURED_CHATS_STORE", None)
+    monkeypatch.setattr(chat_mod, "_CHAT_RUN_MANAGER", manager)
+    app = FastAPI()
+    chat_mod.register_workbench_chat_routes(
+        app, bot=None, db_path=str(tmp_path / "workbench.db")
+    )
+    release = asyncio.Event()
+
+    async def runner(_run):
+        await release.wait()
+
+    run, _ = manager.start_or_get("chat_sealed", {"type": "ack"}, runner)
+    await run.ready.wait()
+    assert await run.inbox.collect_guidance_or_seal() == []
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="http://test"
+    ) as client:
+        response_task = asyncio.create_task(
+            client.post(
+                "/api/workbench/chats/chat_sealed/guidance",
+                json={"message": "作为下一条继续", "clientRequestId": "sealed-guide"},
+            )
+        )
+        await asyncio.sleep(0)
+        assert response_task.done() is False
+        release.set()
+        response = await asyncio.wait_for(response_task, timeout=1)
+    assert response.status_code == 409
+    assert response.json()["code"] == "chat_not_running"
+    await run.done.wait()
+
+
 async def test_startup_reconciles_durable_guidance_missing_from_transcript(
     monkeypatch, tmp_path
 ):
@@ -1120,20 +1214,25 @@ async def test_main_agent_applies_guidance_sent_while_model_call_is_in_flight(mo
     inbox = WorkbenchAgentInbox("chat_model_guidance", str(tmp_path / "workbench.db"))
     model_started = asyncio.Event()
     release_model = asyncio.Event()
+    first_model_cancelled = asyncio.Event()
     model_calls = []
 
     async def fake_llm(messages, tools=None, **_kwargs):
         model_calls.append(messages)
         if len(model_calls) == 1:
             model_started.set()
-            await release_model.wait()
-            return {
-                "role": "assistant", "content": "旧答案",
-                "tool_calls": [{
-                    "id": "quit_old", "type": "function",
-                    "function": {"name": "quit", "arguments": "{}"},
-                }],
-            }
+            try:
+                await release_model.wait()
+                return {
+                    "role": "assistant", "content": "旧答案",
+                    "tool_calls": [{
+                        "id": "quit_old", "type": "function",
+                        "function": {"name": "quit", "arguments": "{}"},
+                    }],
+                }
+            except asyncio.CancelledError:
+                first_model_cancelled.set()
+                raise
         assert any(
             "改成新答案" in str(message.get("content") or "")
             for message in messages
@@ -1162,9 +1261,10 @@ async def test_main_agent_applies_guidance_sent_while_model_call_is_in_flight(mo
         )
         await asyncio.wait_for(model_started.wait(), timeout=1)
         await inbox.put_guidance("改成新答案", client_request_id="guide_during_model")
-        release_model.set()
         assert await asyncio.wait_for(task, timeout=2) == "新答案"
+        assert first_model_cancelled.is_set()
     finally:
+        release_model.set()
         _workbench_agent_inbox.reset(inbox_token)
         state_mod._current_round_id.reset(round_token)
         await inbox.close()
@@ -1355,6 +1455,23 @@ def test_workbench_composer_switches_stop_button_to_guidance_when_typed():
     assert 'err.code === "chat_not_running"' in source
     assert "runtimeEngine.deferSend(chatId, { message: text }, model)" in source
     assert "terminal event wakes the deferred send" in source
+    assert "if (!runtimes[chatId])" in source.split("function deferSend", 1)[1].split(
+        "function setHooks", 1
+    )[0]
+    split = source.split("function WbcChatSplit(", 1)[1].split(
+        "function WbcSideAgentSplitResizer", 1
+    )[0]
+    side_agent = source.split("function WbcSideAgentTab(", 1)[1].split(
+        "function WbcSideAgentsPanel", 1
+    )[0]
+    assert "function guide(message)" in split
+    assert "onGuidance={guide}" in split
+    assert "setRunning(false);" not in split.split("function stop()", 1)[1].split(
+        "function guide", 1
+    )[0]
+    assert "function guide(message)" in side_agent
+    assert "onGuidance={guide}" in side_agent
+    assert "disabled={compact && running}" not in source
 
 
 def test_runtime_guidance_marker_is_not_sent_as_an_upstream_message_field():
@@ -1365,6 +1482,32 @@ def test_runtime_guidance_marker_is_not_sent_as_an_upstream_message_field():
         "content": "guide",
         "runtime_guidance": True,
     }) == {"role": "user", "content": "guide"}
+
+
+def test_interrupt_waits_for_workbench_run_cleanup_before_acknowledging():
+    from pathlib import Path
+
+    route_source = Path("src/route/agent/chat.py").read_text(encoding="utf-8")
+    manager_source = Path("src/cyrene/workbench/chat_runs.py").read_text(
+        encoding="utf-8"
+    )
+    frontend_source = Path("src/webui/frontend/workbench-chat.jsx").read_text(
+        encoding="utf-8"
+    )
+    interrupt_route = route_source.split(
+        'async def api_interrupt_chat(session_id: str = ""):', 1
+    )[1].split('@router.post("/api/chat/clear")', 1)[0]
+    assert "workbench_run.done.wait()" in interrupt_route
+    assert "asyncio.shield" in interrupt_route
+    manager_interrupt = manager_source.split("def interrupt(self, chat_id: str)", 1)[1].split(
+        "def start_or_get", 1
+    )[0]
+    assert "queue.put_nowait(None)" not in manager_interrupt
+    runtime_interrupt = frontend_source.split("function interrupt(chatId, model)", 1)[1].split(
+        "function deferSend", 1
+    )[0]
+    assert ".then(function (result)" in runtime_interrupt
+    assert ".finally(function ()" not in runtime_interrupt
 
 
 def test_main_prompt_prefers_inbox_wakeup_over_fixed_time_waits():

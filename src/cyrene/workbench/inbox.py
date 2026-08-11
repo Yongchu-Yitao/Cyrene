@@ -29,6 +29,10 @@ ToolRunner = Callable[[], Awaitable[str]]
 _MAX_PARALLEL_TOOL_CALLS = 8
 
 
+class GuidanceAdmissionClosed(RuntimeError):
+    """Raised when a run has crossed its final guidance boundary."""
+
+
 @dataclass(frozen=True)
 class _BatchCall:
     tool_call_id: str
@@ -76,6 +80,12 @@ class WorkbenchAgentInbox:
         self._guidance: list[dict[str, Any]] = []
         self._pending_tool_results: dict[str, dict[str, Any]] = {}
         self._guidance_signal = asyncio.Event()
+        # Guidance persistence and the agent's terminal check share this lock.
+        # Exactly one side wins: either the durable guidance is queued before
+        # the agent checks, or the agent seals admission and the HTTP request is
+        # told to promote the text to a normal follow-up.
+        self._guidance_admission_lock = asyncio.Lock()
+        self._guidance_admission_open = True
         self._guidance_pending_count = 0
         self._tasks: set[asyncio.Task[Any]] = set()
         self._persistence_tasks: set[asyncio.Task[Any]] = set()
@@ -89,6 +99,7 @@ class WorkbenchAgentInbox:
         self._tool_submitted_at: dict[str, float] = {}
         self._live_tool_states: dict[str, dict[str, Any]] = {}
         self._closed = False
+        self._closing = False
         if self.db_path:
             self._ensure_schema()
             self._recover_pending_guidance()
@@ -252,6 +263,7 @@ class WorkbenchAgentInbox:
         return {
             "queueDepth": self._queue_length(),
             "pendingGuidance": self._guidance_pending_count,
+            "guidanceAdmissionOpen": self._guidance_admission_open,
             "activeTasks": sum(1 for task in self._tasks if not task.done()),
             "persistenceTasks": sum(
                 1 for task in self._persistence_tasks if not task.done()
@@ -689,23 +701,58 @@ class WorkbenchAgentInbox:
         public_message_id: str = "",
         public_created_at: str = "",
     ) -> dict[str, Any]:
-        event = await self.put(
-            "guidance",
-            {
-                "text": str(text).strip(),
-                "client_request_id": str(client_request_id),
-                "public_message_id": str(public_message_id),
-                "public_created_at": str(public_created_at),
-            },
-            priority=100,
-            dedupe_key=f"guidance:{client_request_id}" if client_request_id else "",
-        )
+        dedupe_key = f"guidance:{client_request_id}" if client_request_id else ""
+        async with self._guidance_admission_lock:
+            if self._closed or self._closing or not self._guidance_admission_open:
+                # Preserve idempotency for an acknowledgement whose response was
+                # lost just before the run sealed its admission window.
+                existing = self._live_dedupe_events.get(dedupe_key) if dedupe_key else None
+                if existing is None and dedupe_key and self.db_path:
+                    existing = await asyncio.to_thread(self._existing_event, dedupe_key)
+                if existing is not None:
+                    return {**existing, "duplicate": True}
+                raise GuidanceAdmissionClosed(
+                    "Workbench agent inbox is no longer accepting guidance"
+                )
+            event = await self.put(
+                "guidance",
+                {
+                    "text": str(text).strip(),
+                    "client_request_id": str(client_request_id),
+                    "public_message_id": str(public_message_id),
+                    "public_created_at": str(public_created_at),
+                },
+                priority=100,
+                dedupe_key=dedupe_key,
+            )
         if not event.get("duplicate"):
             self._record_event_background(
                 "guidance_queued",
                 payload={"event_id": event["event_id"], "client_request_id": client_request_id},
             )
         return event
+
+    async def wait_for_guidance(self) -> bool:
+        """Wake a model wait as soon as durable user guidance is available."""
+        while True:
+            if self._guidance_signal.is_set():
+                return self.has_guidance_nowait()
+            if self._closed or self._closing or not self._guidance_admission_open:
+                return False
+            await self._guidance_signal.wait()
+
+    async def collect_guidance_or_seal(self) -> list[dict[str, Any]]:
+        """Atomically collect pending guidance or close the admission window.
+
+        A concurrent ``put_guidance`` holds the same lock across its durable
+        INSERT and live enqueue, so an accepted command can never land after an
+        empty terminal check.
+        """
+        async with self._guidance_admission_lock:
+            events = self.collect_guidance_nowait()
+            if not events:
+                self._guidance_admission_open = False
+            return events
 
     async def _run_tool(
         self,
@@ -1147,8 +1194,11 @@ class WorkbenchAgentInbox:
             logger.exception("Failed to clean Workbench inbox event %s", event_id)
 
     async def close(self, *, termination_reason: str = "completed") -> None:
-        if self._closed:
-            return
+        async with self._guidance_admission_lock:
+            if self._closed or self._closing:
+                return
+            self._closing = True
+            self._guidance_admission_open = False
         self._termination_reason = str(termination_reason or "completed")
         tasks = list(self._tasks)
         for task in tasks:
@@ -1168,6 +1218,7 @@ class WorkbenchAgentInbox:
                     await asyncio.gather(*cancelled, return_exceptions=True)
         self._tasks.clear()
         self._closed = True
+        self._closing = False
         self._run_persistence_background(self._cancel_pending, self._termination_reason)
         while True:
             try:
@@ -1432,6 +1483,7 @@ def current_workbench_inbox() -> WorkbenchAgentInbox | None:
 
 
 __all__ = [
+    "GuidanceAdmissionClosed",
     "WorkbenchAgentInbox",
     "_workbench_agent_inbox",
     "current_workbench_inbox",

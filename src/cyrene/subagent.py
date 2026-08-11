@@ -384,6 +384,56 @@ async def reactivate(agent_id: str) -> bool:
     return False
 
 
+async def fan_out_guidance_to_subagents(
+    target_round_id: str,
+    content: str,
+    bot: Any,
+    chat_id: int,
+    db_path: str,
+) -> list[str]:
+    """Relay live user guidance and resume terminal subagents when needed."""
+    from cyrene.agent.context import MAIN_AGENT_ID
+    from cyrene.runtime.inbox import send_message
+
+    guidance_text = (
+        "Main agent received new user guidance for this round.\n"
+        "Adjust your work accordingly and revise your result if needed.\n\n"
+        f"User guidance:\n{content}"
+    )
+    snapshot = await get_snapshot(round_id=target_round_id)
+    if not snapshot:
+        return []
+
+    sent: list[str] = []
+    for agent_id in snapshot:
+        await send_message(
+            MAIN_AGENT_ID,
+            agent_id,
+            "guidance",
+            guidance_text,
+            round_id=target_round_id,
+        )
+        sent.append(agent_id)
+
+    for agent_id, info in snapshot.items():
+        if info.get("status") not in (DONE, TIMEOUT, INCOMPLETE):
+            continue
+        if await reactivate(agent_id):
+            raw_messages = await get_raw_messages(agent_id)
+            spawn_subagent_task(
+                run_subagent(
+                    agent_id,
+                    str(info.get("task") or ""),
+                    bot,
+                    chat_id,
+                    db_path,
+                    resume_messages=raw_messages,
+                ),
+                agent_id,
+            )
+    return sent
+
+
 async def get_raw_messages(agent_id: str) -> list:
     """获取 agent 的完整消息历史（含 system prompt、tool_calls 原始参数）。
 
