@@ -7,6 +7,7 @@ loop).
 """
 
 import asyncio
+import importlib
 import logging
 from datetime import datetime
 from typing import Any, Awaitable, Callable
@@ -119,7 +120,7 @@ async def _kick_behavior_learning_processing() -> None:
     # Normal desktop/server runtimes already own the configured 10-minute
     # behavior-learning job. Do not add a second offset timer after every turn.
     try:
-        from cyrene.runtime import scheduler as _scheduler_module
+        _scheduler_module = importlib.import_module("cyrene.runtime.scheduler")
 
         runtime_scheduler = getattr(_scheduler_module, "_scheduler", None)
         if runtime_scheduler is not None and runtime_scheduler.running:
@@ -1206,7 +1207,7 @@ async def run_heartbeat_agent(
             # assistant content.  Proactive rounds are forbidden from pausing,
             # but keep this delivery-boundary guard so a future tool regression
             # cannot leak the sentinel into a Workbench transcript or alert.
-            public_reply = _state._sanitize_public_agent_text(reply)
+            public_reply = _state.sanitize_public_agent_text(reply)
             if reply and not public_reply:
                 logger.warning(
                     "Suppressing unexpected awaiting-user outcome from proactive round"

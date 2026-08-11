@@ -6271,7 +6271,9 @@ async def _workbench_answer_pending(
         response_capabilities=frozenset({"interactive_blocks"}),
     )
     try:
-        from cyrene.agent.coordinator import run_session_operation
+        run_session_operation = importlib.import_module(
+            "cyrene.agent.coordinator"
+        ).run_session_operation
 
         async def resume_pending_round() -> str:
             return await answer_pending_question(

@@ -17,6 +17,7 @@ compaction; the agent's own raw context lives in
 from __future__ import annotations
 
 import asyncio
+import copy
 import hashlib
 import importlib
 import json
@@ -804,11 +805,11 @@ async def append_proactive_message(chat_id: str, text: str) -> dict[str, str] | 
     existing conversation session.
     """
     from cyrene.observability import debug
-    from cyrene.agent.state import _sanitize_public_agent_text
+    from cyrene.agent.state import sanitize_public_agent_text
 
     payload = _read_chats_store()
     chat = _find_chat(payload, str(chat_id or ""))
-    content = _sanitize_public_agent_text(text)
+    content = sanitize_public_agent_text(text)
     if not chat or not content:
         return None
     now = _utc_now_iso()
@@ -852,10 +853,10 @@ async def create_proactive_chat(
     lang: str = "",
 ) -> dict[str, str] | None:
     """Create a dedicated Workbench chat containing one proactive reply."""
-    from cyrene.agent.state import _sanitize_public_agent_text
+    from cyrene.agent.state import sanitize_public_agent_text
     from cyrene.observability import debug
 
-    content = _sanitize_public_agent_text(text)
+    content = sanitize_public_agent_text(text)
     project_id = str(project_id or "").strip()
     if not project_id or not content:
         return None

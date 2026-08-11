@@ -25,7 +25,7 @@ TOOL_DEF = {
 
 
 async def _tool_browser_screenshot(args: dict[str, Any], _bot: Any, _chat_id: int, _db_path: str, _notify_state: dict[str, bool] | None) -> str:
-    from cyrene.browser import _validate_screenshot_file, screenshot
+    from cyrene.browser import validate_screenshot_file, screenshot
     url = str(args.get("url") or "").strip()
     resource_id = str(args.get("resource_id") or "").strip()
     read_only = False
@@ -48,7 +48,7 @@ async def _tool_browser_screenshot(args: dict[str, Any], _bot: Any, _chat_id: in
     if result.get("ok"):
         path = str(result.get("path") or "")
         try:
-            _validate_screenshot_file(path)
+            validate_screenshot_file(path)
         except ValueError as exc:
             return f"Screenshot failed: Browser screenshot validation failed: {exc}"
         parts = [

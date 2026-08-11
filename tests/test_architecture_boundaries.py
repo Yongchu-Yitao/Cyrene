@@ -44,6 +44,7 @@ CYRENE_TOP_LEVEL_DIRECTORIES = {
     "runtime",
     "tool_impl",
     "tooling",
+    "voice",
     "workbench",
 }
 CYRENE_TOP_LEVEL_FILES = {

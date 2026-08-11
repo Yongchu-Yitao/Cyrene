@@ -5,17 +5,117 @@
 This English edition preserves the release history of the Chinese changelog.
 The Chinese edition remains the most detailed record for older releases.
 
+## [0.7.2] - 2026-08-12
+
+### Local voice interaction
+
+- A microphone action now appears between the model selector and Send when the local speech-recognition model is ready; unavailable voice input is not presented as an active control.
+- The microphone distinguishes microphone access, recording, and recognition states so voice activity is visible at a glance.
+- After speech begins, about 1.6 seconds of silence can stop recording and begin recognition automatically; automatic stop can also be disabled for manual control.
+- Recognized text can be sent immediately or inserted into the current composer for review while preserving the existing draft.
+- Empty audio, silence-only recordings, and recordings without usable recognized text show a clear message and never send an empty chat message.
+- A titlebar voice-command action and shortcut can send spoken requests to a new background conversation in the default project.
+- Voice Command shows starting, listening, and recognizing states; no empty conversation is created when no usable speech is recognized.
+- Each Agent reply gains a Read Aloud action beside Copy, hidden automatically until speech generation and the selected voice are ready.
+- Replies can be read automatically in the active conversation, with streaming text spoken in natural sentence-sized segments before the full reply finishes.
+- Speech output removes display-only markup and smooths audio boundaries to reduce abrupt pauses, clicks, and unnatural segmentation.
+- The active spoken message has a clear state and playback can be stopped from the message action or global voice state.
+- Voice settings add separate controls for automatic send, silence-based stop, and automatic reply reading.
+- A bundled Chinese-English preset voice can be selected directly from Voice settings.
+- A custom voice can be created from a 1–15 second WAV, FLAC, or OGG reference plus its exact transcript; reference audio stays local and can be replaced or deleted.
+- The local-model area adds dedicated speech-recognition and speech-generation cards with model size, runtime, download progress, and readiness.
+- Downloads prefer a source suitable for the current network while retaining fallbacks; network, integrity, extraction, and other failures receive localized actionable messages.
+- Stale local-model errors disappear after recovery instead of remaining visible after the model becomes healthy.
+- Local voice automatically uses available NVIDIA or Apple acceleration and falls back to a compatible runtime when acceleration is unavailable.
+
+### Agent control of Cyrene
+
+- The main Agent can read the currently visible Cyrene interface and, with appropriate permission, click, double-click, type, select, scroll, and drag.
+- Interface reads include only the current layer and visible viewport, excluding hidden pages, passwords, secret fields, and file pickers.
+- New Chat, Search, Settings, project switching, the conversation list, and the active composer expose stable actions that do not expire on ordinary streaming-text updates.
+- Conversation context actions appear only after their menu is actually opened, and closing the menu restores the main interface scope.
+- Long conversation lists and other scroll regions continue through real scrolling instead of a fixed item cap.
+- An inspected component can remain usable across unrelated interface refreshes when the target itself is unchanged; a disappeared or changed target requires a fresh interface read.
+- Retrying the exact same completed interface action returns its prior result, reducing duplicate clicks or edits after a connection retry.
+- The Agent can inspect and adjust non-model settings across appearance, desktop behavior, Profile, Soul, Voice, Remote, channels, integrations, MCP, and shortcuts.
+- Settings changes update only named fields. When the user has made a newer concurrent edit, Cyrene reports a conflict and preserves the user's value.
+- Models, account sign-in, OAuth, QR scanning, secrets, file selection, system permissions, and destructive reset remain user-controlled.
+- The Agent can read Cyrene runtime and window state and control the main or Quick Chat window's visibility, focus, minimize, maximize, restore, fullscreen, position, and size.
+- Browser frame titlebars, window controls, and drag regions use the same experience and can be moved, maximized, or restored without relying on keyboard focus.
+- Double-click is a separate gesture accepted only on a titlebar or other surface that explicitly supports it, preventing accidental activation of ordinary buttons.
+- A purple-blue Agent cursor moves smoothly to inspected, clicked, or dragged targets and shows press feedback.
+- The cursor remains visible and continues moving while the Agent is active, fades after inactivity, and clears when the page changes, the target disappears, or the window is hidden.
+- Browser zoom no longer makes the Agent cursor visually tiny or oversized.
+- App Use uses the same Agent cursor in other desktop applications: clicks move before pressing, hover, scroll, and drag show their paths, and keyboard-only actions do not create misleading pointer feedback.
+- The App Use cursor disappears immediately when its target is minimized, closed, or disconnected instead of leaving a stale desktop indicator.
+- Cyrene components inspected or operated by the Agent receive a brief animated glint; a newly created conversation also highlights its composer and rail card.
+- Target feedback does not change layout or block input and becomes a subtle static cue under reduced-motion preferences.
+
+### Permissions and user control
+
+- Explicit local requests continue through permission review even for legacy desktop turns or turns without a request identifier.
+- The original request and later clarification in the same turn are considered together, so a short clarification does not discard the user's earlier intent.
+- When the Agent does not quote the user, the complete current request is reviewed instead of guessing authorization from fixed keywords.
+- A clearly requested batch can be reviewed once and executed in order; changed operations, arguments, or ordering require fresh authorization.
+- One-time authorization applies only to its matching operation, and wording changes in a retry reason do not create duplicate approval prompts.
+- Remote messages, forwarded text, system guidance, and Agent-generated content cannot impersonate local-user authorization.
+- Permission cards localize tool, operation, target, reason, and choices while hiding risk suffixes and internal correlation identifiers.
+- Sending from the active composer or sending guidance must match a real user request or confirmation, while stopping the active run remains immediately available.
+
+### Agent, context, and conversation reliability
+
+- New user guidance can be applied immediately while a conversation is running, interrupting an unfinished model wait and continuing in the same turn.
+- Guidance arriving at the completion boundary is coordinated with the final state, closing the former window where accepted guidance could be saved but missed by the active run.
+- Guidance that arrives after a run has stopped accepting it becomes a follow-up message rather than being lost or attached to a finished reply.
+- New guidance received by the main Agent is shared with relevant side agents that are still working, reducing continued work against an outdated goal.
+- Stopping a reply waits for server-side cancellation, persistence, and cleanup before the frontend stream settles.
+- Answering a pending question can resume, complete, or remain waiting correctly; cancellation records the right terminal state without leaving an obsolete question behind.
+- Cancelling a Workbench task preserves the correct resumable paused state and does not surface user cancellation as an ordinary failure.
+- Deleting an active conversation first cancels and awaits its background work, then removes retained run state so late replies or subscriptions cannot reappear.
+- Project goals, outcomes, plans, memories, and execution state are composed and reused according to each task while conversation histories remain isolated.
+- Tasks and side agents receive a shortlist of context relevant to their assignment, reducing unrelated history and improving assignment accuracy.
+- Project-memory edits follow the current application language and stay concise; after the application language changes, the same context can learn again in the new language.
+- Completing onboarding enters the conversation directly instead of briefly returning to Welcome.
+- When schedules, Knowledge items, or conversations are switched quickly, late results from an older selection no longer replace the active one.
+- Browser pages are created, reused, and closed with the correct Agent run, and finishing one requested run does not close another run's page.
+- Browser page structure filters non-interactive nodes so decoration or hidden content is less likely to be mistaken for a clickable target.
+- Screenshots accept ordinary bare domains and clearly reject empty, malformed, or damaged image results.
+- Large tool results no longer have a default global character cut-off. Historical saved defaults are migrated back to complete output while structured lists remain pageable.
+
+### Profile, Settings, and Workbench interface
+
+- The Profile rail adds a Codex quota card with plan, five-hour and weekly windows, remaining percentages, and reset times.
+- A separate API budget card shows monthly remaining, monthly limit, weekly remaining, and five-hour remaining, with a clear disabled state when no budget is configured.
+- Quota and currency budget use separate cards and progress bars instead of mixing different billing sources.
+- Collapsing the Profile rail hides budget cards to keep the narrow rail uncluttered.
+- Primary Settings actions use accent glass, secondary actions use neutral glass, and destructive actions use red danger treatment.
+- Inputs, selects, buttons, segmented controls, and channel switches now share consistent height, radius, borders, inset highlights, and keyboard focus feedback.
+- Channel cards, WeChat status, and inset status areas use one glass hierarchy instead of isolated solid panels.
+- Settings loading, saving, pairing, WeChat, and model requests consistently surface failed responses instead of reporting unsuccessful changes as saved.
+- Model deletion is visibly classified as a red destructive action instead of a purple secondary action.
+- Conversation-attention cards now use the shared floating-glass controls for option buttons, custom replies, and Send, including hover, focus, active, and disabled states.
+- Conversation overflow and activity-menu headings use clearer consistent weights for a more stable information hierarchy.
+- The local-model list becomes a compact set of transparent rows with lightweight dividers, smaller icons, tighter copy, and smaller actions so all four models fit more comfortably.
+- Model names, sizes, runtime state, Download, and Delete remain available, with narrow-window realignment that does not remove actions.
+- The composer microphone is equally spaced between the model selector and Send, with one compact spacing rule at narrow widths.
+- The task-board canvas extends behind the floating rail with stable gutters, removing the empty strip during horizontal scrolling.
+- The floating task rail is more translucent and uses stronger background blur, blending with the underlying canvas while preserving readability.
+- Long notification titles and body text wrap instead of creating horizontal scrolling.
+- The onboarding timezone row remains aligned on one line, and completing onboarding moves directly into the workspace.
+
+### Scheduling and desktop updates
+
+- Creating or editing a schedule now retains the selected IANA time zone, and schedule details and calendar previews show the same local time.
+- Recurring schedules calculate future runs by local wall-clock time, preserving the chosen hour and minute across daylight-saving changes.
+- Schedule creation, editing, background execution, and calendar expansion share one time-zone interpretation, preventing preview and execution drift.
+- Existing schedules without an explicit time zone retain their previous default behavior after upgrading.
+- Quickly switching schedules or Knowledge items no longer allows an older background result to overwrite the current detail view.
+- Desktop updates complete preparation and verification before installation and restart, and the app exits only after the desktop host confirms takeover.
+- Update actions remain tied to their originating window and request, so retries or stale state cannot launch a second installation accidentally.
+- Desktop-to-local-service reconnection is more stable, and a page holding stale connection information stops repeated requests until refreshed.
+- Desktop authentication is sent only to the active Cyrene service port and is not exposed to another local page after a port change.
+
 ## [0.7.1] - 2026-08-11
-
-### Cyrene self-control and settings
-
-- Added the progressively disclosed `cyrene_tools` package. Agents can snapshot the current rendered viewport, inspect one semantic component, and operate Cyrene through click, explicit double-click, type, scroll, and drag gestures.
-- New chat, search, project switching, and the active composer use stable nodes. Chat context actions appear only after the menu opens; stable nodes are deduplicated from generic DOM projection, and lists continue through real scrolling without a hard-coded item cap.
-- Browser frame titlebar controls, dragging, and double-click maximize/restore use the same focus-independent UI control layer. The dedicated double-click capability accepts only actions that explicitly advertise a double-click gesture, so ordinary buttons cannot be mis-triggered.
-- Added typed describe/read/write/control operations for every non-model setting family, including scalar settings, Soul, MCP, integrations, Remote, channels, Voice, and shortcuts. Compare-and-set and field-scoped writes surface conflicts instead of overwriting concurrent user changes.
-- Project, chat, and data business services remain available for internal orchestration but are no longer directly exposed to agents. Existing permission reviewers authorize actions, and batch tickets bind an exact operation list.
-- Composer submit is an explicit R2 action while stopping a run remains R1. Package-specific prompt text is disclosed only with `cyrene_tools` to retain a stable prompt-cache prefix.
-- Explicit desktop requests now reach the existing permission-review agent even when a legacy or renderer-originated turn has no client request ID, and the full current user request is reviewed when the model omits a quote. Permission cards localize capability and operation names, options, and labels from structured metadata instead of showing raw risk-qualified IDs or internal fingerprints.
 
 ### Remote collaboration and file workflows
 

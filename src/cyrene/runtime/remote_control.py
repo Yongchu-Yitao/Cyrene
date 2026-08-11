@@ -300,7 +300,7 @@ def _utc_now() -> datetime:
     return datetime.now(timezone.utc)
 
 
-def _utc_iso(value: datetime | None = None) -> str:
+def utc_iso(value: datetime | None = None) -> str:
     return (value or _utc_now()).isoformat()
 
 
@@ -538,7 +538,7 @@ class RemoteControlStore:
                 revision = remote_catalog_state.revision + 1,
                 updated_at = excluded.updated_at
             """,
-            (_utc_iso(),),
+            (utc_iso(),),
         )
         row = conn.execute(
             "SELECT revision FROM remote_catalog_state WHERE singleton = 1"
@@ -757,7 +757,7 @@ class RemoteControlStore:
                 (
                     DEFAULT_RELAY_URL,
                     platform.node() or "Cyrene device",
-                    _utc_iso(),
+                    utc_iso(),
                 ),
             )
             conn.execute(
@@ -766,7 +766,7 @@ class RemoteControlStore:
                     singleton, revision, updated_at
                 ) VALUES (1, 1, ?)
                 """,
-                (_utc_iso(),),
+                (utc_iso(),),
             )
             self._upgrade_required_compatibility_grants(conn)
 
@@ -845,7 +845,7 @@ class RemoteControlStore:
                     migration_id, applied_at
                 ) VALUES (?, ?)
                 """,
-                (_REMOTE_STORE_MIGRATION_ID, _utc_iso()),
+                (_REMOTE_STORE_MIGRATION_ID, utc_iso()),
             )
             conn.commit()
         finally:
@@ -942,7 +942,7 @@ class RemoteControlStore:
                 SET listen_port = ?, updated_at = ?
                 WHERE singleton = 1
                 """,
-                (port, _utc_iso()),
+                (port, utc_iso()),
             )
         self.audit(
             "remote_listener_port_selected",
@@ -986,7 +986,7 @@ class RemoteControlStore:
                 "unsupported remote tool packages: "
                 + ", ".join(invalid_packs)
             )
-        now = _utc_iso()
+        now = utc_iso()
         with self._lock, self._connect() as conn:
             conn.execute(
                 """
@@ -1056,8 +1056,8 @@ class RemoteControlStore:
                     secret_hash,
                     _json_dumps(caps),
                     _json_dumps(scopes),
-                    _utc_iso(expires),
-                    _utc_iso(now),
+                    utc_iso(expires),
+                    utc_iso(now),
                 ),
             )
         identity = self.public_identity()
@@ -1066,7 +1066,7 @@ class RemoteControlStore:
             "kind": "cyrene_pairing_invitation",
             "pairing_id": pairing_id,
             "secret": secret,
-            "expires_at": _utc_iso(expires),
+            "expires_at": utc_iso(expires),
             "relay_url": settings["relay_url"],
             "device": identity,
             "granted_capabilities": caps,
@@ -1335,7 +1335,7 @@ class RemoteControlStore:
             )
             conn.execute(
                 "UPDATE remote_pairings SET used_at = ? WHERE pairing_id = ?",
-                (_utc_iso(), pairing_id),
+                (utc_iso(), pairing_id),
             )
         self.audit(
             "pairing_completed",
@@ -1381,7 +1381,7 @@ class RemoteControlStore:
             existing = conn.execute(
                 "SELECT * FROM remote_peers WHERE device_id = ?", (device_id,)
             ).fetchone()
-            now = _utc_iso()
+            now = utc_iso()
             granted_caps = (
                 self._normalize_capabilities(granted_capabilities)
                 if granted_capabilities is not None
@@ -1491,7 +1491,7 @@ class RemoteControlStore:
                 SET lan_address = ?, last_seen_at = ?
                 WHERE device_id = ? AND revoked_at = ''
                 """,
-                (address, _utc_iso(), str(device_id)),
+                (address, utc_iso(), str(device_id)),
             )
             if cursor.rowcount != 1:
                 raise KeyError(device_id)
@@ -1638,7 +1638,7 @@ class RemoteControlStore:
         return peer
 
     def revoke_peer(self, device_id: str) -> bool:
-        now = _utc_iso()
+        now = utc_iso()
         with self._lock, self._connect() as conn:
             result = conn.execute(
                 "UPDATE remote_peers SET revoked_at = ? "
@@ -1667,7 +1667,7 @@ class RemoteControlStore:
                 SET last_seen_at = ?
                 WHERE device_id = ? AND revoked_at = ''
                 """,
-                (_utc_iso(), str(device_id)),
+                (utc_iso(), str(device_id)),
             )
 
     def authorize_inbound(
@@ -1716,7 +1716,7 @@ class RemoteControlStore:
         return True, ""
 
     def mark_nonce(self, peer_device_id: str, nonce: str) -> bool:
-        cutoff = _utc_iso(_utc_now() - timedelta(seconds=ENVELOPE_MAX_SKEW_SECONDS))
+        cutoff = utc_iso(_utc_now() - timedelta(seconds=ENVELOPE_MAX_SKEW_SECONDS))
         with self._lock, self._connect() as conn:
             conn.execute(
                 "DELETE FROM remote_replay_nonces WHERE observed_at < ?", (cutoff,)
@@ -1728,7 +1728,7 @@ class RemoteControlStore:
                         peer_device_id, nonce, observed_at
                     ) VALUES (?, ?, ?)
                     """,
-                    (str(peer_device_id), str(nonce), _utc_iso()),
+                    (str(peer_device_id), str(nonce), utc_iso()),
                 )
             except sqlite3.IntegrityError:
                 return False
@@ -1746,7 +1746,7 @@ class RemoteControlStore:
         peer_id = str(peer_device_id)
         key = str(idempotency_key)
         now = _utc_now()
-        stale_before = _utc_iso(now - timedelta(minutes=10))
+        stale_before = utc_iso(now - timedelta(minutes=10))
         with self._lock, self._connect() as conn:
             conn.execute("BEGIN IMMEDIATE")
             row = conn.execute(
@@ -1765,7 +1765,7 @@ class RemoteControlStore:
                         result_json, state, created_at
                     ) VALUES (?, ?, ?, '', 'in_progress', ?)
                     """,
-                    (peer_id, key, digest, _utc_iso(now)),
+                    (peer_id, key, digest, utc_iso(now)),
                 )
                 return "execute", None
             if not hmac.compare_digest(str(row["payload_hash"]), digest):
@@ -1779,7 +1779,7 @@ class RemoteControlStore:
                     SET created_at = ?
                     WHERE peer_device_id = ? AND idempotency_key = ?
                     """,
-                    (_utc_iso(now), peer_id, key),
+                    (utc_iso(now), peer_id, key),
                 )
                 return "execute", None
             return "in_progress", None
@@ -1812,7 +1812,7 @@ class RemoteControlStore:
                     str(idempotency_key),
                     digest,
                     _json_dumps(result),
-                    _utc_iso(),
+                    utc_iso(),
                 ),
             )
 
@@ -1840,7 +1840,7 @@ class RemoteControlStore:
                     str(command),
                     str(outcome),
                     _json_dumps(detail or {}),
-                    _utc_iso(),
+                    utc_iso(),
                 ),
             )
 

@@ -390,7 +390,7 @@ async def electron_current_url() -> str:
     return ""
 
 
-def _validate_screenshot_file(path: str) -> dict[str, int | str]:
+def validate_screenshot_file(path: str) -> dict[str, int | str]:
     """Require a non-empty, decodable PNG before exposing a screenshot path."""
     screenshot_path = Path(path)
     if not screenshot_path.is_file():
@@ -1605,7 +1605,7 @@ class _BrowserSession:
         tmp.close()  # Playwright writes via path; release fd immediately
         try:
             await page.screenshot(path=tmp.name, full_page=full_page)
-            _validate_screenshot_file(tmp.name)
+            validate_screenshot_file(tmp.name)
         except Exception:
             try:
                 os.unlink(tmp.name)
@@ -2097,7 +2097,7 @@ async def screenshot(
                 data = base64.b64decode(str(result.get("pngBase64") or ""), validate=True)
                 with open(tmp.name, "wb") as fh:
                     fh.write(data)
-                _validate_screenshot_file(tmp.name)
+                validate_screenshot_file(tmp.name)
             except Exception as exc:
                 try:
                     os.unlink(tmp.name)
@@ -2118,7 +2118,7 @@ async def screenshot(
         elif session._page is None:
             return {"ok": False, "error": "No page open. Call browser_navigate first."}
         path = await session.screenshot_path(full_page=full_page)
-        _validate_screenshot_file(path)
+        validate_screenshot_file(path)
         title = await (await session.page()).title()
         return {"ok": True, "path": path, "title": title}
     except Exception as exc:

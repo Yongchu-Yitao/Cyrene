@@ -6,6 +6,7 @@ module-level cycle.
 """
 
 import asyncio
+import importlib
 import json
 import logging
 from typing import Any
@@ -320,7 +321,7 @@ async def _insert_guidance_ack(
     })
 
 
-async def _fan_out_guidance_to_subagents(target_round_id: str, content: str, bot: Any, chat_id: int, db_path: str) -> list[str]:
+async def fan_out_guidance_to_subagents(target_round_id: str, content: str, bot: Any, chat_id: int, db_path: str) -> list[str]:
     from cyrene.runtime.inbox import send_message as _send_inbox
     from cyrene.subagent import (
         get_raw_messages as _sub_raw_msgs,
@@ -354,6 +355,9 @@ async def _fan_out_guidance_to_subagents(target_round_id: str, content: str, bot
                 agent_id,
             )
     return sent
+
+
+_fan_out_guidance_to_subagents = fan_out_guidance_to_subagents
 
 
 async def _wait_for_subagent_round(round_id: str, bot: Any, chat_id: int, db_path: str) -> tuple[bool, str]:
@@ -679,7 +683,9 @@ async def _final_reply_with_tools(
 # ---------------------------------------------------------------------------
 
 async def _process_main_inbox_message(message: dict[str, Any], bot: Any, chat_id: int, db_path: str) -> str:
-    from cyrene.agent.coordinator import _run_chat_agent
+    _run_chat_agent = importlib.import_module(
+        "cyrene.agent.coordinator"
+    )._run_chat_agent
     from cyrene.subagent import clear as _sub_clear, get_snapshot as _sub_snapshot
 
     target_round_id = str(message.get("round_id", "")).strip()
@@ -721,7 +727,7 @@ async def _process_main_inbox_message(message: dict[str, Any], bot: Any, chat_id
             "detail_key": "phase.applyingGuidanceToSubagents",
             "detail_params": {"count": len(snapshot)},
         })
-        await _fan_out_guidance_to_subagents(target_round_id, content, bot, chat_id, db_path)
+        await fan_out_guidance_to_subagents(target_round_id, content, bot, chat_id, db_path)
         interrupted, _summary = await _wait_for_subagent_round(target_round_id, bot, chat_id, db_path)
         if interrupted:
             reply = "[Sub-agents are still working in the background. The guidance was delivered and the round is continuing.]"
@@ -923,7 +929,9 @@ async def answer_pending_question(
     # the resume (e.g. a Workbench goal loop running in "auto" / "full_access").
     # It only applies to the normal clarification-resume path below; the
     # permission-elevation / plan-confirmation handlers keep their own modes.
-    from cyrene.agent.coordinator import _run_chat_agent
+    _run_chat_agent = importlib.import_module(
+        "cyrene.agent.coordinator"
+    )._run_chat_agent
 
     context = _pending_question_resume_context(question_id)
     pending = context.get("pending_question", {})
@@ -1154,7 +1162,9 @@ async def _handle_permission_elevation_answer(
     context: dict[str, Any],
     permission_mode: str = "default",
 ) -> str:
-    from cyrene.agent.coordinator import _run_chat_agent
+    _run_chat_agent = importlib.import_module(
+        "cyrene.agent.coordinator"
+    )._run_chat_agent
     from cyrene.runtime.settings_store import set_write_permission_mode
 
     normalized = str(answer_text or "").strip().lower()
@@ -1369,7 +1379,9 @@ async def _handle_plan_confirmation_answer(
     permission_mode: str = "default",
 ) -> str:
     """处理「计划模式」确认回答：同意并开始 / 拒绝 / 修改。"""
-    from cyrene.agent.coordinator import _run_chat_agent
+    _run_chat_agent = importlib.import_module(
+        "cyrene.agent.coordinator"
+    )._run_chat_agent
     from cyrene.agent.planning import _plan_to_text
 
     meta = pending.get("meta") if isinstance(pending.get("meta"), dict) else {}

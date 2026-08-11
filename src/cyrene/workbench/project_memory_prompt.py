@@ -11,6 +11,7 @@ from __future__ import annotations
 import asyncio
 import copy
 import hashlib
+import importlib
 import json
 import logging
 import re
@@ -543,7 +544,9 @@ def _recover_completed_context_snapshot(
     from cyrene.agent.session import load_session_state
     from cyrene.model_runtime.client import sanitize_messages_for_llm
     from cyrene.runtime.settings_store import get_models
-    from cyrene.workbench.chat import completed_turn_count
+    completed_turn_count = importlib.import_module(
+        "cyrene.workbench.chat"
+    ).completed_turn_count
 
     state = load_session_state(chat_id)
     raw_messages = state.get("messages") if isinstance(state, dict) else None

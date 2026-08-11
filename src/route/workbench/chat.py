@@ -905,7 +905,6 @@ def register_workbench_chat_routes(
         body = api_models.body_dict(body_model)
         message = str(body.get("message") or "").strip()
         client_request_id = str(body.get("clientRequestId") or "").strip()
-        ui_instance_id = str(body.get("uiInstanceId") or "").strip()
         if not message:
             return JSONResponse(
                 {"error": "guidance message is empty", "code": "guidance_empty"},

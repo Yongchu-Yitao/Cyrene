@@ -4084,7 +4084,7 @@ async def test_main_inbox_guidance_relays_to_subagents_and_inserts_reply(monkeyp
     async def fail_run_chat_agent(*_args, **_kwargs):
         raise AssertionError("_run_chat_agent should not run when the round already has subagents")
 
-    monkeypatch.setattr(_agent_guidance, "_fan_out_guidance_to_subagents", fake_fan_out)
+    monkeypatch.setattr(_agent_guidance, "fan_out_guidance_to_subagents", fake_fan_out)
     monkeypatch.setattr(_agent_guidance, "_wait_for_subagent_round", fake_wait)
     monkeypatch.setattr(subagent, "run_summary_subagent", fake_summary_subagent)
     monkeypatch.setattr(subagent, "build_flow_snapshot", fake_flow_snapshot)

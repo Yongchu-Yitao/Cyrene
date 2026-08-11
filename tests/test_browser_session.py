@@ -1010,22 +1010,22 @@ def test_screenshot_validation_requires_png_format_and_decodability(tmp_path, re
 
     valid = tmp_path / "valid.png"
     valid.write_bytes(_VALID_PNG)
-    assert browser._validate_screenshot_file(str(valid))["format"] == "PNG"
+    assert browser.validate_screenshot_file(str(valid))["format"] == "PNG"
 
     empty = tmp_path / "empty.png"
     empty.touch()
     with pytest.raises(ValueError, match="empty"):
-        browser._validate_screenshot_file(str(empty))
+        browser.validate_screenshot_file(str(empty))
 
     jpeg = tmp_path / "wrong.png"
     real_pillow_modules.new("RGB", (2, 2), "red").save(jpeg, format="JPEG")
     with pytest.raises(ValueError, match="expected PNG format, got JPEG"):
-        browser._validate_screenshot_file(str(jpeg))
+        browser.validate_screenshot_file(str(jpeg))
 
     truncated = tmp_path / "truncated.png"
     truncated.write_bytes(_VALID_PNG[:32])
     with pytest.raises(ValueError, match="cannot be decoded"):
-        browser._validate_screenshot_file(str(truncated))
+        browser.validate_screenshot_file(str(truncated))
 
 
 async def test_tool_browser_screenshot_rejects_invalid_artifact(monkeypatch, tmp_path):

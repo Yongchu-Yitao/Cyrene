@@ -136,16 +136,19 @@ def test_selected_text_is_materialized_as_pinned_markdown_file(tmp_path, monkeyp
 
 
 @pytest.mark.asyncio
-async def test_pinned_browser_screenshot_uses_owner_session_read_only(monkeypatch):
+async def test_pinned_browser_screenshot_uses_owner_session_read_only(monkeypatch, tmp_path):
     import cyrene.browser
     from cyrene.tool_impl.browser.browser_screenshot import _tool_browser_screenshot
     from cyrene.workbench import pinned_resources
+    from PIL import Image
 
     calls = []
+    screenshot_path = tmp_path / "owner-page.png"
+    Image.new("RGB", (3, 2), color=(25, 50, 75)).save(screenshot_path, format="PNG")
 
     async def fake_screenshot(url="", **kwargs):
         calls.append((url, kwargs))
-        return {"ok": True, "path": "", "title": "Owner page"}
+        return {"ok": True, "path": str(screenshot_path), "title": "Owner page"}
 
     monkeypatch.setattr(cyrene.browser, "screenshot", fake_screenshot)
     monkeypatch.setattr(

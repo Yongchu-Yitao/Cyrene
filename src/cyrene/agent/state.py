@@ -281,7 +281,7 @@ _MAIN_INBOX_AGENT_ID = "main"
 _AWAITING_USER_SENTINEL = "[[cyrene.awaiting_user]]"
 
 
-def _sanitize_public_agent_text(value: object) -> str:
+def sanitize_public_agent_text(value: object) -> str:
     """Remove internal control sentinels before text crosses a public boundary.
 
     Callers must not rely on exact equality here: provider adapters or a model
@@ -292,6 +292,9 @@ def _sanitize_public_agent_text(value: object) -> str:
     if _AWAITING_USER_SENTINEL in raw and not cleaned.strip("*_`~[](){}<> "):
         return ""
     return cleaned
+
+
+_sanitize_public_agent_text = sanitize_public_agent_text
 
 _REPORT_REF_PREFIX = "[Deep research report]"
 _REPORT_REF_MAX_PREVIEW = 280
