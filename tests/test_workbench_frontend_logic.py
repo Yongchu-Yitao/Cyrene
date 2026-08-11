@@ -1977,7 +1977,8 @@ def test_workbench_chat_interrupt_waits_for_server_and_uses_live_status_everywhe
     )[0]
 
     assert "Promise.resolve(request)" in runtime_interrupt
-    assert ".finally(function () {" in runtime_interrupt
+    assert ".then(function (result)" in runtime_interrupt
+    assert ".finally(function () {" not in runtime_interrupt
     assert "abort(chatId);" in runtime_interrupt
     assert 'fire("onInterrupted", chatId);' in source
     assert 'return { ...prev, status: "idle" };' in source
@@ -6183,11 +6184,11 @@ def test_workbench_wechat_channel_uses_qr_login_instead_of_token_input():
     index = (root / "src" / "webui" / "frontend" / "index.html").read_text(encoding="utf-8")
 
     assert "function WeChatConnectionPanel" in settings
-    assert 'fetch("/api/wechat/status")' in settings
-    assert 'fetch("/api/wechat/qr-login"' in settings
-    assert 'fetch("/api/wechat/poll-login"' in settings
-    assert 'fetch("/api/wechat/start"' in settings
-    assert 'fetch("/api/wechat/stop"' in settings
+    assert 'settingsFetch("/api/wechat/status")' in settings
+    assert 'settingsFetch("/api/wechat/qr-login"' in settings
+    assert 'settingsFetch("/api/wechat/poll-login"' in settings
+    assert 'settingsFetch("/api/wechat/start"' in settings
+    assert 'settingsFetch("/api/wechat/stop"' in settings
     assert "result.qrcode_image || result.qrcode_img" in settings
     assert "WECHAT_BOT_TOKEN" not in settings
     assert '"settings.wechatScanConnect": "扫描二维码连接"' in translations
@@ -6236,7 +6237,7 @@ def test_backup_actions_use_native_file_pickers_and_comfortable_density_only():
     assert 't("settings.backupRestoreBtn")' in settings
     assert 't("settings.backupHint")' in settings
     assert 'var [exportSids, setExportSids] = useStateSt([])' in settings
-    assert 'fetch("/api/workbench/chats")' in settings
+    assert 'settingsFetch("/api/workbench/chats")' in settings
     assert "(workbenchExportSessions || []).concat(dataState.sessions || [])" in settings
     assert "exportSessions.map(function (s)" in settings
     assert 'className: "wb-export-session-list"' in settings
@@ -6644,7 +6645,7 @@ def test_workbench_model_settings_preserve_form_on_failed_response():
 
     assert "async function readSettingsResponse(response)" in source
     assert "if (!response.ok)" in source
-    assert "fetch(\"/api/settings/models\").then(readSettingsResponse)" in source
+    assert "settingsFetch(\"/api/settings/models\").then(readSettingsResponse)" in source
     assert "}).then(readSettingsResponse).then(function (p)" in save_block
     assert "p.custom_models || norm" in save_block
     assert "p.vision_models || p.vision_candidates || vNorm" in save_block
@@ -7207,8 +7208,8 @@ def test_remote_settings_keeps_compatibility_on_and_persists_package_checkboxes(
     assert i18n.count('"settings.remoteShareSettingsHint"') == 2
     assert '"settings.remoteAllowController": "允许其他设备控制 Cyrene"' in i18n
     assert '"settings.remoteAllowControllerHint": "在共享设置中修改允许远程调用的工具或项目。"' in i18n
-    assert 'fetch("/api/remote/pairing/short-key"' in remote_panel
-    assert 'fetch("/api/remote/pairing/connect"' in remote_panel
+    assert 'settingsFetch("/api/remote/pairing/short-key"' in remote_panel
+    assert 'settingsFetch("/api/remote/pairing/connect"' in remote_panel
     assert 'error.code === "remote_pairing_peer_update_required"' in remote_panel
     assert i18n.count('"settings.remotePeerUpdateRequired"') == 2
     assert "function persistSettings(nextRemote, version)" in remote_panel

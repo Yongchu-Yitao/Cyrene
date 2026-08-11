@@ -1500,7 +1500,7 @@ def test_interrupt_waits_for_workbench_run_cleanup_before_acknowledging():
     assert "workbench_run.done.wait()" in interrupt_route
     assert "asyncio.shield" in interrupt_route
     manager_interrupt = manager_source.split("def interrupt(self, chat_id: str)", 1)[1].split(
-        "def start_or_get", 1
+        "async def terminate", 1
     )[0]
     assert "queue.put_nowait(None)" not in manager_interrupt
     runtime_interrupt = frontend_source.split("function interrupt(chatId, model)", 1)[1].split(
