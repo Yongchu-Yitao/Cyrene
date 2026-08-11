@@ -8149,3 +8149,37 @@ def test_settings_controls_share_memory_floating_material():
     assert ".wb-accent-custom-button" not in styles
     assert ".wb-skill-detail-card" not in styles
     assert ".settings-overlay .wb-export-session-select" not in styles
+
+
+def test_profile_rail_displays_budget_in_existing_spacer():
+    root = Path(__file__).resolve().parent.parent
+    source = (root / "src" / "webui" / "frontend" / "workbench.jsx").read_text(
+        encoding="utf-8"
+    )
+    styles = (root / "src" / "webui" / "frontend" / "workbench.css").read_text(
+        encoding="utf-8"
+    )
+    i18n = (
+        root / "src" / "webui" / "frontend" / "workbench-i18n.jsx"
+    ).read_text(encoding="utf-8")
+
+    profile_rail = source[source.index("function WorkbenchProfileRail"):source.index("// Temporarily keep sign-out")]
+    assert 'fetch("/api/budget/status")' in profile_rail
+    assert 'fetch("/api/settings/openai-oauth/limits")' in profile_rail
+    assert "WorkbenchModel.codexQuotaWindows(payload.limits)" in profile_rail
+    assert "codexQuotaState.connected" in profile_rail
+    assert 'className="workbench-profile-codex-quota"' in profile_rail
+    assert 'window.addEventListener("budget-saved", onBudgetSaved)' in profile_rail
+    assert 'window.addEventListener("cyrene:codex-auth-changed", onCodexAuthChanged)' in profile_rail
+    assert 'className="workbench-profile-rail-spacer"' in profile_rail
+    assert 'className="workbench-profile-budget-stack"' in profile_rail
+    assert profile_rail.count('className="workbench-profile-budget workbench-profile-') == 2
+    assert 'workbench-profile-codex-card' in profile_rail
+    assert 'workbench-profile-currency-card' in profile_rail
+    assert 't("profile.budgetDisabled")' in profile_rail
+    assert ".workbench-profile-budget {" in styles
+    budget_stack_rule = styles.split(".workbench-profile-budget-stack {", 1)[1].split("}", 1)[0]
+    assert "position: absolute;" in budget_stack_rule
+    assert "gap: 12px;" in budget_stack_rule
+    assert '"profile.budgetDisabled": "Budget is not enabled"' in i18n
+    assert '"profile.budgetDisabled": "未开启预算功能"' in i18n

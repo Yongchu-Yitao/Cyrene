@@ -1903,6 +1903,7 @@ function ModelsPanel(p) {
       .then(readSettingsResponse)
       .then(function (data) {
         setCodexState({ ...data, checking: false });
+        try { window.dispatchEvent(new CustomEvent("cyrene:codex-auth-changed", { detail: data })); } catch (e) {}
         var options = data.models || [];
         var saved = codexCandidateRef.current;
         var savedModel = saved && saved.model || "";

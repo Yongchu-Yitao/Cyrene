@@ -4975,10 +4975,144 @@ function WorkbenchSidebarDock({ activePage, onOpenPage, onSettings, collapsed, p
 
 function WorkbenchProfileRail({ collapsed, collapseControl, moduleDock }) {
   var { t } = window.CyreneUI.require("i18n").use();
+  var [budgetState, setBudgetState] = useWorkbenchState(null);
+  var cachedCodexQuota = WorkbenchModel.readCodexQuotaCache();
+  var [codexQuotaState, setCodexQuotaState] = useWorkbenchState({
+    connected: !!(cachedCodexQuota && cachedCodexQuota.connected),
+    windows: cachedCodexQuota ? WorkbenchModel.codexQuotaWindows(cachedCodexQuota.limits) : [],
+    plan: cachedCodexQuota ? WorkbenchModel.codexPlanLabel(cachedCodexQuota.account, cachedCodexQuota.limits) : "",
+  });
+
+  function fetchProfileBudget() {
+    fetch("/api/budget/status")
+      .then(function (response) { return response.json(); })
+      .then(function (payload) { setBudgetState(payload); })
+      .catch(function () {});
+  }
+
+  function fetchProfileCodexQuota() {
+    fetch("/api/settings/openai-oauth/limits")
+      .then(function (response) { return response.json(); })
+      .then(function (payload) {
+        WorkbenchModel.writeCodexQuotaCache(payload);
+        setCodexQuotaState({
+          connected: payload.connected === true,
+          windows: WorkbenchModel.codexQuotaWindows(payload.limits),
+          plan: WorkbenchModel.codexPlanLabel(payload.account, payload.limits),
+        });
+      })
+      .catch(function () {});
+  }
+
+  useWorkbenchEffect(function () {
+    fetchProfileBudget();
+    fetchProfileCodexQuota();
+    function onBudgetSaved() { fetchProfileBudget(); }
+    function onCodexAuthChanged() { fetchProfileCodexQuota(); }
+    try { window.addEventListener("budget-saved", onBudgetSaved); } catch (e) {}
+    try { window.addEventListener("cyrene:codex-auth-changed", onCodexAuthChanged); } catch (e) {}
+    return function () {
+      try { window.removeEventListener("budget-saved", onBudgetSaved); } catch (e) {}
+      try { window.removeEventListener("cyrene:codex-auth-changed", onCodexAuthChanged); } catch (e) {}
+    };
+  }, []);
+
+  function currencySymbol(currency) {
+    return currency === "CNY" ? "¥" : currency === "USD" ? "$" : currency === "EUR" ? "€" : currency === "GBP" ? "£" : currency || "";
+  }
+
+  function formatBudgetAmount(value) {
+    return currencySymbol(budgetState && budgetState.currency) + Number(value || 0).toFixed(2);
+  }
+
+  var budgetEnabled = !!(budgetState && budgetState.monthly_budget > 0);
+  var monthlyUsedPercent = budgetEnabled
+    ? Math.max(0, Math.min(100, Number(budgetState.monthly_spent || 0) / Number(budgetState.monthly_budget) * 100))
+    : 0;
+
+  function codexQuotaWindowName(windowData) {
+    if (windowData.kind === "five_hour") return t("rail.budgetFiveHour");
+    if (windowData.kind === "weekly") return t("rail.budgetWeekly");
+    return windowData.label || t("settings.codexQuotaWindow");
+  }
+
+  function codexQuotaResetTime(windowData) {
+    return windowData.resetsAt ? new Date(windowData.resetsAt * 1000).toLocaleString() : "—";
+  }
+
   return (
     <aside className={"workbench-profile-rail workbench-integrated-rail" + (collapsed ? " is-collapsed" : "")}>
       <header className="workbench-integrated-rail-head"><b>{t("rail.profile")}</b>{collapseControl}</header>
-      <div className="workbench-profile-rail-spacer"></div>
+      <div className="workbench-profile-rail-spacer">
+        <div className="workbench-profile-budget-stack" aria-live="polite">
+          {codexQuotaState.connected && (
+            <section className="workbench-profile-budget workbench-profile-codex-card">
+              <div className="workbench-profile-budget-head">
+                <span className="workbench-profile-budget-icon" aria-hidden="true">
+                  <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+                    <path d="M8.5 4.5 12 2.5l3.5 2 3.5 2v4l2 3.5-2 3.5-3.5 2L12 21.5l-3.5-2-3.5-2v-4L3 10l2-3.5Z"/>
+                    <circle cx="12" cy="12" r="3.5"/>
+                  </svg>
+                </span>
+                <b>{t("settings.codexQuota")}</b>
+              </div>
+              <div className="workbench-profile-codex-quota">
+                <div className="workbench-profile-codex-head">
+                  <strong>Codex</strong>
+                  <small>{t("settings.codexQuotaPlan", { plan: codexQuotaState.plan || "—" })}</small>
+                </div>
+                {codexQuotaState.windows.length > 0 ? codexQuotaState.windows.map(function (windowData) {
+                  return (
+                    <div className="workbench-profile-codex-window" key={windowData.kind + "-" + windowData.durationMins}>
+                      <div className="workbench-profile-codex-row">
+                        <span>{codexQuotaWindowName(windowData)}</span>
+                        <b>{t("settings.codexQuotaRemaining", { pct: windowData.remainingPercent })}</b>
+                      </div>
+                      <div className="workbench-profile-budget-progress" aria-hidden="true">
+                        <span className={windowData.usedPercent >= 100 ? "over" : windowData.usedPercent >= 80 ? "high" : ""} style={{ width: windowData.usedPercent + "%" }} />
+                      </div>
+                      <small>{t("settings.codexQuotaResets", { time: codexQuotaResetTime(windowData) })}</small>
+                    </div>
+                  );
+                }) : (
+                  <div className="workbench-profile-codex-empty">{t("settings.codexQuotaUnavailable")}</div>
+                )}
+              </div>
+            </section>
+          )}
+          <section className="workbench-profile-budget workbench-profile-currency-card">
+            <div className="workbench-profile-budget-head">
+              <span className="workbench-profile-budget-icon" aria-hidden="true">
+                <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+                  <rect x="3" y="5" width="18" height="14" rx="3"/>
+                  <path d="M16 9h5v6h-5a3 3 0 0 1 0-6Z"/><path d="M7 5V3.5h10V5"/>
+                </svg>
+              </span>
+              <b>{t("profile.apiBudgetTitle")}</b>
+            </div>
+            {!budgetState ? (
+              <div className="workbench-profile-budget-empty">{t("common.loading")}</div>
+            ) : !budgetEnabled ? (
+              <div className="workbench-profile-budget-empty">{t("profile.budgetDisabled")}</div>
+            ) : (
+              <div className="workbench-profile-budget-content">
+                <div className="workbench-profile-budget-monthly">
+                  <span>{t("profile.budgetMonthlyRemaining")}</span>
+                  <strong>{formatBudgetAmount(budgetState.monthly_remaining)}</strong>
+                  <small>{t("profile.budgetOfLimit", { limit: formatBudgetAmount(budgetState.monthly_budget) })}</small>
+                </div>
+                <div className="workbench-profile-budget-progress" aria-hidden="true">
+                  <span className={monthlyUsedPercent >= 100 ? "over" : monthlyUsedPercent >= 80 ? "high" : ""} style={{ width: monthlyUsedPercent + "%" }} />
+                </div>
+                <div className="workbench-profile-budget-rows">
+                  <div><span>{t("profile.budgetWeeklyRemaining")}</span><b>{formatBudgetAmount(budgetState.weekly_remaining)}</b></div>
+                  <div><span>{t("profile.budgetFiveHourRemaining")}</span><b>{formatBudgetAmount(budgetState.five_hour_remaining)}</b></div>
+                </div>
+              </div>
+            )}
+          </section>
+        </div>
+      </div>
       {moduleDock}
     </aside>
   );
