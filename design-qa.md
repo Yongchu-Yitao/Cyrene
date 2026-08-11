@@ -799,3 +799,41 @@ No actionable P0, P1, or P2 mismatch remains.
 - Browser console errors: none.
 
 final result: passed
+
+---
+
+# Settings Control Material Consolidation Design QA — 2026-08-11
+
+- Defect references: `/var/folders/zm/qgh_rgw903j0b9t01yg2l0mc0000gn/T/codex-clipboard-56a60498-4c75-4dc9-a16d-0f10d4ea682c.png`, `/var/folders/zm/qgh_rgw903j0b9t01yg2l0mc0000gn/T/codex-clipboard-01e189e4-3118-4a78-be54-053dca543aa1.png`, `/var/folders/zm/qgh_rgw903j0b9t01yg2l0mc0000gn/T/codex-clipboard-4fd1c8cc-a043-4503-8063-f49db2939727.png`, `/var/folders/zm/qgh_rgw903j0b9t01yg2l0mc0000gn/T/codex-clipboard-7d8cc07f-7390-44b4-b6af-ceb1bbc24886.png`, `/var/folders/zm/qgh_rgw903j0b9t01yg2l0mc0000gn/T/codex-clipboard-23e86db0-f3da-4308-9ce2-a4bc1c2515ff.png`, `/var/folders/zm/qgh_rgw903j0b9t01yg2l0mc0000gn/T/codex-clipboard-f76683ac-5833-4c6a-8b81-197762dfdf18.png`, `/var/folders/zm/qgh_rgw903j0b9t01yg2l0mc0000gn/T/codex-clipboard-1e725e0b-a7e2-4b89-9d9d-fcff79577d2e.png`, `/var/folders/zm/qgh_rgw903j0b9t01yg2l0mc0000gn/T/codex-clipboard-80bce686-946b-4d10-823f-868f495e4734.png`, `/var/folders/zm/qgh_rgw903j0b9t01yg2l0mc0000gn/T/codex-clipboard-bd171ed1-db9a-4353-8e18-3447936bd3a7.png`.
+- Target material references: `/var/folders/zm/qgh_rgw903j0b9t01yg2l0mc0000gn/T/codex-clipboard-a7521d56-9ce6-4b01-95a9-59d203fcbb4d.png` (`1118 × 224 px`) and `/var/folders/zm/qgh_rgw903j0b9t01yg2l0mc0000gn/T/codex-clipboard-ae5d548d-1457-4b9f-a94b-29401d90e7d9.png` (`264 × 142 px`).
+- Light implementation: `/Users/syw/Documents/playground/Cyrene/output/settings-controls-unified-light.png` (`1280 × 720 px`).
+- Dark implementation: `/Users/syw/Documents/playground/Cyrene/output/settings-controls-unified-dark.png` (`1280 × 720 px`).
+- Combined focused comparison: `/Users/syw/Documents/playground/Cyrene/output/settings-controls-comparison.png`.
+- Browser viewport: `1280 × 720` CSS px at device density `1`; source material crops were normalized into a single `1140 px` comparison row before review.
+- States: Settings light and dark themes; General, Models, Capabilities, Skills, Channels, Connections, Agents, Data, and Budget tabs.
+
+## Findings
+
+No actionable P0, P1, or P2 mismatch remains.
+
+- Typography and copy remain unchanged. Button labels keep the normal foreground color instead of inheriting the accent color.
+- Primary actions now use the shared accent-tinted glass material; secondary actions use a neutral glass material; destructive actions use a red danger material.
+- Inputs, selects, buttons, segmented controls, and channel switches now resolve to the shared `38 px` control height, `12 px` control radius, theme-aware border, inset highlight, and focus treatment.
+- Channel cards use the shared `16 px` glass-card radius and the WeChat status inset uses the shared `12 px` control surface.
+- Model deletion is explicitly classified as a danger action and no longer appears as a purple secondary button.
+- No raster or generated assets are involved in this control-only change; existing icon and type assets remain intact.
+
+## Comparison History
+
+- Earlier P1: light-theme selectors had higher specificity than the settings material rules, so primary buttons remained solid purple and shared control dimensions fell back to `32 px` / `7 px`.
+- Fix: strengthened the shared Settings selectors at the overlay boundary and separated neutral, primary, and danger button materials; added shared channel-card and status-surface styling.
+- Post-fix evidence: every audited Settings action resolves to the intended material. Primary buttons measure `38 px` high with a `12 px` radius in both themes; compact model deletion remains intentionally `34 px` / `9 px` and is red.
+
+## Verification
+
+- Frontend production build: passed.
+- `git diff --check`: passed.
+- Primary interactions: navigated all audited Settings tabs; switched to dark mode, inspected Channels, and restored the original follow-system preference.
+- Browser console errors: none.
+
+final result: passed
