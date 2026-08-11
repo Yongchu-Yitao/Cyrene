@@ -1210,6 +1210,7 @@
     var citationState = useState({ style: "ieee", text: "", bibtex: "", citekey: "", loading: false, error: "" }); var citation = citationState[0]; var setCitation = citationState[1];
     var fileRef = useRef(null);
     var requestSeq = useRef(0);
+    var loadMoreSeq = useRef(0);
     var detailSeq = useRef(0);
     var readMarksRef = useRef({});
 
@@ -1250,6 +1251,8 @@
       options = options || {};
       if (!client || !workspace) return Promise.resolve();
       var seq = ++requestSeq.current;
+      loadMoreSeq.current += 1;
+      setLoadingMore(false);
       setLoading(true); setError("");
       var calls = [client.list(listParams())];
       if (!options.itemsOnly) calls.push(client.stats(), client.collections(), client.tags());
@@ -1275,12 +1278,31 @@
     function loadMore() {
       if (!client || loadingMore || data.items.length >= data.total) return;
       var params = listParams(); params.offset = data.items.length;
+      var seq = ++loadMoreSeq.current;
       setLoadingMore(true);
       client.list(params).then(function (payload) {
+        if (seq !== loadMoreSeq.current) return;
         var items = Array.isArray(payload.items) ? payload.items : [];
-        setData(function (prev) { return Object.assign({}, prev, { items: prev.items.concat(items), total: payload.total != null ? payload.total : prev.total }); });
+        setData(function (prev) {
+          var seen = {};
+          prev.items.forEach(function (item) { seen[String(item.id)] = true; });
+          var uniqueItems = items.filter(function (item) {
+            var id = String(item.id);
+            if (seen[id]) return false;
+            seen[id] = true;
+            return true;
+          });
+          return Object.assign({}, prev, {
+            items: prev.items.concat(uniqueItems),
+            total: payload.total != null ? payload.total : prev.total,
+          });
+        });
         setLoadingMore(false);
-      }).catch(function (err) { setLoadingMore(false); Toast(String(err.message || err), "error"); });
+      }).catch(function (err) {
+        if (seq !== loadMoreSeq.current) return;
+        setLoadingMore(false);
+        Toast(String(err.message || err), "error");
+      });
     }
 
     useEffect(function () {

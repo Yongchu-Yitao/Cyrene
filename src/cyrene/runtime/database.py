@@ -21,6 +21,7 @@ CREATE TABLE IF NOT EXISTS scheduled_tasks (
     prompt TEXT NOT NULL,
     schedule_type TEXT NOT NULL,
     schedule_value TEXT NOT NULL,
+    schedule_timezone TEXT DEFAULT 'UTC',
     next_run TEXT,
     last_run TEXT,
     last_result TEXT,
@@ -365,6 +366,10 @@ async def init_db(db_path: str) -> None:
             pass  # Column already exists
         try:
             await db.execute("ALTER TABLE scheduled_tasks ADD COLUMN project_id TEXT DEFAULT 'default'")
+        except Exception:
+            pass  # Column already exists
+        try:
+            await db.execute("ALTER TABLE scheduled_tasks ADD COLUMN schedule_timezone TEXT DEFAULT 'UTC'")
         except Exception:
             pass  # Column already exists
         await db.execute(
@@ -1507,12 +1512,22 @@ async def _maybe_backfill_analytics(db_path: str) -> None:
 
 # --- Task CRUD ---
 
-async def create_task(db_path: str, chat_id: int, prompt: str, schedule_type: str, schedule_value: str, next_run: str, permission_mode: str = "workspace_only", project_id: str = "default") -> str:
+async def create_task(
+    db_path: str,
+    chat_id: int,
+    prompt: str,
+    schedule_type: str,
+    schedule_value: str,
+    next_run: str,
+    permission_mode: str = "workspace_only",
+    project_id: str = "default",
+    schedule_timezone: str = "UTC",
+) -> str:
     task_id = uuid.uuid4().hex[:8]
     async with aiosqlite.connect(db_path) as db:
         await db.execute(
-            "INSERT INTO scheduled_tasks (id, chat_id, project_id, prompt, schedule_type, schedule_value, next_run, created_at, permission_mode) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
-            (task_id, chat_id, project_id or "default", prompt, schedule_type, schedule_value, next_run, datetime.now(timezone.utc).isoformat(), permission_mode),
+            "INSERT INTO scheduled_tasks (id, chat_id, project_id, prompt, schedule_type, schedule_value, schedule_timezone, next_run, created_at, permission_mode) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (task_id, chat_id, project_id or "default", prompt, schedule_type, schedule_value, schedule_timezone or "UTC", next_run, datetime.now(timezone.utc).isoformat(), permission_mode),
         )
         await db.commit()
     return task_id

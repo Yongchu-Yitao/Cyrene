@@ -9,9 +9,8 @@
 //     concrete dated events by the backend `/occurrences` endpoint.
 //   • entity deadlines (任务截止) — entities carrying a `due_date`, shown all-day.
 //
-// Timezone: the backend evaluates cron / next_run in UTC and returns UTC ISO; we
-// render in local time. The create form mirrors this by deriving cron fields from
-// the chosen local time's UTC components, so the calendar shows when it fires.
+// Timezone: next_run is stored and returned as UTC ISO, while cron wall-clock
+// fields are evaluated in the persisted IANA timezone chosen by this desktop.
 (function () {
   var useState = React.useState;
   var useEffect = React.useEffect;
@@ -71,6 +70,46 @@
   function toLocalInputValue(d) {
     return d.getFullYear() + "-" + pad2(d.getMonth() + 1) + "-" + pad2(d.getDate()) +
       "T" + pad2(d.getHours()) + ":" + pad2(d.getMinutes());
+  }
+  function toTimezoneInputValue(d, timezoneName) {
+    try {
+      var parts = new Intl.DateTimeFormat("en-US", {
+        timeZone: timezoneName,
+        year: "numeric", month: "2-digit", day: "2-digit",
+        hour: "2-digit", minute: "2-digit", hourCycle: "h23",
+      }).formatToParts(d);
+      var values = {};
+      parts.forEach(function (part) { if (part.type !== "literal") values[part.type] = part.value; });
+      return values.year + "-" + values.month + "-" + values.day + "T" + values.hour + ":" + values.minute;
+    } catch (e) {
+      return toLocalInputValue(d);
+    }
+  }
+  function timezoneOffsetMs(d, timezoneName) {
+    var parts = new Intl.DateTimeFormat("en-US", {
+      timeZone: timezoneName,
+      year: "numeric", month: "2-digit", day: "2-digit",
+      hour: "2-digit", minute: "2-digit", second: "2-digit", hourCycle: "h23",
+    }).formatToParts(d);
+    var values = {};
+    parts.forEach(function (part) { if (part.type !== "literal") values[part.type] = Number(part.value); });
+    return Date.UTC(values.year, values.month - 1, values.day, values.hour, values.minute, values.second) - d.getTime();
+  }
+  function dateFromTimezoneInput(value, timezoneName) {
+    var match = String(value || "").match(/^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})$/);
+    if (!match) return new Date(NaN);
+    var wallUtc = Date.UTC(Number(match[1]), Number(match[2]) - 1, Number(match[3]), Number(match[4]), Number(match[5]), 0);
+    try {
+      var candidate = new Date(wallUtc);
+      for (var i = 0; i < 3; i++) {
+        candidate = new Date(wallUtc - timezoneOffsetMs(candidate, timezoneName));
+      }
+      // Reject nonexistent local times during the spring DST jump instead of
+      // silently scheduling a different wall-clock value.
+      return toTimezoneInputValue(candidate, timezoneName) === value ? candidate : new Date(NaN);
+    } catch (e) {
+      return new Date(value);
+    }
   }
   function toDateInputValue(iso) {
     if (!iso) return "";
@@ -165,22 +204,42 @@
   }
 
   // ── schedule <-> form mapping ────────────────────────────────────────
-  // Build a backend schedule spec from the friendly form. Cron fields use the
-  // chosen local time's *UTC* components so what the calendar shows is when the
-  // backend (which evaluates cron in UTC) actually fires.
-  function buildSchedule(repeat, startDate, cronText, intervalValue, intervalUnit) {
-    if (repeat === "none") return { schedule_type: "once", schedule_value: startDate.toISOString() };
-    if (repeat === "cron") return { schedule_type: "cron", schedule_value: (cronText || "").trim() };
+  function localScheduleTimezone() {
+    try {
+      var configured = localStorage.getItem("cyrene-timezone") || "";
+      if (configured) {
+        new Intl.DateTimeFormat("en-US", { timeZone: configured }).format();
+        return configured;
+      }
+      return Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC";
+    } catch (e) {
+      return "UTC";
+    }
+  }
+
+  // Build a backend schedule spec from the friendly form. Cron fields retain
+  // the chosen local wall-clock components and carry an IANA timezone so daily,
+  // weekly and monthly schedules do not drift when the UTC offset changes.
+  function buildSchedule(repeat, startDate, cronText, intervalValue, intervalUnit, scheduleTimezone, wallValue) {
+    scheduleTimezone = scheduleTimezone || localScheduleTimezone();
+    if (repeat === "none") return { schedule_type: "once", schedule_value: startDate.toISOString(), schedule_timezone: scheduleTimezone };
+    if (repeat === "cron") return { schedule_type: "cron", schedule_value: (cronText || "").trim(), schedule_timezone: scheduleTimezone };
     if (repeat === "interval") {
       var mult = intervalUnit === "h" ? 3600 : intervalUnit === "d" ? 86400 : 60;
       var secs = Math.max(1, Math.round(Number(intervalValue || 0) * mult));
-      return { schedule_type: "interval", schedule_value: String(secs) };
+      return { schedule_type: "interval", schedule_value: String(secs), schedule_timezone: scheduleTimezone };
     }
-    var m = startDate.getUTCMinutes(), h = startDate.getUTCHours();
-    if (repeat === "daily") return { schedule_type: "cron", schedule_value: m + " " + h + " * * *" };
-    if (repeat === "weekly") return { schedule_type: "cron", schedule_value: m + " " + h + " * * " + startDate.getUTCDay() };
-    if (repeat === "monthly") return { schedule_type: "cron", schedule_value: m + " " + h + " " + startDate.getUTCDate() + " * *" };
-    return { schedule_type: "once", schedule_value: startDate.toISOString() };
+    var wallMatch = String(wallValue || "").match(/^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})$/);
+    var m = wallMatch ? Number(wallMatch[5]) : startDate.getMinutes();
+    var h = wallMatch ? Number(wallMatch[4]) : startDate.getHours();
+    var dayOfMonth = wallMatch ? Number(wallMatch[3]) : startDate.getDate();
+    var dayOfWeek = wallMatch
+      ? new Date(Date.UTC(Number(wallMatch[1]), Number(wallMatch[2]) - 1, dayOfMonth)).getUTCDay()
+      : startDate.getDay();
+    if (repeat === "daily") return { schedule_type: "cron", schedule_value: m + " " + h + " * * *", schedule_timezone: scheduleTimezone };
+    if (repeat === "weekly") return { schedule_type: "cron", schedule_value: m + " " + h + " * * " + dayOfWeek, schedule_timezone: scheduleTimezone };
+    if (repeat === "monthly") return { schedule_type: "cron", schedule_value: m + " " + h + " " + dayOfMonth + " * *", schedule_timezone: scheduleTimezone };
+    return { schedule_type: "once", schedule_value: startDate.toISOString(), schedule_timezone: scheduleTimezone };
   }
 
   // Recover friendly form state from an existing task (best-effort).
@@ -207,16 +266,15 @@
       out.start = new Date(task.next_run || Date.now());
       if (p.length === 5 && /^\d+$/.test(p[0]) && /^\d+$/.test(p[1])) {
         var mi = parseInt(p[0], 10), ho = parseInt(p[1], 10), dom = p[2], mo = p[3], dow = p[4];
-        // Reconstruct a local start whose UTC h/m match the cron fields.
-        var d = new Date(); d.setUTCHours(ho, mi, 0, 0);
+        // next_run already represents the correct instant; presenting that
+        // instant locally gives the edit form the same wall-clock value.
+        var d = out.start;
         if (dom === "*" && mo === "*" && dow === "*") { out.repeat = "daily"; out.start = d; return out; }
         if (dom === "*" && mo === "*" && /^\d+$/.test(dow)) {
-          var cur = d.getUTCDay(), want = parseInt(dow, 10) % 7;
-          d.setUTCDate(d.getUTCDate() + ((want - cur + 7) % 7));
           out.repeat = "weekly"; out.start = d; return out;
         }
         if (/^\d+$/.test(dom) && mo === "*" && dow === "*") {
-          d.setUTCDate(parseInt(dom, 10)); out.repeat = "monthly"; out.start = d; return out;
+          out.repeat = "monthly"; out.start = d; return out;
         }
       }
       out.repeat = "cron"; out.cronText = sval;
@@ -763,6 +821,7 @@
 
   // ── new / edit schedule form (modal) ─────────────────────────────────
   function ScheduleForm(props) {
+    var scheduleTimezone = (props.task && props.task.schedule_timezone) || localScheduleTimezone();
     var initial = useMemo(function () {
       if (props.task) return parseSchedule(props.task);
       var s = new Date(props.defaultDate || new Date());
@@ -776,7 +835,7 @@
     var entityDateState = useState(toDateInputValue(props.entity && props.entity.due_date)); var entityDate = entityDateState[0], setEntityDate = entityDateState[1];
     var entityStatusState = useState(props.entity ? (props.entity.status || "active") : "active"); var entityStatus = entityStatusState[0], setEntityStatus = entityStatusState[1];
     var entityPriorityState = useState(props.entity ? (props.entity.priority || "medium") : "medium"); var entityPriority = entityPriorityState[0], setEntityPriority = entityPriorityState[1];
-    var startState = useState(toLocalInputValue(initial.start)); var startVal = startState[0], setStartVal = startState[1];
+    var startState = useState(toTimezoneInputValue(initial.start, scheduleTimezone)); var startVal = startState[0], setStartVal = startState[1];
     var repeatState = useState(initial.repeat); var repeat = repeatState[0], setRepeat = repeatState[1];
     var cronState = useState(initial.cronText); var cronText = cronState[0], setCronText = cronState[1];
     var ivState = useState(initial.intervalValue); var ivVal = ivState[0], setIvVal = ivState[1];
@@ -810,11 +869,11 @@
         entityOp.then(function () { props.onSaved(); }).catch(function (e) { setErr(e.message || String(e)); }).finally(function () { setSaving(false); });
         return;
       }
-      var startDate = new Date(startVal);
+      var startDate = dateFromTimezoneInput(startVal, scheduleTimezone);
       if (repeat !== "cron" && repeat !== "interval" && isNaN(startDate.getTime())) { setErr(T("schedule.error.invalidFirstTime")); return; }
-      var spec = buildSchedule(repeat, startDate, cronText, ivVal, ivUnit);
+      var spec = buildSchedule(repeat, startDate, cronText, ivVal, ivUnit, scheduleTimezone, startVal);
       if ((spec.schedule_type === "cron" || spec.schedule_type === "interval") && !spec.schedule_value) { setErr(T("schedule.error.repeatRequired")); return; }
-      var body = { prompt: p, schedule_type: spec.schedule_type, schedule_value: spec.schedule_value };
+      var body = { prompt: p, schedule_type: spec.schedule_type, schedule_value: spec.schedule_value, schedule_timezone: spec.schedule_timezone };
       if (spec.schedule_type === "once") body.next_run = startDate.toISOString();
       setSaving(true); setErr("");
       var op = props.task ? props.api.update(props.task.id, body) : props.api.create(body);
@@ -971,6 +1030,7 @@
     var pendingTaskIdRef = useRef("");
     var pendingEntityIdRef = useRef("");
     var pendingDateAppliedRef = useRef(false);
+    var detailRequestSeqRef = useRef(0);
 
     useEffect(function () {
       if (!contextMenu) return undefined;
@@ -1164,16 +1224,36 @@
     }, [selectedId, events, rawEvents, entityDetail]);
 
     function selectEvent(ev) {
+      var requestSeq = ++detailRequestSeqRef.current;
       setSelectedId(ev.id);
       setDetailTab("detail");
       if (ev.source === "task" && ev.task_id) {
         setEntityDetail(null);
         setRuns([]); setRunsLoading(true);
-        API.runs(ev.task_id).then(function (r) { setRuns(r); }).catch(function () { setRuns([]); }).finally(function () { setRunsLoading(false); });
+        API.runs(ev.task_id).then(function (r) {
+          if (requestSeq === detailRequestSeqRef.current) setRuns(r);
+        }).catch(function () {
+          if (requestSeq === detailRequestSeqRef.current) setRuns([]);
+        }).finally(function () {
+          if (requestSeq === detailRequestSeqRef.current) setRunsLoading(false);
+        });
       } else if (ev.source === "entity" && ev.entity_id) {
+        setEntityDetail(null);
         setRuns([]); setRunsLoading(false);
-        API.getEntity(ev.entity_id).then(function (ent) { setEntityDetail(ent); }).catch(function () { setEntityDetail(null); });
+        API.getEntity(ev.entity_id).then(function (ent) {
+          if (requestSeq === detailRequestSeqRef.current) setEntityDetail(ent);
+        }).catch(function () {
+          if (requestSeq === detailRequestSeqRef.current) setEntityDetail(null);
+        });
       }
+    }
+
+    function closeDetail() {
+      detailRequestSeqRef.current += 1;
+      setSelectedId(null);
+      setRuns([]);
+      setRunsLoading(false);
+      setEntityDetail(null);
     }
 
     function goToday() { setAnchorDate(today); setViewMonth(new Date()); }
@@ -1286,7 +1366,7 @@
         ? React.createElement(DetailPanel, {
           event: selectedEvent, tab: detailTab, setTab: setDetailTab,
           runs: runs, runsLoading: runsLoading,
-          onClose: function () { setSelectedId(null); },
+          onClose: closeDetail,
           onEdit: openEdit,
           onToggleStatus: toggleStatus,
           onDelete: function (ev) { return ev.source === "task" ? removeTask(ev) : removeEntity(ev); },
