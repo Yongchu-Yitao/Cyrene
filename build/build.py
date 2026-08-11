@@ -193,10 +193,19 @@ def run_pyinstaller(arch: str = "x64") -> None:
         "--noconfirm",
         str(SPEC_FILE),
     ]
-    # Windows cross-compilation support (x64 or ARM64 runners building ARM64 binaries).
+    # The Windows ARM64 package intentionally carries an x64 Python backend.
+    # Windows 11 on ARM runs that process natively through its compatibility
+    # layer, while Electron and the installer remain native ARM64. This keeps
+    # the full OCR/media stack available because several Python projects do not
+    # publish Windows ARM64 wheels yet.
     if sys.platform == "win32" and arch == "arm64":
-        os.environ["PYINSTALLER_TARGET_ARCH"] = "ARM64"
-        print("  [target] ARM64")
+        bundle_arch = os.environ.get("CYRENE_PYTHON_BUNDLE_ARCH", "arm64").lower()
+        if bundle_arch == "x64":
+            os.environ.pop("PYINSTALLER_TARGET_ARCH", None)
+            print("  [python bundle] x64 compatibility backend for Windows ARM64")
+        else:
+            os.environ["PYINSTALLER_TARGET_ARCH"] = "ARM64"
+            print("  [target] ARM64")
     result = subprocess.run(cmd, cwd=str(PROJECT_ROOT))
     if result.returncode != 0:
         print("  [error] PyInstaller failed")

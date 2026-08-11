@@ -239,10 +239,10 @@ jobs:
   build-windows-arm:
     runs-on: windows-11-arm
     env:
-      # vcpkg's files provider writes content-addressed OpenSSL packages into a
-      # directory persisted by actions/cache. The former x-gha provider was
-      # removed from current vcpkg releases.
-      VCPKG_BINARY_SOURCES: 'clear;files,${{ github.workspace }}\vcpkg-binary-cache,readwrite'
+      # Electron is native ARM64. The bundled Python backend is x64 so every
+      # runtime dependency, including OpenCV/RapidOCR, uses a maintained wheel;
+      # Windows 11 on ARM runs it through its built-in x64 compatibility layer.
+      CYRENE_PYTHON_BUNDLE_ARCH: x64
     steps:
       - uses: actions/checkout@v7
 
@@ -250,6 +250,7 @@ jobs:
         uses: actions/setup-python@v7
         with:
           python-version: ${{ env.PYTHON_VERSION }}
+          architecture: x64
           cache: "pip"
           cache-dependency-path: |
             pyproject.toml
@@ -264,22 +265,6 @@ jobs:
             electron/package-lock.json
             src/webui/package-lock.json
 
-      - name: Restore vcpkg binary cache
-        uses: actions/cache@v6
-        with:
-          path: vcpkg-binary-cache
-          key: vcpkg-${{ runner.os }}-${{ runner.arch }}-openssl-arm64-static-md-${{ hashFiles('pyproject.toml', 'uv.lock', '.github/workflows/release.yml') }}
-          restore-keys: |
-            vcpkg-${{ runner.os }}-${{ runner.arch }}-openssl-arm64-static-md-
-
-      - name: Install OpenSSL (ARM64)
-        run: |
-          vcpkg install openssl:arm64-windows-static-md
-          echo "OPENSSL_DIR=C:\vcpkg\installed\arm64-windows-static-md" >> $env:GITHUB_ENV
-          echo "OPENSSL_INCLUDE_DIR=C:\vcpkg\installed\arm64-windows-static-md\include" >> $env:GITHUB_ENV
-          echo "OPENSSL_LIB_DIR=C:\vcpkg\installed\arm64-windows-static-md\lib" >> $env:GITHUB_ENV
-          echo "OPENSSL_STATIC=1" >> $env:GITHUB_ENV
-
       - name: Install Python deps
         run: |
           pip install "pyinstaller>=6.0" pillow packaging pypdf reportlab
@@ -293,11 +278,7 @@ jobs:
           pip install . --no-deps
           pip install -r build/requirements-windows-release.txt
           pip install openai-codex==0.144.4
-          # Rebuild cryptography with statically-linked OpenSSL so the frozen ARM64
-          # app does not depend on vcpkg DLLs at runtime. Keep pip's wheel cache:
-          # subsequent releases can reuse the wheel when inputs are unchanged.
-          pip uninstall -y cryptography
-          pip install cryptography --no-binary cryptography
+          pip install --upgrade cryptography
           # Upgrade pydantic first, then install mcp and friends to avoid pip uninstalling mcp
           # when resolving pyproject.toml dependencies (mcp 1.28+ requires pydantic>=2.11.0).
           pip install --upgrade typing_extensions pydantic pydantic_core

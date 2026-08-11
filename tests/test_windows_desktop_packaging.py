@@ -20,6 +20,18 @@ def test_windows_release_installs_required_native_runtime_packages():
     ) == 2
     assert workflow.count("python build/check_windows_dependencies.py") == 2
     assert workflow.count("numpy._core._multiarray_umath") >= 2
+    arm_job = workflow.split("  build-windows-arm:", 1)[1].split(
+        "  build-linux:", 1
+    )[0]
+    assert "CYRENE_PYTHON_BUNDLE_ARCH: x64" in arm_job
+    assert "architecture: x64" in arm_job
+    assert "vcpkg" not in arm_job
+    assert "pip install --upgrade cryptography" in arm_job
+    assert "--no-binary cryptography" not in arm_job
+
+    build = (ROOT / "build" / "build.py").read_text(encoding="utf-8")
+    assert 'os.environ.get("CYRENE_PYTHON_BUNDLE_ARCH", "arm64")' in build
+    assert 'os.environ.pop("PYINSTALLER_TARGET_ARCH", None)' in build
 
     dependency_check = (
         ROOT / "build" / "check_windows_dependencies.py"
@@ -47,6 +59,9 @@ def test_windows_release_installs_and_runs_the_built_nsis_package():
     assert 'Arguments @("--desktop-smoke-test")' in smoke
     assert 'SuccessMarker "Cyrene smoke test OK:"' in smoke
     assert 'SuccessMarker "DESKTOP_SMOKE_TEST=ok"' in smoke
+    assert "function Get-PeArchitecture" in smoke
+    assert 'Assert-PeArchitecture -Path $installedApp -Expected $Arch' in smoke
+    assert 'Assert-PeArchitecture -Path $installedBackend -Expected "x64"' in smoke
     assert "SMOKE TEST FAILED|DESKTOP_SMOKE_TEST=failed" in smoke
     assert "WINDOWS_INSTALL_SMOKE_TEST=ok" in smoke
 

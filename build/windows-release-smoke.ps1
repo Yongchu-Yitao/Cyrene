@@ -68,7 +68,41 @@ function Assert-SmokeSucceeded {
     }
 }
 
+function Get-PeArchitecture {
+    param([Parameter(Mandatory = $true)][string]$Path)
+
+    $stream = [IO.File]::OpenRead($Path)
+    $reader = [IO.BinaryReader]::new($stream)
+    try {
+        $stream.Position = 0x3c
+        $peOffset = $reader.ReadInt32()
+        $stream.Position = $peOffset + 4
+        $machine = $reader.ReadUInt16()
+    } finally {
+        $reader.Dispose()
+        $stream.Dispose()
+    }
+    switch ($machine) {
+        0x8664 { return "x64" }
+        0xaa64 { return "arm64" }
+        default { return "unknown-0x$($machine.ToString('x4'))" }
+    }
+}
+
+function Assert-PeArchitecture {
+    param(
+        [Parameter(Mandatory = $true)][string]$Path,
+        [Parameter(Mandatory = $true)][string]$Expected,
+        [Parameter(Mandatory = $true)][string]$Label
+    )
+    $actual = Get-PeArchitecture -Path $Path
+    if ($actual -ne $Expected) {
+        throw "$Label architecture was $actual; expected $Expected"
+    }
+}
+
 if (-not (Test-Path $frozenExe)) { throw "Frozen backend missing: $frozenExe" }
+Assert-PeArchitecture -Path $frozenExe -Expected "x64" -Label "Portable Python backend"
 $numpyDir = Join-Path $distRoot "Cyrene\_internal\numpy"
 if (-not (Test-Path $numpyDir)) { throw "NumPy package missing from frozen backend" }
 $numpyCore = @(Get-ChildItem -Path $numpyDir -Recurse -Filter "_multiarray_umath*.pyd")
@@ -106,6 +140,8 @@ $installedApp = Join-Path $installDir "Cyrene.exe"
 $installedBackend = Join-Path $installDir "resources\python-bundle\Cyrene.exe"
 if (-not (Test-Path $installedApp)) { throw "Installed Electron app missing: $installedApp" }
 if (-not (Test-Path $installedBackend)) { throw "Installed Python backend missing: $installedBackend" }
+Assert-PeArchitecture -Path $installedApp -Expected $Arch -Label "Installed Electron app"
+Assert-PeArchitecture -Path $installedBackend -Expected "x64" -Label "Installed Python backend"
 
 $installedSmoke = Invoke-CapturedProcess `
     -Path $installedBackend `
