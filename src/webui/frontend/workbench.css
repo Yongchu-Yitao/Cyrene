@@ -29804,6 +29804,7 @@ html[data-density="compact"] .workbench-shell :where(.wb-budget-model-head, .wb-
 .workbench-grid.integrated-sidebars.is-task-board {
   --wb-task-board-rail-reserve: 300px;
   --wb-task-board-edge-gap: 12px;
+  --wb-task-board-canvas-gutter: 22px;
   position: relative;
   isolation: isolate;
   grid-template-columns: minmax(0, 1fr);
@@ -29818,7 +29819,7 @@ html[data-density="compact"] .workbench-shell :where(.wb-budget-model-head, .wb-
    deliberately matches the empty composer area, while geometry remains
    module-owned so applying the material never changes card height or insets. */
 .workbench-grid.integrated-sidebars .workbench-integrated-rail {
-  background: color-mix(in srgb, var(--wb-composer-surface-color) 94%, transparent);
+  background: color-mix(in srgb, var(--wb-composer-surface-color) 65%, transparent);
   -webkit-backdrop-filter: blur(32px) saturate(170%) contrast(102%);
   backdrop-filter: blur(32px) saturate(170%) contrast(102%);
   box-shadow:
@@ -29851,9 +29852,9 @@ html[data-density="compact"] .workbench-shell :where(.wb-budget-model-head, .wb-
 
 .workbench-grid.integrated-sidebars.is-task-board .wb-board-columns {
   box-sizing: border-box;
-  min-width: calc(1748px + var(--wb-task-board-rail-reserve) + var(--wb-task-board-edge-gap));
+  min-width: calc(1748px + var(--wb-task-board-rail-reserve) + var(--wb-task-board-edge-gap) + var(--wb-task-board-canvas-gutter));
   grid-template-columns: repeat(5, minmax(340px, 1fr));
-  padding-left: var(--wb-task-board-rail-reserve);
+  padding-left: calc(var(--wb-task-board-rail-reserve) + var(--wb-task-board-canvas-gutter));
   padding-right: var(--wb-task-board-edge-gap);
   transition:
     min-width var(--wb-sidebar-motion-duration) var(--wb-sidebar-motion-ease),
@@ -29861,7 +29862,7 @@ html[data-density="compact"] .workbench-shell :where(.wb-budget-model-head, .wb-
 }
 
 .workbench-grid.integrated-sidebars.is-task-board .wb-board-scroll {
-  margin-right: -22px;
+  margin-inline: calc(0px - var(--wb-task-board-canvas-gutter));
   scrollbar-width: none;
 }
 
@@ -29872,10 +29873,7 @@ html[data-density="compact"] .workbench-shell :where(.wb-budget-model-head, .wb-
 @media (max-width: 1040px) {
   .workbench-grid.integrated-sidebars.is-task-board {
     --wb-task-board-edge-gap: 12px;
-  }
-
-  .workbench-grid.integrated-sidebars.is-task-board .wb-board-scroll {
-    margin-right: -16px;
+    --wb-task-board-canvas-gutter: 16px;
   }
 }
 

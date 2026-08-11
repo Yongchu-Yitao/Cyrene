@@ -8183,3 +8183,26 @@ def test_profile_rail_displays_budget_in_existing_spacer():
     assert "gap: 12px;" in budget_stack_rule
     assert '"profile.budgetDisabled": "Budget is not enabled"' in i18n
     assert '"profile.budgetDisabled": "未开启预算功能"' in i18n
+
+
+def test_task_board_scroll_canvas_reaches_behind_floating_rail_gutter():
+    root = Path(__file__).resolve().parent.parent
+    styles = (root / "src" / "webui" / "frontend" / "workbench.css").read_text(
+        encoding="utf-8"
+    )
+
+    columns_rule = styles.split(
+        ".workbench-grid.integrated-sidebars.is-task-board .wb-board-columns {", 1
+    )[1].split("}", 1)[0]
+    scroll_rule = styles.split(
+        ".workbench-grid.integrated-sidebars.is-task-board .wb-board-scroll {", 1
+    )[1].split("}", 1)[0]
+    floating_rail_rule = styles.rsplit(
+        ".workbench-grid.integrated-sidebars .workbench-integrated-rail {", 1
+    )[1].split("}", 1)[0]
+
+    assert "--wb-task-board-canvas-gutter: 22px;" in styles
+    assert "padding-left: calc(var(--wb-task-board-rail-reserve) + var(--wb-task-board-canvas-gutter));" in columns_rule
+    assert "margin-inline: calc(0px - var(--wb-task-board-canvas-gutter));" in scroll_rule
+    assert "background: color-mix(in srgb, var(--wb-composer-surface-color) 65%, transparent);" in floating_rail_rule
+    assert "opacity:" not in floating_rail_rule
