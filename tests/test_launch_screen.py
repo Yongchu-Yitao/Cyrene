@@ -38,7 +38,10 @@ def test_launch_screen_waits_for_initial_workbench_content():
     assert "DATA_STORE.ready = bootstrapData()" in data
     assert 'window.CyreneUI.data = window.CyreneUI.register("data", DATA_STORE)' in data
     assert "window.cyreneInitialDataReady" not in data
-    assert 'readWorkbenchSurface() === "quick-chat"' in app
+    assert 'surface === "quick-chat"' in app
+    assert 'window.CyreneUI.has(name)' in app
+    assert 'if (!servicesReady) return null' in app
+    assert 'window.setInterval(function ()' in app
     assert 'root.dispatchEvent(new CustomEvent("cyrene:ready"))' in (
         ROOT / "src/webui/frontend/platform/readiness.jsx"
     ).read_text(encoding="utf-8")

@@ -227,8 +227,37 @@ function QuickChatRoot() {
   return <QuickChatApp />;
 }
 
+var WORKBENCH_REQUIRED_SERVICES = [
+  "browser", "chat", "create", "data", "events", "feedback", "i18n",
+  "library", "memory", "model", "navigation", "profile", "schedule",
+  "search", "settings", "shell", "shortcuts", "welcome",
+];
+
+function workbenchServicesReady(surface) {
+  var required = surface === "quick-chat"
+    ? ["chat", "data", "events", "feedback", "i18n", "quickChat", "readiness"]
+    : WORKBENCH_REQUIRED_SERVICES;
+  return required.every(function (name) { return window.CyreneUI.has(name); });
+}
+
 function WorkbenchBootstrap() {
-  return readWorkbenchSurface() === "quick-chat"
+  var surface = readWorkbenchSurface();
+  var [servicesReady, setServicesReady] = useStateBootstrap(function () {
+    return workbenchServicesReady(surface);
+  });
+
+  useEffectBootstrap(function () {
+    if (servicesReady) return undefined;
+    var timer = window.setInterval(function () {
+      if (!workbenchServicesReady(surface)) return;
+      window.clearInterval(timer);
+      setServicesReady(true);
+    }, 50);
+    return function () { window.clearInterval(timer); };
+  }, [surface, servicesReady]);
+
+  if (!servicesReady) return null;
+  return surface === "quick-chat"
     ? <QuickChatRoot />
     : <WorkbenchRoot />;
 }
@@ -238,6 +267,7 @@ var WorkbenchBootstrapService = {
   readTweak: readWorkbenchTweak,
   applyAccent: applyWorkbenchAccent,
   applyBackgrounds: applyWorkbenchBackgrounds,
+  servicesReady: workbenchServicesReady,
   Root: WorkbenchBootstrap,
 };
 window.CyreneUI.bootstrap = window.CyreneUI.register(

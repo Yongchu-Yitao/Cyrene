@@ -14,6 +14,7 @@ import subprocess
 import sys
 import struct
 import tempfile
+import time
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -498,9 +499,21 @@ def run_electron_builder(arch: str = "x64") -> None:
 
     # On Windows, electron-builder is a .cmd file that needs shell=True
     # (otherwise CreateProcess fails with "not a valid Win32 application").
-    result = subprocess.run(cmd, cwd=str(electron_dir), shell=IS_WIN)
-    if result.returncode != 0:
-        print("  [error] electron-builder failed")
+    result = None
+    max_attempts = 3
+    for attempt in range(1, max_attempts + 1):
+        result = subprocess.run(cmd, cwd=str(electron_dir), shell=IS_WIN)
+        if result.returncode == 0:
+            break
+        if attempt < max_attempts:
+            delay = 10 * attempt
+            print(
+                "  [warn] electron-builder failed "
+                f"(attempt {attempt}/{max_attempts}); retrying in {delay}s"
+            )
+            time.sleep(delay)
+    if result is None or result.returncode != 0:
+        print(f"  [error] electron-builder failed after {max_attempts} attempts")
         sys.exit(1)
     print("  [ok] electron-builder done")
 
