@@ -83,6 +83,7 @@ function Get-PeArchitecture {
         $stream.Dispose()
     }
     switch ($machine) {
+        0x014c { return "x86" }
         0x8664 { return "x64" }
         0xaa64 { return "arm64" }
         default { return "unknown-0x$($machine.ToString('x4'))" }
@@ -172,7 +173,14 @@ if ($portableApps.Count -ne 1) {
     throw "Expected exactly one Windows $Arch portable app, found $($portableApps.Count)"
 }
 $portableApp = $portableApps[0].FullName
-Assert-PeArchitecture -Path $portableApp -Expected $Arch -Label "Portable Electron app"
+# electron-builder's portable target is a self-extracting compatibility
+# launcher. Its PE machine can be x86 even though the Electron application it
+# extracts is x64 or ARM64; the installed-app check above validates the actual
+# target binary, and the desktop smoke below validates the portable payload.
+$portableLauncherArch = Get-PeArchitecture -Path $portableApp
+if ($portableLauncherArch -notin @("x86", $Arch)) {
+    throw "Portable Electron launcher architecture was $portableLauncherArch; expected x86 compatibility launcher or $Arch"
+}
 
 $env:CYRENE_USER_DATA_DIR = Join-Path $smokeRoot "portable-data"
 $env:CYRENE_CACHE_DIR = Join-Path $smokeRoot "portable-cache"

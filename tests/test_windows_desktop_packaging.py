@@ -62,6 +62,8 @@ def test_windows_release_installs_and_runs_the_built_nsis_package():
     assert "function Get-PeArchitecture" in smoke
     assert 'Assert-PeArchitecture -Path $installedApp -Expected $Arch' in smoke
     assert 'Assert-PeArchitecture -Path $installedBackend -Expected "x64"' in smoke
+    assert '$portableLauncherArch -notin @("x86", $Arch)' in smoke
+    assert '0x014c { return "x86" }' in smoke
     assert "SMOKE TEST FAILED|DESKTOP_SMOKE_TEST=failed" in smoke
     assert "WINDOWS_INSTALL_SMOKE_TEST=ok" in smoke
 
