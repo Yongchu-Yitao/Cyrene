@@ -5880,7 +5880,13 @@ async function runDesktopSmokeTest(window) {
     })}`);
   }
   const semantic = await runDesktopSemanticSmokeTest(window);
-  console.log(`DESKTOP_SMOKE_TEST=ok nonWhitePixels=${nonWhitePixels} semantic=${semantic.checks.join(',')}`);
+  const successMessage = `DESKTOP_SMOKE_TEST=ok nonWhitePixels=${nonWhitePixels} semantic=${semantic.checks.join(',')}`;
+  const resultPath = String(process.env.CYRENE_DESKTOP_SMOKE_RESULT || '').trim();
+  if (resultPath) {
+    fs.mkdirSync(path.dirname(resultPath), { recursive: true });
+    fs.writeFileSync(resultPath, `${successMessage}\n`, 'utf8');
+  }
+  console.log(successMessage);
   isQuitting = true;
   app.quit();
 }

@@ -66,6 +66,7 @@ def test_windows_release_installs_and_runs_the_built_nsis_package():
     assert '0x014c { return "x86" }' in smoke
     assert "SMOKE TEST FAILED|DESKTOP_SMOKE_TEST=failed" in smoke
     assert "WINDOWS_INSTALL_SMOKE_TEST=ok" in smoke
+    assert "CYRENE_DESKTOP_SMOKE_RESULT" in smoke
 
 
 def test_frozen_smoke_imports_numpy_native_extension():

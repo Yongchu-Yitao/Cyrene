@@ -42,9 +42,20 @@ function sha256(file) {
 
 async function download(url, destination, expected) {
   if (!fs.existsSync(destination) || sha256(destination) !== expected) {
-    const response = await fetch(url, { redirect: 'follow' });
-    if (!response.ok) throw new Error(`Download failed (${response.status}): ${url}`);
-    fs.writeFileSync(destination, Buffer.from(await response.arrayBuffer()));
+    let lastError;
+    for (let attempt = 1; attempt <= 4; attempt += 1) {
+      try {
+        const response = await fetch(url, { redirect: 'follow' });
+        if (!response.ok) throw new Error(`Download failed (${response.status}): ${url}`);
+        fs.writeFileSync(destination, Buffer.from(await response.arrayBuffer()));
+        lastError = null;
+        break;
+      } catch (error) {
+        lastError = error;
+        if (attempt < 4) await new Promise((resolve) => setTimeout(resolve, attempt * 1500));
+      }
+    }
+    if (lastError) throw lastError;
   }
   const actual = sha256(destination);
   if (actual !== expected) throw new Error(`Checksum mismatch for ${path.basename(destination)}: ${actual}`);

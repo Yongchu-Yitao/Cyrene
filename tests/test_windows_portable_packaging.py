@@ -9,9 +9,7 @@ def test_electron_builder_produces_distinct_windows_portable_apps():
     package = json.loads((ROOT / "electron" / "package.json").read_text(encoding="utf-8"))
     build = package["build"]
 
-    targets = {entry["target"]: entry for entry in build["win"]["target"]}
-    assert targets["nsis"]["arch"] == ["x64", "arm64"]
-    assert targets["portable"]["arch"] == ["x64", "arm64"]
+    assert build["win"]["target"] == ["nsis", "portable"]
     assert build["portable"]["artifactName"] == "Cyrene-${version}-win-${arch}-portable.${ext}"
     assert build["win"]["artifactName"] == "Cyrene-${version}-win-${arch}.${ext}"
 
@@ -25,6 +23,8 @@ def test_release_uploads_and_smoke_tests_both_portable_architectures():
     assert '"Cyrene-*-win-$Arch-portable.exe"' in smoke
     assert '"Portable Electron desktop smoke test"' in smoke
     assert '"DESKTOP_SMOKE_TEST=ok"' in smoke
+    assert "CYRENE_DESKTOP_SMOKE_RESULT" in smoke
+    assert "portable-desktop-result.log" in smoke
 
 
 def test_windows_portable_updates_replace_the_original_executable():

@@ -185,13 +185,25 @@ if ($portableLauncherArch -notin @("x86", $Arch)) {
 $env:CYRENE_USER_DATA_DIR = Join-Path $smokeRoot "portable-data"
 $env:CYRENE_CACHE_DIR = Join-Path $smokeRoot "portable-cache"
 $env:CYRENE_TEMP_DIR = Join-Path $smokeRoot "portable-tmp"
+$portableResultPath = Join-Path $smokeRoot "portable-desktop-result.log"
+Remove-Item -Force -ErrorAction SilentlyContinue $portableResultPath
+$env:CYRENE_DESKTOP_SMOKE_RESULT = $portableResultPath
 $portableDesktopSmoke = Invoke-CapturedProcess `
     -Path $portableApp `
     -Arguments @("--desktop-smoke-test") `
     -Label "windows-$Arch-portable-desktop"
+$portableDeadline = [DateTime]::UtcNow.AddSeconds(120)
+while (-not (Test-Path $portableResultPath) -and [DateTime]::UtcNow -lt $portableDeadline) {
+    Start-Sleep -Milliseconds 500
+}
+if (Test-Path $portableResultPath) {
+    $portableResult = Get-Content -Raw $portableResultPath
+    $portableDesktopSmoke.Output = ($portableDesktopSmoke.Output, $portableResult) -join [Environment]::NewLine
+}
 Assert-SmokeSucceeded `
     -Result $portableDesktopSmoke `
     -SuccessMarker "DESKTOP_SMOKE_TEST=ok" `
     -Label "Portable Electron desktop smoke test"
+Remove-Item Env:CYRENE_DESKTOP_SMOKE_RESULT -ErrorAction SilentlyContinue
 
 Write-Host "WINDOWS_INSTALL_SMOKE_TEST=ok arch=$Arch installDir=$installDir portable=$portableApp"

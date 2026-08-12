@@ -18,6 +18,8 @@ def test_extension_runtime_installers_are_built_and_packaged():
     for target in ("darwin-arm64", "darwin-x64", "win32-arm64", "win32-x64", "linux-arm64", "linux-x64"):
         assert f"'{target}'" in runtime_builder
     assert "Checksum mismatch" in runtime_builder
+    assert "attempt <= 4" in runtime_builder
+    assert "attempt * 1500" in runtime_builder
     assert "installQuitTitle" in main
     assert "cancelExtensionTasksAndWait" in main
 
