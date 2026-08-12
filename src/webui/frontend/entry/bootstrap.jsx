@@ -242,21 +242,6 @@ function workbenchServicesReady(surface) {
 
 function WorkbenchBootstrap() {
   var surface = readWorkbenchSurface();
-  var [servicesReady, setServicesReady] = useStateBootstrap(function () {
-    return workbenchServicesReady(surface);
-  });
-
-  useEffectBootstrap(function () {
-    if (servicesReady) return undefined;
-    var timer = window.setInterval(function () {
-      if (!workbenchServicesReady(surface)) return;
-      window.clearInterval(timer);
-      setServicesReady(true);
-    }, 50);
-    return function () { window.clearInterval(timer); };
-  }, [surface, servicesReady]);
-
-  if (!servicesReady) return null;
   return surface === "quick-chat"
     ? <QuickChatRoot />
     : <WorkbenchRoot />;
@@ -287,5 +272,37 @@ window.addEventListener(
 if (window.CyrenePageLifecycle && window.CyrenePageLifecycle.isInvalidated()) {
   disposeInvalidatedWorkbenchPage();
 } else {
-  workbenchReactRoot.render(<WorkbenchBootstrap />);
+  var workbenchMountStartedAt = Date.now();
+  var workbenchMountRetryKey = "cyrene-ui-service-load-retries";
+  function mountWorkbenchPage() {
+    var surface = readWorkbenchSurface();
+    if (workbenchServicesReady(surface)) {
+      try { sessionStorage.removeItem(workbenchMountRetryKey); } catch (error) {}
+      workbenchReactRoot.render(<WorkbenchBootstrap />);
+      return;
+    }
+    if (Date.now() - workbenchMountStartedAt < 2500) {
+      window.setTimeout(mountWorkbenchPage, 50);
+      return;
+    }
+    var missing = (surface === "quick-chat"
+      ? ["chat", "data", "events", "feedback", "i18n", "quickChat", "readiness"]
+      : WORKBENCH_REQUIRED_SERVICES
+    ).filter(function (name) { return !window.CyreneUI.has(name); });
+    var retries = 0;
+    try { retries = Number(sessionStorage.getItem(workbenchMountRetryKey) || 0); } catch (error) {}
+    if (retries < 2) {
+      try { sessionStorage.setItem(workbenchMountRetryKey, String(retries + 1)); } catch (error) {}
+      console.warn("Cyrene UI services did not finish loading; retrying page: " + missing.join(", "));
+      window.location.reload();
+      return;
+    }
+    console.error("Cyrene UI services failed to load: " + missing.join(", "));
+    workbenchReactRoot.render(
+      <main className="workbench-bootstrap-error" role="alert">
+        Cyrene Workbench failed to load.
+      </main>,
+    );
+  }
+  mountWorkbenchPage();
 }
