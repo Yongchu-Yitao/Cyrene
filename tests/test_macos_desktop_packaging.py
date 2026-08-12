@@ -12,6 +12,9 @@ def test_extension_runtime_installers_are_built_and_packaged():
     main = (ROOT / "electron" / "main.js").read_text(encoding="utf-8")
 
     assert "build-runtime-tools" in before_pack
+    assert "param([string]$Archive,[string]$Destination)" in runtime_builder
+    assert "'-Archive'" in runtime_builder
+    assert "'-Destination'" in runtime_builder
     resources = {(item["from"], item["to"]) for item in package["build"]["extraResources"]}
     assert ("runtime-tools", "runtime-tools") in resources
     for target in ("darwin-arm64", "darwin-x64", "win32-arm64", "win32-x64", "linux-arm64", "linux-x64"):
