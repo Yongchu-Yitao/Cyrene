@@ -87,16 +87,7 @@ async function buildRuntimeTools(context = {}) {
   const temp = fs.mkdtempSync(path.join(os.tmpdir(), 'cyrene-uv-'));
   try {
     if (uvAsset.endsWith('.zip')) {
-      execFileSync('powershell.exe', [
-        '-NoProfile',
-        '-NonInteractive',
-        '-Command',
-        'param([string]$Archive,[string]$Destination) Expand-Archive -LiteralPath $Archive -DestinationPath $Destination -Force',
-        '-Archive',
-        uvArchive,
-        '-Destination',
-        temp,
-      ]);
+      execFileSync('tar', ['-xf', uvArchive, '-C', temp]);
     } else {
       execFileSync('tar', ['-xzf', uvArchive, '-C', temp]);
     }
