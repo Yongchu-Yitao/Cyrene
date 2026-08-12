@@ -4767,6 +4767,12 @@ function getCurrentAppExecutablePath() {
   if (isLinux && process.env.APPIMAGE) {
     return path.resolve(process.env.APPIMAGE);
   }
+  // electron-builder's Windows portable target expands into a temporary
+  // directory before launching. Pass the original single-file executable to
+  // the backend/updater instead of that disposable extracted copy.
+  if (isWindows && process.env.PORTABLE_EXECUTABLE_FILE) {
+    return path.resolve(process.env.PORTABLE_EXECUTABLE_FILE);
+  }
   return app.getPath('exe');
 }
 

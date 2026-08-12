@@ -982,6 +982,8 @@ final result: blocked
 - Task-card spacing defect reference: `/var/folders/zm/qgh_rgw903j0b9t01yg2l0mc0000gn/T/codex-clipboard-01d66b65-cf63-4a92-aea1-522057172092.png` (`734 × 1598 px`).
 - Knowledge-card geometry reference: `/var/folders/zm/qgh_rgw903j0b9t01yg2l0mc0000gn/T/codex-clipboard-8e6a77fa-d2b8-4c59-9e01-6057ffd4d119.png` (`700 × 1598 px`).
 - Context-layout defect reference: `/var/folders/zm/qgh_rgw903j0b9t01yg2l0mc0000gn/T/codex-clipboard-03bdac63-062f-4965-9c17-d3dfbf9e8969.png` (`504 × 956 px`).
+- Empty-artifacts reference: `/var/folders/zm/qgh_rgw903j0b9t01yg2l0mc0000gn/T/codex-clipboard-7fbccede-ab75-4e60-b8ba-172d90bfccba.png` (`564 × 216 px`).
+- Acceptance-empty-state reference: `/var/folders/zm/qgh_rgw903j0b9t01yg2l0mc0000gn/T/codex-clipboard-69d3d8be-923c-4ebb-8dd7-35c2fde35f20.png` (`572 × 356 px`).
 - Intended implementation state: dark-theme task details with the Context section expanded, plus the Artifacts section expanded in its empty state.
 - Implementation screenshot: unavailable.
 - CSS viewport, implementation pixels, and density normalization: unavailable because the in-app browser rejected `http://localhost:4242` with `ERR_BLOCKED_BY_CLIENT` before rendering; Chrome was not available as the permitted fallback.
@@ -997,6 +999,8 @@ final result: blocked
 - Acceptance-row hover uses the shared neutral row-hover token and rounded interaction target instead of the previous accent-purple slab.
 - Context uses a compact two-column Status/Priority summary, clearer goal hierarchy, lightweight constraint rows, and consistent section rhythm while preserving every existing task field.
 - Context now uses a responsive information-card grid: overview, project context, reflection, and step dependencies span the available width; constraints and task relations share a row when the inspector is widened and fall back to a single column when narrow. Long project paths wrap inside an inset surface, empty states use compact neutral surfaces, and opening a tab resets its scroll position so content is not clipped at the top.
+- Artifacts is now conditional and does not occupy an accordion row until the task has a real downloadable artifact. If an artifact disappears while that row is active, the inspector safely returns to Acceptance.
+- Acceptance now has a compact progress summary, a real progress track, individually surfaced criteria with clearer state labels, a styled edit mode, and a guided empty state with a primary generation action. All new copy is localized in English and Simplified Chinese.
 - Typography uses the shared 12 px detail-tab scale, existing product font stack, and existing icon assets. Colors, border, radius, shadow, blur, and dark glass surface are derived from the shared Workbench tokens. No new raster or placeholder asset is involved.
 - Copy is localized in English and Simplified Chinese through `task.side.detailPanel`.
 

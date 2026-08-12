@@ -14756,14 +14756,129 @@ html[data-theme="dark"] .wb-lib-commandbar::before {
   border-top: 0;
 }
 .wb-task-detail-card .wb-accept-toggle {
-  width: calc(100% + 16px);
-  margin-inline: -8px;
-  padding-inline: 8px;
-  border-radius: 10px;
-  transition: background 140ms ease;
+  width: 100%;
+  min-height: 54px;
+  display: grid;
+  grid-template-columns: 10px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 11px;
+  border: 1px solid color-mix(in srgb, var(--wb-line-2) 58%, transparent);
+  border-radius: 11px;
+  background: color-mix(in srgb, var(--wb-card-bg) 54%, transparent);
+  transition: border-color 140ms ease, background 140ms ease, transform 140ms ease;
 }
 .wb-task-detail-card .wb-accept-toggle:hover {
   background: var(--wb-row-hover-bg);
+  border-color: color-mix(in srgb, var(--wb-accent) 28%, var(--wb-line-2));
+}
+.wb-task-detail-card .wb-accept-toggle:active { transform: scale(.995); }
+.wb-acceptance-panel { gap: 12px; padding: 12px 14px 15px; }
+.wb-acceptance-summary {
+  display: grid;
+  gap: 10px;
+  padding: 12px;
+  border: 1px solid color-mix(in srgb, var(--wb-line-2) 56%, transparent);
+  border-radius: 12px;
+  background: color-mix(in srgb, var(--wb-card-bg) 58%, transparent);
+  box-shadow: inset 0 1px 0 color-mix(in srgb, #fff 5%, transparent);
+}
+.wb-acceptance-summary-copy {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: baseline;
+  gap: 2px 10px;
+}
+.wb-acceptance-summary-copy > span {
+  color: var(--wb-muted);
+  font-size: calc(11.5px * var(--wb-ui-font-scale, 1));
+  font-weight: 650;
+}
+.wb-acceptance-summary-copy > b {
+  grid-column: 2;
+  grid-row: 1 / span 2;
+  color: var(--wb-text);
+  font-size: calc(22px * var(--wb-ui-font-scale, 1));
+  font-weight: 760;
+  font-variant-numeric: tabular-nums;
+}
+.wb-acceptance-summary-copy > b small { color: var(--wb-faint); font-size: .58em; font-weight: 620; }
+.wb-acceptance-summary-copy > p {
+  grid-column: 1;
+  color: var(--wb-faint) !important;
+  font-size: calc(11px * var(--wb-ui-font-scale, 1)) !important;
+}
+.wb-acceptance-progress {
+  height: 5px;
+  overflow: hidden;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--wb-line-2) 46%, transparent);
+}
+.wb-acceptance-progress > span {
+  display: block;
+  height: 100%;
+  border-radius: inherit;
+  background: var(--wb-green);
+  transition: width 180ms cubic-bezier(.2, .8, .2, 1);
+}
+.wb-acceptance-list { display: grid; gap: 8px; }
+.wb-acceptance-panel .wb-acceptance-edit-hint {
+  margin: 0;
+  padding: 9px 11px;
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--wb-amber) 9%, transparent);
+  color: color-mix(in srgb, var(--wb-amber) 74%, var(--wb-text));
+}
+.wb-acceptance-panel .wb-accept-edit-row {
+  min-height: 50px;
+  padding: 8px 10px;
+  border: 1px solid color-mix(in srgb, var(--wb-line-2) 58%, transparent);
+  border-radius: 11px;
+  background: color-mix(in srgb, var(--wb-card-bg) 54%, transparent);
+}
+.wb-acceptance-panel .wb-accept-edit-row input {
+  min-height: 34px;
+  border-radius: 9px;
+}
+.wb-acceptance-panel .wb-accept-edit-actions {
+  padding-top: 0;
+  border-top: 0;
+}
+.wb-acceptance-panel .wb-accept-edit-trigger { align-self: flex-end; margin-top: 0; }
+.wb-acceptance-empty {
+  min-height: 170px;
+  display: grid;
+  grid-template-columns: 38px minmax(0, 1fr);
+  align-content: center;
+  align-items: center;
+  gap: 12px;
+  padding: 20px;
+  border: 1px solid color-mix(in srgb, var(--wb-line-2) 56%, transparent);
+  border-radius: 13px;
+  background: color-mix(in srgb, var(--wb-card-bg) 56%, transparent);
+  text-align: left;
+}
+.wb-acceptance-empty-icon {
+  width: 38px;
+  height: 38px;
+  display: grid;
+  place-items: center;
+  border-radius: 11px;
+  background: color-mix(in srgb, var(--wb-green) 12%, transparent);
+  color: var(--wb-green);
+}
+.wb-acceptance-empty-icon svg { width: 20px; height: 20px; }
+.wb-acceptance-empty b { display: block; color: var(--wb-text); font-size: calc(13px * var(--wb-ui-font-scale, 1)); }
+.wb-acceptance-empty p {
+  margin-top: 4px !important;
+  color: var(--wb-muted) !important;
+  font-size: calc(11.5px * var(--wb-ui-font-scale, 1)) !important;
+  line-height: 1.5 !important;
+}
+.wb-acceptance-empty .wb-btn {
+  grid-column: 1 / -1;
+  justify-self: start;
+  margin-top: 4px;
 }
 .wb-task-artifact-list {
   padding: 8px 12px 10px;

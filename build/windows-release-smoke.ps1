@@ -167,4 +167,23 @@ Assert-SmokeSucceeded `
     -SuccessMarker "DESKTOP_SMOKE_TEST=ok" `
     -Label "Installed Electron desktop smoke test"
 
-Write-Host "WINDOWS_INSTALL_SMOKE_TEST=ok arch=$Arch installDir=$installDir"
+$portableApps = @(Get-ChildItem -Path $electronDist -Filter "Cyrene-*-win-$Arch-portable.exe")
+if ($portableApps.Count -ne 1) {
+    throw "Expected exactly one Windows $Arch portable app, found $($portableApps.Count)"
+}
+$portableApp = $portableApps[0].FullName
+Assert-PeArchitecture -Path $portableApp -Expected $Arch -Label "Portable Electron app"
+
+$env:CYRENE_USER_DATA_DIR = Join-Path $smokeRoot "portable-data"
+$env:CYRENE_CACHE_DIR = Join-Path $smokeRoot "portable-cache"
+$env:CYRENE_TEMP_DIR = Join-Path $smokeRoot "portable-tmp"
+$portableDesktopSmoke = Invoke-CapturedProcess `
+    -Path $portableApp `
+    -Arguments @("--desktop-smoke-test") `
+    -Label "windows-$Arch-portable-desktop"
+Assert-SmokeSucceeded `
+    -Result $portableDesktopSmoke `
+    -SuccessMarker "DESKTOP_SMOKE_TEST=ok" `
+    -Label "Portable Electron desktop smoke test"
+
+Write-Host "WINDOWS_INSTALL_SMOKE_TEST=ok arch=$Arch installDir=$installDir portable=$portableApp"

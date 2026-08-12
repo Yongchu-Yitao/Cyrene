@@ -40,7 +40,9 @@ def test_fix_release_label_maps_to_pep440_local_version():
 # precisely the asset a broken platform match falls back to via assets[0].
 RELEASE_ASSETS = [
     {"name": f"Cyrene-{VERSION}-mac.dmg", "browser_download_url": "https://dl/mac.dmg", "size": 11, "digest": "sha256:" + "a" * 64},
+    {"name": f"Cyrene-{VERSION}-win-arm64-portable.exe", "browser_download_url": "https://dl/win-arm64-portable.exe", "size": 21, "digest": "sha256:" + "e" * 64},
     {"name": f"Cyrene-{VERSION}-win-arm64.exe", "browser_download_url": "https://dl/win-arm64.exe", "size": 22, "digest": "sha256:" + "b" * 64},
+    {"name": f"Cyrene-{VERSION}-win-x64-portable.exe", "browser_download_url": "https://dl/win-x64-portable.exe", "size": 32, "digest": "sha256:" + "f" * 64},
     {"name": f"Cyrene-{VERSION}-win-x64.exe", "browser_download_url": "https://dl/win-x64.exe", "size": 33, "digest": "sha256:" + "c" * 64},
     {"name": f"Cyrene-{VERSION}-x64.AppImage", "browser_download_url": "https://dl/x64.AppImage", "size": 44, "digest": "sha256:" + "d" * 64},
 ]
@@ -51,6 +53,7 @@ SHA_BY_NAME = {a["name"]: str(a["digest"]).split(":", 1)[1] for a in RELEASE_ASS
 
 def _set_platform(monkeypatch, platform_name: str, machine: str) -> None:
     """Pretend we are running on ``platform_name`` with CPU arch ``machine``."""
+    monkeypatch.delenv("PORTABLE_EXECUTABLE_FILE", raising=False)
     monkeypatch.setattr(updater.sys, "platform", platform_name)
     monkeypatch.setattr(updater.platform, "machine", lambda: machine)
 
@@ -146,6 +149,7 @@ def test_current_version_keeps_release_notes(monkeypatch):
     ],
 )
 def test_platform_filter_token(monkeypatch, platform_name, machine, expected_token):
+    monkeypatch.delenv("PORTABLE_EXECUTABLE_FILE", raising=False)
     _set_platform(monkeypatch, platform_name, machine)
     token = updater._platform_filter()
     assert token == expected_token
@@ -165,6 +169,37 @@ def test_filter_token_is_substring_of_real_asset_name(monkeypatch):
         _set_platform(monkeypatch, platform_name, machine)
         token = updater._platform_filter()
         assert token in asset_name.lower(), f"{token!r} not in {asset_name.lower()!r}"
+
+
+@pytest.mark.parametrize(
+    "machine, expected",
+    [
+        ("AMD64", f"Cyrene-{VERSION}-win-x64-portable.exe"),
+        ("ARM64", f"Cyrene-{VERSION}-win-arm64-portable.exe"),
+    ],
+)
+async def test_portable_windows_selects_portable_update(
+    monkeypatch, fake_release, machine, expected
+):
+    _set_platform(monkeypatch, "win32", machine)
+    monkeypatch.setenv("PORTABLE_EXECUTABLE_FILE", rf"C:\Apps\{expected}")
+
+    info = await updater.check_for_update(include_prerelease=False)
+
+    assert info.asset_name == expected
+    assert info.download_url == URL_BY_NAME[expected]
+
+
+def test_portable_windows_restart_script_replaces_original_without_uac(monkeypatch):
+    monkeypatch.setattr(updater.sys, "platform", "win32")
+    monkeypatch.setenv("PORTABLE_EXECUTABLE_FILE", r"C:\Apps\Cyrene-portable.exe")
+    monkeypatch.setenv("CYRENE_APP_EXECUTABLE", r"C:\Apps\Cyrene-portable.exe")
+
+    script = updater.get_restart_script(Path(r"C:\Temp\Cyrene-new-portable.exe"))
+
+    assert 'move /Y "C:\\Apps\\Cyrene-portable.exe.new" "C:\\Apps\\Cyrene-portable.exe"' in script
+    assert 'start "" "C:\\Apps\\Cyrene-portable.exe"' in script
+    assert "-Verb RunAs" not in script
 
 
 # --- #47: missing platform assets must never fall back to another package -----

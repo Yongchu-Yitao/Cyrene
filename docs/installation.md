@@ -59,7 +59,16 @@ Set `CYRENE_ENABLE_HARDWARE_ACCELERATION=1` only to opt back into GPU rendering.
 
 ## Windows
 
-Use the pre-built Windows installer for the supported end-user path.
+Windows releases include two packages for each supported architecture:
+
+- `Cyrene-<version>-win-<arch>.exe` — the standard installer.
+- `Cyrene-<version>-win-<arch>-portable.exe` — a single-file portable app;
+  download it and run it directly, with no installation or administrator access.
+
+The portable executable keeps application data in the normal Windows AppData
+directories, so moving or updating the executable does not lose settings. Its
+in-app updater downloads the matching portable package and replaces the original
+executable after Cyrene exits; it does not convert the app into an installed copy.
 
 There is a current upstream packaging limitation for source environments:
 SimpleXNG declares Unix-only `uvloop` without a Windows environment marker.

@@ -18,6 +18,7 @@
     "build:app-use-macos": "node build-app-use-macos.js",
     "build:mac": "electron-builder --mac",
     "build:win": "electron-builder --win",
+    "build:win:portable": "electron-builder --win portable",
     "build:linux": "electron-builder --linux"
   },
   "build": {
@@ -89,6 +90,13 @@
             "x64",
             "arm64"
           ]
+        },
+        {
+          "target": "portable",
+          "arch": [
+            "x64",
+            "arm64"
+          ]
         }
       ],
       "artifactName": "Cyrene-${version}-win-${arch}.${ext}"
@@ -96,6 +104,9 @@
     "nsis": {
       "oneClick": false,
       "allowToChangeInstallationDirectory": true
+    },
+    "portable": {
+      "artifactName": "Cyrene-${version}-win-${arch}-portable.${ext}"
     },
     "linux": {
       "icon": "../build/icon.png",

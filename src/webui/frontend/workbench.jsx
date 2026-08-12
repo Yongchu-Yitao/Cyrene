@@ -9224,6 +9224,7 @@ function ComposerDisclaimer() {
 function RightContextPanel({ project, session, expandedStepId, tab, onTabChange, onRefresh }) {
   var activeBodyRef = useWorkbenchRef(null);
   var steps = session && Array.isArray(session.plan) ? session.plan : [];
+  var artifacts = WorkbenchModel.ensureArtifacts(session);
   var activeStep = steps.find(function (step) { return step.id === expandedStepId; }) || null;
   var isInit = !!(session && session.kind === "init");
   var tabs = isInit ? [
@@ -9233,11 +9234,13 @@ function RightContextPanel({ project, session, expandedStepId, tab, onTabChange,
     { id: "files", label: wbT("task.side.fileChanges", "File changes") },
     { id: "logs", label: wbT("task.side.runLogs", "Run logs") },
     { id: "acceptance", label: wbT("task.side.acceptance", "Acceptance") },
-    { id: "artifacts", label: wbT("workbenchChat.artifacts", "Artifacts") },
-  ];
+  ].concat(artifacts.length ? [{ id: "artifacts", label: wbT("workbenchChat.artifacts", "Artifacts") }] : []);
   useWorkbenchEffect(function () {
     if (activeBodyRef.current) activeBodyRef.current.scrollTop = 0;
   }, [tab, session && session.id]);
+  useWorkbenchEffect(function () {
+    if (tab === "artifacts" && !artifacts.length) onTabChange("acceptance");
+  }, [tab, artifacts.length]);
   if (!session) {
     return (
       <aside className="workbench-right-panel wb-floating-detail-shell wb-task-detail-shell">
@@ -9558,6 +9561,8 @@ function LogsTab({ session }) {
 function AcceptanceTab({ session, onRefresh }) {
   var [busy, setBusy] = useWorkbenchState(false);
   var items = session && Array.isArray(session.acceptanceCriteria) ? session.acceptanceCriteria : [];
+  var passedCount = items.filter(function (item) { return item.status === "passed" || item.status === "done"; }).length;
+  var failedCount = items.filter(function (item) { return item.status === "failed"; }).length;
   var acceptanceFailure = hasAcceptanceFailure(session);
   var [editing, setEditing] = useWorkbenchState(acceptanceFailure);
   var [draft, setDraft] = useWorkbenchState(items.map(function (item) { return String((item && item.text) || ""); }));
@@ -9597,7 +9602,7 @@ function AcceptanceTab({ session, onRefresh }) {
       });
     }).filter(function (item) { return item.text; });
     if (!next.length) {
-      window.CyreneUI.require("feedback").showToast("至少保留一条验收条件。", "warning");
+      window.CyreneUI.require("feedback").showToast(wbT("task.acceptance.minimumOne", "Keep at least one acceptance criterion."), "warning");
       return;
     }
     setBusy(true);
@@ -9611,13 +9616,25 @@ function AcceptanceTab({ session, onRefresh }) {
     setEditing(false);
   }
   return (
-    <div className="workbench-side-stack wb-task-tab-content">
+    <div className="workbench-side-stack wb-task-tab-content wb-acceptance-panel">
         {items.length ? (
           <React.Fragment>
+            <div className="wb-acceptance-summary">
+              <div className="wb-acceptance-summary-copy">
+                <span>{wbT("task.acceptance.progress", "Verification progress")}</span>
+                <b>{passedCount}<small> / {items.length}</small></b>
+                <p>{failedCount
+                  ? wbT("task.acceptance.failedSummary", "{count} criteria need attention", { count: failedCount })
+                  : wbT("task.acceptance.progressHint", "Verify each criterion against the result")}</p>
+              </div>
+              <div className="wb-acceptance-progress" aria-label={wbT("task.acceptance.progress", "Verification progress")}>
+                <span style={{ width: ((passedCount / Math.max(items.length, 1)) * 100) + "%" }}></span>
+              </div>
+            </div>
             {acceptanceFailure && (
-              <div className="wb-acceptance-edit-hint">修改验收条件后会重新等待验收，已通过条件保持不变。</div>
+              <div className="wb-acceptance-edit-hint">{wbT("task.acceptance.editHint", "Changed criteria return to pending verification; passed criteria remain unchanged.")}</div>
             )}
-            {items.map(function (item, index) {
+            <div className="wb-acceptance-list">{items.map(function (item, index) {
               var done = item.status === "passed" || item.status === "done";
               var dot = done ? "green" : item.status === "failed" ? "red" : "muted";
               var label = done ? wbT("task.acceptance.passed", "Passed") : item.status === "failed" ? wbT("task.acceptance.failed", "Failed") : wbT("task.acceptance.pending", "Pending");
@@ -9628,7 +9645,7 @@ function AcceptanceTab({ session, onRefresh }) {
                     <input type="text" autoFocus={index === 0} value={draft[index] || ""} disabled={busy} onChange={function (event) {
                       var value = event.target.value;
                       setDraft(function (current) { var next = current.slice(); next[index] = value; return next; });
-                    }} aria-label={"验收条件 " + (index + 1)} />
+                    }} aria-label={wbT("task.acceptance.criterionNumber", "Acceptance criterion {number}", { number: index + 1 })} />
                     <span className={"wb-accept-state " + dot}>{label}</span>
                   </div>
                 );
@@ -9638,25 +9655,29 @@ function AcceptanceTab({ session, onRefresh }) {
                   <span className={"workbench-status-dot " + dot}></span>
                   <span className="wb-accept-copy">
                     <span className="wb-accept-text">{item.text}</span>
-                    {item.evidence ? <small className="wb-accept-evidence">验收依据：{item.evidence}</small> : null}
+                    {item.evidence ? <small className="wb-accept-evidence">{wbT("task.acceptance.evidence", "Evidence: {evidence}", { evidence: item.evidence })}</small> : null}
                   </span>
                   <span className={"wb-accept-state " + dot}>{label}</span>
                 </button>
               );
-            })}
+            })}</div>
             {editing ? (
               <div className="wb-accept-edit-actions">
-                <button type="button" className="wb-btn ghost compact" disabled={busy} onClick={cancelEdits}>取消</button>
-                <button type="button" className="wb-btn primary compact" disabled={busy} onClick={saveEdits}>保存验收条件</button>
+                <button type="button" className="wb-btn ghost compact" disabled={busy} onClick={cancelEdits}>{wbT("common.cancel", "Cancel")}</button>
+                <button type="button" className="wb-btn primary compact" disabled={busy} onClick={saveEdits}>{wbT("task.acceptance.save", "Save criteria")}</button>
               </div>
             ) : (
-              <button type="button" className="wb-btn ghost compact wb-accept-edit-trigger" disabled={busy} onClick={function () { setEditing(true); }}>修改验收条件</button>
+              <button type="button" className="wb-btn ghost compact wb-accept-edit-trigger" disabled={busy} onClick={function () { setEditing(true); }}>{wbT("task.acceptance.edit", "Edit criteria")}</button>
             )}
           </React.Fragment>
         ) : (
-          <div className="wb-empty-action">
-            <p className="workbench-muted">{wbT("task.acceptance.empty", "No acceptance criteria yet.")}</p>
-            <button type="button" className="wb-btn ghost" disabled={busy} onClick={generate}>{busy ? wbT("init.generating", "Generating...") : wbT("task.acceptance.generate", "Ask Agent to generate acceptance criteria")}</button>
+          <div className="wb-empty-action wb-acceptance-empty">
+            <span className="wb-acceptance-empty-icon" aria-hidden="true">{ICONS.check}</span>
+            <div>
+              <b>{wbT("task.acceptance.empty", "No acceptance criteria yet.")}</b>
+              <p>{wbT("task.acceptance.emptyHint", "Generate clear, verifiable criteria from the current task goal.")}</p>
+            </div>
+            <button type="button" className="wb-btn primary" disabled={busy} onClick={generate}>{busy ? wbT("init.generating", "Generating...") : wbT("task.acceptance.generate", "Ask Agent to generate acceptance criteria")}</button>
           </div>
         )}
     </div>

@@ -87,12 +87,14 @@ def _platform_filter() -> str:
     （见 electron/package.json 与 .github/workflows/release.yml）：
 
       - macOS:        ``Cyrene-<ver>-mac.dmg``
-      - Windows x64:  ``Cyrene-<ver>-win-x64.exe``
-      - Windows ARM:  ``Cyrene-<ver>-win-arm64.exe``
+      - Windows x64:  ``Cyrene-<ver>-win-x64.exe`` (standard installer)
+      - Windows ARM:  ``Cyrene-<ver>-win-arm64.exe`` (standard installer)
       - Linux:        ``Cyrene-<ver>-x64.AppImage``
 
-    Windows 自 0.6.0b0 起按架构区分文件名，所以这里依据 ``platform.machine()``
-    （ARM64 / AMD64）选择 x64 还是 arm64，而不是写死单一 token。
+    Windows 便携 Runtime 会设置 ``PORTABLE_EXECUTABLE_FILE``，此时匹配
+    ``-portable.exe``；安装版则匹配标准安装器。Windows 自 0.6.0b0 起按架构
+    区分文件名，所以这里依据 ``platform.machine()``（ARM64 / AMD64）选择
+    x64 还是 arm64，而不是写死单一 token。
 
     调用方在 check_for_update() 中用 ``key in name.lower()`` 做大小写无关的子串
     比较，故此处一律返回小写（旧实现返回的 ``x64.AppImage`` 含大写，永远匹配
@@ -102,12 +104,18 @@ def _platform_filter() -> str:
         return ".dmg"
     elif sys.platform == "win32":
         machine = platform.machine().lower()
+        suffix = "-portable.exe" if _is_windows_portable_runtime() else ".exe"
         if machine.startswith(("arm", "aarch")):
-            return "win-arm64.exe"
-        return "win-x64.exe"
+            return f"win-arm64{suffix}"
+        return f"win-x64{suffix}"
     elif sys.platform.startswith("linux"):
         return "x64.appimage"
     return sys.platform.lower()
+
+
+def _is_windows_portable_runtime() -> bool:
+    """Return whether electron-builder launched the single-file portable app."""
+    return bool(os.environ.get("PORTABLE_EXECUTABLE_FILE", "").strip())
 
 
 def _sha256_from_asset(asset: dict) -> str:
@@ -357,12 +365,38 @@ def _restart_script_macos(dmg_path: Path) -> str:
 
 
 def _restart_script_windows(exe_path: Path) -> str:
-    """Windows: 以管理员权限运行 NSIS 安装程序（静默模式）覆盖安装，重启。
+    """Windows: update a portable executable in place or run the NSIS installer.
 
-    使用 PowerShell 的 Start-Process -Verb RunAs 请求 UAC 提升，
-    解决 DETACHED_PROCESS 无法弹出 UAC 提示导致安装静默失败的问题。
+    Portable builds replace their original single-file executable after the
+    wrapper exits and require no elevation. Installed builds use PowerShell's
+    Start-Process -Verb RunAs so the NSIS updater can request UAC correctly.
     """
     app_exe = _current_app_executable() or Path(r"%LOCALAPPDATA%\Programs\Cyrene\Cyrene.exe")
+    if _is_windows_portable_runtime():
+        return f"""@echo off
+setlocal
+:: Cyrene updater — Windows portable
+set LOG="%TEMP%\\cyrene_update.log"
+>>%LOG% echo === Cyrene portable update %date% %time% ===
+>>%LOG% echo UPDATE: {exe_path}
+>>%LOG% echo TARGET: {app_exe}
+
+:: Wait for the portable wrapper and Electron child to release the original exe.
+timeout /t 3 /nobreak >nul
+copy /Y "{exe_path}" "{app_exe}.new" >>%LOG% 2>&1
+if errorlevel 1 goto failed
+move /Y "{app_exe}.new" "{app_exe}" >>%LOG% 2>&1
+if errorlevel 1 goto failed
+start "" "{app_exe}"
+del "{exe_path}"
+>>%LOG% echo Portable update complete.
+exit /b 0
+
+:failed
+>>%LOG% echo Portable update failed with code %errorlevel%.
+del "{app_exe}.new" 2>nul
+exit /b 1
+"""
     return f"""@echo off
 setlocal
 :: Cyrene updater — Windows

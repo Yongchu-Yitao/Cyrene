@@ -6164,6 +6164,8 @@ def test_workbench_task_details_reuse_floating_animated_accordion():
     assert 'className="wb-detail-accordion wb-task-detail-tabs"' in panel
     assert 'aria-expanded={expanded}' in panel
     assert 'onTabChange(expanded ? "" : item.id)' in panel
+    assert 'artifacts.length ? [{ id: "artifacts"' in panel
+    assert 'tab === "artifacts" && !artifacts.length' in panel
     assert 'className={"wb-detail-accordion-panel wb-task-detail-tab-panel"' in panel
     assert 'className="workbench-right-body"' in panel
     files_tab = source.split("function FilesTab", 1)[1].split("function LogsTab", 1)[0]
@@ -6190,6 +6192,10 @@ def test_workbench_task_details_reuse_floating_animated_accordion():
     assert ".wb-task-context-empty" in styles
     assert ".wb-task-detail-card .wb-accept-toggle:hover" in styles
     assert "background: var(--wb-row-hover-bg);" in styles
+    assert ".wb-acceptance-summary" in styles
+    assert ".wb-acceptance-empty" in styles
+    assert 'className="wb-acceptance-list"' in acceptance_tab
+    assert 'className="wb-empty-action wb-acceptance-empty"' in acceptance_tab
     assert 'html[data-theme="dark"] .wb-task-detail-card' in styles
     assert '"task.side.detailPanel": "Task details"' in i18n
     assert '"task.side.detailPanel": "任务详情"' in i18n

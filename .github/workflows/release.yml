@@ -225,11 +225,13 @@ jobs:
         shell: powershell
         run: build\windows-release-smoke.ps1 -Arch x64
 
-      - name: Upload installer
+      - name: Upload Windows packages
         uses: actions/upload-artifact@v7
         with:
           name: windows-installer
-          path: dist-electron/Cyrene-*-win-x64.exe
+          path: |
+            dist-electron/Cyrene-*-win-x64.exe
+            dist-electron/Cyrene-*-win-x64-portable.exe
           if-no-files-found: error
           compression-level: 0
 
@@ -387,11 +389,13 @@ jobs:
         shell: powershell
         run: build\windows-release-smoke.ps1 -Arch arm64
 
-      - name: Upload installer
+      - name: Upload Windows packages
         uses: actions/upload-artifact@v7
         with:
           name: windows-installer-arm
-          path: dist-electron/Cyrene-*-win-arm64.exe
+          path: |
+            dist-electron/Cyrene-*-win-arm64.exe
+            dist-electron/Cyrene-*-win-arm64-portable.exe
           if-no-files-found: error
           compression-level: 0
 

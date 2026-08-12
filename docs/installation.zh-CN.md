@@ -58,7 +58,15 @@ Linux 桌面版默认使用软件渲染，规避 Wayland、Mesa 或虚拟 GPU
 
 ## Windows
 
-预构建 Windows Installer 是当前面向最终用户的受支持路径。
+Windows Release 会为每种受支持的架构同时提供两种包：
+
+- `Cyrene-<版本>-win-<架构>.exe`：标准安装版。
+- `Cyrene-<版本>-win-<架构>-portable.exe`：单文件便携版；下载后直接双击运行，
+  无需安装，也不需要管理员权限。
+
+便携版仍将应用数据保存在 Windows 的标准 AppData 目录，因此移动或更新 exe
+不会丢失设置。应用内更新会下载相同架构的便携包，并在 Cyrene 退出后原位替换
+原始 exe，不会把便携版转换成安装版。
 
 Windows 源码 Environment 仍有一个上游 Packaging 限制：SimpleXNG 没有用
 Windows Environment Marker 排除 Unix-only `uvloop`。因此通用
