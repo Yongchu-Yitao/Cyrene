@@ -34,12 +34,56 @@ def isolated_project_memory_store(tmp_path, monkeypatch):
     memory_prompt.configure_store(original_db_path)
 
 
-def test_auto_learning_threshold_is_ten_then_every_five_turns():
-    assert not memory_prompt.should_auto_trigger(9)
-    assert memory_prompt.should_auto_trigger(10)
-    assert not memory_prompt.should_auto_trigger(11)
-    assert memory_prompt.should_auto_trigger(15)
-    assert memory_prompt.should_auto_trigger(20)
+def test_auto_learning_uses_context_thresholds_and_stops_at_seventy(monkeypatch):
+    monkeypatch.setattr(
+        "cyrene.model_runtime.client.message_token_estimate",
+        lambda message: int(message.get("tokens") or 0),
+    )
+    messages = [{"role": "user", "tokens": 199}]
+    assert memory_prompt.context_auto_trigger_threshold(
+        "project-a", "chat-a", messages, ctx_limit=1000
+    ) is None
+
+    messages[0]["tokens"] = 205
+    assert memory_prompt.context_auto_trigger_threshold(
+        "project-a", "chat-a", messages, ctx_limit=1000
+    ) == 20
+
+    snapshot = {
+        "chatId": "chat-a",
+        "roundId": "round-1",
+        "messages": messages,
+        "contextHash": "hash-1",
+        "contextThresholdPercent": 20,
+    }
+    memory_prompt._append_job(
+        "project-a", snapshot, "conversation_auto", "context_20_percent"
+    )
+    assert memory_prompt.context_auto_trigger_threshold(
+        "project-a", "chat-a", messages, ctx_limit=1000
+    ) is None
+
+    messages[0]["tokens"] = 355
+    assert memory_prompt.context_auto_trigger_threshold(
+        "project-a", "chat-a", messages, ctx_limit=1000
+    ) == 30
+
+    messages[0]["tokens"] = 950
+    assert memory_prompt.context_auto_trigger_threshold(
+        "project-a", "chat-a", messages, ctx_limit=1000
+    ) == 70
+
+    snapshot.update(
+        roundId="round-2",
+        contextHash="hash-2",
+        contextThresholdPercent=70,
+    )
+    memory_prompt._append_job(
+        "project-a", snapshot, "conversation_auto", "context_70_percent"
+    )
+    assert memory_prompt.context_auto_trigger_threshold(
+        "project-a", "chat-a", messages, ctx_limit=1000
+    ) is None
 
 
 def test_completed_turn_counter_excludes_retry_command_and_side_agent():

@@ -2079,15 +2079,17 @@ async def _run_subagent(
                 limits["max_messages_per_agent"],
                 per_agent_override,
             )
-    run_binding = bind_run_context(
-        caller=f"subagent_{agent_id}",
-        **({"round_id": round_id} if round_id else {}),
-    )
-    dm_token = _direct_message_mode.set(False)
     _subagent_session_id = (
         await get_session_id(agent_id)
         or parent_context.session_id
     )
+    run_binding = bind_run_context(
+        agent_id=agent_id,
+        caller=f"subagent_{agent_id}",
+        **({"round_id": round_id} if round_id else {}),
+        **({"session_id": _subagent_session_id} if _subagent_session_id else {}),
+    )
+    dm_token = _direct_message_mode.set(False)
     from cyrene.runtime.inbox import get_inbox_context as _get_inbox_base, mark_all_read as _mark_inbox_read_base
 
     def _get_inbox(agent_id: str) -> str:
@@ -2217,6 +2219,14 @@ You are a **participant** in this discussion. Rules:
             enabled_wire_names,
         )
     )
+    from cyrene.hooks import run_lifecycle_hooks
+
+    injected_hook_context = await run_lifecycle_hooks(
+        "SessionStart",
+        parent_agent_id=parent_context.agent_id,
+    )
+    if injected_hook_context:
+        subagent_prompt += "\n\n## Agent Hook Context\n" + injected_hook_context
     workbench_context = ""
     if _subagent_session_id:
         try:
@@ -2836,11 +2846,38 @@ You are a **participant** in this discussion. Rules:
                 continue
             if tcs:
                 await _save_if_registered()
+    except asyncio.CancelledError:
+        await asyncio.shield(run_lifecycle_hooks(
+            "Stop",
+            parent_agent_id=parent_context.agent_id,
+            reason="cancelled",
+            details={"status": "cancelled"},
+        ))
+        raise
     except Exception as e:
         logger.exception("Sub-agent %s crashed", agent_id)
         final_text = f"Sub-agent crashed: {e}"
         stop_reason = "subagent_crashed"
         incomplete_outcome = "blocked"
+        await run_lifecycle_hooks(
+            "Stop",
+            parent_agent_id=parent_context.agent_id,
+            reason=stop_reason,
+            details={"status": "error", "summary": final_text[:16000]},
+        )
+    else:
+        lifecycle_event = (
+            "Stop"
+            if incomplete_outcome == "resource_exhausted"
+            or "timeout" in str(stop_reason).lower()
+            else "SessionEnd"
+        )
+        await run_lifecycle_hooks(
+            lifecycle_event,
+            parent_agent_id=parent_context.agent_id,
+            reason=stop_reason,
+            details={"status": incomplete_outcome or "completed", "summary": final_text[:16000]},
+        )
     finally:
         reset_catalog_snapshot(catalog_snapshot_token)
         run_binding.reset()

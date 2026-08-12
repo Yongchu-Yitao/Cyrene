@@ -207,6 +207,12 @@ def migrate_legacy_database(
     if not source.is_file():
         return DatabaseMigrationResult("not_needed", source, target, detail="source_missing")
 
+    # SQLite can leave an empty database file behind when a legacy path is
+    # opened but never initialized.  It contains nothing to migrate and must
+    # not turn an already-populated target into an ambiguous migration error.
+    if source.stat().st_size == 0:
+        return DatabaseMigrationResult("not_needed", source, target, detail="source_empty")
+
     try:
         if _database_has_rows(target):
             logger.warning(

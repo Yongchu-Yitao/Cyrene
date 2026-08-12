@@ -44,7 +44,7 @@ async def _tool_set_task_goal(
     # process); importing it at module load would invert package layering.
     from cyrene.workbench.runtime import set_task_goal_for_session
 
-    result = set_task_goal_for_session(session_id, goal, title, summary)
+    result = await set_task_goal_for_session(session_id, goal, title, summary)
     if not result.get("ok"):
         return "Not set: " + str(result.get("error") or "could not update the task.")
     parts: list[str] = []

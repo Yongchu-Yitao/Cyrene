@@ -53,6 +53,7 @@ contextBridge.exposeInMainWorld('cyrene', {
     if (process.platform !== 'linux') return Promise.resolve(null);
     return ipcRenderer.invoke('dialog:pick-directory');
   },
+  pickExtensionPath: (options) => ipcRenderer.invoke('dialog:pick-extension-path', options || {}),
   pickBackupSavePath: (options) => ipcRenderer.invoke('dialog:pick-backup-save-path', options || {}),
   pickBackupFile: (options) => ipcRenderer.invoke('dialog:pick-backup-file', options || {}),
   browser: {

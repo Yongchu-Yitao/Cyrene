@@ -22,11 +22,23 @@ def test_main_agent_prompt_requires_final_deliverable_verification():
     assert "report any failed or unavailable checks" in _MAIN_AGENT_PROMPT
 
 
+def test_agent_generated_external_skills_require_successful_registration():
+    from cyrene.agent.prompts import _EXECUTION_SYSTEM_PROMPT, _MAIN_AGENT_PROMPT
+
+    assert "invoke `skill.install`" in _MAIN_AGENT_PROMPT
+    assert "only a draft until `skill.install` succeeds" in _MAIN_AGENT_PROMPT
+    assert "writing `SKILL.md` alone does not register or enable it" in _EXECUTION_SYSTEM_PROMPT
+
+
 def test_user_facing_prompts_hide_internal_runtime_details():
     from cyrene.agent.prompts import _EXECUTION_SYSTEM_PROMPT, _MAIN_AGENT_PROMPT
 
     for prompt in (_MAIN_AGENT_PROMPT, _EXECUTION_SYSTEM_PROMPT):
         assert "Never expose internal tool, function, gateway" in prompt
+        assert "runtime risk tiers and codes (including `R0`–`R4`)" in prompt
+        assert 'labels such as "R2 operation" as internal-only' in prompt
+        assert "Never include them in user-visible text" in prompt
+        assert "state only the concrete action that needs their confirmation" in prompt
         assert "Describe work in natural, outcome-oriented language" in prompt
         assert "omit implementation details about the agent runtime itself" in prompt
         assert "do not paste raw internal errors or identifiers" in prompt

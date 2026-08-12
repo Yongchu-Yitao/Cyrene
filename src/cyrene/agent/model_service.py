@@ -14,6 +14,7 @@ async def call_agent_model(
     max_tokens: int | None = None,
     *,
     caller: str | None = None,
+    candidates: list[dict[str, Any]] | None = None,
     secondary: bool = False,
     thinking: str = "auto",
     response_format: dict[str, Any] | None = None,
@@ -22,6 +23,8 @@ async def call_agent_model(
     binding = bind_run_context(caller=caller) if caller is not None else None
     try:
         optional: dict[str, Any] = {}
+        if candidates is not None:
+            optional["candidates"] = candidates
         if secondary:
             optional["secondary"] = True
         if thinking != "auto":

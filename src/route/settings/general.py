@@ -1354,18 +1354,21 @@ def register_settings_routes(router: APIRouter, bot: Any, db_path: str) -> None:
 
     @router.get("/api/settings/mcp")
     async def api_get_mcp_servers():
-        from cyrene.tooling.backends.mcp_manager import get_manager as _get_mcp_mgr, get_mcp_servers as _get_servers
+        from cyrene.tooling.backends.mcp_manager import get_manager as _get_mcp_mgr, get_mcp_servers as _get_servers, redact_mcp_servers as _redact_servers
         manager = _get_mcp_mgr()
         return {
             "servers": manager.get_server_status(),
-            "configs": _get_servers(),
+            "configs": _redact_servers(_get_servers()),
         }
 
     @router.put("/api/settings/mcp")
     async def api_update_mcp_servers(request: Request):
-        from cyrene.tooling.backends.mcp_manager import save_mcp_servers as _save_servers, restart_mcp as _restart_mcp
+        from cyrene.tooling.backends.mcp_manager import get_mcp_servers as _get_servers, merge_redacted_mcp_servers as _merge_servers, save_mcp_servers as _save_servers, restart_mcp as _restart_mcp
         body = await request.json()
         servers = body.get("servers", [])
-        _save_servers(servers)
+        try:
+            _save_servers(_merge_servers(_get_servers(), servers))
+        except ValueError as exc:
+            return JSONResponse({"ok": False, "error": str(exc)}, status_code=400)
         await _restart_mcp()
         return {"ok": True}

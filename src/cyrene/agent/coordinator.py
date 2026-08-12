@@ -9,6 +9,7 @@ loop).
 import asyncio
 import importlib
 import logging
+import sys
 from datetime import datetime
 from typing import Any, Awaitable, Callable
 
@@ -72,6 +73,12 @@ from cyrene.agent.state import (
     active_workspace_dir,
 )
 from cyrene.observability.context_trace import context_block
+from cyrene.observability.trace import (
+    bind_trace_context,
+    current_trace_context,
+    new_trace_id,
+    trace_span,
+)
 from cyrene.config import PATTERN_DETECTION_INTERVAL
 from cyrene.model_runtime.messages import (
     assistant_text,
@@ -457,6 +464,109 @@ async def _run_chat_agent(
     permission_mode: str = "default",
     plan_modification: str = "",
 ) -> str:
+    """Run one main Agent slice with complete global Hook lifecycle events."""
+    import time as _time
+
+    from cyrene.hooks import run_lifecycle_hooks
+
+    round_id = str(forced_round_id or "").strip() or f"round_{int(_time.time() * 1000)}"
+    round_token = _current_round_id.set(round_id)
+    caller_token = _caller_type.set("main_agent")
+    try:
+        injected = await run_lifecycle_hooks("SessionStart")
+        effective_fixed = "\n\n".join(
+            part for part in (
+                fixed_ephemeral_system,
+                ("## Agent Hook Context\n" + injected) if injected else "",
+            ) if part
+        )
+        try:
+            result = await _run_chat_agent_impl(
+                user_message,
+                bot,
+                chat_id,
+                db_path,
+                ephemeral_system=ephemeral_system,
+                fixed_ephemeral_system=effective_fixed,
+                volatile_ephemeral_system=volatile_ephemeral_system,
+                static_system_extra=static_system_extra,
+                final_system_extra=final_system_extra,
+                forced_round_id=round_id,
+                history_override=history_override,
+                persist_base_messages=persist_base_messages,
+                persist_insert_at=persist_insert_at,
+                client_request_id=client_request_id,
+                persist_user_message=persist_user_message,
+                behavior_user_message=behavior_user_message,
+                behavior_system_initiated=behavior_system_initiated,
+                public_user_message=public_user_message,
+                public_attachments=public_attachments,
+                llm_user_content=llm_user_content,
+                public_prompt=public_prompt,
+                refresh_labels=refresh_labels,
+                hide_initial_detail=hide_initial_detail,
+                assistant_message_meta=assistant_message_meta,
+                lang=lang,
+                command=command,
+                permission_mode=permission_mode,
+                plan_modification=plan_modification,
+            )
+        except asyncio.CancelledError:
+            await asyncio.shield(run_lifecycle_hooks(
+                "Stop", reason="cancelled", details={"status": "cancelled"},
+            ))
+            raise
+        except Exception as exc:
+            await run_lifecycle_hooks(
+                "Stop",
+                reason=f"abnormal:{type(exc).__name__}",
+                details={"status": "error", "error": str(exc)[:2000]},
+            )
+            raise
+        await run_lifecycle_hooks(
+            "SessionEnd",
+            reason="awaiting_user" if result == _AWAITING_USER_SENTINEL else "completed",
+            details={
+                "status": "awaiting_user" if result == _AWAITING_USER_SENTINEL else "completed",
+                "summary": str(result or "")[:16000],
+            },
+        )
+        return result
+    finally:
+        _caller_type.reset(caller_token)
+        _current_round_id.reset(round_token)
+
+
+async def _run_chat_agent_impl(
+    user_message: str,
+    bot: Any,
+    chat_id: int,
+    db_path: str,
+    ephemeral_system: str = "",
+    fixed_ephemeral_system: str = "",
+    volatile_ephemeral_system: str = "",
+    static_system_extra: str = "",
+    final_system_extra: str = "",
+    forced_round_id: str = "",
+    history_override: list[dict[str, Any]] | None = None,
+    persist_base_messages: list[dict[str, Any]] | None = None,
+    persist_insert_at: int | None = None,
+    client_request_id: str = "",
+    persist_user_message: bool = True,
+    behavior_user_message: str | None = None,
+    behavior_system_initiated: bool = False,
+    public_user_message: str | None = None,
+    public_attachments: list[dict[str, Any]] | None = None,
+    llm_user_content: Any | None = None,
+    public_prompt: str | None = None,
+    refresh_labels: bool = True,
+    hide_initial_detail: bool = False,
+    assistant_message_meta: dict[str, Any] | None = None,
+    lang: str = "",
+    command: str = "",
+    permission_mode: str = "default",
+    plan_modification: str = "",
+) -> str:
     import time as _time
 
     original_user_message = str(user_message or "")
@@ -471,6 +581,29 @@ async def _run_chat_agent(
 
     round_id = str(forced_round_id or "").strip() or f"round_{int(_time.time() * 1000)}"
     round_token = _current_round_id.set(round_id)
+    standalone_run_span = None
+    if not current_trace_context().trace_id:
+        standalone_run_id = new_trace_id("run")
+        standalone_run_span = trace_span(
+            "run",
+            "agent_run",
+            span_id=standalone_run_id,
+            trace_id=standalone_run_id,
+            run_id=standalone_run_id,
+            db_path=db_path,
+        ).start()
+    trace_ids_binding = bind_trace_context(
+        session_id=_current_session_id.get(),
+        round_id=round_id,
+    )
+    round_span = trace_span(
+        "round",
+        "agent_round",
+        span_id=round_id,
+        db_path=db_path,
+        attributes={"command": str(command or "chat")},
+    ).start()
+    prepare_span = trace_span("local", "round_prepare", db_path=db_path).start()
     full_session_messages = _load_session_messages()
     # Update per-session context so reads via cyrene.agent.state are visible
     _ctx = _ensure_session(_current_session_id.get())
@@ -1040,6 +1173,8 @@ async def _run_chat_agent(
 
         from cyrene.agent.agent import _run_main_agent
 
+        prepare_span.set_attribute("history_messages", len(history))
+        await prepare_span.finish()
         main_text = await _run_main_agent(
             user_message, history, bot, chat_id, db_path, main_system,
             client_request_id=client_request_id, persist_user_message=persist_user_message,
@@ -1132,6 +1267,17 @@ async def _run_chat_agent(
         _state._permission_elevation_grants.set(None)
         _state._scoped_path_access_grants.set(None)
         _state._permission_mode.reset(mode_token)
+        exc_type = sys.exc_info()[0]
+        if exc_type is not None and issubclass(exc_type, asyncio.CancelledError):
+            round_status = "cancelled"
+        else:
+            round_status = "error" if exc_type is not None else "ok"
+        if prepare_span.is_active:
+            await prepare_span.finish(status=round_status)
+        await round_span.finish(status=round_status)
+        trace_ids_binding.reset()
+        if standalone_run_span is not None:
+            await standalone_run_span.finish(status=round_status)
         _current_round_id.reset(round_token)
 
 

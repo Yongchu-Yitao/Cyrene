@@ -102,6 +102,7 @@ def test_durable_timeline_splits_tools_around_visible_tool_preamble():
         {
             "role": "assistant",
             "message_id": "file1",
+            "round_id": "round_delivery",
             "created_at": "2026-01-01T00:00:03+00:00",
             "intermediate_reply": True,
             "content": "你的照片",
@@ -139,6 +140,7 @@ def test_durable_timeline_splits_tools_around_visible_tool_preamble():
     assert [tool["tool"] for tool in timeline[2]["trace"]] == ["send_file"]
     assert timeline[2]["reasoning"] == "文件存在，现在发送"
     assert timeline[3]["content"] == "你的照片"
+    assert timeline[3]["roundId"] == "round_delivery"
     assert timeline[3]["trace"] == []
 
 
@@ -198,6 +200,91 @@ def test_late_discovered_assistant_message_is_inserted_before_guidance():
     ])
 
     assert [message["id"] for message in chat["messages"]] == ["u1", "a1", "g1", "a2"]
+
+
+def test_identical_deliveries_in_different_rounds_are_not_deduped():
+    attachment = {
+        "id": "report-v3",
+        "name": "report.md",
+        "url": "/api/chat/export/report-v3.md",
+    }
+    chat = {
+        "messages": [
+            {
+                "id": "old-delivery",
+                "role": "assistant",
+                "content": "",
+                "createdAt": "2026-01-01T00:00:01+00:00",
+                "intermediate": True,
+                "roundId": "round_1",
+                "attachments": [attachment],
+            },
+            {
+                "id": "u2",
+                "role": "user",
+                "content": "再发给我",
+                "createdAt": "2026-01-01T00:01:00+00:00",
+            },
+        ]
+    }
+
+    _merge_chat_messages_chronologically(chat, [{
+        "id": "new-delivery",
+        "role": "assistant",
+        "content": "",
+        "createdAt": "2026-01-01T00:01:01+00:00",
+        "intermediate": True,
+        "roundId": "round_2",
+        "attachments": [attachment],
+    }])
+
+    assert [message["id"] for message in chat["messages"]] == [
+        "old-delivery",
+        "u2",
+        "new-delivery",
+    ]
+
+
+def test_live_and_durable_delivery_in_same_round_are_deduped():
+    attachment = {"id": "report", "name": "report.md", "url": "/f/report.md"}
+    chat = {
+        "messages": [{
+            "id": "live-id",
+            "role": "assistant",
+            "content": "文件已发送",
+            "createdAt": "2026-01-01T00:00:01+00:00",
+            "intermediate": True,
+            "roundId": "round_1",
+            "attachments": [attachment],
+        }]
+    }
+
+    _merge_chat_messages_chronologically(chat, [{
+        "id": "durable-id",
+        "role": "assistant",
+        "content": "文件已发送",
+        "createdAt": "2026-01-01T00:00:02+00:00",
+        "intermediate": True,
+        "roundId": "round_1",
+        "attachments": [attachment],
+    }])
+
+    assert len(chat["messages"]) == 1
+    assert chat["messages"][0]["id"] == "live-id"
+    assert chat["messages"][0]["createdAt"] == "2026-01-01T00:00:02+00:00"
+
+
+def test_merge_repairs_existing_fully_timestamped_message_order():
+    chat = {
+        "messages": [
+            {"id": "late", "createdAt": "2026-01-01T00:02:00+00:00"},
+            {"id": "early", "createdAt": "2026-01-01T00:01:00+00:00"},
+        ]
+    }
+
+    _merge_chat_messages_chronologically(chat, [])
+
+    assert [message["id"] for message in chat["messages"]] == ["early", "late"]
 
 
 def test_pending_question_is_a_durable_transcript_message_with_trace():

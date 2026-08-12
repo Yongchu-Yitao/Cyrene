@@ -36,6 +36,8 @@ test.db
 # Electron
 electron/node_modules/
 electron/out/
+electron/runtime-tools/
+electron/.runtime-tools-cache/
 dist-electron/
 
 # IDE
@@ -80,6 +82,9 @@ src/webui/static/app/electron/
 
 # Transient agent/test output written to the repo root
 /animations/
+/output/
+/:memory:
+/runtime.db
 
 # GAIA benchmark dataset + outputs
 gaia_data/

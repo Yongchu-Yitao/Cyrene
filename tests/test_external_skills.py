@@ -1,4 +1,4 @@
-def test_external_skill_prompt_has_no_implicit_character_limit(monkeypatch):
+def test_external_skill_prompt_discloses_only_names_and_ids(monkeypatch):
     from cyrene.learning import skills
 
     first = "A" * 25_000
@@ -28,9 +28,12 @@ def test_external_skill_prompt_has_no_implicit_character_limit(monkeypatch):
 
     prompt = skills.build_skill_prompt_block()
 
-    assert first in prompt
-    assert second in prompt
-    assert len(prompt) > 50_000
+    assert "First (ID: first)" in prompt
+    assert "Second (ID: second)" in prompt
+    assert first not in prompt
+    assert second not in prompt
+    assert "first skill" not in prompt
+    assert "LoadSkill" in prompt
 
 
 def test_read_skill_text_defaults_to_the_complete_file(tmp_path):

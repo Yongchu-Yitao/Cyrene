@@ -1538,11 +1538,39 @@ def register_workbench_chat_routes(
             if not should_generate_title:
                 return
             from cyrene.workbench.session_naming import generate_session_title
+            from cyrene.model_runtime.client import resolve_session_model_candidate
+
+            naming_candidate = resolve_session_model_candidate(chat_id)
+            candidate_id = str((naming_candidate or {}).get("id") or "")
+            candidate_model = str((naming_candidate or {}).get("model") or "")
+            logger.info(
+                "Workbench session naming started "
+                "[chat=%s project=%s candidate=%s model=%s input_chars=%d]",
+                chat_id,
+                project_id,
+                candidate_id or "unresolved",
+                candidate_model or "unresolved",
+                len(message),
+            )
 
             try:
-                generated_title = await generate_session_title(message, limit=60)
-            except Exception:
-                logger.warning("Workbench session naming failed for %s", chat_id, exc_info=True)
+                if naming_candidate is None:
+                    raise RuntimeError("no configured model candidate for conversation")
+                generated_title = await generate_session_title(
+                    message,
+                    limit=60,
+                    candidate=naming_candidate,
+                )
+            except Exception as exc:
+                logger.exception(
+                    "Workbench session naming failed "
+                    "[chat=%s project=%s candidate=%s model=%s error_type=%s]",
+                    chat_id,
+                    project_id,
+                    candidate_id or "unresolved",
+                    candidate_model or "unresolved",
+                    type(exc).__name__,
+                )
                 generated_title = ""
 
             def persist_title() -> bool:
@@ -1562,6 +1590,16 @@ def register_workbench_chat_routes(
                 return bool(generated_title) and not bool(fresh_chat.get("titleLocked"))
 
             changed = await asyncio.to_thread(persist_title)
+            logger.info(
+                "Workbench session naming finished "
+                "[chat=%s project=%s candidate=%s model=%s status=%s output_chars=%d]",
+                chat_id,
+                project_id,
+                candidate_id or "unresolved",
+                candidate_model or "unresolved",
+                "generated" if changed else "failed_or_locked",
+                len(generated_title),
+            )
             if changed:
                 from cyrene.observability import debug
 
@@ -1721,8 +1759,8 @@ def register_workbench_chat_routes(
             if finalized and not is_side_agent:
                 from cyrene.workbench.project_memory_prompt import (
                     completed_context_snapshot,
+                    context_auto_trigger_threshold,
                     schedule_learning,
-                    should_auto_trigger,
                 )
 
                 turn_count = int(finalized.get("completedTurnCount") or 0)
@@ -1733,17 +1771,20 @@ def register_workbench_chat_routes(
                     completed_turn_count=turn_count,
                     final_assistant_text=str(reply_text or ""),
                 )
-                if (
-                    snapshot
-                    and not command
-                    and not retry
-                    and should_auto_trigger(turn_count)
-                ):
+                threshold = (
+                    context_auto_trigger_threshold(
+                        project_id, chat_id, snapshot.get("messages") or []
+                    )
+                    if snapshot and not command and not retry
+                    else None
+                )
+                if snapshot and threshold is not None:
+                    snapshot["contextThresholdPercent"] = threshold
                     schedule_learning(
                         project_id,
                         snapshot,
                         source="conversation_auto",
-                        reason=f"completed_turn_{turn_count}",
+                        reason=f"context_{threshold}_percent",
                     )
             return finalized
 
@@ -2813,8 +2854,8 @@ def register_workbench_chat_routes(
         if project_id and not is_side_agent:
             from cyrene.workbench.project_memory_prompt import (
                 completed_context_snapshot,
+                context_auto_trigger_threshold,
                 schedule_learning,
-                should_auto_trigger,
             )
 
             snapshot = await asyncio.to_thread(
@@ -2824,12 +2865,19 @@ def register_workbench_chat_routes(
                 completed_turn_count=completed_turn_count,
                 final_assistant_text=str(reply or ""),
             )
-            if snapshot and should_auto_trigger(completed_turn_count):
+            threshold = (
+                context_auto_trigger_threshold(
+                    project_id, chat_id, snapshot.get("messages") or []
+                )
+                if snapshot else None
+            )
+            if snapshot and threshold is not None:
+                snapshot["contextThresholdPercent"] = threshold
                 schedule_learning(
                     project_id,
                     snapshot,
                     source="conversation_auto",
-                    reason=f"completed_turn_{completed_turn_count}",
+                    reason=f"context_{threshold}_percent",
                 )
         return {
             "ok": True,

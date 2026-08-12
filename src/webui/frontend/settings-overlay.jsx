@@ -124,7 +124,7 @@ var TABS = [
   { id: "agents", labelKey: "settings.agents" },
   { id: "appearance", labelKey: "settings.appearance" },
   { id: "capabilities", labelKey: "settings.capabilities" },
-  { id: "skills", labelKey: "settings.skills" },
+  { id: "extensions", labelKey: "settings.extensions" },
   { id: "shortcuts", labelKey: "settings.shortcuts" },
   { id: "data", labelKey: "settings.data" },
   { id: "budget", labelKey: "settings.budget" },
@@ -133,7 +133,7 @@ var TABS = [
 
 var SETTINGS_TAB_GROUPS = [
   ["general", "appearance", "shortcuts"],
-  ["models", "capabilities", "skills"],
+  ["models", "capabilities", "extensions"],
   ["channels", "remote", "agents"],
   ["data", "budget"],
   ["about"],
@@ -157,7 +157,7 @@ function SettingsTabIcon(id) {
     agents: [React.createElement("path", { key: "p", d: "M12 3v4M6 8h12a2 2 0 0 1 2 2v7a3 3 0 0 1-3 3H7a3 3 0 0 1-3-3v-7a2 2 0 0 1 2-2Z" }), React.createElement("path", { key: "p2", d: "M9 14h.01M15 14h.01M8 20v2M16 20v2" })],
     appearance: [React.createElement("path", { key: "p", d: "M12 3a9 9 0 1 0 9 9 4 4 0 0 1-4 4h-1.2a2 2 0 0 1-1.5-3.3l.7-.8A5 5 0 0 0 12 3Z" }), React.createElement("circle", { key: "c1", cx: "7.5", cy: "10.5", r: ".8" }), React.createElement("circle", { key: "c2", cx: "10", cy: "7.5", r: ".8" }), React.createElement("circle", { key: "c3", cx: "14", cy: "7.5", r: ".8" })],
     capabilities: [React.createElement("path", { key: "p", d: "M7 7h10M7 17h10M9 7a2 2 0 1 1-4 0 2 2 0 0 1 4 0ZM19 17a2 2 0 1 1-4 0 2 2 0 0 1 4 0Z" })],
-    skills: [React.createElement("path", { key: "p", d: "M12 2 4 6v6c0 5 3.5 8 8 10 4.5-2 8-5 8-10V6l-8-4Z" }), React.createElement("path", { key: "p2", d: "m9 12 2 2 4-5" })],
+    extensions: [React.createElement("path", { key: "p", d: "M12 2 4 6v6c0 5 3.5 8 8 10 4.5-2 8-5 8-10V6l-8-4Z" }), React.createElement("path", { key: "p2", d: "m9 12 2 2 4-5" })],
     shortcuts: [React.createElement("rect", { key: "r", x: "3", y: "5", width: "18", height: "14", rx: "2" }), React.createElement("path", { key: "p", d: "M7 9h.01M11 9h.01M15 9h.01M7 13h10" })],
     data: [React.createElement("path", { key: "p", d: "M4 6c0-2 3.6-3 8-3s8 1 8 3-3.6 3-8 3-8-1-8-3Z" }), React.createElement("path", { key: "p2", d: "M4 6v6c0 2 3.6 3 8 3s8-1 8-3V6M4 12v6c0 2 3.6 3 8 3s8-1 8-3v-6" })],
     budget: [
@@ -201,7 +201,7 @@ function SettingsOverlay({
   project,
 }) {
   var { t, lang, setLang } = useWorkbenchI18n();
-  var [tab, setTab] = useStateSt(initialTab || "general");
+  var [tab, setTab] = useStateSt(initialTab === "skills" ? "extensions" : (initialTab || "general"));
 
   // ── General state ──
   var [desktopNotifications, setDesktopNotifications] = useStateSt(function () {
@@ -281,8 +281,121 @@ function SettingsOverlay({
   });
   var [voiceReferenceText, setVoiceReferenceText] = useStateSt("");
   var [voiceReferenceFile, setVoiceReferenceFile] = useStateSt(null);
+  var [voiceReferencePhase, setVoiceReferencePhase] = useStateSt("idle");
+  var [voiceReferenceElapsed, setVoiceReferenceElapsed] = useStateSt(0);
+  var voiceReferenceRecorderRef = useRefSt(null);
+  var voiceReferenceTimerRef = useRefSt(null);
+  var voiceReferenceStartedAtRef = useRefSt(0);
+  var voiceReferenceFinishingRef = useRefSt(false);
+  var voiceReferenceMountedRef = useRefSt(true);
+  var voiceReferenceSessionRef = useRefSt(0);
   var [voiceBusy, setVoiceBusy] = useStateSt("");
   var [voiceNotice, setVoiceNotice] = useStateSt("");
+
+  function clearVoiceReferenceTimer() {
+    if (!voiceReferenceTimerRef.current) return;
+    clearInterval(voiceReferenceTimerRef.current);
+    voiceReferenceTimerRef.current = null;
+  }
+
+  function finishVoiceReferenceRecording(activeRecorder) {
+    var recorder = activeRecorder || voiceReferenceRecorderRef.current;
+    if (!recorder || voiceReferenceFinishingRef.current) return;
+    var session = voiceReferenceSessionRef.current;
+    voiceReferenceFinishingRef.current = true;
+    var recordedMs = Date.now() - voiceReferenceStartedAtRef.current;
+    voiceReferenceRecorderRef.current = null;
+    clearVoiceReferenceTimer();
+    setVoiceReferencePhase("transcribing");
+    setVoiceNotice(t("settings.voiceReferenceRecognizing"));
+    recorder.stop().then(function (blob) {
+      if (recordedMs < 1000) {
+        throw new Error(t("settings.voiceReferenceTooShort"));
+      }
+      if (recordedMs > 15000) {
+        throw new Error(t("settings.voiceReferenceTooLong"));
+      }
+      return wbcTranscribeVoiceBlob(blob).then(function (transcript) {
+        if (!voiceReferenceMountedRef.current || session !== voiceReferenceSessionRef.current) return;
+        if (transcript === false) throw new Error(t("workbenchChat.noRecognizedSpeech"));
+        setVoiceReferenceFile(blob);
+        setVoiceReferenceText(transcript);
+        setVoiceReferencePhase("ready");
+        setVoiceNotice(t("settings.voiceReferenceRecognized"));
+      });
+    }).catch(function (error) {
+      if (!voiceReferenceMountedRef.current || session !== voiceReferenceSessionRef.current) return;
+      setVoiceReferenceFile(null);
+      setVoiceReferenceText(voiceStatus.reference_text || "");
+      setVoiceReferencePhase("idle");
+      setVoiceNotice(t("settings.error") + ": " + (error.message || ""));
+    }).finally(function () {
+      voiceReferenceFinishingRef.current = false;
+    });
+  }
+
+  function startVoiceReferenceRecording() {
+    if (!voiceStatus.asr_ready || voiceBusy || voiceReferencePhase !== "idle" && voiceReferencePhase !== "ready") return;
+    setVoiceReferenceFile(null);
+    setVoiceReferenceText("");
+    setVoiceReferenceElapsed(0);
+    setVoiceNotice("");
+    setVoiceReferencePhase("starting");
+    voiceReferenceFinishingRef.current = false;
+    voiceReferenceSessionRef.current += 1;
+    var session = voiceReferenceSessionRef.current;
+    try {
+      if (typeof WbcVoice !== "undefined" && WbcVoice) WbcVoice.stop();
+    } catch (e) {}
+    wbcStartVoiceRecorder().then(function (recorder) {
+      if (!voiceReferenceMountedRef.current || session !== voiceReferenceSessionRef.current) {
+        recorder.stop().catch(function () {});
+        return;
+      }
+      voiceReferenceRecorderRef.current = recorder;
+      voiceReferenceStartedAtRef.current = Date.now();
+      setVoiceReferencePhase("recording");
+      setVoiceNotice(t("settings.voiceReferenceRecordingHint"));
+      voiceReferenceTimerRef.current = setInterval(function () {
+        var elapsed = Math.max(0, (Date.now() - voiceReferenceStartedAtRef.current) / 1000);
+        setVoiceReferenceElapsed(Math.min(14, elapsed));
+        if (elapsed >= 14) finishVoiceReferenceRecording(recorder);
+      }, 100);
+    }).catch(function (error) {
+      if (!voiceReferenceMountedRef.current || session !== voiceReferenceSessionRef.current) return;
+      setVoiceReferencePhase("idle");
+      setVoiceNotice(t("settings.error") + ": " + (error.message || ""));
+    });
+  }
+
+  useEffectSt(function () {
+    voiceReferenceMountedRef.current = true;
+    return function () {
+      voiceReferenceMountedRef.current = false;
+      voiceReferenceSessionRef.current += 1;
+      clearVoiceReferenceTimer();
+      var recorder = voiceReferenceRecorderRef.current;
+      voiceReferenceRecorderRef.current = null;
+      if (recorder) recorder.stop().catch(function () {});
+    };
+  }, []);
+
+  useEffectSt(function () {
+    if (tab === "capabilities") return;
+    voiceReferenceSessionRef.current += 1;
+    clearVoiceReferenceTimer();
+    var recorder = voiceReferenceRecorderRef.current;
+    voiceReferenceRecorderRef.current = null;
+    if (recorder) recorder.stop().catch(function () {});
+    if (voiceReferencePhase === "starting" || voiceReferencePhase === "recording" || voiceReferencePhase === "transcribing") {
+      voiceReferenceFinishingRef.current = false;
+      setVoiceReferencePhase("idle");
+      setVoiceReferenceFile(null);
+      setVoiceReferenceText(voiceStatus.reference_text || "");
+      setVoiceReferenceElapsed(0);
+      setVoiceNotice("");
+    }
+  }, [tab]);
 
   // ── Data state ──
   var [resetStatus, setResetStatus] = useStateSt("");
@@ -620,8 +733,7 @@ function SettingsOverlay({
       body: JSON.stringify({ [settingKey]: nextEnabled }),
     }).then(readSettingsResponse).then(function (payload) {
       publishVoiceStatus(payload);
-      setVoiceNotice(t("settings.saved"));
-      setTimeout(function () { setVoiceNotice(""); }, 1500);
+      setVoiceNotice("");
     }).catch(function (error) {
       publishVoiceStatus(previous);
       setVoiceNotice(t("settings.error") + ": " + (error.message || ""));
@@ -637,8 +749,7 @@ function SettingsOverlay({
       body: JSON.stringify({ voice_mode: nextMode, voice_preset: "zipvoice-default" }),
     }).then(readSettingsResponse).then(function (payload) {
       publishVoiceStatus(payload);
-      setVoiceNotice(t("settings.saved"));
-      setTimeout(function () { setVoiceNotice(""); }, 1500);
+      setVoiceNotice("");
     }).catch(function (error) {
       setVoiceNotice(t("settings.error") + ": " + (error.message || ""));
     }).finally(function () { setVoiceBusy(""); });
@@ -655,6 +766,7 @@ function SettingsOverlay({
       .then(readSettingsResponse).then(function (payload) {
         publishVoiceStatus(payload);
         setVoiceReferenceFile(null);
+        setVoiceReferencePhase("idle");
         setVoiceReferenceText(payload.reference_text || voiceReferenceText.trim());
         setVoiceNotice(t("settings.voiceProfileSaved"));
       }).catch(function (error) {
@@ -669,6 +781,7 @@ function SettingsOverlay({
       .then(readSettingsResponse).then(function (payload) {
         publishVoiceStatus(payload);
         setVoiceReferenceFile(null);
+        setVoiceReferencePhase("idle");
         setVoiceReferenceText("");
         setVoiceNotice(t("settings.voiceProfileDeleted"));
       }).catch(function (error) {
@@ -792,10 +905,12 @@ function SettingsOverlay({
             t, mcpConfigs, setMcpConfigs, mcpServers, toolGroups, toolsSaved,
             saveToolGroup, newMcpServer, setNewMcpServer, mcpSaved, saveMcp,
             voiceStatus, voiceReferenceText, setVoiceReferenceText,
-            voiceReferenceFile, setVoiceReferenceFile, voiceBusy, voiceNotice,
+            voiceReferenceFile, setVoiceReferenceFile, voiceReferencePhase,
+            startVoiceReferenceRecording, finishVoiceReferenceRecording,
+            voiceBusy, voiceNotice,
             saveVoiceBooleanSetting, saveVoiceMode, saveVoiceProfile, deleteVoiceProfile,
           }),
-          tab === "skills" && React.createElement(SkillsPanel, { t }),
+          tab === "extensions" && React.createElement(ExtensionsPanel, { t }),
           tab === "shortcuts" && React.createElement(ShortcutsPanel, { t }),
           tab === "data" && DataPanel({ t, redactSecrets, saveRedactSecrets, config, configLoading, resetStatus, setResetStatus, resetting, setResetting, backupList, backupMsg, setBackupMsg, loadBackups, exportSids, setExportSids, workbenchExportSessions, exportFmt, setExportFmt, exportMsg, setExportMsg, formatBytes, formatDate }),
           tab === "budget" && React.createElement(BudgetPanel, { t, config }),
@@ -3237,7 +3352,9 @@ function CapabilitiesPanel(p) {
     t, mcpConfigs, setMcpConfigs, mcpServers, toolGroups, toolsSaved,
     saveToolGroup, newMcpServer, setNewMcpServer, mcpSaved, saveMcp,
     voiceStatus, voiceReferenceText, setVoiceReferenceText,
-    voiceReferenceFile, setVoiceReferenceFile, voiceBusy, voiceNotice,
+    voiceReferenceFile, setVoiceReferenceFile, voiceReferencePhase,
+    startVoiceReferenceRecording, finishVoiceReferenceRecording,
+    voiceBusy, voiceNotice,
     saveVoiceBooleanSetting, saveVoiceMode, saveVoiceProfile, deleteVoiceProfile,
   } = p;
 
@@ -3257,6 +3374,9 @@ function CapabilitiesPanel(p) {
   function removeMcp(name) { setMcpConfigs(mcpConfigs.filter(function (s) { return s.name !== name; })); }
   function toggleMcp(name) { setMcpConfigs(mcpConfigs.map(function (s) { return s.name === name ? { ...s, enabled: !s.enabled } : s; })); }
   var customVoiceSelected = voiceStatus.voice_mode === "custom";
+  var voiceReferenceActive = voiceReferencePhase === "starting"
+    || voiceReferencePhase === "recording"
+    || voiceReferencePhase === "transcribing";
 
   return React.createElement("div", { className: "settings-panel" },
     SectionTitle(t("settings.capabilities"), t("settings.capabilitiesSubtitle")),
@@ -3312,14 +3432,14 @@ function CapabilitiesPanel(p) {
               type: "button",
               className: "wb-seg-btn" + (!customVoiceSelected ? " active" : ""),
               "aria-pressed": customVoiceSelected ? "false" : "true",
-              disabled: !!voiceBusy,
+              disabled: !!voiceBusy || voiceReferenceActive,
               onClick: function () { saveVoiceMode("preset"); },
             }, t("settings.voicePresetMode")),
             React.createElement("button", {
               type: "button",
               className: "wb-seg-btn" + (customVoiceSelected ? " active" : ""),
               "aria-pressed": customVoiceSelected ? "true" : "false",
-              disabled: !!voiceBusy,
+              disabled: !!voiceBusy || voiceReferenceActive,
               onClick: function () { saveVoiceMode("custom"); },
             }, t("settings.voiceCustomMode")),
           ),
@@ -3329,31 +3449,47 @@ function CapabilitiesPanel(p) {
                   React.createElement("b", null, t("settings.voiceCustomTitle")),
                   React.createElement("small", null, t("settings.voiceCustomHint")),
                 ),
-                React.createElement("label", { className: "wb-voice-file" },
-                  React.createElement("input", {
-                    type: "file",
-                    accept: ".wav,.flac,.ogg,audio/wav,audio/flac,audio/ogg",
-                    onChange: function (event) {
-                      setVoiceReferenceFile(event.target.files && event.target.files[0] || null);
+                React.createElement("div", { className: "wb-voice-reference-recorder" },
+                  React.createElement("button", {
+                    type: "button",
+                    className: "wb-voice-record-btn" + (voiceReferencePhase === "recording" ? " recording" : ""),
+                    disabled: !voiceStatus.asr_ready || voiceReferencePhase === "starting" || voiceReferencePhase === "transcribing" || !!voiceBusy,
+                    "aria-label": voiceReferencePhase === "recording"
+                      ? t("settings.voiceReferenceStop")
+                      : t("settings.voiceReferenceRecord"),
+                    onClick: function () {
+                      if (voiceReferencePhase === "recording") finishVoiceReferenceRecording();
+                      else startVoiceReferenceRecording();
                     },
-                  }),
-                  React.createElement("span", null,
-                    voiceReferenceFile
-                      ? voiceReferenceFile.name
-                      : voiceStatus.voice_profile_ready
-                        ? t("settings.voiceProfileConfigured")
-                        : t("settings.voiceChooseAudio")
+                  },
+                    React.createElement("span", { className: "wb-voice-record-dot", "aria-hidden": "true" }),
+                    React.createElement("span", null,
+                      voiceReferencePhase === "starting"
+                        ? t("settings.voiceReferenceStarting")
+                        : voiceReferencePhase === "recording"
+                          ? t("settings.voiceReferenceStop")
+                          : voiceReferencePhase === "transcribing"
+                            ? t("settings.voiceReferenceRecognizing")
+                            : voiceReferenceFile
+                              ? t("settings.voiceReferenceRecordAgain")
+                              : t("settings.voiceReferenceRecord")
+                    ),
+                  ),
+                  React.createElement("small", null,
+                    voiceStatus.asr_ready
+                      ? voiceReferencePhase === "recording"
+                        ? t("settings.voiceReferenceRecordingStatus", { seconds: voiceReferenceElapsed.toFixed(1) })
+                        : t("settings.voiceReferenceRecordingHint")
+                      : t("settings.voiceReferenceAsrUnavailable")
                   ),
                 ),
-                React.createElement("textarea", {
-                  className: "wb-input wb-voice-reference-text",
-                  rows: 3,
-                  maxLength: 1000,
-                  value: voiceReferenceText,
-                  "aria-label": t("settings.voiceReferencePlaceholder"),
-                  placeholder: t("settings.voiceReferencePlaceholder"),
-                  onChange: function (event) { setVoiceReferenceText(event.target.value); },
-                }),
+                voiceReferenceFile && voiceReferenceText && React.createElement("div", {
+                  className: "wb-voice-reference-transcript",
+                  role: "status",
+                },
+                  React.createElement("b", null, t("settings.voiceReferenceTranscriptLabel")),
+                  React.createElement("p", null, voiceReferenceText),
+                ),
                 React.createElement("div", { className: "wb-save-actions" },
                   React.createElement("button", {
                     type: "button",
@@ -3417,45 +3553,6 @@ function CapabilitiesPanel(p) {
       ),
       toolsSaved && React.createElement("div", { className: "wb-save-actions" },
         React.createElement("span", { className: "wb-hint saved" }, toolsSaved),
-      ),
-    ),
-
-    // MCP
-    SectionBlock(t("settings.mcpServers"), null,
-      mcpConfigs.map(function (server) {
-        var live = mcpServers.find(function (s) { return s.name === server.name; });
-        var st = live ? live.status : "disconnected";
-        var tc = live ? live.tool_count : 0;
-        return React.createElement("div", { className: "wb-mcp-row", key: server.name },
-          React.createElement("div", { className: "wb-mcp-info" },
-            React.createElement("b", null, server.name),
-            React.createElement("small", null, server.transport === "stdio" ? server.command + " " + (server.args || []).join(" ") : server.url),
-          ),
-          React.createElement("div", { className: "wb-mcp-status" },
-            React.createElement("span", { className: "wb-mcp-indicator " + st }, st === "connected" ? "● " + t("settings.connected") : "○ " + t("settings.disconnected")),
-            tc > 0 && React.createElement("small", null, t("settings.toolsCount", { n: tc })),
-            Toggle(server.enabled !== false, function () { toggleMcp(server.name); }),
-            React.createElement("button", { className: "wb-icon-btn-small danger", onClick: function () { removeMcp(server.name); } }, "✖"),
-          ),
-        );
-      }),
-      React.createElement("div", { className: "wb-mcp-add" },
-        React.createElement("input", { className: "wb-input mono", placeholder: t("settings.placeholderName"), value: newMcpServer.name, onChange: function (e) { setNewMcpServer({ ...newMcpServer, name: e.target.value }); } }),
-        React.createElement("select", { className: "wb-select", value: newMcpServer.transport, onChange: function (e) { setNewMcpServer({ ...newMcpServer, transport: e.target.value }); } },
-          React.createElement("option", { value: "stdio" }, "stdio"),
-          React.createElement("option", { value: "sse" }, "SSE"),
-        ),
-        newMcpServer.transport === "stdio"
-          ? React.createElement(React.Fragment, null,
-              React.createElement("input", { className: "wb-input mono", placeholder: t("settings.placeholderCommand"), value: newMcpServer.command, onChange: function (e) { setNewMcpServer({ ...newMcpServer, command: e.target.value }); } }),
-              React.createElement("input", { className: "wb-input mono", placeholder: t("settings.placeholderArgs"), value: newMcpServer.args, onChange: function (e) { setNewMcpServer({ ...newMcpServer, args: e.target.value }); } }),
-            )
-          : React.createElement("input", { className: "wb-input mono", placeholder: t("settings.placeholderMcpUrl"), value: newMcpServer.url, onChange: function (e) { setNewMcpServer({ ...newMcpServer, url: e.target.value }); } }),
-        React.createElement("button", { className: "wb-btn", onClick: addMcp }, t("settings.add")),
-      ),
-      React.createElement("div", { className: "wb-save-actions" },
-        React.createElement("button", { className: "wb-btn primary", onClick: saveMcp }, t("settings.saveRestartMcp")),
-        mcpSaved && React.createElement("span", { className: "wb-hint saved" }, mcpSaved),
       ),
     ),
   );
@@ -3928,7 +4025,7 @@ function UpdateSection({ t, config }) {
 }
 
 // ── Skills Panel ──
-function SkillsPanel(p) {
+function LegacySkillsPanel(p) {
   var t = p.t;
   var [skills, setSkills] = useStateSt([]);
   var [loading, setLoading] = useStateSt(true);
@@ -4235,6 +4332,670 @@ function SkillsPanel(p) {
           )
         );
       })
+    )
+  );
+}
+
+function ExtensionGlyph(props) {
+  var kind = props.kind || "extension";
+  var label = String(props.label || kind || "E").slice(0, 1).toUpperCase();
+  if (props.id === "github-cli") return AboutRelatedIcon("github");
+  var paths = {
+    skill: "M12 2 4 6v6c0 5 3.5 8 8 10 4.5-2 8-5 8-10V6l-8-4Z",
+    mcp: "M8 12h8M12 8v8M5 5h4v4H5zM15 15h4v4h-4z",
+    cli: "M4 5h16v14H4zM7 9l3 3-3 3M12 15h5",
+    toolchain: "M14.7 6.3a4 4 0 0 0-5 5L3 18l3 3 6.7-6.7a4 4 0 0 0 5-5l-3 3-3-3z",
+  };
+  if (!paths[kind]) return React.createElement("span", { className: "wb-extension-glyph-text" }, label);
+  return React.createElement("svg", { width: "22", height: "22", viewBox: "0 0 24 24", fill: "none", stroke: "currentColor", strokeWidth: "1.9", strokeLinecap: "round", strokeLinejoin: "round", "aria-hidden": "true" },
+    React.createElement("path", { d: paths[kind] })
+  );
+}
+
+function extensionDisplayName(item, t) {
+  item = item || {};
+  return t("settings.extensionCatalog." + item.id + ".name", item.name || item.id || "—");
+}
+
+function extensionDisplayDescription(item, t) {
+  item = item || {};
+  return t("settings.extensionCatalog." + item.id + ".description", item.description || "—");
+}
+
+function extensionSourceLabel(item, t) {
+  item = item || {};
+  var source = item.source;
+  var type = "";
+  var details = [];
+  if (item.ownership === "system") type = "system";
+  else if (item.ownership === "builtin") type = "builtin";
+  if (!type && typeof source === "string") {
+    var value = source.trim();
+    var lower = value.toLowerCase();
+    if (lower === "manual") type = "manual";
+    else if (lower === "github" || lower.indexOf("github:") === 0 || lower.indexOf("github.com") >= 0) type = "github";
+    else if (lower === "cyrene-catalog" || lower.indexOf("registry") >= 0) type = "registry";
+    else if (/^https?:\/\//.test(lower)) type = "registry";
+    if (value && type !== "registry" && lower !== type && lower !== "cyrene-catalog") details.push(value.replace(/^github:/i, ""));
+  }
+  if (source && typeof source === "object") {
+    var rawType = String(source.type || source.kind || "").toLowerCase().replace(/_/g, "-");
+    if (!type) {
+      if (rawType === "system") type = "system";
+      else if (rawType === "bundled" || rawType === "builtin") type = "builtin";
+      else if (rawType === "uv") type = "uv";
+      else if (rawType === "mise") type = "mise";
+      else if (rawType === "github-release") type = "githubRelease";
+      else if (rawType === "mcp-registry" || rawType === "mcp-registry-package") type = "mcpRegistry";
+      else if (rawType === "github" || String(source.url || "").toLowerCase().indexOf("github.com") >= 0) type = "github";
+      else if (["local", "directory", "file", "archive", "upload"].indexOf(rawType) >= 0 || source.path) type = "local";
+      else if (rawType === "manual" || source.transport) type = "manual";
+      else if (rawType === "registry") type = "registry";
+    }
+    if (type === "mise" && source.ref) details.push(String(source.ref));
+    if (type === "githubRelease") {
+      if (source.repo) details.push(String(source.repo));
+      if (source.tag) details.push(String(source.tag));
+    }
+    if (type === "mcpRegistry") {
+      if (source.identifier) details.push(String(source.identifier));
+      else if (source.id) details.push(String(source.id));
+    }
+  }
+  if (!type) type = "unknown";
+  return [t("settings.extensionSource." + type), ...details].filter(Boolean).join(" · ");
+}
+
+function extensionHealthLabel(item, t) {
+  item = item || {};
+  var value = item.kind === "mcp" ? (item.connection_status || item.health) : item.health;
+  value = String(value || "unknown").toLowerCase().replace(/-/g, "_");
+  var aliases = {
+    missing_bundle: "missingBundle",
+    error: "unhealthy",
+    failed: "unhealthy",
+    disabled: "disconnected",
+  };
+  return t("settings.extensionHealthValue." + (aliases[value] || value), t("settings.extensionHealthValue.unknown"));
+}
+
+function extensionTaskStatusLabel(status, t) {
+  var value = String(status || "unknown");
+  return t("settings.extensionTaskStatus." + value, t("settings.extensionTaskStatus.unknown"));
+}
+
+function extensionAuditLabel(prefix, value, t) {
+  var aliases = {
+    "install.start": "installStart", "install.finish": "installFinish",
+    uninstall: "uninstall", "mcp.enable": "mcpEnable", "mcp.disable": "mcpDisable",
+    "skill.enable": "skillEnable", "skill.disable": "skillDisable",
+    "extension.enable": "extensionEnable", "extension.disable": "extensionDisable",
+    "source.update": "sourceUpdate", "system.bind": "systemBind", "system.unbind": "systemUnbind",
+    "default.set": "defaultSet",
+  };
+  var resolved = prefix === "Action" ? (aliases[value] || value) : value;
+  return t("settings.extensionAudit" + prefix + "." + resolved, value || "—");
+}
+
+function ExtensionStatus(props) {
+  var item = props.item || {};
+  var t = props.t;
+  var className = "missing";
+  var text = t("settings.extensionNotInstalled");
+  if (item.ownership === "builtin") { className = item.health === "healthy" ? "builtin" : "warning"; text = t("settings.extensionBuiltin"); }
+  else if (item.ownership === "system") { className = "system"; text = t("settings.extensionSystemInstalled"); }
+  else if (item.ownership === "cyrene") { className = item.health === "healthy" ? "managed" : "warning"; text = t("settings.extensionManagedInstalled"); }
+  if (item.kind === "mcp") {
+    className = item.connection_status === "connected" ? "managed" : "warning";
+    text = item.connection_status === "connected" ? t("settings.connected") : t("settings.disconnected");
+  }
+  if (item.observed_state === "installed" && item.enabled === false) { className = "disabled"; text = t("settings.extensionDisabled"); }
+  return React.createElement("span", { className: "wb-extension-status " + className },
+    React.createElement("span", { className: "wb-extension-status-dot", "aria-hidden": "true" }), text
+  );
+}
+
+function ExtensionCard(props) {
+  var item = props.item;
+  var t = props.t;
+  var busy = props.busy;
+  var [expanded, setExpanded] = useStateSt(false);
+  var canInstall = (item.capabilities || []).indexOf("install") >= 0;
+  var canUninstall = (item.capabilities || []).some(function (value) { return value === "uninstall" || value === "uninstall_managed" || value === "remove"; });
+  var canToggle = item.observed_state === "installed" && (item.capabilities || []).some(function (value) { return value === "enable" || value === "disable"; });
+  var canUseLocalProgram = (item.capabilities || []).indexOf("bind_system") >= 0;
+  var canStopUsingLocalProgram = (item.capabilities || []).indexOf("unbind_system") >= 0;
+  var canConfigureHook = item.kind === "cli" && item.observed_state === "installed";
+  var typeText = t("settings.extensionType." + item.kind);
+  var version = String(item.version || item.recommended_version || "").replace(/^python\s+/i, "").replace(/^v/, "");
+  var displayName = extensionDisplayName(item, t);
+  var displayDescription = extensionDisplayDescription(item, t);
+  return React.createElement("article", { className: "wb-extension-card" + (expanded ? " expanded" : "") },
+    React.createElement("div", { className: "wb-extension-card-main" },
+      React.createElement("button", {
+        type: "button", className: "wb-extension-card-summary", onClick: function () { setExpanded(!expanded); },
+        "aria-expanded": expanded ? "true" : "false", "aria-label": t("settings.extensionDetailsFor", { name: displayName }),
+      },
+        React.createElement("span", { className: "wb-extension-glyph " + item.kind + " extension-" + String(item.id || "").replace(/[^a-z0-9_-]/gi, "-").toLowerCase() }, React.createElement(ExtensionGlyph, { id: item.id, kind: item.kind, label: displayName })),
+        React.createElement("span", { className: "wb-extension-copy" },
+          React.createElement("span", { className: "wb-extension-title-row" },
+            React.createElement("strong", null, displayName),
+            React.createElement("span", { className: "wb-extension-type" }, typeText),
+            item.id === "python" && item.observed_state === "missing" && React.createElement("span", { className: "wb-extension-recommended" }, t("settings.extensionRecommendedInstall")),
+          ),
+          React.createElement("span", { className: "wb-extension-description" }, displayDescription),
+          React.createElement("span", { className: "wb-extension-meta" },
+            React.createElement(ExtensionStatus, { item: item, t: t }),
+            version && React.createElement("span", { className: "mono" }, version),
+            item.tool_count > 0 && React.createElement("span", null, t("settings.toolsCount", { n: item.tool_count })),
+          ),
+        ),
+      ),
+      React.createElement("div", { className: "wb-extension-actions" },
+        canInstall && React.createElement("button", { type: "button", className: "wb-btn primary wb-extension-install-button", disabled: busy, onClick: function () { props.onInstall(item); } }, t("settings.install")),
+        canUninstall && (item.ownership === "cyrene" || item.managed_available) && React.createElement("button", { type: "button", className: "wb-btn danger", disabled: busy, onClick: function () { props.onRemove(item); } }, item.kind === "mcp" ? t("settings.delete") : t("settings.uninstall")),
+      ),
+      React.createElement("button", {
+        type: "button",
+        className: "wb-extension-expand-button",
+        onClick: function () { setExpanded(!expanded); },
+        "aria-expanded": expanded ? "true" : "false",
+        "aria-label": t("settings.extensionDetailsFor", { name: displayName }),
+      }, React.createElement("span", { className: "wb-extension-chevron", "aria-hidden": "true" }, ExternalChevron())),
+    ),
+    expanded && React.createElement("div", { className: "wb-extension-details" },
+      canToggle && React.createElement("div", { className: "wb-extension-enabled-row" },
+        React.createElement("div", null,
+          React.createElement("strong", null, t("settings.extensionEnabledTitle")),
+          React.createElement("small", null, t("settings.extensionEnabledHint." + item.kind))
+        ),
+        Toggle(item.enabled !== false, function () { props.onToggle(item); }, busy, t("settings.extensionToggle", { name: displayName }))
+      ),
+      React.createElement("dl", null,
+        React.createElement("div", null, React.createElement("dt", null, t("settings.extensionSource")), React.createElement("dd", null, extensionSourceLabel(item, t))),
+        React.createElement("div", null, React.createElement("dt", null, t("settings.extensionVersion")), React.createElement("dd", { className: "mono" }, version || "—")),
+        React.createElement("div", null, React.createElement("dt", null, t("settings.extensionPath")), React.createElement("dd", { className: "mono" }, item.path || "—")),
+        React.createElement("div", null, React.createElement("dt", null, t("settings.extensionHealth")), React.createElement("dd", null, extensionHealthLabel(item, t))),
+        item.ownership === "system" && item.managed_available && React.createElement("div", null, React.createElement("dt", null, t("settings.extensionManagedInstalled")), React.createElement("dd", { className: "mono" }, [item.managed_version, item.managed_path].filter(Boolean).join(" · "))),
+      ),
+      item.kind === "toolchain" && (item.versions || []).length > 1 && React.createElement("label", { className: "wb-extension-version-select" },
+        React.createElement("span", null, t("settings.extensionDefaultVersion")),
+        React.createElement("select", { className: "wb-select", value: item.default_version || item.version, disabled: busy, onChange: function (event) { props.onDefault(item, event.target.value); } },
+          item.versions.map(function (value) { return React.createElement("option", { key: value, value: value }, value); })
+        )
+      ),
+      (canUseLocalProgram || canStopUsingLocalProgram) && React.createElement("div", { className: "wb-extension-detail-actions" },
+        canUseLocalProgram && React.createElement("button", { type: "button", className: "wb-btn", disabled: busy, onClick: function () { props.onBind(item); } }, t(item.manual_binding ? "settings.extensionChangeSystem" : "settings.extensionBindSystem")),
+        canStopUsingLocalProgram && React.createElement("button", { type: "button", className: "wb-btn danger", disabled: busy, onClick: function () { props.onUnbind(item); } }, t("settings.extensionUnbindSystem"))
+      ),
+      canConfigureHook && React.createElement("div", { className: "wb-extension-hook-action" },
+        React.createElement("div", null,
+          React.createElement("strong", null, t("settings.extensionHookTitle")),
+          React.createElement("small", null, t("settings.extensionHookHint"))
+        ),
+        React.createElement("button", { type: "button", className: "wb-btn", disabled: busy, onClick: function () { props.onConfigureHook(item); } }, t("settings.extensionConfigureHook"))
+      ),
+      item.kind === "skill" && item.preview && React.createElement("pre", { className: "wb-extension-preview" }, item.preview),
+    )
+  );
+}
+
+function ExtensionsPanel(p) {
+  var t = p.t;
+  var [data, setData] = useStateSt({ recommended: [], skills: [], mcp: [], cli: [], toolchains: [], tasks: [] });
+  var [category, setCategory] = useStateSt("recommended");
+  var [query, setQuery] = useStateSt("");
+  var [loading, setLoading] = useStateSt(true);
+  var [busy, setBusy] = useStateSt("");
+  var [notice, setNotice] = useStateSt("");
+  var [noticeKind, setNoticeKind] = useStateSt("info");
+  var [installOpen, setInstallOpen] = useStateSt(false);
+  var [installKind, setInstallKind] = useStateSt("skill");
+  var [remoteQuery, setRemoteQuery] = useStateSt("");
+  var [remoteResults, setRemoteResults] = useStateSt([]);
+  var [remoteCursor, setRemoteCursor] = useStateSt("");
+  var [remoteLoading, setRemoteLoading] = useStateSt(false);
+  var [advanced, setAdvanced] = useStateSt(false);
+  var [sourceOpen, setSourceOpen] = useStateSt(false);
+  var [sources, setSources] = useStateSt({});
+  var [sourceTesting, setSourceTesting] = useStateSt(false);
+  var [sourceHealth, setSourceHealth] = useStateSt(null);
+  var [skillSelection, setSkillSelection] = useStateSt(null);
+  var [manualMcp, setManualMcp] = useStateSt({ name: "", transport: "streamable_http", url: "", command: "", args: "", version: "", headers: "", env: "" });
+  var [requestedVersion, setRequestedVersion] = useStateSt("");
+  var [texChoice, setTexChoice] = useStateSt("tinytex");
+  var [bindItem, setBindItem] = useStateSt(null);
+  var [bindPath, setBindPath] = useStateSt("");
+  var [auditRecords, setAuditRecords] = useStateSt([]);
+  var [hooksOpen, setHooksOpen] = useStateSt(false);
+  var [hooksData, setHooksData] = useStateSt({ hooks: [], proposals: [], configuration_results: {} });
+  var [hookAudit, setHookAudit] = useStateSt([]);
+  var emptyHookDraft = { id: "", name: "", description: "", event: "PreToolUse", matcher: "*", priority: 100, failure_policy: "open", timeout_seconds: 10, enabled: false, runner: { type: "command", executable: "", args: [], env: {} } };
+  var [hookDraft, setHookDraft] = useStateSt(emptyHookDraft);
+  var [hookArgsText, setHookArgsText] = useStateSt("");
+  var [hookEditorOpen, setHookEditorOpen] = useStateSt(false);
+
+  function tell(text, kind) {
+    setNotice(text || ""); setNoticeKind(kind || "info");
+    if (text) setTimeout(function () { setNotice(""); }, 5000);
+  }
+
+  function load() {
+    return settingsFetch("/api/extensions").then(readSettingsResponse).then(function (payload) {
+      setData(payload); setLoading(false);
+    }).catch(function (error) { setLoading(false); tell(error.message || t("settings.networkError"), "error"); });
+  }
+
+  useEffectSt(function () { load(); }, []);
+  useEffectSt(function () {
+    function openAgentHooks() { loadHooks(true); }
+    window.addEventListener("cyrene:open-agent-hooks", openAgentHooks);
+    return function () { window.removeEventListener("cyrene:open-agent-hooks", openAgentHooks); };
+  }, []);
+  useEffectSt(function () {
+    var active = (data.tasks || []).some(function (task) { return ["queued", "running", "cancelling"].indexOf(task.status) >= 0; });
+    if (!active) return undefined;
+    var timer = setInterval(load, 1200);
+    return function () { clearInterval(timer); };
+  }, [data.tasks]);
+
+  function openInstaller(kind) {
+    setInstallKind(kind); setRemoteQuery(""); setRemoteResults([]); setRemoteCursor(""); setSkillSelection(null); setRequestedVersion(""); setInstallOpen(true);
+  }
+
+  function searchRemote(append) {
+    setRemoteLoading(true); setSkillSelection(null);
+    var cursor = append ? remoteCursor : "";
+    var url = "/api/extensions/search?kind=" + encodeURIComponent(installKind) + "&q=" + encodeURIComponent(remoteQuery) + "&advanced=" + (advanced ? "true" : "false") + "&cursor=" + encodeURIComponent(cursor);
+    settingsFetch(url).then(readSettingsResponse).then(function (payload) {
+      setRemoteResults(function (previous) { return append ? previous.concat(payload.results || []) : (payload.results || []); });
+      setRemoteCursor(payload.next_cursor || ""); setRemoteLoading(false);
+    }).catch(function (error) { setRemoteLoading(false); tell(error.message, "error"); });
+  }
+
+  function startInstall(item, request) {
+    var summary = [extensionDisplayName(item, t), item.version || item.recommended_version || "", extensionSourceLabel(item, t)].filter(Boolean).join(" · ");
+    var feedback = window.CyreneUI.require("feedback");
+    feedback.confirmModal({
+      title: t("settings.extensionInstallConfirmTitle"),
+      body: t("settings.extensionInstallConfirmBody", { summary: summary }),
+      confirmLabel: t("settings.install"),
+    }).then(function (ok) {
+      if (!ok) return;
+      setBusy(item.kind + ":" + item.id);
+      settingsFetch("/api/extensions/install", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ kind: item.kind, extension_id: item.id, ...(request || {}) }),
+      }).then(readSettingsResponse).then(function () {
+        setInstallOpen(false); tell(t("settings.extensionInstallStarted"), "success"); return load();
+      }).catch(function (error) { tell(error.message, "error"); }).finally(function () { setBusy(""); });
+    });
+  }
+
+  function installSearchResult(item) {
+    if (item.kind === "skill") {
+      setRemoteLoading(true);
+      settingsFetch("/api/extensions/skills/inspect", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ url: item.clone_url || item.repository }) })
+        .then(readSettingsResponse).then(function (payload) {
+          var candidates = payload.candidates || [];
+          if (candidates.length === 1) {
+            startInstall({ ...item, kind: "skill" }, { url: item.clone_url || item.repository, subdirs: [candidates[0].path] });
+          } else {
+            setSkillSelection({ item: item, candidates: candidates, selected: {} });
+          }
+        }).catch(function (error) { tell(error.message, "error"); }).finally(function () { setRemoteLoading(false); });
+      return;
+    }
+    if (item.kind === "mcp") {
+      var remote = (item.installable_remotes || [])[0];
+      if (remote) {
+        startInstall(item, { version: item.version, remote: remote, source: { type: "mcp-registry", id: item.id, version: item.version } });
+        return;
+      }
+      var packageSpec = (item.installable_packages || [])[0];
+      if (!packageSpec) { tell(t("settings.extensionMcpLocalPackageHint"), "info"); return; }
+      startInstall(item, { version: item.version, package: packageSpec, source: { type: "mcp-registry-package", id: item.id, version: item.version } });
+      return;
+    }
+    startInstall(item, { version: requestedVersion.trim() || item.version || item.recommended_version, ref: item.ref || item.source, spec: item, ...(item.id === "tex" ? { distribution: texChoice } : {}) });
+  }
+
+  function removeItem(item) {
+    window.CyreneUI.require("feedback").confirmModal({ body: t("settings.extensionRemoveConfirm", { name: extensionDisplayName(item, t) }), confirmLabel: item.kind === "mcp" ? t("settings.delete") : t("settings.uninstall"), danger: true }).then(function (ok) {
+      if (!ok) return;
+      setBusy(item.key);
+      settingsFetch("/api/extensions/" + encodeURIComponent(item.kind) + "/" + encodeURIComponent(item.id), { method: "DELETE" })
+        .then(readSettingsResponse).then(function () { tell(t("settings.saved"), "success"); return load(); })
+        .catch(function (error) { tell(error.message, "error"); }).finally(function () { setBusy(""); });
+    });
+  }
+
+  function toggleItem(item) {
+    setBusy(item.key);
+    settingsFetch("/api/extensions/" + encodeURIComponent(item.kind) + "/" + encodeURIComponent(item.id) + "/enabled", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ enabled: !item.enabled }) })
+      .then(readSettingsResponse).then(load).catch(function (error) { tell(error.message, "error"); }).finally(function () { setBusy(""); });
+  }
+
+  function setDefault(item, version) {
+    setBusy(item.key);
+    settingsFetch("/api/extensions/toolchains/" + encodeURIComponent(item.id) + "/default", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ version: version }) })
+      .then(readSettingsResponse).then(load).catch(function (error) { tell(error.message, "error"); }).finally(function () { setBusy(""); });
+  }
+
+  function installLocalFile() {
+    var input = document.createElement("input"); input.type = "file"; input.accept = ".md,.txt,.zip,.json,.yaml,.yml,.prompt";
+    input.onchange = function (event) {
+      var file = event.target.files && event.target.files[0]; if (!file) return;
+      var form = new FormData(); form.append("file", file); setRemoteLoading(true);
+      settingsFetch("/api/skills/install-upload", { method: "POST", body: form }).then(readSettingsResponse).then(function () { setInstallOpen(false); return load(); }).catch(function (error) { tell(error.message, "error"); }).finally(function () { setRemoteLoading(false); });
+    };
+    input.click();
+  }
+
+  function installLocalFolder() {
+    if (window.cyrene && typeof window.cyrene.pickExtensionPath === "function") {
+      setRemoteLoading(true);
+      window.cyrene.pickExtensionPath({ directory: true, title: t("settings.installFolder") }).then(function (picked) {
+        if (!picked || picked.cancelled || !picked.path) return null;
+        return settingsFetch("/api/skills/install", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ path: picked.path }) }).then(readSettingsResponse).then(function () { setInstallOpen(false); return load(); });
+      }).catch(function (error) { tell(error.message, "error"); }).finally(function () { setRemoteLoading(false); });
+      return;
+    }
+    setRemoteLoading(true);
+    settingsFetch("/api/skills/install-picker", { method: "POST" }).then(readSettingsResponse).then(function (payload) { if (!payload.cancelled) { setInstallOpen(false); return load(); } }).catch(function (error) { tell(error.message, "error"); }).finally(function () { setRemoteLoading(false); });
+  }
+
+  function addManualMcp() {
+    var config = { name: manualMcp.name.trim(), transport: manualMcp.transport, enabled: true, version: manualMcp.version.trim() };
+    if (manualMcp.transport !== "stdio") config.url = manualMcp.url.trim();
+    else { config.command = manualMcp.command.trim(); config.args = manualMcp.args.split(/\s+/).filter(Boolean); }
+    function parseVariables(value, label) {
+      var variables = {};
+      String(value || "").split(/\r?\n/).forEach(function (line) {
+        if (!line.trim()) return;
+        var separator = line.indexOf("=");
+        if (separator <= 0) throw new Error(t("settings.extensionVariableInvalid", { label: label }));
+        variables[line.slice(0, separator).trim()] = line.slice(separator + 1);
+      });
+      return variables;
+    }
+    try {
+      if (config.transport !== "stdio") config.headers = parseVariables(manualMcp.headers, t("settings.extensionHeaders"));
+      else config.env = parseVariables(manualMcp.env, t("settings.extensionEnvironment"));
+    } catch (error) { tell(error.message, "error"); return; }
+    if (!config.name || (config.transport !== "stdio" ? !config.url : !config.command || !config.version)) { tell(t("settings.extensionMcpRequired"), "error"); return; }
+    startInstall({ id: config.name, name: config.name, kind: "mcp", source: "manual", version: config.version }, { config: config, version: config.version, source: { type: "manual" } });
+  }
+
+  function openSources() {
+    Promise.all([
+      settingsFetch("/api/extensions/sources").then(readSettingsResponse),
+      settingsFetch("/api/extensions/audit?limit=50").then(readSettingsResponse),
+    ]).then(function (payloads) { setSources(payloads[0]); setAuditRecords(payloads[1].records || []); setSourceHealth(null); setSourceOpen(true); }).catch(function (error) { tell(error.message, "error"); });
+  }
+
+  function bindSystem(item) {
+    if (window.cyrene && typeof window.cyrene.pickExtensionPath === "function") {
+      window.cyrene.pickExtensionPath({ directory: false, title: t("settings.extensionBindTitle") }).then(function (picked) {
+        if (!picked || picked.cancelled || !picked.path) return;
+        setBindItem(item); setBindPath(picked.path);
+      });
+      return;
+    }
+    setBindItem(item); setBindPath(item.manual_binding ? (item.path || "") : "");
+  }
+  function saveBinding() {
+    if (!bindItem || !bindPath.trim()) return;
+    setBusy(bindItem.key);
+    settingsFetch("/api/extensions/bind", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ extension_id: bindItem.id, path: bindPath.trim() }) })
+      .then(readSettingsResponse).then(function () { setBindItem(null); tell(t("settings.saved"), "success"); return load(); })
+      .catch(function (error) { tell(error.message, "error"); }).finally(function () { setBusy(""); });
+  }
+  function unbindSystem(item) {
+    setBusy(item.key);
+    settingsFetch("/api/extensions/unbind", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ extension_id: item.id }) })
+      .then(readSettingsResponse).then(load).catch(function (error) { tell(error.message, "error"); }).finally(function () { setBusy(""); });
+  }
+
+  function saveSources() {
+    setBusy("sources");
+    settingsFetch("/api/extensions/sources", { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify(sources) }).then(readSettingsResponse).then(function (payload) { setSources(payload); tell(t("settings.saved"), "success"); }).catch(function (error) { tell(error.message, "error"); }).finally(function () { setBusy(""); });
+  }
+
+  function testSources() {
+    setSourceTesting(true); setSourceHealth(null);
+    settingsFetch("/api/extensions/sources/test", { method: "POST" }).then(readSettingsResponse).then(setSourceHealth).catch(function (error) { tell(error.message, "error"); }).finally(function () { setSourceTesting(false); });
+  }
+
+  function loadHooks(open) {
+    return Promise.all([
+      settingsFetch("/api/hooks").then(readSettingsResponse),
+      settingsFetch("/api/hooks/audit/records?limit=100").then(readSettingsResponse),
+    ]).then(function (payloads) {
+      setHooksData(payloads[0]); setHookAudit(payloads[1].records || []);
+      if (open) setHooksOpen(true);
+    }).catch(function (error) { tell(error.message, "error"); });
+  }
+  function editHook(item) {
+    var value = item || emptyHookDraft;
+    setHookDraft({ ...emptyHookDraft, ...value, runner: { ...emptyHookDraft.runner, ...(value.runner || {}) } });
+    setHookArgsText(((value.runner || {}).args || []).join("\n"));
+    setHookEditorOpen(true);
+  }
+  function saveHook() {
+    var payload = { ...hookDraft, runner: { ...hookDraft.runner, args: hookArgsText.split("\n").map(function (value) { return value.trim(); }).filter(Boolean) } };
+    delete payload.runner.env;
+    var url = hookDraft.id ? "/api/hooks/" + encodeURIComponent(hookDraft.id) : "/api/hooks";
+    setBusy("hook-save");
+    settingsFetch(url, { method: hookDraft.id ? "PUT" : "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload) })
+      .then(readSettingsResponse).then(function () { setHookDraft(emptyHookDraft); setHookArgsText(""); setHookEditorOpen(false); tell(t("settings.hookSaved"), "success"); return loadHooks(false); })
+      .catch(function (error) { tell(error.message, "error"); }).finally(function () { setBusy(""); });
+  }
+  function toggleHook(item) {
+    setBusy("hook:" + item.id);
+    settingsFetch("/api/hooks/" + encodeURIComponent(item.id) + "/enabled", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ enabled: item.enabled !== true }) })
+      .then(readSettingsResponse).then(function () { return loadHooks(false); }).catch(function (error) { tell(error.message, "error"); }).finally(function () { setBusy(""); });
+  }
+  function deleteHook(item) {
+    setBusy("hook:" + item.id);
+    settingsFetch("/api/hooks/" + encodeURIComponent(item.id), { method: "DELETE" }).then(readSettingsResponse).then(function () { return loadHooks(false); }).catch(function (error) { tell(error.message, "error"); }).finally(function () { setBusy(""); });
+  }
+  function testHook(item) {
+    setBusy("hook:" + item.id);
+    settingsFetch("/api/hooks/" + encodeURIComponent(item.id) + "/test", { method: "POST", headers: { "Content-Type": "application/json" }, body: "{}" }).then(readSettingsResponse).then(function () { tell(t("settings.hookTestSucceeded"), "success"); return loadHooks(false); }).catch(function (error) { tell(error.message, "error"); }).finally(function () { setBusy(""); });
+  }
+  function decideHookProposal(item, approve) {
+    setBusy("proposal:" + item.id);
+    settingsFetch("/api/hooks/proposals/" + encodeURIComponent(item.id) + "/decision", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ approve: approve }) }).then(readSettingsResponse).then(function () { tell(t(approve ? "settings.hookProposalApproved" : "settings.hookProposalRejected"), "success"); return loadHooks(false); }).catch(function (error) { tell(error.message, "error"); }).finally(function () { setBusy(""); });
+  }
+  function configureExtensionHook(item) {
+    setBusy(item.key);
+    settingsFetch("/api/hooks/extensions/cli/" + encodeURIComponent(item.id) + "/configure", { method: "POST" }).then(readSettingsResponse).then(function () { tell(t("settings.extensionHookStarted"), "success"); }).catch(function (error) { tell(error.message, "error"); }).finally(function () { setBusy(""); });
+  }
+
+  var categories = ["recommended", "skills", "mcp", "cli", "toolchains"];
+  var items = data[category] || [];
+  var q = query.trim().toLowerCase();
+  var filtered = items.filter(function (item) { return !q || [extensionDisplayName(item, t), item.id, extensionDisplayDescription(item, t), item.version].join(" ").toLowerCase().indexOf(q) >= 0; });
+  var activeTasks = (data.tasks || []).filter(function (task) { return ["queued", "running", "cancelling", "failed", "interrupted"].indexOf(task.status) >= 0; }).slice(0, 4);
+  var installCategory = category === "recommended" ? "toolchain" : category === "skills" ? "skill" : category === "toolchains" ? "toolchain" : category;
+
+  return React.createElement("div", { className: "wb-extensions-page" },
+    React.createElement("header", { className: "wb-extensions-header" },
+      SectionTitle(t("settings.extensions"), t("settings.extensionsSubtitle")),
+      React.createElement("div", { className: "wb-extension-header-actions" },
+        React.createElement("button", { type: "button", className: "wb-btn", onClick: function () { loadHooks(true); } }, t("settings.agentHooks")),
+        React.createElement("button", { type: "button", className: "wb-btn", onClick: openSources }, t("settings.extensionSources")),
+        category !== "recommended" && React.createElement("button", { type: "button", className: "wb-btn primary wb-extension-install-button wb-extension-tab-install-button", onClick: function () { openInstaller(installCategory); } }, t("settings.extensionInstallAction." + installCategory)),
+      )
+    ),
+    data.python_prompt_required && React.createElement("button", { type: "button", className: "wb-extension-python-callout", onClick: function () { setCategory("recommended"); setQuery("Python"); } },
+      React.createElement("strong", null, t("settings.extensionPythonMissingTitle")),
+      React.createElement("span", null, t("settings.extensionPythonMissingBody")),
+      React.createElement("span", { className: "wb-extension-callout-action" }, t("settings.extensionViewInstall"))
+    ),
+    React.createElement("div", { className: "wb-extension-tabs", role: "tablist", "aria-label": t("settings.extensions") },
+      categories.map(function (id) { return React.createElement("button", { key: id, type: "button", role: "tab", "aria-selected": category === id ? "true" : "false", className: category === id ? "active" : "", onClick: function () { setCategory(id); setQuery(""); } }, t("settings.extensionTab." + id)); })
+    ),
+    React.createElement("div", { className: "wb-extension-filter" },
+      React.createElement("input", { className: "wb-input", value: query, onChange: function (event) { setQuery(event.target.value); }, placeholder: t("settings.extensionFilter") , "aria-label": t("settings.extensionFilter") }),
+      React.createElement("span", null, t("settings.extensionCount", { n: filtered.length }))
+    ),
+    notice && React.createElement("div", { className: "wb-extension-notice " + noticeKind, role: noticeKind === "error" ? "alert" : "status" }, notice),
+    activeTasks.length > 0 && React.createElement("section", { className: "wb-extension-tasks", "aria-label": t("settings.extensionTasks") },
+      activeTasks.map(function (task) { return React.createElement("div", { key: task.id, className: "wb-extension-task " + task.status },
+        React.createElement("div", null, React.createElement("strong", null, extensionDisplayName({ id: task.extension_id, name: task.extension_id }, t)), React.createElement("span", { title: task.error || "" }, extensionTaskStatusLabel(task.status, t))),
+        React.createElement("div", { className: "wb-extension-task-progress", role: "progressbar", "aria-valuemin": "0", "aria-valuemax": "100", "aria-valuenow": task.progress || 0 }, React.createElement("span", { style: { width: (task.progress || 0) + "%" } })),
+        ["queued", "running"].indexOf(task.status) >= 0 && React.createElement("button", { type: "button", className: "wb-btn", onClick: function () { settingsFetch("/api/extensions/tasks/" + task.id + "/cancel", { method: "POST" }).then(load); } }, t("settings.cancel")),
+      ); })
+    ),
+    React.createElement("div", { className: "wb-extension-list", "aria-busy": loading ? "true" : "false" },
+      loading && React.createElement("div", { className: "wb-extensions-empty" }, t("settings.loading")),
+      !loading && filtered.length === 0 && React.createElement("div", { className: "wb-extensions-empty" }, t("settings.extensionEmpty")),
+      filtered.map(function (item) { return React.createElement(ExtensionCard, { key: item.key, item: item, t: t, busy: busy === item.key, onInstall: function (target) { if (category === "recommended" && target.id !== "tex") startInstall(target, {}); else { openInstaller(target.kind); if (target.id === "tex") { setRemoteQuery("TeX"); setRemoteResults([target]); } } }, onRemove: removeItem, onToggle: toggleItem, onDefault: setDefault, onBind: bindSystem, onUnbind: unbindSystem, onConfigureHook: configureExtensionHook }); })
+    ),
+    hooksOpen && React.createElement("div", { className: "wb-extension-modal-scrim", onMouseDown: function (event) { if (event.target === event.currentTarget) setHooksOpen(false); } },
+      React.createElement("section", { className: "wb-extension-modal wb-hooks-modal", role: "dialog", "aria-modal": "true", "aria-labelledby": "agent-hooks-title" },
+        React.createElement("header", null, React.createElement("div", null, React.createElement("h3", { id: "agent-hooks-title" }, t("settings.agentHooks")), React.createElement("p", null, t("settings.agentHooksSubtitle"))), React.createElement("button", { type: "button", className: "wb-extension-close", onClick: function () { setHooksOpen(false); }, "aria-label": t("settings.close") }, "×")),
+        (hooksData.proposals || []).filter(function (item) { return item.status === "pending"; }).length > 0 && React.createElement("section", { className: "wb-hook-proposals" },
+          React.createElement("h4", null, t("settings.hookPendingApprovals")),
+          (hooksData.proposals || []).filter(function (item) { return item.status === "pending"; }).map(function (item) { var proposalHook = item.hook || {}; var proposalRunner = proposalHook.runner || {}; var proposalTarget = proposalRunner.executable || proposalRunner.path || ""; var proposalCommand = [proposalTarget].concat(proposalRunner.args || []).join(" "); return React.createElement("article", { key: item.id, className: "wb-hook-proposal" }, React.createElement("div", null, React.createElement("strong", null, (item.extension || {}).name || (item.extension || {}).id || proposalHook.name), React.createElement("small", null, item.rationale), React.createElement("code", null, proposalHook.event + " · " + (proposalHook.matcher || "*")), React.createElement("code", { title: proposalCommand }, proposalCommand)), React.createElement("div", null, React.createElement("button", { type: "button", className: "wb-btn", disabled: busy === "proposal:" + item.id, onClick: function () { decideHookProposal(item, false); } }, t("settings.reject")), React.createElement("button", { type: "button", className: "wb-btn primary", disabled: busy === "proposal:" + item.id, onClick: function () { decideHookProposal(item, true); } }, t("settings.approve")))); })
+        ),
+        React.createElement("section", { className: "wb-hook-list" },
+          React.createElement("div", { className: "wb-hook-section-head" }, React.createElement("h4", null, t("settings.configuredHooks")), React.createElement("button", { type: "button", className: "wb-btn", onClick: function () { editHook(null); } }, t("settings.addHook"))),
+          (hooksData.hooks || []).length === 0 ? React.createElement("div", { className: "wb-hook-empty" }, React.createElement("p", null, t("settings.hookEmpty"))) : (hooksData.hooks || []).map(function (item) { return React.createElement("article", { key: item.id, className: "wb-hook-row" }, React.createElement("div", null, React.createElement("strong", null, item.name), React.createElement("small", null, item.event + (item.matcher && item.matcher !== "*" ? " · " + item.matcher : "")), React.createElement("code", null, (item.runner || {}).executable || (item.runner || {}).path)), React.createElement("div", null, Toggle(item.enabled === true, function () { toggleHook(item); }, busy === "hook:" + item.id, item.name), React.createElement("button", { type: "button", className: "wb-btn", onClick: function () { testHook(item); } }, t("settings.test")), React.createElement("button", { type: "button", className: "wb-btn", onClick: function () { editHook(item); } }, t("settings.edit")), React.createElement("button", { type: "button", className: "wb-btn danger", onClick: function () { deleteHook(item); } }, t("settings.delete")))); })
+        ),
+        hookEditorOpen && React.createElement("section", { className: "wb-hook-editor" },
+          React.createElement("div", { className: "wb-hook-editor-head" },
+            React.createElement("div", null, React.createElement("h4", null, hookDraft.id ? t("settings.editHook") : t("settings.addHook")), React.createElement("small", null, t("settings.hookEditorHint"))),
+            React.createElement("button", { type: "button", className: "wb-extension-close wb-hook-editor-close", onClick: function () { setHookEditorOpen(false); }, "aria-label": t("settings.close") }, "×")
+          ),
+          React.createElement("div", { className: "wb-extension-form-grid wb-hook-core-fields" },
+            React.createElement("label", null, React.createElement("span", null, t("settings.name")), React.createElement("input", { className: "wb-input", value: hookDraft.name, onChange: function (event) { setHookDraft({ ...hookDraft, name: event.target.value }); } })),
+            React.createElement("label", null, React.createElement("span", null, t("settings.hookEvent")), React.createElement("select", { className: "wb-select", value: hookDraft.event, onChange: function (event) { setHookDraft({ ...hookDraft, event: event.target.value, failure_policy: event.target.value === "PreToolUse" ? hookDraft.failure_policy : "open" }); } }, ["PreToolUse", "PostToolUse", "SessionStart", "SessionEnd", "Stop"].map(function (value) { return React.createElement("option", { key: value, value: value }, value); }))),
+            React.createElement("label", null, React.createElement("span", null, t("settings.hookRunnerType")), React.createElement("select", { className: "wb-select", value: hookDraft.runner.type, onChange: function (event) { var type = event.target.value; setHookDraft({ ...hookDraft, runner: type === "script" ? { type: "script", path: "", args: hookDraft.runner.args || [], env: hookDraft.runner.env || {} } : { type: "command", executable: "", args: hookDraft.runner.args || [], env: hookDraft.runner.env || {} } }); } }, React.createElement("option", { value: "command" }, t("settings.hookRunnerCommand")), React.createElement("option", { value: "script" }, t("settings.hookRunnerScript")))),
+            ["PreToolUse", "PostToolUse"].indexOf(hookDraft.event) >= 0 && React.createElement("label", null, React.createElement("span", null, t("settings.hookMatcher")), React.createElement("input", { className: "wb-input mono", value: hookDraft.matcher, onChange: function (event) { setHookDraft({ ...hookDraft, matcher: event.target.value }); } })),
+            React.createElement("label", { className: "wide" }, React.createElement("span", null, hookDraft.runner.type === "script" ? t("settings.hookScriptPath") : t("settings.hookExecutable")), React.createElement("input", { className: "wb-input mono", value: hookDraft.runner.executable || hookDraft.runner.path || "", onChange: function (event) { var runner = { ...hookDraft.runner }; if (runner.type === "script") runner.path = event.target.value; else runner.executable = event.target.value; setHookDraft({ ...hookDraft, runner: runner }); } })),
+          ),
+          React.createElement("details", { className: "wb-hook-advanced" },
+            React.createElement("summary", null, React.createElement("span", null, t("settings.hookAdvanced")), React.createElement("small", null, t("settings.hookAdvancedHint"))),
+            React.createElement("div", { className: "wb-extension-form-grid" },
+              React.createElement("label", null, React.createElement("span", null, t("settings.hookPriority")), React.createElement("input", { className: "wb-input mono", type: "number", value: hookDraft.priority, onChange: function (event) { setHookDraft({ ...hookDraft, priority: Number(event.target.value) }); } })),
+              React.createElement("label", null, React.createElement("span", null, t("settings.hookTimeout")), React.createElement("input", { className: "wb-input mono", type: "number", min: "0.1", max: "60", step: "0.1", value: hookDraft.timeout_seconds, onChange: function (event) { setHookDraft({ ...hookDraft, timeout_seconds: Number(event.target.value) }); } })),
+              hookDraft.event === "PreToolUse" && React.createElement("label", null, React.createElement("span", null, t("settings.hookFailurePolicy")), React.createElement("select", { className: "wb-select", value: hookDraft.failure_policy, onChange: function (event) { setHookDraft({ ...hookDraft, failure_policy: event.target.value }); } }, React.createElement("option", { value: "open" }, t("settings.hookFailureOpen")), React.createElement("option", { value: "block" }, t("settings.hookFailureBlock")))),
+              React.createElement("label", { className: hookDraft.event === "PreToolUse" ? "" : "wide" }, React.createElement("span", null, t("settings.description")), React.createElement("input", { className: "wb-input", value: hookDraft.description, onChange: function (event) { setHookDraft({ ...hookDraft, description: event.target.value }); } })),
+              React.createElement("label", { className: "wide" }, React.createElement("span", null, t("settings.hookArguments")), React.createElement("textarea", { className: "wb-input mono", rows: 2, value: hookArgsText, onChange: function (event) { setHookArgsText(event.target.value); } }), React.createElement("small", null, t("settings.hookArgumentsHint")))
+            )
+          ),
+          React.createElement("div", { className: "wb-hook-editor-actions" }, React.createElement("button", { type: "button", className: "wb-btn", onClick: function () { editHook(null); } }, t("settings.reset")), React.createElement("button", { type: "button", className: "wb-btn", onClick: function () { setHookEditorOpen(false); } }, t("settings.cancel")), React.createElement("button", { type: "button", className: "wb-btn primary", disabled: busy === "hook-save" || !hookDraft.name || !(hookDraft.runner.executable || hookDraft.runner.path), onClick: saveHook }, t("settings.save")))
+        ),
+        React.createElement("details", { className: "wb-extension-audit" },
+          React.createElement("summary", null, t("settings.hookExecutionLog")),
+          hookAudit.length === 0
+            ? React.createElement("p", null, t("settings.hookAuditEmpty"))
+            : hookAudit.map(function (record, index) {
+                return React.createElement("div", { key: record.timestamp + index },
+                  React.createElement("strong", null, (record.hook_name || record.hook_id || record.action) + " · " + (record.event || record.action || "")),
+                  React.createElement("small", null, new Date(record.timestamp).toLocaleString() + " · " + (record.status || record.result || ""))
+                );
+              })
+        )
+      )
+    ),
+    installOpen && React.createElement("div", { className: "wb-extension-modal-scrim", onMouseDown: function (event) { if (event.target === event.currentTarget) setInstallOpen(false); } },
+      React.createElement("section", { className: "wb-extension-modal", role: "dialog", "aria-modal": "true", "aria-labelledby": "extension-install-title" },
+        React.createElement("header", null,
+          React.createElement("div", null, React.createElement("h3", { id: "extension-install-title" }, t("settings.extensionInstallTitle." + installKind)), React.createElement("p", null, t("settings.extensionInstallSubtitle." + installKind))),
+          React.createElement("button", { type: "button", className: "wb-extension-close", onClick: function () { setInstallOpen(false); }, "aria-label": t("settings.close") }, "×")
+        ),
+        installKind === "skill" && React.createElement("div", { className: "wb-extension-local-actions" },
+          React.createElement("button", { type: "button", className: "wb-btn wb-extension-install-button", onClick: installLocalFile }, t("settings.installFile")),
+          React.createElement("button", { type: "button", className: "wb-btn wb-extension-install-button", onClick: installLocalFolder }, t("settings.installFolder"))
+        ),
+        installKind === "mcp" && React.createElement("details", { className: "wb-extension-manual" },
+          React.createElement("summary", null, t("settings.extensionManualMcp")),
+          React.createElement("div", { className: "wb-extension-form-grid" },
+            React.createElement("label", null, React.createElement("span", null, t("settings.name")), React.createElement("input", { className: "wb-input", value: manualMcp.name, onChange: function (e) { setManualMcp({ ...manualMcp, name: e.target.value }); } })),
+            React.createElement("label", null, React.createElement("span", null, t("settings.extensionTransport")), React.createElement("select", { className: "wb-select", value: manualMcp.transport, onChange: function (e) { setManualMcp({ ...manualMcp, transport: e.target.value }); } }, React.createElement("option", { value: "streamable_http" }, "Streamable HTTP"), React.createElement("option", { value: "sse" }, "SSE"), React.createElement("option", { value: "stdio" }, "stdio"))),
+            manualMcp.transport !== "stdio"
+              ? React.createElement(React.Fragment, null,
+                  React.createElement("label", { className: "wide" }, React.createElement("span", null, "URL"), React.createElement("input", { className: "wb-input mono", value: manualMcp.url, onChange: function (e) { setManualMcp({ ...manualMcp, url: e.target.value }); } })),
+                  React.createElement("label", { className: "wide" }, React.createElement("span", null, t("settings.extensionHeaders")), React.createElement("textarea", { className: "wb-input mono", rows: 3, value: manualMcp.headers, placeholder: "Authorization=Bearer …", onChange: function (e) { setManualMcp({ ...manualMcp, headers: e.target.value }); } }), React.createElement("small", null, t("settings.extensionSecretStored")))
+                )
+              : React.createElement(React.Fragment, null,
+                  React.createElement("label", { className: "wide" }, React.createElement("span", null, t("settings.placeholderCommand")), React.createElement("input", { className: "wb-input mono", value: manualMcp.command, onChange: function (e) { setManualMcp({ ...manualMcp, command: e.target.value }); } })),
+                  React.createElement("label", { className: "wide" }, React.createElement("span", null, t("settings.placeholderArgs")), React.createElement("input", { className: "wb-input mono", value: manualMcp.args, onChange: function (e) { setManualMcp({ ...manualMcp, args: e.target.value }); } })),
+                  React.createElement("label", { className: "wide" }, React.createElement("span", null, t("settings.extensionEnvironment")), React.createElement("textarea", { className: "wb-input mono", rows: 3, value: manualMcp.env, placeholder: "API_KEY=…", onChange: function (e) { setManualMcp({ ...manualMcp, env: e.target.value }); } }), React.createElement("small", null, t("settings.extensionSecretStored")))
+                ),
+            React.createElement("label", null, React.createElement("span", null, t("settings.extensionVersion")), React.createElement("input", { className: "wb-input mono", value: manualMcp.version, onChange: function (e) { setManualMcp({ ...manualMcp, version: e.target.value }); } })),
+            React.createElement("button", { type: "button", className: "wb-btn primary wb-extension-install-button", onClick: addManualMcp }, t("settings.add"))
+          )
+        ),
+        React.createElement("div", { className: "wb-extension-remote-search" },
+          React.createElement("input", { className: "wb-input", value: remoteQuery, onChange: function (e) { setRemoteQuery(e.target.value); setRemoteCursor(""); }, onKeyDown: function (e) { if (e.key === "Enter") searchRemote(false); }, placeholder: t("settings.extensionSearchPlaceholder." + installKind), "aria-label": t("settings.extensionRemoteSearch") }),
+          React.createElement("button", { type: "button", className: "wb-btn primary", disabled: remoteLoading, onClick: function () { searchRemote(false); } }, remoteLoading ? t("settings.loading") : t("settings.search"))
+        ),
+        (installKind === "cli" || installKind === "toolchain") && React.createElement("label", { className: "wb-extension-requested-version" }, React.createElement("span", null, t("settings.extensionRequestedVersion")), React.createElement("input", { className: "wb-input mono", value: requestedVersion, onChange: function (event) { setRequestedVersion(event.target.value); }, placeholder: "latest / lts / 22.14.0" })),
+        installKind === "cli" && React.createElement("label", { className: "wb-extension-advanced-toggle" }, React.createElement("input", { type: "checkbox", checked: advanced, onChange: function (e) { setAdvanced(e.target.checked); } }), React.createElement("span", null, t("settings.extensionAdvancedSources"))),
+        installKind === "toolchain" && remoteResults.some(function (item) { return item.id === "tex"; }) && React.createElement("fieldset", { className: "wb-extension-tex-choice" },
+          React.createElement("legend", null, t("settings.extensionTeXChoice")),
+          [["tinytex", "settings.extensionTinyTeX", "settings.extensionTinyTeXHint"], ["texlive-full", "settings.extensionFullTeX", "settings.extensionFullTeXHint"]].map(function (entry) { return React.createElement("label", { key: entry[0] }, React.createElement("input", { type: "radio", name: "tex-distribution", checked: texChoice === entry[0], onChange: function () { setTexChoice(entry[0]); } }), React.createElement("span", null, React.createElement("strong", null, t(entry[1])), React.createElement("small", null, t(entry[2])))); })
+        ),
+        skillSelection && React.createElement("div", { className: "wb-extension-skill-selection" },
+          React.createElement("strong", null, t("settings.extensionSelectSkills")),
+          skillSelection.candidates.map(function (candidate) { return React.createElement("label", { key: candidate.path }, React.createElement("input", { type: "checkbox", checked: !!skillSelection.selected[candidate.path], onChange: function (e) { setSkillSelection({ ...skillSelection, selected: { ...skillSelection.selected, [candidate.path]: e.target.checked } }); } }), React.createElement("span", null, React.createElement("b", null, candidate.name), React.createElement("small", null, candidate.description), React.createElement("code", null, candidate.path || "."))); }),
+          React.createElement("button", { type: "button", className: "wb-btn primary wb-extension-install-button", onClick: function () { var selected = Object.keys(skillSelection.selected).filter(function (key) { return skillSelection.selected[key]; }); if (selected.length) startInstall({ ...skillSelection.item, kind: "skill" }, { url: skillSelection.item.clone_url || skillSelection.item.repository, subdirs: selected }); } }, t("settings.extensionInstallSelected"))
+        ),
+        React.createElement("div", { className: "wb-extension-search-results" },
+          remoteResults.map(function (item) { var displayName = extensionDisplayName(item, t); return React.createElement("div", { key: item.id + String(item.source), className: "wb-extension-result" },
+            React.createElement("span", { className: "wb-extension-glyph " + item.kind + " extension-" + String(item.id || "").replace(/[^a-z0-9_-]/gi, "-").toLowerCase() }, React.createElement(ExtensionGlyph, { id: item.id, kind: item.kind, label: displayName })),
+            React.createElement("div", null, React.createElement("strong", null, displayName), React.createElement("p", null, extensionDisplayDescription(item, t)), React.createElement("small", null, [item.version, item.backend, item.publisher, item.verified ? t("settings.extensionVerified") : t("settings.extensionUnverified")].filter(Boolean).join(" · "))),
+            React.createElement("button", { type: "button", className: "wb-btn primary wb-extension-install-button", disabled: remoteLoading || item.installable === false, title: item.installable === false ? t("settings.extensionNeedsConfiguration") : "", onClick: function () { installSearchResult(item); } }, item.installable === false ? t("settings.extensionConfigureManually") : t("settings.install"))
+          ); })
+        ),
+        remoteCursor && React.createElement("button", { type: "button", className: "wb-btn wb-extension-load-more", disabled: remoteLoading, onClick: function () { searchRemote(true); } }, remoteLoading ? t("settings.loading") : t("settings.extensionLoadMore"))
+      )
+    ),
+    sourceOpen && React.createElement("div", { className: "wb-extension-modal-scrim", onMouseDown: function (event) { if (event.target === event.currentTarget) setSourceOpen(false); } },
+      React.createElement("section", { className: "wb-extension-modal wb-extension-source-modal", role: "dialog", "aria-modal": "true", "aria-labelledby": "extension-source-title" },
+        React.createElement("header", null, React.createElement("div", null, React.createElement("h3", { id: "extension-source-title" }, t("settings.extensionSources")), React.createElement("p", null, t("settings.extensionSourcesSubtitle"))), React.createElement("button", { type: "button", className: "wb-extension-close", onClick: function () { setSourceOpen(false); }, "aria-label": t("settings.close") }, "×")),
+        React.createElement("div", { className: "wb-extension-source-sections" },
+          React.createElement("section", { className: "wb-extension-source-section" },
+            React.createElement("div", { className: "wb-extension-source-section-head" }, React.createElement("div", null, React.createElement("h4", null, t("settings.extensionSourceSectionNetwork")), React.createElement("p", null, t("settings.extensionSourceSectionNetworkHint")))),
+            React.createElement("div", { className: "wb-extension-source-form" },
+              React.createElement("label", { className: "wide" }, React.createElement("span", null, t("settings.extensionNetworkMode")), React.createElement("select", { className: "wb-select", value: sources.network_mode || "auto", onChange: function (event) { setSources({ ...sources, network_mode: event.target.value }); } }, React.createElement("option", { value: "auto" }, t("settings.extensionNetworkAuto")), React.createElement("option", { value: "direct" }, t("settings.extensionNetworkDirect")), React.createElement("option", { value: "china" }, t("settings.extensionNetworkChina")))),
+              [["github_mirror", "settings.extensionGithubMirror", "settings.extensionGithubMirrorPlaceholder"], ["npm_registry", "settings.extensionNpmRegistry", "settings.extensionNpmRegistryPlaceholder"], ["pip_index_url", "settings.extensionPipIndex", "settings.extensionPipIndexPlaceholder"]].map(function (entry) { return React.createElement("label", { key: entry[0] }, React.createElement("span", null, t(entry[1])), React.createElement("input", { className: "wb-input mono", type: "url", value: sources[entry[0]] || "", placeholder: t(entry[2]), onChange: function (event) { setSources({ ...sources, [entry[0]]: event.target.value }); } })); }),
+              React.createElement("div", { className: "wb-extension-source-toggle wide" }, React.createElement("div", null, React.createElement("strong", null, t("settings.extensionAutoMirror")), React.createElement("small", null, t("settings.extensionAutoMirrorHint"))), Toggle(sources.auto_mirror !== false, function () { setSources({ ...sources, auto_mirror: sources.auto_mirror === false }); }, false, t("settings.extensionAutoMirror")))
+            )
+          ),
+          React.createElement("section", { className: "wb-extension-source-section" },
+            React.createElement("div", { className: "wb-extension-source-section-head" }, React.createElement("div", null, React.createElement("h4", null, t("settings.extensionSourceSectionCatalogs")), React.createElement("p", null, t("settings.extensionSourceSectionCatalogsHint")))),
+            React.createElement("div", { className: "wb-extension-source-form" },
+              React.createElement("label", null, React.createElement("span", null, t("settings.extensionMcpRegistry")), React.createElement("input", { className: "wb-input mono", type: "url", value: sources.mcp_registry_url || "", placeholder: "https://registry.modelcontextprotocol.io", onChange: function (event) { setSources({ ...sources, mcp_registry_url: event.target.value }); } }), React.createElement("small", null, t("settings.extensionMcpRegistryHint"))),
+              React.createElement("label", null, React.createElement("span", null, t("settings.extensionSkillCatalog")), React.createElement("input", { className: "wb-input mono", type: "url", value: sources.skill_catalog_url || "", placeholder: t("settings.extensionSkillCatalogPlaceholder"), onChange: function (event) { setSources({ ...sources, skill_catalog_url: event.target.value }); } }), React.createElement("small", null, t("settings.extensionSkillCatalogHint")))
+            )
+          ),
+          React.createElement("section", { className: "wb-extension-source-section" },
+            React.createElement("div", { className: "wb-extension-source-section-head" }, React.createElement("div", null, React.createElement("h4", null, t("settings.extensionSourceSectionSecurity")), React.createElement("p", null, t("settings.extensionSourceSectionSecurityHint")))),
+            React.createElement("div", { className: "wb-extension-source-form" },
+              React.createElement("label", { className: "wide" }, React.createElement("span", null, t("settings.extensionGithubToken")), React.createElement("div", { className: "wb-extension-token-row" }, React.createElement("input", { className: "wb-input mono", type: "password", value: sources.github_token || "", placeholder: sources.github_token_configured ? t("settings.secretConfigured") : "ghp_…", onChange: function (event) { setSources({ ...sources, github_token: event.target.value }); } }), sources.github_token_configured && React.createElement("button", { type: "button", className: "wb-btn danger", onClick: function () { setSources({ ...sources, github_token: "", clear_github_token: true, github_token_configured: false }); } }, t("settings.clearStoredKey"))), React.createElement("small", null, t("settings.extensionGithubTokenHint"))),
+              React.createElement("div", { className: "wb-extension-source-toggle wide" }, React.createElement("div", null, React.createElement("strong", null, t("settings.extensionVerifySignatures")), React.createElement("small", null, t("settings.extensionVerifySignaturesHint"))), Toggle(sources.verify_signatures !== false, function () { setSources({ ...sources, verify_signatures: sources.verify_signatures === false }); }, false, t("settings.extensionVerifySignatures")))
+            )
+          )
+        ),
+        sourceHealth && React.createElement("div", { className: "wb-extension-source-health" }, Object.keys(sourceHealth.checks || {}).map(function (key) { var item = sourceHealth.checks[key]; return React.createElement("span", { key: key, className: item.ok ? "ok" : "error" }, t("settings.extensionSourceCheck." + key, key) + " · " + (item.ok ? t("settings.extensionReachable") : t("settings.extensionUnreachable"))); })),
+        React.createElement("details", { className: "wb-extension-audit" }, React.createElement("summary", null, t("settings.extensionAudit")),
+          auditRecords.length === 0 ? React.createElement("p", null, t("settings.extensionAuditEmpty")) : auditRecords.map(function (record, index) { return React.createElement("div", { key: record.at + index }, React.createElement("strong", null, extensionAuditLabel("Action", record.action, t) + " · " + record.target), React.createElement("small", null, new Date(record.at).toLocaleString() + " · " + extensionAuditLabel("Actor", record.actor, t) + " · " + extensionAuditLabel("Result", record.result, t))); })
+        ),
+        React.createElement("footer", null, React.createElement("button", { type: "button", className: "wb-btn", disabled: sourceTesting, onClick: testSources }, sourceTesting ? t("settings.testingConnection") : t("settings.testConnection")), React.createElement("button", { type: "button", className: "wb-btn primary", disabled: busy === "sources", onClick: saveSources }, t("settings.save")))
+      )
+    ),
+    bindItem && React.createElement("div", { className: "wb-extension-modal-scrim", onMouseDown: function (event) { if (event.target === event.currentTarget) setBindItem(null); } },
+      React.createElement("section", { className: "wb-extension-modal wb-extension-bind-modal", role: "dialog", "aria-modal": "true", "aria-labelledby": "extension-bind-title" },
+        React.createElement("header", null, React.createElement("div", null, React.createElement("h3", { id: "extension-bind-title" }, t("settings.extensionBindTitle")), React.createElement("p", null, t("settings.extensionBindHint"))), React.createElement("button", { type: "button", className: "wb-extension-close", onClick: function () { setBindItem(null); }, "aria-label": t("settings.close") }, "×")),
+        React.createElement("input", { className: "wb-input mono", autoFocus: true, value: bindPath, onChange: function (event) { setBindPath(event.target.value); }, placeholder: "/usr/local/bin/" + bindItem.id }),
+        React.createElement("footer", null, React.createElement("button", { type: "button", className: "wb-btn", onClick: function () { setBindItem(null); } }, t("settings.cancel")), React.createElement("button", { type: "button", className: "wb-btn primary", disabled: !bindPath.trim() || busy === bindItem.key, onClick: saveBinding }, t("settings.save")))
+      )
     )
   );
 }

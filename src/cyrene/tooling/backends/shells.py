@@ -197,11 +197,12 @@ async def start_shell(
         else:
             shell_argv = [executable, "/d", "/q"]
     resolved_cwd, confined_root = _resolve_cwd(cwd, workspace_root)
-    env = dict(os.environ)
-    # npm injects this into Electron development launches; nvm treats it as an
-    # incompatible user override and prints a warning in every child shell.
-    env.pop("npm_config_prefix", None)
-    env.pop("NPM_CONFIG_PREFIX", None)
+    # Cyrene-managed commands are a fallback, never a shadow for the user's
+    # system PATH. This environment is private to Agent Shell processes and
+    # does not mutate shell profiles or terminal settings.
+    from cyrene.extensions.service import agent_process_environment
+
+    env = agent_process_environment()
     env["PS1"] = ""
     env.setdefault("TERM", "dumb")
     proc = await asyncio.create_subprocess_exec(

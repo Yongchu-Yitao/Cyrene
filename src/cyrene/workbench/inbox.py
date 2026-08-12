@@ -23,6 +23,8 @@ from pathlib import Path
 from typing import Any, Awaitable, Callable
 from uuid import uuid4
 
+from cyrene.observability.trace import trace_span
+
 logger = logging.getLogger(__name__)
 
 ToolRunner = Callable[[], Awaitable[str]]
@@ -764,6 +766,16 @@ class WorkbenchAgentInbox:
     ) -> None:
         started = time.perf_counter()
         submitted_at = self._tool_submitted_at.pop(tool_call_id, started)
+        tool_span = trace_span(
+            "tool",
+            tool_name,
+            span_id=tool_call_id,
+            db_path=self.db_path,
+            attributes={
+                "batch_id": batch_id,
+                "queue_wait_ms": (started - submitted_at) * 1000,
+            },
+        ).start()
         self._set_live_tool_state(tool_call_id, tool_name, "running")
         self._record_event_background(
             "tool_started", batch_id=batch_id, tool_call_id=tool_call_id,
@@ -798,6 +810,8 @@ class WorkbenchAgentInbox:
                 duration_ms=duration_ms, tool_execution_ms=duration_ms,
                 payload={"event_id": event["event_id"], "cancelled": True},
             )
+            tool_span.set_attribute("result_chars", len(payload["result"]))
+            await tool_span.finish(status="cancelled")
             raise
         except Exception as exc:
             payload = {
@@ -819,6 +833,8 @@ class WorkbenchAgentInbox:
             duration_ms=duration_ms, tool_execution_ms=duration_ms,
             payload={"event_id": event["event_id"], "is_error": payload["is_error"]},
         )
+        tool_span.set_attribute("result_chars", len(payload["result"]))
+        await tool_span.finish(status="error" if payload["is_error"] else "ok")
 
     def submit_tool(
         self,
@@ -1058,6 +1074,12 @@ class WorkbenchAgentInbox:
     async def wait_for_tool_result(self, tool_call_id: str) -> str:
         """Wait for one result while retaining guidance for the next model turn."""
         wait_started = time.perf_counter()
+        consume_span = trace_span(
+            "tool_consume",
+            "wait_for_tool_result",
+            span_id=f"{tool_call_id}.consume",
+            db_path=self.db_path,
+        ).start()
         while True:
             event = self._pending_tool_results.pop(tool_call_id, None)
             if event is None:
@@ -1094,6 +1116,10 @@ class WorkbenchAgentInbox:
                         "result_queue_delay_ms": queue_delay_ms,
                     },
                 )
+                consume_span.set_attribute(
+                    "result_queue_delay_ms", queue_delay_ms
+                )
+                await consume_span.finish()
                 return str(payload.get("result") or "")
             if event_type == "tool_result":
                 unexpected_id = str(payload.get("tool_call_id") or "")

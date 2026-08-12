@@ -226,6 +226,27 @@ CREATE INDEX IF NOT EXISTS idx_llm_latency_created_at ON llm_latency_events(crea
 CREATE INDEX IF NOT EXISTS idx_llm_latency_call_id ON llm_latency_events(call_id);
 CREATE INDEX IF NOT EXISTS idx_llm_latency_endpoint ON llm_latency_events(endpoint);
 
+CREATE TABLE IF NOT EXISTS runtime_trace_spans (
+    span_id TEXT NOT NULL,
+    trace_id TEXT NOT NULL,
+    parent_span_id TEXT NOT NULL DEFAULT '',
+    run_id TEXT NOT NULL DEFAULT '',
+    session_id TEXT NOT NULL DEFAULT '',
+    round_id TEXT NOT NULL DEFAULT '',
+    kind TEXT NOT NULL,
+    name TEXT NOT NULL,
+    status TEXT NOT NULL DEFAULT 'ok',
+    started_at TEXT NOT NULL,
+    ended_at TEXT NOT NULL,
+    duration_ms REAL NOT NULL DEFAULT 0,
+    attributes_json TEXT NOT NULL DEFAULT '{}',
+    PRIMARY KEY(trace_id, span_id)
+);
+CREATE INDEX IF NOT EXISTS idx_runtime_trace_spans_trace
+ON runtime_trace_spans(trace_id, started_at);
+CREATE INDEX IF NOT EXISTS idx_runtime_trace_spans_run
+ON runtime_trace_spans(run_id, started_at);
+
 CREATE TABLE IF NOT EXISTS entities (
     id                  TEXT PRIMARY KEY,
     type                TEXT NOT NULL,
@@ -1196,6 +1217,138 @@ async def _ensure_llm_latency_table(db: aiosqlite.Connection) -> None:
             )
 
 
+async def _ensure_runtime_trace_table(db: aiosqlite.Connection) -> None:
+    await db.executescript(
+        """
+        CREATE TABLE IF NOT EXISTS runtime_trace_spans (
+            span_id TEXT NOT NULL, trace_id TEXT NOT NULL,
+            parent_span_id TEXT NOT NULL DEFAULT '', run_id TEXT NOT NULL DEFAULT '',
+            session_id TEXT NOT NULL DEFAULT '', round_id TEXT NOT NULL DEFAULT '',
+            kind TEXT NOT NULL, name TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'ok',
+            started_at TEXT NOT NULL, ended_at TEXT NOT NULL,
+            duration_ms REAL NOT NULL DEFAULT 0,
+            attributes_json TEXT NOT NULL DEFAULT '{}',
+            PRIMARY KEY(trace_id, span_id)
+        );
+        CREATE INDEX IF NOT EXISTS idx_runtime_trace_spans_trace
+            ON runtime_trace_spans(trace_id, started_at);
+        CREATE INDEX IF NOT EXISTS idx_runtime_trace_spans_run
+            ON runtime_trace_spans(run_id, started_at);
+        """
+    )
+
+
+def _runtime_trace_row(event: dict, now: str) -> tuple:
+    attributes = event.get("attributes")
+    return (
+        str(event.get("span_id") or f"span_{uuid.uuid4().hex}"),
+        str(event.get("trace_id") or ""),
+        str(event.get("parent_span_id") or ""),
+        str(event.get("run_id") or ""),
+        str(event.get("session_id") or ""),
+        str(event.get("round_id") or ""),
+        str(event.get("kind") or "unknown"),
+        str(event.get("name") or "unknown"),
+        str(event.get("status") or "unknown"),
+        str(event.get("started_at") or now),
+        str(event.get("ended_at") or now),
+        float(event.get("duration_ms") or 0),
+        json.dumps(attributes if isinstance(attributes, dict) else {}, ensure_ascii=False),
+    )
+
+
+def _llm_trace_event(event: dict, now: str) -> dict:
+    duration_ms = float(event.get("request_ms") or event.get("total_call_ms") or 0)
+    ended_at = str(event.get("created_at") or now)
+    try:
+        ended = datetime.fromisoformat(ended_at)
+        started_at = (ended - timedelta(milliseconds=duration_ms)).isoformat()
+    except (TypeError, ValueError):
+        started_at = ended_at
+    return {
+        "span_id": str(event.get("span_id") or ""),
+        "trace_id": str(event.get("trace_id") or ""),
+        "parent_span_id": str(event.get("parent_span_id") or ""),
+        "run_id": str(event.get("run_id") or ""),
+        "session_id": str(event.get("session_id") or ""),
+        "round_id": str(event.get("round_id") or ""),
+        "kind": "model",
+        "name": f"{event.get('caller') or 'unknown'}.{event.get('phase') or 'unknown'}",
+        "status": "ok" if event.get("outcome") == "success" else "error",
+        "started_at": started_at,
+        "ended_at": ended_at,
+        "duration_ms": duration_ms,
+        "attributes": {
+            "call_id": str(event.get("call_id") or ""),
+            "attempt": int(event.get("attempt") or 1),
+            "model": str(event.get("model") or ""),
+            "outcome": str(event.get("outcome") or "unknown"),
+            "prompt_tokens": int(event.get("prompt_tokens") or 0),
+            "completion_tokens": int(event.get("completion_tokens") or 0),
+            "fallback_used": bool(event.get("fallback_used")),
+            "queue_wait_ms": float(event.get("queue_wait_ms") or 0),
+            "pre_attempt_wait_ms": float(event.get("pre_attempt_wait_ms") or 0),
+            "request_ms": float(event.get("request_ms") or 0),
+            "response_headers_ms": event.get("response_headers_ms"),
+            "ttft_ms": event.get("ttft_ms"),
+            "first_token_after_headers_ms": event.get("first_token_after_headers_ms"),
+            "generation_ms": event.get("generation_ms"),
+            "retry_backoff_ms": float(event.get("retry_backoff_ms") or 0),
+        },
+    }
+
+
+async def record_runtime_trace_span(db_path: str, event: dict) -> None:
+    """Persist one metadata-only performance span."""
+    await record_runtime_trace_spans(db_path, [event])
+
+
+async def record_runtime_trace_spans(
+    db_path: str, events: list[dict] | tuple[dict, ...]
+) -> None:
+    """Persist one run's metadata-only spans in a single transaction."""
+    if not events:
+        return
+    now = datetime.now(timezone.utc).isoformat()
+    async with aiosqlite.connect(db_path) as db:
+        await _ensure_runtime_trace_table(db)
+        await db.executemany(
+            """
+            INSERT OR REPLACE INTO runtime_trace_spans
+            (span_id, trace_id, parent_span_id, run_id, session_id, round_id,
+             kind, name, status, started_at, ended_at, duration_ms, attributes_json)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            [_runtime_trace_row(event, now) for event in events],
+        )
+        await db.commit()
+
+
+async def get_runtime_trace(db_path: str, trace_id: str) -> list[dict]:
+    """Return a start-time ordered waterfall for one trace."""
+    async with aiosqlite.connect(db_path) as db:
+        await _ensure_runtime_trace_table(db)
+        db.row_factory = aiosqlite.Row
+        cursor = await db.execute(
+            """
+            SELECT * FROM runtime_trace_spans
+            WHERE trace_id = ? ORDER BY started_at, span_id
+            """,
+            (str(trace_id),),
+        )
+        rows = await cursor.fetchall()
+    result = []
+    for row in rows:
+        item = dict(row)
+        try:
+            item["attributes"] = json.loads(item.pop("attributes_json") or "{}")
+        except (TypeError, ValueError, json.JSONDecodeError):
+            item["attributes"] = {}
+            item.pop("attributes_json", None)
+        result.append(item)
+    return result
+
+
 def _token_usage_row(event: dict, now: str) -> tuple:
     model = str(event.get("model") or "")
     prompt_tokens = int(event.get("prompt_tokens") or 0)
@@ -1274,6 +1427,11 @@ async def record_llm_telemetry_batch(
     async with aiosqlite.connect(db_path) as db:
         if latency_events:
             await _ensure_llm_latency_table(db)
+        traced_latency_events = [
+            event for event in latency_events if str(event.get("trace_id") or "")
+        ]
+        if traced_latency_events:
+            await _ensure_runtime_trace_table(db)
         if token_events:
             await db.executemany(
                 """INSERT INTO token_usage
@@ -1297,6 +1455,19 @@ async def record_llm_telemetry_batch(
                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 [_llm_latency_row(event, now) for event in latency_events],
+            )
+        if traced_latency_events:
+            await db.executemany(
+                """
+                INSERT OR REPLACE INTO runtime_trace_spans
+                (span_id, trace_id, parent_span_id, run_id, session_id, round_id,
+                 kind, name, status, started_at, ended_at, duration_ms, attributes_json)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                [
+                    _runtime_trace_row(_llm_trace_event(event, now), now)
+                    for event in traced_latency_events
+                ],
             )
         await db.commit()
 

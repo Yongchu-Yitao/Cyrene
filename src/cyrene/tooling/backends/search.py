@@ -16,6 +16,7 @@ import requests
 
 from cyrene.call_llm import call_llm as _unified_call_llm
 from cyrene.config import SEARCH_PROXY, SEARXNG_URL
+from cyrene.observability.trace import new_trace_id, trace_span
 
 logger = logging.getLogger(__name__)
 
@@ -345,7 +346,10 @@ async def _deep_search_simplexng(topic: str) -> str:
 
     search_tasks = [_limited_search(q) for q in queries]
 
-    search_results = await asyncio.gather(*search_tasks, return_exceptions=True)
+    async with trace_span(
+        "search_stage", "simplexng_search", attributes={"query_count": len(queries)}
+    ):
+        search_results = await asyncio.gather(*search_tasks, return_exceptions=True)
 
     all_results: list[dict] = []
     for sr in search_results:
@@ -380,7 +384,13 @@ async def _deep_search_simplexng(topic: str) -> str:
             return await _fetch_url(url)
 
     fetch_tasks = [_limited_fetch(r) for r in deduped[:8]]
-    fetched = await asyncio.gather(*fetch_tasks, return_exceptions=True)
+    async with trace_span(
+        "search_stage", "simplexng_fetch", attributes={"url_count": len(fetch_tasks)}
+    ) as fetch_span:
+        fetched = await asyncio.gather(*fetch_tasks, return_exceptions=True)
+        fetch_span.set_attribute(
+            "fetched_count", sum(1 for f in fetched if isinstance(f, str) and f)
+        )
 
     # Attach fetched content back to results
     for i, r in enumerate(deduped[:8]):
@@ -401,7 +411,11 @@ async def _deep_search_simplexng(topic: str) -> str:
     # -----------------------------------------------------------------------
     # Stage 3: Filter
     # -----------------------------------------------------------------------
-    filtered = await _filter_results(deduped, topic)
+    async with trace_span(
+        "search_stage", "simplexng_filter", attributes={"input_count": len(deduped)}
+    ) as filter_span:
+        filtered = await _filter_results(deduped, topic)
+        filter_span.set_attribute("output_count", len(filtered))
     if not filtered:
         logger.warning("Stage 3 filter returned empty, falling back to top 5 results")
         filtered = deduped[:5]
@@ -411,13 +425,17 @@ async def _deep_search_simplexng(topic: str) -> str:
     # Stage 4: Synthesize
     # -----------------------------------------------------------------------
     fetched_contents = [r.get("fetched_content", "") or r.get("snippet", "") for r in filtered]
-    answer = await _synthesize(filtered, fetched_contents, topic)
+    async with trace_span(
+        "search_stage", "simplexng_synthesize", attributes={"source_count": len(filtered)}
+    ) as synthesize_span:
+        answer = await _synthesize(filtered, fetched_contents, topic)
+        synthesize_span.set_attribute("answer_chars", len(answer))
     logger.info("Stage 4 complete: synthesis generated (%d chars)", len(answer))
 
     return answer
 
 
-async def deep_search(
+async def _deep_search_impl(
     topic: str,
     *,
     db_path: str = "",
@@ -449,7 +467,13 @@ async def deep_search(
             candidate.search_model,
         )
         try:
-            result = await search_with_deepseek(topic, candidate)
+            async with trace_span(
+                "search_stage",
+                "deepseek_provider",
+                attributes={"candidate_id": candidate.candidate_id},
+            ) as provider_span:
+                result = await search_with_deepseek(topic, candidate)
+                provider_span.set_attribute("answer_chars", len(result.text))
         except DeepSeekWebSearchError as exc:
             logger.warning("%s; falling back to SimpleXNG", exc)
         except Exception as exc:
@@ -485,4 +509,31 @@ async def deep_search(
             return result.text
 
     logger.info("Web search using SimpleXNG fallback")
-    return await _deep_search_simplexng(topic)
+    async with trace_span("search_stage", "simplexng_pipeline"):
+        return await _deep_search_simplexng(topic)
+
+
+async def deep_search(
+    topic: str,
+    *,
+    db_path: str = "",
+    session_id: str = "",
+    round_id: str = "",
+) -> str:
+    """Run one search under a stable, query-free trace identifier."""
+    search_id = new_trace_id("search")
+    async with trace_span(
+        "search",
+        "web_search",
+        span_id=search_id,
+        db_path=db_path,
+        attributes={"session_id_present": bool(session_id), "round_id_present": bool(round_id)},
+    ) as search_span:
+        result = await _deep_search_impl(
+            topic,
+            db_path=db_path,
+            session_id=session_id,
+            round_id=round_id,
+        )
+        search_span.set_attribute("answer_chars", len(result))
+        return result

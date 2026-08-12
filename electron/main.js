@@ -258,6 +258,8 @@ let pendingPortResolve = null;
 let backendPort = null;
 let isShuttingDown = false;
 let isQuitting = false;
+let quitExtensionCheckInFlight = false;
+let quitExtensionDecisionMade = false;
 let launchHidden = process.argv.includes('--hidden');
 let tray = null;
 const browserTabManagers = new Map();
@@ -361,14 +363,80 @@ function postBackendJson(pathname, payload) {
   req.end();
 }
 
+function requestBackendJson(method, pathname, payload) {
+  return new Promise((resolve, reject) => {
+    if (!backendPort) {
+      reject(new Error('backend unavailable'));
+      return;
+    }
+    const body = payload == null ? '' : JSON.stringify(payload);
+    const req = http.request({
+      hostname: '127.0.0.1',
+      port: backendPort,
+      path: pathname,
+      method,
+      headers: {
+        'X-Cyrene-Token': AUTH_TOKEN,
+        ...(body ? { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(body) } : {}),
+      },
+      timeout: 3000,
+    }, (res) => {
+      const chunks = [];
+      res.on('data', (chunk) => chunks.push(chunk));
+      res.on('end', () => {
+        try {
+          const parsed = JSON.parse(Buffer.concat(chunks).toString('utf8') || '{}');
+          if ((res.statusCode || 500) >= 400) reject(new Error(parsed.error || `HTTP ${res.statusCode}`));
+          else resolve(parsed);
+        } catch (error) {
+          reject(error);
+        }
+      });
+    });
+    req.on('error', reject);
+    req.on('timeout', () => req.destroy(new Error('backend request timed out')));
+    if (body) req.write(body);
+    req.end();
+  });
+}
+
+async function cancelExtensionTasksAndWait(tasks) {
+  await Promise.allSettled(tasks.map((task) => (
+    requestBackendJson('POST', `/api/extensions/tasks/${encodeURIComponent(task.id)}/cancel`, {})
+  )));
+  const deadline = Date.now() + 3000;
+  while (Date.now() < deadline) {
+    try {
+      const payload = await requestBackendJson('GET', '/api/extensions/tasks');
+      const pending = (payload.tasks || []).some((task) => (
+        ['queued', 'running', 'cancelling'].includes(task.status)
+      ));
+      if (!pending) return;
+    } catch (_) {
+      return;
+    }
+    await new Promise((resolve) => setTimeout(resolve, 150));
+  }
+}
+
 const DESKTOP_TRANSLATIONS = Object.freeze({
   en: {
     open: 'Open Cyrene',
     quit: 'Quit Cyrene',
+    installQuitTitle: 'Extensions are still installing',
+    installQuitMessage: 'One or more extension installations are still running.',
+    installQuitDetail: 'Wait to keep the installations running, or cancel them before quitting. Interrupted tasks remain visible for a safe retry on the next launch.',
+    installQuitWait: 'Wait',
+    installQuitCancel: 'Cancel installs and quit',
   },
   zh: {
     open: '打开 Cyrene',
     quit: '退出 Cyrene',
+    installQuitTitle: '扩展仍在安装',
+    installQuitMessage: '一个或多个扩展安装任务仍在运行。',
+    installQuitDetail: '可以等待安装完成，或取消安装后退出。异常中断的任务会保留记录，下次启动时可安全重试。',
+    installQuitWait: '等待',
+    installQuitCancel: '取消安装并退出',
   },
 });
 
@@ -4796,6 +4864,7 @@ function spawnPython() {
     childEnv.CYRENE_USER_DATA_DIR = process.env.CYRENE_USER_DATA_DIR || getCyreneUserDataDir();
     childEnv.CYRENE_CACHE_DIR = process.env.CYRENE_CACHE_DIR || getCyreneCacheDir();
     childEnv.CYRENE_TEMP_DIR = process.env.CYRENE_TEMP_DIR || getCyreneTempDir();
+    childEnv.CYRENE_INSTALL_RESOURCES_DIR = process.resourcesPath;
   }
 
   if (binaryPath) {
@@ -6144,6 +6213,16 @@ if (!gotSingleInstanceLock) {
       }
       return { path: result.filePaths[0] };
     });
+    ipcMain.handle('dialog:pick-extension-path', async (event, info) => {
+      const owner = BrowserWindow.fromWebContents(event.sender);
+      const directory = !!(info && info.directory);
+      const result = await dialog.showOpenDialog(owner || mainWindow, {
+        title: String(info && info.title || (directory ? 'Select extension folder' : 'Select executable')),
+        properties: [directory ? 'openDirectory' : 'openFile'],
+      });
+      if (result.canceled || !result.filePaths.length) return { path: '', cancelled: true };
+      return { path: result.filePaths[0] };
+    });
     ipcMain.handle('dialog:pick-backup-save-path', async (event, info) => {
       const owner = BrowserWindow.fromWebContents(event.sender);
       const requestedName = path.basename(String(info && info.defaultName || '').trim()) || 'cyrene_backup.zip';
@@ -6274,7 +6353,50 @@ if (!gotSingleInstanceLock) {
     }
   });
 
-  app.on('before-quit', () => {
+  app.on('before-quit', (event) => {
+    if (!quitExtensionDecisionMade && backendPort && !quitExtensionCheckInFlight) {
+      event.preventDefault();
+      quitExtensionCheckInFlight = true;
+      requestBackendJson('GET', '/api/extensions/tasks')
+        .then(async (payload) => {
+          const active = (payload.tasks || []).filter((task) => ['queued', 'running', 'cancelling'].includes(task.status));
+          if (!active.length) {
+            quitExtensionDecisionMade = true;
+            app.quit();
+            return;
+          }
+          const settings = readDesktopSettings();
+          const choice = await dialog.showMessageBox(mainWindow && !mainWindow.isDestroyed() ? mainWindow : undefined, {
+            type: 'warning',
+            title: desktopT('installQuitTitle', settings),
+            message: desktopT('installQuitMessage', settings),
+            detail: desktopT('installQuitDetail', settings),
+            buttons: [desktopT('installQuitWait', settings), desktopT('installQuitCancel', settings)],
+            defaultId: 0,
+            cancelId: 0,
+            noLink: true,
+          });
+          if (choice.response === 0) {
+            isQuitting = false;
+            return;
+          }
+          await cancelExtensionTasksAndWait(active);
+          quitExtensionDecisionMade = true;
+          app.quit();
+        })
+        .catch(() => {
+          // If the backend cannot answer, the durable task store reconciles
+          // interrupted jobs on the next launch. Do not trap the user in-app.
+          quitExtensionDecisionMade = true;
+          app.quit();
+        })
+        .finally(() => { quitExtensionCheckInFlight = false; });
+      return;
+    }
+    if (quitExtensionCheckInFlight && !quitExtensionDecisionMade) {
+      event.preventDefault();
+      return;
+    }
     isQuitting = true;
     destroyTray();
     globalShortcut.unregisterAll();

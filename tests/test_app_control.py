@@ -97,6 +97,9 @@ def test_current_tree_exposes_project_switch_chat_search_and_shared_pip_maximize
     assert "if (!collapsed)" not in registration_block
     assert 'node_id: "chat_list"' in chat
     assert 'node_id: "chat_composer_submit"' in chat
+    assert 'node_id: "task_composer_submit"' in workbench
+    assert 'get_element: function () { return sendButtonRef.current; }' in workbench
+    assert 'target_scope: "task"' in workbench
     composer_source = chat.split("function WbcComposer", 1)[1]
     user_message_source = chat.split("function WbcUserMessage", 1)[1].split("function WbcAssistantMessage", 1)[0]
     assert "var sendButtonRef = useWbcRef(null);" in composer_source
@@ -347,14 +350,14 @@ def test_lifecycle_records_revalidation_and_reconciles_only_host_accepted_action
             "restart_app",
             idempotency_key="restart-1",
             parameter_hash="a" * 64,
-            expected_app_version="0.7.3",
+            expected_app_version="0.7.4",
             approval_receipt="delegation_receipt",
         )
         second = host_actions.schedule_action(
             "restart_backend",
             idempotency_key="restart-2",
             parameter_hash="b" * 64,
-            expected_app_version="0.7.3",
+            expected_app_version="0.7.4",
         )
     finally:
         binding.reset()
@@ -392,7 +395,7 @@ async def test_update_install_uses_host_prepare_launch_commit_order(monkeypatch,
     async def fake_host(method, args=None):
         calls.append((method, dict(args or {})))
         if method == "host.status":
-            return {"ok": True, "hostKind": "electron", "appVersion": "0.7.3"}
+            return {"ok": True, "hostKind": "electron", "appVersion": "0.7.4"}
         return {"ok": True, "summary": str((args or {}).get("phase") or "")}
 
     monkeypatch.setattr(host_actions, "call_host", fake_host)
@@ -400,7 +403,7 @@ async def test_update_install_uses_host_prepare_launch_commit_order(monkeypatch,
         "action_id": "host_action_" + "b" * 32,
         "action": "update_install",
         "parameter_hash": "c" * 64,
-        "expected_app_version": "0.7.3",
+        "expected_app_version": "0.7.4",
         "required_host_kind": "electron",
         "revalidation": {"sha256": "a" * 64, "size": 12},
     })
@@ -925,6 +928,47 @@ async def test_ui_inspect_uses_target_node_lease_across_unrelated_revision_chang
 
 
 @pytest.mark.asyncio
+async def test_ui_snapshot_exposes_visible_and_calling_session_mismatch(monkeypatch):
+    from cyrene.agent.context import bind_run_context
+    from cyrene.tool_impl.application import _ui_snapshot, ui_snapshot
+
+    async def fake_host(method, _args):
+        assert method == "ui.snapshot.current"
+        return {
+            "ok": True,
+            "snapshot_id": "tree-other-session",
+            "revision": 5,
+            "surface": {
+                "kind": "main",
+                "scope": "main",
+                "visible_session_id": "visible-chat",
+                "visible_session_kind": "chat",
+            },
+            "root": {"node_id": "root", "children": []},
+        }
+
+    monkeypatch.setattr(_ui_snapshot, "call_host", fake_host)
+    binding = bind_run_context(
+        agent_id="main", caller="main_agent", session_id="calling-chat",
+        round_id="round-mismatch", client_request_id="request-mismatch",
+        conversation_source="desktop_local", ui_instance_id="surface-main",
+    )
+    try:
+        result = json.loads(await ui_snapshot.handler({}, None, 0, "", None))
+    finally:
+        binding.reset()
+
+    assert result["snapshot"]["surface"] == {
+        "kind": "main",
+        "scope": "main",
+        "visible_session_id": "visible-chat",
+        "visible_session_kind": "chat",
+        "calling_session_id": "calling-chat",
+        "session_relation": "different",
+    }
+
+
+@pytest.mark.asyncio
 async def test_ui_action_exact_retry_replays_before_reading_new_tree(
     monkeypatch, tmp_path,
 ):
@@ -1157,7 +1201,7 @@ async def test_lifecycle_finalization_is_scoped_to_origin_request(
                 "restart_backend",
                 idempotency_key=key,
                 parameter_hash=digest,
-                expected_app_version="0.7.3",
+                expected_app_version="0.7.4",
             )
         finally:
             binding.reset()

@@ -84,13 +84,14 @@ def test_settings_api_exposes_stable_package_groups(monkeypatch):
         "map_tools",
         "subagent_tools",
         "delivery_tools",
+        "environment_tools",
         "skill_tools",
         "remote_tools",
         "cyrene_tools",
         "integration_tools",
     ]
     groups = payload["tool_groups"]
-    assert len(groups) == 14
+    assert len(groups) == 15
     assert all(item["kind"] == "package" for item in groups)
     browser = next(
         item for item in payload["packages"]
@@ -105,6 +106,8 @@ def test_settings_api_exposes_stable_package_groups(monkeypatch):
     assert tools["browser_navigate"]["configured_enabled"] is False
     assert tools["browser_navigate"]["effective_enabled"] is False
     assert tools["SearchKnowledge"]["package_id"] == "knowledge_tools"
+    assert tools["ListEnvironment"]["package_id"] == "environment_tools"
+    assert tools["SearchEnvironment"]["package_id"] == "environment_tools"
 
 
 def test_settings_api_updates_package_atomically(monkeypatch):

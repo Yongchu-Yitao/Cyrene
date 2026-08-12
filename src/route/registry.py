@@ -18,6 +18,8 @@ from route.channels.wechat import register_wechat_routes
 from route.code import router as code_router
 from route.control import register_control_routes
 from route.entities import register_entity_routes
+from route.extensions import register_extension_routes
+from route.hooks import register_hook_routes
 from route.errors import install_api_exception_handlers
 from route.knowledge import register_knowledge_routes
 from route.learning import register_learning_routes
@@ -150,6 +152,8 @@ def register_routes(app: FastAPI, bot: Any, db_path: str) -> None:
         register_browser_routes,
         register_session_routes,
         register_learning_routes,
+        register_extension_routes,
+        register_hook_routes,
         register_skill_routes,
         register_search_routes,
         register_usage_routes,

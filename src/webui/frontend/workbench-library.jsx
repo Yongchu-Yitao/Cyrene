@@ -184,15 +184,20 @@
         other: "file",
       }[itemFileType(item)] || itemFileType(item);
     },
-    tone: function (item) {
+    toneForKind: function (kind) {
       return {
         pdf: "red", doc: "blue", sheet: "green", slide: "orange",
         image: "purple", link: "cyan", audio: "amber", video: "red",
-      }[LibraryFileVisual.visualKind(item)] || "slate";
+      }[kind] || "slate";
+    },
+    tone: function (item) {
+      return LibraryFileVisual.toneForKind(LibraryFileVisual.visualKind(item));
+    },
+    iconForKind: function (kind) {
+      return icon({ doc: "file", sheet: "sheet", slide: "slide" }[kind] || kind, 20);
     },
     icon: function (item) {
-      var kind = LibraryFileVisual.visualKind(item);
-      return icon({ doc: "file", sheet: "sheet", slide: "slide" }[kind] || kind, 20);
+      return LibraryFileVisual.iconForKind(LibraryFileVisual.visualKind(item));
     },
   };
 

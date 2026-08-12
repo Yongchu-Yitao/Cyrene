@@ -5,6 +5,79 @@
 This English edition preserves the release history of the Chinese changelog.
 The Chinese edition remains the most detailed record for older releases.
 
+## [0.7.4] - 2026-08-13
+
+### Unified Extension Center
+
+- The former Skills page is now a unified Extension Center for Skills, MCP servers, command-line tools, and runtime environments, while each type keeps its own installation, activation, and removal behavior.
+- Added Recommended, Skills, MCP, Command-line Tools, and Runtime Environments tabs, with installed-item filtering and direct search and installation from the relevant source.
+- Recommended now brings Python, uv, TeX, Node.js, GitHub CLI, and Bun together. Existing system programs are detected automatically with version, path, source, and health information.
+- When Python is missing, the Extension Center offers an installation path without blocking the rest of Cyrene. Go, Java, Rust, Deno, and other runtimes can be searched and installed as needed.
+- Command-line search covers the mise catalog plus npm, pipx, RubyGems, Cargo, and Go sources, allowing tools such as fd, ripgrep, and RTK to be resolved to exact versions and installed.
+- MCP supports the official Registry as well as manually configured remote URLs or local commands. Multiple MCP servers can coexist, each with its own address, command, and enabled state.
+- Skill installation supports GitHub repository inspection, selecting multiple Skills from one repository, and importing a local snapshot. Installed Skills can be enabled or disabled globally.
+- Every installed extension exposes an enabled switch in its details. Disabling hides the corresponding Skill, MCP tools, CLI, or runtime from Agents without uninstalling local content.
+- System tools can use an “existing local program” binding. Cyrene records only the path and never changes or removes the user's installation, and automatic detection can be restored at any time.
+- Installation tasks continue in the background and show waiting, installing, cancelling, failed, interrupted, and completed states, with clear return and retry paths.
+- Added source settings for network mode, GitHub download mirrors, npm registries, pip indexes, the MCP Registry, Skill catalogs, GitHub credentials, and integrity verification, including direct connection tests.
+- Extension installs, removals, activation changes, version selection, and Agent-requested mutations pass through the existing review flow and remain visible in an audit history.
+
+### Skills and Agent environment discovery
+
+- External Skills now use progressive disclosure. Agents initially receive only enabled Skill names and a compact catalog, then load full instructions and required resources only when needed.
+- Agents can search Skills by name, description, and tags, load a complete Skill, and read declared text resources on demand. Disabled Skills cannot be discovered or loaded.
+- When an Agent creates a reusable Skill, it finishes the complete Skill directory before reviewed installation and registration. Creating `SKILL.md` alone is no longer reported as an installed Skill.
+- Agents can inspect available MCP servers, CLIs, and runtimes and search installable candidates. Search remains read-only, while installation still requires review.
+- CLIs and runtimes installed by Cyrene are automatically available to Agents and the built-in Bash environment without manual PATH setup. Disabling an extension removes it from that environment.
+- File delivery registers real generated files as conversation or task artifacts, including files saved to an explicitly requested location, instead of returning only a non-downloadable path.
+
+### General Agent Hooks
+
+- Added global Hooks for `PreToolUse`, `PostToolUse`, `SessionStart`, `SessionEnd`, and `Stop`, running approved user programs or scripts when matching events occur.
+- Hooks can match tool names and define priority, timeout, and failure behavior. Pre-tool Hooks can allow a call, modify its arguments, or block it.
+- Hooks cover the main Agent, side Agents, built-in tools, and MCP tools. Context returned at session start can be supplied to the corresponding Agent.
+- After a CLI installation, a background configuration Agent checks whether the tool explicitly supports a compatible Hook workflow. It proposes integration only when useful and does not force Hooks onto ordinary search or compiler tools.
+- Agent-generated Hook proposals never activate automatically. The notification center sends an approval notice that opens Hook management with the exact program, arguments, event, matcher, and rationale for approval or rejection.
+- CLI details add a “Let Agent configure” action so any installed tool can be reassessed for Hook integration.
+- The Extension Center now includes Hook management for adding, editing, testing, enabling, disabling, and deleting Hooks, with execution and approval history.
+
+### Conversations, tasks, and Agent experience
+
+- Conversation sidebars now separate user-provided files from Agent-generated artifacts, with more accurate file-type names, icons, and colors.
+- Duplicate delivery of the same file within one round is merged, while files with the same name from different rounds remain separate.
+- Outputs reported by older tasks but not previously registered can reappear as artifacts, reducing missing historical file entries after upgrading.
+- Task and delete menus use corrected layering and click-away behavior, avoiding blocked controls or menus hidden under a scrim.
+- The composer tools menu brings content actions and workspace selection together, with long workspace paths remaining readable.
+- Agents operating the visible interface in the background can distinguish the calling session from the session currently shown, avoiding false failures after the user changes pages.
+- Agent-generated conversation titles retain the full candidate instead of being shortened unexpectedly. Project-memory learning adapts its cadence to available content to avoid early or repeated writes.
+- Model authentication failures provide clearer reconnection guidance, and permission prompts focus more directly on the real action that needs confirmation.
+- Agent tool use and context handling are more stable in long-running work, parallel tasks, and conversations containing large tool results.
+
+### MCP, voice, and reliability
+
+- MCP connections support Streamable HTTP, with improved local-process startup, cancellation, timeout, and disconnect behavior so stopped connections do not leave child processes behind.
+- MCP configuration rejects unsafe remote addresses and dynamic launch methods without a fixed source. Secret fields remain hidden in the interface, backups, and exported state.
+- Custom voice profile save, synthesis, replacement, and deletion flows are more complete. A failed save restores the previous reference audio instead of leaving a partial profile.
+- Message merging repairs rare historical ordering issues and keeps live replies consistent after durable records are reloaded.
+- Database upgrades, backup restore, and runtime migration preserve existing data more reliably and do not replace populated state with an empty legacy database.
+
+### Interface changes
+
+- The Settings navigation item formerly named Skills is now Extensions. The page uses the same fixed Settings geometry as other sections, so switching tabs no longer expands the whole window.
+- Recommended extension names, descriptions, states, sources, and health information are fully localized in English and Chinese. GitHub CLI now uses the correct GitHub mark with theme-aware color.
+- Install buttons use consistent sizing across tabs and card states, and the install and expand controls keep a consistent position and interaction order.
+- Extension cards use a more compact information hierarchy, with source, version, path, health, enabled state, and relevant actions shown after expansion.
+- Source settings are reorganized into Network & Downloads, Extension Catalogs, and Credentials & Integrity, with less unused space and clearer guidance.
+- The Hook management dialog is narrower and centered, showing configured items by default. Editing uses a compact two-column form, moves infrequent controls into Advanced Options, and increases supporting text readability.
+- Project selector, collapsed state, and hover feedback are more stable, with clear clickable targets retained in narrow rails.
+
+### Desktop installation and updates
+
+- Windows adds a portable edition that can be run without installation while retaining the installed edition's capabilities.
+- Windows installed and portable packages include the runtime installation tools required by the Extension Center, enabling in-app installation of Python, CLIs, and other runtimes.
+- Windows updates detect whether the current app is installed or portable and select the matching update package.
+- macOS packages also include Extension Center runtime tools, while app-managed installations remain isolated in Cyrene's own directory.
+
 ## [0.7.3] - 2026-08-12
 
 ### Data reset and settings

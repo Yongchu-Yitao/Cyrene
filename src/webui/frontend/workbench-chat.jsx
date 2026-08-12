@@ -1617,6 +1617,7 @@ var WORKBENCH_ERROR_I18N_KEYS = {
   authentication_expired: "workbenchChat.error.authenticationExpired",
   model_unavailable: "workbenchChat.error.modelUnavailable",
   model_not_configured: "workbenchChat.error.modelNotConfigured",
+  model_authentication_failed: "workbenchChat.error.modelAuthenticationFailed",
   process_restarted: "workbenchChat.error.processRestarted",
   chat_run_driver_failed: "workbenchChat.error.driverFailed",
   chat_not_found: "workbenchChat.error.chatNotFound",
@@ -1682,6 +1683,7 @@ var WBC_ICONS = {
   check: <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round"><path d="m5 12.5 4.5 4.5L19 7"/></svg>,
   x: <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="m6 6 12 12M18 6 6 18"/></svg>,
   tool: <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d="M14.7 6.3a4.5 4.5 0 0 0-6 6L3 18l3 3 5.7-5.7a4.5 4.5 0 0 0 6-6L14 13l-3-3Z"/></svg>,
+  layers: <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d="m12 2.8 8.2 4.6L12 12 3.8 7.4 12 2.8Z"/><path d="m3.8 12 8.2 4.6 8.2-4.6M3.8 16.6l8.2 4.6 8.2-4.6"/></svg>,
   chat: <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d="M21 11.5a8.5 8.5 0 0 1-12.2 7.6L3 21l1.9-5.8A8.5 8.5 0 1 1 21 11.5Z"/></svg>,
   file: <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d="M14 2H7a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V7Z"/><path d="M14 2v5h5"/></svg>,
   trash: <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d="M3 6h18M8 6V4a1 1 0 0 1 1-1h6a1 1 0 0 1 1 1v2M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/></svg>,
@@ -2773,7 +2775,8 @@ var WBC_SIDE_TAB_ICONS = {
   plan: <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><rect x="5" y="4.5" width="14" height="16" rx="2.5"/><path d="M9 4.5V3h6v1.5M8.5 10.5l1.4 1.4 2.6-2.8M14.5 11h2M8.5 16h8"/></svg>,
   subagents: <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M7 9.5A4.5 4.5 0 0 1 11.5 5H14a4 4 0 0 1 4 4v.5a4.5 4.5 0 0 1 2 3.7v2.3a3.5 3.5 0 0 1-3.5 3.5h-9A3.5 3.5 0 0 1 4 15.5v-2.3a4.5 4.5 0 0 1 3-4.2Z"/><path d="M9 13h.01M15 13h.01M9.5 16h5M12 5V2.8M10.5 2.8h3"/></svg>,
   context: <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><rect x="4" y="4" width="6" height="6" rx="2"/><rect x="14" y="4" width="6" height="6" rx="2"/><rect x="4" y="14" width="6" height="6" rx="2"/><rect x="14" y="14" width="6" height="6" rx="2"/><path d="M10 7h4M7 10v4M17 10v4M10 17h4"/></svg>,
-  artifacts: <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M7 4.5h10A2.5 2.5 0 0 1 19.5 7v11A2.5 2.5 0 0 1 17 20.5H7A2.5 2.5 0 0 1 4.5 18V7A2.5 2.5 0 0 1 7 4.5Z"/><path d="M9 4.5V3h6v1.5M8 10h8M8 14h5M8 17h7"/></svg>,
+  files: <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M7 4.5h10A2.5 2.5 0 0 1 19.5 7v11A2.5 2.5 0 0 1 17 20.5H7A2.5 2.5 0 0 1 4.5 18V7A2.5 2.5 0 0 1 7 4.5Z"/><path d="M9 4.5V3h6v1.5M8 10h8M8 14h5M8 17h7"/></svg>,
+  artifacts: <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M4 8.5h16v9A2.5 2.5 0 0 1 17.5 20h-11A2.5 2.5 0 0 1 4 17.5Z"/><path d="M3.5 5.5h17v3h-17zM9 12h6M12 8.5V12"/></svg>,
   changes: <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><circle cx="7" cy="5" r="2"/><circle cx="7" cy="19" r="2"/><circle cx="17" cy="8" r="2"/><path d="M7 7v10M9 17c5 0 8-2.5 8-7M14.5 8H10"/></svg>,
   branches: <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><circle cx="6" cy="5" r="2"/><circle cx="6" cy="19" r="2"/><circle cx="18" cy="8" r="2"/><path d="M6 7v10M8 17h4a6 6 0 0 0 6-6V10"/></svg>,
   viewer: <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><rect x="3.5" y="5" width="17" height="14" rx="2.5"/><path d="m6 16 3.5-3.5 2.7 2.7 2.3-2.3L18 16M8 9h.01"/><path d="M3.5 8.5h17"/></svg>,
@@ -2794,6 +2797,17 @@ var WBC_COMMANDS = [
   { id: "deep-compare", labelKey: "workbenchChat.command.deep-compare.label", descKey: "workbenchChat.command.deep-compare.desc" },
   { id: "claude-code", labelKey: "workbenchChat.command.claude-code.label", descKey: "workbenchChat.command.claude-code.desc" },
 ];
+
+var WBC_COMMAND_ICONS = {
+  "quick-answer": WBC_ICONS.bolt,
+  "deep-research": WBC_ICONS.search,
+  "deep-reflect": WBC_ICONS.spark,
+  "help-me-decide": WBC_ICONS.task,
+  "learning-plan": WBC_ICONS.file,
+  "daily-review": WBC_ICONS.task,
+  "deep-compare": WBC_ICONS.fork,
+  "claude-code": WBC_ICONS.slash,
+};
 
 var WBC_MODES = [
   { id: "default", labelKey: "workbenchChat.mode.default.label", descKey: "workbenchChat.mode.default.desc" },
@@ -2891,7 +2905,7 @@ var WBC_CODE_EXTS = ["py","js","ts","jsx","tsx","css","json","yaml","yml","toml"
 function wbcFileViewKind(file) {
   if (!file) return "";
   var ct = String(file.content_type || "").split(";", 1)[0].trim().toLowerCase();
-  var ext = String(file.name || "").split(".").pop().toLowerCase();
+  var ext = String(file.name || file.filename || "").split(".").pop().toLowerCase();
   if (ct.indexOf("image/") === 0 || file.kind === "image") return "image";
   if (ct === "application/pdf" || ext === "pdf" || file.kind === "pdf") return "pdf";
   if (ct === "text/html" || ct === "application/xhtml+xml" || ext === "html" || ext === "htm") return "html";
@@ -2901,18 +2915,33 @@ function wbcFileViewKind(file) {
 }
 
 function wbcAttachmentVisualKind(file) {
+  var viewKind = wbcFileViewKind(file);
+  var ext = String(file && (file.name || file.filename) || "").split(".").pop().toLowerCase();
+  // The library groups searchable text formats under "document".  That is a
+  // useful filter category, but it is too broad for attachment labels: mapping
+  // it directly to "doc" makes Markdown and source files look like Word files.
+  if (viewKind === "markdown") return "markdown";
+  if (viewKind === "code" || viewKind === "html") {
+    if (ext === "txt" || ext === "log") return "note";
+    // Let the shared classifier keep tabular and office files in their native
+    // categories even when an upload reports the generic text/plain MIME type.
+    if (!/^(csv|tsv|doc|docx|odt|rtf|xls|xlsm|xlsx|odp|ppt|pptx)$/.test(ext)) return "code";
+  }
   var shared = window.CyreneUI.require("library").FileVisual;
   if (shared && typeof shared.visualKind === "function") return shared.visualKind(file);
-  return wbcFileViewKind(file) === "image" ? "image" : (wbcFileViewKind(file) || "file");
+  return viewKind === "image" ? "image" : (viewKind || "file");
 }
 
 function wbcAttachmentVisual(file) {
   var shared = window.CyreneUI.require("library").FileVisual;
   if (shared && typeof shared.icon === "function") {
+    var kind = wbcAttachmentVisualKind(file);
     return {
-      kind: wbcAttachmentVisualKind(file),
-      tone: typeof shared.tone === "function" ? shared.tone(file) : "slate",
-      icon: shared.icon(file),
+      kind: kind,
+      tone: typeof shared.toneForKind === "function"
+        ? shared.toneForKind(kind)
+        : (typeof shared.tone === "function" ? shared.tone(file) : "slate"),
+      icon: typeof shared.iconForKind === "function" ? shared.iconForKind(kind) : shared.icon(file),
     };
   }
   return { kind: wbcAttachmentVisualKind(file), tone: "slate", icon: WBC_ICONS.file };
@@ -6808,7 +6837,7 @@ function WbcRenameDialog({ chat, onClose, onRename, entity }) {
   }
 
   if (!chat) return null;
-  return (
+  return window.ReactDOM.createPortal(
     <div
       className="wbc-rename-scrim"
       onMouseDown={function (e) { if (e.target === e.currentTarget) close(); }}
@@ -6867,7 +6896,8 @@ function WbcRenameDialog({ chat, onClose, onRename, entity }) {
           </button>
         </div>
       </form>
-    </div>
+    </div>,
+    document.querySelector(".workbench-shell") || document.body
   );
 }
 
@@ -12447,8 +12477,7 @@ function WbcComposer({ chat, project, runtime, running, onSend, onGuidance, onIn
   var [command, setCommand] = useWbcState("");
   var [uploading, setUploading] = useWbcState(false);
   var [failedImagePreviews, setFailedImagePreviews] = useWbcState({});
-  var [slashOpen, setSlashOpen] = useWbcState(false);
-  var [modeOpen, setModeOpen] = useWbcState(false);
+  var [toolsOpen, setToolsOpen] = useWbcState(false);
   var [modelOpen, setModelOpen] = useWbcState(false);
   var [modelPanel, setModelPanel] = useWbcState("root");
   var [configuredModels, setConfiguredModels] = useWbcState([]);
@@ -12463,7 +12492,6 @@ function WbcComposer({ chat, project, runtime, running, onSend, onGuidance, onIn
   });
   var [remoteDevices, setRemoteDevices] = useWbcState([]);
   var [remoteDeviceIds, setRemoteDeviceIds] = useWbcState([]);
-  var [ctxPickerOpen, setCtxPickerOpen] = useWbcState(false);
   var [voiceSnapshot, setVoiceSnapshot] = useWbcState({ status: {}, activeKey: "" });
   var [voicePhase, setVoicePhase] = useWbcState("");
   var [agentFlowState, setAgentFlowState] = useWbcState(function () {
@@ -12473,9 +12501,7 @@ function WbcComposer({ chat, project, runtime, running, onSend, onGuidance, onIn
   var composerBoxRef = useWbcRef(null);
   var sendButtonRef = useWbcRef(null);
   var fileRef = useWbcRef(null);
-  var slashPickerRef = useWbcRef(null);
-  var modePickerRef = useWbcRef(null);
-  var ctxPickerRef = useWbcRef(null);
+  var toolsPickerRef = useWbcRef(null);
   var modelPickerRef = useWbcRef(null);
   var uploadCountRef = useWbcRef(0);
   var draftRef = useWbcRef(draft);
@@ -12589,37 +12615,15 @@ function WbcComposer({ chat, project, runtime, running, onSend, onGuidance, onIn
   }, []);
 
   useWbcEffect(function () {
-    if (!slashOpen && !modeOpen) return undefined;
-    function closeComposerMenu(event) {
-      if (
-        slashOpen
-        && slashPickerRef.current
-        && !slashPickerRef.current.contains(event.target)
-      ) {
-        setSlashOpen(false);
-      }
-      if (
-        modeOpen
-        && modePickerRef.current
-        && !modePickerRef.current.contains(event.target)
-      ) {
-        setModeOpen(false);
+    if (!toolsOpen) return undefined;
+    function closeToolsMenu(event) {
+      if (toolsPickerRef.current && !toolsPickerRef.current.contains(event.target)) {
+        setToolsOpen(false);
       }
     }
-    document.addEventListener("pointerdown", closeComposerMenu);
-    return function () { document.removeEventListener("pointerdown", closeComposerMenu); };
-  }, [slashOpen, modeOpen]);
-
-  useWbcEffect(function () {
-    if (!ctxPickerOpen) return undefined;
-    function closeContextPicker(event) {
-      if (ctxPickerRef.current && !ctxPickerRef.current.contains(event.target)) {
-        setCtxPickerOpen(false);
-      }
-    }
-    document.addEventListener("pointerdown", closeContextPicker);
-    return function () { document.removeEventListener("pointerdown", closeContextPicker); };
-  }, [ctxPickerOpen]);
+    document.addEventListener("pointerdown", closeToolsMenu);
+    return function () { document.removeEventListener("pointerdown", closeToolsMenu); };
+  }, [toolsOpen]);
 
   useWbcEffect(function () {
     if (!modelOpen) return undefined;
@@ -12698,11 +12702,9 @@ function WbcComposer({ chat, project, runtime, running, onSend, onGuidance, onIn
       prevChatIdRef.current = chatId;
     }
       setCommand("");
-      setSlashOpen(false);
-      setModeOpen(false);
+      setToolsOpen(false);
       setModelOpen(false);
       setModelPanel("root");
-      setCtxPickerOpen(false);
   }, [chatId]);
 
   useWbcEffect(function () {
@@ -12871,8 +12873,7 @@ function WbcComposer({ chat, project, runtime, running, onSend, onGuidance, onIn
       return;
     }
     if (event.key === "Escape") {
-      setSlashOpen(false);
-      setModeOpen(false);
+      setToolsOpen(false);
       setModelOpen(false);
       setModelPanel("root");
     }
@@ -13019,15 +13020,23 @@ function WbcComposer({ chat, project, runtime, running, onSend, onGuidance, onIn
   var slashItems = translatedCommands.filter(function (c) {
     return !slashQuery || c.id.indexOf(slashQuery) !== -1 || c.label.toLowerCase().indexOf(slashQuery) !== -1;
   });
-  var showSlash = (slashOpen || (draft.indexOf("/") === 0 && draft.indexOf(" ") === -1)) && slashItems.length > 0 && !running;
+  var slashDraftOpen = draft.indexOf("/") === 0 && draft.indexOf(" ") === -1 && slashItems.length > 0 && !running;
+  var showToolsMenu = (toolsOpen || slashDraftOpen) && !running;
   var activeCommand = command ? wbcCommandMeta(command) : null;
   var currentMode = wbcModeMeta(mode);
   var personaOn = !contextState || contextState.soul_active !== false;
   var workspaceOn = !!(contextState && contextState.workspace_active !== false);
+  var enabledContentCount = (personaOn ? 1 : 0) + (workspaceOn ? 1 : 0) + remoteDeviceIds.length;
   // Follow the active project's workspace by default. A directory explicitly
   // chosen from the composer remains selected when the user switches projects.
   var wsDir = workspaceOverride || projectWorkspacePath || (contextState && contextState.workspace_dir) || "";
   var wsHistory = (contextState && Array.isArray(contextState.workspace_history)) ? contextState.workspace_history : [];
+  var workspaceOptions = [];
+  [wsDir, projectWorkspacePath].concat(wsHistory).forEach(function (path) {
+    var normalized = String(path || "").trim();
+    if (!normalized || workspaceOptions.some(function (item) { return item.path === normalized; })) return;
+    workspaceOptions.push({ path: normalized, isDefault: normalized === projectWorkspacePath });
+  });
   var selectedModel = configuredModels.find(function (item) {
     return String(item.id || item.model || "") === String(selectedModelId || "");
   });
@@ -13045,7 +13054,6 @@ function WbcComposer({ chat, project, runtime, running, onSend, onGuidance, onIn
       .then(wbcRefreshCtxState, function (err) {
         window.CyreneUI.require("api").toastError(err, wbcT("workbenchChat.personaFailed", "Failed to toggle persona: "));
       }).catch(function () {});
-    setCtxPickerOpen(false);
   }
 
   function wbcAddWorkspace(path) {
@@ -13072,7 +13080,6 @@ function WbcComposer({ chat, project, runtime, running, onSend, onGuidance, onIn
       wbcRefreshCtxState();
       window.CyreneUI.require("api").toastError(err, wbcT("workbenchChat.workspaceAddFailed", "Failed to add workspace: "));
     }).catch(function () {});
-    setCtxPickerOpen(false);
   }
 
   function wbcRemoveWorkspace() {
@@ -13085,7 +13092,7 @@ function WbcComposer({ chat, project, runtime, running, onSend, onGuidance, onIn
   }
 
   function wbcPickWorkspace() {
-    setCtxPickerOpen(false);
+    setToolsOpen(false);
     if (
       window.cyrene &&
       window.cyrene.platform === "linux" &&
@@ -13132,7 +13139,6 @@ function WbcComposer({ chat, project, runtime, running, onSend, onGuidance, onIn
     wbcSaveRemoteContext(chatId, nextIds).catch(function () {
       setRemoteDeviceIds(previousIds);
     });
-    setCtxPickerOpen(false);
   }
 
   function wbcRemoveRemoteDevice(deviceId) {
@@ -13322,6 +13328,9 @@ function WbcComposer({ chat, project, runtime, running, onSend, onGuidance, onIn
         )}
         <textarea
           ref={taRef}
+          aria-label={running
+            ? (runningPlaceholder || wbcT("workbenchChat.placeholderRunning", "Send guidance to the running agent..."))
+            : (placeholder || wbcT("workbenchChat.placeholder", "Message Cyrene..."))}
           value={draft}
           rows={compact ? 1 : 2}
           onChange={function (e) { setDraft(e.target.value); syncHeight(); }}
@@ -13331,107 +13340,117 @@ function WbcComposer({ chat, project, runtime, running, onSend, onGuidance, onIn
             ? (runningPlaceholder || wbcT("workbenchChat.placeholderRunning", "Send guidance to the running agent..."))
             : (placeholder || wbcT("workbenchChat.placeholder", "Message Cyrene..."))}
         />
-        {!compact && <div className="wbc-context-chips">
-          {personaOn && (
-            <span className="wbc-ctx-chip on">
-              {WBC_ICONS.spark}
-              <span>{wbcT("workbenchChat.persona", "Persona")}</span>
-              <button type="button" className="wbc-ctx-x" title={wbcT("workbenchChat.removeContext", "Remove")} onClick={wbcTogglePersona}>{WBC_ICONS.x}</button>
-            </span>
-          )}
-          {workspaceOn && (
-            <span className="wbc-ctx-chip on">
-              {WBC_ICONS.folder}
-              <span title={wsDir}>{wbcT("workbenchChat.workspaceChip", "Workspace: {name}", { name: wbcWorkspaceDisplayName(wsDir) })}</span>
-              <button type="button" className="wbc-ctx-x" title={wbcT("workbenchChat.removeContext", "Remove")} onClick={wbcRemoveWorkspace}>{WBC_ICONS.x}</button>
-            </span>
-          )}
-          {remoteDeviceIds.map(function (deviceId) {
-            var device = remoteDevices.find(function (item) { return item.device_id === deviceId; });
-            if (!device) return null;
-            return (
-              <span className="wbc-ctx-chip on remote" key={deviceId}>
-                {WBC_ICONS.device}
-                <span title={device.device_id}>{wbcT("workbenchChat.remoteDeviceChip", "Remote: {name}", { name: device.display_name || device.device_id })}</span>
-                <button type="button" className="wbc-ctx-x" title={wbcT("workbenchChat.removeContext", "Remove")} onClick={function () { wbcRemoveRemoteDevice(deviceId); }}>{WBC_ICONS.x}</button>
-              </span>
-            );
-          })}
-          {(!personaOn || !workspaceOn || remoteDevices.length > 0) && (
-            <span className="wbc-pop-anchor" ref={ctxPickerRef}>
-              <button type="button" className={"wbc-ctx-add-btn" + (ctxPickerOpen ? " active" : "")} onClick={function () { setCtxPickerOpen(!ctxPickerOpen); setSlashOpen(false); setModeOpen(false); }}>
-                {WBC_ICONS.plus}<span>{wbcT("workbenchChat.addContext", "Add context")}</span>
-              </button>
-              {ctxPickerOpen && (
-                <WbcCtxPicker
-                  personaOn={personaOn}
-                  workspaceOn={workspaceOn}
-                  defaultWorkspacePath={projectWorkspacePath || wsDir}
-                  wsHistory={wsHistory}
-                  onTogglePersona={wbcTogglePersona}
-                  onAddWorkspace={wbcAddWorkspace}
-                  onPickWorkspace={wbcPickWorkspace}
-                  remoteDevices={remoteDevices}
-                  selectedRemoteDeviceIds={remoteDeviceIds}
-                  onToggleRemoteDevice={wbcToggleRemoteDevice}
-                />
-              )}
-            </span>
-          )}
-        </div>}
         <div className="wbc-composer-actions">
           <input ref={fileRef} type="file" multiple style={{ display: "none" }} onChange={onFilePick} />
           <button type="button" className="wbc-composer-icon" title={uploading ? wbcT("workbenchChat.uploading", "Uploading...") : wbcT("workbenchChat.addAttachment", "Add attachment")} disabled={uploading || running} onClick={pickFiles}>
             {uploading ? <span className="wb-spinner small" /> : WBC_ICONS.attach}
           </button>
-          {!compact && <>
-            <span className="wbc-pop-anchor" ref={slashPickerRef}>
-            <button type="button" className={"wbc-composer-icon" + (showSlash || command ? " active" : "")} title={wbcT("workbenchChat.commands", "Commands")} disabled={running} onClick={function () { setSlashOpen(!slashOpen); setModeOpen(false); }}>
-              {WBC_ICONS.slash}
-            </button>
-            {showSlash && (
-              <div className="wbc-popmenu">
-                <div className="wbc-popmenu-head">{wbcT("workbenchChat.commands", "Commands")}</div>
-                {slashItems.map(function (c) {
-                  var on = command === c.id;
-                  return (
-                    <button key={c.id} type="button" className={on ? "active" : ""} onClick={function () {
-                      setCommand(on ? "" : c.id);
-                      setSlashOpen(false);
-                      if (draft.indexOf("/") === 0) setDraft("");
-                      if (taRef.current) taRef.current.focus();
-                    }}>
-                      <span className="wbc-popmenu-label">{c.label}</span>
-                      <span className="wbc-popmenu-desc">{c.desc}</span>
-                      {on ? <span className="wbc-popmenu-check">{WBC_ICONS.check}</span> : null}
-                    </button>
-                  );
-                })}
-              </div>
-            )}
+          {!compact && (
+            <span className="wbc-pop-anchor wbc-tools-anchor" ref={toolsPickerRef}>
+              <button
+                type="button"
+                className={"wbc-composer-icon wbc-tools-trigger" + (enabledContentCount > 0 ? " has-content" : "") + (showToolsMenu ? " active" : "")}
+                title={wbcT("workbenchChat.toolsCount", "Tools · {count} enabled", { count: enabledContentCount })}
+                aria-label={wbcT("workbenchChat.toolsCount", "Tools · {count} enabled", { count: enabledContentCount })}
+                aria-haspopup="menu"
+                aria-expanded={showToolsMenu}
+                disabled={running}
+                onClick={function () {
+                  setToolsOpen(!toolsOpen);
+                  setModelOpen(false);
+                }}
+              >
+                <span className="wbc-tools-trigger-icon" aria-hidden="true">{WBC_ICONS.layers}</span>
+                {enabledContentCount > 0 ? <span className="wbc-tools-trigger-count" aria-hidden="true">{enabledContentCount}</span> : null}
+              </button>
+              {showToolsMenu && (
+                <div className="wbc-popmenu wbc-tools-menu" role="menu">
+                  <section
+                    className="wbc-tools-section"
+                    aria-label={wbcT("workbenchChat.contentItems", "Content")}
+                  >
+                    <div className="wbc-tools-section-title">
+                      {wbcT("workbenchChat.contentItems", "Content")}
+                    </div>
+                    <div className="wbc-tools-content-list">
+                      <button type="button" className={"wbc-tools-enabled-row" + (personaOn ? " active" : "")} role="menuitemcheckbox" aria-checked={personaOn} onClick={wbcTogglePersona}>
+                        <span className="wbc-tools-row-icon">{WBC_ICONS.spark}</span>
+                        <span className="wbc-tools-row-copy">
+                          <span>{wbcT("workbenchChat.persona", "Persona")}</span>
+                          <small>{wbcT("workbenchChat.personaDescription", "Cyrene persona settings")}</small>
+                        </span>
+                        {personaOn ? <span className="wbc-tools-row-check">{WBC_ICONS.check}</span> : null}
+                      </button>
+                      {workspaceOptions.map(function (option) {
+                        var selected = workspaceOn && option.path === wsDir;
+                        return (
+                          <button key={option.path} type="button" className={"wbc-tools-enabled-row" + (selected ? " active" : "")} role="menuitemcheckbox" aria-checked={selected} onClick={function () {
+                            if (selected) wbcRemoveWorkspace();
+                            else wbcAddWorkspace(option.path);
+                          }}>
+                            <span className="wbc-tools-row-icon">{WBC_ICONS.folder}</span>
+                            <span className="wbc-tools-row-copy">
+                              <span>{option.isDefault ? wbcT("workbenchChat.defaultWorkspace", "Default workspace") : (wbcWorkspaceDisplayName(option.path) || wbcT("workbenchChat.workspacePath", "Workspace path"))}</span>
+                              <small title={option.path}>{option.path}</small>
+                            </span>
+                            {selected ? <span className="wbc-tools-row-check">{WBC_ICONS.check}</span> : null}
+                          </button>
+                        );
+                      })}
+                      <button type="button" className="wbc-tools-enabled-row wbc-tools-choose-row" role="menuitem" onClick={wbcPickWorkspace}>
+                        <span className="wbc-tools-row-icon">{WBC_ICONS.plus}</span>
+                        <span className="wbc-tools-row-copy"><span>{wbcT("workbenchChat.chooseDirectory", "Choose directory…")}</span></span>
+                      </button>
+                      {remoteDevices.map(function (device) {
+                        var selected = remoteDeviceIds.indexOf(device.device_id) >= 0;
+                        var eligible = !!device.eligible;
+                        var stateLabel = device.state === "syncing_grants"
+                          ? wbcT("workbenchChat.remoteDeviceSyncing", "Syncing permissions…")
+                          : device.state === "offline"
+                            ? wbcT("workbenchChat.remoteDeviceOffline", "Offline · available when reconnected")
+                            : wbcT("workbenchChat.remoteDeviceHint", "{count} granted capabilities", { count: (device.received_capabilities || []).length });
+                        return (
+                          <button key={device.device_id} type="button" disabled={!eligible} className={"wbc-tools-enabled-row" + (selected ? " active" : "")} role="menuitemcheckbox" aria-checked={selected} onClick={function () { wbcToggleRemoteDevice(device.device_id); }}>
+                            <span className="wbc-tools-row-icon">{WBC_ICONS.device}</span>
+                            <span className="wbc-tools-row-copy">
+                              <span>{device.display_name || device.device_id}</span>
+                              <small>{stateLabel}</small>
+                            </span>
+                            {selected ? <span className="wbc-tools-row-check">{WBC_ICONS.check}</span> : null}
+                          </button>
+                        );
+                      })}
+                    </div>
+                  </section>
+                  <section
+                    className="wbc-tools-section wbc-tools-commands"
+                    aria-label={wbcT("workbenchChat.composer.commandMenu", "Commands")}
+                  >
+                    <div className="wbc-tools-section-title">
+                      {wbcT("workbenchChat.commands", "Commands")}
+                    </div>
+                    <div className="wbc-tools-command-grid">
+                      {slashItems.map(function (c) {
+                        var on = command === c.id;
+                        return (
+                          <button key={c.id} type="button" title={c.desc} aria-label={c.label + ": " + c.desc} className={"wbc-tools-command" + (on ? " active" : "")} role="menuitemcheckbox" aria-checked={on} onClick={function () {
+                            setCommand(on ? "" : c.id);
+                            setToolsOpen(false);
+                            if (draft.indexOf("/") === 0) setDraft("");
+                            if (taRef.current) taRef.current.focus();
+                          }}>
+                            <span className="wbc-tools-command-icon">{WBC_COMMAND_ICONS[c.id] || WBC_ICONS.slash}</span>
+                            <span className="wbc-tools-command-copy"><span>{c.label}</span></span>
+                            {on ? <span className="wbc-tools-command-check">{WBC_ICONS.check}</span> : null}
+                          </button>
+                        );
+                      })}
+                    </div>
+                  </section>
+                </div>
+              )}
             </span>
-            <span className="wbc-pop-anchor" ref={modePickerRef}>
-            <button type="button" className={"wbc-composer-icon mode" + (modeOpen ? " active" : "")} title={wbcT("workbenchChat.permissionMode", "Permission mode")} onClick={function () { setModeOpen(!modeOpen); setSlashOpen(false); }}>
-              {WBC_ICONS.bolt}
-              <span>{currentMode.label}</span>
-            </button>
-            {modeOpen && (
-              <div className="wbc-popmenu">
-                <div className="wbc-popmenu-head">{wbcT("workbenchChat.permissionMode", "Permission mode")}</div>
-                {translatedModes.map(function (m) {
-                  var on = mode === m.id;
-                  return (
-                    <button key={m.id} type="button" className={on ? "active" : ""} onClick={function () { setMode(m.id); setModeOpen(false); }}>
-                      <span className="wbc-popmenu-label">{m.label}</span>
-                      <span className="wbc-popmenu-desc">{m.desc}</span>
-                      {on ? <span className="wbc-popmenu-check">{WBC_ICONS.check}</span> : null}
-                    </button>
-                  );
-                })}
-              </div>
-            )}
-            </span>
-          </>}
+          )}
           <span className="wbc-composer-spacer" />
           {!compact && modelName ? (
             <span className="wbc-pop-anchor wbc-model-anchor" ref={modelPickerRef}>
@@ -13446,8 +13465,7 @@ function WbcComposer({ chat, project, runtime, running, onSend, onGuidance, onIn
                 onClick={function () {
                   setModelOpen(!modelOpen);
                   setModelPanel("root");
-                  setSlashOpen(false);
-                  setModeOpen(false);
+                  setToolsOpen(false);
                 }}
               >
                 <span className="wbc-model-button-icon" aria-hidden="true">{WBC_ICONS.model}</span>
@@ -13471,6 +13489,11 @@ function WbcComposer({ chat, project, runtime, running, onSend, onGuidance, onIn
                           <span className="wbc-model-menu-chevron">{WBC_ICONS.chevronRight}</span>
                         </button>
                       )}
+                      <button type="button" className="wbc-model-menu-row" onClick={function () { setModelPanel("permission"); }}>
+                        <span className="wbc-model-menu-key">{wbcT("workbenchChat.permissionMode", "Permission mode")}</span>
+                        <span className="wbc-model-menu-value">{currentMode.label}</span>
+                        <span className="wbc-model-menu-chevron">{WBC_ICONS.chevronRight}</span>
+                      </button>
                     </>
                   )}
                   {modelPanel === "models" && (
@@ -13516,6 +13539,27 @@ function WbcComposer({ chat, project, runtime, running, onSend, onGuidance, onIn
                       })}
                     </>
                   )}
+                  {modelPanel === "permission" && (
+                    <>
+                      <button type="button" className="wbc-model-menu-back" onClick={function () { setModelPanel("root"); }}>
+                        <span>{WBC_ICONS.chevronLeft}</span>
+                        <span>{wbcT("workbenchChat.permissionMode", "Permission mode")}</span>
+                      </button>
+                      {translatedModes.map(function (item) {
+                        var active = mode === item.id;
+                        return (
+                          <button key={item.id} type="button" className={active ? "active" : ""} onClick={function () {
+                            setMode(item.id);
+                            setModelPanel("root");
+                          }}>
+                            <span className="wbc-popmenu-label">{item.label}</span>
+                            <span className="wbc-popmenu-desc">{item.desc}</span>
+                            {active ? <span className="wbc-popmenu-check">{WBC_ICONS.check}</span> : null}
+                          </button>
+                        );
+                      })}
+                    </>
+                  )}
                 </div>
               )}
             </span>
@@ -13555,11 +13599,11 @@ function WbcComposer({ chat, project, runtime, running, onSend, onGuidance, onIn
             title={running
               ? (hasRuntimeGuidance ? wbcT("workbenchChat.sendGuidance", "Send guidance") : wbcT("workbenchChat.stop", "Stop"))
               : wbcT("workbenchChat.send", "Send")}
+            aria-label={running
+              ? (hasRuntimeGuidance ? wbcT("workbenchChat.sendGuidance", "Send guidance") : wbcT("workbenchChat.stop", "Stop"))
+              : wbcT("workbenchChat.send", "Send")}
           >
             {running && !hasRuntimeGuidance ? WBC_ICONS.stop : WBC_ICONS.send}
-            <span>{running
-              ? (hasRuntimeGuidance ? wbcT("workbenchChat.guidance", "Guide") : wbcT("workbenchChat.stop", "Stop"))
-              : wbcT("workbenchChat.send", "Send")}</span>
           </button>
         </div>
       </div>
@@ -13584,70 +13628,7 @@ function wbcClearComposerDraft(chatId, ns) {
   wbcSaveAttachments(chatId, [], ns);
 }
 
-// Context picker popup — shown inside the composer when the user clicks "+ Add context".
-// Fully independent from the legacy ModernContextPicker in chat-surface.jsx.
-function WbcCtxPicker({ personaOn, workspaceOn, defaultWorkspacePath, wsHistory, onTogglePersona, onAddWorkspace, onPickWorkspace, remoteDevices, selectedRemoteDeviceIds, onToggleRemoteDevice }) {
-  var hasAny = !personaOn || !workspaceOn || (remoteDevices && remoteDevices.length > 0);
-  var workspaceOptions = [];
-  if (defaultWorkspacePath) workspaceOptions.push({ path: defaultWorkspacePath, isDefault: true });
-  wsHistory.forEach(function (path) {
-    if (path && path !== defaultWorkspacePath) workspaceOptions.push({ path: path, isDefault: false });
-  });
-  if (!hasAny) return null;
-  return (
-    <div className="wbc-popmenu wbc-ctx-picker">
-      <div className="wbc-popmenu-head">{wbcT("workbenchChat.addContext", "Add context")}</div>
-      {!personaOn && (
-        <button type="button" onClick={onTogglePersona}>
-          <span className="wbc-popmenu-label">{WBC_ICONS.spark} {wbcT("workbenchChat.persona", "Persona")}</span>
-          <span className="wbc-popmenu-desc">{wbcT("workbenchChat.addPersonaHint", "Include SOUL.md persona in context")}</span>
-        </button>
-      )}
-      {!workspaceOn && (
-        <React.Fragment>
-          <div className="wbc-popmenu-head">{wbcT("workbenchChat.workspaceSection", "Workspace")}</div>
-          {workspaceOptions.map(function (option) {
-            var p = option.path;
-            var name = wbcWorkspaceDisplayName(p);
-            return (
-              <button key={p} type="button" onClick={function () { onAddWorkspace(p); }}>
-                <span className="wbc-popmenu-label mono">
-                  {option.isDefault ? wbcT("workbenchChat.defaultWorkspace", "Default workspace") : name}
-                </span>
-                <span className="wbc-popmenu-desc" title={p}>{p}</span>
-              </button>
-            );
-          })}
-          <button type="button" onClick={onPickWorkspace}>
-            <span className="wbc-popmenu-label">{wbcT("workbenchChat.chooseDirectory", "Choose directory…")}</span>
-          </button>
-        </React.Fragment>
-      )}
-      {remoteDevices && remoteDevices.length > 0 && (
-        <React.Fragment>
-          <div className="wbc-popmenu-head">{wbcT("workbenchChat.remoteDevicesSection", "Remote devices")}</div>
-          {remoteDevices.map(function (device) {
-            var selected = selectedRemoteDeviceIds.indexOf(device.device_id) >= 0;
-            var capabilityCount = (device.received_capabilities || []).length;
-            var eligible = !!device.eligible;
-            var stateLabel = device.state === "syncing_grants"
-              ? wbcT("workbenchChat.remoteDeviceSyncing", "Syncing permissions…")
-              : device.state === "offline"
-                ? wbcT("workbenchChat.remoteDeviceOffline", "Offline · available when reconnected")
-                : wbcT("workbenchChat.remoteDeviceHint", "{count} granted capabilities", { count: capabilityCount });
-            return (
-              <button key={device.device_id} type="button" disabled={!eligible} className={selected ? "active" : ""} onClick={function () { onToggleRemoteDevice(device.device_id); }}>
-                <span className="wbc-popmenu-label">{WBC_ICONS.device} {device.display_name || device.device_id}</span>
-                <span className="wbc-popmenu-desc">{stateLabel}</span>
-                {selected ? <span className="wbc-popmenu-check">{WBC_ICONS.check}</span> : null}
-              </button>
-            );
-          })}
-        </React.Fragment>
-      )}
-    </div>
-  );
-}
+// Context picker popup controls now live directly in WbcComposer's single tools menu.
 
 // ---------------------------------------------------------------------------
 // Branch tree (fork lineage navigator)
@@ -13860,6 +13841,25 @@ function wbcChatArtifactFiles(chat) {
       ? { ...file, url: "/api/workbench/chats/" + encodeURIComponent(chat.id) + "/files/" + path.split("/").map(encodeURIComponent).join("/") }
       : file;
     add(withUrl, "assistant");
+  });
+  return files;
+}
+
+// User-facing deliverables are the files attached by assistant messages. They
+// are kept separate from the broader Files index, which also contains uploads
+// and ordinary workspace changes.
+function wbcChatDeliveredArtifacts(chat) {
+  var files = [];
+  var seen = new Set();
+  (chat && chat.messages || []).forEach(function (message) {
+    if (!message || message.role !== "assistant") return;
+    (message.attachments || []).forEach(function (file) {
+      if (!file) return;
+      var key = String(file.id || file.url || file.path || file.name || "").trim();
+      if (!key || seen.has(key)) return;
+      seen.add(key);
+      files.push({ file: file, role: "assistant" });
+    });
   });
   return files;
 }
@@ -15494,8 +15494,10 @@ function WbcSide({
   var browserPanelState = browserState || {};
   var hasMap = wbcChatUsedMap(chat, runtime);
   var hasBrowser = !!((browserState && browserState.active) || browserMarkedActive);
-  var hasArtifacts = wbcChatArtifactFiles(chat).length > 0;
-  var viewerItems = wbcChatArtifactFiles(chat);
+  var fileItems = wbcChatArtifactFiles(chat);
+  var artifactItems = wbcChatDeliveredArtifacts(chat);
+  var hasFiles = fileItems.length > 0;
+  var viewerItems = fileItems;
   var hasBranches = useWbcMemo(function () {
     return !!wbcBranchLineage(chats, activeChatId);
   }, [chats, activeChatId]);
@@ -15513,7 +15515,8 @@ function WbcSide({
   if (pendingPlan) tabs.push({ id: "plan", label: wbcT("chat.side.plan", "Plan") });
   if (hasSubagents) tabs.push({ id: "subagents", label: wbcT("workbenchChat.subagents", "Subagents") });
   tabs.push({ id: "context", label: wbcT("workbenchChat.context", "Context") });
-  if (hasArtifacts) tabs.push({ id: "artifacts", label: wbcT("workbenchChat.files", "Files") });
+  if (hasFiles) tabs.push({ id: "files", label: wbcT("workbenchChat.files", "Files") });
+  if (artifactItems.length) tabs.push({ id: "artifacts", label: wbcT("workbenchChat.artifacts", "Artifacts") });
   if (hasWorkspaceChanges) {
     tabs.push({ id: "changes", label: wbcT("workbenchChat.changes", "Changes") });
   }
@@ -15537,7 +15540,8 @@ function WbcSide({
     subagents: subagentData && Array.isArray(subagentData.agents) && subagentData.agents.length
       ? String(subagentData.agents.length)
       : "",
-    artifacts: hasArtifacts ? String(wbcChatArtifactFiles(chat).length) : "",
+    files: hasFiles ? String(fileItems.length) : "",
+    artifacts: artifactItems.length ? String(artifactItems.length) : "",
     viewer: viewerItems.length ? String(viewerItems.length) : "",
     browser: browserPanelState && Array.isArray(browserPanelState.tabs) ? String(browserPanelState.tabs.length) : "",
     "side-agents": sideAgents && sideAgents.length ? String(sideAgents.length) : "",
@@ -15547,7 +15551,8 @@ function WbcSide({
       {activeTab === "overview" && <WbcOverviewTab chat={chat} loading={chatLoading} detailed={chatDetailed} runtime={runtime} onRename={onRename} onDelete={onDelete} onToTask={onToTask} toTaskBusy={toTaskBusy} onCompact={onCompact} compactBusy={compactBusy} />}
       {activeTab === "plan" && <WbcPlanTab plan={pendingPlan} />}
       {activeTab === "context" && <WbcContextTab project={project} chat={chat} runtime={runtime} />}
-      {activeTab === "artifacts" && <WbcArtifactsTab chat={chat} onSelectArtifact={onSelectArtifact} />}
+      {activeTab === "files" && <WbcArtifactsTab chat={chat} onSelectArtifact={onSelectArtifact} />}
+      {activeTab === "artifacts" && <WbcArtifactsTab chat={chat} files={artifactItems} emptyKey="workbenchChat.noArtifacts" emptyFallback="This chat has not delivered any artifacts yet." onSelectArtifact={onSelectArtifact} />}
       {activeTab === "changes" && <WbcChangesTab chatId={activeChatId} onSelectChange={onSelectChange} />}
       {activeTab === "branches" && <WbcBranchTab chats={chats} activeChatId={activeChatId} onSelectChat={onSelectChat} />}
       {activeTab === "viewer" && <WbcViewerList files={viewerItems} selectedFile={viewerFile} onSelect={onSelectViewer} />}
@@ -17622,6 +17627,7 @@ var WBC_PROGRESSIVE_TOOL_PACKAGES = new Set([
   "map_tools",
   "subagent_tools",
   "delivery_tools",
+  "environment_tools",
   "skill_tools",
   "remote_tools",
   "integration_tools",
@@ -17693,11 +17699,11 @@ function WbcContextTab({ project, chat, runtime }) {
   );
 }
 
-function WbcArtifactsTab({ chat, onSelectArtifact }) {
-  var files = wbcChatArtifactFiles(chat);
+function WbcArtifactsTab({ chat, files: providedFiles, emptyKey, emptyFallback, onSelectArtifact }) {
+  var files = Array.isArray(providedFiles) ? providedFiles : wbcChatArtifactFiles(chat);
   return (
     <div className="wbc-artifact-list">
-        {files.length === 0 && <p className="workbench-muted">{wbcT("workbenchChat.noFiles", "This chat has not produced files yet. Uploads and agent-generated files will appear here.")}</p>}
+        {files.length === 0 && <p className="workbench-muted">{wbcT(emptyKey || "workbenchChat.noFiles", emptyFallback || "This chat has not produced files yet. Uploads and agent-generated files will appear here.")}</p>}
         {files.map(function (item, i) {
           var file = item.file;
           return (

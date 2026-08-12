@@ -19,7 +19,7 @@ async def _tool_list_skills(_args: dict[str, Any], _bot: Any, _chat_id: int, _db
         {
             "id": s.get("id"),
             "name": s.get("name"),
-            "desc": s.get("desc", "")[:120],
+            "desc": s.get("desc", ""),
             "enabled": s.get("enabled", True),
             "files": len(s.get("files", [])),
         }

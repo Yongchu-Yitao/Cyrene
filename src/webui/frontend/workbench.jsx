@@ -1258,6 +1258,7 @@ function WorkbenchApp({ theme, actualTheme, onToggleTheme, needsOnboarding }) {
   var [searchOpen, setSearchOpen] = useWorkbenchState(false);
   var [settingsOpen, setSettingsOpen] = useWorkbenchState(false);
   var [settingsTab, setSettingsTab] = useWorkbenchState("");
+  var pythonPromptCheckedRef = useWorkbenchRef(false);
   var [newProjectOpen, setNewProjectOpen] = useWorkbenchState(false);
   var [newTaskOpen, setNewTaskOpen] = useWorkbenchState(false);
   var [newChatRequestId, setNewChatRequestId] = useWorkbenchState(0);
@@ -1965,6 +1966,28 @@ function WorkbenchApp({ theme, actualTheme, onToggleTheme, needsOnboarding }) {
     wbSetBrowserOverlayObscured(0);
   }, []);
 
+  useWorkbenchEffect(function () {
+    if (pythonPromptCheckedRef.current) return undefined;
+    pythonPromptCheckedRef.current = true;
+    window.CyreneUI.require("api").json("/api/extensions", { toast: false })
+      .then(function (payload) {
+        if (!payload || payload.python_prompt_required !== true) return;
+        window.CyreneUI.require("feedback").confirmModal({
+          title: t("settings.extensionPythonMissingTitle"),
+          body: t("settings.extensionPythonMissingBody"),
+          confirmLabel: t("settings.extensionViewInstall"),
+          cancelLabel: t("settings.close"),
+        }).then(function (open) {
+          if (open) {
+            setSettingsTab("extensions");
+            setSettingsOpen(true);
+          }
+        });
+      })
+      .catch(function () {});
+    return undefined;
+  }, []);
+
   // Any renderer overlay must temporarily detach the native browser view.
   // The coordinator also covers topbar popovers, which cannot rely on CSS
   // z-index to appear above an Electron WebContentsView.
@@ -2371,6 +2394,14 @@ function WorkbenchApp({ theme, actualTheme, onToggleTheme, needsOnboarding }) {
 
   function navigateFromNotification(item) {
     var meta = item && item.meta && typeof item.meta === "object" ? item.meta : {};
+    if (meta.category === "hook_approval") {
+      setSettingsTab("extensions");
+      setSettingsOpen(true);
+      window.setTimeout(function () {
+        try { window.dispatchEvent(new CustomEvent("cyrene:open-agent-hooks", { detail: meta })); } catch (e) {}
+      }, 80);
+      return true;
+    }
     if (meta.category === "app_update" || String(item && item.source || "") === "updater") {
       setSettingsTab("about");
       setSettingsOpen(true);
@@ -4488,7 +4519,8 @@ function WorkbenchNotificationItem({ item, onOpen }) {
   var { t } = window.CyreneUI.require("i18n").use();
   var target = wbNotificationNavigationTarget(item);
   var isUpdate = item && item.meta && item.meta.category === "app_update";
-  var canNavigate = !!target || !!isUpdate || String(item && item.source || "") === "updater";
+  var isHookApproval = item && item.meta && item.meta.category === "hook_approval";
+  var canNavigate = !!target || !!isUpdate || !!isHookApproval || String(item && item.source || "") === "updater";
   var tab = String(item && item.tab || "system");
   var iconClass = "system";
   var icon = null;
@@ -5753,6 +5785,21 @@ function TaskBoard({ project, loading, error, onOpenSession, onCreateSession, on
   var [completedOpen, setCompletedOpen] = useWorkbenchState(true);
 
   useWorkbenchEffect(function () {
+    if (!menuId) return undefined;
+    function closeOnOutside(event) {
+      var target = event.target;
+      if (target && target.closest && (
+        target.closest(".wb-card-menu") || target.closest(".wb-card-menu-btn")
+      )) return;
+      setMenuId("");
+    }
+    document.addEventListener("pointerdown", closeOnOutside, true);
+    return function () {
+      document.removeEventListener("pointerdown", closeOnOutside, true);
+    };
+  }, [menuId]);
+
+  useWorkbenchEffect(function () {
     setMenuId("");
   }, [project && project.id]);
 
@@ -5779,7 +5826,6 @@ function TaskBoard({ project, loading, error, onOpenSession, onCreateSession, on
 
   return (
     <main className="workbench-task-board" aria-label={t("taskBoard.title")}>
-      {menuId && <div className="wb-card-menu-scrim" onClick={function () { setMenuId(""); }} />}
       <header className="wb-board-header">
         <div className="wb-board-heading">
           <span className="wb-board-kicker">{t("taskBoard.title")}</span>
@@ -5907,6 +5953,21 @@ function TaskRail({ project, activeSessionId, onSelectSession, onCreateSession, 
   var sessions = project && Array.isArray(project.sessions) ? project.sessions : [];
   var [menuId, setMenuId] = useWorkbenchState("");
 
+  useWorkbenchEffect(function () {
+    if (!menuId) return undefined;
+    function closeOnOutside(event) {
+      var target = event.target;
+      if (target && target.closest && (
+        target.closest(".wb-card-menu") || target.closest(".wb-card-menu-btn")
+      )) return;
+      setMenuId("");
+    }
+    document.addEventListener("pointerdown", closeOnOutside, true);
+    return function () {
+      document.removeEventListener("pointerdown", closeOnOutside, true);
+    };
+  }, [menuId]);
+
   return (
     <aside className={"workbench-task-rail workbench-integrated-rail" + (collapsed ? " is-collapsed" : "")}>
       <div className="workbench-rail-head workbench-integrated-rail-head">
@@ -5916,7 +5977,6 @@ function TaskRail({ project, activeSessionId, onSelectSession, onCreateSession, 
           {collapseControl}
         </div>
       </div>
-      {menuId && <div className="wb-card-menu-scrim" onClick={function () { setMenuId(""); }} />}
       <div className={"workbench-task-list workbench-integrated-rail-body" + (!loading && sessions.length === 0 ? " is-empty" : "")}>
         {loading && <div className="workbench-muted wb-task-rail-loading">{t("rail.loadingTasks")}</div>}
         {!loading && sessions.length === 0 && (
@@ -8668,6 +8728,7 @@ function TaskComposer({
   var [voiceSnapshot, setVoiceSnapshot] = useWorkbenchState({ status: {}, activeKey: "" });
   var [voicePhase, setVoicePhase] = useWorkbenchState("");
   var taRef = useWorkbenchRef(null);
+  var sendButtonRef = useWorkbenchRef(null);
   var draftRef = useWorkbenchRef(draft);
   var fileRef = useWorkbenchRef(null);
   var modelPickerRef = useWorkbenchRef(null);
@@ -8944,7 +9005,8 @@ function TaskComposer({
   useWorkbenchEffect(function () {
     if (!window.CyreneUI.has("uiSurface")) return undefined;
     var uiSurface = window.CyreneUI.require("uiSurface");
-    return uiSurface.register({
+    var unregister = [];
+    unregister.push(uiSurface.register({
       node_id: "task_composer_input",
       parent_id: "root",
       scope: "main",
@@ -8961,7 +9023,7 @@ function TaskComposer({
             draft_empty: !currentDraft,
             draft_length: currentDraft.length,
             running: running === true,
-            submit_exposed: false,
+            submit_exposed: !sendDisabled,
           },
         };
       },
@@ -8999,8 +9061,53 @@ function TaskComposer({
           return { draft_length: 0, cleared: true, submitted: false };
         },
       },
-    });
-  }, [session.id, status, disabled, awaitingAnswer]);
+    }));
+    var submitMode = running ? "interrupt" : "send";
+    var submitActionId = running ? "interrupt" : "submit";
+    unregister.push(uiSurface.register({
+      node_id: "task_composer_submit",
+      parent_id: "root",
+      scope: "main",
+      get_element: function () { return sendButtonRef.current; },
+      get_node: function () {
+        if (awaitingAnswer) return null;
+        return {
+          role: "button",
+          name: running ? wbT("workbenchChat.stop", "Stop") : wbT("workbenchChat.send", "Send"),
+          state: {
+            session_id: String(session.id || ""),
+            session_kind: "task",
+            mode: submitMode,
+            disabled: !!sendDisabled,
+          },
+        };
+      },
+      actions: sendDisabled ? [] : [{
+        action_id: submitActionId,
+        kind: "invoke",
+        risk: running ? "R1" : "R2",
+        gesture_aliases: ["press", "keyboard"],
+        outcome: {
+          effect: running ? "interrupts_current_run" : "submits_current_composer",
+          target_scope: "task",
+          inspect_after: true,
+        },
+      }],
+      handlers: {
+        interrupt: function () {
+          var button = sendButtonRef.current;
+          if (!button || button.disabled) throw new Error("composer interrupt is unavailable");
+          button.click();
+        },
+        submit: function () {
+          var button = sendButtonRef.current;
+          if (!button || button.disabled) throw new Error("composer submit is unavailable");
+          button.click();
+        },
+      },
+    }));
+    return function () { unregister.forEach(function (remove) { remove(); }); };
+  }, [session.id, status, disabled, awaitingAnswer, running, sendDisabled]);
 
   return (
     <div className="workbench-composer compact">
@@ -9199,6 +9306,7 @@ function TaskComposer({
             </button>
           ) : null}
           <button
+            ref={sendButtonRef}
             type="button"
             className={"wb-composer-send" + (running ? " stop" : "")}
             onClick={submit}
@@ -9383,7 +9491,7 @@ function ContextTab({ project, session, activeStep }) {
       <SideSection title={wbT("task.side.constraintsCount", "Constraints ({count})", { count: constraints.length })} className="wb-task-context-constraints">
         {constraints.length
           ? constraints.map(function (item, i) { return <div className="workbench-check wb-constraint-row" key={i}><span className="workbench-status-dot amber"></span><span className="wb-constraint-text">{item}</span></div>; })
-          : <p className="workbench-muted wb-task-context-empty">{wbT("task.noConstraints", "No constraints yet. Phrases like \"do not\" or \"only\" in the task are recognized as constraints automatically.")}</p>}
+          : <p className="workbench-muted wb-task-context-empty">{wbT("task.noConstraints", "No constraints yet. Explicit scope, prohibitions, compatibility, or other requirements in the task are identified automatically.")}</p>}
       </SideSection>
       {isInit && window.CyreneUI.require("create").InitProgress ? (
         <SideSection title={wbT("init.progress.title", "Initialization progress")}>

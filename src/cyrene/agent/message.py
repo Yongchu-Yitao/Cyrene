@@ -95,6 +95,8 @@ async def _insert_intermediate_user_reply(
         "createdAt": created_at,
         "intermediate": True,
     }
+    if round_id:
+        public_message["roundId"] = round_id
     if attachments:
         public_message["attachments"] = [dict(item) for item in attachments if isinstance(item, dict)]
     await _emit_reply_stream_event({

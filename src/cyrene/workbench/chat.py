@@ -424,6 +424,13 @@ def complete_chat_plan(chat_id: str) -> dict[str, Any] | None:
 
 def _workbench_chat_run_error_message(exc: Exception, lang: str = "") -> str:
     """Return a user-facing message after bounded model-network retries."""
+    if isinstance(exc, httpx.HTTPStatusError):
+        status = int(exc.response.status_code)
+        english = str(lang or "").lower() == "en"
+        if status in (401, 403):
+            if english:
+                return "The model service could not be authenticated. Check its API key or sign-in, then try again."
+            return "无法访问模型服务：鉴权失败。请检查 API Key 或登录状态后重试。"
     if isinstance(exc, httpx.TransportError):
         if str(lang or "").lower() == "en":
             return (
@@ -439,6 +446,7 @@ _WORKBENCH_CHAT_ERROR_I18N_KEYS = {
     "authentication_expired": "workbenchChat.error.authenticationExpired",
     "model_unavailable": "workbenchChat.error.modelUnavailable",
     "model_not_configured": "workbenchChat.error.modelNotConfigured",
+    "model_authentication_failed": "workbenchChat.error.modelAuthenticationFailed",
 }
 
 
@@ -454,6 +462,12 @@ def _workbench_chat_error_metadata(exc: Exception) -> dict[str, str]:
     direct_key = _WORKBENCH_CHAT_ERROR_I18N_KEYS.get(direct_code, "")
     if direct_code and direct_key:
         return {"code": direct_code, "detail_key": direct_key}
+
+    if isinstance(exc, httpx.HTTPStatusError) and int(exc.response.status_code) in (401, 403):
+        return {
+            "code": "model_authentication_failed",
+            "detail_key": "workbenchChat.error.modelAuthenticationFailed",
+        }
 
     try:
         from cyrene.model_runtime.codex_provider import codex_availability_error
@@ -1060,6 +1074,44 @@ def _prune_orphaned_fork_metadata(payload: dict[str, Any]) -> bool:
     return changed
 
 
+def _message_event_time(message: dict[str, Any]) -> datetime | None:
+    """Parse a transcript timestamp for stable chronological repair."""
+    raw = str(message.get("createdAt") or message.get("created_at") or "").strip()
+    if not raw:
+        return None
+    try:
+        parsed = datetime.fromisoformat(raw.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    return parsed.astimezone(timezone.utc)
+
+
+def _messages_in_chronological_order(messages: list[Any]) -> list[Any]:
+    """Repair fully timestamped transcripts without disturbing legacy data.
+
+    Older records can lack event times, so those transcripts retain their
+    stored order. Modern transcripts are stably sorted, which also repairs
+    records written before intermediate-message dedupe became round-scoped.
+    """
+    if not messages:
+        return list(messages)
+    event_times: list[datetime] = []
+    for message in messages:
+        if not isinstance(message, dict):
+            return list(messages)
+        event_time = _message_event_time(message)
+        if event_time is None:
+            return list(messages)
+        event_times.append(event_time)
+    ordered = sorted(
+        enumerate(messages),
+        key=lambda pair: (event_times[pair[0]], pair[0]),
+    )
+    return [message for _index, message in ordered]
+
+
 def _chat_preview(chat: dict[str, Any]) -> str:
     for message in reversed(chat.get("messages") or []):
         text = str(message.get("content") or "").strip()
@@ -1260,6 +1312,7 @@ def _merge_chat_messages_chronologically(
             if isinstance(existing, dict) and bool(existing.get("intermediate"))
             if (key := _live_segment_dedupe_key(existing))
         }
+    messages[:] = _messages_in_chronological_order(messages)
     return messages
 
 
@@ -1337,7 +1390,8 @@ def _remove_retry_replaced_messages(
 
 def _public_chat_full(chat: dict[str, Any]) -> dict[str, Any]:
     payload = _public_chat_light(chat)
-    payload["messages"] = [_public_message(m) for m in (chat.get("messages") or [])]
+    ordered_messages = _messages_in_chronological_order(chat.get("messages") or [])
+    payload["messages"] = [_public_message(m) for m in ordered_messages]
     payload["files"] = [
         dict(item)
         for item in (chat.get("generatedFiles") or [])
@@ -1992,6 +2046,9 @@ def _make_reply_segment(
         "createdAt": str(message.get("created_at") or message.get("createdAt") or _utc_now_iso()),
         "intermediate": True,
     }
+    round_id = str(message.get("round_id") or message.get("roundId") or "").strip()
+    if round_id:
+        entry["roundId"] = round_id
     model_name = str(
         (message.get("usage") or {}).get("model")
         if isinstance(message.get("usage"), dict)
@@ -2071,6 +2128,9 @@ def _live_segment_dedupe_key(entry: dict[str, Any]) -> str:
     if not content and not attachments:
         return ""
     payload = {"content": content, "attachments": sorted(set(attachments))}
+    round_id = str(entry.get("roundId") or entry.get("round_id") or "").strip()
+    if round_id:
+        payload["roundId"] = round_id
     encoded = json.dumps(payload, ensure_ascii=False, sort_keys=True, default=str)
     return "msg_sem_" + hashlib.sha1(encoded.encode("utf-8")).hexdigest()[:16]
 

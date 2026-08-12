@@ -164,6 +164,105 @@ final result: passed
 
 ---
 
+# Composer Content Count Pill Design QA — 2026-08-13
+
+- Source visual truth: `/var/folders/zm/qgh_rgw903j0b9t01yg2l0mc0000gn/T/codex-clipboard-b663da8c-5c67-40bb-9719-623075a9a465.png` (`88 × 88 px`), plus the user's explicit selected-state pill/count specification.
+- Implementation screenshot: `/var/folders/zm/qgh_rgw903j0b9t01yg2l0mc0000gn/T/com.openai.sky.CUAService/Safari浏览器 Screenshot 2026-08-13 at 12.15.59 AM.jpeg` (`1224 × 768 px`).
+- Viewport and state: Safari at `1224 × 768` CSS px, device scale factor `1`, dark theme, two content sources enabled, tools menu closed.
+- Full-view comparison evidence: the source icon and refreshed implementation screenshot were emitted together in one comparison input.
+- Focused comparison evidence: the composer toolbar region was cropped and enlarged to inspect the pill silhouette, icon alignment, spacing, and numeric baseline.
+
+## Findings
+
+- No actionable P0, P1, or P2 issue remains.
+- With enabled content, the layers icon now sits inside a compact `999 px` radius pill and a tabular numeric count appears immediately to its right. The rendered `2` state is centered and visually balanced with the existing icon.
+- With zero enabled content, the count element is not rendered and the trigger returns to the existing icon-only control.
+- The count includes persona, workspace, and selected remote devices only; command selection does not inflate the content count.
+- The accessible title/label continues to expose “Tools · {count} enabled”. The pill preserves the existing hover, open, disabled, and focus treatments.
+- Typography, colors, composer spacing, existing vector icon asset, and adjacent attachment/microphone controls remain consistent. No raster imagery is introduced into the product UI.
+
+## Verification
+
+- Frontend production build: passed (`34` JSX entries compiled).
+- Focused content-pill, menu outside-click, and voice-control regressions: `3 passed`.
+- Safari visual state: two enabled content sources render as an icon-plus-`2` pill without crowding the attachment control.
+- `git diff --check`: passed.
+
+## Comparison History
+
+- Earlier state: the content trigger always appeared as a standalone layers icon, so enabled context was not visible until the menu opened.
+- Fix: added a conditional `has-content` pill state and a numeric count element to the existing trigger without introducing a second button.
+- Post-fix evidence: the focused crop shows the layers glyph and number aligned within one compact rounded control.
+
+final result: passed
+
+---
+
+# Composer Two-Column Commands Design QA — 2026-08-13
+
+- Source visual truth: `/var/folders/zm/qgh_rgw903j0b9t01yg2l0mc0000gn/T/codex-clipboard-96a46a65-9330-4aa5-96d2-8da11e1a5dba.png` (`520 × 780 px`), with the user's explicit follow-up that Commands should use two columns.
+- Implementation screenshot: `/var/folders/zm/qgh_rgw903j0b9t01yg2l0mc0000gn/T/com.openai.sky.CUAService/Safari浏览器 Screenshot 2026-08-13 at 12.13.06 AM.jpeg` (`1224 × 768 px`).
+- Viewport and state: Safari at `1224 × 768` CSS px, device scale factor `1`, dark theme, tools menu open with all command rows visible in a two-column grid.
+- Full-view comparison evidence: the source and refreshed implementation were emitted together in one comparison input.
+- Focused comparison evidence: the implementation menu was cropped and enlarged to inspect two-column alignment, icon/text rhythm, truncation, and final-row visibility.
+
+## Findings
+
+- No actionable P0, P1, or P2 issue remains.
+- Commands now render as a `repeat(2, minmax(0, 1fr))` grid, reducing eight rows to four while preserving the single-column Content section.
+- Each command keeps its icon, full accessible label/title, hover/active/focus behavior, and minimum-width protection. Long visible labels use the existing ellipsis behavior rather than widening the `260 px` flyout.
+- Typography, colors, spacing tokens, copy, and source icon assets remain consistent with the previous passed menu treatment. No raster imagery is part of the control.
+- The menu retains one continuous vertical scroll container and no inner section scrollers.
+
+## Verification
+
+- Frontend production build: passed (`34` JSX entries compiled).
+- Focused two-column menu, outside-click, and scrolling regressions: `3 passed`.
+- Safari interaction: the menu opens, all eight commands remain present in accessibility order, and the final row is visible without horizontal overflow.
+- `git diff --check`: passed.
+
+## Comparison History
+
+- Earlier state: Commands used one column, which was readable but consumed disproportionate vertical space in the narrow menu.
+- Fix: changed only the command grid to two equal flexible columns and tightened the icon/check tracks for the narrower cells.
+- Post-fix evidence: the focused capture shows a balanced four-row-by-two-column command area while Content remains comfortably single-column.
+
+final result: passed
+
+---
+
+# Composer Tools Divider Design QA — 2026-08-12
+
+- Source visual truth: `/var/folders/zm/qgh_rgw903j0b9t01yg2l0mc0000gn/T/codex-clipboard-5bfcf3c9-e6cd-44e3-b815-8c96b754edab.png` (`520 × 780 px`).
+- Implementation screenshot: `/var/folders/zm/qgh_rgw903j0b9t01yg2l0mc0000gn/T/com.openai.sky.CUAService/Safari浏览器 Screenshot 2026-08-12 at 11.02.35 PM.jpeg` (`1224 × 768 px`).
+- Viewport and state: Safari at `1224 × 768` CSS px, dark theme, composer tools menu open with the Content/Commands divider visible.
+- Full-view comparison evidence: the source and refreshed implementation screenshot were emitted together in one comparison input.
+- Focused comparison evidence: the tools menu region was cropped from the implementation screenshot and inspected at readable scale because the divider was too small to judge reliably in the full browser view.
+
+## Findings
+
+- No actionable P0, P1, or P2 issue remains.
+- The divider no longer uses the nearly black base line token. It now uses `--wb-flyout-border`, which is the same cool grey, foreground-derived border token as the surrounding menu surface.
+- Fonts and typography, spacing and layout rhythm, icon assets, copy, and the single continuous scroll behavior are unchanged.
+- No raster imagery is involved in this interface. Existing vector icons remain unchanged.
+
+## Verification
+
+- Frontend production build: passed (`34` JSX entries compiled).
+- Focused divider-token regression: `1 passed`.
+- `git diff --check`: passed.
+- Primary interaction checked in Safari: the menu opens and retains its unified scrolling structure.
+
+## Comparison History
+
+- Earlier P2: the Content/Commands separator used `--wb-line`, which appeared close to black against the blue-grey flyout surface.
+- Fix: changed the separator to `--wb-flyout-border`, preserving a subtle boundary while aligning it with the menu's cool-grey edge treatment.
+- Post-fix evidence: the refreshed open-menu capture shows a low-contrast cool-grey divider rather than a black horizontal cut.
+
+final result: passed
+
+---
+
 # Compact Local Model List Design QA — 2026-08-11
 
 - Source visual truth: `/var/folders/zm/qgh_rgw903j0b9t01yg2l0mc0000gn/T/codex-clipboard-64e29a13-79cc-45fc-9ddc-f3d7581c7071.png` (`1594 × 918 px`).
@@ -973,6 +1072,38 @@ final result: blocked
 
 ---
 
+# Composer Unified Tools List Design QA — 2026-08-12
+
+- Source visual truth: `/var/folders/zm/qgh_rgw903j0b9t01yg2l0mc0000gn/T/codex-clipboard-120a6ef4-7699-49f4-8a72-152ba537ddcc.png` (`520 × 700 px`).
+- Implementation screenshots: `/var/folders/zm/qgh_rgw903j0b9t01yg2l0mc0000gn/T/com.openai.sky.CUAService/Safari浏览器 Screenshot 2026-08-12 at 10.54.22 PM.jpeg` and `/var/folders/zm/qgh_rgw903j0b9t01yg2l0mc0000gn/T/com.openai.sky.CUAService/Safari浏览器 Screenshot 2026-08-12 at 10.54.37 PM.jpeg` (`1224 × 768 px`).
+- State: dark theme, composer populated, tools menu open, then the same menu scrolled to its bottom.
+- Full-view and focused comparison evidence: the reference, open implementation, and scrolled implementation were emitted together in one comparison input. The implementation uses a single `260 px`-wide menu scroller; scrolling moves content, devices, the Commands heading, and command rows as one continuous list.
+
+## Findings
+
+- No actionable P0, P1, or P2 visual issue remains.
+- The independent content and command scroll regions are removed. Only `.wbc-tools-menu` owns vertical scrolling; `.wbc-tools-content-list` and `.wbc-tools-command-grid` have no max-height or overflow rules.
+- The menu remains intentionally narrower than the supplied defect screenshot, following the user's explicit width refinement. It preserves the existing dark Workbench tokens, compact typography, shared iconography, and keyboard/outside-click behavior.
+- The toolbar remains icon-only, voice input is preserved, and the send action remains a circular icon-only control with optical centering.
+- Long workspace paths truncate within the list instead of widening the panel. Remote device states and all commands remain reachable through the same continuous scroll.
+
+## Verification
+
+- Frontend production build: passed (`34` JSX entries compiled).
+- Focused composer menu, scrolling, voice-control, and layout regressions: `5 passed`.
+- Safari interaction check: opening the tools menu and scrolling from the content rows through the final command completed successfully.
+- `git diff --check`: passed before the final test-only assertion refinement; the edited files contain no patch whitespace errors.
+
+## Comparison History
+
+- Earlier P2: content and commands each owned a constrained scroll region, producing two crowded vertical windows inside one menu.
+- Fix: both internal height/overflow constraints were removed and the shared parent menu became the sole vertical scroll owner.
+- Final comparison confirms that the title, content rows, devices, section divider, and command rows form one continuous scroll sequence.
+
+final result: passed
+
+---
+
 # Task Detail Inspector Design QA — 2026-08-12
 
 - Source visual truth: `/var/folders/zm/qgh_rgw903j0b9t01yg2l0mc0000gn/T/codex-clipboard-1235fde0-3220-4379-a106-5e1ffdb02d2d.png` (`626 × 1800 px`).
@@ -1017,3 +1148,73 @@ final result: blocked
 - Browser-rendered comparison remains blocked by the local preview restriction; the updated selector and shared-class path are covered by focused regression checks.
 
 final result: blocked
+# Extension Center / Source Configuration Design QA — 2026-08-12
+
+- Source Configuration reference: `/var/folders/zm/qgh_rgw903j0b9t01yg2l0mc0000gn/T/codex-clipboard-463c7f0c-6a86-430d-8fbb-2420ac5df81e.png` (`1560 × 1158 px`).
+- Extension modal references:
+  - `/var/folders/zm/qgh_rgw903j0b9t01yg2l0mc0000gn/T/codex-clipboard-7c1f63a0-45d4-4d91-9c30-1c8597d50e56.png`
+  - `/var/folders/zm/qgh_rgw903j0b9t01yg2l0mc0000gn/T/codex-clipboard-cc82e501-fdcf-4525-b4fa-2e302480eefc.png`
+- Extension detail and action references:
+  - `/var/folders/zm/qgh_rgw903j0b9t01yg2l0mc0000gn/T/codex-clipboard-d89e8a34-2a23-4063-ada3-0b144fde0c7e.png`
+  - `/var/folders/zm/qgh_rgw903j0b9t01yg2l0mc0000gn/T/codex-clipboard-e85592fa-8fe5-4952-a6ff-503ec81250ef.png`
+  - `/var/folders/zm/qgh_rgw903j0b9t01yg2l0mc0000gn/T/codex-clipboard-744d5ef4-b186-40b1-8beb-bcb3daad31c7.png`
+- Browser-rendered Source Configuration: `/Users/syw/Documents/playground/Cyrene/output/playwright/extension-center/source-config-implemented.png`.
+- Same-viewport combined comparison: `/Users/syw/Documents/playground/Cyrene/output/playwright/extension-center/source-config-comparison.png`.
+- Viewport: `1560 × 1158` CSS px, dark theme, Settings / Extensions / Sources, Chinese.
+
+## Findings
+
+No actionable P0, P1, or P2 visual mismatch remains in the requested extension surfaces.
+
+- Settings geometry: General and Extensions both render in the same `920 × 540 px` panel. Extensions no longer applies a content-dependent modal override.
+- Source hierarchy: the original flat two-column field wall is now grouped into Network & downloads, Extension catalogs, and Credentials & integrity cards. Inputs still use the existing settings control tokens and remain two-column where the viewport allows.
+- Source behavior: the `820 × 680 px` dialog owns its vertical scroll (`scrollHeight 1069 px`), while the action footer stays visible. This removes content clipping without resizing the underlying Settings panel.
+- MCP semantics: the Registry field is explicitly described as one search catalog, while the UI explains that users can install multiple independently addressed MCP servers.
+- Card actions: Install uses a consistent `92 × 38 px` rendered target in the inspected state. Install precedes the fixed `40 × 40 px` far-right expand control.
+- GitHub identity: GitHub CLI uses the product's existing GitHub brand SVG with neutral foreground `rgb(235, 239, 243)`, rather than the generic terminal glyph or CLI-green treatment.
+- Localization: all six Recommended cards render localized Chinese descriptions; their English keys are present in the same catalog. Source, health, task status, audit actor/action/result, source checks, placeholders, hints, and dialog sections use translation keys rather than raw backend enum strings.
+- Source details: system observations now expose a semantic source object. The frontend maps it to “系统环境 / System environment” and maps `healthy` to “正常 / Healthy”; raw `{}` and `healthy` are not displayed.
+
+## Verification
+
+- Frontend production build: passed (`34` JSX entry files).
+- In-app browser: Settings size parity, Source dialog scroll, all Recommended Chinese copy, GitHub icon path/color, and Install/expand geometry inspected.
+- Reference and implementation were reviewed together in the same-viewport combined comparison.
+
+final result: passed
+
+---
+
+# Composer Tools Menu Density Design QA — 2026-08-13
+
+- Source visual truth: `/var/folders/zm/qgh_rgw903j0b9t01yg2l0mc0000gn/T/codex-clipboard-96a46a65-9330-4aa5-96d2-8da11e1a5dba.png` (`520 × 780 px`).
+- Implementation screenshots: `/var/folders/zm/qgh_rgw903j0b9t01yg2l0mc0000gn/T/com.openai.sky.CUAService/Safari浏览器 Screenshot 2026-08-13 at 12.08.23 AM.jpeg` and `/var/folders/zm/qgh_rgw903j0b9t01yg2l0mc0000gn/T/com.openai.sky.CUAService/Safari浏览器 Screenshot 2026-08-13 at 12.09.12 AM.jpeg` (`1224 × 768 px`).
+- Viewport and state: Safari at `1224 × 768` CSS px, device scale factor `1`, dark theme, completed conversation, tools menu open and then scrolled to the final command.
+- Full-view comparison evidence: the source and refreshed implementation were emitted together in one comparison input.
+- Focused comparison evidence: the implementation menu was cropped and enlarged to inspect row borders, section rhythm, typography, and active/disabled treatments.
+
+## Findings
+
+- No actionable P0, P1, or P2 issue remains.
+- The hard Content/Commands divider is removed. A `12 px` section gap, quieter section labels, and a small commands top margin now establish hierarchy without cutting the menu into boxes.
+- Command rows and content rows no longer draw persistent borders. Neutral hover, subtle accent selection, and a visible keyboard focus ring preserve affordance without card stacking.
+- Row height and horizontal spacing are slightly increased while the panel remains `260 px` wide and uses one continuous `390 px`-capped scroller. Disabled remote devices are visually softened instead of presented like selected cards.
+- Fonts and typography continue to use the shared Manrope/Noto Sans SC stack, with compact 10.5–11.5 px menu hierarchy and ellipsis for long workspace/device labels.
+- Colors remain derived from Workbench tokens; no new hard-coded palette was introduced. Existing icon assets and all application copy remain unchanged. No raster imagery is part of this control.
+
+## Verification
+
+- Frontend production build: passed (`34` JSX entries compiled).
+- Focused unified-menu layout, outside-click, and scrolling regressions: `3 passed`.
+- Primary Safari interactions: opening the menu and scrolling from Content through `Claude Code` both passed.
+- `git diff --check`: passed.
+
+## Comparison History
+
+- Earlier P2: a full-width divider and bordered command cards created a dense stack of nested rectangles; the selected/disabled device surface amplified the same box-heavy treatment.
+- Fix: removed the divider and persistent row borders, replaced the boundary with spacing and section-label hierarchy, softened disabled rows, and increased row breathing room.
+- Post-fix evidence: the focused implementation capture shows one calm continuous list with clear sections, while the scrolled capture confirms that every command remains reachable.
+
+final result: passed
+
+---

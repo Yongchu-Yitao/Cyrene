@@ -449,7 +449,7 @@ def _workbench_derive_title(text: str) -> str:
     return head[:24] or "新任务"
 
 
-def set_task_goal_for_session(
+async def set_task_goal_for_session(
     session_id: str, goal: str, title: str = "", summary: str = ""
 ) -> dict[str, Any]:
     """Set/correct a Workbench task session's goal, short title, and/or one-line
@@ -478,11 +478,18 @@ def set_task_goal_for_session(
         return {"ok": False, "error": "session not found"}
     if str(session.get("kind") or "") == "init":
         return {"ok": False, "error": "cannot set goal on an init session"}
+    extracted_constraints = await _workbench_extract_constraints(new_goal) if new_goal else []
+    # Constraint extraction is an awaited model call. Re-read before mutating so
+    # a concurrent task update made during that call is not overwritten.
+    payload = _read_workbench_store()
+    project, session = _workbench_find_session(payload, sid)
+    if not session or not project:
+        return {"ok": False, "error": "session not found"}
     now = _utc_now_iso()
     if new_goal:
         session["goal"] = new_goal
         merged = list(session.get("constraints") or [])
-        for item in _workbench_extract_constraints(new_goal):
+        for item in extracted_constraints:
             if item not in merged:
                 merged.append(item)
         session["constraints"] = merged
@@ -1443,72 +1450,98 @@ def _workbench_maybe_compact_planning_thread(thread: dict[str, Any]) -> None:
     thread["compactionCount"] = int(thread.get("compactionCount") or 0) + 1
 
 
-def _workbench_feedback_needs_workspace(
-    feedback: str,
-    *,
-    requested_operation: str,
-) -> bool:
-    text = str(feedback or "").strip()
-    if not text:
-        return False
-    resource_signal = re.search(
-        r"([A-Za-z0-9_.-]+[/\\][A-Za-z0-9_./\\-]+|"
-        r"\.(?:py|js|jsx|ts|tsx|java|go|rs|rb|php|swift|kt|md|toml|json|ya?ml)\b|"
-        r"新(?:文件|目录|模块|组件|接口|服务)|新增(?:文件|目录|模块|组件)|"
-        r"代码库|源码|工作区|项目结构|实际文件|先检查|先读取|查看文件|重新扫描)",
-        text,
-        re.IGNORECASE,
-    )
-    if resource_signal:
-        return True
-    local_edit_only = re.search(
-        r"(步骤|顺序|依赖|描述|标题|验收|删除|移除|合并|拆分|调序|提前|延后|"
-        r"第[一二三四五六七八九十\d]+步|保留原计划|改写|精简|详细一点)",
-        text,
-    )
-    if local_edit_only:
-        return False
-    # A replacement changes the decomposition, not necessarily workspace facts.
-    if requested_operation == "replace":
-        return False
-    return False
-
-
-def _workbench_plan_tool_bundle(
+async def _workbench_classify_plan_routing(
     session: dict[str, Any],
+    project: dict[str, Any],
+    *,
+    feedback: str,
+    requested_operation: str,
+) -> dict[str, Any]:
+    """Semantically decide workspace use and plan revision behavior."""
+    goal = str(session.get("goal") or session.get("title") or "").strip()
+    project_context = project.get("context") if isinstance(project.get("context"), dict) else {}
+    prompt = (
+        "请为任务规划器做一次语义路由判断。不要按关键词机械判断，要结合任务目标、项目说明和"
+        "本次反馈的真实含义。只返回 JSON："
+        '{"workspaceRelationship":"related|independent|unclear",'
+        '"needsWorkspaceRefresh":true|false,"revisionMode":"revise|replace"}。\n'
+        "workspaceRelationship：任务是否需要当前项目/代码工作区的信息。"
+        "needsWorkspaceRefresh：本次反馈是否要求核对当前文件、实现或项目事实；仅调整步骤文字、"
+        "顺序或依赖时为 false。revisionMode：保留并协调已有步骤用 revise；只有用户明确要求"
+        "舍弃原计划或目标/路线整体改变时才用 replace。否定表达必须按语义理解。\n\n"
+        f"项目名称：{project.get('name') or ''}\n"
+        f"项目说明：{project.get('description') or project_context.get('summary') or ''}\n"
+        f"任务目标：{goal}\n本次反馈：{feedback or '（无）'}"
+    )
+    fallback = {
+        "workspaceRelationship": "unclear",
+        "needsWorkspaceRefresh": False,
+        "revisionMode": "revise",
+    }
+    try:
+        response = await asyncio.wait_for(
+            _call_llm(
+                [{"role": "user", "content": prompt}], tools=None,
+                max_tokens=300, secondary=True, thinking="disabled",
+            ),
+            timeout=20,
+        )
+    except Exception:
+        logger.exception("Workbench plan routing classification failed")
+        return fallback
+    content = str(response.get("content") or "") if isinstance(response, dict) else ""
+    parsed = _workbench_parse_json_object(content)
+    if not isinstance(parsed, dict):
+        return fallback
+    relationship = str(parsed.get("workspaceRelationship") or "").strip().lower()
+    revision_mode = str(parsed.get("revisionMode") or "").strip().lower()
+    return {
+        "workspaceRelationship": relationship if relationship in {"related", "independent", "unclear"} else "unclear",
+        "needsWorkspaceRefresh": parsed.get("needsWorkspaceRefresh") is True,
+        "revisionMode": revision_mode if revision_mode in {"revise", "replace"} else "revise",
+    }
+
+
+async def _workbench_plan_tool_bundle(
+    session: dict[str, Any],
+    project: dict[str, Any],
     workspace_root: Path | None,
     *,
     feedback: str,
     requested_operation: str,
     auto_start: bool,
-) -> tuple[str, str, dict[str, str]]:
+) -> tuple[str, str, dict[str, str], dict[str, Any]]:
     current_revision, current_snapshot = _workbench_workspace_state(workspace_root)
     thread = _workbench_planning_thread(session, workspace_root)
     previous_revision = str(thread.get("workspaceRevision") or "")
     has_history = bool(thread.get("messages"))
     workspace_changed = bool(previous_revision and previous_revision != current_revision)
-    goal_text = str(session.get("goal") or session.get("title") or "")
-    explicitly_independent = bool(re.search(
-        r"(与(?:当前|本地)?项目无关|不涉及(?:当前|本地)?项目|不要(?:读取|查看|检查|关联)(?:工作区|项目|文件)|"
-        r"旅行计划|健身计划|学习计划|活动策划|会议议程|写作提纲)",
-        goal_text,
-    ))
+    workspace_empty = _is_workspace_empty(workspace_root)
+    routing = (
+        {
+            "workspaceRelationship": "unclear",
+            "needsWorkspaceRefresh": False,
+            "revisionMode": "revise",
+        }
+        if workspace_empty
+        else await _workbench_classify_plan_routing(
+            session, project, feedback=feedback, requested_operation=requested_operation,
+        )
+    )
 
-    if _is_workspace_empty(workspace_root):
+    if workspace_empty:
         bundle = _WORKBENCH_PLANNER_NO_TOOLS_VERSION
-    elif explicitly_independent:
+    elif routing["workspaceRelationship"] == "independent":
         bundle = _WORKBENCH_PLANNER_NO_TOOLS_VERSION
     elif auto_start:
         bundle = _WORKBENCH_PLANNER_EXPLORE_VERSION
     elif not has_history:
         bundle = _WORKBENCH_PLANNER_EXPLORE_VERSION
-    elif workspace_changed or _workbench_feedback_needs_workspace(
-        feedback, requested_operation=requested_operation
-    ):
+    elif workspace_changed or routing["needsWorkspaceRefresh"]:
         bundle = _WORKBENCH_PLANNER_EXPLORE_VERSION
     else:
         bundle = _WORKBENCH_PLANNER_NO_TOOLS_VERSION
-    return bundle, current_revision, current_snapshot
+    return bundle, current_revision, current_snapshot, routing
 
 
 async def _workbench_exec_explore_tool(
@@ -2603,8 +2636,6 @@ def _workbench_ensure_invariants(payload: dict[str, Any]) -> bool:
                 _workbench_workspace_root(project),
             ):
                 changed = True
-            if _workbench_backfill_referenced_file_artifacts(project, session, now):
-                changed = True
     if projects and not payload.get("activeProjectId"):
         payload["activeProjectId"] = projects[0].get("id")
         changed = True
@@ -3030,20 +3061,55 @@ def _launch_update_restart(
     return True, "", "", 200
 
 
-def _workbench_extract_constraints(text: str) -> list[str]:
-    source = str(text or "")
+async def _workbench_extract_constraints(text: str) -> list[str]:
+    """Use a lightweight semantic pass to extract explicit task constraints.
+
+    Constraints are requirements that restrict scope, implementation choices,
+    compatibility, resources, timing, or behavior.  A model is used instead of
+    keyword matching so negation in questions and descriptive prose is not
+    mistaken for a task requirement.  Failure is fail-soft: the original user
+    text remains available as the task goal/message and no guessed constraint is
+    persisted.
+    """
+    source = str(text or "").strip()
+    if not source:
+        return []
+    prompt = (
+        "请判断下面的用户任务表述中是否包含明确的执行约束。约束是用户真正要求遵守的范围、"
+        "禁止事项、必须保留项、技术/平台限制、兼容性要求、截止时间或资源限制。"
+        "不要因为文本出现‘不’‘只’‘保留’等字样就机械提取；疑问、解释、背景事实、目标本身、"
+        "建议和无法确定为用户要求的内容都不是约束。每条约束应保持原意、可独立理解、简洁，"
+        "不得补充用户没有表达的要求。只返回 JSON：{\"constraints\":[\"约束\"]}；"
+        "没有约束时返回空数组，最多 8 条。\n\n"
+        f"用户表述：{source}"
+    )
+    try:
+        response = await asyncio.wait_for(
+            _call_llm(
+                [{"role": "user", "content": prompt}],
+                tools=None,
+                max_tokens=700,
+                secondary=True,
+                thinking="disabled",
+            ),
+            timeout=20,
+        )
+    except Exception:
+        logger.exception("Workbench constraint extraction failed")
+        return []
+    content = str(response.get("content") or "") if isinstance(response, dict) else ""
+    parsed = _workbench_parse_json_object(content)
+    raw = parsed.get("constraints") if isinstance(parsed, dict) else None
+    if not isinstance(raw, list):
+        return []
     constraints: list[str] = []
-    patterns = [
-        r"不[^\n，。；;,.]{1,32}",
-        r"只[^\n，。；;,.]{1,32}",
-        r"保留[^\n，。；;,.]{1,32}",
-    ]
-    for pattern in patterns:
-        for match in re.findall(pattern, source):
-            item = match.strip()
-            if item and item not in constraints:
-                constraints.append(item)
-    return constraints[:6]
+    for value in raw:
+        item = re.sub(r"\s+", " ", str(value or "").strip())[:300]
+        if item and item not in constraints:
+            constraints.append(item)
+        if len(constraints) >= 8:
+            break
+    return constraints
 
 
 def _workbench_new_plan_step(title: str, description: str, order: int, task_id: str = "") -> dict[str, Any]:
@@ -3304,14 +3370,6 @@ def _workbench_plan_title_key(value: Any) -> str:
     return re.sub(r"\s+", "", str(value or "").strip().lower())
 
 
-def _workbench_plan_reset_requested(feedback: str) -> bool:
-    return bool(re.search(
-        r"(重新生成|重新规划|重排|重做|从头|替换|清空|不要原计划|不保留原计划|"
-        r"完全不一样|完全不同|全新计划|换一套|另一套方案|另一个方案)",
-        str(feedback or ""),
-    ))
-
-
 def _workbench_existing_plan_block(session: dict[str, Any]) -> str:
     plan = session.get("plan") if isinstance(session.get("plan"), list) else []
     titles_by_id = {
@@ -3512,7 +3570,7 @@ def _workbench_reconcile_revised_plan(
 ) -> list[dict[str, Any]]:
     mode = str(operation or "auto").strip().lower()
     if mode not in ("revise", "replace"):
-        mode = "replace" if _workbench_plan_reset_requested(feedback) else "revise"
+        mode = "revise"
     if not existing or not feedback or mode == "replace":
         return _workbench_normalize_plan(generated)
     if not generated:
@@ -3639,8 +3697,9 @@ async def _workbench_generate_plan_steps(
         if isinstance(planning_thread.get("workspaceSnapshot"), dict)
         else {}
     )
-    tool_bundle_version, workspace_revision, workspace_snapshot = _workbench_plan_tool_bundle(
+    tool_bundle_version, workspace_revision, workspace_snapshot, routing = await _workbench_plan_tool_bundle(
         session,
+        project,
         workspace_root,
         feedback=feedback,
         requested_operation=requested_operation,
@@ -3755,7 +3814,7 @@ async def _workbench_generate_plan_steps(
         elif agent_operation in ("revise", "replace"):
             operation = agent_operation
         else:
-            operation = "replace" if _workbench_plan_reset_requested(feedback) else "revise"
+            operation = str(routing.get("revisionMode") or "revise")
         steps = _workbench_reconcile_revised_plan(existing_plan, steps, feedback, operation)
         revised_goal = str(parsed.get("goal") or "").strip()
         if revised_goal:
@@ -4645,24 +4704,6 @@ def _workbench_prune_non_file_artifacts(session: dict[str, Any]) -> bool:
         if not path or path in seen_paths:
             continue
         name = path.rsplit("/", 1)[-1].lower()
-        looks_temporary = name.startswith(("test_", "temp_", "tmp_", "scratch_"))
-        if looks_temporary:
-            reported = False
-            for run in session.get("runs") or []:
-                if not isinstance(run, dict):
-                    continue
-                response = str(run.get("agentResponse") or "")
-                index = response.find(path)
-                if index < 0:
-                    index = response.find(path.rsplit("/", 1)[-1])
-                if index < 0:
-                    continue
-                context = response[max(0, index - 180):index + len(path) + 180]
-                if _WORKBENCH_OUTPUT_EVIDENCE.search(context):
-                    reported = True
-                    break
-            if not reported:
-                continue
         seen_paths.add(path)
         kept.append(artifact)
 
@@ -4790,52 +4831,79 @@ def _workbench_backfill_file_artifacts(
     )
 
 
-_WORKBENCH_OUTPUT_EVIDENCE = re.compile(
-    r"(已生成|成功生成|生成完成|已导出|成功导出|已保存|文件路径|可直接交付|"
-    r"generated|created|exported|saved|produced|deliverable)",
-    flags=re.IGNORECASE,
-)
-_WORKBENCH_INPUT_EVIDENCE = re.compile(
-    r"(输入|源文件|读取|基于|转换自|input|source|read from|converted from)",
-    flags=re.IGNORECASE,
-)
-
-
-def _workbench_backfill_referenced_file_artifacts(
+async def _workbench_backfill_referenced_file_artifacts(
     project: dict[str, Any],
     session: dict[str, Any],
     now: str,
 ) -> int:
-    """Recover real files explicitly reported as outputs by historical runs."""
+    """Use a model once to recover deliverables from legacy free-text replies."""
+    if int(session.get("legacyArtifactModelMigrationVersion") or 0) >= 1:
+        return 0
     root = _workbench_workspace_root(project)
     snapshot = _workbench_workspace_file_snapshot(root)
     if not snapshot:
+        session["legacyArtifactModelMigrationVersion"] = 1
         return 0
-    changes: list[dict[str, Any]] = []
+    candidates: list[dict[str, str]] = []
     for run in session.get("runs") or []:
         if not isinstance(run, dict):
             continue
         response = str(run.get("agentResponse") or "")
-        if not response or not _WORKBENCH_OUTPUT_EVIDENCE.search(response):
+        if not response:
             continue
         for path in snapshot:
             name = path.rsplit("/", 1)[-1]
-            positions = [
-                index for token in (path, name)
-                if token and (index := response.find(token)) >= 0
-            ]
-            if not positions:
+            index = response.find(path)
+            if index < 0:
+                index = response.find(name)
+            if index < 0:
                 continue
-            index = min(positions)
-            prefix = response[max(0, index - 80):index]
-            if _WORKBENCH_INPUT_EVIDENCE.search(prefix):
-                continue
-            context = response[max(0, index - 180):index + len(name) + 180]
-            if not _WORKBENCH_OUTPUT_EVIDENCE.search(context):
-                continue
-            change = _workbench_file_change(path, "produced", root, "workspace_output")
-            if change:
-                changes.append(change)
+            candidate = {
+                "path": path,
+                "context": response[max(0, index - 240):index + len(name) + 240],
+            }
+            if candidate not in candidates:
+                candidates.append(candidate)
+            if len(candidates) >= 100:
+                break
+        if len(candidates) >= 100:
+            break
+    if not candidates:
+        session["legacyArtifactModelMigrationVersion"] = 1
+        return 0
+    prompt = (
+        "请判断旧任务回复中提到的文件，哪些是 Agent 明确交付给用户的最终输出产物。"
+        "必须理解否定、输入/源文件、临时文件、示例和历史文件等语义；只有明确作为本任务产出或"
+        "交付物的文件才选中。不要根据‘生成’‘保存’等单个词机械判断。只返回 JSON："
+        '{"deliverablePaths":["候选中的完整相对路径"]}。不得返回候选之外的路径。\n\n候选：'
+        + _workbench_stable_json(candidates)
+    )
+    try:
+        response = await asyncio.wait_for(
+            _call_llm(
+                [{"role": "user", "content": prompt}], tools=None,
+                max_tokens=1200, secondary=True, thinking="disabled",
+            ),
+            timeout=30,
+        )
+    except Exception:
+        logger.exception("Workbench legacy artifact classification failed")
+        return 0
+    content = str(response.get("content") or "") if isinstance(response, dict) else ""
+    parsed = _workbench_parse_json_object(content)
+    raw_paths = parsed.get("deliverablePaths") if isinstance(parsed, dict) else None
+    if not isinstance(raw_paths, list):
+        return 0
+    allowed = {item["path"] for item in candidates}
+    changes: list[dict[str, Any]] = []
+    for value in raw_paths:
+        path = str(value or "").strip()
+        if path not in allowed:
+            continue
+        change = _workbench_file_change(path, "produced", root, "workspace_output")
+        if change:
+            changes.append(change)
+    session["legacyArtifactModelMigrationVersion"] = 1
     return _workbench_promote_file_artifacts(
         session,
         _workbench_merge_file_changes(changes),
@@ -5298,6 +5366,7 @@ _WORKBENCH_TASK_MODE_SYSTEM = (
     "## 把产物交付给用户\n"
     "任务的交付物（报告、数据、导出文件、生成的代码包等）要让用户能在「产物」面板下载：\n"
     "- 你需要判断哪些是真正面向用户的最终交付物，并用 send_file 声明；只写文件路径不算交付。\n"
+    "- 用户指定保存地址时，先保存文件，再对真实路径调用 send_file 登记产物；已授权的工作区外路径也适用。\n"
     "- 不要声明源代码、脚本、.tex、缓存、依赖、构建目录或中间数据，除非用户明确要求这些也是交付物。\n"
     "- 例：代码生成数据分析报告时，默认只交付最终报告（如 PDF/HTML/Markdown），不交付分析脚本；"
     "LaTeX 生成文档时，默认只交付编译后的 PDF，不交付 .tex/.aux/.log。\n"
@@ -6210,7 +6279,7 @@ def _workbench_apply_pending(session: dict[str, Any], session_id: str, agent_rep
 
 
 # Task-meta fields the agent may edit mid-run via the set_task_goal tool.
-_WORKBENCH_AGENT_EDITABLE_META = ("goal", "title", "summary", "titleLocked")
+_WORKBENCH_AGENT_EDITABLE_META = ("goal", "title", "summary", "titleLocked", "constraints")
 
 
 def _workbench_capture_task_meta(session: dict[str, Any]) -> dict[str, Any]:
@@ -6463,9 +6532,9 @@ async def _workbench_agent_reply(
             conversation_source=resolved_conversation_source,
         )
         if not str(reply or "").strip():
-            from cyrene.model_runtime.client import _resolve_llm_candidates
+            from cyrene.model_runtime.client import resolve_llm_candidates
 
-            if not _resolve_llm_candidates():
+            if not resolve_llm_candidates():
                 raise _WorkbenchAgentRunError(
                     "model_not_configured",
                     "No model is configured. Configure one in Settings → Models, then try again.",
@@ -6527,7 +6596,7 @@ async def _reset_process_runtime_state() -> None:
     from cyrene.runtime.shell_wake import get_shell_wake_service
     from cyrene.tooling.backends.mcp_manager import stop_mcp_async
     from cyrene.workbench import chat as workbench_chat
-    from cyrene.workbench import goal_loop
+    goal_loop = importlib.import_module("cyrene.workbench.goal_loop")
 
     manager = workbench_chat._CHAT_RUN_MANAGER
     for chat_id in list(manager.runs):

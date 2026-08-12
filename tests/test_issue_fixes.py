@@ -759,7 +759,7 @@ def test_update_restart_api_schedules_verified_install_without_exiting_in_route(
     launch = MagicMock(return_value=(True, "", "", 200))
     monkeypatch.setattr(routes, "_launch_update_restart", launch)
     call_host = AsyncMock(return_value={
-        "ok": True, "hostKind": "electron", "appVersion": "0.7.3",
+        "ok": True, "hostKind": "electron", "appVersion": "0.7.4",
     })
     schedule = MagicMock(return_value={"action_id": "host_action_" + "a" * 32})
     finalize = AsyncMock()

@@ -37,6 +37,8 @@ PRIVATE_IMPORT_BUDGET = {
 CYRENE_TOP_LEVEL_DIRECTORIES = {
     "agent",
     "channels",
+    "extensions",
+    "hooks",
     "knowledge",
     "learning",
     "model_runtime",

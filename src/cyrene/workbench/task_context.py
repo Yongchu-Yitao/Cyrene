@@ -259,6 +259,20 @@ def render_session_plan_block(session: dict[str, Any]) -> str:
     return "## 当前 session 计划\n" + "\n".join(rows)
 
 
+def render_session_constraints_block(session: dict[str, Any]) -> str:
+    raw = session.get("constraints")
+    if not isinstance(raw, list):
+        return ""
+    rows: list[str] = []
+    for item in raw[:8]:
+        text = _clean_text(item, 300)
+        if text:
+            rows.append(f"- {text}")
+    if not rows:
+        return ""
+    return "## 当前 session 任务约束\n" + "\n".join(rows)
+
+
 def render_session_acceptance_block(session: dict[str, Any]) -> str:
     raw = session.get("acceptanceCriteria")
     if not isinstance(raw, list):
@@ -306,6 +320,7 @@ def build_main_context(
     parts = [
         render_project_fixed_block(project),
         render_session_task_block(session, parent_task=True),
+        render_session_constraints_block(session),
         render_session_plan_block(session),
         render_session_acceptance_block(session),
     ]
@@ -328,6 +343,7 @@ def build_subagent_context(
         render_project_fixed_block(project),
         render_outcome_tail_block(project),
         render_session_task_block(session, subtask_prompt=subtask_prompt),
+        render_session_constraints_block(session),
         render_session_plan_block(session),
         render_session_acceptance_block(session),
     ]

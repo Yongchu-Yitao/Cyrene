@@ -292,6 +292,7 @@ async def _request_scope_elevation(
         "self_configuration_confirmation",
         "host_lifecycle_confirmation",
     }
+    always_review = permission_kind == "extension_change"
     # A paired controller may pre-authorize one exact, argument-hashed capability
     # invocation. That bounded receipt carries the controller chat's local path
     # decision, but never deletion or external-upload authority.
@@ -309,10 +310,10 @@ async def _request_scope_elevation(
     # never destructive or external-upload confirmation.
     if (
         mode == "full_access" or run_context.temporary_full_access
-    ) and not requires_human_confirmation:
+    ) and not requires_human_confirmation and not always_review:
         return None
     # 自动模式：审核 agent 自主裁决，从不打扰用户。
-    if mode == "auto" and not requires_human_confirmation:
+    if (mode == "auto" or always_review) and not requires_human_confirmation:
         from cyrene.agent.auto_review import review_elevation
         approved, rationale = await review_elevation(
             tool_name=tool_name,

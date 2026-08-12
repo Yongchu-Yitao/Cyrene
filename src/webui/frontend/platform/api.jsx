@@ -32,6 +32,8 @@ var WorkbenchAPI = (function () {
     quota_exhausted: "workbenchChat.error.quotaExhausted",
     authentication_expired: "workbenchChat.error.authenticationExpired",
     model_unavailable: "workbenchChat.error.modelUnavailable",
+    model_not_configured: "workbenchChat.error.modelNotConfigured",
+    model_authentication_failed: "workbenchChat.error.modelAuthenticationFailed",
     process_restarted: "workbenchChat.error.processRestarted",
     chat_run_driver_failed: "workbenchChat.error.driverFailed",
     chat_not_found: "workbenchChat.error.chatNotFound",

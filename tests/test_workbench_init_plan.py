@@ -701,7 +701,9 @@ def test_workbench_plan_revision_allows_explicit_replacement():
     existing = [_workbench_new_plan_step("旧计划", "", 1, "task_1")]
     generated = [_workbench_new_plan_step("新计划", "", 1, "task_1")]
 
-    merged = _workbench_reconcile_revised_plan(existing, generated, "重新规划，替换原计划")
+    merged = _workbench_reconcile_revised_plan(
+        existing, generated, "重新规划，替换原计划", operation="replace"
+    )
 
     assert [step["title"] for step in merged] == ["新计划"]
 
@@ -1423,7 +1425,15 @@ async def test_workbench_plan_prompt_leaves_workspace_exploration_to_agent(monke
             "acceptanceCriteria": ["计划覆盖目标、行动和复盘"],
         }
 
+    async def fake_routing(*_args, **_kwargs):
+        return {
+            "workspaceRelationship": "independent",
+            "needsWorkspaceRefresh": False,
+            "revisionMode": "revise",
+        }
+
     monkeypatch.setattr(routes, "_workbench_run_explore_agent", fake_agent)
+    monkeypatch.setattr(routes, "_workbench_classify_plan_routing", fake_routing)
     session = {
         "id": "task_non_file_plan",
         "title": "制定学习计划",
@@ -2173,11 +2183,14 @@ def test_workbench_prunes_non_file_and_duplicate_artifacts():
     assert _workbench_prune_non_file_artifacts(session) is True
     assert session["artifacts"] == [
         {"id": "file-1", "type": "file_change", "name": "report.md", "path": "out/report.md"},
+        {"id": "test", "type": "file_change", "name": "test_render.md", "path": "test_render.md"},
     ]
 
 
-def test_workbench_backfills_reported_historical_output(tmp_path):
+@pytest.mark.asyncio
+async def test_workbench_backfills_reported_historical_output(monkeypatch, tmp_path):
     from cyrene.workbench.runtime import _workbench_backfill_referenced_file_artifacts
+    from cyrene.workbench import runtime
 
     output = tmp_path / "exports" / "final.pdf"
     output.parent.mkdir()
@@ -2194,7 +2207,13 @@ def test_workbench_backfills_reported_historical_output(tmp_path):
         }],
     }
 
-    added = _workbench_backfill_referenced_file_artifacts(
+    async def fake_call_llm(messages, **_kwargs):
+        assert "不要根据‘生成’‘保存’等单个词机械判断" in messages[-1]["content"]
+        return {"content": '{"deliverablePaths":["exports/final.pdf"]}'}
+
+    monkeypatch.setattr(runtime, "_call_llm", fake_call_llm)
+
+    added = await _workbench_backfill_referenced_file_artifacts(
         {"workspacePath": str(tmp_path)},
         session,
         "2026-06-21T00:00:00Z",
@@ -2202,6 +2221,7 @@ def test_workbench_backfills_reported_historical_output(tmp_path):
 
     assert added == 1
     assert session["artifacts"][0]["path"] == "deliverables/final.pdf"
+    assert session["legacyArtifactModelMigrationVersion"] == 1
     assert (tmp_path / "deliverables" / "final.pdf").read_bytes() == b"%PDF-1.7\n"
 
 

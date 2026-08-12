@@ -1,3 +1,4 @@
+import io
 from pathlib import Path
 
 import numpy as np
@@ -61,6 +62,90 @@ def test_zipvoice_generation_uses_balanced_quality_and_slower_natural_pacing():
     assert engine.TTS_SILENCE_SCALE == 0.24
 
 
+def test_custom_voice_profile_save_status_synthesis_and_delete(monkeypatch, tmp_path):
+    voice_root = tmp_path / "voice"
+    reference_audio = voice_root / "reference.wav"
+    settings = {
+        "auto_read": False,
+        "auto_send_after_asr": False,
+        "auto_stop_on_silence": True,
+        "reference_text": "",
+        "voice_mode": engine.VOICE_MODE_PRESET,
+        "voice_preset": engine.DEFAULT_PRESET_ID,
+    }
+
+    monkeypatch.setattr(engine, "VOICE_ROOT", voice_root)
+    monkeypatch.setattr(engine, "REFERENCE_AUDIO", reference_audio)
+    monkeypatch.setattr(engine.config_store, "get_setting", lambda key, default=None: dict(settings))
+    monkeypatch.setattr(engine.config_store, "set_setting", lambda key, value: settings.update(value))
+    monkeypatch.setattr(engine, "_runtime_available", lambda: True)
+    monkeypatch.setattr(engine.local_models, "is_ready", lambda _model_id: True)
+    monkeypatch.setattr(engine, "_preset_ready", lambda: True)
+
+    source = io.BytesIO()
+    sf_samples = np.sin(np.linspace(0, np.pi * 440, 24_000, dtype=np.float32)) * 0.1
+    import soundfile as sf
+    sf.write(source, sf_samples, 24_000, format="WAV", subtype="PCM_16")
+
+    saved = engine.save_voice_profile(source.getvalue(), "这是自动识别的参考文字。")
+    assert saved["voice_mode"] == engine.VOICE_MODE_CUSTOM
+    assert saved["voice_profile_ready"] is True
+    assert saved["tts_ready"] is True
+    assert reference_audio.exists()
+
+    class FakeAudio:
+        samples = np.ones(240, dtype=np.float32) * 0.05
+        sample_rate = 24_000
+
+    class FakeTts:
+        def generate(self, content, generation):
+            assert content == "你好"
+            assert generation.reference_text == "这是自动识别的参考文字。"
+            assert len(generation.reference_audio) == 24_000
+            assert generation.reference_sample_rate == 24_000
+            return FakeAudio()
+
+    class FakeGenerationConfig:
+        def __init__(self):
+            self.extra = {}
+
+    monkeypatch.setattr(engine, "_load_tts", lambda: FakeTts())
+    monkeypatch.setitem(__import__("sys").modules, "sherpa_onnx", type("Sherpa", (), {"GenerationConfig": FakeGenerationConfig}))
+    speech = engine.synthesize("你好", num_steps=4)
+    assert speech.startswith(b"RIFF")
+
+    deleted = engine.delete_voice_profile()
+    assert deleted["voice_mode"] == engine.VOICE_MODE_PRESET
+    assert deleted["voice_profile_ready"] is False
+    assert not reference_audio.exists()
+
+
+def test_custom_voice_profile_restores_previous_audio_when_settings_save_fails(monkeypatch, tmp_path):
+    voice_root = tmp_path / "voice"
+    voice_root.mkdir()
+    reference_audio = voice_root / "reference.wav"
+    reference_audio.write_bytes(b"previous-reference")
+    monkeypatch.setattr(engine, "VOICE_ROOT", voice_root)
+    monkeypatch.setattr(engine, "REFERENCE_AUDIO", reference_audio)
+    monkeypatch.setattr(engine, "_settings", lambda: {
+        "auto_read": False,
+        "auto_send_after_asr": False,
+        "auto_stop_on_silence": True,
+        "reference_text": "旧文字",
+        "voice_mode": engine.VOICE_MODE_CUSTOM,
+        "voice_preset": engine.DEFAULT_PRESET_ID,
+    })
+    monkeypatch.setattr(engine.config_store, "set_setting", lambda *_args: (_ for _ in ()).throw(OSError("disk full")))
+
+    source = io.BytesIO()
+    import soundfile as sf
+    sf.write(source, np.zeros(16_000, dtype=np.float32), 16_000, format="WAV", subtype="PCM_16")
+    with __import__("pytest").raises(OSError, match="disk full"):
+        engine.save_voice_profile(source.getvalue(), "新文字")
+
+    assert reference_audio.read_bytes() == b"previous-reference"
+
+
 def test_tts_audio_edges_are_silent_and_smooth():
     sample_rate = 24_000
     source = np.ones(sample_rate // 2, dtype=np.float32)
@@ -99,6 +184,12 @@ def test_voice_routes_reuse_engine_adapters(monkeypatch):
         "transcribe",
         lambda payload: {"text": "语音输入成功", "bytes": len(payload)},
     )
+    monkeypatch.setattr(
+        voice_routes.engine,
+        "save_voice_profile",
+        lambda payload, text: {**ready, "reference_text": text, "voice_mode": "custom", "bytes": len(payload)},
+    )
+    monkeypatch.setattr(voice_routes.engine, "delete_voice_profile", lambda: {**ready, "voice_profile_ready": False})
     synthesized = []
 
     def synthesize(text, *, num_steps=None):
@@ -122,6 +213,15 @@ def test_voice_routes_reuse_engine_adapters(monkeypatch):
         files={"audio": ("voice.wav", b"wave-data", "audio/wav")},
     ).json()
     assert transcript == {"text": "语音输入成功", "bytes": 9}
+    profile = client.post(
+        "/api/voice/profile",
+        files={"audio": ("reference.wav", b"recorded-reference", "audio/wav")},
+        data={"reference_text": "自动识别文字"},
+    ).json()
+    assert profile["voice_mode"] == "custom"
+    assert profile["reference_text"] == "自动识别文字"
+    assert profile["bytes"] == 18
+    assert client.delete("/api/voice/profile").json()["voice_profile_ready"] is False
     speech = client.post("/api/voice/tts", json={"text": "你好", "num_steps": 4})
     assert speech.status_code == 200
     assert speech.headers["content-type"].startswith("audio/wav")
@@ -152,6 +252,19 @@ def test_voice_controls_follow_existing_chat_layout():
     assert "settings.voiceAutoStop" in capabilities
     assert "settings.voicePresetMode" in capabilities
     assert "settings.voiceCustomMode" in capabilities
+    custom_voice = capabilities.split('customVoiceSelected\n            ?', 1)[1].split(': React.createElement("div", { className: "wb-voice-preset-row" }', 1)[0]
+    assert 'type: "file"' not in custom_voice
+    assert 'React.createElement("textarea"' not in custom_voice
+    assert "wbcStartVoiceRecorder" in settings
+    assert "wbcTranscribeVoiceBlob(blob)" in settings
+    assert "voiceReferenceSessionRef.current += 1" in settings
+    assert 'if (tab === "capabilities") return;' in settings
+    assert "wbcStartVoiceRecorder().then" in settings
+    assert "autoStopOnSilence: true" not in settings.split("function startVoiceReferenceRecording", 1)[1].split("useEffectSt(function ()", 1)[0]
+    assert "voiceReferenceElapsed.toFixed(1)" in custom_voice
+    assert 'settings.voiceReferenceRecordingStatus' in custom_voice
+    assert "if (elapsed >= 14) finishVoiceReferenceRecording(recorder);" in settings
+    assert 'className: "wb-voice-reference-transcript"' in custom_voice
     assert "/api/voice/settings" in settings
     assert "auto_send_after_asr" in composer
     assert "auto_stop_on_silence" in composer

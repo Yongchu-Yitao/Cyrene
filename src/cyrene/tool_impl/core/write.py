@@ -40,7 +40,15 @@ async def _tool_write(args: dict[str, Any], _bot: Any, _chat_id: int, _db_path: 
         path.write_text(str(args.get("content", "")), encoding="utf-8")
 
     await asyncio.to_thread(write_file)
-    return f"Wrote {path}"
+    result = f"Wrote {path}"
+    if path.name.casefold() == "skill.md":
+        result += (
+            "\nThis Skill is a workspace draft and is not registered yet. "
+            "Finish all referenced files, then invoke `skill.install` through "
+            f"`skill_tools` with directory path `{path.parent}`. Only a successful "
+            "install result makes it available to future agent turns."
+        )
+    return result
 
 
 handler = _tool_write

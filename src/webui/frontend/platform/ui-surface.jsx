@@ -1029,6 +1029,33 @@
     return result;
   }
 
+  function visibleSessionState(entries) {
+    var preferredNodeIds = [
+      "chat_composer_input", "task_composer_input",
+      "chat_composer_submit", "task_composer_submit",
+    ];
+    var item = null;
+    preferredNodeIds.some(function (nodeId) {
+      item = entries.find(function (candidate) {
+        return candidate.entry.node_id === nodeId
+          && candidate.value && candidate.value.state
+          && candidate.value.state.session_id;
+      });
+      return !!item;
+    });
+    if (!item) {
+      item = entries.find(function (candidate) {
+        return candidate.value && candidate.value.state
+          && candidate.value.state.session_id;
+      });
+    }
+    var state = item && item.value && item.value.state || {};
+    return {
+      visible_session_id: String(state.session_id || ""),
+      visible_session_kind: String(state.session_kind || ""),
+    };
+  }
+
   function stableSemanticState(value) {
     var state = value && value.state || {};
     var semanticState = {};
@@ -1220,6 +1247,7 @@
     var includeText = includes.indexOf("text") >= 0;
     var includeInteractive = includes.indexOf("interactive") >= 0;
     var entries = visibleEntries();
+    var sessionState = visibleSessionState(entries);
     if (options.snapshot_id && String(options.snapshot_id) !== snapshotId) {
       return { ok: false, error: "stale_snapshot", snapshot_id: snapshotId, revision: revision };
     }
@@ -1304,7 +1332,16 @@
     }
     var rootItem = {
       entry: { node_id: "root", parent_id: "", actions: [] },
-      value: { role: "application", name: "Cyrene", value_summary: "", state: { scope: activeScope } },
+      value: {
+        role: "application",
+        name: "Cyrene",
+        value_summary: "",
+        state: {
+          scope: activeScope,
+          visible_session_id: sessionState.visible_session_id,
+          visible_session_kind: sessionState.visible_session_kind,
+        },
+      },
     };
     var parentNodeId = String(options.parent_node_id || "root");
     var selectedRoot = parentNodeId === "root" ? rootItem : entryById.get(parentNodeId);
@@ -1338,7 +1375,12 @@
       snapshot_id: snapshotId,
       revision: revision,
       requested_revision_compatible: requestedRevisionCompatible,
-      surface: { kind: surfaceKind, scope: activeScope },
+      surface: {
+        kind: surfaceKind,
+        scope: activeScope,
+        visible_session_id: sessionState.visible_session_id,
+        visible_session_kind: sessionState.visible_session_kind,
+      },
       include: includes,
       page: clone(rootNode.children_page),
       root: rootNode,

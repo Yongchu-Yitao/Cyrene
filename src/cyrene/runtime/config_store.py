@@ -151,6 +151,15 @@ _DEFAULT_SETTINGS: dict = {
     "notify_telegram": True,
     "notify_wechat": True,
     "shortcut_bindings": {},
+    # Portable Extension Center declarations. Downloaded runtimes and caches
+    # deliberately live outside this encrypted snapshot.
+    "extension_sources": {},
+    "extension_clis": [],
+    "extension_toolchains": [],
+    "extension_system_bindings": {},
+    # None distinguishes a pre-migration installation from a deliberately
+    # empty encrypted MCP declaration list.
+    "mcp_servers": None,
     "zotero": {
         "base_url": "http://127.0.0.1:23119/api",
         "auto_sync": False,
@@ -514,7 +523,26 @@ def export_snapshot() -> dict:
     Backup archives therefore carry this logical snapshot and re-encrypt it
     with the destination installation's key during restore.
     """
-    return deepcopy(_ensure_loaded())
+    snapshot = deepcopy(_ensure_loaded())
+    # Runtime credentials remain encrypted locally but are intentionally not
+    # portable. Keep the declarations and replace values with explicit
+    # references so restore never transports plaintext secrets.
+    settings = snapshot.get("settings")
+    if isinstance(settings, dict):
+        sources = settings.get("extension_sources")
+        if isinstance(sources, dict) and sources.get("github_token"):
+            sources["github_token"] = ""
+            sources["github_token_requires_reentry"] = True
+        servers = settings.get("mcp_servers")
+        if isinstance(servers, list):
+            for server in servers:
+                if not isinstance(server, dict):
+                    continue
+                for field in ("env", "headers"):
+                    values = server.get(field)
+                    if isinstance(values, dict) and values:
+                        server[field] = {str(key): "[requires re-entry]" for key in values}
+    return snapshot
 
 
 def _normalize_restored_snapshot(snapshot: dict) -> dict:

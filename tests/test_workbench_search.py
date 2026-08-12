@@ -891,8 +891,9 @@ def test_chat_session_is_llm_named_only_after_its_first_message(
     async def fake_run_agent(**kwargs):
         return "done"
 
-    async def fake_generate(message, *, limit=60):
+    async def fake_generate(message, *, limit=60, candidate=None):
         calls.append(message)
+        assert candidate is not None
         await asyncio.sleep(0)
         return "检查当前 Session 命名"
 

@@ -464,9 +464,56 @@ def restore_project_memory_prompt(
     )
 
 
-def should_auto_trigger(completed_turn_count: int) -> bool:
-    count = int(completed_turn_count or 0)
-    return count >= 10 and (count - 10) % 5 == 0
+_AUTO_CONTEXT_START_PERCENT = 20
+_AUTO_CONTEXT_STEP_PERCENT = 10
+_AUTO_CONTEXT_FINAL_PERCENT = 70
+
+
+def context_auto_trigger_threshold(
+    project_id: str,
+    chat_id: str,
+    messages: list[dict[str, Any]],
+    *,
+    ctx_limit: int | None = None,
+) -> int | None:
+    """Return a newly crossed 20%..70% context threshold, if any.
+
+    Thresholds are tracked for the lifetime of a conversation, including across
+    compaction. If one turn crosses several thresholds, only the highest reached
+    threshold is returned. Seventy percent is the final automatic trigger.
+    """
+    from cyrene.model_runtime.client import message_token_estimate
+    from cyrene.runtime.config_store import get_current_ctx_limit
+
+    limit = int(ctx_limit if ctx_limit is not None else get_current_ctx_limit())
+    if limit <= 0 or not messages:
+        return None
+    used = sum(
+        message_token_estimate(message)
+        for message in messages
+        if isinstance(message, dict)
+    )
+    reached = min(
+        _AUTO_CONTEXT_FINAL_PERCENT,
+        (used * 100 // limit // _AUTO_CONTEXT_STEP_PERCENT)
+        * _AUTO_CONTEXT_STEP_PERCENT,
+    )
+    if reached < _AUTO_CONTEXT_START_PERCENT:
+        return None
+
+    document = _load_prompt_document(project_id)
+    previous = 0
+    for job in document.get("jobs") or []:
+        if not isinstance(job, dict):
+            continue
+        if str(job.get("chatId") or "") != str(chat_id or ""):
+            continue
+        if str(job.get("source") or "") != "conversation_auto":
+            continue
+        if str(job.get("status") or "") in {"failed", "conflict"}:
+            continue
+        previous = max(previous, int(job.get("contextThresholdPercent") or 0))
+    return reached if reached > previous else None
 
 
 def _context_hash(messages: list[dict[str, Any]]) -> str:
@@ -664,6 +711,7 @@ def _append_job(project_id: str, snapshot: dict[str, Any], source: str, reason: 
             "turn": int(snapshot.get("completedTurnCount") or 0),
             "contextHash": str(snapshot.get("contextHash") or ""),
             "contextSource": str(snapshot.get("snapshotSource") or "exact_completed_context"),
+            "contextThresholdPercent": int(snapshot.get("contextThresholdPercent") or 0),
             "language": str(snapshot.get("language") or ""),
             "source": str(source or "manual"),
             "reason": str(reason or "manual"),
@@ -1073,6 +1121,7 @@ __all__ = [
     "cancel_chat_jobs",
     "cancel_project_jobs",
     "completed_context_snapshot",
+    "context_auto_trigger_threshold",
     "configure_store",
     "current_snapshot",
     "delete_chat_context",
@@ -1085,7 +1134,6 @@ __all__ = [
     "schedule_learning",
     "schedule_learning_from_completed_chat",
     "schedule_learning_from_live_session",
-    "should_auto_trigger",
     "update_project_memory_prompt",
     "wait_for_pending_jobs",
 ]

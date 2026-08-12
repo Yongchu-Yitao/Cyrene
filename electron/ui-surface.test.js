@@ -305,6 +305,24 @@ test('semantic surface exposes only registered current-scope actions with revisi
   assert.equal(value, 'compatible');
 });
 
+test('snapshot exposes the session owning the current visible interface', () => {
+  const surface = loadSurface();
+  surface.register({
+    node_id: 'chat_composer_input', parent_id: 'root', scope: 'main', order: 1,
+    get_node: () => ({
+      role: 'textbox', name: 'Message',
+      state: { session_id: 'visible-chat', session_kind: 'chat' },
+    }),
+    actions: [{ action_id: 'set_value', kind: 'set_value' }],
+    handlers: { set_value: () => {} },
+  });
+
+  const tree = surface.snapshot({ max_depth: 12 });
+  assert.equal(tree.surface.visible_session_id, 'visible-chat');
+  assert.equal(tree.surface.visible_session_kind, 'chat');
+  assert.equal(tree.root.state.visible_session_id, 'visible-chat');
+});
+
 test('current accessibility projection supports visible press, value, select, context menu, and list scroll', async () => {
   const { surface, button, input, select, menuTarget, scroller, document, cursorTimers } = loadSurfaceWithDocument();
   let tree = surface.snapshot({ max_depth: 12 });

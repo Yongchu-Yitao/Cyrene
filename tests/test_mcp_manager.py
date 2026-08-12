@@ -4,6 +4,7 @@ Tests for MCP manager: config persistence and tool integration.
 
 import sys
 import tempfile
+import asyncio
 from pathlib import Path
 
 import pytest
@@ -11,12 +12,13 @@ import pytest
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 
 
-def _patch(obj, attr, replacement):
-    """Monkey-patch helper — returns the original value."""
-    original = getattr(obj, attr)
-    setattr(obj, attr, replacement)
-    return original
+@pytest.fixture(autouse=True)
+def _isolated_mcp_settings(monkeypatch):
+    from cyrene.runtime import settings_store
 
+    state = {"mcp_servers": None}
+    monkeypatch.setattr(settings_store, "get", lambda key, default=None: state.get(key, default))
+    monkeypatch.setattr(settings_store, "set_", lambda key, value: state.__setitem__(key, value))
 
 def test_config_persistence_empty():
     """Default config should return an empty server list."""
@@ -34,12 +36,14 @@ def test_config_persistence_save_and_load():
 
     with tempfile.TemporaryDirectory() as tmp:
         mm._MCP_SERVERS_FILE = Path(tmp) / "mcp_servers.json"
+        wrapper = Path(tmp) / "test-mcp-server"
+        wrapper.write_text("test executable", encoding="utf-8")
         test_servers = [
             {
                 "name": "test-fs",
                 "transport": "stdio",
-                "command": "npx",
-                "args": ["-y", "@modelcontextprotocol/server-filesystem", "/tmp"],
+                "command": str(wrapper),
+                "args": ["-m", "test_mcp_server"],
                 "enabled": True,
             },
             {
@@ -54,6 +58,19 @@ def test_config_persistence_save_and_load():
         assert loaded == test_servers, f"Mismatch: {loaded} != {test_servers}"
 
 
+def test_mcp_browser_payload_is_redacted_and_round_trips_sentinels():
+    from cyrene.tooling.backends import mcp_manager as mm
+
+    existing = [{
+        "name": "secured", "transport": "streamable_http", "url": "https://example.com/mcp",
+        "headers": {"Authorization": "Bearer secret"},
+    }]
+    safe = mm.redact_mcp_servers(existing)
+    assert "secret" not in str(safe)
+    merged = mm.merge_redacted_mcp_servers(existing, safe)
+    assert merged[0]["headers"]["Authorization"] == "Bearer secret"
+
+
 def test_config_persistence_corrupted_file():
     """A corrupted JSON file should fall back to the default empty list."""
     from cyrene.tooling.backends import mcp_manager as mm
@@ -64,6 +81,22 @@ def test_config_persistence_corrupted_file():
         mcp_file.write_text("{{{ corrupted json", encoding="utf-8")
         servers = mm.get_mcp_servers()
         assert servers == [], f"Expected empty list fallback, got {servers}"
+
+
+def test_config_rejects_dynamic_runners_and_insecure_remote_urls():
+    from cyrene.tooling.backends import mcp_manager as mm
+
+    with pytest.raises(ValueError, match="not allowed"):
+        mm.save_mcp_servers([{"name": "dynamic", "transport": "stdio", "command": "npx", "args": ["-y", "pkg@latest"]}])
+    with pytest.raises(ValueError, match="HTTPS"):
+        mm.save_mcp_servers([{"name": "remote", "transport": "streamable_http", "url": "http://example.com/mcp"}])
+
+
+def test_streamable_http_is_a_supported_transport(monkeypatch):
+    from cyrene.tooling.backends.mcp_manager import MCPServerConnection
+
+    connection = MCPServerConnection("remote", "streamable-http", {"url": "https://example.com/mcp"})
+    assert connection.transport == "streamable-http"
 
 
 def test_singleton_get_manager():
@@ -193,6 +226,85 @@ def test_start_stop_with_no_servers():
         manager = get_manager()
         assert len(manager._servers) == 0, "No servers should be connected with empty config"
         stop_mcp()
+
+
+@pytest.mark.asyncio
+async def test_manager_cancellation_disconnects_staged_connection(monkeypatch):
+    from cyrene.tooling.backends import mcp_manager as mm
+
+    started = __import__("asyncio").Event()
+    disconnected = __import__("asyncio").Event()
+
+    class SlowConnection:
+        def __init__(self, name, transport, config):
+            self.name = name
+
+        async def connect(self):
+            started.set()
+            await __import__("asyncio").Future()
+
+        async def disconnect(self):
+            disconnected.set()
+
+    monkeypatch.setattr(mm, "get_mcp_servers", lambda: [{"name": "slow", "transport": "stdio", "enabled": True}])
+    monkeypatch.setattr(mm, "MCPServerConnection", SlowConnection)
+    manager = mm.MCPManager()
+    task = __import__("asyncio").create_task(manager.start())
+    await started.wait()
+    task.cancel()
+    with pytest.raises(__import__("asyncio").CancelledError):
+        await task
+
+    assert disconnected.is_set()
+    assert manager._servers == {}
+
+
+@pytest.mark.asyncio
+async def test_cancelled_real_stdio_handshake_terminates_child_process(tmp_path, monkeypatch):
+    from cyrene.tooling.backends import mcp_manager as mm
+
+    pid_file = tmp_path / "server.pid"
+    server = tmp_path / "slow-mcp-server"
+    server.write_text(
+        "#!/bin/sh\n"
+        f"echo $$ > {pid_file}\n"
+        "exec sleep 30\n",
+        encoding="utf-8",
+    )
+    server.chmod(0o755)
+    monkeypatch.setattr(mm, "get_mcp_servers", lambda: [{
+        "name": "slow",
+        "transport": "stdio",
+        "command": str(server),
+        "enabled": True,
+        "startup_timeout_seconds": 60,
+    }])
+
+    manager = mm.MCPManager()
+    task = asyncio.create_task(manager.start())
+    pid = None
+    try:
+        deadline = asyncio.get_running_loop().time() + 5.0
+        while not pid_file.is_file() and asyncio.get_running_loop().time() < deadline:
+            await asyncio.sleep(0.02)
+        assert pid_file.is_file()
+        pid = int(pid_file.read_text(encoding="utf-8"))
+    finally:
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+
+    assert pid is not None
+    deadline = asyncio.get_running_loop().time() + 5.0
+    while asyncio.get_running_loop().time() < deadline:
+        try:
+            __import__("os").kill(pid, 0)
+        except ProcessLookupError:
+            break
+        await asyncio.sleep(0.02)
+    else:
+        pytest.fail(f"cancelled MCP subprocess {pid} is still running")
+    assert manager._servers == {}
 
 
 @pytest.mark.asyncio

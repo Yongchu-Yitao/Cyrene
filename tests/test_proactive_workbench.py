@@ -355,6 +355,30 @@ async def test_proactive_write_allows_only_new_files(monkeypatch, tmp_path):
         state._active_workspace_dir.reset(workspace_token)
 
 
+async def test_write_skill_md_reminds_agent_to_register_after_generation(monkeypatch, tmp_path):
+    from cyrene.agent import state
+    from cyrene.tool_impl.core.write import _tool_write
+    import cyrene.runtime.settings_store as settings_store
+
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    monkeypatch.setattr(settings_store, "is_workspace_active", lambda: True)
+    workspace_token = state._active_workspace_dir.set(str(workspace))
+    try:
+        result = await _tool_write(
+            {"path": "skills/demo/SKILL.md", "content": "# Demo"},
+            None,
+            0,
+            "db.sqlite3",
+            None,
+        )
+        assert "not registered yet" in result
+        assert "skill.install" in result
+        assert str(workspace / "skills" / "demo") in result
+    finally:
+        state._active_workspace_dir.reset(workspace_token)
+
+
 async def test_proactive_rejects_edit_and_shell_file_mutations(monkeypatch):
     from cyrene.agent import state
     from cyrene.tooling.executor import _execute_tool

@@ -1,7 +1,24 @@
+import json
 from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parent.parent
+
+
+def test_extension_runtime_installers_are_built_and_packaged():
+    package = json.loads((ROOT / "electron" / "package.json").read_text(encoding="utf-8"))
+    before_pack = (ROOT / "electron" / "build-app-use-macos.js").read_text(encoding="utf-8")
+    runtime_builder = (ROOT / "electron" / "build-runtime-tools.js").read_text(encoding="utf-8")
+    main = (ROOT / "electron" / "main.js").read_text(encoding="utf-8")
+
+    assert "build-runtime-tools" in before_pack
+    resources = {(item["from"], item["to"]) for item in package["build"]["extraResources"]}
+    assert ("runtime-tools", "runtime-tools") in resources
+    for target in ("darwin-arm64", "darwin-x64", "win32-arm64", "win32-x64", "linux-arm64", "linux-x64"):
+        assert f"'{target}'" in runtime_builder
+    assert "Checksum mismatch" in runtime_builder
+    assert "installQuitTitle" in main
+    assert "cancelExtensionTasksAndWait" in main
 
 
 def test_release_mounts_and_runs_the_built_macos_dmg():

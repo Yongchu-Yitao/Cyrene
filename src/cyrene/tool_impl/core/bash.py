@@ -76,9 +76,11 @@ async def _tool_bash(args: dict[str, Any], _bot: Any, _chat_id: int, _db_path: s
     timeout_ms = int(args.get("timeout_ms", 120000))
     timeout_sec = timeout_ms / 1000
     from cyrene.agent.context import active_workspace_dir
+    from cyrene.extensions.service import agent_process_environment
     proc = await asyncio.create_subprocess_exec(
         *command_argv(command),
         cwd=str(active_workspace_dir()),
+        env=agent_process_environment(),
         stdout=asyncio.subprocess.PIPE,
         stderr=asyncio.subprocess.PIPE,
     )

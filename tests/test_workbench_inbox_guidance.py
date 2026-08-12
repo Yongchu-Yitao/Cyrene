@@ -1443,7 +1443,7 @@ def test_workbench_composer_switches_stop_button_to_guidance_when_typed():
     source = Path("src/webui/frontend/workbench-chat.jsx").read_text(encoding="utf-8")
     assert "var hasRuntimeGuidance = running && !!draft.trim();" in source
     assert "running && !hasRuntimeGuidance ? onInterrupt : submit" in source
-    assert 'wbcT("workbenchChat.guidance", "Guide")' in source
+    assert 'wbcT("workbenchChat.sendGuidance", "Send guidance")' in source
     assert "model.sendGuidance(chatId, text" in source
     assert "timeout: 0" in source.split("function sendGuidance", 1)[1].split(
         "function answerChat", 1

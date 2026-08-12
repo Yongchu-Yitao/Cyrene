@@ -15,10 +15,11 @@ PACKS = (
     PackSpec("map", "map_tools", "Create map pins and connect locations.", ("map.",), 800),
     PackSpec("subagent", "subagent_tools", "Spawn, inspect, and communicate with subagents.", ("subagent.",), 900),
     PackSpec("delivery", "delivery_tools", "Progress updates, notifications, messages, and file delivery.", ("delivery.",), 1000),
-    PackSpec("skill", "skill_tools", "Discover, install, remove, inspect, and run Agent Skills.", ("skill.",), 1100),
-    PackSpec("remote", "remote_tools", "Operate paired Cyrene devices explicitly selected in the current chat.", ("remote.",), 1200),
-    PackSpec("application", "cyrene_tools", "Snapshot and inspect the current Cyrene UI, then control declared components with focus-independent click, double-click, type, scroll, and drag gestures.", ("cyrene.",), 1300),
-    PackSpec("integration", "integration_tools", "Dynamically connected MCP and external integration capabilities.", ("integration.",), 1400),
+    PackSpec("environment", "environment_tools", "Find enabled, installed or installable MCP servers, CLI tools, and runtimes without changing them.", ("environment.",), 1100),
+    PackSpec("skill", "skill_tools", "Discover, install, remove, inspect, and run Agent Skills.", ("skill.",), 1200),
+    PackSpec("remote", "remote_tools", "Operate paired Cyrene devices explicitly selected in the current chat.", ("remote.",), 1300),
+    PackSpec("application", "cyrene_tools", "Snapshot and inspect the current Cyrene UI, then control declared components with focus-independent click, double-click, type, scroll, and drag gestures.", ("cyrene.",), 1400),
+    PackSpec("integration", "integration_tools", "Dynamically connected MCP and external integration capabilities.", ("integration.",), 1500),
 )
 
 CAPABILITY_BINDINGS: dict[str, tuple[tuple[str, str], ...]] = {
@@ -115,10 +116,19 @@ CAPABILITY_BINDINGS: dict[str, tuple[tuple[str, str], ...]] = {
         ("delivery.send_wechat_file", "send_wechat_file"),
         ("delivery.send_notification", "send_notification"),
     ),
+    "environment_tools": (
+        ("environment.list", "ListEnvironment"),
+        ("environment.search", "SearchEnvironment"),
+    ),
     "skill_tools": (
         ("skill.install", "InstallSkill"),
         ("skill.uninstall", "UninstallSkill"),
         ("skill.list", "ListSkills"),
+        ("skill.search", "SearchSkills"),
+        ("skill.load", "LoadSkill"),
+        ("skill.read_resource", "ReadSkillResource"),
+        ("skill.manage_extensions", "ManageExtensions"),
+        ("skill.manage_agent_hooks", "ManageAgentHooks"),
         ("skill.get_learned", "GetLearnedSkill"),
         ("skill.run_learned", "RunLearnedSkill"),
     ),

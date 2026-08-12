@@ -23,6 +23,7 @@
 
 ## 进行中 / 规划
 
+- [Cyrene Agent 性能重构路线图](agent-performance-refactor-roadmap.zh-CN.md)
 - [Cyrene App 专用自管理控制面 Handoff](cyrene-app-control-handoff.zh-CN.md)
 - [Workbench 项目级 Memory Agent Handoff](project-memory-agent-handoff.zh-CN.md)
 - [Research Workbench 路线图](research-workbench-roadmap.md)

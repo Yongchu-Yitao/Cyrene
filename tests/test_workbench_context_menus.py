@@ -116,7 +116,7 @@ def test_native_browser_tab_picker_dismisses_and_syncs_actions_to_both_hosts():
     assert 'window.addEventListener("keydown", closeBrowserPicker);' in split
 
 
-def test_composer_command_and_permission_menus_close_on_outside_pointerdown():
+def test_composer_tools_menu_closes_on_outside_pointerdown():
     chat = (ROOT / "src/webui/frontend/workbench-chat.jsx").read_text(
         encoding="utf-8"
     )
@@ -124,14 +124,12 @@ def test_composer_command_and_permission_menus_close_on_outside_pointerdown():
         "// Context picker popup", 1
     )[0]
 
-    assert "var slashPickerRef = useWbcRef(null);" in composer
-    assert "var modePickerRef = useWbcRef(null);" in composer
-    assert 'className="wbc-pop-anchor" ref={slashPickerRef}' in composer
-    assert 'className="wbc-pop-anchor" ref={modePickerRef}' in composer
-    assert 'document.addEventListener("pointerdown", closeComposerMenu);' in composer
-    assert "!slashPickerRef.current.contains(event.target)" in composer
-    assert "!modePickerRef.current.contains(event.target)" in composer
-    assert 'document.removeEventListener("pointerdown", closeComposerMenu);' in composer
+    assert "var toolsPickerRef = useWbcRef(null);" in composer
+    assert 'className="wbc-pop-anchor wbc-tools-anchor" ref={toolsPickerRef}' in composer
+    assert 'document.addEventListener("pointerdown", closeToolsMenu);' in composer
+    assert "!toolsPickerRef.current.contains(event.target)" in composer
+    assert 'document.removeEventListener("pointerdown", closeToolsMenu);' in composer
+    assert 'setModelPanel("permission")' in composer
 
 
 def test_existing_item_action_menus_are_available_from_right_click():

@@ -4,7 +4,7 @@ import pytest
 
 
 @pytest.mark.asyncio
-async def test_generate_session_title_uses_secondary_json_model(monkeypatch):
+async def test_generate_session_title_uses_exact_candidate_without_truncation(monkeypatch):
     from cyrene.agent import model_service
     from cyrene.workbench.session_naming import generate_session_title
 
@@ -13,16 +13,19 @@ async def test_generate_session_title_uses_secondary_json_model(monkeypatch):
     async def fake_call(messages, **kwargs):
         captured["messages"] = messages
         captured["kwargs"] = kwargs
-        return {"content": '{"title":"  修复登录超时问题。  "}'}
+        return {"content": "  修复登录超时问题。  "}
 
     monkeypatch.setattr(model_service, "call_agent_model", fake_call)
 
-    title = await generate_session_title("请帮我排查登录接口偶发超时", limit=60)
+    message = "请帮我排查登录接口偶发超时" * 300
+    candidate = {"id": "chosen", "model": "chosen-model"}
+    title = await generate_session_title(message, limit=60, candidate=candidate)
 
     assert title == "修复登录超时问题"
-    assert captured["messages"][-1]["content"] == "请帮我排查登录接口偶发超时"
-    assert captured["kwargs"]["secondary"] is True
-    assert captured["kwargs"]["response_format"] == {"type": "json_object"}
+    assert captured["messages"][-1]["content"] == message
+    assert captured["kwargs"]["candidates"] == [candidate]
+    assert captured["kwargs"]["max_tokens"] is None
+    assert "response_format" not in captured["kwargs"]
 
 
 def test_task_session_is_llm_named_only_once(monkeypatch, tmp_path):
@@ -50,8 +53,9 @@ def test_task_session_is_llm_named_only_once(monkeypatch, tmp_path):
 
     calls = []
 
-    async def fake_name(message, *, limit=60):
+    async def fake_name(message, *, limit=60, candidate=None):
         calls.append(message)
+        assert candidate is not None
         return "实现单次 Session 命名"
 
     async def fake_classify(_text, _session):

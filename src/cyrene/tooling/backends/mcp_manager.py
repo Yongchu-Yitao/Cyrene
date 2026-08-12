@@ -5,9 +5,10 @@ Manages MCP server connections and tool lifecycle. Follows the
 searxng_manager.py pattern for subprocess management (stdio transport)
 and settings_store.py pattern for configuration persistence.
 
-Supports two transport modes:
+Supports three transport modes:
   - "stdio": spawn a subprocess and communicate over stdin/stdout
   - "sse": connect to a remote HTTP endpoint using Server-Sent Events
+  - "streamable_http": connect to a modern MCP Streamable HTTP endpoint
 """
 
 import asyncio
@@ -15,6 +16,8 @@ import json
 import logging
 import os
 import pathlib
+import shutil
+import urllib.parse
 from typing import Any
 
 from cyrene.config import DATA_DIR
@@ -39,6 +42,7 @@ _BLOCKED_EXECUTABLES = frozenset({
     "ruby", "perl",
     # env/xargs/script can be used to indirectly invoke blocked executables
     "env", "xargs", "script",
+    "npx", "npx.exe", "uvx", "uvx.exe",
 })
 
 logger = logging.getLogger(__name__)
@@ -122,28 +126,105 @@ _DEFAULT_MCP_SERVERS: list[dict[str, Any]] = []
 
 
 def get_mcp_servers() -> list[dict[str, Any]]:
-    """Load MCP server configs from ``data/mcp_servers.json``."""
+    """Load MCP declarations from the encrypted portable settings store.
+
+    Existing ``mcp_servers.json`` installations are imported once and the
+    plaintext legacy file is removed after a successful encrypted write.
+    """
+    from cyrene.runtime.settings_store import get as get_setting, set_ as set_setting
+
+    encrypted = get_setting("mcp_servers", None)
+    if isinstance(encrypted, list):
+        return encrypted
     if not _MCP_SERVERS_FILE.exists():
         return list(_DEFAULT_MCP_SERVERS)
     try:
         data = json.loads(_MCP_SERVERS_FILE.read_text(encoding="utf-8"))
         servers = data.get("servers", [])
-        return servers if isinstance(servers, list) else list(_DEFAULT_MCP_SERVERS)
+        if not isinstance(servers, list):
+            return list(_DEFAULT_MCP_SERVERS)
+        set_setting("mcp_servers", servers)
+        _MCP_SERVERS_FILE.unlink(missing_ok=True)
+        return servers
     except Exception:
         logger.exception("Failed to load MCP server config")
         return list(_DEFAULT_MCP_SERVERS)
 
 
 def save_mcp_servers(servers: list[dict[str, Any]]) -> None:
-    """Save MCP server configs to ``data/mcp_servers.json``."""
-    try:
-        _MCP_SERVERS_FILE.parent.mkdir(parents=True, exist_ok=True)
-        _MCP_SERVERS_FILE.write_text(
-            json.dumps({"servers": servers}, ensure_ascii=False, indent=2),
-            encoding="utf-8",
-        )
-    except Exception:
-        logger.exception("Failed to save MCP server config")
+    """Validate and save MCP declarations into encrypted settings."""
+    normalized = [dict(server) for server in servers]
+    for server in normalized:
+        if not isinstance(server, dict):
+            raise ValueError("MCP server configuration must be an object")
+        transport = str(server.get("transport") or "stdio")
+        if transport not in {"stdio", "sse", "streamable_http", "streamable-http", "http"}:
+            raise ValueError(f"Unsupported MCP transport: {transport}")
+        if transport == "stdio":
+            command = str(server.get("command") or "")
+            args = [str(arg) for arg in server.get("args", [])]
+            executable = pathlib.Path(command).stem.lower()
+            if executable in _BLOCKED_EXECUTABLES:
+                raise ValueError(f"MCP command is not allowed: {command}")
+            invocation = " ".join([command, *args]).casefold()
+            if "@latest" in invocation:
+                raise ValueError("MCP runtime downloads must use an exact version, not @latest")
+            if command and not pathlib.Path(command).is_absolute():
+                resolved = shutil.which(command)
+                if resolved:
+                    server["command"] = str(pathlib.Path(resolved).resolve())
+                else:
+                    raise ValueError("MCP command must be an existing deterministic executable")
+        else:
+            url = str(server.get("url") or "").strip()
+            parsed = urllib.parse.urlparse(url)
+            local_http = parsed.scheme == "http" and parsed.hostname in {"127.0.0.1", "localhost", "::1"}
+            if not url or (parsed.scheme != "https" and not local_http):
+                raise ValueError("Remote MCP URLs must use HTTPS (local loopback HTTP is allowed)")
+            if parsed.username or parsed.password:
+                raise ValueError("Remote MCP URL must not embed credentials")
+    from cyrene.runtime.settings_store import set_ as set_setting
+
+    set_setting("mcp_servers", normalized)
+    # Do not leave an older plaintext copy (which may contain explicit env
+    # values) once the encrypted write has succeeded.
+    _MCP_SERVERS_FILE.unlink(missing_ok=True)
+
+
+def redact_mcp_servers(servers: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Return browser-safe MCP declarations without credential material."""
+    result = []
+    for original in servers:
+        server = dict(original)
+        if server.get("env"):
+            server["env"] = {str(key): "[configured]" for key in server["env"]}
+        if server.get("headers"):
+            server["headers"] = {str(key): "[configured]" for key in server["headers"]}
+        result.append(server)
+    return result
+
+
+def merge_redacted_mcp_servers(
+    existing: list[dict[str, Any]],
+    incoming: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    """Preserve stored secrets represented by browser redaction sentinels."""
+    previous = {str(server.get("name") or ""): server for server in existing}
+    merged = []
+    for original in incoming:
+        server = dict(original)
+        old = previous.get(str(server.get("name") or ""), {})
+        for field in ("env", "headers"):
+            values = server.get(field)
+            old_values = old.get(field) if isinstance(old.get(field), dict) else {}
+            if isinstance(values, dict):
+                server[field] = {
+                    str(key): old_values.get(key) if value == "[configured]" else value
+                    for key, value in values.items()
+                    if value != "[configured]" or key in old_values
+                }
+        merged.append(server)
+    return merged
 
 
 # ---------------------------------------------------------------------------
@@ -156,13 +237,14 @@ class MCPServerConnection:
 
     def __init__(self, name: str, transport: str, config: dict[str, Any]) -> None:
         self.name = name
-        self.transport = transport  # "stdio" | "sse"
+        self.transport = transport  # "stdio" | "sse" | "streamable_http"
         self.config = config
         self._session: Any = None
         self._read_stream: Any = None
         self._write_stream: Any = None
         self._process: asyncio.subprocess.Process | None = None
         self._ctx_stack: Any = None
+        self._http_client: Any = None
         self._tools: list[dict[str, Any]] = []
         # The raw stdio transport has one response stream. Serialize requests
         # so concurrent Agent tool calls cannot consume one another's replies.
@@ -211,19 +293,26 @@ class MCPServerConnection:
         """Connect to the MCP server and discover tools."""
         if self.transport == "stdio":
             await self._connect_stdio()
-        elif self.transport == "sse":
-            # SSE transport still uses the MCP SDK (SSE has no anyio conflict)
-            from mcp.client.sse import sse_client
-
+        elif self.transport in {"sse", "streamable_http", "streamable-http", "http"}:
             url = str(self.config.get("url", ""))
             if not url:
                 raise ValueError(f"MCP server '{self.name}' has no URL configured")
-
-            ctx = sse_client(url)
+            headers = {str(key): str(value) for key, value in (self.config.get("headers") or {}).items()}
+            if self.transport == "sse":
+                from mcp.client.sse import sse_client
+                ctx = sse_client(url, headers=headers or None)
+            else:
+                import httpx
+                from mcp.client.streamable_http import streamable_http_client
+                self._http_client = httpx.AsyncClient(headers=headers, follow_redirects=True)
+                ctx = streamable_http_client(url, http_client=self._http_client)
+                self.transport = "streamable_http"
             self._ctx_stack = ctx
-            self._read_stream, self._write_stream = await ctx.__aenter__()
+            streams = await ctx.__aenter__()
+            self._read_stream, self._write_stream = streams[:2]
             from mcp import ClientSession
             self._session = ClientSession(self._read_stream, self._write_stream)
+            await self._session.__aenter__()
             await self._session.initialize()
         else:
             raise ValueError(f"Unsupported MCP transport: {self.transport}")
@@ -475,6 +564,12 @@ class MCPServerConnection:
             except Exception:
                 pass
             self._ctx_stack = None
+        if self._http_client is not None:
+            try:
+                await self._http_client.aclose()
+            except Exception:
+                pass
+            self._http_client = None
 
         # Terminate subprocess (stdio transport)
         if self._process is not None:
@@ -514,23 +609,37 @@ class MCPManager:
         """Load config and connect all enabled servers."""
         servers = get_mcp_servers()
         new_connections: dict[str, MCPServerConnection] = {}
-        for cfg in servers:
-            name = str(cfg.get("name", "")).strip()
-            if not name:
-                continue
-            if not cfg.get("enabled", True):
-                continue
+        try:
+            for cfg in servers:
+                name = str(cfg.get("name", "")).strip()
+                if not name:
+                    continue
+                if not cfg.get("enabled", True):
+                    continue
 
-            transport = str(cfg.get("transport", "stdio")).strip()
-            conn = MCPServerConnection(name, transport, cfg)
-            try:
-                await conn.connect()
-                new_connections[name] = conn
-            except Exception:
-                logger.warning("Failed to connect MCP server '%s'", name, exc_info=True)
+                transport = str(cfg.get("transport", "stdio")).strip()
+                conn = MCPServerConnection(name, transport, cfg)
+                try:
+                    await conn.connect()
+                    new_connections[name] = conn
+                except asyncio.CancelledError:
+                    # connect() may already have spawned a subprocess or opened
+                    # an HTTP client before the caller cancels startup.
+                    await conn.disconnect()
+                    raise
+                except Exception:
+                    await conn.disconnect()
+                    logger.warning("Failed to connect MCP server '%s'", name, exc_info=True)
 
-        async with self._lock:
-            self._servers = new_connections
+            async with self._lock:
+                self._servers = new_connections
+        except asyncio.CancelledError:
+            # Connections are only published after every configured server has
+            # been attempted, so cancellation must explicitly unwind staged
+            # connections as well as the connection currently being opened.
+            for conn in new_connections.values():
+                await conn.disconnect()
+            raise
 
     async def stop(self) -> None:
         """Disconnect all servers."""

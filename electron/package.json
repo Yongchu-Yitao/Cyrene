@@ -1,6 +1,6 @@
 {
   "name": "cyrene",
-  "version": "0.7.3",
+  "version": "0.7.4",
   "license": "Apache-2.0",
   "description": "Cyrene AI Agent — self-evolving AI companion",
   "desktopName": "cyrene.desktop",
@@ -32,6 +32,13 @@
       {
         "from": "../dist/Cyrene",
         "to": "python-bundle",
+        "filter": [
+          "**/*"
+        ]
+      },
+      {
+        "from": "runtime-tools",
+        "to": "runtime-tools",
         "filter": [
           "**/*"
         ]

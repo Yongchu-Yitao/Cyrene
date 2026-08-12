@@ -2279,6 +2279,7 @@ async def test_send_message_tool_persists_intermediate_reply(monkeypatch, tmp_pa
             "content": "先给你一个中途结论：方向是对的，我继续细化。",
             "createdAt": saved[-1]["created_at"],
             "intermediate": True,
+            "roundId": "round_1",
         },
     }]
 

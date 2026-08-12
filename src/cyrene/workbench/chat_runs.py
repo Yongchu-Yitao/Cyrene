@@ -41,6 +41,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Any, AsyncGenerator, Awaitable, Callable
 from uuid import uuid4
 
+from cyrene.observability.trace import trace_span
 from cyrene.workbench.compat import chat_service
 
 logger = logging.getLogger(__name__)
@@ -758,6 +759,15 @@ class ChatRunManager:
         return run, True
 
     async def _drive(self, run: ChatRun, runner: Runner) -> None:
+        run_span = trace_span(
+            "run",
+            "workbench_chat",
+            span_id=run.run_id,
+            trace_id=run.run_id,
+            run_id=run.run_id,
+            db_path=self._db_path,
+            attributes={"chat_id": run.chat_id},
+        ).start()
         try:
             if self._event_store is not None:
                 await run.configure_event_store(self._event_store)
@@ -812,6 +822,11 @@ class ChatRunManager:
                 # non-streaming callers.
                 logger.exception("Failed to close chat inbox for %s", run.chat_id)
             run.status = "done" if run.status in {"running", "finishing"} else run.status
+            persistence_span = trace_span(
+                "persistence",
+                "run_finalize",
+                attributes={"durable_store": bool(self._db_path)},
+            ).start()
             if self._db_path:
                 try:
                     await asyncio.to_thread(
@@ -834,14 +849,11 @@ class ChatRunManager:
                         "Failed to finalize durable event log for run %s",
                         run.run_id,
                     )
+            await persistence_span.finish()
+            await run_span.finish(status=run.status)
+            # Shell-wake checks ``done`` to decide whether this chat is still
+            # busy, so expose completion before attempting the pending wake.
             run.done.set()
-            # Nudge attached streams so they re-check ``done`` immediately rather
-            # than waiting out the poll timeout.
-            for queue in list(run.subscribers):
-                try:
-                    queue.put_nowait(None)
-                except Exception:
-                    pass
             # A shell-exit wake may have been queued while this chat was busy.
             if run.termination_reason != "chat_deleted":
                 try:
@@ -852,6 +864,13 @@ class ChatRunManager:
                     logger.exception(
                         "Failed to dispatch pending shell wake for chat %s", run.chat_id
                     )
+            # Nudge attached streams so they re-check ``done`` immediately rather
+            # than waiting out the poll timeout.
+            for queue in list(run.subscribers):
+                try:
+                    queue.put_nowait(None)
+                except Exception:
+                    pass
             self._schedule_cleanup(run)
 
     def _schedule_cleanup(self, run: ChatRun) -> None:

@@ -20,13 +20,13 @@ WEBUI_ROOT = ROOT / "src" / "webui"
 WORKBENCH_ROOT = WEBUI_ROOT / "frontend"
 INDEX = WORKBENCH_ROOT / "index.html"
 
-OPENAPI_OPERATION_COUNT = 330
+OPENAPI_OPERATION_COUNT = 356
 OPENAPI_BASELINE_FASTAPI = "0.136.1"
 OPENAPI_BASELINE_PYDANTIC = "2.13.4"
-OPENAPI_SHA256 = "a3b849aa8afad34b70ce6f283f5e9980beca653684bd3b98ce13520c76e5dbcd"
-TOOL_REGISTRY_SHA256 = "8a8398afdf39ee37746620ec246253e7dabc1b294d621133de380fde913c9875"
-MAIN_WIRE_SHA256 = "c3c6f094cfa771515d8f0e9daf49058824d41c34e2989ff4358ef5b1deb21ec9"
-SUBAGENT_WIRE_SHA256 = "4d2f207b6508c148e5756826b435c4ca95830b3b8441198e2066cc7529ae27ad"
+OPENAPI_SHA256 = "e9e70f09ac0298c5b1ba40cac2ae1003ac8a16ef36715cd25afe8e5cd054f11b"
+TOOL_REGISTRY_SHA256 = "927f9117adc0d748201f74788aa080acc3a52bfb818a5b0fed1ba4f2bf8b46f9"
+MAIN_WIRE_SHA256 = "4441f7190f312af1a7004e7b0e6011093b96f788ee1269fdcd076ae47ad3bf88"
+SUBAGENT_WIRE_SHA256 = "119103c4098eeda6ce0d5b0d4fa7359299a6c3dd10104e0ae48ecef90dd2cdb9"
 
 # CyreneUI owns runtime services. The launch lifecycle is the sole bootstrap
 # global because it must guard fetch before the platform registry is loaded.
@@ -114,14 +114,14 @@ def test_tool_registry_wire_and_actor_policy_contracts_are_unchanged(monkeypatch
         "get_models",
         lambda: [{"provider": "openai_compatible", "model": "custom-model"}],
     )
-    assert len(catalog.TOOL_DEFS) == 122
-    assert len(catalog.TOOL_HANDLERS) == 122
-    assert len(catalog._MAIN_ONLY_TOOLS) == 61
+    assert len(catalog.TOOL_DEFS) == 129
+    assert len(catalog.TOOL_HANDLERS) == 129
+    assert len(catalog._MAIN_ONLY_TOOLS) == 65
     assert _sha256_json(catalog.TOOL_DEFS) == TOOL_REGISTRY_SHA256
 
-    assert len(wire.get_main_wire_tool_defs()) == 30
+    assert len(wire.get_main_wire_tool_defs()) == 31
     assert wire.get_wire_bundle_hash("main") == MAIN_WIRE_SHA256
-    assert len(wire.get_subagent_wire_tool_defs()) == 23
+    assert len(wire.get_subagent_wire_tool_defs()) == 24
     assert wire.get_wire_bundle_hash("subagent") == SUBAGENT_WIRE_SHA256
 
 
@@ -161,44 +161,44 @@ def test_workbench_runtime_dependencies_keep_their_relative_script_order():
         "katex/katex.min.js",
         "purify.min.js",
         "highlight.min.js",
-        "compiled/platform/runtime.js?v=0.7.3",
-        "compiled/shared/markdown/math.js?v=0.7.3",
-        "compiled/shared/markdown/highlight.js?v=0.7.3",
+        "compiled/platform/runtime.js?v=0.7.4",
+        "compiled/shared/markdown/math.js?v=0.7.4",
+        "compiled/shared/markdown/highlight.js?v=0.7.4",
         "leaflet.js",
-        "pdfjs/pdf.min.js?v=0.7.3",
-        "pdfjs/pdf_viewer.js?v=0.7.3",
-        "compiled/platform/readiness.js?v=0.7.3",
-        "compiled/platform/events.js?v=0.7.3",
-        "compiled/platform/navigation.js?v=0.7.3",
-        "compiled/workbench-i18n.js?v=0.7.3",
-        "compiled/shared/i18n/format.js?v=0.7.3",
-        "compiled/shared/i18n/translations.js?v=0.7.3",
-        "compiled/shared/pdf/bridge.js?v=0.7.3",
-        "compiled/shared/feedback/service.js?v=0.7.3",
-        "compiled/shared/markdown/renderer.js?v=0.7.3",
-        "compiled/platform/data-store.js?v=0.7.3",
-        "compiled/shared/browser/viewport.js?v=0.7.3",
-        "compiled/shared/search/overlay.js?v=0.7.3",
-        "compiled/shared/markdown/actions.js?v=0.7.3",
-        "compiled/shared/diff/viewer.js?v=0.7.3",
-        "compiled/platform/api.js?v=0.7.3",
-        "compiled/workbench-chat.js?v=0.7.3",
-        "compiled/workbench-quick-chat.js?v=0.7.3",
-        "compiled/workbench.js?v=0.7.3",
-        "compiled/settings-overlay.js?v=0.7.3",
-        "compiled/entry/bootstrap.js?v=0.7.3",
+        "pdfjs/pdf.min.js?v=0.7.4",
+        "pdfjs/pdf_viewer.js?v=0.7.4",
+        "compiled/platform/readiness.js?v=0.7.4",
+        "compiled/platform/events.js?v=0.7.4",
+        "compiled/platform/navigation.js?v=0.7.4",
+        "compiled/workbench-i18n.js?v=0.7.4",
+        "compiled/shared/i18n/format.js?v=0.7.4",
+        "compiled/shared/i18n/translations.js?v=0.7.4",
+        "compiled/shared/pdf/bridge.js?v=0.7.4",
+        "compiled/shared/feedback/service.js?v=0.7.4",
+        "compiled/shared/markdown/renderer.js?v=0.7.4",
+        "compiled/platform/data-store.js?v=0.7.4",
+        "compiled/shared/browser/viewport.js?v=0.7.4",
+        "compiled/shared/search/overlay.js?v=0.7.4",
+        "compiled/shared/markdown/actions.js?v=0.7.4",
+        "compiled/shared/diff/viewer.js?v=0.7.4",
+        "compiled/platform/api.js?v=0.7.4",
+        "compiled/workbench-chat.js?v=0.7.4",
+        "compiled/workbench-quick-chat.js?v=0.7.4",
+        "compiled/workbench.js?v=0.7.4",
+        "compiled/settings-overlay.js?v=0.7.4",
+        "compiled/entry/bootstrap.js?v=0.7.4",
     ]
 
     positions = [scripts.index(script) for script in required_in_order]
     assert positions == sorted(positions)
     assert not {
-        "compiled/app.js?v=0.7.3",
-        "compiled/chat.js?v=0.7.3",
-        "compiled/dashboard.js?v=0.7.3",
-        "compiled/knowledge.js?v=0.7.3",
-        "compiled/memory.js?v=0.7.3",
-        "compiled/tasks.js?v=0.7.3",
-        "compiled/settings.js?v=0.7.3",
+        "compiled/app.js?v=0.7.4",
+        "compiled/chat.js?v=0.7.4",
+        "compiled/dashboard.js?v=0.7.4",
+        "compiled/knowledge.js?v=0.7.4",
+        "compiled/memory.js?v=0.7.4",
+        "compiled/tasks.js?v=0.7.4",
+        "compiled/settings.js?v=0.7.4",
     }.intersection(scripts)
 
 

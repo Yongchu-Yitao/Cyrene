@@ -43,6 +43,7 @@ TTS_TRAILING_SILENCE_MS = 25
 
 _ASR_LOCK = threading.RLock()
 _TTS_LOCK = threading.RLock()
+_VOICE_PROFILE_LOCK = threading.RLock()
 _RECOGNIZER: Any = None
 _PUNCTUATION: Any = None
 _TTS: Any = None
@@ -74,11 +75,12 @@ def _settings() -> dict[str, Any]:
 
 
 def _profile_ready(settings: dict[str, Any] | None = None) -> bool:
-    current = settings or _settings()
-    try:
-        return bool(current["reference_text"] and REFERENCE_AUDIO.stat().st_size > 1_000)
-    except OSError:
-        return False
+    with _VOICE_PROFILE_LOCK:
+        current = settings or _settings()
+        try:
+            return bool(current["reference_text"] and REFERENCE_AUDIO.stat().st_size > 1_000)
+        except OSError:
+            return False
 
 
 def _preset_audio() -> Path:
@@ -103,10 +105,11 @@ def _active_reference(settings: dict[str, Any]) -> tuple[Path, str]:
 
 
 def status() -> dict[str, Any]:
-    settings = _settings()
+    with _VOICE_PROFILE_LOCK:
+        settings = _settings()
+        profile_ready = _profile_ready(settings)
     asr_ready = local_models.is_ready(ASR_MODEL_ID)
     tts_model_ready = local_models.is_ready(TTS_MODEL_ID)
-    profile_ready = _profile_ready(settings)
     preset_ready = tts_model_ready and _preset_ready()
     selected_voice_ready = profile_ready if settings["voice_mode"] == VOICE_MODE_CUSTOM else preset_ready
     runtime_available = _runtime_available()
@@ -137,24 +140,25 @@ def update_settings(
     voice_mode: str | None = None,
     voice_preset: str | None = None,
 ) -> dict[str, Any]:
-    current = _settings()
-    if auto_read is not None:
-        current["auto_read"] = bool(auto_read)
-    if auto_send_after_asr is not None:
-        current["auto_send_after_asr"] = bool(auto_send_after_asr)
-    if auto_stop_on_silence is not None:
-        current["auto_stop_on_silence"] = bool(auto_stop_on_silence)
-    if voice_mode is not None:
-        normalized_mode = str(voice_mode).strip().lower()
-        if normalized_mode not in {VOICE_MODE_PRESET, VOICE_MODE_CUSTOM}:
-            raise ValueError("voice_mode must be preset or custom")
-        current["voice_mode"] = normalized_mode
-    if voice_preset is not None and str(voice_preset).strip() != DEFAULT_PRESET_ID:
-        raise ValueError("unknown voice preset")
-    current["voice_preset"] = DEFAULT_PRESET_ID
-    if current["voice_mode"] == VOICE_MODE_CUSTOM and not _profile_ready(current):
-        current["auto_read"] = False
-    config_store.set_setting("voice", current)
+    with _VOICE_PROFILE_LOCK:
+        current = _settings()
+        if auto_read is not None:
+            current["auto_read"] = bool(auto_read)
+        if auto_send_after_asr is not None:
+            current["auto_send_after_asr"] = bool(auto_send_after_asr)
+        if auto_stop_on_silence is not None:
+            current["auto_stop_on_silence"] = bool(auto_stop_on_silence)
+        if voice_mode is not None:
+            normalized_mode = str(voice_mode).strip().lower()
+            if normalized_mode not in {VOICE_MODE_PRESET, VOICE_MODE_CUSTOM}:
+                raise ValueError("voice_mode must be preset or custom")
+            current["voice_mode"] = normalized_mode
+        if voice_preset is not None and str(voice_preset).strip() != DEFAULT_PRESET_ID:
+            raise ValueError("unknown voice preset")
+        current["voice_preset"] = DEFAULT_PRESET_ID
+        if current["voice_mode"] == VOICE_MODE_CUSTOM and not _profile_ready(current):
+            current["auto_read"] = False
+        config_store.set_setting("voice", current)
     return status()
 
 
@@ -328,29 +332,55 @@ def save_voice_profile(payload: bytes, reference_text: str) -> dict[str, Any]:
     duration = len(samples) / sample_rate
     if duration < 1 or duration > 15:
         raise ValueError("reference audio must be between 1 and 15 seconds")
-    VOICE_ROOT.mkdir(parents=True, exist_ok=True)
-    fd, temporary_name = tempfile.mkstemp(prefix="reference-", suffix=".wav", dir=VOICE_ROOT)
-    os.close(fd)
-    temporary = Path(temporary_name)
-    try:
-        sf.write(temporary, samples, sample_rate, subtype="PCM_16")
-        os.replace(temporary, REFERENCE_AUDIO)
-    finally:
-        temporary.unlink(missing_ok=True)
-    current = _settings()
-    current["reference_text"] = text
-    current["voice_mode"] = VOICE_MODE_CUSTOM
-    config_store.set_setting("voice", current)
+    with _VOICE_PROFILE_LOCK:
+        VOICE_ROOT.mkdir(parents=True, exist_ok=True)
+        fd, temporary_name = tempfile.mkstemp(prefix="reference-", suffix=".wav", dir=VOICE_ROOT)
+        os.close(fd)
+        temporary = Path(temporary_name)
+        backup = VOICE_ROOT / f"reference-backup-{os.getpid()}-{threading.get_ident()}.wav"
+        had_previous = REFERENCE_AUDIO.exists()
+        reference_replaced = False
+        try:
+            sf.write(temporary, samples, sample_rate, subtype="PCM_16")
+            if had_previous:
+                os.replace(REFERENCE_AUDIO, backup)
+            os.replace(temporary, REFERENCE_AUDIO)
+            reference_replaced = True
+            current = _settings()
+            current["reference_text"] = text
+            current["voice_mode"] = VOICE_MODE_CUSTOM
+            config_store.set_setting("voice", current)
+        except Exception:
+            if reference_replaced:
+                REFERENCE_AUDIO.unlink(missing_ok=True)
+            if had_previous and backup.exists():
+                os.replace(backup, REFERENCE_AUDIO)
+            raise
+        finally:
+            temporary.unlink(missing_ok=True)
+            backup.unlink(missing_ok=True)
     reset_tts()
     return status()
 
 
 def delete_voice_profile() -> dict[str, Any]:
-    REFERENCE_AUDIO.unlink(missing_ok=True)
-    current = _settings()
-    current["reference_text"] = ""
-    current["voice_mode"] = VOICE_MODE_PRESET
-    config_store.set_setting("voice", current)
+    with _VOICE_PROFILE_LOCK:
+        VOICE_ROOT.mkdir(parents=True, exist_ok=True)
+        backup = VOICE_ROOT / f"reference-delete-{os.getpid()}-{threading.get_ident()}.wav"
+        had_previous = REFERENCE_AUDIO.exists()
+        try:
+            if had_previous:
+                os.replace(REFERENCE_AUDIO, backup)
+            current = _settings()
+            current["reference_text"] = ""
+            current["voice_mode"] = VOICE_MODE_PRESET
+            config_store.set_setting("voice", current)
+        except Exception:
+            if had_previous and backup.exists():
+                os.replace(backup, REFERENCE_AUDIO)
+            raise
+        finally:
+            backup.unlink(missing_ok=True)
     reset_tts()
     return status()
 
@@ -487,14 +517,15 @@ def synthesize(text: str, *, num_steps: int | None = None) -> bytes:
     selected_num_steps = TTS_NUM_STEPS if num_steps is None else int(num_steps)
     if selected_num_steps not in TTS_ALLOWED_NUM_STEPS:
         raise ValueError("num_steps must be 4 or 6")
-    settings = _settings()
-    reference_path, reference_text = _active_reference(settings)
-    reference_audio, reference_sample_rate = sf.read(
-        reference_path,
-        dtype="float32",
-        always_2d=True,
-    )
-    reference_audio = np.ascontiguousarray(reference_audio.mean(axis=1), dtype=np.float32)
+    with _VOICE_PROFILE_LOCK:
+        settings = _settings()
+        reference_path, reference_text = _active_reference(settings)
+        reference_audio, reference_sample_rate = sf.read(
+            reference_path,
+            dtype="float32",
+            always_2d=True,
+        )
+        reference_audio = np.ascontiguousarray(reference_audio.mean(axis=1), dtype=np.float32)
     with _TTS_LOCK:
         import sherpa_onnx
 

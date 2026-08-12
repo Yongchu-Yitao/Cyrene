@@ -27,6 +27,128 @@ process.stdout.write(JSON.stringify(files));
     assert files[1]["file"]["url"] == "/api/workbench/chats/chat%2Fone/files/other%20folder/result.md"
 
 
+def test_chat_artifacts_only_include_assistant_deliveries():
+    root = Path(__file__).resolve().parent.parent
+    source = (root / "src" / "webui" / "frontend" / "workbench-chat.jsx").read_text(
+        encoding="utf-8"
+    )
+    helper_source = "function wbcChatDeliveredArtifacts(" + source.split(
+        "function wbcChatDeliveredArtifacts(", 1
+    )[1].split("function wbcArtifactFileKey", 1)[0]
+    script = f"""
+eval({json.dumps(helper_source)});
+const files = wbcChatDeliveredArtifacts({{
+  messages: [
+    {{ role: "user", attachments: [{{ id: "upload", name: "brief.txt" }}] }},
+    {{ role: "assistant", attachments: [{{ id: "result", name: "result.pdf", url: "/api/chat/export/result.pdf" }}] }},
+    {{ role: "assistant", attachments: [{{ id: "result", name: "result.pdf", url: "/api/chat/export/result.pdf" }}] }}
+  ],
+  files: [{{ id: "workspace", name: "notes.md", source: "agent" }}]
+}});
+process.stdout.write(JSON.stringify(files));
+"""
+    completed = subprocess.run(["node", "-e", script], check=True, capture_output=True, text=True)
+    files = json.loads(completed.stdout)
+
+    assert [item["file"]["name"] for item in files] == ["result.pdf"]
+
+
+def test_chat_file_type_labels_do_not_treat_text_formats_as_word_documents():
+    root = Path(__file__).resolve().parent.parent
+    source = (root / "src" / "webui" / "frontend" / "workbench-chat.jsx").read_text(
+        encoding="utf-8"
+    )
+    constants = "var WBC_CODE_EXTS" + source.split("var WBC_CODE_EXTS", 1)[1].split(
+        "function wbcFileViewKind", 1
+    )[0]
+    helpers = "function wbcFileViewKind" + source.split(
+        "function wbcFileViewKind", 1
+    )[1].split("function wbcAttachmentVisual(file)", 1)[0]
+    script = f"""
+const window = {{ CyreneUI: {{ require() {{
+  return {{ FileVisual: {{ visualKind(file) {{
+    const name = String(file.name || file.filename || '').toLowerCase();
+    if (/\\.(doc|docx)$/.test(name)) return 'doc';
+    if (/\\.(csv|tsv|xlsx)$/.test(name)) return 'sheet';
+    return 'file';
+  }} }} }};
+}} }} }};
+eval({json.dumps(constants + helpers)});
+const files = [
+  {{ name: 'notes.md', content_type: 'text/plain' }},
+  {{ name: 'ci.yml', content_type: 'text/yaml' }},
+  {{ name: 'output.log', content_type: 'text/plain' }},
+  {{ name: 'report.docx', content_type: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document' }},
+  {{ filename: 'fallback.md', content_type: 'text/plain' }}
+];
+process.stdout.write(JSON.stringify(files.map(wbcAttachmentVisualKind)));
+"""
+    completed = subprocess.run(["node", "-e", script], check=True, capture_output=True, text=True)
+
+    assert json.loads(completed.stdout) == ["markdown", "code", "note", "doc", "markdown"]
+
+
+def test_chat_file_visual_uses_the_precise_attachment_kind_for_icon_and_tone():
+    root = Path(__file__).resolve().parent.parent
+    source = (root / "src" / "webui" / "frontend" / "workbench-chat.jsx").read_text(
+        encoding="utf-8"
+    )
+    visual = source.split("function wbcAttachmentVisual(file)", 1)[1].split(
+        "function wbcAttachmentTypeLabel", 1
+    )[0]
+
+    assert "var kind = wbcAttachmentVisualKind(file);" in visual
+    assert "shared.toneForKind(kind)" in visual
+    assert "shared.iconForKind(kind)" in visual
+
+
+def test_library_file_visual_exposes_kind_based_rendering_without_reclassification():
+    root = Path(__file__).resolve().parent.parent
+    source = (root / "src" / "webui" / "frontend" / "workbench-library.jsx").read_text(
+        encoding="utf-8"
+    )
+    visual = source.split("var LibraryFileVisual =", 1)[1].split(
+        "function cardDescription", 1
+    )[0]
+
+    assert "toneForKind: function (kind)" in visual
+    assert "iconForKind: function (kind)" in visual
+    assert "toneForKind(LibraryFileVisual.visualKind(item))" in visual
+    assert "iconForKind(LibraryFileVisual.visualKind(item))" in visual
+
+
+def test_conversation_panel_has_separate_files_and_artifacts_rows():
+    root = Path(__file__).resolve().parent.parent
+    source = (root / "src" / "webui" / "frontend" / "workbench-chat.jsx").read_text(
+        encoding="utf-8"
+    )
+
+    assert 'tabs.push({ id: "files", label: wbcT("workbenchChat.files", "Files") });' in source
+    assert 'if (artifactItems.length) tabs.push({ id: "artifacts", label: wbcT("workbenchChat.artifacts", "Artifacts") });' in source
+    assert 'files: hasFiles ? String(fileItems.length) : ""' in source
+    assert 'artifacts: artifactItems.length ? String(artifactItems.length) : ""' in source
+
+
+def test_send_file_prompt_registers_user_requested_save_locations_as_artifacts():
+    from cyrene.agent.prompts import _MAIN_DELIVERY_FILE_PROMPT, workspace_scope_block
+    from cyrene.tooling.native_definitions import get_native_tool_def
+
+    tool = get_native_tool_def("send_file")["function"]
+    description = tool["description"]
+    path_description = tool["parameters"]["properties"]["path"]["description"]
+
+    assert "file you actually created" in description
+    assert "never guess paths or merely print one" in description
+    assert "specific save location" in description
+    assert "does not save or move files" in description
+    assert "authorized user-requested locations" in path_description
+    assert "real file you created" in _MAIN_DELIVERY_FILE_PROMPT
+    assert "printing or guessing a path is not delivery" in _MAIN_DELIVERY_FILE_PROMPT
+    assert "specific save location" in _MAIN_DELIVERY_FILE_PROMPT
+    assert "registered as an artifact" in _MAIN_DELIVERY_FILE_PROMPT
+    assert "save the file there first" in workspace_scope_block()
+
+
 def test_global_search_times_out_and_ignores_stale_requests():
     root = Path(__file__).resolve().parent.parent
     source = (root / "src" / "webui" / "frontend" / "shared" / "search" / "overlay.jsx").read_text(
@@ -898,7 +1020,8 @@ def test_workbench_chat_sidebar_keeps_only_overview_and_context_unconditional():
     assert tabs.count('id: "context"') == 1
     assert 'if (pendingPlan) tabs.push({ id: "plan"' in tabs
     assert 'if (hasSubagents) tabs.push({ id: "subagents"' in tabs
-    assert 'if (hasArtifacts) tabs.push({ id: "artifacts"' in tabs
+    assert 'if (hasFiles) tabs.push({ id: "files"' in tabs
+    assert 'if (artifactItems.length) tabs.push({ id: "artifacts"' in tabs
     assert "if (hasWorkspaceChanges)" in tabs
     assert 'if (hasBranches) tabs.push({ id: "branches"' in tabs
     assert 'if (viewerFile) tabs.push({ id: "viewer"' in tabs
@@ -3988,6 +4111,8 @@ def test_workbench_chat_card_menu_can_rename_the_target_chat():
     assert 'wbcT("workbenchChat.rename", "Rename chat")' in rail
     assert 'role="dialog"' in rename_dialog
     assert "maxLength={60}" in rename_dialog
+    assert "window.ReactDOM.createPortal(" in rename_dialog
+    assert 'document.querySelector(".workbench-shell") || document.body' in rename_dialog
     assert "setRenameChat(chat)" in rail
     assert "window.prompt(" not in rail
     assert "onRename(chat.id, nextTitle)" in rename_dialog
@@ -4158,8 +4283,8 @@ def test_workbench_chat_switches_stop_to_guidance_while_running():
     assert "输入内容以引导正在运行的 Agent" in (
         root / "src" / "webui" / "frontend" / "workbench-i18n.jsx"
     ).read_text(encoding="utf-8")
-    assert "workbench-chat.js?v=0.7.3" in index
-    assert "workbench-i18n.js?v=0.7.3" in index
+    assert "workbench-chat.js?v=0.7.4" in index
+    assert "workbench-i18n.js?v=0.7.4" in index
 
 
 def test_task_answer_resume_uses_interrupt_not_pause_and_suppresses_cancel_error():
@@ -4527,6 +4652,10 @@ def test_collapsed_chat_rail_measures_expanded_row_centres_for_spatial_mapping()
         ".workbench-grid.integrated-sidebars .wbc-rail.workbench-integrated-rail.is-collapsed .wbc-conversation-status-anchor {",
         1,
     )[1].split("}", 1)[0]
+    unmeasured_collapsed_anchor_css = styles.split(
+        ".workbench-grid.integrated-sidebars .wbc-rail.workbench-integrated-rail.is-collapsed .wbc-conversation-status-anchor:not(.is-measured) {",
+        1,
+    )[1].split("}", 1)[0]
     assert "left: var(--wbc-track-expanded-x, 29px)" in anchor_css
     assert "top: var(--wbc-track-expanded-position, var(--wbc-track-position))" in anchor_css
     assert "transition:" not in anchor_css
@@ -4536,6 +4665,8 @@ def test_collapsed_chat_rail_measures_expanded_row_centres_for_spatial_mapping()
     assert "top:" not in collapsed_anchor_css
     assert "--wbc-track-collapsed-x: 23px" in base_track
     assert "wbc-status-enable-interaction" in collapsed_anchor_css
+    assert "animation: none" in unmeasured_collapsed_anchor_css
+    assert "pointer-events: none" in unmeasured_collapsed_anchor_css
     assert ".wbc-conversation-status-glyph" in styles
     assert ".wbc-conversation-status-dot" in styles
     expanding_css = styles.split(
@@ -4779,6 +4910,15 @@ def test_tool_package_settings_are_scoped_and_context_shows_agent_disclosure():
     assert "toggleTool(" not in capabilities
     assert "toolList.map" not in capabilities
     assert "saveBrowserTools" not in overlay
+    voice_setting_helpers = overlay.split("function saveVoiceBooleanSetting", 1)[1].split(
+        "function saveVoiceProfile", 1
+    )[0]
+    assert 'setVoiceNotice(t("settings.saved"))' not in voice_setting_helpers
+    assert voice_setting_helpers.count('setVoiceNotice("");') == 2
+    voice_save_actions_css = css.split(
+        ".wb-voice-custom-fields > .wb-save-actions {", 1
+    )[1].split("}", 1)[0]
+    assert "justify-content: flex-end;" in voice_save_actions_css
 
     disclosure = chat.split("function wbcUsedToolPackages", 1)[1].split(
         "function WbcContextTab", 1
@@ -4811,6 +4951,7 @@ def test_tool_package_settings_are_scoped_and_context_shows_agent_disclosure():
         "map_tools",
         "subagent_tools",
         "delivery_tools",
+        "environment_tools",
         "skill_tools",
         "remote_tools",
         "integration_tools",
@@ -5024,6 +5165,36 @@ def test_collapsed_workspace_headers_center_their_expand_button_and_hide_task_em
         1,
     )[1].split("}", 1)[0]
     assert "visibility: hidden;" in collapsed_body_css
+
+
+def test_task_rail_delete_menu_is_above_the_outside_click_scrim():
+    root = Path(__file__).resolve().parent.parent
+    styles = (root / "src" / "webui" / "frontend" / "workbench.css").read_text(
+        encoding="utf-8"
+    )
+
+    open_actions_css = styles.split(
+        ".workbench-task-card.menu-open .wb-card-actions {", 1
+    )[1].split("}", 1)[0]
+    assert "z-index: 200;" in open_actions_css
+
+
+def test_task_menus_use_document_click_away_without_a_blocking_scrim():
+    root = Path(__file__).resolve().parent.parent
+    source = (root / "src" / "webui" / "frontend" / "workbench.jsx").read_text(
+        encoding="utf-8"
+    )
+
+    task_rail = source.split("function TaskRail(", 1)[1].split(
+        "function TaskBoard(", 1
+    )[0]
+    task_board = source.split("function TaskBoard(", 1)[1].split(
+        "function TaskBoardCard(", 1
+    )[0]
+    for component in (task_rail, task_board):
+        assert 'document.addEventListener("pointerdown", closeOnOutside, true);' in component
+        assert 'target.closest(".wb-card-menu")' in component
+        assert 'className="wb-card-menu-scrim"' not in component
 
 
 def test_expanded_task_detail_rail_uses_its_own_lane_and_hides_scrollbar():
@@ -5339,6 +5510,15 @@ def test_workbench_keeps_one_persistent_module_dock_across_workspace_switches():
     assert "backdrop-filter: none;" in project_menu_styles
     assert "backdrop-filter: none;" in account_menu_styles
     assert ".workbench-top-project-menu-list:has(.workbench-top-project-row.menu-open) {" in styles
+    project_row_active_styles = styles.split(
+        ".workbench-top-project-row.active {", 1
+    )[1].split("}", 1)[0]
+    project_row_hover_styles = styles.split(
+        ".workbench-top-project-row:hover,", 1
+    )[1].split("}", 1)[0]
+    assert "background: color-mix(in srgb, var(--wb-accent) 8%, transparent);" in project_row_active_styles
+    assert "background: color-mix(in srgb, var(--wb-accent) 10%, transparent);" in project_row_hover_styles
+    assert "box-shadow:" not in project_row_active_styles
     assert ".workbench-top-project-row:nth-last-child(-n + 2) .workbench-top-project-actions {" in styles
     project_actions_markup = source.split('className="workbench-top-project-actions"', 1)[1].split("</div>", 1)[0]
     assert project_actions_markup.count("<svg") == 3
@@ -6199,7 +6379,7 @@ def test_workbench_task_details_reuse_floating_animated_accordion():
     assert 'html[data-theme="dark"] .wb-task-detail-card' in styles
     assert '"task.side.detailPanel": "Task details"' in i18n
     assert '"task.side.detailPanel": "任务详情"' in i18n
-    assert "workbench.css?v=0.7.3" in index
+    assert "workbench.css?v=0.7.4" in index
 
 
 def test_workbench_collapsed_rail_keeps_labels_horizontal_during_expansion():
@@ -6221,7 +6401,7 @@ def test_workbench_collapsed_rail_keeps_labels_horizontal_during_expansion():
     assert "height: 63px;" in account_rule
     assert "grid-template-rows: 36px;" in account_rule
     assert "height: 36px;" in account_meta_rule
-    assert "workbench.css?v=0.7.3" in index
+    assert "workbench.css?v=0.7.4" in index
 
 
 def test_workbench_collapsed_rail_icons_stay_left_anchored_while_closing():
@@ -6294,7 +6474,7 @@ def test_workbench_wechat_channel_uses_qr_login_instead_of_token_input():
     assert "WECHAT_BOT_TOKEN" not in settings
     assert '"settings.wechatScanConnect": "扫描二维码连接"' in translations
     assert ".wb-wechat-qr-overlay" in styles
-    assert "settings-overlay.js?v=0.7.3" in index
+    assert "settings-overlay.js?v=0.7.4" in index
 
 
 def test_linux_desktop_uses_native_frame_and_directory_picker():
@@ -6530,8 +6710,8 @@ def test_workbench_chat_directory_picker_falls_back_on_macos_and_lists_default_w
 
     assert 'window.cyrene.platform === "linux"' in chat
     assert 'fetch("/api/context/pick-directory", { method: "POST" })' in chat
-    assert "defaultWorkspacePath={projectWorkspacePath || wsDir}" in chat
-    assert "if (defaultWorkspacePath) workspaceOptions.push" in chat
+    assert "[wsDir, projectWorkspacePath].concat(wsHistory).forEach" in chat
+    assert "workspaceOptions.push({ path: normalized, isDefault: normalized === projectWorkspacePath })" in chat
     assert 'wbcT("workbenchChat.defaultWorkspace", "Default workspace")' in chat
     assert '"workbenchChat.defaultWorkspace": "Default workspace"' in i18n
     assert '"workbenchChat.defaultWorkspace": "默认 workspace"' in i18n
@@ -6549,8 +6729,8 @@ def test_workbench_chat_workspace_chip_follows_project_until_user_overrides_it()
     assert 'function wbcWorkspaceDisplayName(path)' in chat
     assert 'replace(/[\\\\/]+$/, "")' in chat
     assert 'normalized.split(/[\\\\/]/).filter(Boolean).pop()' in chat
-    assert "name: wbcWorkspaceDisplayName(wsDir)" in chat
-    assert "var name = wbcWorkspaceDisplayName(p);" in chat
+    assert "wbcWorkspaceDisplayName(option.path)" in chat
+    assert "option.isDefault ? wbcT" in chat
 
     # The workspace override helpers take an optional draft namespace (default
     # "" for the main chat; the quick-chat window passes one) — the call sites
@@ -6579,33 +6759,45 @@ def test_workbench_chat_workspace_chip_follows_project_until_user_overrides_it()
     assert 'body.workspaceOverride = input.workspaceOverride || "";' in chat
 
 
-def test_workbench_context_picker_contains_long_workspace_paths():
+def test_workbench_tools_menu_combines_content_commands_and_long_workspace_paths():
     root = Path(__file__).resolve().parent.parent
     chat = (root / "src" / "webui" / "frontend" / "workbench-chat.jsx").read_text(encoding="utf-8")
     styles = (root / "src" / "webui" / "frontend" / "workbench.css").read_text(encoding="utf-8")
     index = (root / "src" / "webui" / "frontend" / "index.html").read_text(encoding="utf-8")
 
-    picker_rule = styles.rsplit(".wbc-ctx-picker {", 1)[1].split("}", 1)[0]
-    chip_row_rule = styles.split(".wbc-context-chips {", 1)[1].split("}", 1)[0]
-    picker_anchor_rule = styles.split(
-        ".wbc-context-chips > .wbc-pop-anchor {", 1
-    )[1].split("}", 1)[0]
-    text_rule = styles.rsplit(
-        ".wbc-ctx-picker .wbc-popmenu-label,\n.wbc-ctx-picker .wbc-popmenu-desc {",
-        1,
-    )[1].split("}", 1)[0]
+    tools_rule = styles.split(".wbc-tools-menu {", 1)[1].split("}", 1)[0]
+    content_rule = styles.split(".wbc-tools-content-list {", 1)[1].split("}", 1)[0]
+    command_rule = styles.split(".wbc-tools-command-grid {", 1)[1].split("}", 1)[0]
+    command_section_rule = styles.split(".wbc-tools-commands {", 1)[1].split("}", 1)[0]
 
-    assert "position: relative;" in chip_row_rule
-    assert "position: static;" in picker_anchor_rule
-    assert "width: min(300px, 100%);" in picker_rule
-    assert "max-width: 100%;" in picker_rule
-    assert "min-width: min(220px, 100%);" in styles
-    assert "overflow-x: hidden;" in picker_rule
+    assert "width: min(260px, calc(100cqw - 58px));" in tools_rule
+    assert "max-height: min(390px, calc(100vh - 190px));" in tools_rule
+    assert "overflow-y: auto;" in tools_rule
+    assert "max-height:" not in content_rule
+    assert "overflow-y:" not in content_rule
+    assert "max-height:" not in command_rule
+    assert "overflow-y:" not in command_rule
+    assert "grid-template-columns: repeat(2, minmax(0, 1fr));" in command_rule
+    assert "border-top:" not in command_section_rule
+    assert "margin-top: 2px;" in command_section_rule
+    assert ".wbc-tools-command:not(:disabled):hover" in styles
     assert "min-width: 0;" in styles
-    assert "text-overflow: ellipsis;" in text_rule
-    assert "white-space: nowrap;" in text_rule
-    assert 'className="wbc-popmenu-desc" title={p}' in chat
-    assert "workbench-chat.js?v=0.7.3" in index
+    assert 'wbcT("workbenchChat.contentItems", "Content")' in chat
+    assert 'className="wbc-tools-content-list"' in chat
+    assert 'wbcT("workbenchChat.chooseDirectory", "Choose directory…")' in chat
+    assert "remoteDevices.map(function (device)" in chat
+    assert "setToolsPanel" not in chat
+    assert "function WbcCtxPicker" not in chat
+    assert 'className="wbc-tools-command-grid"' in chat
+    assert 'className={"wbc-composer-icon wbc-tools-trigger"' in chat
+    assert 'enabledContentCount > 0 ? " has-content" : ""' in chat
+    assert 'className="wbc-tools-trigger-count"' in chat
+    assert ".wbc-tools-trigger.has-content {" in styles
+    assert "border-radius: 999px;" in styles.split(".wbc-tools-trigger.has-content {", 1)[1].split("}", 1)[0]
+    assert 'className={"wbc-send"' in chat
+    assert ".wbc-send span" not in styles
+    assert "transform: translate(-1px, 1px);" in styles
+    assert "workbench-chat.js?v=0.7.4" in index
 
 
 def test_workbench_follow_up_uses_context_endpoint_without_native_prompt():
@@ -6621,8 +6813,8 @@ def test_workbench_follow_up_uses_context_endpoint_without_native_prompt():
     assert '"/api/task-sessions/{session_id}/follow-up"' in routes
     assert 'session["parentSessionId"] = session_id' in routes
     assert "followUpContext" in routes
-    assert "workbench-model.js?v=0.7.3" in index
-    assert "workbench.js?v=0.7.3" in index
+    assert "workbench-model.js?v=0.7.4" in index
+    assert "workbench.js?v=0.7.4" in index
 
 
 def test_workbench_regenerate_plan_failure_preserves_current_plan():
@@ -6750,7 +6942,7 @@ def test_workbench_model_settings_preserve_form_on_failed_response():
     assert "}).then(readSettingsResponse).then(function (p)" in save_block
     assert "p.custom_models || norm" in save_block
     assert "p.vision_models || p.vision_candidates || vNorm" in save_block
-    assert "settings-overlay.js?v=0.7.3" in index
+    assert "settings-overlay.js?v=0.7.4" in index
 
 
 def test_workbench_chat_subagent_page_is_independent_and_localized():
@@ -7257,7 +7449,7 @@ def test_workbench_settings_overlay_has_shortcuts_tab_and_panel():
     assert ".wb-shortcut-row" in styles
     assert ".wb-shortcut-capture" in styles
     # The new module is loaded before the panels that consume it
-    assert "compiled/workbench-shortcuts.js?v=0.7.3" in index
+    assert "compiled/workbench-shortcuts.js?v=0.7.4" in index
 
 
 def test_workbench_about_related_actions_only_click_right_button():
@@ -7290,6 +7482,51 @@ def test_workbench_about_related_actions_only_click_right_button():
 
     assert "--wb-settings-panel-height: min(540px, calc(100vh - 48px))" in styles
     assert styles.count("height: var(--wb-settings-panel-height);") == 3
+
+
+def test_extension_center_uses_fixed_settings_geometry_and_localized_catalog_copy():
+    root = Path(__file__).resolve().parent.parent
+    source = (root / "src" / "webui" / "frontend" / "settings-overlay.jsx").read_text(encoding="utf-8")
+    translations = (root / "src" / "webui" / "frontend" / "workbench-i18n.jsx").read_text(encoding="utf-8")
+    styles = (root / "src" / "webui" / "frontend" / "workbench.css").read_text(encoding="utf-8")
+
+    assert '.settings-overlay-panel:has([data-settings-active-tab="extensions"])' not in styles
+    assert 'if (props.id === "github-cli") return AboutRelatedIcon("github");' in source
+    assert 'className: "wb-extension-expand-button"' in source
+    assert source.index('className: "wb-extension-actions"') < source.index('className: "wb-extension-expand-button"')
+    assert 'className: "wb-extension-source-sections"' in source
+    assert 't("settings.extensionMcpRegistryHint")' in source
+    assert '.wb-extension-source-modal { width: min(820px, calc(100vw - 32px)); padding: 0; overflow: auto; }' in styles
+    assert '.wb-extension-glyph.github-cli { color: var(--wb-text); }' in styles
+    assert 'min-width: 92px;' in styles.split('.wb-extensions-page .wb-extension-install-button {', 1)[1].split('}', 1)[0]
+    assert 'className: "wb-btn primary wb-extension-install-button wb-extension-tab-install-button"' in source
+    tab_install_button_css = styles.split(
+        ".wb-extension-header-actions .wb-extension-tab-install-button {", 1
+    )[1].split("}", 1)[0]
+    assert "width: 128px;" in tab_install_button_css
+    assert "min-width: 128px;" in tab_install_button_css
+
+    extension_scroll_css = styles.split(
+        '.settings-overlay-content[data-settings-active-tab="extensions"] {', 1
+    )[1].split("}", 1)[0]
+    extension_webkit_scroll_css = styles.split(
+        '.settings-overlay-content[data-settings-active-tab="extensions"]::-webkit-scrollbar {', 1
+    )[1].split("}", 1)[0]
+    settings_content_css = styles.split("/* Content area */", 1)[1].split(
+        ".settings-overlay-content {", 1
+    )[1].split("}", 1)[0]
+    assert "overflow-y: auto;" in settings_content_css
+    assert "scrollbar-width: none;" in extension_scroll_css
+    assert "-ms-overflow-style: none;" in extension_scroll_css
+    assert "display: none;" in extension_webkit_scroll_css
+    assert "width: 0;" in extension_webkit_scroll_css
+    assert "height: 0;" in extension_webkit_scroll_css
+
+    for extension_id in ("python", "uv", "tex", "node", "github-cli", "bun"):
+        assert translations.count(f'"settings.extensionCatalog.{extension_id}.name"') == 2
+        assert translations.count(f'"settings.extensionCatalog.{extension_id}.description"') == 2
+    assert translations.count('"settings.extensionSource.system"') == 2
+    assert translations.count('"settings.extensionHealthValue.healthy"') == 2
 
 
 def test_remote_settings_keeps_compatibility_on_and_persists_package_checkboxes():
@@ -7546,8 +7783,11 @@ def test_workbench_skill_learning_has_small_screen_progressive_disclosure():
     assert ".wb-mem-page.learning-active > .wb-mem-detail" in compact_three_column
     assert "display: flex;" in compact_three_column
     assert "grid-template-columns: 220px minmax(280px, 1fr);" in compact_three_column
-    narrow_block = css.rsplit("@media (max-width: 760px)", 1)[1].split("@media", 1)[0]
-    assert ".wb-mem-page.learning-active > .wb-mem-detail { display: none; }" in narrow_block
+    narrow_rule = ".wb-mem-page.learning-active > .wb-mem-detail { display: none; }"
+    narrow_rule_index = css.index(narrow_rule)
+    narrow_media_index = css.rfind("@media (max-width: 760px)", 0, narrow_rule_index)
+    assert narrow_media_index >= 0
+    assert css.find("@media", narrow_media_index + 1, narrow_rule_index) < 0
     assert "@media (max-width: 1500px)" not in css
     assert "@media (max-width: 1080px)" in css
     assert "@media (max-width: 760px)" in css

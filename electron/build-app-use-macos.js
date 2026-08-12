@@ -25,8 +25,9 @@ function buildMacHitTestHelper() {
   }
 }
 
-module.exports = async function beforePack() {
+module.exports = async function beforePack(context) {
   buildMacHitTestHelper();
+  await require('./build-runtime-tools').buildRuntimeTools(context || {});
 };
 module.exports.buildMacHitTestHelper = buildMacHitTestHelper;
 

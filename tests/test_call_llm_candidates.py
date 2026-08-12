@@ -291,6 +291,25 @@ def test_workbench_network_error_message_requests_resend():
     assert "Please send this message again." in _workbench_chat_run_error_message(exc, "en")
 
 
+def test_workbench_model_authentication_error_is_actionable():
+    from cyrene.workbench.chat import (
+        _workbench_chat_error_metadata,
+        _workbench_chat_run_error_message,
+    )
+
+    request = httpx.Request("POST", "https://api.deepseek.com/chat/completions")
+    response = httpx.Response(401, request=request)
+    exc = httpx.HTTPStatusError("401 Authorization Required", request=request, response=response)
+
+    assert _workbench_chat_run_error_message(exc, "zh") == (
+        "无法访问模型服务：鉴权失败。请检查 API Key 或登录状态后重试。"
+    )
+    assert _workbench_chat_error_metadata(exc) == {
+        "code": "model_authentication_failed",
+        "detail_key": "workbenchChat.error.modelAuthenticationFailed",
+    }
+
+
 @pytest.mark.parametrize(
     "base_url",
     [

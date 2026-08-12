@@ -581,6 +581,11 @@ def _resolve_llm_candidates() -> list[dict[str, Any]]:
     return _inherit_sibling_keys(candidates)
 
 
+def resolve_llm_candidates() -> list[dict[str, Any]]:
+    """Return the configured primary model candidates in fallback order."""
+    return _resolve_llm_candidates()
+
+
 def model_candidate_identity_for_response(
     session_id: str,
     model_name: str,
@@ -608,6 +613,14 @@ def model_candidate_identity_for_response(
         "baseUrl": _public_base_url(match.get("base_url") or ""),
         "reasoningEffort": str(match.get("reasoning_effort") or "").strip().lower(),
     }
+
+
+def resolve_session_model_candidate(session_id: str) -> dict[str, Any] | None:
+    """Resolve the exact configured primary candidate selected for a session."""
+    candidates = _prioritize_last_success(
+        _resolve_llm_candidates(), "primary", str(session_id or "")
+    )
+    return dict(candidates[0]) if candidates else None
 
 
 def resolve_exact_model_candidate(identity: dict[str, Any]) -> dict[str, Any] | None:
@@ -1423,6 +1436,7 @@ def _record_success_telemetry_faf(
     record_usage: bool = True,
 ) -> None:
     """Persist the normal success-path telemetry with a single SQLite commit."""
+    from cyrene.observability.trace import current_trace_context
     from cyrene.runtime.database import record_llm_telemetry_batch
 
     token_events = []
@@ -1439,7 +1453,18 @@ def _record_success_telemetry_faf(
             "session_id": session_id,
             "caller": caller,
         })
-    latency_events = [latency_event] if latency_event is not None else []
+    latency_events = []
+    if latency_event is not None:
+        trace = current_trace_context()
+        attempt = int(latency_event.get("attempt") or 1)
+        call_id = str(latency_event.get("call_id") or "")
+        latency_events.append({
+            **latency_event,
+            "trace_id": trace.trace_id,
+            "run_id": trace.run_id,
+            "parent_span_id": trace.parent_span_id,
+            "span_id": f"{call_id}.attempt.{attempt}" if call_id else "",
+        })
     if not token_events and not latency_events:
         return
     _bg_token_task(asyncio.create_task(record_llm_telemetry_batch(
@@ -1451,9 +1476,20 @@ def _record_success_telemetry_faf(
 
 def _record_latency_faf(event: dict[str, Any]) -> None:
     """Persist a request-attempt span without delaying the model loop."""
+    from cyrene.observability.trace import current_trace_context
     from cyrene.runtime.database import record_llm_latency
 
-    _bg_token_task(asyncio.create_task(record_llm_latency(str(DB_PATH), **event)))
+    trace = current_trace_context()
+    attempt = int(event.get("attempt") or 1)
+    call_id = str(event.get("call_id") or "")
+    _bg_token_task(asyncio.create_task(record_llm_latency(
+        str(DB_PATH),
+        **event,
+        trace_id=trace.trace_id,
+        run_id=trace.run_id,
+        parent_span_id=trace.parent_span_id,
+        span_id=f"{call_id}.attempt.{attempt}" if call_id else "",
+    )))
 
 
 # ---------------------------------------------------------------------------

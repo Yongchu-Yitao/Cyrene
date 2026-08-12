@@ -96,6 +96,20 @@ def test_never_overwrites_a_populated_target(tmp_path):
     assert result.rollback_path is None
 
 
+def test_ignores_an_empty_legacy_file_when_target_is_populated(tmp_path):
+    source = tmp_path / "cyrene.db"
+    target = tmp_path / "cyrene.runtime.database"
+    source.touch()
+    _create_database(target, "new")
+
+    result = migrate_legacy_database(target)
+
+    assert result.status == "not_needed"
+    assert result.detail == "source_empty"
+    assert source.stat().st_size == 0
+    assert _values(target) == ["new"]
+
+
 def test_migration_is_idempotent(tmp_path):
     source = tmp_path / "cyrene.db"
     target = tmp_path / "cyrene.runtime.database"

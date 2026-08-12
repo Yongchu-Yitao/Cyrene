@@ -96,6 +96,20 @@ def register_task_session_routes(
         session["reasoningEffort"] = selected_effort
         return None
 
+    async def migrate_legacy_artifacts_if_needed(
+        payload: dict[str, Any],
+        project: dict[str, Any],
+        session: dict[str, Any],
+    ) -> None:
+        if int(session.get("legacyArtifactModelMigrationVersion") or 0) >= 1:
+            return
+        before = int(session.get("legacyArtifactModelMigrationVersion") or 0)
+        await _workbench_backfill_referenced_file_artifacts(
+            project, session, _utc_now_iso(),
+        )
+        if int(session.get("legacyArtifactModelMigrationVersion") or 0) != before:
+            _write_workbench_store(payload)
+
     @router.get("/api/task-sessions/{session_id}")
     async def api_workbench_get_session(session_id: str):
         payload = _read_workbench_store()
@@ -521,7 +535,7 @@ def register_task_session_routes(
         if goal:
             session["goal"] = goal
             merged = list(session.get("constraints") or [])
-            for item in _workbench_extract_constraints(goal):
+            for item in await _workbench_extract_constraints(goal):
                 if item not in merged:
                     merged.append(item)
             session["constraints"] = merged
@@ -911,7 +925,7 @@ def register_task_session_routes(
 
         run_started_at = _utc_now_iso()
         if not is_step_run:
-            constraints = _workbench_extract_constraints(user_input)
+            constraints = await _workbench_extract_constraints(user_input)
             merged_constraints = list(session.get("constraints") or [])
             for item in constraints:
                 if item not in merged_constraints:
@@ -1239,16 +1253,37 @@ def register_task_session_routes(
         )
         if should_generate_title:
             from cyrene.workbench.session_naming import generate_session_title
+            from cyrene.model_runtime.client import resolve_session_model_candidate
 
             session["titleNamingStatus"] = "pending"
             session["titleNamingStartedAt"] = _utc_now_iso()
+            naming_candidate = resolve_session_model_candidate(session_id)
+            candidate_id = str((naming_candidate or {}).get("id") or "")
+            candidate_model = str((naming_candidate or {}).get("model") or "")
+            logger.info(
+                "Workbench task session naming started "
+                "[session=%s candidate=%s model=%s input_chars=%d]",
+                session_id,
+                candidate_id or "unresolved",
+                candidate_model or "unresolved",
+                len(user_input),
+            )
             try:
-                generated_title = await generate_session_title(user_input, limit=80)
-            except Exception:
-                logger.warning(
-                    "Workbench task session naming failed for %s",
+                if naming_candidate is None:
+                    raise RuntimeError("no configured model candidate for task session")
+                generated_title = await generate_session_title(
+                    user_input,
+                    limit=80,
+                    candidate=naming_candidate,
+                )
+            except Exception as exc:
+                logger.exception(
+                    "Workbench task session naming failed "
+                    "[session=%s candidate=%s model=%s error_type=%s]",
                     session_id,
-                    exc_info=True,
+                    candidate_id or "unresolved",
+                    candidate_model or "unresolved",
+                    type(exc).__name__,
                 )
                 generated_title = ""
             if generated_title and not session.get("titleLocked"):
@@ -1257,6 +1292,15 @@ def register_task_session_routes(
                 session["titleGeneratedAt"] = _utc_now_iso()
             else:
                 session["titleNamingStatus"] = "failed"
+            logger.info(
+                "Workbench task session naming finished "
+                "[session=%s candidate=%s model=%s status=%s output_chars=%d]",
+                session_id,
+                candidate_id or "unresolved",
+                candidate_model or "unresolved",
+                session["titleNamingStatus"],
+                len(generated_title),
+            )
         # A slash command or attachment-only message is already a concrete action —
         # skip classification and treat it as a direct instruction.
         if command or (not user_input and attachments):
@@ -1265,7 +1309,7 @@ def register_task_session_routes(
             kind = await _workbench_classify_intent(user_input, session)
 
         now = _utc_now_iso()
-        # Seed goal/title/constraints from the first ACTIONABLE input so the task
+        # Seed goal/title from the first ACTIONABLE input so the task
         # gets a real identity — but not for a pure question (kind=="answer") or a
         # completion signal (kind=="finalize"): neither is a task goal. The agent
         # can still set/correct goal+title at any time via the set_task_goal tool.
@@ -1273,8 +1317,12 @@ def register_task_session_routes(
             session["goal"] = user_input
             if _workbench_is_default_title(session.get("title")):
                 session["title"] = _workbench_derive_title(user_input)
+        # Constraints are semantic requirements and may be added in later turns,
+        # so analyze every actionable task/direct input instead of only the first
+        # goal or matching a few trigger words.
+        if kind in ("plan", "direct") and user_input:
             merged = list(session.get("constraints") or [])
-            for item in _workbench_extract_constraints(user_input):
+            for item in await _workbench_extract_constraints(user_input):
                 if item not in merged:
                     merged.append(item)
             session["constraints"] = merged
@@ -2002,9 +2050,11 @@ def register_task_session_routes(
     @router.get("/api/task-sessions/{session_id}/artifacts")
     async def api_workbench_session_artifacts(session_id: str):
         payload = _read_workbench_store()
-        _project, session = _workbench_find_session(payload, session_id)
+        project, session = _workbench_find_session(payload, session_id)
         if not session:
             return JSONResponse({"error": "session not found"}, status_code=404)
+        if project:
+            await migrate_legacy_artifacts_if_needed(payload, project, session)
         return {"artifacts": session.get("artifacts", [])}
 
     @router.get("/api/task-sessions/{session_id}/artifacts/{artifact_id}/download")

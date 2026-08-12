@@ -65,6 +65,9 @@ _RESTORABLE_REPLACE_ROOTS = {arcname for _, arcname in _MANAGED_DIRECTORIES}
 # included.
 _EXCLUDED_DATA_ROOT_NAMES = {
     "config.enc", ".config_key", "code_index.db",
+    # MCP declarations are migrated into the encrypted portable config
+    # snapshot. Never copy a legacy plaintext declaration file into backups.
+    "mcp_servers.json",
 }
 _EXCLUDED_DATA_DIRECTORIES = {
     "attachment_cache", "browser_profile", "generated_reports",

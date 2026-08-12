@@ -125,6 +125,37 @@ async def test_auto_approval_is_bound_to_one_exact_path(monkeypatch, tmp_path):
     assert [item["tool_name"] for item in reviews] == ["Read", "send_message"]
 
 
+async def test_extension_changes_reach_reviewer_even_in_full_access(monkeypatch):
+    from cyrene.agent import auto_review, state
+    from cyrene.observability import debug
+    from cyrene.tooling import runtime_support
+
+    reviews = []
+
+    async def approve(**kwargs):
+        reviews.append(kwargs)
+        return True, "extension install approved"
+
+    monkeypatch.setattr(auto_review, "review_elevation", approve)
+    monkeypatch.setattr(debug, "publish_event", _ignore_event)
+    round_token = state._current_round_id.set("round_extension_review")
+    mode_token = state._permission_mode.set("full_access")
+    try:
+        result = await runtime_support._request_scope_elevation(
+            tool_name="ManageExtensions",
+            path_hint="extension:toolchain:node:exact",
+            operation="安装扩展 toolchain:node",
+            reason="User asked the agent to install Node.",
+            permission_kind="extension_change",
+        )
+    finally:
+        state._permission_mode.reset(mode_token)
+        state._current_round_id.reset(round_token)
+
+    assert result is None
+    assert reviews[0]["tool_name"] == "ManageExtensions"
+
+
 async def test_exact_grant_is_shared_and_consumed_once_across_tool_tasks():
     from cyrene.agent import context, state
 
@@ -249,7 +280,7 @@ async def test_default_mode_blocks_unknown_mcp_until_exact_approval(
     assert manager.calls == []
 
 
-async def test_auto_mode_reviews_shell_but_default_keeps_simple_commands_smooth(
+async def test_auto_mode_reviews_unbounded_shell_but_skips_workspace_read_only_commands(
     monkeypatch, tmp_path
 ):
     from cyrene.agent import auto_review, state
@@ -278,7 +309,6 @@ async def test_auto_mode_reviews_shell_but_default_keeps_simple_commands_smooth(
             "",
             None,
         )
-        state._permission_mode.set("default")
         allowed = await executor._execute_tool(
             "Bash",
             {"command": "printf safe"},
@@ -296,6 +326,39 @@ async def test_auto_mode_reviews_shell_but_default_keeps_simple_commands_smooth(
     assert reviews[0]["tool_name"] == "Bash"
     assert reviews[0]["operation"] == "执行本地进程或 Shell 命令"
     assert "safe" in allowed
+    assert len(reviews) == 1
+
+
+def test_shell_review_classifier_distinguishes_read_only_git_from_mutating_commands(
+    tmp_path
+):
+    from cyrene.agent import state
+    from cyrene.tooling.executor import _shell_command_needs_explicit_review
+
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    workspace_token = state._active_workspace_dir.set(str(workspace))
+    try:
+        assert _shell_command_needs_explicit_review({
+            "command": "cd repo && git log --oneline -5 && rg -n skill src 2>/dev/null",
+        }) is False
+        assert _shell_command_needs_explicit_review({
+            "command": "git clone https://example.com/repo.git scratch/repo",
+        }) is True
+        assert _shell_command_needs_explicit_review({
+            "command": "sed -i 's/old/new/' src/example.py",
+        }) is True
+        assert _shell_command_needs_explicit_review({
+            "command": "printf changed > src/example.py",
+        }) is True
+        assert _shell_command_needs_explicit_review({
+            "command": "cd ../../outside && cat secret.txt",
+        }) is True
+        assert _shell_command_needs_explicit_review({
+            "command": "git branch -D obsolete",
+        }) is True
+    finally:
+        state._active_workspace_dir.reset(workspace_token)
 
 
 async def test_permission_decision_is_persisted(tmp_path):

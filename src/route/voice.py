@@ -61,7 +61,10 @@ def register_voice_routes(router: APIRouter) -> None:
 
     @router.delete("/api/voice/profile")
     async def api_delete_voice_profile():
-        return {"ok": True, **engine.delete_voice_profile()}
+        try:
+            return {"ok": True, **await asyncio.to_thread(engine.delete_voice_profile)}
+        except (ValueError, RuntimeError, OSError) as exc:
+            return _error(exc)
 
     @router.post("/api/voice/asr")
     async def api_voice_asr(audio: UploadFile):

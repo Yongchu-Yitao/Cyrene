@@ -247,6 +247,20 @@ def test_portable_snapshot_is_detached_reencrypted_and_activated(
     assert isolated_config_store.get_setting("app_language") == "en"
 
 
+def test_portable_snapshot_redacts_extension_credentials(isolated_config_store):
+    isolated_config_store.set_setting("extension_sources", {"github_token": "github-secret"})
+    isolated_config_store.set_setting("mcp_servers", [{
+        "name": "remote", "headers": {"Authorization": "Bearer secret"},
+        "env": {"API_KEY": "local-secret"},
+    }])
+
+    snapshot = isolated_config_store.export_snapshot()
+    encoded = json.dumps(snapshot)
+    assert "github-secret" not in encoded
+    assert "Bearer secret" not in encoded
+    assert "local-secret" not in encoded
+
+
 def test_unknown_model_context_uses_smallest_known_candidate_window(monkeypatch):
     from cyrene.runtime import config_store
 

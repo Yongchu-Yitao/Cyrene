@@ -40,10 +40,19 @@ _NETWORK_SHELL_EXECUTABLES = frozenset({
     "curl", "wget", "ssh", "scp", "sftp", "ftp",
     "nc", "ncat", "socat", "telnet",
 })
+_READ_ONLY_SHELL_EXECUTABLES = frozenset({
+    "[", "cat", "cd", "cut", "echo", "find", "git", "grep", "head",
+    "ls", "pwd", "printf", "rg", "sed", "sort", "tail", "test", "tr",
+    "uniq", "wc",
+})
+_READ_ONLY_GIT_SUBCOMMANDS = frozenset({
+    "diff", "grep", "log", "ls-files", "rev-parse", "show",
+    "status",
+})
 
 
 def _shell_command_needs_explicit_review(arguments: dict[str, Any]) -> bool:
-    """Flag shell calls whose scope cannot be kept inside the workspace."""
+    """Flag shell calls that are not statically bounded, workspace-local reads."""
     command = str(arguments.get("command") or "").strip()
     cwd = str(arguments.get("cwd") or "").strip()
     from cyrene.agent.context import active_workspace_dir
@@ -60,22 +69,58 @@ def _shell_command_needs_explicit_review(arguments: dict[str, Any]) -> bool:
         return False
     if "$(" in command or "`" in command:
         return True
+    # Discard the common read-only stderr suppression before detecting output
+    # redirection. Other redirects can mutate a file and therefore need review.
+    command_without_devnull = re.sub(r"(?:^|\s)2?>\s*/dev/null(?=\s|$)", " ", command)
+    if re.search(r"(?:^|\s)(?:\d*>>?|&>)", command_without_devnull):
+        return True
     try:
         tokens = shlex.split(command, posix=True)
     except ValueError:
         return True
     expect_executable = True
+    executable = ""
+    segment_tokens: list[str] = []
     separators = {"|", "||", "&&", ";", "&"}
     for token in tokens:
         if token in separators:
+            if executable == "sed" and not _sed_invocation_is_read_only(segment_tokens):
+                return True
             expect_executable = True
+            segment_tokens = []
             continue
         if expect_executable:
             executable = Path(token).name.lower()
             if executable in _OPAQUE_SHELL_EXECUTABLES | _NETWORK_SHELL_EXECUTABLES:
                 return True
+            if executable not in _READ_ONLY_SHELL_EXECUTABLES:
+                return True
             expect_executable = False
+            segment_tokens = [token]
             continue
+        segment_tokens.append(token)
+        if executable == "git" and not token.startswith("-"):
+            if token.lower() not in _READ_ONLY_GIT_SUBCOMMANDS:
+                return True
+            executable = "git:args"
+            continue
+        if executable == "cd" and not token.startswith("-"):
+            destination = Path(token).expanduser()
+            if not destination.is_absolute():
+                destination = workspace / destination
+            resolved_destination = destination.resolve()
+            if (
+                resolved_destination != workspace
+                and workspace not in resolved_destination.parents
+            ):
+                return True
+        if executable == "sort" and (token == "-o" or token.startswith("--output=")):
+            return True
+        if executable == "find" and token in {
+            "-delete", "-exec", "-execdir", "-fprint", "-fprint0", "-fprintf",
+            "-ok", "-okdir",
+        }:
+            return True
         if token.startswith("-") or token in {">", ">>", "<", "2>", "2>>"}:
             continue
         expanded = Path(
@@ -86,7 +131,20 @@ def _shell_command_needs_explicit_review(arguments: dict[str, Any]) -> bool:
         resolved = expanded.resolve()
         if resolved != workspace and workspace not in resolved.parents:
             return True
+    if executable == "sed" and not _sed_invocation_is_read_only(segment_tokens):
+        return True
     return False
+
+
+def _sed_invocation_is_read_only(tokens: list[str]) -> bool:
+    """Allow only the common ``sed -n <address>p <files...>`` inspection form."""
+    if len(tokens) < 3 or "-n" not in tokens[1:]:
+        return False
+    positional = [token for token in tokens[1:] if not token.startswith("-")]
+    if not positional:
+        return False
+    script = positional[0].strip()
+    return bool(re.fullmatch(r"(?:\d+(?:,\d+)?|\$)p", script))
 
 _pending_action_record_tasks: set[asyncio.Task[Any]] = set()
 _pending_timed_out_tool_tasks: set[asyncio.Task[Any]] = set()
@@ -330,6 +388,14 @@ def _proactive_tool_refusal(name: str, arguments: dict[str, Any]) -> str | None:
 
 
 async def _execute_tool(name: str, arguments: dict[str, Any], bot: Any, chat_id: int, db_path: str, notify_state: dict[str, bool] | None) -> str:
+    from cyrene.hooks import HookBlocked, run_post_tool_hooks, run_pre_tool_hooks
+
+    try:
+        # Hooks transform the concrete call before every policy gate below, so
+        # Cyrene's reviewer always evaluates the final arguments.
+        arguments = await run_pre_tool_hooks(name, arguments)
+    except HookBlocked as exc:
+        return f"Tool blocked by Agent Hook: {exc}"
     proactive_refusal = _proactive_tool_refusal(name, arguments)
     if proactive_refusal is not None:
         return proactive_refusal
@@ -353,10 +419,7 @@ async def _execute_tool(name: str, arguments: dict[str, Any], bot: Any, chat_id:
     if (
         name in _PROCESS_EXECUTION_TOOLS
         and run_context.permission_mode != "full_access"
-        and (
-            run_context.permission_mode == "auto"
-            or _shell_command_needs_explicit_review(arguments)
-        )
+        and (name != "Bash" or _shell_command_needs_explicit_review(arguments))
     ):
         from cyrene.tooling.runtime_api import request_scope_elevation
 
@@ -420,6 +483,13 @@ async def _execute_tool(name: str, arguments: dict[str, Any], bot: Any, chat_id:
                 success=tool_success,
                 error="" if tool_success else redact_text(str(result)),
             )
+            await run_post_tool_hooks(
+                name,
+                arguments,
+                result,
+                success=tool_success,
+                error="" if tool_success else str(result),
+            )
             return result
         except ValueError:
             raise ValueError(f"Unknown tool: {name}")
@@ -434,6 +504,13 @@ async def _execute_tool(name: str, arguments: dict[str, Any], bot: Any, chat_id:
                 result=redact_text(f"Tool {name} failed: {e}"),
                 success=False,
                 error=redact_text(str(e)),
+            )
+            await run_post_tool_hooks(
+                name,
+                arguments,
+                f"Tool {name} failed: {e}",
+                success=False,
+                error=str(e),
             )
             return f"Tool {name} failed: {e}"
 
@@ -461,6 +538,13 @@ async def _execute_tool(name: str, arguments: dict[str, Any], bot: Any, chat_id:
             success=False,
             error=redact_text(str(e)),
         )
+        await run_post_tool_hooks(
+            name,
+            arguments,
+            f"Tool failed: {e}",
+            success=False,
+            error=str(e),
+        )
         raise
     from cyrene.observability import debug
     run_context = current_run_context()
@@ -480,6 +564,13 @@ async def _execute_tool(name: str, arguments: dict[str, Any], bot: Any, chat_id:
         result=redact_text(result),
         success=tool_success,
         error="" if tool_success else redact_text(str(result)),
+    )
+    await run_post_tool_hooks(
+        name,
+        arguments,
+        result,
+        success=tool_success,
+        error="" if tool_success else str(result),
     )
     return result
 

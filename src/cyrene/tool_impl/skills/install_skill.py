@@ -7,6 +7,7 @@ from typing import Any
 from cyrene.tooling.native_definitions import get_native_tool_def
 from cyrene.tooling.runtime_api import (
     install_skill_from_path,
+    request_scope_elevation,
     resolve_tool_path,
     json,
 )
@@ -26,6 +27,15 @@ async def _tool_install_skill(args: dict[str, Any], _bot: Any, _chat_id: int, _d
     source = source.resolve()
     if not source.exists():
         return json.dumps({"ok": False, "error": f"path does not exist: {source}"}, ensure_ascii=False)
+    reviewed = await request_scope_elevation(
+        tool_name=TOOL_NAME,
+        path_hint=f"extension:skill:{source}",
+        operation=f"安装全局 Skill：{source.name}",
+        reason="Installing a Skill changes Cyrene's persistent global capabilities.",
+        permission_kind="extension_change",
+    )
+    if reviewed is not None:
+        return reviewed
     result = install_skill_from_path(source)
     if result.get("ok"):
         skill = result.get("skill", {})

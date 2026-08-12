@@ -22,6 +22,7 @@ def _project():
                 "title": "实现共享上下文",
                 "goal": "让同项目任务共享成果",
                 "summary": {"text": "后端机制实现"},
+                "constraints": ["保持普通聊天上下文不受影响"],
                 "plan": [
                     {
                         "id": "step_1",
@@ -56,10 +57,13 @@ def test_main_context_orders_project_blocks_before_session_blocks():
     assert "## Workbench 项目共享上下文" in ctx
     assert "### 项目任务描述" in ctx
     assert "## 当前 session 任务" in ctx
+    assert "## 当前 session 任务约束" in ctx
+    assert "保持普通聊天上下文不受影响" in ctx
     assert "## 当前 session 计划" in ctx
     assert "## 当前计划的验收标准" in ctx
     assert ctx.index("### 项目任务描述") < ctx.index("## 当前 session 任务")
-    assert ctx.index("## 当前 session 任务") < ctx.index("## 当前 session 计划")
+    assert ctx.index("## 当前 session 任务") < ctx.index("## 当前 session 任务约束")
+    assert ctx.index("## 当前 session 任务约束") < ctx.index("## 当前 session 计划")
     assert ctx.index("## 当前 session 计划") < ctx.index("## 当前计划的验收标准")
 
 
@@ -73,6 +77,7 @@ def test_subagent_context_replaces_session_task_with_subtask_prompt():
     assert "子任务：只实现 append_shared_outcome" in ctx
     assert "父 session：实现共享上下文" in ctx
     assert "目标：让同项目任务共享成果" not in ctx
+    assert "保持普通聊天上下文不受影响" in ctx
     assert "## 当前 session 计划" in ctx
     assert "主代理看到项目共享上下文" in ctx
 
