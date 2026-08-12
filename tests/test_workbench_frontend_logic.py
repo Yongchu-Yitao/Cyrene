@@ -4527,6 +4527,10 @@ def test_collapsed_chat_rail_measures_expanded_row_centres_for_spatial_mapping()
         ".workbench-grid.integrated-sidebars .wbc-rail.workbench-integrated-rail.is-collapsed .wbc-conversation-status-anchor {",
         1,
     )[1].split("}", 1)[0]
+    unmeasured_collapsed_anchor_css = styles.split(
+        ".workbench-grid.integrated-sidebars .wbc-rail.workbench-integrated-rail.is-collapsed .wbc-conversation-status-anchor:not(.is-measured) {",
+        1,
+    )[1].split("}", 1)[0]
     assert "left: var(--wbc-track-expanded-x, 29px)" in anchor_css
     assert "top: var(--wbc-track-expanded-position, var(--wbc-track-position))" in anchor_css
     assert "transition:" not in anchor_css
@@ -4536,6 +4540,8 @@ def test_collapsed_chat_rail_measures_expanded_row_centres_for_spatial_mapping()
     assert "top:" not in collapsed_anchor_css
     assert "--wbc-track-collapsed-x: 23px" in base_track
     assert "wbc-status-enable-interaction" in collapsed_anchor_css
+    assert "animation: none" in unmeasured_collapsed_anchor_css
+    assert "pointer-events: none" in unmeasured_collapsed_anchor_css
     assert ".wbc-conversation-status-glyph" in styles
     assert ".wbc-conversation-status-dot" in styles
     expanding_css = styles.split(

@@ -29758,6 +29758,14 @@ html[data-density="compact"] .workbench-shell :where(.wb-budget-model-head, .wb-
   animation: wbc-status-enable-interaction 240ms step-end both;
 }
 
+/* Rows outside the measured rail window remain in the status model, but they
+   are not painted. Do not let the collapsed interaction animation turn those
+   transparent anchors into hit targets over a visible marker. */
+.workbench-grid.integrated-sidebars .wbc-rail.workbench-integrated-rail.is-collapsed .wbc-conversation-status-anchor:not(.is-measured) {
+  animation: none;
+  pointer-events: none;
+}
+
 .wbc-rail.is-status-expanding .wbc-conversation-status-anchor {
   transition:
     left var(--wb-sidebar-motion-duration) var(--wb-sidebar-motion-ease),
