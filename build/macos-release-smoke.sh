@@ -19,8 +19,19 @@ cleanup() {
 }
 trap cleanup EXIT
 
-hdiutil attach "${dmgs[0]}" -nobrowse -readonly -mountpoint "$mount_dir"
-mounted=true
+for attempt in 1 2 3; do
+  if hdiutil attach "${dmgs[0]}" -nobrowse -readonly -mountpoint "$mount_dir"; then
+    mounted=true
+    break
+  fi
+  if [[ $attempt -lt 3 ]]; then
+    sleep $((attempt * 5))
+  fi
+done
+if [[ "$mounted" != true ]]; then
+  echo "Unable to mount macOS DMG after 3 attempts" >&2
+  exit 1
+fi
 
 app_path="$mount_dir/Cyrene.app"
 backend="$app_path/Contents/Resources/python-bundle/Cyrene"

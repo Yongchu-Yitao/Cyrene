@@ -35,6 +35,8 @@ def test_release_mounts_and_runs_the_built_macos_dmg():
     assert "Install and smoke test macOS package" in workflow
     assert "build/macos-release-smoke.sh" in workflow
     assert "hdiutil attach" in smoke
+    assert "for attempt in 1 2 3" in smoke
+    assert "Unable to mount macOS DMG after 3 attempts" in smoke
     assert 'Contents/Resources/python-bundle/Cyrene' in smoke
     assert 'Contents/MacOS/Cyrene' in smoke
     assert 'run_and_require "Cyrene smoke test OK:"' in smoke
