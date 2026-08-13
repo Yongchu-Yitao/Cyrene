@@ -970,6 +970,16 @@ async def _electron_app_rpc(
     return data
 
 
+async def electron_app_rpc(
+    operation: str,
+    arguments: dict[str, Any] | None = None,
+    *,
+    timeout: float = 45.0,
+) -> dict[str, Any]:
+    """Public bridge for App Use backends that share the Electron transport."""
+    return await _electron_app_rpc(operation, arguments, timeout=timeout)
+
+
 def _validate_gateway_arguments(arguments: dict[str, Any]) -> tuple[str, dict[str, Any]]:
     unknown = sorted(set(arguments) - {"operation", "target_id", "session_id", "capability", "parameters"})
     if unknown:
@@ -1309,6 +1319,7 @@ def format_app_use_result(result: dict[str, Any], *, max_chars: int = 20_000) ->
 
 
 __all__ = [
+    "electron_app_rpc",
     "electron_app_use_available",
     "execute_app_use",
     "format_app_use_result",

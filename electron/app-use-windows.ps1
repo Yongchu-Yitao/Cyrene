@@ -328,19 +328,24 @@ function Get-Snapshot($Payload, [bool]$InspectOnly) {
     $maxDepth = if ($options.maxDepth) { [Math]::Max(1, [Math]::Min(16, [int]$options.maxDepth)) } else { if ($InspectOnly) { 3 } else { 8 } }
     $nodes = [System.Collections.Generic.List[object]]::new()
     $queue = [System.Collections.Generic.Queue[object]]::new()
-    $queue.Enqueue(@($start, $nativeRef, 0))
+    $queue.Enqueue(@($start, $nativeRef, 0, ''))
     $truncated = $false
     while ($queue.Count -gt 0) {
         $entry = $queue.Dequeue()
         $element = $entry[0]
         $elementRef = [string]$entry[1]
         $depth = [int]$entry[2]
-        try { $nodes.Add((Get-Node $element $elementRef)) } catch {}
+        $parentRef = [string]$entry[3]
+        try {
+            $node = Get-Node $element $elementRef
+            if (-not [string]::IsNullOrWhiteSpace($parentRef)) { $node.parentNativeRef = $parentRef }
+            $nodes.Add($node)
+        } catch {}
         if ($nodes.Count -ge $maxNodes) { $truncated = $queue.Count -gt 0; break }
         if ($depth -ge $maxDepth) { continue }
         $children = @(Get-Children $element)
         for ($index = 0; $index -lt $children.Count; $index += 1) {
-            $queue.Enqueue(@($children[$index], "$elementRef/e$index", $depth + 1))
+            $queue.Enqueue(@($children[$index], "$elementRef/e$index", $depth + 1, $elementRef))
         }
     }
     return @{ ok = $true; nodes = @($nodes); truncated = $truncated }

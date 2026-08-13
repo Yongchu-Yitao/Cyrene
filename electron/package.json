@@ -137,7 +137,10 @@
       "artifactName": "Cyrene-${version}-x64.${ext}"
     },
     "deb": {
-      "afterInstall": "linux-after-install.sh"
+      "afterInstall": "linux-after-install.sh",
+      "depends": [
+        "at-spi2-core"
+      ]
     },
     "rpm": {
       "afterInstall": "linux-after-install.sh"

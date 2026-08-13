@@ -2,7 +2,6 @@ const crypto = require('crypto');
 const fs = require('fs');
 const path = require('path');
 const { execFile } = require('child_process');
-const { LinuxAtspiProvider } = require('./app-use-linux');
 
 const MANIFEST_VERSION = 'app-use-semantic-v2';
 const DEFAULT_SESSION_TTL_MS = 5 * 60 * 1000;
@@ -281,7 +280,14 @@ class CommandPlatformProvider {
     this.baseDir = baseDir;
     this.resourcesPath = resourcesPath;
     this.existsSync = existsSync;
-    this.linuxProvider = platform === 'linux' ? new LinuxAtspiProvider() : null;
+    if (platform === 'linux') {
+      // Load the optional D-Bus dependency only on Linux. Unit tests and
+      // non-Linux packages must not require Electron production dependencies.
+      const { LinuxAtspiProvider } = require('./app-use-linux');
+      this.linuxProvider = new LinuxAtspiProvider();
+    } else {
+      this.linuxProvider = null;
+    }
   }
 
   async request(operation, payload = {}, timeout = 15000) {

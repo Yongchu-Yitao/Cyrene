@@ -160,6 +160,8 @@ class LinuxAtspiProvider {
       if (valueProps.CurrentValue !== undefined) value = String(valueProps.CurrentValue);
     } catch (_) {}
     const nativeRef = encodeRef(ref.busName, ref.objectPath);
+    const semanticActions = actions.map((item) => item.kind);
+    if (info.interfaces.includes(`${ATSPI}.EditableText`)) semanticActions.push('set_value');
     return {
       raw: {
         nativeRef,
@@ -171,7 +173,7 @@ class LinuxAtspiProvider {
         value,
         bounds,
         enabled: true,
-        actions: [...new Set(actions.map((item) => item.kind))],
+        actions: [...new Set(semanticActions)],
         nativeActions: actions.map((item) => item.name),
         actionDescriptors: actions,
         interfaces: info.interfaces,
@@ -284,14 +286,16 @@ class LinuxAtspiProvider {
     const after = await this._node(ref).catch(() => null);
     const beforeState = before ? JSON.stringify([before.raw.name, before.raw.value, before.raw.actions]) : '';
     const afterState = after ? JSON.stringify([after.raw.name, after.raw.value, after.raw.actions]) : '';
-    const verified = performed && (beforeState !== afterState || ['press', 'select', 'semantic_double_click', 'semantic_drag', 'scroll'].includes(capability));
+    const verified = performed && beforeState !== afterState;
     return {
       ok: true,
       verified,
       uncertain: !verified,
       summary: `${capability} dispatched through AT-SPI2.`,
       diagnostics: { provider: 'at-spi2', performed },
-      verification: after ? { ok: true, nodes: [after.raw] } : null,
+      // AppUseManager takes a fresh, mapped snapshot for verification. Do not
+      // leak AT-SPI object references through the provider result.
+      verification: null,
     };
   }
 }

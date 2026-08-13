@@ -1151,6 +1151,10 @@ def test_agent_never_bypasses_an_unavailable_app_use_provider():
         "or another tool that imitates the requested App Use action"
     )
     assert prompts.count(rule) == 2
-    assert prompts.count("Choose a candidate center in captured-image pixels") == 2
-    assert prompts.count("marked calibration crop") == 2
-    assert prompts.count("semantic_profile.status=\"unavailable\"") == 2
+    # Coordinate calibration belongs only to the visual scheme; the semantic
+    # scheme must never receive screenshot coordinates.
+    assert prompts.count("Choose a candidate center in captured-image pixels") == 1
+    assert prompts.count("marked calibration crop") == 1
+    assert "seven `desktop.semantic.*` capabilities" in prompts
+    assert "Never fall back implicitly between them" in prompts
+    assert "Linux is semantic-only" in prompts
