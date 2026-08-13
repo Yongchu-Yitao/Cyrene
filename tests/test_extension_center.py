@@ -198,6 +198,35 @@ def test_skill_snapshot_progressive_load_and_resource_confinement(tmp_path, monk
     assert skills.read_skill_resource(result["skill"]["id"], "../outside.md")["ok"] is False
 
 
+def test_extension_skill_card_includes_full_markdown_and_file_directory(tmp_path, monkeypatch):
+    from cyrene.extensions import service
+
+    monkeypatch.setattr(service, "build_skills", lambda: [{
+        "id": "demo-skill",
+        "name": "Demo Skill",
+        "desc": "Full private workflow",
+        "stored_path": str(tmp_path / "demo-skill"),
+        "entrypoint_name": "SKILL.md",
+        "preview": "# Instructions\n\nDo the **complete** workflow.\n",
+        "files": [
+            {"path": "SKILL.md", "name": "SKILL.md", "size": 48},
+            {"path": "references/guide.md", "name": "guide.md", "size": 24},
+        ],
+    }])
+    monkeypatch.setattr(service.ExtensionService, "_system_observation", lambda *_args: None)
+    from cyrene.tooling.backends import mcp_manager
+    monkeypatch.setattr(mcp_manager, "get_mcp_servers", lambda: [])
+    monkeypatch.setattr(mcp_manager, "get_manager", lambda: type("Manager", (), {"get_server_status": lambda self: []})())
+
+    extension_service = object.__new__(service.ExtensionService)
+    extension_service.tasks = type("Tasks", (), {"list": lambda self: []})()
+    card = extension_service.list_extensions()["skills"][0]
+
+    assert card["preview"] == "# Instructions\n\nDo the **complete** workflow.\n"
+    assert card["entrypoint_name"] == "SKILL.md"
+    assert [item["path"] for item in card["files"]] == ["SKILL.md", "references/guide.md"]
+
+
 def test_skill_directory_and_archive_reject_links_and_expansion(tmp_path, monkeypatch):
     from cyrene.learning import skills
 

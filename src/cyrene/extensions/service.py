@@ -702,6 +702,7 @@ class ExtensionService:
                 "capabilities": ["enable", "disable", "uninstall", "inspect"], "size_bytes": skill.get("size_bytes", 0),
                 "enabled": skill.get("enabled", True), "files": skill.get("files", []),
                 "installed_at": skill.get("installed_at", ""), "content_hash": skill.get("content_hash", ""),
+                "entrypoint_name": skill.get("entrypoint_name", "SKILL.md"), "preview": skill.get("preview", ""),
             })
 
         from cyrene.tooling.backends.mcp_manager import get_manager, get_mcp_servers, redact_mcp_servers

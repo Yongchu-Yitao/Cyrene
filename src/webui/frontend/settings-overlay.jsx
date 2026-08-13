@@ -4455,6 +4455,48 @@ function ExtensionStatus(props) {
   );
 }
 
+function SkillFileDirectory(props) {
+  var files = Array.isArray(props.files) ? props.files : [];
+  var entrypoint = String(props.entrypoint || "SKILL.md");
+  var rows = [];
+  var seenDirectories = {};
+  files.forEach(function (file) {
+    var path = String(file.path || file.name || "");
+    var parts = path.split(/[\\/]/).filter(Boolean);
+    parts.slice(0, -1).forEach(function (part, index) {
+      var directoryPath = parts.slice(0, index + 1).join("/");
+      if (seenDirectories[directoryPath]) return;
+      seenDirectories[directoryPath] = true;
+      rows.push({ key: "directory:" + directoryPath, name: part + "/", path: directoryPath, depth: index, directory: true });
+    });
+    rows.push({
+      key: "file:" + path,
+      name: parts[parts.length - 1] || path || "—",
+      path: path,
+      depth: Math.max(0, parts.length - 1),
+      directory: false,
+      size: Number(file.size || 0),
+    });
+  });
+  return React.createElement("div", { className: "wb-extension-skill-files", role: "list" },
+    rows.map(function (row) {
+      var isEntrypoint = !row.directory && (row.path === entrypoint || row.name === entrypoint);
+      var sizeLabel = row.size < 1024 ? row.size + " B" : (row.size / 1024).toFixed(1) + " KB";
+      return React.createElement("div", {
+        key: row.key,
+        className: "wb-extension-skill-file" + (row.directory ? " directory" : "") + (isEntrypoint ? " entrypoint" : ""),
+        role: "listitem",
+        style: { paddingLeft: (11 + row.depth * 14) + "px" },
+        title: row.path,
+      },
+        React.createElement("span", { className: "wb-extension-skill-file-name mono" }, row.name),
+        isEntrypoint && React.createElement("span", { className: "wb-extension-skill-entrypoint" }, "SKILL"),
+        !row.directory && React.createElement("span", { className: "wb-extension-skill-file-size" }, sizeLabel)
+      );
+    })
+  );
+}
+
 function ExtensionCard(props) {
   var item = props.item;
   var t = props.t;
@@ -4535,7 +4577,26 @@ function ExtensionCard(props) {
         ),
         React.createElement("button", { type: "button", className: "wb-btn", disabled: busy, onClick: function () { props.onConfigureHook(item); } }, t("settings.extensionConfigureHook"))
       ),
-      item.kind === "skill" && item.preview && React.createElement("pre", { className: "wb-extension-preview" }, item.preview),
+      item.kind === "skill" && React.createElement("div", { className: "wb-extension-skill-content" },
+        React.createElement("section", { className: "wb-extension-skill-document", "aria-labelledby": "skill-content-" + item.id },
+          React.createElement("h4", { id: "skill-content-" + item.id }, t("settings.extensionSkillContent", "Skill instructions")),
+          item.preview
+            ? React.createElement("div", {
+                className: "wb-extension-skill-markdown markdown",
+                dangerouslySetInnerHTML: { __html: renderSettingsMarkdown(item.preview) },
+              })
+            : React.createElement("div", { className: "wb-extension-skill-empty" }, t("settings.extensionSkillContentEmpty", "No Skill instructions found."))
+        ),
+        React.createElement("aside", { className: "wb-extension-skill-directory", "aria-labelledby": "skill-files-" + item.id },
+          React.createElement("div", { className: "wb-extension-skill-directory-head" },
+            React.createElement("h4", { id: "skill-files-" + item.id }, t("settings.extensionSkillDirectory", "Skill file directory")),
+            React.createElement("span", null, t("settings.extensionSkillFileCount", { n: (item.files || []).length }, "{n} files"))
+          ),
+          (item.files || []).length
+            ? React.createElement(SkillFileDirectory, { files: item.files, entrypoint: item.entrypoint_name })
+            : React.createElement("div", { className: "wb-extension-skill-empty" }, t("settings.extensionSkillDirectoryEmpty", "No files found."))
+        )
+      ),
     )
   );
 }
