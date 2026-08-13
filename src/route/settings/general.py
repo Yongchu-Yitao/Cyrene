@@ -1288,7 +1288,7 @@ def register_settings_routes(router: APIRouter, bot: Any, db_path: str) -> None:
         import calendar
         from datetime import datetime, timezone
         from cyrene.runtime.database import get_token_usage_stats as _usage_stats
-        from cyrene.model_runtime.pricing import CNY_PER_USD as _CNY2USD
+        from cyrene.model_runtime.pricing import cost_from_cny as _cost_from_cny
         from cyrene.runtime.settings_store import get_all as _gsett
 
         currency = str(_gsett().get("budget_currency") or "CNY").upper()
@@ -1302,25 +1302,26 @@ def register_settings_routes(router: APIRouter, bot: Any, db_path: str) -> None:
             py = now.year if now.month > 1 else now.year - 1
             _, days_in_prev = calendar.monthrange(py, pm)
             period_start = datetime(py, pm, min(start_day, days_in_prev), tzinfo=timezone.utc)
-        days_since_period_start = max(int((now - period_start).total_seconds() / 86400) + 1, 1)
-
         try:
-            stats = await _usage_stats(str(_db_path or DB_PATH), days=days_since_period_start)
+            # Use the exact billing-period boundary. Converting it to an
+            # integer day count creates a rolling window that can include
+            # usage from before the configured start date.
+            stats = await _usage_stats(
+                str(_db_path or DB_PATH),
+                since=period_start,
+            )
             by_model = stats.get("by_model", [])
             total = stats.get("total", {})
         except Exception:
             by_model = []
             total = {}
-        by_model = stats.get("by_model", [])
-        total = stats.get("total", {})
         total_requests = int(total.get("requests", 0))
 
         rows = []
         for m in by_model:
-            cost = round(float(m.get("cost", 0)), 4)
-            # get_token_usage_stats returns cost in USD; convert to CNY for CNY users
-            if currency == "CNY":
-                cost = round(cost * _CNY2USD, 4)
+            # Aggregated database costs are canonical CNY. The currency chosen
+            # beside Monthly Budget controls both budget comparison and display.
+            cost = round(_cost_from_cny(float(m.get("cost", 0)), currency), 4)
             rows.append({
                 "model": m.get("model", ""),
                 "requests": int(m.get("requests", 0)),

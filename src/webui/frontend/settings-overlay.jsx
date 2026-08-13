@@ -5333,7 +5333,7 @@ function BudgetPanel(p) {
   }
 
   function saveBudgetConfig(body) {
-    settingsFetch("/api/settings/config", {
+    return settingsFetch("/api/settings/config", {
       method: "PUT", headers: { "Content-Type": "application/json" },
       body: JSON.stringify(body),
     }).then(function (r) {
@@ -5384,8 +5384,7 @@ function BudgetPanel(p) {
       budget_action: budgetAction,
       budget_mode: budgetMode,
       budget_start_day: Number(budgetStartDay) || 1,
-    });
-    fetchStats();
+    }).then(fetchStats);
   }
 
   // ── Stats from API ──

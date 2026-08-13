@@ -33,6 +33,36 @@ async def test_tool_stats_counts_and_ordering(tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_token_usage_stats_respects_exact_since_boundary(tmp_path):
+    db_path = str(tmp_path / "usage.db")
+    await cy_db.init_db(db_path)
+
+    async with aiosqlite.connect(db_path) as db:
+        rows = [
+            ("2026-08-09T23:59:59+00:00", "deepseek-v4-flash", 10, 1, 11, 0.5),
+            ("2026-08-10T00:00:00+00:00", "deepseek-v4-flash", 20, 2, 22, 1.0),
+            ("2026-08-10T12:00:00+00:00", "deepseek-v4-flash", 30, 3, 33, 1.5),
+        ]
+        await db.executemany(
+            """INSERT INTO token_usage
+               (created_at, model, prompt_tokens, completion_tokens, total_tokens, estimated_cost)
+               VALUES (?, ?, ?, ?, ?, ?)""",
+            rows,
+        )
+        await db.commit()
+
+    stats = await cy_db.get_token_usage_stats(
+        db_path,
+        since=datetime(2026, 8, 10, tzinfo=timezone.utc),
+    )
+
+    assert stats["total"]["requests"] == 2
+    assert stats["total"]["prompt_tokens"] == 50
+    assert stats["total"]["completion_tokens"] == 5
+    assert stats["total"]["total_cost"] == pytest.approx(2.5)
+
+
+@pytest.mark.asyncio
 async def test_tool_stats_merges_profile_display_aliases_before_limit(tmp_path):
     db_path = str(tmp_path / "stats.db")
     await cy_db.init_db(db_path)

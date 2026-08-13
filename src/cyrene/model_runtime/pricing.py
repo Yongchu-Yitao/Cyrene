@@ -118,6 +118,7 @@ def parse_user_price(price_str: str, *, default_currency: str = "CNY") -> Pricin
         currency = "CNY"
         value = value[1:]
     elif value.startswith("$"):
+        currency = "USD"
         value = value[1:]
     parts = [part.strip() for part in value.split("/")]
     if len(parts) not in (2, 3):
@@ -187,6 +188,18 @@ def to_usd(pricing: Pricing) -> Pricing:
             continue
         result[key] = round(float(value) / _CNY_PER_USD, 8)
     return result
+
+
+def cost_to_cny(cost: float, currency: str) -> float:
+    """Convert a monetary amount to the canonical database currency (CNY)."""
+    return float(cost) if str(currency or "CNY").upper() == "CNY" else float(cost) * CNY_PER_USD
+
+
+def cost_from_cny(cost: float, currency: str) -> float:
+    """Convert a canonical CNY amount to the requested display currency."""
+    if str(currency or "CNY").upper() == "USD":
+        return float(cost) / CNY_PER_USD if CNY_PER_USD > 0 else float(cost)
+    return float(cost)
 
 
 def estimate_cost(

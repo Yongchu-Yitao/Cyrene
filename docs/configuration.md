@@ -183,7 +183,10 @@ served each response. An explicit saved price wins, followed by the built-in
 catalog in `cyrene.model_runtime.pricing`; an unknown unpriced model records
 zero. User prices accept `input/output` or `input/cache-hit/output` per one
 million tokens. Prefix a value with `$` for USD or `¥` for CNY; unmarked values
-default to CNY.
+default to CNY. Recorded costs are normalized to CNY for aggregation, then
+converted to the currency selected beside Monthly Budget for display and
+budget enforcement. Billing-period totals use the configured start timestamp,
+not a rolling-day approximation.
 
 The catalog is code data, not a live quote. Its current source is marked as
 verified on 2026-06-25 and uses a fixed `7.25 CNY = 1 USD` conversion for

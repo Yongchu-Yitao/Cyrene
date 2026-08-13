@@ -63,7 +63,7 @@ def _to_usd(value: float, currency: str) -> float:
 # ---------------------------------------------------------------------------
 
 async def _query_sum(db_path: str, since: datetime) -> float:
-    """Sum ``estimated_cost`` since *since* (returns USD)."""
+    """Sum canonical CNY ``estimated_cost`` values since *since*."""
     import aiosqlite
 
     for attempt in range(2):
@@ -321,7 +321,7 @@ async def get_budget_state(
             )
         return _build_response(prev)
 
-    # Full recalculation — fetch records (USD from DB), cap to billing period,
+    # Full recalculation — fetch records (CNY from DB), cap to billing period,
     # then convert all costs to the user's chosen currency ONCE.
     records = await _query_records(db_path)
     records = [r for r in records if r.timestamp >= monthly_start]

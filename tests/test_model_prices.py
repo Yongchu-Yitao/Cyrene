@@ -4,6 +4,8 @@ import pytest
 
 from cyrene.runtime import database as db
 from cyrene.model_runtime.pricing import (
+    cost_from_cny,
+    cost_to_cny,
     effective_price,
     estimate_cost,
     lookup_price,
@@ -50,6 +52,12 @@ def test_price_hint_and_user_price_parsing():
         "currency": "CNY",
     }
     assert parse_user_price("¥2/8") == {"input": 2.0, "output": 8.0, "currency": "CNY"}
+    assert parse_user_price("$1/0.1/2", default_currency="CNY") == {
+        "input": 1.0,
+        "cache_hit": 0.1,
+        "output": 2.0,
+        "currency": "USD",
+    }
     assert parse_user_price("-1/2") is None
     assert parse_user_price("nan/2") is None
     assert parse_user_price("1/2/3/4") is None
@@ -137,6 +145,27 @@ def test_db_estimate_cost_uses_saved_custom_price(monkeypatch):
         lambda model: {"input": 7.25, "output": 14.5, "currency": "CNY"},
     )
     assert db._estimate_cost("custom-model", 1_000_000, 1_000_000) == pytest.approx(21.75)
+
+
+def test_db_estimate_cost_normalizes_usd_price_to_cny(monkeypatch):
+    monkeypatch.setattr(
+        "cyrene.model_runtime.pricing.configured_user_price",
+        lambda model: {"input": 1.0, "output": 2.0, "cache_hit": 0.1, "currency": "USD"},
+    )
+    assert db._estimate_cost(
+        "usd-model",
+        1_000_000,
+        500_000,
+        cache_hit_tokens=250_000,
+        cache_miss_tokens=750_000,
+    ) == pytest.approx((0.25 * 0.1 + 0.75 * 1.0 + 0.5 * 2.0) * 7.25)
+
+
+def test_cost_conversion_uses_selected_display_currency():
+    assert cost_to_cny(2.0, "USD") == pytest.approx(14.5)
+    assert cost_to_cny(2.0, "CNY") == pytest.approx(2.0)
+    assert cost_from_cny(14.5, "USD") == pytest.approx(2.0)
+    assert cost_from_cny(14.5, "CNY") == pytest.approx(14.5)
 
 
 def test_to_usd_preserves_usd_and_converts_cny():

@@ -1133,7 +1133,7 @@ def _estimate_cost(
     cache_hit_tokens: int = 0,
     cache_miss_tokens: int = 0,
 ) -> float:
-    from cyrene.model_runtime.pricing import effective_price, estimate_cost
+    from cyrene.model_runtime.pricing import cost_to_cny, effective_price, estimate_cost
 
     pricing = effective_price(model)
     cost = estimate_cost(
@@ -1143,7 +1143,9 @@ def _estimate_cost(
         cache_hit_tokens=cache_hit_tokens,
         cache_miss_tokens=cache_miss_tokens,
     )
-    return round(cost, 6)
+    # ``token_usage.estimated_cost`` has one canonical unit.  Prices may be
+    # configured in CNY or USD, but persisted and aggregated costs are CNY.
+    return round(cost_to_cny(cost, str(pricing.get("currency") or "CNY")), 6)
 
 
 async def record_token_usage(
@@ -1485,6 +1487,7 @@ async def get_token_usage_stats(
     *,
     days: int = 7,
     model: str = "",
+    since: datetime | None = None,
 ) -> dict:
     """Return aggregated token usage stats.
 
@@ -1494,7 +1497,10 @@ async def get_token_usage_stats(
          "by_day": [{"day": "...", "requests": N, ...}],
          "total_cost": N}
     """
-    since = (datetime.now(timezone.utc) - timedelta(days=days)).isoformat()
+    since_value = since or (datetime.now(timezone.utc) - timedelta(days=days))
+    if since_value.tzinfo is None:
+        since_value = since_value.replace(tzinfo=timezone.utc)
+    since_iso = since_value.isoformat()
     async with aiosqlite.connect(db_path) as db:
         db.row_factory = aiosqlite.Row
 
@@ -1507,13 +1513,13 @@ async def get_token_usage_stats(
                       COALESCE(SUM(cache_hit_tokens), 0) AS cache_hit_tokens,
                       COALESCE(SUM(estimated_cost), 0) AS total_cost
                FROM token_usage WHERE created_at >= ?""",
-            (since,),
+            (since_iso,),
         )
         total_row = await cursor.fetchone()
 
         # By model
         model_filter = " AND model = ?" if model else ""
-        model_params = (since, model) if model else (since,)
+        model_params = (since_iso, model) if model else (since_iso,)
         cursor = await db.execute(
             f"""SELECT model,
                        COUNT(*) AS requests,
