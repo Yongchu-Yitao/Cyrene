@@ -8,6 +8,7 @@ from pathlib import Path
 import pytest
 
 from cyrene.knowledge import local_models
+from cyrene.knowledge import local_onnx
 
 
 def test_sherpa_provider_prefers_cuda_then_apple_coreml(monkeypatch):
@@ -33,6 +34,42 @@ def test_onnx_provider_order_prefers_directml_before_cpu(monkeypatch):
     assert local_models.onnx_execution_providers() == [
         "DmlExecutionProvider", "CPUExecutionProvider",
     ]
+
+
+def test_onnx_provider_order_prefers_cuda_before_directml(monkeypatch):
+    monkeypatch.setitem(sys.modules, "onnxruntime", SimpleNamespace(
+        get_available_providers=lambda: [
+            "DmlExecutionProvider", "CUDAExecutionProvider", "CPUExecutionProvider",
+        ],
+    ))
+
+    assert local_models.onnx_execution_providers() == [
+        "CUDAExecutionProvider", "DmlExecutionProvider", "CPUExecutionProvider",
+    ]
+
+
+def test_onnx_session_falls_back_when_cuda_initialization_fails():
+    calls = []
+
+    def create_session(_model_path, *, sess_options, providers):
+        calls.append(list(providers))
+        if "CUDAExecutionProvider" in providers:
+            raise RuntimeError("CUDA runtime is incompatible")
+        return SimpleNamespace(providers=providers, options=sess_options)
+
+    ort = SimpleNamespace(InferenceSession=create_session)
+    session = local_onnx._create_session(
+        ort,
+        "model.onnx",
+        object(),
+        ["CUDAExecutionProvider", "DmlExecutionProvider", "CPUExecutionProvider"],
+    )
+
+    assert calls == [
+        ["CUDAExecutionProvider", "DmlExecutionProvider", "CPUExecutionProvider"],
+        ["DmlExecutionProvider", "CPUExecutionProvider"],
+    ]
+    assert session.providers == ["DmlExecutionProvider", "CPUExecutionProvider"]
 
 
 def test_windows_arm_registers_qnn_npu_session(monkeypatch):

@@ -6,6 +6,8 @@
 
 ### 功能变更
 
+- Windows x64 与 Linux 在检测到兼容的 NVIDIA CUDA 环境时会自动启用 GPU 加速；不具备 CUDA 条件的设备仍会自动回退到 CPU，Windows on ARM 的 QNN/NPU 路径不受影响。
+- Linux 新增基于系统无障碍服务的应用控制，可在不抢占焦点的情况下读取和操作兼容应用；不可用或尚未就绪时会明确显示能力状态。
 - 新增外部 Agent 支持，Cyrene 可以作为兼容 ACP Agent 的统一对话前端；首批推荐提供 OpenCode、Codex ACP 与 Pi ACP，并允许通过公开安装接口接入其他兼容 Agent。
 - 外部 Agent 使用通用能力协议接入，不依赖某个 Agent 的专用页面；兼容 Agent 可以声明会话、输入、输出、权限、模型与交互能力，后续接入同类 Agent 时无需重做整套前端。
 - 外部 Agent 可以选择共用 Cyrene 的模型配置，也可以使用自己的登录、API Key 或环境配置；使用 Cyrene 配置时会严格跟随对话中选择的模型。

@@ -152,6 +152,7 @@
       "browser-chat-overlay-preload.js",
       "browser-tab-picker-preload.js",
       "app-use.js",
+      "app-use-linux.js",
       "package.json"
     ]
   },
@@ -162,5 +163,8 @@
   "allowScripts": {
     "electron@43.2.0": true,
     "electron-winstaller@5.4.0": true
+  },
+  "dependencies": {
+    "dbus-next": "^0.10.2"
   }
 }

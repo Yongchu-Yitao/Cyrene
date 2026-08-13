@@ -6,3 +6,10 @@ if [ -f "$sandbox_path" ]; then
   chown root:root "$sandbox_path"
   chmod 4755 "$sandbox_path"
 fi
+
+# Semantic App Use talks to the desktop accessibility bus. Package managers
+# normally pull this in through the graphical desktop; keep install scripts
+# non-invasive and merely document the runtime package when it is absent.
+if ! command -v at-spi-bus-launch >/dev/null 2>&1; then
+  echo "Cyrene semantic App Use requires AT-SPI2 (install at-spi2-core)." >&2
+fi

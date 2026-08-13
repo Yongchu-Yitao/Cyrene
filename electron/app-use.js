@@ -2,6 +2,7 @@ const crypto = require('crypto');
 const fs = require('fs');
 const path = require('path');
 const { execFile } = require('child_process');
+const { LinuxAtspiProvider } = require('./app-use-linux');
 
 const MANIFEST_VERSION = 'app-use-semantic-v2';
 const DEFAULT_SESSION_TTL_MS = 5 * 60 * 1000;
@@ -12,6 +13,10 @@ const AGENT_CURSOR_PRESS_MS = 100;
 const SEMANTIC_TREE_CAPABILITIES = new Set([
   'snapshot', 'inspect', 'find', 'press', 'set_value', 'select', 'toggle', 'scroll',
   'type_text', 'select_text', 'set_selection_range', 'wait',
+]);
+const SEMANTIC_MODE_CAPABILITIES = new Set([
+  'snapshot', 'inspect', 'find', 'press', 'set_value', 'select', 'toggle', 'scroll', 'type_text',
+  'semantic_double_click', 'semantic_drag', 'wait',
 ]);
 
 const CAPABILITIES = Object.freeze([
@@ -24,6 +29,8 @@ const CAPABILITIES = Object.freeze([
   { name: 'toggle', description: 'Toggle a checkbox, switch, or expandable control.', arguments: { ref: 'string' }, background: 'safe_when_supported' },
   { name: 'scroll', description: 'Scroll an accessible container or the target window.', arguments: { ref: 'string?', direction: 'up|down|left|right', amount: 'integer?' }, background: 'safe_when_supported' },
   { name: 'type_text', description: 'Write text to a semantically editable element and verify its value. This works in the background only when the accessibility provider exposes a writable value.', arguments: { ref: 'string', text: 'string', replace: 'boolean?' }, background: 'safe_when_supported' },
+  { name: 'semantic_double_click', description: 'Invoke a provider-declared semantic double-click action without coordinates or focus.', arguments: { ref: 'string' }, background: 'safe_when_supported' },
+  { name: 'semantic_drag', description: 'Invoke a provider-declared semantic move, reorder, resize, or drag action without coordinates or focus.', arguments: { ref: 'string' }, background: 'safe_when_supported' },
   { name: 'select_text', description: 'Select an exact text occurrence using focus-dependent input; allow_foreground_input=true is required.', arguments: { ref: 'string', text: 'string', occurrence: 'integer?', case_sensitive: 'boolean?', allow_foreground_input: 'boolean' }, background: 'requires_focus' },
   { name: 'set_selection_range', description: 'Set a selected character range using focus-dependent input; allow_foreground_input=true is required.', arguments: { ref: 'string', start: 'integer', end: 'integer', allow_foreground_input: 'boolean' }, background: 'requires_focus' },
   { name: 'click_at', description: 'Primary App Use click tool. Click the latest calibrated point with the real OS pointer. Coordinates are window-relative by default and allow_foreground_input=true is required.', arguments: { x: 'number', y: 'number', coordinate_space: 'window|screen?', allow_foreground_input: 'boolean' }, background: 'requires_focus' },
@@ -62,8 +69,15 @@ const SAFARI_CAPABILITIES = Object.freeze([
   { name: 'reload', description: 'Reload the current Safari tab without focusing Safari.', arguments: {}, background: 'safe' },
 ]);
 
-function capabilitiesForTarget(target) {
-  const platformCapabilities = String(target.platform || process.platform) === 'darwin'
+function capabilitiesForTarget(target, { mode = 'hybrid' } = {}) {
+  const platform = String(target.platform || process.platform);
+  if (platform === 'linux' || mode === 'semantic') {
+    return CAPABILITIES.filter((item) => SEMANTIC_MODE_CAPABILITIES.has(item.name));
+  }
+  if (mode === 'visual') {
+    return CAPABILITIES.filter((item) => !SEMANTIC_TREE_CAPABILITIES.has(item.name));
+  }
+  const platformCapabilities = platform === 'darwin'
     ? [DARWIN_MENU_CAPABILITY, DARWIN_PID_TYPE_CAPABILITY] : [];
   return String(target.applicationId || '') === 'com.apple.Safari'
     ? [...SAFARI_CAPABILITIES, ...platformCapabilities, ...CAPABILITIES]
@@ -267,6 +281,7 @@ class CommandPlatformProvider {
     this.baseDir = baseDir;
     this.resourcesPath = resourcesPath;
     this.existsSync = existsSync;
+    this.linuxProvider = platform === 'linux' ? new LinuxAtspiProvider() : null;
   }
 
   async request(operation, payload = {}, timeout = 15000) {
@@ -312,12 +327,20 @@ class CommandPlatformProvider {
   }
 
   async listTargets(exclusions = {}) {
+    if (this.linuxProvider) {
+      try { return await this.linuxProvider.listTargets(exclusions); }
+      catch (error) { throw new AppUseError('provider_error', String(error.message || error), { retryable: true }); }
+    }
     const normalized = typeof exclusions === 'number' ? { excludePid: exclusions } : exclusions;
     const result = await this.request('list_targets', normalized, 10000);
     return Array.isArray(result.targets) ? result.targets : [];
   }
 
   async snapshot(target, options = {}) {
+    if (this.linuxProvider) {
+      try { return await this.linuxProvider.snapshot(target, options); }
+      catch (error) { throw new AppUseError('provider_error', String(error.message || error), { retryable: true }); }
+    }
     const timeout = clampInteger(options.timeoutMs, 15000, 250, 15000);
     const providerOptions = { ...options };
     delete providerOptions.timeoutMs;
@@ -373,6 +396,10 @@ class CommandPlatformProvider {
   }
 
   async enableAccessibility(target) {
+    if (this.linuxProvider) {
+      try { return await this.linuxProvider.enableAccessibility(target); }
+      catch (error) { throw new AppUseError('provider_error', String(error.message || error), { retryable: true }); }
+    }
     if (this.platform !== 'darwin') return { ok: true, enabled: false, supported: false };
     const helperPath = resolveDarwinHitTestHelperPath(this);
     return runCommand(helperPath, [JSON.stringify({ operation: 'enable_accessibility', target })], { timeout: 5000 });
@@ -387,14 +414,23 @@ class CommandPlatformProvider {
   }
 
   async inspect(target, nativeRef, options = {}) {
+    if (this.linuxProvider) {
+      try { return await this.linuxProvider.inspect(target, nativeRef, options); }
+      catch (error) { throw new AppUseError('provider_error', String(error.message || error), { retryable: true }); }
+    }
     return this.request('inspect', { target, nativeRef, options });
   }
 
   async perform(target, capability, nativeRef, parameters = {}) {
+    if (this.linuxProvider) {
+      try { return await this.linuxProvider.perform(target, capability, nativeRef, parameters); }
+      catch (error) { throw new AppUseError('provider_error', String(error.message || error), { retryable: false }); }
+    }
     return this.request('perform', { target, capability, nativeRef, parameters });
   }
 
   async focusTarget(target) {
+    if (this.linuxProvider) throw new AppUseError('unsupported_capability', 'Linux App Use is semantic-only and never changes focus.');
     return this.request('focus', { target }, 10000);
   }
 }
@@ -540,19 +576,30 @@ class AppUseManager {
   async connect(targetId, parameters = {}) {
     await this.refreshTargets();
     const target = this._selectTarget(targetId, parameters);
-    const focusPolicy = ['never', 'when_required', 'always'].includes(parameters.focus_policy)
+    const requestedMode = String(parameters.mode || 'hybrid').toLowerCase();
+    if (!['hybrid', 'visual', 'semantic'].includes(requestedMode)) {
+      throw new AppUseError('invalid_arguments', 'mode must be hybrid, visual, or semantic.');
+    }
+    const platform = String(target.platform || process.platform);
+    if (platform === 'linux' && requestedMode === 'visual') {
+      throw new AppUseError('unsupported_mode', 'Linux App Use supports semantic mode only.');
+    }
+    const mode = platform === 'linux' ? 'semantic' : requestedMode;
+    const requestedFocusPolicy = ['never', 'when_required', 'always'].includes(parameters.focus_policy)
       ? parameters.focus_policy
       : 'when_required';
+    const focusPolicy = mode === 'semantic' ? 'never' : requestedFocusPolicy;
     let accessibilityActivation = null;
-    if (String(target.platform || process.platform) === 'darwin' && typeof this.provider.enableAccessibility === 'function') {
+    if (mode !== 'visual' && typeof this.provider.enableAccessibility === 'function') {
       accessibilityActivation = await this.provider.enableAccessibility(target).catch((error) => ({
-        ok: false, error: String(error && error.message ? error.message : error),
+        ok: false, errorType: String((error && error.code) || 'provider_error'),
+        error: String(error && error.message ? error.message : error),
       }));
       if (accessibilityActivation && accessibilityActivation.foregroundAffected === true) {
         throw new AppUseError('foreground_interference_detected', 'Enabling the target accessibility tree changed the foreground application.');
       }
     }
-    const runtimeCapabilities = capabilitiesForTarget(target).filter(
+    const runtimeCapabilities = capabilitiesForTarget(target, { mode }).filter(
       (capability) => focusPolicy !== 'never' || !['requires_focus', 'changes_focus'].includes(capability.background),
     );
     const sessionId = `app_session_${crypto.randomUUID()}`;
@@ -560,6 +607,7 @@ class AppUseManager {
       sessionId,
       target: { ...target },
       targetIdentity: target.identity,
+      mode,
       focusPolicy,
       createdAt: Date.now(),
       lastUsedAt: Date.now(),
@@ -569,32 +617,35 @@ class AppUseManager {
       previousFocusTarget: null,
       previousFocusWasHost: false,
       capabilities: runtimeCapabilities,
+      semanticProbeAttempts: 0,
+      semanticProbeStartedAt: Date.now(),
     };
     this.sessions.set(sessionId, session);
     let semanticProfile = {
-      status: 'unknown',
+      status: mode === 'visual' ? 'unavailable' : 'initializing',
       reason: 'semantic_probe_not_completed',
-      probe_timeout_ms: 2000,
+      probe_timeout_ms: 5000,
     };
     try {
+      if (mode === 'visual') throw new AppUseError('semantic_disabled', 'Semantic probing is disabled for visual mode.');
+      if (accessibilityActivation && accessibilityActivation.ok === false && accessibilityActivation.errorType === 'permission_required') {
+        throw new AppUseError('permission_required', accessibilityActivation.error || 'Accessibility permission is required.');
+      }
       const probe = await this._snapshot(session, {
-        max_nodes: 12,
-        max_depth: 3,
-        _probe_timeout_ms: 2000,
+        max_nodes: 80,
+        max_depth: 10,
+        _probe_timeout_ms: 5000,
       });
       semanticProfile = probe.semantic_profile;
     } catch (error) {
       const reason = error && error.code ? String(error.code) : 'semantic_probe_failed';
       semanticProfile = reason === 'accessibility_tree_timeout' || reason === 'timeout'
-        ? { status: 'unavailable', reason: 'semantic_probe_timeout', probe_timeout_ms: 2000 }
-        : { status: 'unknown', reason, probe_timeout_ms: 2000 };
-    }
-    if (semanticProfile.status === 'unavailable') {
-      session.capabilities = session.capabilities.filter(
-        (capability) => !SEMANTIC_TREE_CAPABILITIES.has(capability.name),
-      );
-      session.refs.clear();
-      session.pathToRef.clear();
+        ? { status: 'initializing', reason: 'semantic_probe_timeout', probe_timeout_ms: 5000, retryable: true }
+        : reason === 'semantic_disabled'
+          ? { status: 'unavailable', reason: 'semantic_mode_disabled', retryable: false }
+          : reason === 'permission_required'
+            ? { status: 'permission_required', reason, probe_timeout_ms: 5000, retryable: true }
+            : { status: 'provider_error', reason, probe_timeout_ms: 5000, retryable: true };
     }
     session.semanticProfile = semanticProfile;
     if (focusPolicy === 'always') await this._focusSessionTarget(session);
@@ -602,12 +653,13 @@ class AppUseManager {
       status: 'success',
       session_id: sessionId,
       target: publicTarget(target, target.targetId),
+      mode,
       focus_policy: focusPolicy,
       manifest_version: MANIFEST_VERSION,
       capabilities: session.capabilities,
       accessibility_activation: accessibilityActivation,
       semantic_profile: semanticProfile,
-      next_valid_actions: semanticProfile.status === 'unavailable'
+      next_valid_actions: mode === 'visual'
         ? ['call:visual_describe', 'status', 'disconnect']
         : ['call:snapshot', 'call:find', 'status', 'disconnect'],
     };
@@ -670,6 +722,11 @@ class AppUseManager {
       }
       nodes.push(node);
     }
+    for (const node of nodes) {
+      const raw = rawNodes.find((item) => String(item.nativeRef || item.path || '') === session.refs.get(node.ref));
+      const parentNativeRef = String((raw && raw.parentNativeRef) || '');
+      if (parentNativeRef && session.pathToRef.has(parentNativeRef)) node.parent_ref = session.pathToRef.get(parentNativeRef);
+    }
     if (prune) {
       for (const [ref, nativeRef] of session.refs.entries()) {
         if (!livePaths.has(nativeRef)) session.refs.delete(ref);
@@ -692,9 +749,20 @@ class AppUseManager {
       const nodeArea = Number(bounds.width) * Number(bounds.height);
       return !(windowArea > 0 && Number.isFinite(nodeArea)) || nodeArea / windowArea >= 0.9;
     });
+    session.semanticProbeAttempts = Number(session.semanticProbeAttempts || 0) + 1;
     const semanticProfile = containerOnly
-      ? { status: 'unavailable', reason: 'container_only_tree' }
-      : { status: 'available', reason: 'meaningful_nodes_exposed' };
+      ? {
+        status: session.semanticProbeAttempts < 3 ? 'initializing' : 'unavailable',
+        reason: session.semanticProbeAttempts < 3 ? 'tree_not_ready' : 'container_only_tree',
+        retryable: true,
+        probe_attempts: session.semanticProbeAttempts,
+      }
+      : {
+        status: ratio < 0.6 || providerResult.truncated === true ? 'partial' : 'available',
+        reason: providerResult.truncated === true ? 'snapshot_truncated' : 'meaningful_nodes_exposed',
+        retryable: true,
+        probe_attempts: session.semanticProbeAttempts,
+      };
     const grade = containerOnly || (canvasCount > 0 && actionable.length === 0)
       ? 'insufficient' : ratio < 0.6 ? 'partial' : 'full';
     return {
@@ -725,7 +793,9 @@ class AppUseManager {
     }
     if (parameters.scope_ref) options.nativeRef = this._nativeRef(session, parameters.scope_ref);
     const result = await this.provider.snapshot(session.target, options);
-    return this._mapNodes(session, result, { prune: !options.nativeRef });
+    const mapped = this._mapNodes(session, result, { prune: !options.nativeRef });
+    session.semanticProfile = mapped.semantic_profile;
+    return mapped;
   }
 
   async _inspect(session, parameters = {}) {
@@ -1358,8 +1428,10 @@ class AppUseManager {
       session_id: session.sessionId,
       target: publicTarget(session.target, session.target.targetId),
       focus_policy: session.focusPolicy,
+      mode: session.mode,
       snapshot_revision: session.revision,
       manifest_version: MANIFEST_VERSION,
+      semantic_profile: session.semanticProfile || null,
     };
   }
 

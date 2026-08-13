@@ -64,7 +64,16 @@ CAPABILITY_BINDINGS: dict[str, tuple[tuple[str, str], ...]] = {
         ("browser.user_events", "browser_user_events"),
         ("browser.request_takeover", "browser_request_takeover"),
     ),
-    "desktop_tools": (("desktop.use", "app_use"),),
+    "desktop_tools": (
+        ("desktop.use", "app_use"),
+        ("desktop.semantic.snapshot", "AppUISnapshot"),
+        ("desktop.semantic.inspect", "AppUIInspect"),
+        ("desktop.semantic.click", "AppUIClick"),
+        ("desktop.semantic.double_click", "AppUIDoubleClick"),
+        ("desktop.semantic.type", "AppUIType"),
+        ("desktop.semantic.scroll", "AppUIScroll"),
+        ("desktop.semantic.drag", "AppUIDrag"),
+    ),
     "memory_tools": (
         ("memory.list", "ListMemories"),
         ("memory.recall", "RecallMemory"),

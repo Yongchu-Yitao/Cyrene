@@ -175,13 +175,28 @@ func enableAccessibility(_ payload: [String: Any]) throws -> [String: Any] {
     _ = AXUIElementSetMessagingTimeout(application, 0.75)
     let foregroundBefore = NSWorkspace.shared.frontmostApplication?.processIdentifier ?? 0
     let error = AXUIElementSetAttributeValue(application, "AXManualAccessibility" as CFString, kCFBooleanTrue)
-    if error == .success { Thread.sleep(forTimeInterval: 0.12) }
+    let deadline = Date().addingTimeInterval(5.0)
+    var ready = false
+    var attempts = 0
+    var observedChildren = 0
+    repeat {
+        attempts += 1
+        var value: CFTypeRef?
+        let childrenError = AXUIElementCopyAttributeValue(application, kAXChildrenAttribute as CFString, &value)
+        if childrenError == .success, let children = value as? [AXUIElement] {
+            observedChildren = children.count
+            ready = !children.isEmpty
+        }
+        if !ready { Thread.sleep(forTimeInterval: min(0.1 * Double(attempts), 0.5)) }
+    } while !ready && Date() < deadline
     let foregroundAfter = NSWorkspace.shared.frontmostApplication?.processIdentifier ?? 0
     return [
         "ok": true, "enabled": error == .success, "supported": error != .attributeUnsupported,
+        "ready": ready, "status": ready ? "available" : "initializing",
         "foregroundAffected": foregroundBefore != foregroundAfter,
         "diagnostics": [
             "method": "AXManualAccessibility", "axError": error.rawValue,
+            "readinessAttempts": attempts, "observedChildren": observedChildren,
             "foregroundBefore": Int(foregroundBefore), "foregroundAfter": Int(foregroundAfter),
             "backgroundSafe": foregroundBefore == foregroundAfter,
         ],

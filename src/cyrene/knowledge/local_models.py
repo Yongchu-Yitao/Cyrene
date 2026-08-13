@@ -290,8 +290,8 @@ def onnx_execution_providers() -> list[Any]:
     """Return the fastest safe ONNX Runtime providers for this host.
 
     Windows ARM prefers Qualcomm's QNN HTP/NPU provider when the packaged
-    runtime exposes it. DirectML remains the broad Windows GPU fallback for a
-    compatible sidecar/runtime; CPU is always retained as the final fallback.
+    runtime exposes it. CUDA is preferred when its runtime is available;
+    DirectML and CPU remain safe fallbacks.
     """
     try:
         import onnxruntime as ort
@@ -301,10 +301,10 @@ def onnx_execution_providers() -> list[Any]:
         available = set()
 
     providers: list[Any] = []
-    if "DmlExecutionProvider" in available:
-        providers.append("DmlExecutionProvider")
     if "CUDAExecutionProvider" in available:
         providers.append("CUDAExecutionProvider")
+    if "DmlExecutionProvider" in available:
+        providers.append("DmlExecutionProvider")
     if "CoreMLExecutionProvider" in available:
         providers.append("CoreMLExecutionProvider")
     providers.append("CPUExecutionProvider")
@@ -461,10 +461,10 @@ def status() -> dict[str, Any]:
                     and any(device.ep_name == "QNNExecutionProvider" for device in ort.get_ep_devices())
                 ):
                     runtime = "qnn-npu"
-                elif "DmlExecutionProvider" in available:
-                    runtime = "directml"
                 elif "CUDAExecutionProvider" in available:
                     runtime = "cuda"
+                elif "DmlExecutionProvider" in available:
+                    runtime = "directml"
                 else:
                     runtime = "onnx-cpu"
             except Exception:

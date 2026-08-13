@@ -31,6 +31,31 @@ def _runtime() -> str:
     return str(local_models.MODEL_CATALOG[MODEL_ID].get("runtime") or "onnx")
 
 
+def _create_session(ort: Any, model_path: str, options: Any, providers: list[Any]) -> Any:
+    """Create an ORT session, dropping optional accelerators that fail to load."""
+    candidates = list(providers)
+    while candidates:
+        try:
+            return ort.InferenceSession(
+                model_path,
+                sess_options=options,
+                providers=candidates,
+            )
+        except Exception:
+            optional_index = next(
+                (
+                    index for index, provider in enumerate(candidates)
+                    if (provider[0] if isinstance(provider, tuple) else provider)
+                    != "CPUExecutionProvider"
+                ),
+                None,
+            )
+            if optional_index is None:
+                raise
+            candidates.pop(optional_index)
+    raise RuntimeError("no ONNX Runtime execution provider is available")
+
+
 def _load() -> tuple[Any, Any]:
     global _MODEL
     if _MODEL is not None:
@@ -60,10 +85,10 @@ def _load() -> tuple[Any, Any]:
             options.execution_mode = ort.ExecutionMode.ORT_SEQUENTIAL
         model_path = str(root / "model.onnx")
         try:
-            session = ort.InferenceSession(
-                model_path,
-                sess_options=options,
-                **({} if qnn_enabled else {"providers": providers}),
+            session = (
+                ort.InferenceSession(model_path, sess_options=options)
+                if qnn_enabled
+                else _create_session(ort, model_path, options, providers)
             )
         except Exception:
             if not qnn_enabled:
@@ -74,11 +99,7 @@ def _load() -> tuple[Any, Any]:
             options.intra_op_num_threads = max(1, min(4, (os.cpu_count() or 2) // 2))
             options.inter_op_num_threads = 1
             options.graph_optimization_level = ort.GraphOptimizationLevel.ORT_ENABLE_ALL
-            session = ort.InferenceSession(
-                model_path,
-                sess_options=options,
-                providers=providers,
-            )
+            session = _create_session(ort, model_path, options, providers)
         tokenizer = Tokenizer.from_file(str(root / "tokenizer.json"))
         tokenizer.enable_truncation(max_length=1024)
         tokenizer.enable_padding()

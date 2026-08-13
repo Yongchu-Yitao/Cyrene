@@ -9,6 +9,8 @@ The Chinese edition remains the most detailed record for older releases.
 
 ### Feature changes
 
+- Windows x64 and Linux now automatically use GPU acceleration when a compatible NVIDIA CUDA environment is detected, while falling back to CPU on other devices; the Windows on ARM QNN/NPU path is unchanged.
+- Linux adds accessibility-based App Use for reading and operating compatible applications without taking focus, with clear capability status when the service is unavailable or still initializing.
 - Added external Agent support, allowing Cyrene to act as a unified conversation frontend for compatible ACP Agents. The initial recommended catalog includes OpenCode, Codex ACP, and Pi ACP, while a public installation endpoint supports other compatible Agents.
 - External Agents use a universal capability protocol instead of Agent-specific screens. Compatible Agents can declare session, input, output, permission, model, and interaction capabilities without requiring a new frontend integration each time.
 - External Agents can share Cyrene's model configuration or use their own login, API key, or environment configuration. Cyrene-managed access follows the exact model selected for the conversation.

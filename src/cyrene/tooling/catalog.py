@@ -43,6 +43,13 @@ _MAIN_ONLY_TOOLS = {
     "query_round",
     "ReadChatGroupSessions",
     "app_use",
+    "AppUISnapshot",
+    "AppUIInspect",
+    "AppUIClick",
+    "AppUIDoubleClick",
+    "AppUIType",
+    "AppUIScroll",
+    "AppUIDrag",
     "browser_navigate",
     "browser_snapshot",
     "browser_screenshot",
@@ -199,6 +206,11 @@ for _browser_tool_name in _REQUIRES_ORDER_TOOLS:
     if _browser_tool_name.startswith("browser_"):
         _RESOURCE_KEY_TEMPLATES[_browser_tool_name] = ("browser:active-tab",)
 _RESOURCE_KEY_TEMPLATES["app_use"] = ("desktop:app-use",)
+for _semantic_tool_name in (
+    "AppUISnapshot", "AppUIInspect", "AppUIClick", "AppUIDoubleClick",
+    "AppUIType", "AppUIScroll", "AppUIDrag",
+):
+    _RESOURCE_KEY_TEMPLATES[_semantic_tool_name] = ("desktop:app-semantic",)
 
 _RESOURCE_PARALLEL_WRITES = {"Write", "Edit", "FormatCode", "CloseShell"}
 _RESOURCE_FIELD_RE = re.compile(r"\{([A-Za-z_][A-Za-z0-9_]*)\}")

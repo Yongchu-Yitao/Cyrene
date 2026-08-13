@@ -2,7 +2,10 @@
 # Windows release jobs. Keep this list aligned with pyproject.toml so the
 # PyInstaller bundle contains the native libraries used after installation.
 numpy>=2.1.0
-onnxruntime>=1.27,<1.28
+# Native x64 builds expose CUDA when the matching NVIDIA runtime is present;
+# ARM64 builds keep the native CPU/QNN runtime and never install x64 CUDA bits.
+onnxruntime-gpu>=1.26,<1.27; platform_machine == "AMD64" or platform_machine == "x86_64"
+onnxruntime>=1.27,<1.28; platform_machine == "ARM64" or platform_machine == "arm64"
 onnxruntime-qnn==2.3.0; platform_machine == "ARM64" or platform_machine == "arm64"
 pypdfium2>=4.30.0
 rapidocr>=3.9.0; platform_machine != "ARM64" and platform_machine != "arm64"

@@ -510,6 +510,12 @@ function Perform-Action($Payload) {
     $parameters = $Payload.parameters
     if ($capability -in @('click_at', 'double_click', 'right_click', 'hover_at', 'drag', 'swipe', 'scroll_at')) { return Perform-CoordinateAction $Payload.target $capability $parameters }
     if ($capability -eq 'key_sequence') { return Perform-KeySequence $parameters.steps }
+    if ($capability -in @('semantic_double_click', 'semantic_drag')) {
+        $legacy = Try-Pattern $element ([System.Windows.Automation.LegacyIAccessiblePattern]::Pattern)
+        if ($null -eq $legacy) { throw "Element does not expose a native $capability action." }
+        $legacy.DoDefaultAction()
+        return @{ ok = $true; verified = $true; summary = "Performed $capability through UI Automation."; diagnostics = @{ method = 'LegacyIAccessible.DoDefaultAction' } }
+    }
     if ($capability -eq 'press') {
         $pattern = Try-Pattern $element ([System.Windows.Automation.InvokePattern]::Pattern)
         if ($null -eq $pattern) {

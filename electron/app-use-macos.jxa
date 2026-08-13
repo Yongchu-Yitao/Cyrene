@@ -448,22 +448,28 @@ function snapshotFrom(root, rootPath, options) {
   const maxNodes = Math.max(1, Math.min(200, Number(options.maxNodes || 80)));
   const maxDepth = Math.max(1, Math.min(16, Number(options.maxDepth || 8)));
   const nodes = [];
+  const maxVisited = Math.max(200, maxNodes * 4);
+  const queue = [{ element: root, nativeRef: rootPath, parentNativeRef: '', depth: 0 }];
+  let visited = 0;
   let truncated = false;
-  function visit(element, nativeRef, depth) {
-    if (nodes.length >= maxNodes) {
-      truncated = true;
-      return;
-    }
-    nodes.push(nodeFor(element, nativeRef));
-    if (depth >= maxDepth) return;
-    const children = directChildren(element);
-    for (let index = 0; index < children.length; index += 1) {
-      visit(children[index], `${nativeRef}/e${index}`, depth + 1);
-      if (nodes.length >= maxNodes) break;
+  while (queue.length && nodes.length < maxNodes && visited < maxVisited) {
+    const current = queue.shift();
+    visited += 1;
+    const node = nodeFor(current.element, current.nativeRef);
+    if (current.parentNativeRef) node.parentNativeRef = current.parentNativeRef;
+    nodes.push(node);
+    if (current.depth < maxDepth) {
+      const children = directChildren(current.element);
+      for (let index = 0; index < children.length; index += 1) {
+        queue.push({
+          element: children[index], nativeRef: `${current.nativeRef}/e${index}`,
+          parentNativeRef: current.nativeRef, depth: current.depth + 1,
+        });
+      }
     }
   }
-  visit(root, rootPath, 0);
-  return { ok: true, nodes, truncated };
+  truncated = queue.length > 0;
+  return { ok: true, nodes, truncated, visited, traversal: 'breadth_first' };
 }
 
 function snapshot(payload, inspectOnly) {
@@ -550,6 +556,14 @@ function perform(payload) {
   }
   if (capability === 'key_sequence') return performKeySequence(resolved, parameters);
   const element = payload.nativeRef ? resolveElement(resolved.win, payload.nativeRef) : resolved.win;
+  if (capability === 'semantic_double_click') {
+    const action = performNativeAction(element, ['AXDoublePress']);
+    return { ok: true, verified: true, summary: `Performed ${action}.`, diagnostics: { nativeAction: action } };
+  }
+  if (capability === 'semantic_drag') {
+    const action = performNativeAction(element, ['AXDrag', 'AXMove', 'AXReorder', 'AXResize']);
+    return { ok: true, verified: true, summary: `Performed ${action}.`, diagnostics: { nativeAction: action } };
+  }
   if (capability === 'press' || capability === 'select') {
     const action = performNativeAction(element, ['AXPress', 'AXConfirm', 'AXPick']);
     return { ok: true, verified: true, summary: `Performed ${action}.`, diagnostics: { nativeAction: action } };

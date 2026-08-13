@@ -22,7 +22,10 @@ dependencies = [
     "mcp>=1.27.0",
     "numpy>=2.1.0",
     "onnxruntime>=1.27,<1.28; sys_platform == 'darwin' or platform_machine != 'x86_64'",
-    "onnxruntime-gpu>=1.27,<1.28; sys_platform != 'darwin' and platform_machine == 'x86_64'",
+    # ORT 1.27 links the Linux Python extension directly to CUDA 13, which
+    # prevents CPU fallback on hosts without that runtime. 1.26 keeps CUDA 12
+    # as an optional provider and still imports safely for CPU-only hosts.
+    "onnxruntime-gpu>=1.26,<1.27; sys_platform != 'darwin' and platform_machine == 'x86_64'",
     "pillow>=11.2.1",
     "prompt-toolkit>=3.0.52",
     "pydantic>=2.10",

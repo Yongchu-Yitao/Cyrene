@@ -72,6 +72,17 @@ test('Windows runtime capabilities exclude macOS PID typing and menu commands', 
   assert.equal(names.includes('virtual_click_at'), true);
 });
 
+test('Linux runtime exposes semantic capabilities without visual or focus input', () => {
+  const names = capabilitiesForTarget({ platform: 'linux', applicationId: 'org.demo.App' })
+    .map((item) => item.name);
+  assert.equal(names.includes('snapshot'), true);
+  assert.equal(names.includes('find'), true);
+  assert.equal(names.includes('press'), true);
+  assert.equal(names.includes('visual_describe'), false);
+  assert.equal(names.includes('virtual_click_at'), false);
+  assert.equal(names.includes('key_chord'), false);
+});
+
 test('packaged macOS coordinate hit-test helper resolves outside app.asar', () => {
   const resourcesPath = path.join('/Applications', 'Cyrene.app', 'Contents', 'Resources');
   const expected = path.join(resourcesPath, 'app-use', 'app-use-macos-hit-test');
@@ -248,7 +259,7 @@ test('connect discloses runtime capabilities without changing the gateway', asyn
   assert.ok(connected.capabilities.some((item) => item.name === 'visual_describe'));
 });
 
-test('connect removes semantic-tree fallbacks for container-only windows', async () => {
+test('connect keeps semantic capabilities retryable while a container-only tree initializes', async () => {
   const provider = new FakeProvider();
   provider.snapshot = async (target) => ({
     ok: true,
@@ -265,23 +276,23 @@ test('connect removes semantic-tree fallbacks for container-only windows', async
   });
   const names = connected.capabilities.map((capability) => capability.name);
   assert.deepEqual(connected.semantic_profile, {
-    status: 'unavailable', reason: 'container_only_tree',
+    status: 'initializing', reason: 'tree_not_ready', retryable: true, probe_attempts: 1,
   });
-  assert.equal(names.includes('snapshot'), false);
-  assert.equal(names.includes('find'), false);
-  assert.equal(names.includes('press'), false);
+  assert.equal(names.includes('snapshot'), true);
+  assert.equal(names.includes('find'), true);
+  assert.equal(names.includes('press'), true);
   assert.ok(names.includes('virtual_click_at'));
   assert.ok(names.includes('visual_describe'));
-  const blocked = await manager.handle('call', {
+  const retried = await manager.handle('call', {
     session_id: connected.session_id,
     capability: 'snapshot',
     parameters: {},
   });
-  assert.equal(blocked.status, 'error');
-  assert.equal(blocked.type, 'unsupported_capability');
+  assert.equal(retried.status, 'success');
+  assert.equal(retried.semantic_profile.status, 'initializing');
 });
 
-test('connect treats a bounded semantic probe timeout as unavailable', async () => {
+test('connect treats a bounded semantic probe timeout as retryable initialization', async () => {
   const provider = new FakeProvider();
   provider.snapshot = async () => {
     const error = new Error('tree probe timed out');
@@ -296,10 +307,10 @@ test('connect treats a bounded semantic probe timeout as unavailable', async () 
   });
   const names = connected.capabilities.map((capability) => capability.name);
   assert.deepEqual(connected.semantic_profile, {
-    status: 'unavailable', reason: 'semantic_probe_timeout', probe_timeout_ms: 2000,
+    status: 'initializing', reason: 'semantic_probe_timeout', probe_timeout_ms: 5000, retryable: true,
   });
-  assert.equal(names.includes('snapshot'), false);
-  assert.equal(names.includes('find'), false);
+  assert.equal(names.includes('snapshot'), true);
+  assert.equal(names.includes('find'), true);
   assert.ok(names.includes('virtual_click_at'));
 });
 

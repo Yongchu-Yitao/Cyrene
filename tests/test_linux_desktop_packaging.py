@@ -63,8 +63,10 @@ def test_release_pipeline_smoke_tests_and_publishes_all_linux_packages():
         "\n  release:\n", 1
     )[0]
 
-    assert "pip uninstall -y onnxruntime-gpu" in linux_job
-    assert 'pip install --force-reinstall --no-deps "onnxruntime>=1.27,<1.28"' in linux_job
+    project = (ROOT / "pyproject.toml").read_text(encoding="utf-8")
+    assert "onnxruntime-gpu>=1.26,<1.27" in project
+    assert "pip uninstall -y onnxruntime-gpu" not in linux_job
+    assert "onnxruntime.__version__.startswith('1.26.')" in linux_job
     assert "'CPUExecutionProvider' in onnxruntime.get_available_providers()" in linux_job
     assert "Smoke test packaged AppImage UI" in workflow
     assert "--appimage-extract-and-run" in workflow
