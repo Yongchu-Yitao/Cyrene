@@ -30,6 +30,7 @@ from pathlib import Path
 
 import pytest
 import PIL as _REAL_PIL
+import pypdf as _REAL_PYPDF
 
 # Tests import ``cyrene`` from the in-repo ``src/`` tree; make sure it is on the
 # path before any cyrene import happens (mirrors the shim at the top of
@@ -60,6 +61,20 @@ def real_pillow_modules():
                 sys.modules.pop(name, None)
             else:
                 sys.modules[name] = previous
+
+
+@pytest.fixture
+def real_pypdf_module():
+    """Temporarily undo legacy module-level pypdf shims for PDF tests."""
+    previous = sys.modules.get("pypdf")
+    sys.modules["pypdf"] = _REAL_PYPDF
+    try:
+        yield _REAL_PYPDF
+    finally:
+        if previous is None:
+            sys.modules.pop("pypdf", None)
+        else:
+            sys.modules["pypdf"] = previous
 
 
 @pytest.fixture(autouse=True)

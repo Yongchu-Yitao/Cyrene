@@ -157,7 +157,7 @@ async def test_library_item_embedding_status_tracks_current_model_coverage(
 
 @pytest.mark.asyncio
 async def test_pdf_page_count_is_persisted_and_returned_in_library_detail(
-    library_db, tmp_path
+    library_db, tmp_path, real_pypdf_module
 ):
     from pypdf import PdfWriter
 
@@ -851,7 +851,8 @@ def test_library_frontend_uses_project_api_and_clears_filtered_selection():
     assert 'scope.type !== "all" && h("h2"' in source
     assert 'className: "wb-lib-head-button zotero"' not in source
     assert "wb-lib-side-section-toggle" in source
-    assert "复制纯文本" in source and "复制 BibTeX" in source
+    assert 'L("library.copyPlainText", "Copy plain text")' in source
+    assert 'L("library.copyBibtex", "Copy BibTeX")' in source
     assert ".wb-lib-results {" in styles
     assert "overflow-x: hidden" in styles
     assert "overflow-y: hidden" in styles

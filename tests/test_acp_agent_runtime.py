@@ -791,6 +791,7 @@ async def test_transport_request_timeout(fake_acp_bin, monkeypatch):
     monkeypatch.setenv("FAKE_ACP_MODE", "slow_initialize")
     transport = AcpStdioTransport(
         "fake-acp",
+        env={"FAKE_ACP_MODE": "slow_initialize"},
         initialize_timeout=0.3,
         request_timeout=0.3,
         shutdown_grace_seconds=0.5,
