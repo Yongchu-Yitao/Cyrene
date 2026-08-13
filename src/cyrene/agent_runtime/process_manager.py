@@ -265,11 +265,11 @@ class AcpProcessManager:
             managed_path = str(installation.get("managed_path") or "").strip()
             which_fn = self._which_fn
             if which_fn is None:
-                which_fn = lambda name: (
-                    managed_path
-                    if managed_path and name == command
-                    else shutil.which(name, path=child_env.get("PATH"))
-                )
+                def which_fn(name: str) -> str | None:
+                    if managed_path and name == command:
+                        return managed_path
+                    return shutil.which(name, path=child_env.get("PATH"))
+
             transport = self._transport_factory(
                 command,
                 args,

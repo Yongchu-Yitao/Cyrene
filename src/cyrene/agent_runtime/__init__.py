@@ -182,6 +182,7 @@ __all__ = [
     "default_model_access",
     "default_registry",
     "default_model_binder",
+    "discover_external_agent_config_options",
     "driver_names",
     "event_envelope",
     "failure_kind",

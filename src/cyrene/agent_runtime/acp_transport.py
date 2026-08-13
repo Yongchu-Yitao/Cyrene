@@ -27,17 +27,14 @@ import re
 import shutil
 import urllib.parse
 from collections import deque
-from typing import Any, AsyncIterator, Awaitable, Callable
+from typing import Any, AsyncIterator, Callable
 
 from cyrene.agent_runtime.acp_protocol import (
     ACP_METHOD_INITIALIZE,
-    ACP_METHOD_SESSION_INTERRUPT,
-    ACP_METHOD_SESSION_CANCEL,
     ACP_NOTIFICATIONS,
     ERROR_METHOD_NOT_FOUND,
     ACP_METHOD_REQUEST_PERMISSION,
     ACP_METHOD_ELICITATION_CREATE,
-    ERROR_PARSE_ERROR,
     ACP_PROTOCOL_VERSION,
     JsonRpcError,
     build_error,
