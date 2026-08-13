@@ -214,12 +214,21 @@ async def _index_document_inner(db_path: str, doc_id: str) -> None:
             if relocated is not None:
                 path = relocated
         content_hash = str(doc.get("content_hash") or "") or store.content_hash_file(path)
+        metadata = dict(doc.get("metadata") or {})
+        if doc["kind"] == "pdf" or is_pdf_path(path):
+            try:
+                from pypdf import PdfReader
+
+                metadata["page_count"] = len(PdfReader(str(path)).pages)
+            except Exception:
+                # Page count is supplementary metadata and must not prevent
+                # extraction/indexing when a malformed PDF can still degrade.
+                pass
         text = await extract_document_text(path, doc["kind"], content_hash=content_hash)
         try:
             from cyrene.knowledge import ocr
 
             if ocr.read_cache(content_hash):
-                metadata = dict(doc.get("metadata") or {})
                 metadata.update({"ocr": True, "ocr_model": ocr.MODEL_ID})
                 await store.update_document(
                     db_path, doc_id, metadata=metadata, content_hash=content_hash
@@ -294,6 +303,7 @@ async def _index_document_inner(db_path: str, doc_id: str) -> None:
             chunk_count=len(chunks_to_store),
             summary=summary,
             indexed_at=store._now(),
+            metadata=metadata,
         )
 
     except Exception as e:

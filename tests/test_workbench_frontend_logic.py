@@ -8026,6 +8026,22 @@ def test_workbench_library_list_uses_explicit_pagination():
     assert "library.loadMore" in source
 
 
+def test_workbench_library_does_not_merge_stale_detail_when_switching_items():
+    root = Path(__file__).resolve().parent.parent
+    source = (root / "src" / "webui" / "frontend" / "workbench-library.jsx").read_text(
+        encoding="utf-8"
+    )
+
+    assert (
+        "detail && String(detail.id) === String(selectedId) ? detail : null"
+        in source
+    )
+    assert (
+        'function select(id) { setDetail(null); setSelectedId(String(id));'
+        in source
+    )
+
+
 def test_packaged_electron_preserves_explicit_runtime_path_overrides():
     root = Path(__file__).resolve().parent.parent
     source = (root / "electron" / "main.js").read_text(encoding="utf-8")

@@ -11,7 +11,7 @@ from fastapi import APIRouter, FastAPI
 from fastapi.testclient import TestClient
 
 from cyrene.runtime.database import init_knowledge_db
-from cyrene.knowledge import bibliography, library, store, zotero
+from cyrene.knowledge import bibliography, ingest, library, store, zotero
 from route.workbench import library as library_routes
 
 
@@ -153,6 +153,53 @@ async def test_library_item_embedding_status_tracks_current_model_coverage(
     assert (
         await library_routes._item_embedding_status(library_db, item["id"])
     )["state"] == "incompatible"
+
+
+@pytest.mark.asyncio
+async def test_pdf_page_count_is_persisted_and_returned_in_library_detail(
+    library_db, tmp_path
+):
+    from pypdf import PdfWriter
+
+    pdf_path = tmp_path / "pages.pdf"
+    writer = PdfWriter()
+    writer.add_blank_page(width=100, height=100)
+    writer.add_blank_page(width=100, height=100)
+    with pdf_path.open("wb") as output:
+        writer.write(output)
+
+    document = await store.create_document(
+        library_db,
+        name=pdf_path.name,
+        path=str(pdf_path),
+        content_type="application/pdf",
+        kind="pdf",
+    )
+    item = await library.create_item(library_db, {"title": "Two pages"})
+    await library.add_attachment(
+        library_db,
+        item["id"],
+        {
+            "kb_document_id": document["id"],
+            "filename": pdf_path.name,
+            "path": str(pdf_path),
+            "content_type": "application/pdf",
+        },
+    )
+
+    # Existing PDFs without page metadata are repaired when details are read.
+    detail = await library.get_item(library_db, item["id"])
+    assert detail["attachments"][0]["page_count"] == 2
+    stored = await store.get_document(library_db, document["id"])
+    assert stored["metadata"]["page_count"] == 2
+
+    # Reindexing keeps the page count as durable document metadata.
+    await store.update_document(library_db, document["id"], metadata={})
+    await ingest.index_document(library_db, document["id"])
+    detail = await library.get_item(library_db, item["id"])
+    assert detail["attachments"][0]["page_count"] == 2
+    stored = await store.get_document(library_db, document["id"])
+    assert stored["metadata"]["page_count"] == 2
 
 
 @pytest.mark.asyncio

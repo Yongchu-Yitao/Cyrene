@@ -11,6 +11,7 @@ import json
 import re
 import uuid
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
 from typing import Any, Iterable
 
 import aiosqlite
@@ -122,7 +123,7 @@ async def _fetch_children(
     if table == "library_attachments":
         cursor = await db.execute(
             f"""SELECT a.*,COALESCE(d.size,0) AS size,d.status AS index_status,
-                d.chunk_count,d.indexed_at
+                d.chunk_count,d.indexed_at,d.metadata AS document_metadata
                 FROM library_attachments a LEFT JOIN kb_documents d ON d.id=a.kb_document_id
                 WHERE a.item_id=? ORDER BY a.{order}""",
             (item_id,),
@@ -137,7 +138,53 @@ async def _fetch_children(
         "library_notes": ("raw_json",),
         "library_annotations": ("position_json", "raw_json"),
     }.get(table, ())
-    return [_row_json(row, *json_fields) for row in rows]
+    result = [_row_json(row, *json_fields) for row in rows]
+    if table == "library_attachments":
+        for attachment in result:
+            document_metadata = _loads(attachment.pop("document_metadata", None), {})
+            raw_json = attachment.get("raw_json") or {}
+            page_count = (
+                document_metadata.get("page_count") or raw_json.get("page_count")
+            )
+            try:
+                page_count = int(page_count or 0)
+            except (TypeError, ValueError):
+                page_count = 0
+            if page_count <= 0 and (
+                str(attachment.get("content_type") or "").lower() == "application/pdf"
+                or Path(
+                    str(
+                        attachment.get("filename")
+                        or attachment.get("path")
+                        or ""
+                    )
+                ).suffix.lower()
+                == ".pdf"
+            ):
+                path = Path(str(attachment.get("path") or ""))
+                if not path.is_file():
+                    from cyrene.runtime.attachments import resolve_managed_attachment_path
+
+                    relocated = resolve_managed_attachment_path(str(path))
+                    if relocated is not None:
+                        path = relocated
+                if path.is_file():
+                    try:
+                        from pypdf import PdfReader
+
+                        page_count = len(PdfReader(str(path)).pages)
+                        document_metadata["page_count"] = page_count
+                        if attachment.get("kb_document_id"):
+                            await db.execute(
+                                "UPDATE kb_documents SET metadata=? WHERE id=?",
+                                (_json(document_metadata, {}), attachment["kb_document_id"]),
+                            )
+                            await db.commit()
+                    except Exception:
+                        page_count = 0
+            if page_count > 0:
+                attachment["page_count"] = page_count
+    return result
 
 
 async def _hydrate(db: aiosqlite.Connection, item: dict[str, Any]) -> dict[str, Any]:

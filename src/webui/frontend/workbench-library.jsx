@@ -1424,9 +1424,10 @@
     }, [client, selectedId]);
 
     var listItem = useMemo(function () { return data.items.find(function (item) { return String(item.id) === String(selectedId); }) || null; }, [data.items, selectedId]);
-    var selectedItem = detail ? Object.assign({}, listItem || {}, detail) : listItem;
+    var currentDetail = detail && String(detail.id) === String(selectedId) ? detail : null;
+    var selectedItem = currentDetail ? Object.assign({}, listItem || {}, currentDetail) : listItem;
 
-    function select(id) { setSelectedId(String(id)); setRightTab("detail"); setRightOpen(true); }
+    function select(id) { setDetail(null); setSelectedId(String(id)); setRightTab("detail"); setRightOpen(true); }
     function replaceItem(item) {
       if (!item) return;
       setData(function (prev) { return Object.assign({}, prev, { items: prev.items.map(function (old) { return String(old.id) === String(item.id) ? Object.assign({}, old, item) : old; }) }); });
