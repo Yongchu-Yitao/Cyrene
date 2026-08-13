@@ -74,7 +74,7 @@ def test_quick_chat_surface_is_loaded_without_uploading_the_screenshot():
     assert 'return surface === "quick-chat"' in app
     assert 'var QuickChatApp = window.CyreneUI.require("quickChat").App;' in app
     assert "<QuickChatApp />" in app
-    assert "compiled/workbench-quick-chat.js?v=0.7.5" in index
+    assert "compiled/workbench-quick-chat.js?v=0.7.6" in index
     # The picker pulls writable targets from the dedicated endpoint.
     assert "/api/workbench/quick-chat/targets" in quick_chat
     assert "getLaunchContext" in quick_chat
@@ -198,8 +198,8 @@ def test_background_residency_exposes_a_tray_entrypoint():
     assert {"from": "../build/tray-mac@2x.png", "to": "build/tray-mac@2x.png"} in extra_resources
 
 
-def test_tray_icon_is_a_small_transparent_colored_asset():
-    Image = _pillow_image_module()
+def test_tray_icon_is_a_small_transparent_colored_asset(real_pillow_modules):
+    Image = real_pillow_modules
     mac1x = Image.open(ROOT / "build" / "tray-mac.png").convert("RGBA")
     mac2x = Image.open(ROOT / "build" / "tray-mac@2x.png").convert("RGBA")
     colored = Image.open(ROOT / "build" / "tray.png").convert("RGBA")

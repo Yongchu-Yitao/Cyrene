@@ -5,6 +5,37 @@
 This English edition preserves the release history of the Chinese changelog.
 The Chinese edition remains the most detailed record for older releases.
 
+## [0.7.6] - 2026-08-14
+
+### Feature changes
+
+- Added external Agent support, allowing Cyrene to act as a unified conversation frontend for compatible ACP Agents. The initial recommended catalog includes OpenCode, Codex ACP, and Pi ACP, while a public installation endpoint supports other compatible Agents.
+- External Agents can share Cyrene's model configuration or use their own login, API key, or environment configuration. Cyrene-managed access follows the exact model selected for the conversation.
+- Each external Agent keeps its own security restrictions, permission choices, and input requests. Cyrene presents the Agent's actual options and returns the user's original selection.
+- External Agents support continuous conversations and context recovery. If an old session cannot be restored or its process exits, Cyrene can safely open a replacement session with the visible conversation history.
+- External Agent replies, reasoning, tool activity, files, images, usage, plans, commands, and runtime status can stream into Cyrene conversations.
+- Added opt-in proxy settings for external Agents with a configurable local port. When disabled, Agents do not receive that proxy configuration.
+- Transport fallback, timeouts, and certificate warnings are separated from reply text and retained as standalone notices. Failures provide clearer causes and recovery guidance.
+- Empty conversations can switch Agents in place. Conversations that already contain messages prompt the user to continue with the Agent in a new conversation, preserving the existing binding.
+- External Agent model and reasoning choices now follow reported capabilities instead of inheriting fixed choices from Cyrene's built-in models.
+- WebSearch now includes already-read source evidence in a single result to reduce duplicate page opening, while page retrieval and result filtering can run together for shorter waits.
+- Windows on ARM prefers available NPU acceleration for local models and uses compatibility components to retain OCR and local search support.
+- Knowledge Library PDF details retain accurate page counts, with improved status and failure reporting for local models, OCR, and extension installation.
+
+### Interface changes
+
+- The composer model menu now includes Agent selection and presents Agent, model, and reasoning controls in a unified single-row settings panel.
+- Conversation Overview now shows the Agent identity, connection state, model source, session details, and capability status.
+- The Extension Center adds an Agent tab containing the recommended catalog and installation entry. Agents installed through the external endpoint also appear in Installed.
+- Installed Agent details add enable, uninstall, connection test, diagnostics, login, and model-source controls, with explicit availability and failure reasons.
+- The Install Other Agent dialog now includes the full endpoint, request example, Manifest template, and copy actions for developers or other Agents.
+- Permission prompts and information forms are generated from each external Agent's declarations. Unsupported inputs, commands, models, and tool capabilities are not presented as available.
+- Main conversations, Quick Chat, split conversations, and side Agents now share streaming replies, reasoning, tool progress, files, images, notices, and dynamic permission requests.
+- Images and files produced by external Agents can open directly in Cyrene's viewer or download flow, while unknown events remain available in expandable diagnostic cards.
+- Network, certificate, login, dependency, protocol, model configuration, session recovery, and process-exit failures use dedicated cards instead of appearing as ordinary reply text.
+- Settings → General adds the external Agent proxy switch and port. Settings → Appearance adds Performance Mode to reduce animation, blur, and shadow overhead.
+- Browser controls, task-step states, Agent permission semantics, and extension failure messages receive more complete English and Chinese localization.
+
 ## [0.7.5] - 2026-08-13
 
 ### Feature changes
