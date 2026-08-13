@@ -193,6 +193,7 @@ final result: passed
 - Earlier P2: the source explanation was permanently rendered above the usage header, consuming space; an intermediate placement left the icon at the opposite edge from the number.
 - Fix: moved the explanation behind an information control and grouped the control immediately before the token number.
 - Post-fix evidence: the implementation screenshot and accessibility snapshot show `上下文用量说明 → 768 → tokens`, with the note exposed only in the activated state.
+- Narrow-panel follow-up: the first popover width was anchored to the icon and could be clipped by the panel's horizontal overflow boundary. The popover is now sized from the full Context section (`left: 0; right: 0; max-width: 100%`) with internal box sizing, so localized text wraps within the narrowest panel instead of being obscured.
 
 final result: passed
 

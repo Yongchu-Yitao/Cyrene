@@ -26025,6 +26025,10 @@ body.wb-col-resizing .wb-floating-detail-card > .wb-col-resizer.card-edge::after
   gap: 4px;
 }
 
+.wbc-context-detail {
+  position: relative;
+}
+
 .wbc-ctx-token-total {
   min-width: 0;
   display: inline-flex;
@@ -26033,7 +26037,7 @@ body.wb-col-resizing .wb-floating-detail-card > .wb-col-resizer.card-edge::after
 }
 
 .wbc-context-source-info {
-  position: relative;
+  position: static;
   flex: 0 0 auto;
 }
 
@@ -26074,10 +26078,13 @@ body.wb-col-resizing .wb-floating-detail-card > .wb-col-resizer.card-edge::after
 .wbc-context-source-popover {
   position: absolute;
   z-index: 8;
-  top: calc(100% + 7px);
-  left: -8px;
-  width: min(280px, calc(100vw - 64px));
+  top: 31px;
+  left: 0;
+  right: 0;
+  width: auto;
+  max-width: 100%;
   padding: 10px 12px;
+  box-sizing: border-box;
   border: 1px solid var(--wb-line);
   border-radius: 10px;
   background: var(--wb-panel);
