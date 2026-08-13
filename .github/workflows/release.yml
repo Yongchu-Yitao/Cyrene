@@ -396,6 +396,11 @@ jobs:
         run: |
           pip install "pyinstaller>=6.0" pillow packaging
           pip install .
+          # The portable Linux build must start on machines without a CUDA
+          # runtime. Replace the project-level GPU wheel with the CPU wheel;
+          # source installs may still opt into onnxruntime-gpu explicitly.
+          pip uninstall -y onnxruntime-gpu
+          pip install --force-reinstall --no-deps "onnxruntime>=1.27,<1.28"
           pip install --upgrade typing_extensions pydantic pydantic_core
 
       - name: Install Electron deps
@@ -406,7 +411,7 @@ jobs:
 
       - name: Verify build environment imports
         run: |
-          python -c "from typing_extensions import Sentinel; from pydantic_core import core_schema; import anyio, httpx, httpcore, sniffio, aiosqlite, apscheduler, websockets, simplexng, jinja2, mcp, openai_codex, codex_cli_bin; print('imports-ok')"
+          python -c "from typing_extensions import Sentinel; from pydantic_core import core_schema; import anyio, httpx, httpcore, sniffio, aiosqlite, apscheduler, websockets, simplexng, jinja2, mcp, onnxruntime, openai_codex, codex_cli_bin; assert 'CPUExecutionProvider' in onnxruntime.get_available_providers(); print('imports-ok')"
 
       - name: Full build (PyInstaller + Electron)
         run: python build/build.py --ui-mode ${{ env.UI_MODE }}

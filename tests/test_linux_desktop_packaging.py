@@ -59,7 +59,13 @@ def test_frozen_build_keeps_numpy_native_extensions():
 
 def test_release_pipeline_smoke_tests_and_publishes_all_linux_packages():
     workflow = (ROOT / ".github" / "workflows" / "release.yml").read_text(encoding="utf-8")
+    linux_job = workflow.split("\n  build-linux:\n", 1)[1].split(
+        "\n  release:\n", 1
+    )[0]
 
+    assert "pip uninstall -y onnxruntime-gpu" in linux_job
+    assert 'pip install --force-reinstall --no-deps "onnxruntime>=1.27,<1.28"' in linux_job
+    assert "'CPUExecutionProvider' in onnxruntime.get_available_providers()" in linux_job
     assert "Smoke test packaged AppImage UI" in workflow
     assert "--appimage-extract-and-run" in workflow
     assert "--no-sandbox" in workflow
