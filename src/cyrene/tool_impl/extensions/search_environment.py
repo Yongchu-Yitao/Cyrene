@@ -78,12 +78,20 @@ def _compact_candidate(item: dict[str, Any], installed: set[tuple[str, str]]) ->
     extension_id = str(item.get("id") or "")
     installed_locally = environment_key(kind, extension_id) in installed
     request = None if installed_locally else _install_request(item)
+    fallback_request = None if installed_locally else item.get("fallback_request")
+    reason_code = "already_installed" if installed_locally else str(item.get("reason_code") or "")
+    if not request and not fallback_request and not reason_code:
+        reason_code = "unsupported_registry_type" if kind == "mcp" else "not_installable"
     return {
         "kind": kind,
         "id": extension_id,
         "name": str(item.get("name") or extension_id),
         "description": str(item.get("description") or ""),
         "version": str(item.get("version") or item.get("recommended_version") or ""),
+        "registry_version": str(item.get("registry_version") or ""),
+        "package_latest_version": str(item.get("package_latest_version") or ""),
+        "resolved_version": str(item.get("resolved_version") or item.get("version") or ""),
+        "version_status": str(item.get("version_status") or ""),
         "source": item.get("source"),
         "publisher": str(item.get("publisher") or ""),
         "backend": str(item.get("backend") or ""),
@@ -92,6 +100,8 @@ def _compact_candidate(item: dict[str, Any], installed: set[tuple[str, str]]) ->
         "installed": installed_locally,
         "installable": bool(request) and item.get("installable") is not False,
         "install_request": request,
+        "reason_code": reason_code,
+        "fallback_request": fallback_request,
     }
 
 
@@ -135,7 +145,7 @@ async def _tool_search_environment(args: dict[str, Any], *_unused: Any) -> str:
         "results": candidates[:limit],
         "source_errors": errors,
         "next_cursors": next_cursors,
-        "next_step": "Disabled extensions are intentionally hidden and must be re-enabled from the Extension Center. To install a selected result, invoke skill.manage_extensions through skill_tools with action=install, the result kind/id, and its install_request. Installation remains subject to extension review.",
+        "next_step": "Disabled extensions are intentionally hidden and must be re-enabled from the Extension Center. For installable results, invoke skill.manage_extensions with action=install and only the exact install_request returned here. If installable is false, use the exact fallback_request when present; otherwise stop and report reason_code. Never guess request fields or retry alternate payload shapes. Installation remains subject to extension review.",
     }, ensure_ascii=False)
 
 

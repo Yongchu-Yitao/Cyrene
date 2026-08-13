@@ -40,13 +40,17 @@ async def _tool_manage_extensions(args: dict[str, Any], *_unused: Any) -> str:
     if action == "search":
         result = await service.search(kind, str(args.get("query") or ""), advanced=bool(args.get("advanced")))
         return json.dumps({"ok": True, **result}, ensure_ascii=False)
-    if action not in {"install", "uninstall", "set_default", "enable", "disable"} or not kind or not extension_id:
+    if action not in {"install", "install_local_mcp", "uninstall", "set_default", "enable", "disable"} or not kind or not extension_id:
         return json.dumps({"ok": False, "error": "action, kind, and extension_id are required"}, ensure_ascii=False)
+    if action == "install_local_mcp" and kind != "mcp":
+        return json.dumps({"ok": False, "error": "install_local_mcp requires kind=mcp"}, ensure_ascii=False)
+    request = dict(args.get("request") or {})
+    if action == "install_local_mcp" and not isinstance(request.get("config"), dict):
+        return json.dumps({"ok": False, "error": "install_local_mcp requires request.config"}, ensure_ascii=False)
     reviewed = await _review(action, f"{kind}:{extension_id}", args)
     if reviewed is not None:
         return reviewed
-    if action == "install":
-        request = dict(args.get("request") or {})
+    if action in {"install", "install_local_mcp"}:
         task = service.start_install(kind, extension_id, request, actor="agent")
         return json.dumps({"ok": True, "task": task}, ensure_ascii=False)
     if action == "uninstall":

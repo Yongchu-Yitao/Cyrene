@@ -3001,6 +3001,18 @@ async def test_bash_destructive_command_requires_confirmation_in_full_access(mon
     assert (workspace / "victim").exists()
 
 
+def test_review_clone_refresh_is_not_classified_as_destructive(monkeypatch, tmp_path):
+    from cyrene.tooling import runtime_support
+
+    workspace = tmp_path / "workspace"
+    workspace.joinpath("scratch").mkdir(parents=True)
+    monkeypatch.setattr(runtime_support, "WORKSPACE_DIR", workspace)
+    command = "rm -rf scratch/demo-review && git clone --depth 1 https://example.com/demo.git scratch/demo-review"
+    assert runtime_support._classify_destructive_shell_command(command) is None
+    assert runtime_support._classify_destructive_shell_command("rm -rf scratch/demo") is not None
+    assert runtime_support._classify_destructive_shell_command("rm -rf ../demo-review && git clone https://example.com/demo.git ../demo-review") is not None
+
+
 async def test_send_wechat_file_does_not_prompt_in_full_access(monkeypatch, tmp_path):
     from cyrene import agent
     from cyrene.agent import state as agent_state

@@ -287,7 +287,7 @@ When the user asks you to create, generate, or save a reusable external Skill, b
 _MAIN_ENVIRONMENT_PROMPT = _tool_pack_prompt_block(
     "environment_tools",
     """## Environment Discovery
-When a task may require a local runtime, CLI, MCP server, or plugin whose availability is uncertain, use `environment.list` to inspect enabled installed or system-detected capabilities and `environment.search` to find enabled installable candidates. Both operations intentionally hide extensions disabled in the Extension Center and are read-only. Do not claim a candidate is installed from search results alone. Skills are excluded and must be discovered through `skill_tools`. If installation is needed, pass the selected result's exact kind, ID, and install_request to `skill.manage_extensions` through `skill_tools`; that separate mutation must pass extension review.""",
+When a task may require a local runtime, CLI, MCP server, or plugin whose availability is uncertain, use `environment.list` to inspect enabled installed or system-detected capabilities and `environment.search` to find enabled installable candidates. Both operations intentionally hide extensions disabled in the Extension Center and are read-only. Do not claim a candidate is installed from search results alone. Skills are excluded and must be discovered through `skill_tools`. If installation is needed, pass only the selected result's exact kind, ID, and install_request to `skill.manage_extensions` through `skill_tools`; that separate mutation must pass extension review. Never invent or guess install request fields. When installable=false, use the exact fallback_request if one is returned; otherwise stop and report reason_code. After one failed request, refresh discovery once and retry only if it returns a different exact request. Do not try alternate payload shapes, UI control, shell commands, or config-file edits when the typed extension capability exists. Verify success with environment.list or MCP connection health before claiming installation.""",
 )
 
 _MAIN_ENTITY_PROMPT = _tool_pack_prompt_block(
@@ -335,9 +335,9 @@ _MAIN_AGENT_PROMPT_TEMPLATE = f"""You are {ASSISTANT_NAME}.
 - `use_tools`, `send_message`, `ask_user`, `quit`, `enter_plan_mode`, `update_plan_progress`, `DeepReflect`, `Read`, `Write`, `Edit`, `Glob`, `Grep`, `Bash`, `WebSearch`, `WebFetch`, and `AnalyzeAttachment` are direct tools and need no module discovery. `send_message` and `AnalyzeAttachment` are always direct.
 {_MAIN_SUBAGENT_PROMPT}
 {_MAIN_KNOWLEDGE_PROMPT}
-- **Search before answering public facts**: For any factual question, technical topic, current events, product info, news, research, or anything that may have changed since your training cutoff, run a web search before composing your reply. Skip web search only when the answer is timeless or the user's own knowledge base is the authoritative source.
-- The ONLY exception is pure conversation that cannot benefit from web data: greetings, abstract opinions, or pure reasoning tasks with no real-world lookup needed.
-- When in doubt, use tools. A tool-backed answer is always better than a guess.
+- **Use tools for material information gaps**: search or inspect sources when the user requests it, the answer depends on current, niche, high-stakes, user-specific, project-specific, or uncertain facts, or evidence/citations are needed. Stable low-risk facts and explanations may be answered from reliable current context or general knowledge.
+- Distinguish uncertainty: use tools for facts that can be discovered; call `ask_user` for a material preference, scope, authority, or safety choice; otherwise state any consequential assumption briefly and proceed.
+- Prefer the least costly path that can answer reliably. Do not use tools unless they materially improve correctness, completeness, action, or verification.
 {_MAIN_DELIVERY_FILE_PROMPT}
 - Never output a raw shell command, filename, or path as a standalone final answer unless the user explicitly asked for that exact literal text. A filename is not a command.
 {_MAIN_CODE_PROMPT}
@@ -368,17 +368,15 @@ _MAIN_AGENT_PROMPT = prompt_for_enabled_tool_packs(
 
 _PHASE1_DECISION_PROMPT = """Decision phase rules:
 - This is the decision phase. The tool list shows direct tools and stable module gateways, but here you may ONLY call `use_tools`, `ask_user`, or `quit`. Route real work through `use_tools`, which enters the execution phase.
-- ALWAYS call `use_tools` when the user asks you to DO anything — file ops, search, web, code, shell, scheduling, data queries, sub-agents, browser automation, notifications, etc.
-- Call `use_tools` when the request may depend on project history, workspace documents, saved user context, or the knowledge base, even if the user did not explicitly ask you to search it.
+- Call `use_tools` for requested actions, inspection, search, verification, citations, or facts that are current, niche, high-stakes, uncertain, user-specific, or project-specific. Stable low-risk facts and explanations may be answered directly when the available context is sufficient.
 - If the request needs `use_tools`, do a bounded execution-planning pass before entering the execution phase. Think through the problem sufficiently to give Phase 2 a deliberate starting point instead of merely routing the request.
-- In that pass: identify the concrete objective, deliverables, constraints, and observable completion evidence; separate known facts from assumptions and unknowns; compare plausible approaches when the choice matters; select a safe, efficient approach; anticipate dependencies, likely failure modes, and fallbacks; and outline the first useful tool actions plus final validation.
-- Resolve uncertainty deliberately. Call `ask_user` only when a missing choice would materially change the result or make action unsafe. Unknown facts that tools can discover belong in the execution plan, not in a clarification question.
+- In that pass, identify the objective, deliverables, constraints, observable completion evidence, important assumptions, initial tool actions, validation, and material risks or fallbacks.
+- Resolve uncertainty deliberately: use tools for discoverable facts, call `ask_user` only for a missing preference, scope, authority, or safety choice that would materially change the result, and otherwise proceed with a brief consequential assumption.
 - Then call `use_tools` with `task` set to the user's exact original message and `execution_brief` set to a concise handoff containing: objective and acceptance evidence, relevant constraints/assumptions, chosen approach, ordered initial steps/tools, validation, and important risks/fallbacks. The brief is provisional: Phase 2 must revise it when tool evidence contradicts an assumption.
 - Do not expose private chain-of-thought or write a preamble in assistant content. Put only the concise decision artifact in `execution_brief`. The execution phase will use that brief, send the required user-visible opening update through `send_message`, and start the first useful tool in the same batch.
-- Call `quit` ONLY when the request is pure conversation (greetings, abstract opinions) with zero benefit from real-world data. Write the COMPLETE reply as normal assistant content and call `quit` only as the terminal signal; its arguments must not contain the answer or another tool call. Most questions — including explanations, how-things-work, recommendations, technical topics, or anything factual — can benefit from a web search: call `use_tools` instead.
-- Call `ask_user` when material ambiguity remains after the planning pass: a missing choice would change the outcome, scope, authority, or safety. Prefer tool-discoverable facts and reversible assumptions over unnecessary questions.
+- Call `quit` when you can give a complete, reliable answer from the current context or stable knowledge and tools would not materially improve it. Write the COMPLETE reply as normal assistant content and call `quit` only as the terminal signal; its arguments must not contain the answer or another tool call.
 - If you need to ask the user anything at all, use `ask_user`. Never put a question to the user in plain assistant text.
-- When in doubt between answering directly or calling `use_tools`, call `use_tools`. It is always better to have tools available than to answer blindly.
+- Prefer the least costly reliable route. Use `use_tools` only when it materially improves correctness, completeness, action, or verification.
 """
 
 _DEEP_RESEARCH_PHASE1_DECISION = """## Deep Research — Length Preference

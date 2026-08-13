@@ -29,6 +29,7 @@ from cyrene.runtime import database as db
 from cyrene.config import (
     DATA_DIR,
     STATE_FILE,
+    TEMP_DIR,
     WORKSPACE_DIR,
 )
 from cyrene.model_runtime.messages import truncate
@@ -697,6 +698,8 @@ def _classify_destructive_shell_command(command: str) -> dict[str, str] | None:
         return None
     lowered = raw.lower()
     first = _extract_first_command(raw)
+    if _is_safe_review_directory_refresh(raw):
+        return None
     if first in {"rm", "rmdir", "unlink"} or re.search(r'(?:^|[;&|]\s*)(?:sudo\s+)?(?:\\|/[\w./-]+/)?(?:rm|rmdir|unlink)\b', lowered):
         return {"operation": "文件删除操作", "kind": "file_delete", "detail": f"命令：{raw[:240]}"}
     if re.search(r'\bgit\s+reset\b[^\n;&|]*\s--hard\b', lowered):
@@ -712,6 +715,43 @@ def _classify_destructive_shell_command(command: str) -> dict[str, str] | None:
     if re.search(r'(?:^|[;&|]\s*)(?:sudo\s+)?(?:mv|cp|install)\b[^\n;&|]*(?:\s-f\b|\s--force\b)', lowered):
         return {"operation": "覆盖文件操作", "kind": "file_overwrite", "detail": f"命令：{raw[:240]}"}
     return None
+
+
+def _is_safe_review_directory_refresh(command: str) -> bool:
+    """Allow replacing one narrowly-scoped Cyrene review clone without ceremony."""
+    segments = re.split(r"\s*&&\s*", str(command or ""), maxsplit=2)
+    if len(segments) < 2:
+        return False
+    try:
+        delete_tokens = shlex.split(segments[0], posix=True)
+        clone_tokens = shlex.split(segments[1], posix=True)
+    except ValueError:
+        return False
+    if len(delete_tokens) != 3 or delete_tokens[:2] != ["rm", "-rf"]:
+        return False
+    if len(clone_tokens) < 4 or clone_tokens[:2] != ["git", "clone"]:
+        return False
+    target_text = delete_tokens[2]
+    if clone_tokens[-1] != target_text:
+        return False
+    clone_url = next((token for token in clone_tokens[2:-1] if token.startswith("https://")), "")
+    if not clone_url:
+        return False
+    if not target_text or any(token in target_text for token in ("*", "?", "[", "]", "$", "`")):
+        return False
+    target = Path(target_text)
+    target = target if target.is_absolute() else WORKSPACE_DIR / target
+    try:
+        resolved = target.resolve(strict=False)
+    except OSError:
+        return False
+    allowed_roots = ((WORKSPACE_DIR / "scratch").resolve(), (TEMP_DIR / "reviews").resolve())
+    if not any(root in resolved.parents for root in allowed_roots):
+        return False
+    if not resolved.name.casefold().endswith(("-review", "_review")):
+        return False
+    # Never follow an existing link out of the review root.
+    return not target.is_symlink()
 
 
 def _extract_first_command(raw: str) -> str:

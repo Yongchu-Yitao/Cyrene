@@ -50,6 +50,7 @@ _MISE_CONFIG = _ROOT / "mise-config"
 _MISE_CACHE = CACHE_DIR / "extensions" / "mise"
 _UV_PYTHON_DIR = _ROOT / "python"
 _UV_BIN_DIR = _ROOT / "python-bin"
+_UV_TOOL_DIR = _ROOT / "uv-tools"
 _TEX_DIR = _ROOT / "tex"
 _STAGING_DIR = TEMP_DIR / "extension-installs"
 _TASK_FILE = DATA_DIR / "extension_install_tasks.json"
@@ -124,6 +125,21 @@ def _redact_secrets(value: Any) -> Any:
 def _safe_version_text(value: str) -> str:
     line = next((line.strip() for line in str(value or "").splitlines() if line.strip()), "")
     return line[:240]
+
+
+def _extension_error_reason(exc: BaseException) -> str:
+    message = str(exc).casefold()
+    if "could not be connected" in message or "not connected" in message:
+        return "mcp_connection_failed"
+    if "deterministic executable" in message or "did not expose" in message:
+        return "executable_not_found"
+    if "fixed-version" in message or "exact version" in message or "@latest" in message:
+        return "fixed_version_required"
+    if "requires environment configuration" in message or "requires credentials" in message:
+        return "configuration_required"
+    if "bundled uv is missing" in message:
+        return "uv_runtime_missing"
+    return "installation_failed"
 
 
 def _command_version(path: Path, args: tuple[str, ...], timeout: float = 3.0) -> str:
@@ -220,6 +236,7 @@ def extension_environment() -> dict[str, str]:
     _MISE_CACHE.mkdir(parents=True, exist_ok=True)
     _UV_PYTHON_DIR.mkdir(parents=True, exist_ok=True)
     _UV_BIN_DIR.mkdir(parents=True, exist_ok=True)
+    _UV_TOOL_DIR.mkdir(parents=True, exist_ok=True)
     env = dict(os.environ)
     env.update({
         "MISE_DATA_DIR": str(_MISE_DATA),
@@ -234,6 +251,8 @@ def extension_environment() -> dict[str, str]:
         "MISE_YES": "1",
         "UV_PYTHON_INSTALL_DIR": str(_UV_PYTHON_DIR),
         "UV_PYTHON_BIN_DIR": str(_UV_BIN_DIR),
+        "UV_TOOL_DIR": str(_UV_TOOL_DIR),
+        "UV_TOOL_BIN_DIR": str(_UV_BIN_DIR),
         "UV_CACHE_DIR": str(CACHE_DIR / "extensions" / "uv"),
         "UV_PYTHON_DOWNLOADS": "manual",
     })
@@ -518,7 +537,7 @@ class InstallTaskStore:
                 self.update(task_id, status="cancelled", finished_at=_now(), message="Cancelled")
             except Exception as exc:
                 logger.exception("Extension install task failed: %s", task_id)
-                self.update(task_id, status="failed", finished_at=_now(), error=str(exc), message="Installation failed")
+                self.update(task_id, status="failed", finished_at=_now(), error=str(exc), reason_code=_extension_error_reason(exc), message="Installation failed")
                 _audit(task.get("actor", "user"), f"{task.get('action')}.finish", task.get("extension_id", ""), {"error": str(exc)}, "failed")
             finally:
                 self._async_tasks.pop(task_id, None)
@@ -1100,8 +1119,33 @@ class ExtensionService:
             response = await client.get(base + "/v0.1/servers", params=params)
             response.raise_for_status()
             payload = response.json()
+        wrappers = payload.get("servers", [])
+        pypi_identifiers = list(dict.fromkeys(
+            str(package.get("identifier") or "").strip()
+            for wrapper in wrappers
+            for package in (wrapper.get("server", wrapper).get("packages") or [])
+            if str(package.get("registryType") or "").lower() == "pypi"
+            and str(package.get("identifier") or "").strip()
+        ))
+
+        async def latest_pypi_version(client: httpx.AsyncClient, identifier: str) -> tuple[str, str]:
+            try:
+                response = await client.get(f"https://pypi.org/pypi/{urllib.parse.quote(identifier, safe='')}/json")
+                response.raise_for_status()
+                return identifier, str((response.json().get("info") or {}).get("version") or "")
+            except (httpx.HTTPError, ValueError, TypeError):
+                logger.debug("Unable to refresh PyPI metadata for %s", identifier, exc_info=True)
+                return identifier, ""
+
+        if pypi_identifiers:
+            async with httpx.AsyncClient(timeout=10, follow_redirects=True) as pypi_client:
+                pypi_versions = dict(await asyncio.gather(*(
+                    latest_pypi_version(pypi_client, identifier) for identifier in pypi_identifiers
+                )))
+        else:
+            pypi_versions = {}
         results = []
-        for wrapper in payload.get("servers", []):
+        for wrapper in wrappers:
             server = wrapper.get("server", wrapper)
             packages = server.get("packages") or []
             remotes = server.get("remotes") or []
@@ -1112,17 +1156,73 @@ class ExtensionService:
             ]
             installable_packages = [
                 package for package in packages
-                if str(package.get("registryType") or "").lower() == "npm"
+                if str(package.get("registryType") or "").lower() in {"npm", "pypi"}
                 and str(package.get("version") or "")
                 and not any(variable.get("isRequired") for variable in package.get("environmentVariables") or [])
             ]
+            registry_version = str(server.get("version") or "")
+            pypi_package = next((
+                package for package in packages
+                if str(package.get("registryType") or "").lower() == "pypi"
+                and str(package.get("identifier") or "").strip()
+            ), None)
+            package_latest_version = ""
+            if pypi_package:
+                identifier = str(pypi_package.get("identifier") or "").strip()
+                package_latest_version = pypi_versions.get(identifier, "")
+            resolved_version = package_latest_version or registry_version
+            version_status = (
+                "registry_stale"
+                if package_latest_version and registry_version and package_latest_version != registry_version
+                else "current" if resolved_version else "unknown"
+            )
+            if pypi_package and resolved_version:
+                packages = [
+                    {**package, "version": resolved_version}
+                    if str(package.get("registryType") or "").lower() == "pypi"
+                    else package
+                    for package in packages
+                ]
+                installable_packages = [
+                    {**package, "version": resolved_version}
+                    if str(package.get("registryType") or "").lower() == "pypi"
+                    else package
+                    for package in installable_packages
+                ]
+            reason_code = ""
+            fallback_request = None
+            if not (installable_remotes or installable_packages):
+                required_config = any(
+                    any(variable.get("isRequired") for variable in package.get("environmentVariables") or [])
+                    for package in packages
+                ) or any(any(header.get("isRequired") for header in remote.get("headers") or []) for remote in remotes)
+                reason_code = "configuration_required" if required_config else "unsupported_registry_type"
+                package = next(iter(packages), {})
+                fallback_request = {
+                    "action": "install_local_mcp",
+                    "kind": "mcp",
+                    "extension_id": server.get("name"),
+                    "request": {
+                        "config": {
+                            "name": server.get("name"), "transport": "stdio", "command": "",
+                            "args": [], "env": {}, "version": resolved_version, "enabled": True,
+                        },
+                        "source": {
+                            "type": "manual", "registry_type": package.get("registryType"),
+                            "identifier": package.get("identifier"), "version": resolved_version,
+                        },
+                    },
+                }
             results.append({
                 "id": server.get("name"), "name": server.get("title") or server.get("name"), "kind": "mcp",
-                "description": server.get("description", ""), "version": server.get("version", ""), "repository": server.get("repository") or {},
+                "description": server.get("description", ""), "version": resolved_version, "registry_version": registry_version,
+                "package_latest_version": package_latest_version, "resolved_version": resolved_version,
+                "version_status": version_status, "repository": server.get("repository") or {},
                 "packages": packages, "remotes": remotes, "installable_remotes": installable_remotes,
                 "installable_packages": installable_packages,
                 "verified": True, "source": base, "risk": "medium",
                 "installable": bool(installable_remotes or installable_packages),
+                "reason_code": reason_code, "fallback_request": fallback_request,
             })
         metadata = payload.get("metadata") or {}
         return {"results": results, "source": base, "next_cursor": metadata.get("nextCursor", "")}
@@ -1467,46 +1567,77 @@ class ExtensionService:
                 transport = "sse" if remote_type == "sse" else "streamable_http"
                 config = {"name": extension_id, "transport": transport, "url": remote["url"], "enabled": True}
         package = dict(request.get("package") or {})
+        installed_pypi_identifier = ""
         if not config and package:
             registry_type = str(package.get("registryType") or "").lower()
             identifier = str(package.get("identifier") or "").strip()
             version = str(package.get("version") or request.get("version") or "").strip()
-            if registry_type != "npm" or not identifier or not version or version == "latest":
-                raise ValueError("Only fixed-version npm MCP packages can be installed directly")
+            if registry_type not in {"npm", "pypi"} or not identifier or not version or version == "latest":
+                raise ValueError("Only fixed-version npm or PyPI MCP packages can be installed directly")
             if any(variable.get("isRequired") for variable in package.get("environmentVariables") or []):
                 raise ValueError("This MCP package requires environment configuration; use Manual MCP after installing its executable")
-            mise = _bundled_binary("mise")
-            if not mise:
-                raise RuntimeError("Bundled mise is missing")
-            ref = f"npm:{identifier}"
             env = extension_environment()
-            await self._run_manager(task_id, [str(mise), "install", f"{ref}@{version}"], env=env)
-            await self._run_manager(task_id, [str(mise), "use", "--global", "--pin", f"{ref}@{version}"], env=env, timeout=120)
-            where_out, _ = await self._run_manager(task_id, [str(mise), "where", f"{ref}@{version}"], env=env, timeout=120)
-            install_root = Path(where_out.strip())
-            manifests = sorted(install_root.rglob("package.json"), key=lambda path: len(path.parts))
-            binary_name = ""
-            for manifest in manifests:
+            if registry_type == "pypi":
+                uv = _bundled_binary("uv")
+                if not uv:
+                    raise RuntimeError("Bundled uv is missing")
+                installed_pypi_identifier = identifier
                 try:
-                    package_json = json.loads(manifest.read_text(encoding="utf-8"))
-                except Exception:
-                    continue
-                bin_value = package_json.get("bin")
-                if isinstance(bin_value, str):
-                    binary_name = str(package_json.get("name") or identifier).rsplit("/", 1)[-1]
-                elif isinstance(bin_value, dict) and bin_value:
-                    binary_name = str(next(iter(bin_value)))
-                if binary_name:
-                    break
-            if not binary_name:
-                raise RuntimeError("The installed MCP package does not declare an executable")
-            proc = await asyncio.create_subprocess_exec(str(mise), "which", binary_name, f"--tool={ref}@{version}", stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE, env=env)
-            stdout, stderr = await proc.communicate()
-            if proc.returncode != 0 or not stdout.decode().strip():
-                raise RuntimeError(stderr.decode(errors="replace") or "Unable to locate the installed MCP executable")
+                    before = {path.resolve() for path in _UV_BIN_DIR.iterdir()} if _UV_BIN_DIR.is_dir() else set()
+                    await self._run_manager(task_id, [str(uv), "tool", "install", "--force", f"{identifier}=={version}"], env=env)
+                    after = [path.resolve() for path in _UV_BIN_DIR.iterdir() if path.is_file() and os.access(path, os.X_OK)]
+                    expected_names = {
+                        identifier.rsplit("/", 1)[-1].casefold(),
+                        identifier.rsplit("/", 1)[-1].replace("_", "-").casefold(),
+                    }
+                    executable = next((path for path in after if path.stem.casefold() in expected_names), None)
+                    new_executables = [path for path in after if path not in before]
+                    executable = executable or (new_executables[0] if len(new_executables) == 1 else None)
+                    if executable is None:
+                        raise RuntimeError("The installed PyPI MCP package did not expose a deterministic executable")
+                except BaseException:
+                    try:
+                        await self._run_manager("", [str(uv), "tool", "uninstall", identifier], env=env, timeout=120)
+                    except BaseException:
+                        logger.exception("Failed to roll back incomplete PyPI MCP installation")
+                    installed_pypi_identifier = ""
+                    raise
+                command = str(executable)
+                managed_ref = f"pypi:{identifier}"
+            else:
+                mise = _bundled_binary("mise")
+                if not mise:
+                    raise RuntimeError("Bundled mise is missing")
+                ref = f"npm:{identifier}"
+                await self._run_manager(task_id, [str(mise), "install", f"{ref}@{version}"], env=env)
+                await self._run_manager(task_id, [str(mise), "use", "--global", "--pin", f"{ref}@{version}"], env=env, timeout=120)
+                where_out, _ = await self._run_manager(task_id, [str(mise), "where", f"{ref}@{version}"], env=env, timeout=120)
+                install_root = Path(where_out.strip())
+                manifests = sorted(install_root.rglob("package.json"), key=lambda path: len(path.parts))
+                binary_name = ""
+                for manifest in manifests:
+                    try:
+                        package_json = json.loads(manifest.read_text(encoding="utf-8"))
+                    except Exception:
+                        continue
+                    bin_value = package_json.get("bin")
+                    if isinstance(bin_value, str):
+                        binary_name = str(package_json.get("name") or identifier).rsplit("/", 1)[-1]
+                    elif isinstance(bin_value, dict) and bin_value:
+                        binary_name = str(next(iter(bin_value)))
+                    if binary_name:
+                        break
+                if not binary_name:
+                    raise RuntimeError("The installed MCP package does not declare an executable")
+                proc = await asyncio.create_subprocess_exec(str(mise), "which", binary_name, f"--tool={ref}@{version}", stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE, env=env)
+                stdout, stderr = await proc.communicate()
+                if proc.returncode != 0 or not stdout.decode().strip():
+                    raise RuntimeError(stderr.decode(errors="replace") or "Unable to locate the installed MCP executable")
+                command = stdout.decode().strip()
+                managed_ref = ref
             package_arguments = [str(item.get("value")) for item in package.get("packageArguments") or [] if item.get("value") is not None]
-            config = {"name": extension_id, "transport": "stdio", "command": stdout.decode().strip(), "args": package_arguments, "enabled": True}
-            request = {**request, "source": {"type": "mcp-registry-package", "registry": "npm", "identifier": identifier, "version": version, "managed_ref": ref}}
+            config = {"name": extension_id, "transport": "stdio", "command": command, "args": package_arguments, "enabled": True}
+            request = {**request, "source": {"type": "mcp-registry-package", "registry": registry_type, "identifier": identifier, "version": version, "managed_ref": managed_ref}}
         if not config:
             raise ValueError("Select a registry remote transport or provide a fixed local MCP configuration")
         config["name"] = str(config.get("name") or extension_id)
@@ -1542,6 +1673,13 @@ class ExtensionService:
                 await restart_mcp()
             except BaseException:
                 logger.exception("Failed to restore MCP connections after installation rollback")
+            if installed_pypi_identifier:
+                uv = _bundled_binary("uv")
+                if uv:
+                    try:
+                        await self._run_manager("", [str(uv), "tool", "uninstall", installed_pypi_identifier], env=extension_environment(), timeout=120)
+                    except BaseException:
+                        logger.exception("Failed to uninstall PyPI MCP package after rollback")
             raise
         _audit(actor, "install.finish", f"mcp:{extension_id}", {"version": config.get("version"), "source": config.get("source"), "transport": config.get("transport")})
         return config
@@ -1567,8 +1705,13 @@ class ExtensionService:
             managed_ref = str(source.get("managed_ref") or "")
             managed_version = str(source.get("version") or "")
             mise = _bundled_binary("mise")
-            if managed_ref and managed_version and mise:
-                await self._run_manager("", [str(mise), "unuse", "--global", f"{managed_ref}@{managed_version}"], env=extension_environment(), timeout=300)
+            if managed_ref and managed_version:
+                if managed_ref.startswith("pypi:"):
+                    uv = _bundled_binary("uv")
+                    if uv:
+                        await self._run_manager("", [str(uv), "tool", "uninstall", managed_ref.split(":", 1)[1]], env=extension_environment(), timeout=300)
+                elif mise:
+                    await self._run_manager("", [str(mise), "unuse", "--global", f"{managed_ref}@{managed_version}"], env=extension_environment(), timeout=300)
             _forget_extension_enabled(kind, extension_id)
             _audit(actor, "uninstall", f"mcp:{extension_id}", {})
             return {"ok": True}

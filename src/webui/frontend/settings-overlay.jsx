@@ -4623,6 +4623,7 @@ function ExtensionsPanel(p) {
   var [sourceHealth, setSourceHealth] = useStateSt(null);
   var [skillSelection, setSkillSelection] = useStateSt(null);
   var [manualMcp, setManualMcp] = useStateSt({ name: "", transport: "streamable_http", url: "", command: "", args: "", version: "", headers: "", env: "" });
+  var [manualMcpOpen, setManualMcpOpen] = useStateSt(false);
   var [requestedVersion, setRequestedVersion] = useStateSt("");
   var [texChoice, setTexChoice] = useStateSt("tinytex");
   var [bindItem, setBindItem] = useStateSt(null);
@@ -4661,7 +4662,7 @@ function ExtensionsPanel(p) {
   }, [data.tasks]);
 
   function openInstaller(kind) {
-    setInstallKind(kind); setRemoteQuery(""); setRemoteResults([]); setRemoteCursor(""); setSkillSelection(null); setRequestedVersion(""); setInstallOpen(true);
+    setInstallKind(kind); setRemoteQuery(""); setRemoteResults([]); setRemoteCursor(""); setSkillSelection(null); setRequestedVersion(""); setManualMcpOpen(false); setInstallOpen(true);
   }
 
   function searchRemote(append) {
@@ -4688,7 +4689,7 @@ function ExtensionsPanel(p) {
         method: "POST", headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ kind: item.kind, extension_id: item.id, ...(request || {}) }),
       }).then(readSettingsResponse).then(function () {
-        setInstallOpen(false); tell(t("settings.extensionInstallStarted"), "success"); return load();
+        tell(t("settings.extensionInstallStarted"), "success"); return load();
       }).catch(function (error) { tell(error.message, "error"); }).finally(function () { setBusy(""); });
     });
   }
@@ -4719,6 +4720,21 @@ function ExtensionsPanel(p) {
       return;
     }
     startInstall(item, { version: requestedVersion.trim() || item.version || item.recommended_version, ref: item.ref || item.source, spec: item, ...(item.id === "tex" ? { distribution: texChoice } : {}) });
+  }
+
+  function configureManualMcp(item) {
+    var fallback = ((item.fallback_request || {}).request || {});
+    var config = fallback.config || {};
+    var source = fallback.source || {};
+    var packageSpec = (item.packages || [])[0] || {};
+    setManualMcp({
+      name: config.name || item.id || "", transport: config.transport || "stdio", url: config.url || "",
+      command: config.command || "", args: (config.args || []).join("\n"),
+      version: config.version || item.resolved_version || item.version || "", headers: "", env: "",
+      packageIdentifier: source.identifier || packageSpec.identifier || "",
+    });
+    setManualMcpOpen(true);
+    tell(t("settings.extensionManualPrefilled"), "info");
   }
 
   function removeItem(item) {
@@ -4769,7 +4785,7 @@ function ExtensionsPanel(p) {
   function addManualMcp() {
     var config = { name: manualMcp.name.trim(), transport: manualMcp.transport, enabled: true, version: manualMcp.version.trim() };
     if (manualMcp.transport !== "stdio") config.url = manualMcp.url.trim();
-    else { config.command = manualMcp.command.trim(); config.args = manualMcp.args.split(/\s+/).filter(Boolean); }
+    else { config.command = manualMcp.command.trim(); config.args = manualMcp.args.split(/\r?\n/).map(function (value) { return value.trim(); }).filter(Boolean); }
     function parseVariables(value, label) {
       var variables = {};
       String(value || "").split(/\r?\n/).forEach(function (line) {
@@ -4907,6 +4923,7 @@ function ExtensionsPanel(p) {
       activeTasks.map(function (task) { return React.createElement("div", { key: task.id, className: "wb-extension-task " + task.status },
         React.createElement("div", null, React.createElement("strong", null, extensionDisplayName({ id: task.extension_id, name: task.extension_id }, t)), React.createElement("span", { title: task.error || "" }, extensionTaskStatusLabel(task.status, t))),
         React.createElement("div", { className: "wb-extension-task-progress", role: "progressbar", "aria-valuemin": "0", "aria-valuemax": "100", "aria-valuenow": task.progress || 0 }, React.createElement("span", { style: { width: (task.progress || 0) + "%" } })),
+        task.status === "failed" && React.createElement("p", { className: "wb-extension-task-error", role: "alert" }, (task.reason_code ? task.reason_code + ": " : "") + (task.error || t("settings.extensionInstallFailed"))),
         ["queued", "running"].indexOf(task.status) >= 0 && React.createElement("button", { type: "button", className: "wb-btn", onClick: function () { settingsFetch("/api/extensions/tasks/" + task.id + "/cancel", { method: "POST" }).then(load); } }, t("settings.cancel")),
       ); })
     ),
@@ -4973,7 +4990,7 @@ function ExtensionsPanel(p) {
           React.createElement("button", { type: "button", className: "wb-btn wb-extension-install-button", onClick: installLocalFile }, t("settings.installFile")),
           React.createElement("button", { type: "button", className: "wb-btn wb-extension-install-button", onClick: installLocalFolder }, t("settings.installFolder"))
         ),
-        installKind === "mcp" && React.createElement("details", { className: "wb-extension-manual" },
+        installKind === "mcp" && React.createElement("details", { className: "wb-extension-manual", open: manualMcpOpen, onToggle: function (event) { setManualMcpOpen(event.currentTarget.open); } },
           React.createElement("summary", null, t("settings.extensionManualMcp")),
           React.createElement("div", { className: "wb-extension-form-grid" },
             React.createElement("label", null, React.createElement("span", null, t("settings.name")), React.createElement("input", { className: "wb-input", value: manualMcp.name, onChange: function (e) { setManualMcp({ ...manualMcp, name: e.target.value }); } })),
@@ -4985,7 +5002,7 @@ function ExtensionsPanel(p) {
                 )
               : React.createElement(React.Fragment, null,
                   React.createElement("label", { className: "wide" }, React.createElement("span", null, t("settings.placeholderCommand")), React.createElement("input", { className: "wb-input mono", value: manualMcp.command, onChange: function (e) { setManualMcp({ ...manualMcp, command: e.target.value }); } })),
-                  React.createElement("label", { className: "wide" }, React.createElement("span", null, t("settings.placeholderArgs")), React.createElement("input", { className: "wb-input mono", value: manualMcp.args, onChange: function (e) { setManualMcp({ ...manualMcp, args: e.target.value }); } })),
+                  React.createElement("label", { className: "wide" }, React.createElement("span", null, t("settings.placeholderArgs")), React.createElement("textarea", { className: "wb-input mono", rows: 3, value: manualMcp.args, placeholder: t("settings.extensionArgumentsHint"), onChange: function (e) { setManualMcp({ ...manualMcp, args: e.target.value }); } }), React.createElement("small", null, t("settings.extensionArgumentsHint"))),
                   React.createElement("label", { className: "wide" }, React.createElement("span", null, t("settings.extensionEnvironment")), React.createElement("textarea", { className: "wb-input mono", rows: 3, value: manualMcp.env, placeholder: "API_KEY=…", onChange: function (e) { setManualMcp({ ...manualMcp, env: e.target.value }); } }), React.createElement("small", null, t("settings.extensionSecretStored")))
                 ),
             React.createElement("label", null, React.createElement("span", null, t("settings.extensionVersion")), React.createElement("input", { className: "wb-input mono", value: manualMcp.version, onChange: function (e) { setManualMcp({ ...manualMcp, version: e.target.value }); } })),
@@ -5011,7 +5028,7 @@ function ExtensionsPanel(p) {
           remoteResults.map(function (item) { var displayName = extensionDisplayName(item, t); return React.createElement("div", { key: item.id + String(item.source), className: "wb-extension-result" },
             React.createElement("span", { className: "wb-extension-glyph " + item.kind + " extension-" + String(item.id || "").replace(/[^a-z0-9_-]/gi, "-").toLowerCase() }, React.createElement(ExtensionGlyph, { id: item.id, kind: item.kind, label: displayName })),
             React.createElement("div", null, React.createElement("strong", null, displayName), React.createElement("p", null, extensionDisplayDescription(item, t)), React.createElement("small", null, [item.version, item.backend, item.publisher, item.verified ? t("settings.extensionVerified") : t("settings.extensionUnverified")].filter(Boolean).join(" · "))),
-            React.createElement("button", { type: "button", className: "wb-btn primary wb-extension-install-button", disabled: remoteLoading || item.installable === false, title: item.installable === false ? t("settings.extensionNeedsConfiguration") : "", onClick: function () { installSearchResult(item); } }, item.installable === false ? t("settings.extensionConfigureManually") : t("settings.install"))
+            React.createElement("button", { type: "button", className: "wb-btn primary wb-extension-install-button", disabled: remoteLoading, title: item.installable === false ? t("settings.extensionNeedsConfiguration") : "", onClick: function () { if (item.installable === false) configureManualMcp(item); else installSearchResult(item); } }, item.installable === false ? t("settings.extensionConfigureManually") : t("settings.install"))
           ); })
         ),
         remoteCursor && React.createElement("button", { type: "button", className: "wb-btn wb-extension-load-more", disabled: remoteLoading, onClick: function () { searchRemote(true); } }, remoteLoading ? t("settings.loading") : t("settings.extensionLoadMore"))

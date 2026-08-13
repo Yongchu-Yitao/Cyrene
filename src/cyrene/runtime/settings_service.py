@@ -188,7 +188,7 @@ SETTING_CONTROL_SPECS: tuple[SettingControlSpec, ...] = (
     SettingControlSpec("capabilities.voice_settings", "capabilities", "current_ui", "cyrene.ui.inspect", "R2"),
     SettingControlSpec("capabilities.voice_profile", "capabilities", "user_ceremony", "cyrene.file_picker", "R3"),
     SettingControlSpec("capabilities.tool_packages", "capabilities", "direct", "cyrene.settings.update", "R2", "next_run"),
-    SettingControlSpec("capabilities.mcp_servers", "capabilities", "current_ui", "cyrene.ui.inspect", "R2", "restart_required"),
+    SettingControlSpec("capabilities.mcp_servers", "capabilities", "existing_capability", "skill_tools", "R2", "immediate"),
     SettingControlSpec("skills.installed", "skills", "existing_capability", "skill_tools", "R2"),
     SettingControlSpec("skills.install_picker", "skills", "user_ceremony", "cyrene.file_picker", "R2"),
     SettingControlSpec("shortcuts.workbench_bindings", "shortcuts", "direct", "cyrene.settings.update", "R2"),

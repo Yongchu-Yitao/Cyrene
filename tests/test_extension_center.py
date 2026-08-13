@@ -598,6 +598,15 @@ def test_extension_switch_is_rendered_only_in_expanded_details_and_uses_unified_
     assert '(item.kind === "toolchain" || item.kind === "cli") && item.ownership !== "builtin"' not in frontend
 
 
+def test_mcp_manual_fallback_ui_is_actionable_and_uses_structured_arguments():
+    root = Path(__file__).resolve().parents[1]
+    frontend = root.joinpath("src/webui/frontend/settings-overlay.jsx").read_text(encoding="utf-8")
+    assert 'if (item.installable === false) configureManualMcp(item); else installSearchResult(item);' in frontend
+    assert 'disabled: remoteLoading || item.installable === false' not in frontend
+    assert 'manualMcp.args.split(/\\r?\\n/)' in frontend
+    assert 'setInstallOpen(false); tell(t("settings.extensionInstallStarted")' not in frontend
+
+
 @pytest.mark.asyncio
 @pytest.mark.skipif(os.name == "nt", reason="probe command uses POSIX shell syntax")
 async def test_persistent_shell_uses_the_shared_agent_process_environment(tmp_path, monkeypatch):
@@ -881,6 +890,150 @@ async def test_environment_search_does_not_offer_reinstall_for_system_extension(
         "kind": "skill",
     }))
     assert excluded == {"ok": False, "error": "unsupported environment kind: skill"}
+
+
+@pytest.mark.asyncio
+async def test_mcp_registry_keeps_pypi_packages_and_refreshes_stale_version(monkeypatch):
+    from cyrene.extensions import service
+
+    class Response:
+        def __init__(self, payload):
+            self.payload = payload
+
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            return self.payload
+
+    class Client:
+        def __init__(self, **_kwargs):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *_args):
+            return None
+
+        async def get(self, url, **_kwargs):
+            if "pypi.org" in url:
+                return Response({"info": {"version": "0.5.0"}})
+            return Response({"servers": [{"server": {
+                "name": "io.demo/pypi-mcp", "version": "0.3.1",
+                "packages": [{"registryType": "pypi", "identifier": "pypi-mcp", "version": "0.3.1"}],
+            }}]})
+
+    monkeypatch.setattr(service, "source_settings", lambda **_kwargs: {"mcp_registry_url": "https://registry.example"})
+    monkeypatch.setattr(service.httpx, "AsyncClient", Client)
+    extension_service = object.__new__(service.ExtensionService)
+
+    result = await extension_service._search_mcp("pypi")
+    item = result["results"][0]
+    assert item["installable"] is True
+    assert item["installable_packages"][0]["registryType"] == "pypi"
+    assert item["installable_packages"][0]["version"] == "0.5.0"
+    assert item["registry_version"] == "0.3.1"
+    assert item["package_latest_version"] == "0.5.0"
+    assert item["resolved_version"] == "0.5.0"
+    assert item["version_status"] == "registry_stale"
+
+
+@pytest.mark.asyncio
+async def test_environment_search_returns_machine_readable_mcp_fallback(monkeypatch):
+    from cyrene.tool_impl.extensions import search_environment
+
+    class FakeService:
+        def list_extensions(self):
+            return {"skills": [], "mcp": [], "cli": [], "toolchains": []}
+
+        async def search(self, _kind, _query, **_kwargs):
+            return {"results": [{
+                "id": "demo", "name": "Demo", "kind": "mcp", "version": "1.0.0",
+                "installable": False, "reason_code": "unsupported_registry_type",
+                "fallback_request": {"action": "install_local_mcp", "kind": "mcp", "extension_id": "demo", "request": {"config": {"name": "demo", "transport": "stdio", "command": "", "args": [], "version": "1.0.0", "enabled": True}}},
+            }], "next_cursor": ""}
+
+    monkeypatch.setattr(search_environment, "get_extension_service", lambda: FakeService())
+    payload = json.loads(await search_environment._tool_search_environment({"kind": "mcp", "query": "demo"}))
+    item = payload["results"][0]
+    assert item["installable"] is False
+    assert item["reason_code"] == "unsupported_registry_type"
+    assert item["fallback_request"]["action"] == "install_local_mcp"
+    assert "Never guess" in payload["next_step"]
+
+
+@pytest.mark.asyncio
+async def test_pypi_mcp_install_uses_bundled_uv_and_fixed_version(tmp_path, monkeypatch):
+    from cyrene.extensions import service
+    from cyrene.tooling.backends import mcp_manager
+
+    uv = tmp_path / "uv"
+    uv.write_text("uv", encoding="utf-8")
+    uv.chmod(0o755)
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    commands = []
+    saved = []
+
+    class Tasks:
+        def update(self, *_args, **_kwargs):
+            return None
+
+    class Manager:
+        def get_server_status(self):
+            return [{"name": "demo", "status": "connected", "tool_count": 1}]
+
+    async def run_manager(_self, _task_id, command, **_kwargs):
+        commands.append(command)
+        if command[1:3] == ["tool", "install"]:
+            executable = bin_dir / "demo-mcp"
+            executable.write_text("#!/bin/sh", encoding="utf-8")
+            executable.chmod(0o755)
+        return "", ""
+
+    monkeypatch.setattr(service, "_UV_BIN_DIR", bin_dir)
+    monkeypatch.setattr(service, "_bundled_binary", lambda name: uv if name == "uv" else None)
+    monkeypatch.setattr(service, "extension_environment", lambda: {})
+    monkeypatch.setattr(service.ExtensionService, "_run_manager", run_manager)
+    monkeypatch.setattr(service, "_audit", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(mcp_manager, "get_mcp_servers", lambda: [])
+    monkeypatch.setattr(mcp_manager, "save_mcp_servers", lambda value: saved.append(value))
+    monkeypatch.setattr(mcp_manager, "restart_mcp", lambda: _async_result(None))
+    monkeypatch.setattr(mcp_manager, "get_manager", lambda: Manager())
+    extension_service = object.__new__(service.ExtensionService)
+    extension_service.tasks = Tasks()
+
+    config = await extension_service._install_mcp("task", "demo", {
+        "version": "1.2.3",
+        "package": {"registryType": "pypi", "identifier": "demo-mcp", "version": "1.2.3"},
+    }, "agent")
+
+    assert commands[0][-1] == "demo-mcp==1.2.3"
+    assert config["command"] == str((bin_dir / "demo-mcp").resolve())
+    assert config["source"]["registry"] == "pypi"
+    assert saved[-1][0]["name"] == "demo"
+
+
+@pytest.mark.asyncio
+async def test_manage_extensions_exposes_local_mcp_action(monkeypatch):
+    from cyrene.tool_impl.extensions import manage_extensions
+
+    started = []
+
+    class FakeService:
+        def start_install(self, kind, extension_id, request, *, actor):
+            started.append((kind, extension_id, request, actor))
+            return {"id": "task"}
+
+    monkeypatch.setattr(manage_extensions, "get_extension_service", lambda: FakeService())
+    monkeypatch.setattr(manage_extensions, "_review", lambda *_args, **_kwargs: _async_result(None))
+    config = {"name": "demo", "transport": "stdio", "command": "/bin/demo", "args": [], "version": "1.0.0"}
+    payload = json.loads(await manage_extensions._tool_manage_extensions({
+        "action": "install_local_mcp", "kind": "mcp", "extension_id": "demo", "request": {"config": config},
+    }))
+    assert payload["ok"] is True
+    assert started == [("mcp", "demo", {"config": config}, "agent")]
 
 
 @pytest.mark.asyncio

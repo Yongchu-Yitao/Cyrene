@@ -56,11 +56,11 @@ _USE_TOOLS_DEF = {
     "function": {
         "name": "use_tools",
         "description": (
-            "Decision-phase gateway. Before calling it, perform a bounded "
-            "planning pass. Keep task equal to the user's exact original "
-            "message and provide a concise execution_brief so the execution "
-            "phase can start from the chosen approach. In the execution phase "
-            "this gateway is a no-op because tools are already enabled."
+            "Decision-phase gateway for actions or when retrieval or verification "
+            "materially improves the answer; stable low-risk facts and explanations "
+            "may be answered directly. Before calling it, make a bounded plan. Keep "
+            "task equal to the user's exact original message and put the concise "
+            "provisional plan in execution_brief. It is a no-op in execution."
         ),
         "parameters": {
             "type": "object",

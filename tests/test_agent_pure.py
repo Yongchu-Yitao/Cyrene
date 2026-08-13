@@ -56,7 +56,7 @@ def test_main_agent_prompt_proactively_consults_knowledge_base():
     assert "`knowledge.list_documents`" in _MAIN_AGENT_PROMPT
     assert "`knowledge.library.search`" in _MAIN_AGENT_PROMPT
     assert "`knowledge.library.update_metadata`" in _MAIN_AGENT_PROMPT
-    assert "may depend on project history" in _PHASE1_DECISION_PROMPT
+    assert "user-specific, or project-specific" in _PHASE1_DECISION_PROMPT
     assert "`knowledge.search`" in _EXECUTION_SYSTEM_PROMPT
     assert "`knowledge.library.search`" in _EXECUTION_SYSTEM_PROMPT
 
@@ -68,7 +68,7 @@ def test_phase1_prompt_requires_bounded_plan_before_execution():
 
     assert "bounded execution-planning pass" in _PHASE1_DECISION_PROMPT
     assert "observable completion evidence" in _PHASE1_DECISION_PROMPT
-    assert "likely failure modes, and fallbacks" in _PHASE1_DECISION_PROMPT
+    assert "material risks or fallbacks" in _PHASE1_DECISION_PROMPT
     assert "ordered initial steps/tools" in _PHASE1_DECISION_PROMPT
     assert "Do not expose private chain-of-thought" in _PHASE1_DECISION_PROMPT
     for tool_def in (_LIGHT_TOOL_DEFS[0], _USE_TOOLS_DEF):
