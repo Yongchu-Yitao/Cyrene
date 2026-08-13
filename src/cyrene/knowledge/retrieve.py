@@ -56,8 +56,12 @@ async def search_knowledge(
             cursor = await db.execute(sql, params)
             fts_results = [dict(row) for row in await cursor.fetchall()]
     else:
-        # Use MATCH with a quoted phrase; escape internal quotes FIRST, then wrap
-        fts_query = '"' + query.replace('"', '""') + '"'
+        # Natural-language queries should not require every word to appear as
+        # one exact phrase. Search all whitespace-delimited terms first, then
+        # broaden to any term when the strict form has no matches.
+        terms = [term for term in query.split() if term]
+        quoted_terms = ['"' + term.replace('"', '""') + '"' for term in terms]
+        fts_query = " AND ".join(quoted_terms) if quoted_terms else '"' + query.replace('"', '""') + '"'
 
         async with aiosqlite.connect(db_path) as db:
             db.row_factory = aiosqlite.Row
@@ -77,6 +81,9 @@ async def search_knowledge(
                 cursor = await db.execute(sql, params)
                 rows = await cursor.fetchall()
                 fts_results = [dict(row) for row in rows]
+                if not fts_results and len(quoted_terms) > 1:
+                    cursor = await db.execute(sql, [" OR ".join(quoted_terms), *params[1:]])
+                    fts_results = [dict(row) for row in await cursor.fetchall()]
             except Exception:
                 # Fall back to LIKE if MATCH fails
                 like_pattern = f"%{query}%"

@@ -24,9 +24,9 @@ OPENAPI_OPERATION_COUNT = 356
 OPENAPI_BASELINE_FASTAPI = "0.136.1"
 OPENAPI_BASELINE_PYDANTIC = "2.13.4"
 OPENAPI_SHA256 = "e9e70f09ac0298c5b1ba40cac2ae1003ac8a16ef36715cd25afe8e5cd054f11b"
-TOOL_REGISTRY_SHA256 = "927f9117adc0d748201f74788aa080acc3a52bfb818a5b0fed1ba4f2bf8b46f9"
-MAIN_WIRE_SHA256 = "4441f7190f312af1a7004e7b0e6011093b96f788ee1269fdcd076ae47ad3bf88"
-SUBAGENT_WIRE_SHA256 = "119103c4098eeda6ce0d5b0d4fa7359299a6c3dd10104e0ae48ecef90dd2cdb9"
+TOOL_REGISTRY_SHA256 = "31c5752c70ff699441c90bfcf6647b1d98635e68acc9c1c84915d43ddf9cfefb"
+MAIN_WIRE_SHA256 = "ce4d139aeb89ed5a4945bc55744763a2e3f390af45539413f2634f42f78a037c"
+SUBAGENT_WIRE_SHA256 = "6e5d0906cb1d18df785d43aca4c0f04bf67ca1da7786136d22886563eecaad3f"
 
 # CyreneUI owns runtime services. The launch lifecycle is the sole bootstrap
 # global because it must guard fetch before the platform registry is loaded.
@@ -161,44 +161,44 @@ def test_workbench_runtime_dependencies_keep_their_relative_script_order():
         "katex/katex.min.js",
         "purify.min.js",
         "highlight.min.js",
-        "compiled/platform/runtime.js?v=0.7.4",
-        "compiled/shared/markdown/math.js?v=0.7.4",
-        "compiled/shared/markdown/highlight.js?v=0.7.4",
+        "compiled/platform/runtime.js?v=0.7.5",
+        "compiled/shared/markdown/math.js?v=0.7.5",
+        "compiled/shared/markdown/highlight.js?v=0.7.5",
         "leaflet.js",
-        "pdfjs/pdf.min.js?v=0.7.4",
-        "pdfjs/pdf_viewer.js?v=0.7.4",
-        "compiled/platform/readiness.js?v=0.7.4",
-        "compiled/platform/events.js?v=0.7.4",
-        "compiled/platform/navigation.js?v=0.7.4",
-        "compiled/workbench-i18n.js?v=0.7.4",
-        "compiled/shared/i18n/format.js?v=0.7.4",
-        "compiled/shared/i18n/translations.js?v=0.7.4",
-        "compiled/shared/pdf/bridge.js?v=0.7.4",
-        "compiled/shared/feedback/service.js?v=0.7.4",
-        "compiled/shared/markdown/renderer.js?v=0.7.4",
-        "compiled/platform/data-store.js?v=0.7.4",
-        "compiled/shared/browser/viewport.js?v=0.7.4",
-        "compiled/shared/search/overlay.js?v=0.7.4",
-        "compiled/shared/markdown/actions.js?v=0.7.4",
-        "compiled/shared/diff/viewer.js?v=0.7.4",
-        "compiled/platform/api.js?v=0.7.4",
-        "compiled/workbench-chat.js?v=0.7.4",
-        "compiled/workbench-quick-chat.js?v=0.7.4",
-        "compiled/workbench.js?v=0.7.4",
-        "compiled/settings-overlay.js?v=0.7.4",
-        "compiled/entry/bootstrap.js?v=0.7.4",
+        "pdfjs/pdf.min.js?v=0.7.5",
+        "pdfjs/pdf_viewer.js?v=0.7.5",
+        "compiled/platform/readiness.js?v=0.7.5",
+        "compiled/platform/events.js?v=0.7.5",
+        "compiled/platform/navigation.js?v=0.7.5",
+        "compiled/workbench-i18n.js?v=0.7.5",
+        "compiled/shared/i18n/format.js?v=0.7.5",
+        "compiled/shared/i18n/translations.js?v=0.7.5",
+        "compiled/shared/pdf/bridge.js?v=0.7.5",
+        "compiled/shared/feedback/service.js?v=0.7.5",
+        "compiled/shared/markdown/renderer.js?v=0.7.5",
+        "compiled/platform/data-store.js?v=0.7.5",
+        "compiled/shared/browser/viewport.js?v=0.7.5",
+        "compiled/shared/search/overlay.js?v=0.7.5",
+        "compiled/shared/markdown/actions.js?v=0.7.5",
+        "compiled/shared/diff/viewer.js?v=0.7.5",
+        "compiled/platform/api.js?v=0.7.5",
+        "compiled/workbench-chat.js?v=0.7.5",
+        "compiled/workbench-quick-chat.js?v=0.7.5",
+        "compiled/workbench.js?v=0.7.5",
+        "compiled/settings-overlay.js?v=0.7.5",
+        "compiled/entry/bootstrap.js?v=0.7.5",
     ]
 
     positions = [scripts.index(script) for script in required_in_order]
     assert positions == sorted(positions)
     assert not {
-        "compiled/app.js?v=0.7.4",
-        "compiled/chat.js?v=0.7.4",
-        "compiled/dashboard.js?v=0.7.4",
-        "compiled/knowledge.js?v=0.7.4",
-        "compiled/memory.js?v=0.7.4",
-        "compiled/tasks.js?v=0.7.4",
-        "compiled/settings.js?v=0.7.4",
+        "compiled/app.js?v=0.7.5",
+        "compiled/chat.js?v=0.7.5",
+        "compiled/dashboard.js?v=0.7.5",
+        "compiled/knowledge.js?v=0.7.5",
+        "compiled/memory.js?v=0.7.5",
+        "compiled/tasks.js?v=0.7.5",
+        "compiled/settings.js?v=0.7.5",
     }.intersection(scripts)
 
 

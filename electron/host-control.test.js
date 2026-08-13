@@ -45,7 +45,7 @@ function fixture(lifecycleExecutor) {
   const main = new FakeWindow('main');
   const quick = new FakeWindow('quick_chat');
   const control = new HostControl({
-    app: { getVersion: () => '0.7.4' },
+    app: { getVersion: () => '0.7.5' },
     screen: { getDisplayMatching: () => ({ workArea: { x: 0, y: 0, width: 1200, height: 900 } }) },
     getMainWindow: () => main,
     getQuickChatWindow: () => quick,
@@ -137,7 +137,7 @@ test('lifecycle execution requires exact version and canonical parameter hash', 
     actionId: `host_action_${'a'.repeat(32)}`,
     action: 'restart_app',
     parameterHash: 'b'.repeat(64),
-    expectedAppVersion: '0.7.4',
+    expectedAppVersion: '0.7.5',
   };
   assert.equal((await control.handle('lifecycle.execute_approved', base)).ok, true);
   assert.equal(accepted.length, 1);

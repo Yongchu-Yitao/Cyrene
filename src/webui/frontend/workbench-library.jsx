@@ -31,6 +31,7 @@
       upload: ["M12 16V4", "m7 9 5-5 5 5", "M5 14v4a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2v-4"],
       download: ["M12 3v12", "m8 11 4 4 4-4", "M4 17v2a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-2"],
       sync: ["M20 7h-5V2", "M4 17h5v5", "M5.2 9A8 8 0 0 1 18 5.5L20 7", "M18.8 15A8 8 0 0 1 6 18.5L4 17"],
+      vector: ["M12 3v18M3 12h18", "m5 7 4-4 4 4", "m6 13 4 4 4-4"],
       grid: [h("rect", { key: "a", x: 3, y: 3, width: 7, height: 7, rx: 1 }), h("rect", { key: "b", x: 14, y: 3, width: 7, height: 7, rx: 1 }), h("rect", { key: "c", x: 3, y: 14, width: 7, height: 7, rx: 1 }), h("rect", { key: "d", x: 14, y: 14, width: 7, height: 7, rx: 1 })],
       list: ["M8 6h13M8 12h13M8 18h13M3.5 6h.01M3.5 12h.01M3.5 18h.01"],
       folder: ["M3 7a2 2 0 0 1 2-2h4l2 2.5h8a2 2 0 0 1 2 2V18a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2Z"],
@@ -326,6 +327,8 @@
       },
       zoteroStatus: function () { return json("/zotero/status", { toast: false }); },
       zoteroSync: function (value) { return json("/zotero/sync", Object.assign(body("POST", value), { timeout: 0 })); },
+      embeddingStatus: function () { return requestJson("/api/workbench/knowledge/embedding/status?workspace=" + ws, { toast: false }); },
+      vectorizeAll: function () { return requestJson("/api/workbench/knowledge/reembed?workspace=" + ws, { method: "POST" }); },
       citation: function (id, style) { return json("/items/" + encodeURIComponent(id) + "/citation", { toast: false }, { style: style || "ieee" }); },
       rawUrl: function (id) { return root + "/items/" + encodeURIComponent(id) + "/raw?workspace=" + ws; },
     };
@@ -1257,12 +1260,29 @@
     var manualState = useState(false); var manualOpen = manualState[0]; var setManualOpen = manualState[1];
     var collectionModalState = useState(false); var collectionModalOpen = collectionModalState[0]; var setCollectionModalOpen = collectionModalState[1];
     var uploadingState = useState(false); var uploading = uploadingState[0]; var setUploading = uploadingState[1];
+    var embeddingState = useState({ configured: false, pending_vectors: 0, compatible_vectors: 0, total_chunks: 0, reembed: { running: false } }); var embedding = embeddingState[0]; var setEmbedding = embeddingState[1];
     var citationState = useState({ style: "ieee", text: "", bibtex: "", citekey: "", loading: false, error: "" }); var citation = citationState[0]; var setCitation = citationState[1];
     var fileRef = useRef(null);
     var requestSeq = useRef(0);
     var loadMoreSeq = useRef(0);
     var detailSeq = useRef(0);
     var readMarksRef = useRef({});
+
+    function loadEmbeddingStatus() {
+      if (!client) return Promise.resolve();
+      return client.embeddingStatus().then(function (payload) {
+        setEmbedding(payload || { configured: false, pending_vectors: 0, reembed: { running: false } });
+        return payload || {};
+      });
+    }
+
+    function vectorizeAll() {
+      if (!client || !embedding.configured || !Number(embedding.pending_vectors || 0) || (embedding.reembed && embedding.reembed.running)) return;
+      client.vectorizeAll().then(function () {
+        Toast(L("library.vectorizeStarted", "Vectorization started"));
+        return loadEmbeddingStatus();
+      }).catch(function (err) { Toast(String(err.message || err), "error"); });
+    }
 
     useEffect(function () { var timer = setTimeout(function () { setDebouncedQuery(query.trim()); }, 240); return function () { clearTimeout(timer); }; }, [query]);
     useEffect(function () {
@@ -1281,6 +1301,20 @@
         document.removeEventListener("keydown", closeContextMenuOnEscape);
       };
     }, [!!contextMenu]);
+    useEffect(function () { loadEmbeddingStatus(); }, [client]);
+    useEffect(function () {
+      if (!(embedding.reembed && embedding.reembed.running)) return undefined;
+      var timer = setInterval(function () {
+        loadEmbeddingStatus().then(function (next) {
+          if (!(next.reembed && next.reembed.running)) {
+            if (next.reembed && next.reembed.error) Toast(L("library.vectorizeFailed", "Vectorization failed") + ": " + next.reembed.error, "error");
+            else Toast(L("library.vectorizeComplete", "Vectorization complete", { count: Number(next.reembed && next.reembed.updated || 0) }));
+            reload({ itemsOnly: true });
+          }
+        });
+      }, 1000);
+      return function () { clearInterval(timer); };
+    }, [!!(embedding.reembed && embedding.reembed.running)]);
 
     function listParams() {
       var params = { q: debouncedQuery, sort: sort, order: order, limit: PAGE_SIZE, offset: 0 };
@@ -1636,6 +1670,7 @@
           h("div", { className: "wb-lib-heading" }, scope.type !== "all" && h("h2", null, scopeTitle), h("span", null, L("library.count", "{count} items", { count: Number(data.total || 0).toLocaleString() }))),
           h("div", { className: "wb-lib-head-actions" },
             h("div", { className: "wb-lib-menu-wrap" }, h("button", { type: "button", className: "wb-lib-primary", title: L("library.addItem", "Add item"), "aria-label": L("library.addItem", "Add item"), onClick: function () { setMenu(menu === "add" ? "" : "add"); } }, icon("plus", 16), " ", L("library.addItem", "Add item")), h(Dropdown, { open: menu === "add", onClose: function () { setMenu(""); } }, h("button", { type: "button", onClick: function () { setMenu(""); setManualOpen(true); } }, icon("note", 16), h("span", null, h("b", null, L("library.manualAdd", "Add manually")), h("small", null, L("library.createItem", "Create a knowledge item")))), h("button", { type: "button", onClick: function () { setMenu(""); fileRef.current && fileRef.current.click(); } }, icon("upload", 16), h("span", null, h("b", null, L("library.uploadFile", "Upload file")), h("small", null, L("library.uploadTypes", "Documents, images, audio and video")))))),
+            h("button", { type: "button", className: "wb-lib-head-button", title: !embedding.configured ? L("library.vectorizeUnavailable", "Install and enable an embedding model first") : !Number(embedding.pending_vectors || 0) ? L("library.vectorizedAll", "All chunks are vectorized") : L("library.vectorizeAllHint", "Vectorize {count} missing chunks", { count: Number(embedding.pending_vectors || 0) }), "aria-label": L("library.vectorizeAll", "Vectorize all"), disabled: !embedding.configured || !Number(embedding.pending_vectors || 0) || (embedding.reembed && embedding.reembed.running), onClick: vectorizeAll }, embedding.reembed && embedding.reembed.running ? h(Spinner) : icon("vector", 16), embedding.reembed && embedding.reembed.running ? L("library.vectorizing", "Vectorizing…") : L("library.vectorizeAll", "Vectorize all")),
             h("button", { type: "button", className: "wb-lib-head-button", title: uploading ? L("library.importing", "Importing") : L("library.import", "Import"), "aria-label": uploading ? L("library.importing", "Importing") : L("library.import", "Import"), disabled: uploading, onClick: function () { fileRef.current && fileRef.current.click(); } }, uploading ? h(Spinner) : icon("upload", 16), uploading ? L("library.importing", "Importing") : L("library.import", "Import")),
             h("button", { type: "button", className: "wb-lib-head-button", title: L("library.export", "Export"), "aria-label": L("library.export", "Export"), onClick: exportItems, disabled: !data.items.length }, icon("download", 16), L("library.export", "Export")))),
         h("div", { className: "wb-lib-toolbar" },

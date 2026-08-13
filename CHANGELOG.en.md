@@ -5,6 +5,27 @@
 This English edition preserves the release history of the Chinese changelog.
 The Chinese edition remains the most detailed record for older releases.
 
+## [0.7.5] - 2026-08-13
+
+### Feature changes
+
+- Web reading now extracts readable page content and keeps useful links, giving Agents cleaner results for continued browsing and reference.
+- The Extension Center improves discovery and installation of runtimes and command-line tools, with more accurate search results, version detection, progress, and failure reasons.
+- Extension installation more reliably recognizes existing system programs and adds stronger download safety checks and protection for sensitive information.
+- Agents can discover and use enabled extension environments more consistently, with clearer tool guidance and broader runtime support.
+- Usage costs now follow the selected display and budget currency, with more accurate USD pricing, custom prices, and billing-period start dates.
+- Project memory retains more complete reusable context and is less likely to omit important information through early compression.
+- Knowledge search first matches all query terms and automatically broadens to related terms when needed, improving mixed-language and natural-language searches.
+- Knowledge documents remain searchable when vector generation is temporarily unavailable, with failures surfaced for follow-up.
+
+### Interface changes
+
+- Skill details now present formatted instructions beside a file directory, including headings, lists, code blocks, tables, entrypoint markers, and file sizes; narrow windows switch to a single-column layout.
+- The Extension Center adds clearer search, installation, and error messages with improved English and Chinese localization.
+- Saving budget settings now immediately refreshes current-period totals in the selected currency.
+- The Soul editor in Agents settings once again uses the consistent input style.
+- The Knowledge Library adds a Vectorize All action with pending status, batch processing, and completion or failure feedback.
+
 ## [0.7.4] - 2026-08-13
 
 ### Unified Extension Center

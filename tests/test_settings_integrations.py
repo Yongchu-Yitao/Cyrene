@@ -330,3 +330,9 @@ def test_settings_ui_keeps_zotero_in_general_and_embedding_in_models():
     assert translations.count('"settings.reembedPromptTitle"') == 2
     assert translations.count('"settings.zoteroIntegration"') == 2
     assert translations.count('"settings.zoteroImportAction"') == 2
+
+    library = (root / "src/webui/frontend/workbench-library.jsx").read_text(encoding="utf-8")
+    assert '"/api/workbench/knowledge/embedding/status?workspace="' in library
+    assert '"/api/workbench/knowledge/reembed?workspace="' in library
+    assert 'L("library.vectorizeAll", "Vectorize all")' in library
+    assert translations.count('"library.vectorizeAll"') == 2

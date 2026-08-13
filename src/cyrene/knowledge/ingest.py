@@ -6,6 +6,7 @@ Handles text extraction, chunking, embedding, and indexing.
 import asyncio
 import hashlib
 import json
+import logging
 import re
 import aiosqlite
 from datetime import datetime, timedelta, timezone
@@ -26,6 +27,8 @@ from cyrene.knowledge.ingest_tasks import (
 from cyrene.knowledge.extractors import (
     extract_office_xml_text as _extract_office_xml_text,
 )
+
+logger = logging.getLogger(__name__)
 
 
 async def extract_document_text(path: Path, kind: str, *, content_hash: str = "") -> str:
@@ -270,7 +273,11 @@ async def _index_document_inner(db_path: str, doc_id: str) -> None:
                         chunk_dict["embedding_model"] = model
             except Exception:
                 # Gracefully degrade: proceed without embeddings
-                pass
+                logger.exception(
+                    "Embedding generation failed for knowledge document %s; "
+                    "continuing with keyword retrieval",
+                    doc_id,
+                )
 
         # Replace chunks
         replaced = await store.replace_chunks(db_path, doc_id, chunks_to_store)

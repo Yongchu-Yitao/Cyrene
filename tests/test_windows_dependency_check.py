@@ -39,7 +39,7 @@ def test_every_other_dependency_conflict_still_blocks_release(monkeypatch):
         lambda *args, **kwargs: subprocess.CompletedProcess(
             args[0],
             1,
-            "cyrene 0.7.4 requires numpy, which is not installed.\n",
+            "cyrene 0.7.5 requires numpy, which is not installed.\n",
             "",
         ),
     )

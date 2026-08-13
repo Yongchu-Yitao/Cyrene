@@ -691,6 +691,33 @@ class TestSearch:
         assert results[0]["mode"] == "fts"
 
     @pytest.mark.asyncio
+    async def test_search_fts_broadens_multi_term_query(self, temp_db):
+        """A natural-language query falls back to any matching term."""
+        from cyrene.knowledge.retrieve import search_knowledge
+
+        doc = await store.create_document(
+            temp_db,
+            name="otty.md",
+            path="/tmp/otty.md",
+        )
+        await store.replace_chunks(
+            temp_db,
+            doc["id"],
+            [{
+                "ordinal": 0,
+                "content": "Otty reports agent state through Claude Code hooks.",
+                "char_start": 0,
+                "char_end": 50,
+            }],
+        )
+
+        results = await search_knowledge(temp_db, "otty 体验分析")
+
+        assert len(results) == 1
+        assert results[0]["mode"] == "fts"
+        assert "Otty" in results[0]["content"]
+
+    @pytest.mark.asyncio
     async def test_search_no_results(self, temp_db):
         """Test search with no matching results."""
         from cyrene.knowledge.retrieve import search_knowledge
