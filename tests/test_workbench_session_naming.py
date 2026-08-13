@@ -32,6 +32,7 @@ def test_task_session_is_llm_named_only_once(monkeypatch, tmp_path):
     from fastapi import FastAPI
     from fastapi.testclient import TestClient
 
+    from cyrene.model_runtime import client as model_client
     from cyrene.runtime import database as db
     from cyrene.workbench import runtime, session_naming
     from route.registry import register_routes
@@ -65,6 +66,11 @@ def test_task_session_is_llm_named_only_once(monkeypatch, tmp_path):
         return ([{"id": "step_1", "title": "实现", "status": "pending"}], [], True, "replace")
 
     monkeypatch.setattr(session_naming, "generate_session_title", fake_name)
+    monkeypatch.setattr(
+        model_client,
+        "resolve_session_model_candidate",
+        lambda _session_id: {"id": "test", "model": "test-model"},
+    )
     monkeypatch.setattr(runtime, "_workbench_classify_intent", fake_classify)
     monkeypatch.setattr(runtime, "_workbench_generate_plan_steps", fake_plan)
 

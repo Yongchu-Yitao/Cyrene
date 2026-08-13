@@ -884,6 +884,7 @@ def test_chat_session_is_llm_named_only_after_its_first_message(
     client, search_env, monkeypatch,
 ):
     from cyrene import agent
+    from cyrene.model_runtime import client as model_client
     from cyrene.workbench import session_naming
 
     calls = []
@@ -898,6 +899,11 @@ def test_chat_session_is_llm_named_only_after_its_first_message(
         return "检查当前 Session 命名"
 
     monkeypatch.setattr(agent, "run_agent", fake_run_agent)
+    monkeypatch.setattr(
+        model_client,
+        "resolve_session_model_candidate",
+        lambda _session_id: {"id": "test", "model": "test-model"},
+    )
     monkeypatch.setattr(session_naming, "generate_session_title", fake_generate)
 
     created = client.post(
