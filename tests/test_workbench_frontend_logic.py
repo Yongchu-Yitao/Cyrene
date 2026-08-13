@@ -35,10 +35,21 @@ def test_external_agent_context_uses_report_then_transcript_fallback_copy():
     assert 'data.compositionSource === "agent_report"' in source
     assert 'data.compositionSource === "public_transcript"' in source
     assert "workbenchChat.ctxBlocks.agentReportDetailed" in source
+    assert 'className: "wbc-context-source-info"' in source
+    assert 'className: "wbc-context-source-popover"' in source
+    assert 'usesAgentReport && React.createElement("p"' not in source
     assert '"workbenchChat.ctxBlocks.externalEstimate": "以下为 Cyrene 可见的对话内容估算。' in i18n
     assert 'className: "wbc-ctx-layer-row"' in source
     assert '"workbenchChat.ctxBlocks.layer.agent_other": "External Agent"' in i18n
     assert '"workbenchChat.ctxBlocks.layer.agent_other": "外部 Agent"' in i18n
+
+
+def test_external_agent_context_hides_cyrene_only_inbox_and_tool_packages():
+    root = Path(__file__).resolve().parent.parent
+    source = (root / "src" / "webui" / "frontend" / "workbench-chat.jsx").read_text(encoding="utf-8")
+    assert 'var externalAgent = !!wbcChatAgent(chat) && !wbcIsBuiltinAgent(wbcChatAgent(chat));' in source
+    assert '!externalAgent && <WbcInboxCard' in source
+    assert '!externalAgent && <section className="workbench-side-section" aria-label={wbcT("workbenchChat.usedToolPackages"' in source
 
 
 def test_external_agent_permission_labels_are_localized_by_protocol_semantics():

@@ -26025,14 +26025,67 @@ body.wb-col-resizing .wb-floating-detail-card > .wb-col-resizer.card-edge::after
   gap: 4px;
 }
 
-.wbc-context-source-note {
-  margin: 0 0 10px;
-  padding: 8px 10px;
-  border-radius: 8px;
-  background: color-mix(in srgb, var(--wb-accent) 7%, transparent);
+.wbc-ctx-token-total {
+  min-width: 0;
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+}
+
+.wbc-context-source-info {
+  position: relative;
+  flex: 0 0 auto;
+}
+
+.wbc-context-source-info > summary {
+  width: 24px;
+  height: 24px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  margin-left: -2px;
+  border-radius: 50%;
+  color: var(--wb-faint);
+  cursor: pointer;
+  list-style: none;
+  transition: background 140ms ease, color 140ms ease;
+}
+
+.wbc-context-source-info > summary::-webkit-details-marker {
+  display: none;
+}
+
+.wbc-context-source-info > summary:hover,
+.wbc-context-source-info[open] > summary {
+  background: var(--wb-icon-bg);
+  color: var(--wb-text);
+}
+
+.wbc-context-source-info > summary:focus-visible {
+  outline: 2px solid var(--wb-accent);
+  outline-offset: 1px;
+}
+
+.wbc-context-source-info > summary svg {
+  width: 15px;
+  height: 15px;
+}
+
+.wbc-context-source-popover {
+  position: absolute;
+  z-index: 8;
+  top: calc(100% + 7px);
+  left: -8px;
+  width: min(280px, calc(100vw - 64px));
+  padding: 10px 12px;
+  border: 1px solid var(--wb-line);
+  border-radius: 10px;
+  background: var(--wb-panel);
+  box-shadow: 0 12px 30px color-mix(in srgb, #000 28%, transparent);
   color: var(--wb-muted);
   font-size: calc(11.5px * var(--wb-ui-font-scale, 1));
-  line-height: 1.45;
+  font-weight: 500;
+  line-height: 1.5;
 }
 
 .wbc-side-body .wbc-file-row.clickable {

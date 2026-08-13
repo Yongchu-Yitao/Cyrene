@@ -164,6 +164,40 @@ final result: passed
 
 ---
 
+# External Agent Context Information Design QA — 2026-08-14
+
+- Source visual truth: `/Users/syw/Documents/playground/Cyrene/.codex/audits/context-info-qa/source.png` (`318 × 76 px`).
+- Browser-rendered implementation: `/Users/syw/Documents/playground/Cyrene/.codex/audits/context-info-qa/implementation.png` (`1261 × 863 px`).
+- Viewport and state: `1261 × 863` CSS px at device scale factor `1`, dark theme, external Agent conversation, Context panel expanded, source-information popover open.
+- Full-view comparison evidence: the browser-rendered implementation confirms that the Cyrene-only Agent inbox and used-tool-package sections are absent while conversation statistics remain.
+- Focused comparison evidence: the Context header visibly renders the information icon immediately to the left of `768`, followed by `tokens`; clicking the icon exposes the full context-source note.
+
+## Findings
+
+- No actionable P0, P1, or P2 mismatch remains.
+- Fonts and typography: the token total retains the existing Workbench numeric hierarchy; the icon does not alter its weight or line height.
+- Spacing and layout rhythm: the icon is grouped with and immediately precedes the token number, instead of occupying the far edge of the row. The source note no longer consumes persistent vertical space.
+- Colors and visual tokens: the information control uses the existing muted/accent tokens and the popover uses the existing panel, line, radius, and elevation tokens.
+- Image and icon fidelity: the existing Workbench stroke-icon language is preserved; no raster placeholder or decorative asset was added.
+- Copy and content: the full localized source explanation remains available on demand. External Agent views omit the Cyrene-specific inbox and used-tool-package copy, while built-in Agent rendering remains unchanged.
+
+## Interaction Verification
+
+- Opened an external Agent conversation and its Context tab in the browser-rendered development app.
+- Confirmed the default view contains no inline source explanation.
+- Activated the information control and confirmed the localized explanation appears as a dedicated note.
+- Confirmed the external Agent view contains Conversation context and Chat stats, but not Agent inbox or Used tool packages.
+
+## Comparison History
+
+- Earlier P2: the source explanation was permanently rendered above the usage header, consuming space; an intermediate placement left the icon at the opposite edge from the number.
+- Fix: moved the explanation behind an information control and grouped the control immediately before the token number.
+- Post-fix evidence: the implementation screenshot and accessibility snapshot show `上下文用量说明 → 768 → tokens`, with the note exposed only in the activated state.
+
+final result: passed
+
+---
+
 # Composer Content Count Pill Design QA — 2026-08-13
 
 - Source visual truth: `/var/folders/zm/qgh_rgw903j0b9t01yg2l0mc0000gn/T/codex-clipboard-b663da8c-5c67-40bb-9719-623075a9a465.png` (`88 × 88 px`), plus the user's explicit selected-state pill/count specification.

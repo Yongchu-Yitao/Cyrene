@@ -10,16 +10,22 @@ The Chinese edition remains the most detailed record for older releases.
 ### Feature changes
 
 - Added external Agent support, allowing Cyrene to act as a unified conversation frontend for compatible ACP Agents. The initial recommended catalog includes OpenCode, Codex ACP, and Pi ACP, while a public installation endpoint supports other compatible Agents.
+- External Agents use a universal capability protocol instead of Agent-specific screens. Compatible Agents can declare session, input, output, permission, model, and interaction capabilities without requiring a new frontend integration each time.
 - External Agents can share Cyrene's model configuration or use their own login, API key, or environment configuration. Cyrene-managed access follows the exact model selected for the conversation.
+- When sharing Cyrene's model configuration, an external Agent receives only the model access needed for the current session and never receives or stores Cyrene's long-lived model credentials.
 - Each external Agent keeps its own security restrictions, permission choices, and input requests. Cyrene presents the Agent's actual options and returns the user's original selection.
+- External Agent installation validates source, version, executable, and capability declarations before user confirmation, with recommended, externally verified, and unverified sources clearly distinguished.
 - External Agents support continuous conversations and context recovery. If an old session cannot be restored or its process exits, Cyrene can safely open a replacement session with the visible conversation history.
+- External Agents start on demand and support stop, restart, connection probing, and diagnostics. Process exits no longer retract completed replies or repeat an old reply in the next turn.
 - External Agent replies, reasoning, tool activity, files, images, usage, plans, commands, and runtime status can stream into Cyrene conversations.
+- Audio, video, and other external Agent attachments now use the shared file and viewer flow, while unknown but valid Agent events remain available instead of being silently discarded.
 - Added opt-in proxy settings for external Agents with a configurable local port. When disabled, Agents do not receive that proxy configuration.
 - Transport fallback, timeouts, and certificate warnings are separated from reply text and retained as standalone notices. Failures provide clearer causes and recovery guidance.
 - Empty conversations can switch Agents in place. Conversations that already contain messages prompt the user to continue with the Agent in a new conversation, preserving the existing binding.
 - External Agent model and reasoning choices now follow reported capabilities instead of inheriting fixed choices from Cyrene's built-in models.
 - WebSearch now includes already-read source evidence in a single result to reduce duplicate page opening, while page retrieval and result filtering can run together for shorter waits.
-- Windows on ARM prefers available NPU acceleration for local models and uses compatibility components to retain OCR and local search support.
+- The Windows on ARM backend now runs natively on ARM64 instead of relying on a full x64 backend compatibility layer. Local models prefer available Qualcomm NPU acceleration and fall back safely when a model is not supported.
+- Windows on ARM retains OCR and local search through bundled compatibility components in both installer and portable packages.
 - Knowledge Library PDF details retain accurate page counts, with improved status and failure reporting for local models, OCR, and extension installation.
 
 ### Interface changes
@@ -27,14 +33,19 @@ The Chinese edition remains the most detailed record for older releases.
 - The composer model menu now includes Agent selection and presents Agent, model, and reasoning controls in a unified single-row settings panel.
 - Conversation Overview now shows the Agent identity, connection state, model source, session details, and capability status.
 - The Extension Center adds an Agent tab containing the recommended catalog and installation entry. Agents installed through the external endpoint also appear in Installed.
+- The Agent tab keeps a focused no-search layout, with recommendation status, installed count, source trust, version, protocol, and availability visible at a glance.
 - Installed Agent details add enable, uninstall, connection test, diagnostics, login, and model-source controls, with explicit availability and failure reasons.
 - The Install Other Agent dialog now includes the full endpoint, request example, Manifest template, and copy actions for developers or other Agents.
 - Permission prompts and information forms are generated from each external Agent's declarations. Unsupported inputs, commands, models, and tool capabilities are not presented as available.
+- The Composer dynamically exposes text, image, file, model switching, reasoning effort, and stop controls from the selected Agent's capabilities, with model and reasoning choices coming from that Agent's actual list.
 - Main conversations, Quick Chat, split conversations, and side Agents now share streaming replies, reasoning, tool progress, files, images, notices, and dynamic permission requests.
 - Images and files produced by external Agents can open directly in Cyrene's viewer or download flow, while unknown events remain available in expandable diagnostic cards.
 - Network, certificate, login, dependency, protocol, model configuration, session recovery, and process-exit failures use dedicated cards instead of appearing as ordinary reply text.
 - Settings → General adds the external Agent proxy switch and port. Settings → Appearance adds Performance Mode to reduce animation, blur, and shadow overhead.
+- Extension installation failures now show user-facing causes and recovery guidance with expandable technical details. MCP details show discovered tools or explain why tools cannot currently be read.
+- Browser tabs, fullscreen playback, takeover, separate-window verification, sign-in, and retry states are localized, alongside task-step fields, statuses, actions, and empty states.
 - Browser controls, task-step states, Agent permission semantics, and extension failure messages receive more complete English and Chinese localization.
+- External Agent context-source notes now live behind an information button beside the token count, while the Cyrene-only inbox and tool-package summary are hidden for external Agents.
 
 ## [0.7.5] - 2026-08-13
 

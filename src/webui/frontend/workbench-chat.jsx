@@ -2201,6 +2201,7 @@ var WBC_ICONS = {
   search: <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.2-3.2"/></svg>,
   alert: <svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round"><path d="M10.3 4 2.5 18a1.5 1.5 0 0 0 1.3 2.3h16.4a1.5 1.5 0 0 0 1.3-2.3L13.7 4a1.5 1.5 0 0 0-3.4 0Z"/><path d="M12 9v4.5M12 17h.01"/></svg>,
   errorCircle: <svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="8.5"/><path d="m9 9 6 6M15 9l-6 6"/></svg>,
+  infoCircle: <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="9"/><path d="M12 11v5"/><path d="M12 8h.01"/></svg>,
   edit: <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round"><path d="M12 20h9"/><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4Z"/></svg>,
   pin: <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d="M12 17v5"/><path d="M5 17h14"/><path d="M17 3a1 1 0 0 1 1 1v4.6a2 2 0 0 0 .6 1.4l1.7 1.7A1 1 0 0 1 19.6 13H4.4a1 1 0 0 1-.7-1.7l1.7-1.7A2 2 0 0 0 6 8.2V4a1 1 0 0 1 1-1Z"/></svg>,
   dots: <svg viewBox="0 0 24 24" width="17" height="17" fill="currentColor"><circle cx="5.5" cy="12" r="1.6"/><circle cx="12" cy="12" r="1.6"/><circle cx="18.5" cy="12" r="1.6"/></svg>,
@@ -19188,6 +19189,16 @@ function WbcContextBlockList({ chat, running, compact }) {
   var layers = data.layers;
   var usesTranscriptEstimate = data.compositionSource === "public_transcript";
   var usesAgentReport = data.compositionSource === "agent_report";
+  var sourceNote = usesAgentReport
+    ? (data.agentContextDetailAvailable
+        ? wbcT("workbenchChat.ctxBlocks.agentReportDetailed", "Context composition reported by the Agent.")
+        : wbcT("workbenchChat.ctxBlocks.agentReportTotal", "Context usage reported by the Agent; no detailed composition was provided."))
+    : usesTranscriptEstimate
+      ? wbcT(
+          "workbenchChat.ctxBlocks.externalEstimate",
+          "Showing the conversation visible to Cyrene. This Agent does not expose its private system prompt, memory, or full context composition."
+        )
+      : "";
   var msgTokens = data.messageTokens || 0;
   // Total for the bar: include all layers (system + ephemeral + messages)
   var barTotal = layers.reduce(function (sum, l) { return sum + (Number(l.totalTokens) || 0); }, 0);
@@ -19307,20 +19318,18 @@ function WbcContextBlockList({ chat, running, compact }) {
   });
 
   return React.createElement("div", { className: "wbc-context-detail" },
-    usesAgentReport && React.createElement("p", { className: "wbc-context-source-note is-agent-report" },
-      data.agentContextDetailAvailable
-        ? wbcT("workbenchChat.ctxBlocks.agentReportDetailed", "Context composition reported by the Agent.")
-        : wbcT("workbenchChat.ctxBlocks.agentReportTotal", "Context usage reported by the Agent; no detailed composition was provided.")
-    ),
-    usesTranscriptEstimate && React.createElement("p", { className: "wbc-context-source-note" },
-      wbcT(
-        "workbenchChat.ctxBlocks.externalEstimate",
-        "Showing the conversation visible to Cyrene. This Agent does not expose its private system prompt, memory, or full context composition."
-      )
-    ),
     // Gauge head
     React.createElement("div", { className: "wbc-ctx-gauge-head" },
-      React.createElement("b", null, wbcCompactNumber(total)),
+      React.createElement("div", { className: "wbc-ctx-token-total" },
+        sourceNote && React.createElement("details", { className: "wbc-context-source-info" },
+          React.createElement("summary", {
+            "aria-label": wbcT("workbenchChat.ctxBlocks.sourceInfo", "Context usage information"),
+            title: wbcT("workbenchChat.ctxBlocks.sourceInfo", "Context usage information"),
+          }, WBC_ICONS.infoCircle),
+          React.createElement("div", { className: "wbc-context-source-popover", role: "note" }, sourceNote)
+        ),
+        React.createElement("b", null, wbcCompactNumber(total))
+      ),
       React.createElement("span", null, usesAgentReport && Number(data.contextLimit || 0) > 0
         ? ("/ " + wbcCompactNumber(data.contextLimit) + " " + wbcT("workbenchChat.ctxBlocks.totalTokens", "tokens"))
         : wbcT("workbenchChat.ctxBlocks.totalTokens", "tokens"))
@@ -19686,13 +19695,14 @@ function wbcUsedToolPackages(chat, runtime) {
 function WbcContextTab({ project, chat, runtime }) {
   var usedToolPackages = wbcUsedToolPackages(chat, runtime);
   var conversationTitle = wbcT("workbenchChat.conversationContext", "Conversation context");
+  var externalAgent = !!wbcChatAgent(chat) && !wbcIsBuiltinAgent(wbcChatAgent(chat));
   return (
     <div className="wbc-context-sections">
       <section className="workbench-side-section" aria-label={conversationTitle}>
         <WbcContextBlockList chat={chat} running={!!runtime} compact={false} />
       </section>
-      <WbcInboxCard chat={chat} running={!!runtime} hideTitle={true} />
-      <section className="workbench-side-section" aria-label={wbcT("workbenchChat.usedToolPackages", "Used tool packages")}>
+      {!externalAgent && <WbcInboxCard chat={chat} running={!!runtime} hideTitle={true} />}
+      {!externalAgent && <section className="workbench-side-section" aria-label={wbcT("workbenchChat.usedToolPackages", "Used tool packages")}>
         <div className="wbc-context-empty-head wbc-tool-pack-head">
           <span className="wbc-context-empty-label">{wbcT("workbenchChat.usedToolPackages", "Used tool packages")}</span>
           {usedToolPackages.length === 0 ? <b>{wbcT("workbenchChat.notUsed", "Not used")}</b> : null}
@@ -19711,7 +19721,7 @@ function WbcContextTab({ project, chat, runtime }) {
               </div>
             );
           })}
-      </section>
+      </section>}
       <section className="workbench-side-section wbc-context-stats" aria-label={wbcT("workbenchChat.stats", "Chat stats")}>
         <div className="wb-kv"><span>{wbcT("workbenchChat.messageCount", "Messages")}</span><b>{chat ? (chat.messageCount != null ? chat.messageCount : (chat.messages || []).length) : 0}</b></div>
         <div className="wb-kv"><span>{wbcT("workbenchChat.updatedAt", "Last updated")}</span><b>{chat ? (wbcFormatTime(chat.updatedAt) || "—") : "—"}</b></div>
