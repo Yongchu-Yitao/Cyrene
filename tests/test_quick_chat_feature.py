@@ -70,7 +70,8 @@ def test_quick_chat_surface_is_loaded_without_uploading_the_screenshot():
     )
 
     assert 'get("surface")' in app
-    assert 'readWorkbenchSurface() === "quick-chat"' in app
+    assert 'var surface = readWorkbenchSurface();' in app
+    assert 'return surface === "quick-chat"' in app
     assert 'var QuickChatApp = window.CyreneUI.require("quickChat").App;' in app
     assert "<QuickChatApp />" in app
     assert "compiled/workbench-quick-chat.js?v=0.7.5" in index

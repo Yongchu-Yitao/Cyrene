@@ -4703,7 +4703,6 @@ def _workbench_prune_non_file_artifacts(session: dict[str, Any]) -> bool:
         path = str(artifact.get("path") or artifact.get("name") or "").strip()
         if not path or path in seen_paths:
             continue
-        name = path.rsplit("/", 1)[-1].lower()
         seen_paths.add(path)
         kept.append(artifact)
 

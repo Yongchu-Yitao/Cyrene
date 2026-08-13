@@ -1,5 +1,3 @@
-from pathlib import Path
-
 from test_playwright_packaging import _load_build_module
 
 
