@@ -2957,7 +2957,7 @@ function AgentsPanel(p) {
     // SOUL.md
     React.createElement("div", { className: "wb-field wb-field-stack wb-field-soul" },
       React.createElement("div", { className: "wb-label" }, t("settings.soulMd"), React.createElement("small", null, t("settings.soulMdHint"))),
-      React.createElement("textarea", { className: "wb-input mono wb-textarea-soul", value: soulDraft, onChange: function (e) { setSoulDraft(e.target.value); } }),
+      React.createElement("textarea", { className: "wb-textarea mono wb-textarea-soul", value: soulDraft, onChange: function (e) { setSoulDraft(e.target.value); } }),
       React.createElement("div", { className: "wb-inline-row wb-inline-row-start", style: { marginTop: 8 } },
         React.createElement("button", { className: "wb-btn primary", onClick: saveSoul }, t("settings.saveSoul")),
         React.createElement("span", { className: "wb-hint" }, soulStatus || (configLoading ? t("settings.pathLoading") : config.soul_path)),
