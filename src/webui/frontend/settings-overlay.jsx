@@ -176,6 +176,12 @@ function ExternalChevron() {
   );
 }
 
+function AutomationIcon() {
+  return React.createElement("svg", { width: "15", height: "15", viewBox: "0 0 24 24", fill: "none", stroke: "currentColor", strokeWidth: "2", strokeLinecap: "round", strokeLinejoin: "round", "aria-hidden": "true" },
+    React.createElement("path", { d: "M13 2 4.1 12.7a1 1 0 0 0 .8 1.6H11l-1 7.7 8.9-10.7a1 1 0 0 0-.8-1.6H12L13 2Z" })
+  );
+}
+
 function AboutRelatedIcon(name) {
   if (name === "github") {
     return React.createElement("svg", { width: "22", height: "22", viewBox: "0 0 16 16", fill: "currentColor", "aria-hidden": "true" },
@@ -905,7 +911,7 @@ function SettingsOverlay({
             t, mcpConfigs, setMcpConfigs, mcpServers, toolGroups, toolsSaved,
             saveToolGroup, newMcpServer, setNewMcpServer, mcpSaved, saveMcp,
             voiceStatus, voiceReferenceText, setVoiceReferenceText,
-            voiceReferenceFile, setVoiceReferenceFile, voiceReferencePhase,
+            voiceReferenceFile, setVoiceReferenceFile, voiceReferencePhase, voiceReferenceElapsed,
             startVoiceReferenceRecording, finishVoiceReferenceRecording,
             voiceBusy, voiceNotice,
             saveVoiceBooleanSetting, saveVoiceMode, saveVoiceProfile, deleteVoiceProfile,
@@ -1614,12 +1620,16 @@ function GeneralPanel(p) {
   });
   var [zoteroStatus, setZoteroStatus] = useStateSt(null);
   var [integrationBusy, setIntegrationBusy] = useStateSt("");
-
+  var [agentProxyEnabled, setAgentProxyEnabled] = useStateSt(false);
+  var [agentProxyPort, setAgentProxyPort] = useStateSt("7897");
+  var [agentProxyStatus, setAgentProxyStatus] = useStateSt("");
   useEffectSt(function () {
     var cancelled = false;
     settingsFetch("/api/settings/config").then(readSettingsResponse).then(function (payload) {
       if (cancelled) return;
       var savedTimezone = String(payload.timezone || "");
+      setAgentProxyEnabled(payload.external_agent_proxy_enabled === true);
+      setAgentProxyPort(String(payload.external_agent_proxy_port || 7897));
       if (timezoneOptions.indexOf(savedTimezone) < 0) return;
       var previousTimezone = "";
       try { previousTimezone = localStorage.getItem("cyrene-timezone") || ""; } catch (e) {}
@@ -1700,6 +1710,30 @@ function GeneralPanel(p) {
       setSelectedTimezone(previousTimezone);
       try { localStorage.setItem("cyrene-timezone", previousTimezone); } catch (e) {}
       try { window.CyreneUI.require("data").reload(); } catch (e) {}
+    });
+  }
+
+  function saveAgentProxy(nextEnabled, nextPort) {
+    var port = Number(nextPort);
+    if (!Number.isInteger(port) || port < 1 || port > 65535) {
+      setAgentProxyStatus(t("settings.agentProxyPortInvalid"));
+      return;
+    }
+    setAgentProxyStatus(t("settings.saving"));
+    settingsFetch("/api/settings/config", {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        external_agent_proxy_enabled: !!nextEnabled,
+        external_agent_proxy_port: port,
+      }),
+    }).then(readSettingsResponse).then(function () {
+      setAgentProxyEnabled(!!nextEnabled);
+      setAgentProxyPort(String(port));
+      setAgentProxyStatus(t("settings.agentProxySaved"));
+      setTimeout(function () { setAgentProxyStatus(""); }, 2500);
+    }).catch(function (error) {
+      setAgentProxyStatus(t("settings.error") + ": " + (error.message || ""));
     });
   }
 
@@ -1808,6 +1842,30 @@ function GeneralPanel(p) {
     ),
     FieldRow(t("settings.desktopNotifications"), t("settings.desktopNotificationsHint"),
       Toggle(desktopNotifications, toggleDesktopNotifications),
+    ),
+    SectionBlock(t("settings.agentProxy"), t("settings.agentProxyHint"),
+      FieldRow(t("settings.agentProxyEnabled"), t("settings.agentProxyEnabledHint"),
+        Toggle(agentProxyEnabled, function () { saveAgentProxy(!agentProxyEnabled, agentProxyPort); }, false, t("settings.agentProxyEnabled")),
+      ),
+      FieldRow(t("settings.agentProxyPort"), t("settings.agentProxyPortHint"),
+        React.createElement("div", { className: "wb-inline-row" },
+          React.createElement("input", {
+            className: "wb-input mono",
+            type: "number",
+            min: "1",
+            max: "65535",
+            inputMode: "numeric",
+            value: agentProxyPort,
+            disabled: !agentProxyEnabled,
+            "aria-label": t("settings.agentProxyPort"),
+            onChange: function (event) { setAgentProxyPort(event.target.value); setAgentProxyStatus(""); },
+            onBlur: function () { if (agentProxyEnabled) saveAgentProxy(true, agentProxyPort); },
+            onKeyDown: function (event) { if (event.key === "Enter" && agentProxyEnabled) { event.preventDefault(); saveAgentProxy(true, agentProxyPort); } },
+          }),
+          React.createElement("span", { className: "wb-hint" }, "127.0.0.1:" + (agentProxyPort || "—")),
+        ),
+        agentProxyStatus && React.createElement("span", { className: "wb-hint saved", role: "status", "aria-live": "polite" }, agentProxyStatus),
+      ),
     ),
     FieldRow(t("settings.mapProvider"), t("settings.mapProviderHint"),
       React.createElement("div", { className: "wb-seg" },
@@ -2605,7 +2663,9 @@ function ModelsPanel(p) {
         var displayDescription = localCopy ? t(localCopy[2]) : item.description;
         var runtime = String(item.runtime || "onnx").toLowerCase();
         var runtimeLabel = runtime === "onnx-cpu" ? "CPU" : runtime.toUpperCase();
-        var runtimeClass = runtime.indexOf("cuda") >= 0 ? " is-cuda" : runtime.indexOf("mlx") >= 0 ? " is-mlx" : " is-onnx";
+        var runtimeClass = runtime.indexOf("cuda") >= 0 || runtime.indexOf("directml") >= 0 || runtime.indexOf("qnn") >= 0
+          ? " is-cuda"
+          : runtime.indexOf("mlx") >= 0 ? " is-mlx" : " is-onnx";
         var hasError = !item.ready && !!item.error;
         var statusText = hasError
           ? t("settings.localModelError")
@@ -3243,6 +3303,10 @@ function WorkbenchBackgroundColorControl(p) {
 
 function AppearancePanel(p) {
   var { t, tweaks, setTweak, actualTheme, theme } = p;
+  var [performanceMode, setPerformanceMode] = useStateSt(function () {
+    try { return localStorage.getItem("cyrene-performance-mode") === "1"; } catch (e) { return false; }
+  });
+  var [performanceModeBusy, setPerformanceModeBusy] = useStateSt(false);
   var accentPresets = ["#4378ff", "#8b5cf6", "#e8796b", "#34b8a0", "#f4a93e", "#e5488b", "#6b8cff", "#a78bfa"];
   var defaultAccent = actualTheme === "dark" ? "#63B38F" : "#4D9A78";
   var appliedAccent = normalizeAccentHex(tweaks.accent) || defaultAccent;
@@ -3252,6 +3316,31 @@ function AppearancePanel(p) {
   });
   var [accentPickerOpen, setAccentPickerOpen] = useStateSt(false);
   var accentPickerRef = useRefSt(null);
+
+  useEffectSt(function () {
+    var cancelled = false;
+    settingsFetch("/api/settings/config").then(readSettingsResponse).then(function (payload) {
+      if (cancelled) return;
+      setPerformanceMode(payload.performance_mode === true);
+      if (window.CyreneUI.performanceMode) window.CyreneUI.performanceMode.apply(payload.performance_mode === true);
+    }).catch(function () {});
+    return function () { cancelled = true; };
+  }, []);
+
+  function togglePerformanceMode() {
+    var next = !performanceMode;
+    setPerformanceMode(next);
+    setPerformanceModeBusy(true);
+    if (window.CyreneUI.performanceMode) window.CyreneUI.performanceMode.apply(next);
+    settingsFetch("/api/settings/config", {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ performance_mode: next }),
+    }).then(readSettingsResponse).catch(function () {
+      setPerformanceMode(!next);
+      if (window.CyreneUI.performanceMode) window.CyreneUI.performanceMode.apply(!next);
+    }).finally(function () { setPerformanceModeBusy(false); });
+  }
 
   useEffectSt(function () {
     if (!accentPickerOpen) return undefined;
@@ -3342,6 +3431,9 @@ function AppearancePanel(p) {
         React.createElement("button", { className: "wb-seg-btn" + (tweaks.textSize === "large" ? " active" : ""), onClick: function () { setTweak("textSize", "large"); } }, React.createElement("span", { className: "wb-text-size-sample large" }, "A"), " ", t("settings.large")),
       ),
     ),
+    FieldRow(t("settings.performanceMode"), t("settings.performanceModeHint"),
+      Toggle(performanceMode, togglePerformanceMode, performanceModeBusy, t("settings.performanceMode")),
+    ),
     FieldRow(t("settings.pulseAnimation"), t("settings.pulseAnimationHint"), Toggle(tweaks.animatePulse, function () { setTweak("animatePulse", !tweaks.animatePulse); })),
   );
 }
@@ -3352,7 +3444,7 @@ function CapabilitiesPanel(p) {
     t, mcpConfigs, setMcpConfigs, mcpServers, toolGroups, toolsSaved,
     saveToolGroup, newMcpServer, setNewMcpServer, mcpSaved, saveMcp,
     voiceStatus, voiceReferenceText, setVoiceReferenceText,
-    voiceReferenceFile, setVoiceReferenceFile, voiceReferencePhase,
+    voiceReferenceFile, setVoiceReferenceFile, voiceReferencePhase, voiceReferenceElapsed,
     startVoiceReferenceRecording, finishVoiceReferenceRecording,
     voiceBusy, voiceNotice,
     saveVoiceBooleanSetting, saveVoiceMode, saveVoiceProfile, deleteVoiceProfile,
@@ -4424,6 +4516,22 @@ function extensionTaskStatusLabel(status, t) {
   return t("settings.extensionTaskStatus." + value, t("settings.extensionTaskStatus.unknown"));
 }
 
+function extensionTaskErrorContent(task, t) {
+  var knownReasons = ["dependency_conflict", "mcp_connection_failed", "executable_not_found", "fixed_version_required", "configuration_required", "uv_runtime_missing"];
+  var reason = knownReasons.indexOf(task.reason_code) >= 0 ? task.reason_code : "installation_failed";
+  return {
+    title: t("settings.extensionTaskError." + reason + ".title", t("settings.extensionTaskStatus.failed")),
+    hint: t("settings.extensionTaskError." + reason + ".hint", t("settings.extensionInstallFailed")),
+  };
+}
+
+function extensionTaskIsVisible(task, now) {
+  if (["queued", "running", "cancelling"].indexOf(task.status) >= 0) return true;
+  if (["failed", "interrupted"].indexOf(task.status) < 0) return false;
+  var finishedAt = Date.parse(task.finished_at || "");
+  return Number.isFinite(finishedAt) && now - finishedAt < 30000;
+}
+
 function extensionAuditLabel(prefix, value, t) {
   var aliases = {
     "install.start": "installStart", "install.finish": "installFinish",
@@ -4452,6 +4560,666 @@ function ExtensionStatus(props) {
   if (item.observed_state === "installed" && item.enabled === false) { className = "disabled"; text = t("settings.extensionDisabled"); }
   return React.createElement("span", { className: "wb-extension-status " + className },
     React.createElement("span", { className: "wb-extension-status-dot", "aria-hidden": "true" }), text
+  );
+}
+
+// ---- External Agent extension-center UI (phase 1, handoff §7) --------------
+// The Agent Tab deliberately has no search UI: it renders the recommended
+// catalog, the real installed enumeration and a fixed "install other Agent"
+// API entry.  Agent runtime endpoints are phase-1 placeholders, so probe /
+// restart / auth calls surface the backend's explicit unavailability instead
+// of pretending the runtime is ready.
+
+function extensionCopyText(value) {
+  if (!value) return Promise.resolve();
+  if (window.cyrene && typeof window.cyrene.writeClipboardText === "function") {
+    return Promise.resolve(window.cyrene.writeClipboardText(value));
+  }
+  if (navigator.clipboard && navigator.clipboard.writeText) {
+    return navigator.clipboard.writeText(value);
+  }
+  return new Promise(function (resolve, reject) {
+    try {
+      var input = document.createElement("textarea");
+      input.value = value;
+      input.setAttribute("readonly", "");
+      input.style.position = "fixed";
+      input.style.opacity = "0";
+      document.body.appendChild(input);
+      input.select();
+      var ok = document.execCommand && document.execCommand("copy");
+      document.body.removeChild(input);
+      if (ok) resolve(); else reject(new Error("copy_failed"));
+    } catch (error) {
+      reject(error);
+    }
+  });
+}
+
+var AGENT_PROPOSAL_ENDPOINT = "/api/extensions/agents/install-proposals";
+var AGENT_MANIFEST_TEMPLATE = JSON.stringify({
+  manifestApi: "cyrene.agent/v1",
+  agentId: "my-agent",
+  displayName: "My Agent",
+  version: "1.0.0",
+  driver: "acp_stdio",
+  command: "my-agent",
+  protocolVersion: 1,
+  description: "Declarative ACP stdio Agent profile.",
+  capabilities: {
+    session: { load: "unknown" },
+    input: { text: "supported", image: "unknown", file: "unknown", audio: "unknown" },
+    output: { streaming: "supported", reasoning: "unknown", toolLifecycle: "unknown", artifacts: "unknown", diff: "unknown" },
+    interaction: { permission: "agent_defined", steer: "unknown", cancel: "supported" },
+    model: { agentManaged: "supported", cyreneManaged: ["openai_chat", "openai_responses"], switchDuringSession: "unsupported", reasoningEffort: "unknown" },
+  },
+  modelAccess: { mode: "cyrene_managed", profileId: "primary" },
+}, null, 2);
+
+function agentSourceTrustMeta(agent, t) {
+  var trust = String(agent.sourceTrust || agent.source_trust || "").toLowerCase();
+  if (trust === "cyrene_recommended") {
+    return { className: "recommended", label: t("settings.agentSourceTrust.recommended", "Cyrene recommended") };
+  }
+  if (trust === "external_verified") {
+    return { className: "verified", label: t("settings.agentSourceTrust.externalVerified", "External · verified") };
+  }
+  return { className: "unverified", label: t("settings.agentSourceTrust.externalUnverified", "External · unverified") };
+}
+
+function agentInstallStateLabel(agent, t) {
+  var state = String(agent.installState || agent.install_state || "");
+  if (state === "installed") return t("settings.agentInstallState.installed", "Installed");
+  if (state === "upgrade_available") return t("settings.agentInstallState.upgradeAvailable", "Upgrade available");
+  return t("settings.agentInstallState.available", "Available");
+}
+
+function agentDriverLabel(driver, t) {
+  driver = String(driver || "");
+  if (!driver || driver === "cyrene_builtin") return t("settings.agentDriver.builtin", "Built-in");
+  if (driver === "acp_stdio") return "ACP · stdio";
+  return t("settings.agentDriver.unknown", { driver: driver }, "Other driver · " + driver);
+}
+
+function agentAuthLabel(agent, t) {
+  var state = String(agent.authState || agent.auth_state || "not_configured").toLowerCase();
+  var labels = {
+    not_configured: t("settings.agentAuth.notConfigured", "Not configured"),
+    authenticating: t("settings.agentAuth.authenticating", "Authenticating…"),
+    connected: t("settings.agentAuth.connected", "Connected"),
+    failed: t("settings.agentAuth.failed", "Login failed"),
+    expired: t("settings.agentAuth.expired", "Login expired"),
+  };
+  return labels[state] || t("settings.agentState.unknownValue", { value: state || "—" }, "Unknown · " + (state || "—"));
+}
+
+function agentModelAccessLabel(agent, t) {
+  var access = agent.modelAccess || agent.model_access || {};
+  if (String(access.mode || "") === "agent_managed") {
+    return t("settings.agentModelSource.agentManaged", "Agent-owned configuration");
+  }
+  var profileId = String(access.profileId || "primary");
+  return t("settings.agentModelSource.cyrene", "Cyrene") + (profileId && profileId !== "primary" ? " · " + profileId : "");
+}
+
+function agentRuntimeLabel(agent, t) {
+  var state = String(agent.runtimeState || agent.runtime_state || "").toLowerCase();
+  if (!state || state === "unknown") return t("settings.agentRuntime.unknown", "Unknown");
+  var labels = {
+    ready: t("settings.agentRuntime.ready", "Ready"),
+    running: t("settings.agentRuntime.running", "Running"),
+    pending_transport: t("settings.agentRuntime.pendingTransport", "Not tested"),
+    not_started: t("settings.agentRuntime.notStarted", "Starts on demand"),
+    stopped: t("settings.agentRuntime.stopped", "Stopped"),
+    crashed: t("settings.agentRuntime.crashed", "Crashed"),
+    error: t("settings.agentRuntime.error", "Error"),
+  };
+  return labels[state] || t("settings.agentState.unknownValue", { value: state || "—" }, "Unknown · " + (state || "—"));
+}
+
+function agentUsabilityMeta(agent, t) {
+  var installState = String(agent.installState || agent.install_state || "");
+  var authState = String(agent.authState || agent.auth_state || "").toLowerCase();
+  var runtimeState = String(agent.runtimeState || agent.runtime_state || "").toLowerCase();
+  if (installState && installState !== "installed" && installState !== "upgrade_available") {
+    return { usable: false, label: t("settings.agentUsability.notInstalled", "Unavailable · not installed") };
+  }
+  if (agent.enabled === false) {
+    return { usable: false, label: t("settings.agentUsability.disabled", "Unavailable · disabled") };
+  }
+  if (authState === "expired" || authState === "failed") {
+    return { usable: false, label: t("settings.agentUsability.auth", "Unavailable · login required") };
+  }
+  if (["error", "crashed", "failed"].indexOf(runtimeState) >= 0) {
+    return { usable: false, label: t("settings.agentUsability.runtime", "Unavailable · runtime error") };
+  }
+  return { usable: true, label: t("settings.agentUsability.available", "Available in Composer") };
+}
+
+function agentCapabilityGroupLabel(group, t) {
+  var labels = {
+    session: t("settings.agentCapabilityGroup.session", "Session"),
+    input: t("settings.agentCapabilityGroup.input", "Input"),
+    output: t("settings.agentCapabilityGroup.output", "Output"),
+    interaction: t("settings.agentCapabilityGroup.interaction", "Interaction"),
+    model: t("settings.agentCapabilityGroup.model", "Model"),
+  };
+  return labels[group] || group;
+}
+
+function agentCapabilityStateLabel(state, t) {
+  state = String(state || "unknown").toLowerCase();
+  var labels = {
+    supported: t("settings.agentCapabilityState.supported", "Supported"),
+    unsupported: t("settings.agentCapabilityState.unsupported", "Unsupported"),
+    unknown: t("settings.agentCapabilityState.unknown", "Unknown"),
+    degraded: t("settings.agentCapabilityState.degraded", "Degraded"),
+    agent_defined: t("settings.agentCapabilityState.agentDefined", "Agent-defined"),
+  };
+  return labels[state] || t("settings.agentState.unknownValue", { value: state || "—" }, "Unknown · " + (state || "—"));
+}
+
+function agentCapabilityRows(agent) {
+  var caps = (agent && (agent.capabilities || agent.capabilitySummary)) || {};
+  var rows = [];
+  ["session", "input", "output", "interaction", "model"].forEach(function (group) {
+    var section = caps[group];
+    if (!section || typeof section !== "object") return;
+    Object.keys(section).forEach(function (feature) {
+      var state = section[feature];
+      rows.push({
+        group: group,
+        feature: feature,
+        state: Array.isArray(state) ? state.join(", ") : String(state || "unknown"),
+      });
+    });
+  });
+  return rows;
+}
+
+function agentDetailSettingsFetch(installationId, path, options) {
+  return settingsFetch(
+    "/api/agents/" + encodeURIComponent(String(installationId || "")) + path,
+    options || { method: "GET" }
+  ).then(function (response) {
+    return response.json().catch(function () { return {}; });
+  });
+}
+
+function notifyAgentCatalogChanged(reason) {
+  try {
+    window.dispatchEvent(new CustomEvent("cyrene:agents-changed", { detail: { reason: String(reason || "updated") } }));
+  } catch (error) {}
+}
+
+function AgentInstallProposalModal(props) {
+  var t = props.t;
+  var [copied, setCopied] = useStateSt("");
+  var [proposalDraft, setProposalDraft] = useStateSt("");
+  var [proposalResult, setProposalResult] = useStateSt(null);
+  var [proposalBusy, setProposalBusy] = useStateSt("");
+  var [proposalError, setProposalError] = useStateSt("");
+  function copy(label, value) {
+    extensionCopyText(value).then(function () {
+      setCopied(label);
+      setTimeout(function () { setCopied(""); }, 1600);
+    }).catch(function () {});
+  }
+  var origin = (window.location && window.location.origin) || "http://localhost:4242";
+  var apiUrl = origin + AGENT_PROPOSAL_ENDPOINT;
+  var manifestExample = JSON.parse(AGENT_MANIFEST_TEMPLATE);
+  var requestExample = JSON.stringify({
+    source: { type: "inline", manifest: manifestExample },
+    requestedVersion: manifestExample.version,
+  }, null, 2);
+  var curlExample = [
+    "curl -X POST " + JSON.stringify(apiUrl),
+    "  -H \"Content-Type: application/json\"",
+    "  --data-binary @install-agent-request.json",
+  ].join(" \\\n");
+  var responseExample = JSON.stringify({
+    ok: true,
+    proposalId: "agent_prop_…",
+    agentId: "my-agent",
+    version: "1.0.0",
+    sourceTrust: "external_unverified",
+    requiresConfirmation: true,
+    status: "pending",
+  }, null, 2);
+  var guideLines = [
+    t("settings.agentProposalGuideIntro", "Create a cyrene.agent/v1 Manifest, then submit it to Cyrene as an inline manifest or HTTPS manifest_url."),
+    "",
+    t("settings.agentProposalApi", "API") + ": POST " + apiUrl,
+    t("settings.agentProposalContentType", "Content-Type") + ": application/json",
+    t("settings.agentProposalManifestApi", "Manifest API") + ": cyrene.agent/v1",
+    t("settings.agentProposalDrivers", "Supported") + ": ACP stdio",
+    "",
+    t("settings.agentProposalRequestLabel", "Complete request") + ":",
+    requestExample,
+    "",
+    t("settings.agentProposalResponseLabel", "Expected response") + ":",
+    responseExample,
+    "",
+    t("settings.agentProposalConfirmLabel", "Confirmation endpoint") + ": POST " + apiUrl + "/{proposalId}/confirm",
+  ].join("\n");
+  var fullGuide = guideLines + "\n\n" + t("settings.agentProposalExplain", "Agents submitted through this API first become a pending install proposal. They are installed only after you confirm the source and the program that will run.") + "\n\n" + t("settings.agentProposalExternalNote", "Agents installed through this API are marked as external sources and are never presented as Cyrene recommendations.");
+  function createProposal() {
+    var parsed;
+    try {
+      parsed = JSON.parse(String(proposalDraft || ""));
+    } catch (error) {
+      setProposalError(t("settings.agentProposalInvalidJson", "Enter a valid JSON request or cyrene.agent/v1 Manifest."));
+      return;
+    }
+    var body = parsed && parsed.manifestApi === "cyrene.agent/v1"
+      ? { source: { type: "inline", manifest: parsed }, requestedVersion: parsed.version || "" }
+      : parsed;
+    setProposalBusy("create"); setProposalError(""); setProposalResult(null);
+    settingsFetch(AGENT_PROPOSAL_ENDPOINT, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    }).then(function (response) { return response.json(); }).then(function (payload) {
+      setProposalResult(payload || {});
+    }).catch(function (error) {
+      setProposalError(error.message || String(error));
+    }).finally(function () { setProposalBusy(""); });
+  }
+  function confirmProposal() {
+    var proposalId = String(proposalResult && proposalResult.proposalId || "");
+    if (!proposalId) return;
+    setProposalBusy("confirm"); setProposalError("");
+    settingsFetch(AGENT_PROPOSAL_ENDPOINT + "/" + encodeURIComponent(proposalId) + "/confirm", { method: "POST" })
+      .then(function (response) { return response.json(); })
+      .then(function (payload) {
+        setProposalResult({ ...proposalResult, confirmation: payload, status: "confirmed" });
+        notifyAgentCatalogChanged("installed");
+        if (props.onUpdated) props.onUpdated();
+      }).catch(function (error) {
+        setProposalError(error.message || String(error));
+      }).finally(function () { setProposalBusy(""); });
+  }
+  return React.createElement("div", { className: "wb-extension-modal-scrim", onMouseDown: function (event) { if (event.target === event.currentTarget) props.onClose(); } },
+    React.createElement("section", { className: "wb-extension-modal wb-agent-proposal-modal", role: "dialog", "aria-modal": "true", "aria-labelledby": "agent-proposal-title" },
+      React.createElement("header", null,
+        React.createElement("div", null,
+          React.createElement("h3", { id: "agent-proposal-title" }, t("settings.agentProposalTitle", "Install another Agent")),
+          React.createElement("p", null, t("settings.agentProposalSubtitle", "Copy the interface description for a developer or another Agent to generate a compatible cyrene.agent/v1 manifest."))
+        ),
+        React.createElement("button", { type: "button", className: "wb-extension-close", onClick: props.onClose, "aria-label": t("settings.close") }, "×")
+      ),
+      React.createElement("div", { className: "wb-agent-proposal-body" },
+        React.createElement("dl", { className: "wb-agent-proposal-facts" },
+          React.createElement("div", null, React.createElement("dt", null, t("settings.agentProposalApi", "API")), React.createElement("dd", { className: "mono" }, "POST " + apiUrl)),
+          React.createElement("div", null, React.createElement("dt", null, t("settings.agentProposalContentType", "Content-Type")), React.createElement("dd", { className: "mono" }, "application/json")),
+          React.createElement("div", null, React.createElement("dt", null, t("settings.agentProposalManifestApi", "Manifest API")), React.createElement("dd", { className: "mono" }, "cyrene.agent/v1")),
+          React.createElement("div", null, React.createElement("dt", null, t("settings.agentProposalDrivers", "Supported")), React.createElement("dd", null, "ACP stdio"))
+        ),
+        React.createElement("div", { className: "wb-agent-proposal-copy-row" },
+          React.createElement("button", { type: "button", className: "wb-btn", onClick: function () { copy("api", curlExample); } }, copied === "api" ? t("settings.copied", "Copied") : t("settings.agentProposalCopyApi", "Copy cURL")),
+          React.createElement("button", { type: "button", className: "wb-btn", onClick: function () { copy("example", requestExample); } }, copied === "example" ? t("settings.copied", "Copied") : t("settings.agentProposalCopyExample", "Copy complete request")),
+          React.createElement("button", { type: "button", className: "wb-btn", onClick: function () { copy("template", AGENT_MANIFEST_TEMPLATE); } }, copied === "template" ? t("settings.copied", "Copied") : t("settings.agentProposalCopyTemplate", "Copy manifest template"))
+        ),
+        React.createElement("div", { className: "wb-agent-proposal-preview-head" },
+          React.createElement("strong", null, t("settings.agentProposalRequestLabel", "Complete request")),
+          React.createElement("span", null, t("settings.agentProposalRequestHint", "Replace command and capability declarations with the external Agent's actual ACP entry point."))
+        ),
+        React.createElement("pre", { className: "wb-agent-proposal-example mono" }, requestExample),
+        React.createElement("div", { className: "wb-agent-proposal-preview-head" },
+          React.createElement("strong", null, t("settings.agentProposalResponseLabel", "Expected response")),
+          React.createElement("span", null, t("settings.agentProposalResponseHint", "Use proposalId to call the confirmation endpoint after reviewing the source and executable."))
+        ),
+        React.createElement("pre", { className: "wb-agent-proposal-example mono" }, responseExample),
+        React.createElement("section", { className: "wb-agent-proposal-submit" },
+          React.createElement("div", { className: "wb-agent-proposal-preview-head" },
+            React.createElement("strong", null, t("settings.agentProposalSubmitTitle", "Submit in Cyrene")),
+            React.createElement("span", null, t("settings.agentProposalSubmitHint", "Paste either the complete request or a cyrene.agent/v1 Manifest. Cyrene validates it before showing confirmation."))
+          ),
+          React.createElement("textarea", {
+            className: "wb-input mono",
+            rows: 9,
+            value: proposalDraft,
+            placeholder: t("settings.agentProposalSubmitPlaceholder", "Paste request JSON or Manifest JSON"),
+            onChange: function (event) { setProposalDraft(event.target.value); setProposalError(""); },
+          }),
+          React.createElement("div", { className: "wb-agent-proposal-submit-actions" },
+            React.createElement("button", { type: "button", className: "wb-btn", onClick: function () { setProposalDraft(requestExample); } }, t("settings.agentProposalUseExample", "Load example")),
+            React.createElement("button", { type: "button", className: "wb-btn primary", disabled: proposalBusy || !proposalDraft.trim(), onClick: createProposal }, proposalBusy === "create" ? t("settings.loading", "Loading…") : t("settings.agentProposalCreate", "Validate and create proposal"))
+          ),
+          proposalError && React.createElement("div", { className: "wb-agent-unavailable", role: "alert" }, proposalError),
+          proposalResult && React.createElement("div", { className: "wb-agent-proposal-result", role: "status" },
+            React.createElement("strong", null, proposalResult.displayName || proposalResult.agentId || t("settings.agentProposalReady", "Proposal ready")),
+            React.createElement("code", null, proposalResult.proposalId || "—"),
+            React.createElement("span", null, [proposalResult.version, proposalResult.inspect && proposalResult.inspect.command, proposalResult.sourceTrust].filter(Boolean).join(" · ")),
+            proposalResult.requiresConfirmation && proposalResult.status !== "confirmed" && React.createElement("button", { type: "button", className: "wb-btn primary", disabled: proposalBusy === "confirm", onClick: confirmProposal }, proposalBusy === "confirm" ? t("settings.loading", "Loading…") : t("settings.agentProposalConfirmInstall", "Confirm and install")),
+            proposalResult.status === "confirmed" && React.createElement("b", null, t("settings.agentProposalInstallStarted", "Installation started"))
+          )
+        ),
+        React.createElement("div", { className: "wb-agent-proposal-note" },
+          React.createElement("strong", null, t("settings.agentProposalSafetyTitle", "Confirmation required")),
+          React.createElement("p", null, t("settings.agentProposalExplain", "Agents submitted through this API first become a pending install proposal. They are installed only after you confirm the source and the program that will run.")),
+          React.createElement("p", null, t("settings.agentProposalExternalNote", "Agents installed through this API are marked as external sources and are never presented as Cyrene recommendations.")),
+          React.createElement("p", null, t("settings.agentProposalNoCredentials", "Copied content never contains Cyrene tokens, model keys or Agent credentials."))
+        ),
+        React.createElement("div", { className: "wb-agent-proposal-footer" },
+          React.createElement("button", { type: "button", className: "wb-btn", onClick: function () { copy("all", fullGuide); } }, copied === "all" ? t("settings.copied", "Copied") : t("settings.agentProposalCopyAll", "Copy full instructions")),
+          React.createElement("button", { type: "button", className: "wb-btn primary", onClick: props.onClose }, t("settings.close"))
+        )
+      )
+    )
+  );
+}
+
+function AgentCapabilityTable({ agent, t }) {
+  var rows = agentCapabilityRows(agent);
+  if (!rows.length) {
+    return React.createElement("div", { className: "wb-agent-capabilities-empty" },
+      t("settings.agentCapabilitiesEmpty", "No capabilities have been declared or detected yet. Use Test connection to probe this Agent.")
+    );
+  }
+  var groups = {};
+  rows.forEach(function (row) {
+    (groups[row.group] = groups[row.group] || []).push(row);
+  });
+  return React.createElement("div", { className: "wb-agent-capabilities" },
+    ["session", "input", "output", "interaction", "model"].map(function (group) {
+      if (!groups[group]) return null;
+      return React.createElement("section", { key: group, className: "wb-agent-capability-group" },
+        React.createElement("h5", null, agentCapabilityGroupLabel(group, t)),
+        React.createElement("ul", null, groups[group].map(function (row) {
+          return React.createElement("li", { key: row.group + "." + row.feature },
+            React.createElement("code", null, row.feature),
+            React.createElement("span", null, agentCapabilityStateLabel(row.state, t))
+          );
+        }))
+      );
+    })
+  );
+}
+
+function AgentCard(props) {
+  var agent = props.agent || {};
+  var t = props.t;
+  var [localBusy, setLocalBusy] = useStateSt("");
+  var busy = props.busy || localBusy;
+  var expanded = props.expanded;
+  var trust = agentSourceTrustMeta(agent, t);
+  var usability = agentUsabilityMeta(agent, t);
+  var installationId = String(agent.installationId || "");
+  var [modelAccessDraft, setModelAccessDraft] = useStateSt(null);
+  var [probeResult, setProbeResult] = useStateSt(null);
+  var [diagnostics, setDiagnostics] = useStateSt(null);
+  var [authResult, setAuthResult] = useStateSt(null);
+  function loadDetail() {
+    agentDetailSettingsFetch(installationId, "").then(function (payload) {
+      if (payload && payload.agent) props.onChanged(payload.agent);
+    }).catch(function () {});
+  }
+  function toggleEnabled() {
+    props.onToggle(agent);
+  }
+  function runProbe() {
+    setLocalBusy("probe");
+    agentDetailSettingsFetch(installationId, "/probe", { method: "POST" }).then(function (payload) {
+      setProbeResult(payload || {});
+      if (payload && payload.agent) props.onChanged(payload.agent);
+      else loadDetail();
+      notifyAgentCatalogChanged("probe");
+      setLocalBusy("");
+    }).catch(function () { setLocalBusy(""); });
+  }
+  function runRestart() {
+    setLocalBusy("restart");
+    agentDetailSettingsFetch(installationId, "/restart", { method: "POST" }).then(function (payload) {
+      setProbeResult(payload || {});
+      notifyAgentCatalogChanged("restart");
+      setLocalBusy("");
+    }).catch(function () { setLocalBusy(""); });
+  }
+  function runAuth(action) {
+    setLocalBusy("auth:" + action);
+    agentDetailSettingsFetch(installationId, "/auth/" + action, { method: "POST" }).then(function (payload) {
+      setAuthResult(payload || {});
+      notifyAgentCatalogChanged("auth");
+      setLocalBusy("");
+    }).catch(function () { setLocalBusy(""); });
+  }
+  function loadDiagnostics() {
+    setLocalBusy("diagnostics");
+    agentDetailSettingsFetch(installationId, "/diagnostics").then(function (payload) {
+      setDiagnostics(payload || {});
+      setLocalBusy("");
+    }).catch(function () { setLocalBusy(""); });
+  }
+  function saveModelAccess(mode, profileId) {
+    var body = { modelAccess: { mode: mode } };
+    if (mode === "cyrene_managed") body.modelAccess.profileId = String(profileId || "primary") || "primary";
+    setLocalBusy("model");
+    agentDetailSettingsFetch(installationId, "/settings", {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    }).then(function (payload) {
+      if (payload && payload.agent) props.onChanged(payload.agent);
+      notifyAgentCatalogChanged("model_access");
+      setLocalBusy("");
+    }).catch(function () { setLocalBusy(""); });
+  }
+  function placeholderNote(result) {
+    if (!result) return "";
+    if (result.ok !== false && !result.error) return "";
+    return String(result.detail || result.error || "");
+  }
+  function localizedDiagnosticsNote(payload) {
+    var noteCode = String(payload && (payload.noteCode || payload.reason) || "");
+    if (noteCode === "starts_on_demand") {
+      return t("settings.agentDiagnosticsStartsOnDemand", "ACP stdio starts on demand. Diagnostics never expose process environment or credentials.");
+    }
+    return "";
+  }
+  var version = String(agent.version || "");
+  var driver = agentDriverLabel(agent.driver || agent.runtime && agent.runtime.transport, t);
+  var authNote = placeholderNote(authResult);
+  var probeNote = placeholderNote(probeResult);
+  var diagnosticsNote = localizedDiagnosticsNote(diagnostics);
+  return React.createElement("article", { className: "wb-extension-card wb-agent-card" + (expanded ? " expanded" : ""), "data-installation-id": installationId },
+    React.createElement("div", { className: "wb-extension-card-main" },
+      React.createElement("button", {
+        type: "button",
+        className: "wb-extension-card-summary",
+        onClick: props.onToggleExpand,
+        "aria-expanded": expanded ? "true" : "false",
+        "aria-label": t("settings.extensionDetailsFor", { name: agent.displayName || agent.agentId }),
+      },
+        React.createElement("span", { className: "wb-extension-glyph agent extension-agent" }, React.createElement(ExtensionGlyph, { id: agent.agentId, kind: "agent", label: agent.displayName || agent.agentId })),
+        React.createElement("span", { className: "wb-extension-copy" },
+          React.createElement("span", { className: "wb-extension-title-row" },
+            React.createElement("strong", null, agent.displayName || agent.agentId || "—"),
+            React.createElement("span", { className: "wb-extension-type" }, t("settings.extensionType.agent", "Agent")),
+            React.createElement("span", { className: "wb-agent-trust " + trust.className }, trust.label),
+            React.createElement("span", { className: "wb-agent-usability " + (usability.usable ? "available" : "unavailable") }, usability.label)
+          ),
+          React.createElement("span", { className: "wb-extension-description" },
+            [agentInstallStateLabel(agent, t), agentDriverLabel(agent.driver, t), agentAuthLabel(agent, t), agentModelAccessLabel(agent, t)].filter(Boolean).join(" · ")
+          ),
+          React.createElement("span", { className: "wb-extension-meta" },
+            React.createElement("span", { className: "wb-agent-state" + (agent.enabled === false ? " disabled" : "") },
+              React.createElement("span", { className: "wb-extension-status-dot", "aria-hidden": "true" }),
+              agent.enabled === false ? t("settings.extensionDisabled") : agentRuntimeLabel(agent, t)
+            ),
+            version && React.createElement("span", { className: "mono" }, version)
+          )
+        )
+      ),
+      React.createElement("div", { className: "wb-extension-actions" },
+        React.createElement("button", { type: "button", className: "wb-btn", disabled: busy, onClick: toggleEnabled }, agent.enabled === false ? t("settings.enable") : t("settings.disable")),
+        React.createElement("button", { type: "button", className: "wb-btn danger", disabled: busy, onClick: function () { props.onRemove(agent); } }, t("settings.uninstall"))
+      ),
+      React.createElement("button", {
+        type: "button",
+        className: "wb-extension-expand-button",
+        onClick: props.onToggleExpand,
+        "aria-expanded": expanded ? "true" : "false",
+        "aria-label": t("settings.extensionDetailsFor", { name: agent.displayName || agent.agentId }),
+      }, React.createElement("span", { className: "wb-extension-chevron", "aria-hidden": "true" }, ExternalChevron()))
+    ),
+    expanded && React.createElement("div", { className: "wb-extension-details wb-agent-details" },
+      React.createElement("div", { className: "wb-extension-enabled-row" },
+        React.createElement("div", null,
+          React.createElement("strong", null, t("settings.extensionEnabledTitle")),
+          React.createElement("small", null, t("settings.agentEnabledHint", "Disabled Agents are not selectable in the Composer."))
+        ),
+        Toggle(agent.enabled !== false, toggleEnabled, busy, t("settings.extensionToggle", { name: agent.displayName || agent.agentId }))
+      ),
+      React.createElement("section", { className: "wb-agent-detail-section", "aria-labelledby": "agent-overview-" + installationId },
+        React.createElement("h4", { id: "agent-overview-" + installationId }, t("settings.agentSectionOverview", "Overview")),
+        React.createElement("dl", null,
+          React.createElement("div", null, React.createElement("dt", null, t("settings.extensionVersion")), React.createElement("dd", { className: "mono" }, version || "—")),
+          React.createElement("div", null, React.createElement("dt", null, t("settings.extensionSource")), React.createElement("dd", null, trust.label)),
+          React.createElement("div", null, React.createElement("dt", null, t("settings.agentPublisher", "Publisher")), React.createElement("dd", null, agent.publisher || "—")),
+          React.createElement("div", null, React.createElement("dt", null, t("settings.agentSourceUrl", "Manifest / repository")), React.createElement("dd", { className: "mono" }, String((agent.source || {}).url || agent.repository || "—"))),
+          React.createElement("div", null, React.createElement("dt", null, t("settings.agentChecksum", "SHA-256")), React.createElement("dd", { className: "mono" }, String((agent.checksums || {}).sha256 || t("settings.agentUnverified", "Unverified")))),
+          React.createElement("div", null, React.createElement("dt", null, t("settings.agentInstallationId")), React.createElement("dd", { className: "mono" }, installationId || "—")),
+          React.createElement("div", null, React.createElement("dt", null, t("settings.agentDriverProtocol", "Driver / protocol")), React.createElement("dd", { className: "mono" }, driver || "—")),
+          React.createElement("div", null, React.createElement("dt", null, t("settings.extensionHealth")), React.createElement("dd", null, agentRuntimeLabel(agent, t))),
+          React.createElement("div", null, React.createElement("dt", null, t("settings.agentLoginState", "Login")), React.createElement("dd", null, agentAuthLabel(agent, t))),
+          React.createElement("div", null, React.createElement("dt", null, t("settings.agentModelSourceShort", "Model source")), React.createElement("dd", null, agentModelAccessLabel(agent, t))),
+          React.createElement("div", null, React.createElement("dt", null, t("settings.agentComposerAvailability", "Composer availability")), React.createElement("dd", { className: "wb-agent-usability " + (usability.usable ? "available" : "unavailable") }, usability.label))
+        )
+      ),
+      React.createElement("section", { className: "wb-agent-detail-section", "aria-labelledby": "agent-auth-" + installationId },
+        React.createElement("h4", { id: "agent-auth-" + installationId }, t("settings.agentSectionAuthModel", "Login & model")),
+        React.createElement("div", { className: "wb-agent-model-access" },
+          React.createElement("label", null,
+            React.createElement("input", { type: "radio", name: "model-access-" + installationId, checked: String((agent.modelAccess || {}).mode || "cyrene_managed") !== "agent_managed", onChange: function () { saveModelAccess("cyrene_managed", String((agent.modelAccess || {}).profileId || "primary")); } }),
+            React.createElement("span", null, React.createElement("strong", null, t("settings.agentModelCyrene", "Use Cyrene models")), React.createElement("small", null, t("settings.agentModelCyreneHint", "Routes through the Cyrene Model Gateway; no long-lived key is exposed to the Agent.")))
+          ),
+          React.createElement("label", null,
+            React.createElement("input", { type: "radio", name: "model-access-" + installationId, checked: String((agent.modelAccess || {}).mode || "") === "agent_managed", onChange: function () { saveModelAccess("agent_managed"); } }),
+            React.createElement("span", null, React.createElement("strong", null, t("settings.agentModelOwn", "Use the Agent's own configuration")), React.createElement("small", null, t("settings.agentModelOwnHint", "The Agent keeps its own OAuth, API key or environment configuration.")))
+          )
+        ),
+        React.createElement("div", { className: "wb-agent-action-row" },
+          React.createElement("button", { type: "button", className: "wb-btn", disabled: busy === "auth:start", onClick: function () { runAuth("start"); } }, t("settings.agentLoginStart", "Start login")),
+          React.createElement("button", { type: "button", className: "wb-btn", disabled: busy === "auth:logout", onClick: function () { runAuth("logout"); } }, t("settings.agentLoginLogout", "Log out"))
+        ),
+        authNote && React.createElement("div", { className: "wb-agent-unavailable", role: "status" }, authNote),
+        !authNote && React.createElement("p", { className: "wb-hint" }, t("settings.agentAuthHint", "Login is handled through the methods advertised by the Agent. Some Agents require login in their own terminal instead."))
+      ),
+      React.createElement("section", { className: "wb-agent-detail-section", "aria-labelledby": "agent-caps-" + installationId },
+        React.createElement("h4", { id: "agent-caps-" + installationId }, t("settings.agentSectionCapabilities", "Capabilities")),
+        React.createElement(AgentCapabilityTable, { agent: agent, t: t })
+      ),
+      React.createElement("section", { className: "wb-agent-detail-section", "aria-labelledby": "agent-runtime-" + installationId },
+        React.createElement("h4", { id: "agent-runtime-" + installationId }, t("settings.agentSectionRuntime", "Runtime")),
+        React.createElement("dl", null,
+          React.createElement("div", null, React.createElement("dt", null, t("settings.placeholderCommand", "Command")), React.createElement("dd", { className: "mono" }, agent.command || "—")),
+          React.createElement("div", null, React.createElement("dt", null, t("settings.agentRuntimeState", "Process state")), React.createElement("dd", null, agentRuntimeLabel(agent, t))),
+          React.createElement("div", null, React.createElement("dt", null, t("settings.agentLastStarted", "Last started")), React.createElement("dd", { className: "mono" }, (agent.runtime && agent.runtime.lastStartedAt) || "—"))
+        ),
+        React.createElement("div", { className: "wb-agent-action-row" },
+          React.createElement("button", { type: "button", className: "wb-btn", disabled: busy === "restart", onClick: runRestart }, t("settings.agentRestart", "Restart Agent")),
+          React.createElement("button", { type: "button", className: "wb-btn", disabled: busy === "probe", onClick: runProbe }, t("settings.agentProbe", "Test connection"))
+        ),
+        probeNote && React.createElement("div", { className: "wb-agent-unavailable", role: "status" }, probeNote)
+      ),
+      React.createElement("section", { className: "wb-agent-detail-section", "aria-labelledby": "agent-diagnostics-" + installationId },
+        React.createElement("h4", { id: "agent-diagnostics-" + installationId }, t("settings.agentSectionDiagnostics", "Diagnostics")),
+        React.createElement("div", { className: "wb-agent-action-row" },
+          React.createElement("button", { type: "button", className: "wb-btn", disabled: busy === "diagnostics", onClick: loadDiagnostics }, t("settings.agentLoadDiagnostics", "Load diagnostics"))
+        ),
+        diagnosticsNote && React.createElement("p", { className: "wb-hint" }, diagnosticsNote),
+        (diagnostics && (diagnostics.lastErrors || []).length > 0) && React.createElement("ul", { className: "wb-agent-errors" },
+          diagnostics.lastErrors.map(function (error, index) {
+            return React.createElement("li", { key: index, className: "mono" }, String(error));
+          })
+        )
+      )
+    )
+  );
+}
+
+function AgentTabPanel(props) {
+  var t = props.t;
+  var recommended = Array.isArray(props.recommended) ? props.recommended : [];
+  var installed = Array.isArray(props.installed) ? props.installed : [];
+  return React.createElement("div", { className: "wb-agent-tab" },
+    React.createElement("section", { className: "wb-agent-section", "aria-labelledby": "wb-agent-recommended-title" },
+      React.createElement("div", { className: "wb-agent-section-head" },
+        React.createElement("h4", { id: "wb-agent-recommended-title" }, t("settings.agentRecommended", "Recommended")),
+        React.createElement("span", null, t("settings.agentRecommendedHint", "Curated by Cyrene"))
+      ),
+      recommended.length === 0
+        ? React.createElement("div", { className: "wb-extensions-empty" }, t("settings.agentRecommendedEmpty", "No recommended Agents available."))
+        : React.createElement("div", { className: "wb-agent-recommended-list" },
+            recommended.map(function (item) {
+              var state = String(item.installState || "available");
+              var installedInstallationId = String(item.installationId || "");
+              return React.createElement("article", { key: item.agentId, className: "wb-extension-card wb-agent-recommended-card" },
+                React.createElement("div", { className: "wb-extension-card-main" },
+                  React.createElement("div", { className: "wb-extension-card-summary" },
+                    React.createElement("span", { className: "wb-extension-glyph agent extension-agent" }, React.createElement(ExtensionGlyph, { id: item.agentId, kind: "agent", label: item.displayName || item.agentId })),
+                    React.createElement("span", { className: "wb-extension-copy" },
+                      React.createElement("span", { className: "wb-extension-title-row" },
+                        React.createElement("strong", null, item.displayName || item.agentId),
+                        React.createElement("span", { className: "wb-extension-type" }, t("settings.extensionType.agent", "Agent"))
+                      ),
+                      React.createElement("span", { className: "wb-extension-description" }, String(item.description || "")),
+                      React.createElement("span", { className: "wb-extension-meta" },
+                        React.createElement("span", { className: "wb-agent-state" }, agentInstallStateLabel(item, t)),
+                        item.version && React.createElement("span", { className: "mono" }, item.version),
+                        React.createElement("span", null, agentDriverLabel(item.driver, t))
+                      )
+                    )
+                  ),
+                  React.createElement("div", { className: "wb-extension-actions" },
+                    state === "installed"
+                      ? (installedInstallationId
+                          ? React.createElement("button", { type: "button", className: "wb-btn", onClick: function () { props.onOpenInstalled(installedInstallationId); } }, t("settings.agentOpenDetails", "Details"))
+                          : React.createElement("button", { type: "button", className: "wb-btn", disabled: true }, t("settings.agentInstallState.installed", "Installed")))
+                      : state === "upgrade_available"
+                        ? React.createElement("button", { type: "button", className: "wb-btn primary", disabled: props.busy, onClick: function () { props.onInstall(item); } }, t("settings.agentUpgrade", "Upgrade"))
+                        : React.createElement("button", { type: "button", className: "wb-btn primary", disabled: props.busy, onClick: function () { props.onInstall(item); } }, t("settings.install"))
+                  )
+                )
+              );
+            })
+          )
+    ),
+    React.createElement("section", { className: "wb-agent-section", "aria-labelledby": "wb-agent-installed-title" },
+      React.createElement("div", { className: "wb-agent-section-head" },
+        React.createElement("h4", { id: "wb-agent-installed-title" }, t("settings.agentInstalled", "Installed")),
+        React.createElement("span", null, t("settings.agentInstalledCount", { n: installed.length }))
+      ),
+      installed.length === 0
+        ? React.createElement("div", { className: "wb-extensions-empty" }, t("settings.agentInstalledEmpty", "No Agents installed yet."))
+        : React.createElement("div", { className: "wb-agent-installed-list" },
+            installed.map(function (agent) {
+              var installationId = String(agent.installationId || "");
+              var expanded = props.expandedId === installationId;
+              return React.createElement(AgentCard, {
+                key: installationId || agent.agentId,
+                agent: agent,
+                t: t,
+                busy: props.busy === "agent:" + installationId,
+                expanded: expanded,
+                onToggleExpand: function () { props.onToggleExpand(expanded ? "" : installationId); },
+                onToggle: props.onToggle,
+                onRemove: props.onRemove,
+                onChanged: function (updated) {
+                  if (props.onChanged) props.onChanged(updated);
+                },
+              });
+            })
+          )
+    ),
+    React.createElement("div", { className: "wb-agent-install-other" },
+      React.createElement("button", { type: "button", className: "wb-btn primary", onClick: props.onOpenProposal },
+        React.createElement("span", { "aria-hidden": "true" }, "+ "),
+        t("settings.agentInstallOther", "Install another Agent")
+      ),
+      React.createElement("p", null, t("settings.agentInstallOtherHint", "Non-recommended Agents are marked as external sources and appear in the Installed list after confirmation."))
+    )
   );
 }
 
@@ -4560,6 +5328,18 @@ function ExtensionCard(props) {
         React.createElement("div", null, React.createElement("dt", null, t("settings.extensionHealth")), React.createElement("dd", null, extensionHealthLabel(item, t))),
         item.ownership === "system" && item.managed_available && React.createElement("div", null, React.createElement("dt", null, t("settings.extensionManagedInstalled")), React.createElement("dd", { className: "mono" }, [item.managed_version, item.managed_path].filter(Boolean).join(" · "))),
       ),
+      item.kind === "mcp" && React.createElement("section", { className: "wb-extension-mcp-tools", "aria-labelledby": "mcp-tools-" + item.id },
+        React.createElement("div", { className: "wb-extension-mcp-tools-head" },
+          React.createElement("h4", { id: "mcp-tools-" + item.id }, t("settings.extensionMcpTools")),
+          React.createElement("span", null, t("settings.toolsCount", { n: (item.tools || []).length }))
+        ),
+        (item.tools || []).length
+          ? React.createElement("ul", null, item.tools.map(function (tool) { return React.createElement("li", { key: tool.name },
+              React.createElement("code", null, tool.name),
+              React.createElement("p", null, tool.description || t("settings.extensionMcpToolNoDescription"))
+            ); }))
+          : React.createElement("div", { className: "wb-extension-mcp-tools-empty" }, t(item.enabled === false ? "settings.extensionMcpToolsDisabled" : item.connection_status !== "connected" ? "settings.extensionMcpToolsDisconnected" : "settings.extensionMcpToolsEmpty"))
+      ),
       item.kind === "toolchain" && (item.versions || []).length > 1 && React.createElement("label", { className: "wb-extension-version-select" },
         React.createElement("span", null, t("settings.extensionDefaultVersion")),
         React.createElement("select", { className: "wb-select", value: item.default_version || item.version, disabled: busy, onChange: function (event) { props.onDefault(item, event.target.value); } },
@@ -4571,9 +5351,12 @@ function ExtensionCard(props) {
         canStopUsingLocalProgram && React.createElement("button", { type: "button", className: "wb-btn danger", disabled: busy, onClick: function () { props.onUnbind(item); } }, t("settings.extensionUnbindSystem"))
       ),
       canConfigureHook && React.createElement("div", { className: "wb-extension-hook-action" },
-        React.createElement("div", null,
+        React.createElement("div", { className: "wb-extension-hook-copy" },
+          React.createElement("span", { className: "wb-extension-hook-icon", "aria-hidden": "true" }, React.createElement(AutomationIcon)),
+          React.createElement("div", null,
           React.createElement("strong", null, t("settings.extensionHookTitle")),
           React.createElement("small", null, t("settings.extensionHookHint"))
+          )
         ),
         React.createElement("button", { type: "button", className: "wb-btn", disabled: busy, onClick: function () { props.onConfigureHook(item); } }, t("settings.extensionConfigureHook"))
       ),
@@ -4636,6 +5419,9 @@ function ExtensionsPanel(p) {
   var [hookDraft, setHookDraft] = useStateSt(emptyHookDraft);
   var [hookArgsText, setHookArgsText] = useStateSt("");
   var [hookEditorOpen, setHookEditorOpen] = useStateSt(false);
+  var [taskClock, setTaskClock] = useStateSt(Date.now());
+  var [agentProposalOpen, setAgentProposalOpen] = useStateSt(false);
+  var [agentExpandedId, setAgentExpandedId] = useStateSt("");
 
   function tell(text, kind) {
     setNotice(text || ""); setNoticeKind(kind || "info");
@@ -4654,15 +5440,95 @@ function ExtensionsPanel(p) {
     window.addEventListener("cyrene:open-agent-hooks", openAgentHooks);
     return function () { window.removeEventListener("cyrene:open-agent-hooks", openAgentHooks); };
   }, []);
+  // The Composer's Agent submenu opens "Extensions → installed Agent details"
+  // for unavailable Agents through this event (handoff §8.2).
+  useEffectSt(function () {
+    function openAgentDetail(event) {
+      var detail = (event && event.detail) || {};
+      setCategory("agent");
+      setQuery("");
+      var installationId = String(detail.installationId || "");
+      if (installationId && installationId !== "agent_cyrene_builtin") {
+        setAgentExpandedId(installationId);
+      }
+    }
+    window.addEventListener("cyrene:open-agent-detail", openAgentDetail);
+    return function () { window.removeEventListener("cyrene:open-agent-detail", openAgentDetail); };
+  }, []);
   useEffectSt(function () {
     var active = (data.tasks || []).some(function (task) { return ["queued", "running", "cancelling"].indexOf(task.status) >= 0; });
     if (!active) return undefined;
     var timer = setInterval(load, 1200);
     return function () { clearInterval(timer); };
   }, [data.tasks]);
+  useEffectSt(function () {
+    var expirations = (data.tasks || []).filter(function (task) { return ["failed", "interrupted"].indexOf(task.status) >= 0; }).map(function (task) { return Date.parse(task.finished_at || "") + 30000; }).filter(function (value) { return Number.isFinite(value) && value > taskClock; });
+    if (!expirations.length) return undefined;
+    var timer = setTimeout(function () { setTaskClock(Date.now()); }, Math.max(0, Math.min.apply(Math, expirations) - Date.now() + 50));
+    return function () { clearTimeout(timer); };
+  }, [data.tasks, taskClock]);
 
   function openInstaller(kind) {
     setInstallKind(kind); setRemoteQuery(""); setRemoteResults([]); setRemoteCursor(""); setSkillSelection(null); setRequestedVersion(""); setManualMcpOpen(false); setInstallOpen(true);
+  }
+
+  function startAgentInstall(item) {
+    var displayName = item.displayName || item.agentId || item.name || item.id;
+    window.CyreneUI.require("feedback").confirmModal({
+      title: t("settings.extensionInstallConfirmTitle"),
+      body: t("settings.agentInstallConfirmBody", { name: displayName, version: item.version || item.recommended_version || "" }),
+      confirmLabel: t("settings.install"),
+    }).then(function (ok) {
+      if (!ok) return;
+      setBusy("agent-install:" + String(item.agentId || ""));
+      settingsFetch("/api/extensions/install", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ kind: "agent", extension_id: item.agentId || item.id }),
+      }).then(readSettingsResponse).then(function () {
+        notifyAgentCatalogChanged("installed");
+        tell(t("settings.extensionInstallStarted"), "success"); return load();
+      }).catch(function (error) { tell(error.message, "error"); }).finally(function () { setBusy(""); });
+    });
+  }
+
+  function toggleAgent(agent) {
+    var installationId = String(agent.installationId || "");
+    if (!installationId) return;
+    setBusy("agent:" + installationId);
+    settingsFetch("/api/extensions/agent/" + encodeURIComponent(installationId) + "/enabled", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ enabled: agent.enabled === false }),
+    }).then(readSettingsResponse).then(function () { notifyAgentCatalogChanged("enabled"); return load(); }).catch(function (error) { tell(error.message, "error"); }).finally(function () { setBusy(""); });
+  }
+
+  function removeAgent(agent) {
+    var installationId = String(agent.installationId || "");
+    var agentId = String(agent.agentId || "");
+    window.CyreneUI.require("feedback").confirmModal({
+      body: t("settings.agentRemoveConfirm", { name: agent.displayName || agentId || installationId }),
+      confirmLabel: t("settings.uninstall"),
+      danger: true,
+    }).then(function (ok) {
+      if (!ok) return;
+      setBusy("agent:" + installationId);
+      settingsFetch("/api/extensions/agent/" + encodeURIComponent(agentId || installationId), { method: "DELETE" })
+        .then(readSettingsResponse).then(function () { notifyAgentCatalogChanged("removed"); tell(t("settings.saved"), "success"); return load(); })
+        .catch(function (error) { tell(error.message, "error"); }).finally(function () { setBusy(""); });
+    });
+  }
+
+  function replaceAgentCard(updated) {
+    setData(function (current) {
+      var agents = (current.agents && typeof current.agents === "object") ? current.agents : {};
+      var installed = Array.isArray(agents.installed) ? agents.installed : [];
+      var nextInstalled = installed.map(function (agent) {
+        return String(agent.installationId || "") === String(updated.installationId || "") ? updated : agent;
+      });
+      return {
+        ...current,
+        agents: { ...agents, installed: nextInstalled },
+      };
+    });
   }
 
   function searchRemote(append) {
@@ -4689,7 +5555,7 @@ function ExtensionsPanel(p) {
         method: "POST", headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ kind: item.kind, extension_id: item.id, ...(request || {}) }),
       }).then(readSettingsResponse).then(function () {
-        tell(t("settings.extensionInstallStarted"), "success"); return load();
+        notifyAgentCatalogChanged("installed"); tell(t("settings.extensionInstallStarted"), "success"); return load();
       }).catch(function (error) { tell(error.message, "error"); }).finally(function () { setBusy(""); });
     });
   }
@@ -4890,12 +5756,15 @@ function ExtensionsPanel(p) {
     settingsFetch("/api/hooks/extensions/cli/" + encodeURIComponent(item.id) + "/configure", { method: "POST" }).then(readSettingsResponse).then(function () { tell(t("settings.extensionHookStarted"), "success"); }).catch(function (error) { tell(error.message, "error"); }).finally(function () { setBusy(""); });
   }
 
-  var categories = ["recommended", "skills", "mcp", "cli", "toolchains"];
+  var categories = ["recommended", "skills", "mcp", "cli", "toolchains", "agent"];
   var items = data[category] || [];
   var q = query.trim().toLowerCase();
   var filtered = items.filter(function (item) { return !q || [extensionDisplayName(item, t), item.id, extensionDisplayDescription(item, t), item.version].join(" ").toLowerCase().indexOf(q) >= 0; });
-  var activeTasks = (data.tasks || []).filter(function (task) { return ["queued", "running", "cancelling", "failed", "interrupted"].indexOf(task.status) >= 0; }).slice(0, 4);
+  var activeTasks = (data.tasks || []).filter(function (task) { return extensionTaskIsVisible(task, taskClock); }).slice(0, 4);
   var installCategory = category === "recommended" ? "toolchain" : category === "skills" ? "skill" : category === "toolchains" ? "toolchain" : category;
+  var agentListing = (data.agents && typeof data.agents === "object") ? data.agents : { recommended: [], installed: [] };
+  var agentRecommended = Array.isArray(agentListing.recommended) ? agentListing.recommended : [];
+  var agentInstalled = Array.isArray(agentListing.installed) ? agentListing.installed : [];
 
   return React.createElement("div", { className: "wb-extensions-page" },
     React.createElement("header", { className: "wb-extensions-header" },
@@ -4903,7 +5772,7 @@ function ExtensionsPanel(p) {
       React.createElement("div", { className: "wb-extension-header-actions" },
         React.createElement("button", { type: "button", className: "wb-btn", onClick: function () { loadHooks(true); } }, t("settings.agentHooks")),
         React.createElement("button", { type: "button", className: "wb-btn", onClick: openSources }, t("settings.extensionSources")),
-        category !== "recommended" && React.createElement("button", { type: "button", className: "wb-btn primary wb-extension-install-button wb-extension-tab-install-button", onClick: function () { openInstaller(installCategory); } }, t("settings.extensionInstallAction." + installCategory)),
+        category !== "recommended" && category !== "agent" && React.createElement("button", { type: "button", className: "wb-btn primary wb-extension-install-button wb-extension-tab-install-button", onClick: function () { openInstaller(installCategory); } }, t("settings.extensionInstallAction." + installCategory)),
       )
     ),
     data.python_prompt_required && React.createElement("button", { type: "button", className: "wb-extension-python-callout", onClick: function () { setCategory("recommended"); setQuery("Python"); } },
@@ -4914,24 +5783,62 @@ function ExtensionsPanel(p) {
     React.createElement("div", { className: "wb-extension-tabs", role: "tablist", "aria-label": t("settings.extensions") },
       categories.map(function (id) { return React.createElement("button", { key: id, type: "button", role: "tab", "aria-selected": category === id ? "true" : "false", className: category === id ? "active" : "", onClick: function () { setCategory(id); setQuery(""); } }, t("settings.extensionTab." + id)); })
     ),
-    React.createElement("div", { className: "wb-extension-filter" },
+    category !== "agent" && React.createElement("div", { className: "wb-extension-filter" },
       React.createElement("input", { className: "wb-input", value: query, onChange: function (event) { setQuery(event.target.value); }, placeholder: t("settings.extensionFilter") , "aria-label": t("settings.extensionFilter") }),
       React.createElement("span", null, t("settings.extensionCount", { n: filtered.length }))
     ),
     notice && React.createElement("div", { className: "wb-extension-notice " + noticeKind, role: noticeKind === "error" ? "alert" : "status" }, notice),
     activeTasks.length > 0 && React.createElement("section", { className: "wb-extension-tasks", "aria-label": t("settings.extensionTasks") },
-      activeTasks.map(function (task) { return React.createElement("div", { key: task.id, className: "wb-extension-task " + task.status },
-        React.createElement("div", null, React.createElement("strong", null, extensionDisplayName({ id: task.extension_id, name: task.extension_id }, t)), React.createElement("span", { title: task.error || "" }, extensionTaskStatusLabel(task.status, t))),
-        React.createElement("div", { className: "wb-extension-task-progress", role: "progressbar", "aria-valuemin": "0", "aria-valuemax": "100", "aria-valuenow": task.progress || 0 }, React.createElement("span", { style: { width: (task.progress || 0) + "%" } })),
-        task.status === "failed" && React.createElement("p", { className: "wb-extension-task-error", role: "alert" }, (task.reason_code ? task.reason_code + ": " : "") + (task.error || t("settings.extensionInstallFailed"))),
-        ["queued", "running"].indexOf(task.status) >= 0 && React.createElement("button", { type: "button", className: "wb-btn", onClick: function () { settingsFetch("/api/extensions/tasks/" + task.id + "/cancel", { method: "POST" }).then(load); } }, t("settings.cancel")),
-      ); })
+      React.createElement("h3", null, t("settings.extensionTasks")),
+      activeTasks.map(function (task) {
+        var progress = Math.max(0, Math.min(100, Number(task.progress) || 0));
+        var errorContent = task.status === "failed" ? extensionTaskErrorContent(task, t) : null;
+        return React.createElement("article", { key: task.id, className: "wb-extension-task " + task.status },
+          React.createElement("div", { className: "wb-extension-task-head" },
+            React.createElement("strong", null, extensionDisplayName({ id: task.extension_id, name: task.extension_id }, t)),
+            React.createElement("span", { className: "wb-extension-task-status" }, extensionTaskStatusLabel(task.status, t))
+          ),
+          React.createElement("div", { className: "wb-extension-task-progress-row" },
+            React.createElement("div", { className: "wb-extension-task-progress", role: "progressbar", "aria-label": t("settings.extensionTaskProgress", { name: task.extension_id }), "aria-valuemin": "0", "aria-valuemax": "100", "aria-valuenow": progress }, React.createElement("span", { style: { width: progress + "%" } })),
+            React.createElement("span", { className: "wb-extension-task-percent", "aria-hidden": "true" }, progress + "%")
+          ),
+          errorContent && React.createElement("div", { className: "wb-extension-task-error", role: "alert" },
+            React.createElement("strong", null, errorContent.title),
+            React.createElement("p", null, errorContent.hint),
+            task.error && React.createElement("details", null,
+              React.createElement("summary", null, t("settings.extensionTaskTechnicalDetails")),
+              React.createElement("pre", null, task.error)
+            )
+          ),
+          ["queued", "running"].indexOf(task.status) >= 0 && React.createElement("div", { className: "wb-extension-task-actions" }, React.createElement("button", { type: "button", className: "wb-btn", onClick: function () { settingsFetch("/api/extensions/tasks/" + task.id + "/cancel", { method: "POST" }).then(load); } }, t("settings.cancel")))
+        );
+      })
     ),
-    React.createElement("div", { className: "wb-extension-list", "aria-busy": loading ? "true" : "false" },
-      loading && React.createElement("div", { className: "wb-extensions-empty" }, t("settings.loading")),
-      !loading && filtered.length === 0 && React.createElement("div", { className: "wb-extensions-empty" }, t("settings.extensionEmpty")),
-      filtered.map(function (item) { return React.createElement(ExtensionCard, { key: item.key, item: item, t: t, busy: busy === item.key, onInstall: function (target) { if (category === "recommended" && target.id !== "tex") startInstall(target, {}); else { openInstaller(target.kind); if (target.id === "tex") { setRemoteQuery("TeX"); setRemoteResults([target]); } } }, onRemove: removeItem, onToggle: toggleItem, onDefault: setDefault, onBind: bindSystem, onUnbind: unbindSystem, onConfigureHook: configureExtensionHook }); })
-    ),
+    category === "agent"
+      ? React.createElement(AgentTabPanel, {
+          t: t,
+          recommended: agentRecommended,
+          installed: agentInstalled,
+          busy: busy,
+          expandedId: agentExpandedId,
+          onToggleExpand: function (installationId) { setAgentExpandedId(installationId); },
+          onInstall: startAgentInstall,
+          onToggle: toggleAgent,
+          onRemove: removeAgent,
+          onChanged: replaceAgentCard,
+          onOpenInstalled: function (installationId) {
+            setAgentExpandedId(installationId);
+            var panel = document.querySelector(".wb-extensions-page");
+            if (panel) panel.scrollIntoView({ behavior: "smooth", block: "start" });
+          },
+          onOpenProposal: function () { setAgentProposalOpen(true); },
+        })
+      : React.createElement("div", { className: "wb-extension-list", "aria-busy": loading ? "true" : "false" },
+          loading && React.createElement("div", { className: "wb-extensions-empty" }, t("settings.loading")),
+          !loading && filtered.length === 0 && React.createElement("div", { className: "wb-extensions-empty" }, t("settings.extensionEmpty")),
+          filtered.map(function (item) { return React.createElement(ExtensionCard, { key: item.key, item: item, t: t, busy: busy === item.key, onInstall: function (target) { if (category === "recommended" && target.id !== "tex") startInstall(target, {}); else { openInstaller(target.kind); if (target.id === "tex") { setRemoteQuery("TeX"); setRemoteResults([target]); } } }, onRemove: removeItem, onToggle: toggleItem, onDefault: setDefault, onBind: bindSystem, onUnbind: unbindSystem, onConfigureHook: configureExtensionHook }); })
+        ),
+    agentProposalOpen && React.createElement(AgentInstallProposalModal, { t: t, onUpdated: function () { notifyAgentCatalogChanged("installed"); return load(); }, onClose: function () { setAgentProposalOpen(false); } }),
     hooksOpen && React.createElement("div", { className: "wb-extension-modal-scrim", onMouseDown: function (event) { if (event.target === event.currentTarget) setHooksOpen(false); } },
       React.createElement("section", { className: "wb-extension-modal wb-hooks-modal", role: "dialog", "aria-modal": "true", "aria-labelledby": "agent-hooks-title" },
         React.createElement("header", null, React.createElement("div", null, React.createElement("h3", { id: "agent-hooks-title" }, t("settings.agentHooks")), React.createElement("p", null, t("settings.agentHooksSubtitle"))), React.createElement("button", { type: "button", className: "wb-extension-close", onClick: function () { setHooksOpen(false); }, "aria-label": t("settings.close") }, "×")),

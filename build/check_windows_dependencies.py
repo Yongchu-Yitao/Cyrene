@@ -24,10 +24,17 @@ def main() -> int:
         for line in (result.stdout + "\n" + result.stderr).splitlines()
         if line.strip()
     ]
+    expected_missing_for_native_woa = {
+        "simplexng", "rapidocr",
+    } if __import__("platform").machine().lower() in {"arm64", "aarch64"} else set()
     unexpected = [
         line
         for line in lines
         if not any(pattern.fullmatch(line) for pattern in _ALLOWED_WINDOWS_CONFLICTS)
+        and not any(
+            line.startswith(f"cyrene ") and f" requires {package}, which is not installed." in line
+            for package in expected_missing_for_native_woa
+        )
     ]
     for line in lines:
         print(line)

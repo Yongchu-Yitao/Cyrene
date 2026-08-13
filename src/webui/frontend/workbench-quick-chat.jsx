@@ -165,6 +165,7 @@ function QuickChatApp() {
   var [pickerOpen, setPickerOpen] = useQuickChatState(false);
   var [search, setSearch] = useQuickChatState("");
   var [sendError, setSendError] = useQuickChatState("");
+  var [pendingAgentRequest, setPendingAgentRequest] = useQuickChatState(null);
   var [screenshotAddedAt, setScreenshotAddedAt] = useQuickChatState("");
   // Bumped on a session reset (re-trigger) to remount the composer with a clean
   // slate (the window only hides, so its React state would otherwise survive).
@@ -300,14 +301,21 @@ function QuickChatApp() {
         if (chatId !== activeChatIdRef.current) return;
         setMessages(function (prev) { return quickChatDedupAppend(prev, assistantMessages); });
       },
-      onAwaitingUser: function (chatId) {
+      onAwaitingUser: function (chatId, pending) {
         if (chatId !== activeChatIdRef.current) return;
-        // Quick chat has no inline answer prompt; surface a hint and let the user
-        // continue in the main window if a permission/clarification is needed.
+        var kind = String(pending && pending.kind || "");
+        if (kind === "permission.requested" || kind === "elicitation.requested") {
+          setPendingAgentRequest(pending);
+          setSendError("");
+          return;
+        }
         setSendError(quickChatText(
           "需要在主窗口里确认权限或回答问题后才能继续。",
           "Needs a permission/clarification answer in the main window to continue."
         ));
+      },
+      onAgentRequestResolved: function (chatId) {
+        if (chatId === activeChatIdRef.current) setPendingAgentRequest(null);
       },
       onError: function (chatId, err) {
         if (chatId !== activeChatIdRef.current) return;
@@ -340,6 +348,7 @@ function QuickChatApp() {
     runtime && runtime.text,
     runtime && runtime.progress && runtime.progress.length,
     runtime && runtime.segments && runtime.segments.length,
+    runtime && runtime.notifications && runtime.notifications.length,
   ]);
 
   // Keep accent + light/dark live-synced with the main window. Both are applied
@@ -436,10 +445,40 @@ function QuickChatApp() {
     };
   }, [selected, defaultProject]);
 
+  // Full chat snapshot for an opened conversation so the shared composer
+  // inherits the Agent binding, modelAccess and capability snapshot instead of
+  // falling back to the built-in Cyrene Agent (handoff §19.2 Quick Chat rule).
+  var [selectedChatSnapshot, setSelectedChatSnapshot] = useQuickChatState(null);
+  useQuickChatEffect(function () {
+    if (!selected || !selected.chatId) {
+      setSelectedChatSnapshot(null);
+      return undefined;
+    }
+    var cancelled = false;
+    model.getChat(selected.chatId).then(function (chat) {
+      if (!cancelled && chat && chat.id) setSelectedChatSnapshot(chat);
+    }).catch(function () {
+      if (!cancelled) setSelectedChatSnapshot(null);
+    });
+    return function () { cancelled = true; };
+  }, [selected && selected.chatId]);
+
   var composerChat = useQuickChatMemo(function () {
     if (!selected) return null;
-    return { id: selected.chatId, legacy: false, model: selected.model };
-  }, [selected]);
+    var snapshot = selectedChatSnapshot && String(selectedChatSnapshot.id || "") === String(selected.chatId || "")
+      ? selectedChatSnapshot
+      : null;
+    return {
+      id: selected.chatId,
+      legacy: false,
+      model: selected.model,
+      agent: snapshot && snapshot.agent ? snapshot.agent : undefined,
+      modelAccess: snapshot && snapshot.modelAccess ? snapshot.modelAccess : undefined,
+      capabilities: snapshot && snapshot.capabilities ? snapshot.capabilities : undefined,
+      capabilitiesRevision: snapshot ? snapshot.capabilitiesRevision : undefined,
+      pendingQuestion: pendingAgentRequest || undefined,
+    };
+  }, [selected, selectedChatSnapshot, pendingAgentRequest]);
 
   function refetchTargets(query) {
     quickChatJson(QUICK_CHAT_TARGETS_URL + "?limit=40&q=" + encodeURIComponent(query || ""))
@@ -502,6 +541,7 @@ function QuickChatApp() {
     setMessages([]);
     setSelected(null);
     setSendError("");
+    setPendingAgentRequest(null);
     setComposerKey(function (k) { return k + 1; });
   }
 
@@ -522,6 +562,25 @@ function QuickChatApp() {
     } else {
       setSendError(quickChatErrorText(err) || quickChatText("发送失败，请重试。", "Send failed. Try again."));
     }
+  }
+
+  function answerAgentRequest(questionId, optionText) {
+    var pending = pendingAgentRequest;
+    var chatId = activeChatIdRef.current;
+    var formAnswer = optionText && typeof optionText === "object" && optionText.__agentForm === true;
+    var answer = formAnswer ? optionText : String(optionText || "").trim();
+    if (!chatId || !pending || !questionId || (!formAnswer && !answer)) return;
+    var response = String(pending.kind || "") === "permission.requested"
+      ? { type: "option", optionId: String(answer || "") }
+      : (formAnswer
+        ? { type: "form", form: answer.values && typeof answer.values === "object" ? answer.values : {} }
+        : { type: "text", text: String(answer || "") });
+    setPendingAgentRequest(null);
+    setSendError("");
+    return model.answerAgentRequest(chatId, questionId, response).catch(function (err) {
+      setPendingAgentRequest(pending);
+      showSendError(err);
+    });
   }
 
   // input: { message, attachments, mode, command } from the shared composer.
@@ -597,7 +656,7 @@ function QuickChatApp() {
     : (quickChatText("新建对话", "New chat") + (defaultProject ? " · " + defaultProject.name : ""));
 
   var composerReady = typeof chatService.Composer === "function" && composerProject;
-  var hasTranscript = messages.length > 0 || !!runtime;
+  var hasTranscript = messages.length > 0 || !!runtime || !!pendingAgentRequest;
 
   return (
     <div className="workbench-shell wbq-shell" data-screen-label="Cyrene · quick chat">
@@ -689,11 +748,30 @@ function QuickChatApp() {
                 </div>
               ) : null}
               {messages.map(function (m) {
+                if (m.notificationCard && typeof chatService.AgentNotification === "function") {
+                  return React.createElement(chatService.AgentNotification, { key: m.id, notice: m.notification });
+                }
                 return m.role === "user"
                   ? React.createElement(chatService.UserMessage, { key: m.id, msg: m })
                   : React.createElement(chatService.AssistantMessage, { key: m.id, msg: m });
               })}
-              {runtime ? React.createElement(chatService.LiveMessage, { runtime: runtime }) : null}
+              {runtime && typeof chatService.RuntimeTranscript === "function"
+                ? React.createElement(chatService.RuntimeTranscript, { runtime: runtime })
+                : (runtime ? React.createElement(chatService.LiveMessage, { runtime: runtime }) : null)}
+              {pendingAgentRequest && typeof chatService.QuestionPrompt === "function"
+                ? (typeof chatService.ThreadItem === "function"
+                  ? React.createElement(chatService.ThreadItem, null,
+                      React.createElement(chatService.QuestionPrompt, {
+                        pending: pendingAgentRequest,
+                        onAnswer: answerAgentRequest,
+                        busy: false,
+                      }))
+                  : React.createElement(chatService.QuestionPrompt, {
+                      pending: pendingAgentRequest,
+                      onAnswer: answerAgentRequest,
+                      busy: false,
+                    }))
+                : null}
             </div>
 
             <div className="wbq-footer">

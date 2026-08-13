@@ -119,6 +119,13 @@ _DEFAULT_SETTINGS: dict = {
     "agent_proactive": True,
     "app_language": "",
     "timezone": "Asia/Shanghai",
+    # Renderer-wide low-overhead visual profile. The frontend mirrors this
+    # value into localStorage so it can apply before the first React paint.
+    "performance_mode": False,
+    # Explicit opt-in proxy for Cyrene-launched external Agent processes.
+    # Disabled means proxy variables are not inherited from the parent app.
+    "external_agent_proxy_enabled": False,
+    "external_agent_proxy_port": 7897,
     # Custom/API models use a currency budget. Keep the persisted defaults in
     # sync with the values shown by BudgetPanel so enabling the switch without
     # editing the amount still creates a real, visible budget.

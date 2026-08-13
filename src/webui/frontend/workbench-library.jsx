@@ -618,7 +618,7 @@
     }
     return h("div", { className: "wb-lib-editor-layout" },
       h("div", { className: "wb-lib-note-compose" }, h("textarea", { value: value, onChange: function (event) { setValue(event.target.value); }, placeholder: "记录这篇文献的发现、疑问或下一步…" }), h("button", { type: "button", className: "wb-lib-primary", disabled: busy || !value.trim(), onClick: submit }, busy ? h(Spinner) : icon("plus", 14), " 添加笔记")),
-      h("div", { className: "wb-lib-note-list" }, notes.length ? notes.map(function (note) { return h("article", { key: note.id }, h("h4", null, note.title || "笔记"), h("p", null, note.content || note.text || ""), h("small", null, note.author || "我", " · ", formatDate(note.updated_at || note.created_at, true))); }) : h("p", { className: "wb-lib-muted" }, "还没有笔记。")));
+      h("div", { className: "wb-lib-note-list" }, notes.length ? notes.map(function (note) { return h("article", { key: note.id }, h("h4", null, note.title || L("library.note", "Note")), h("p", null, note.content || note.text || ""), h("small", null, note.author || L("library.me", "Me"), " · ", formatDate(note.updated_at || note.created_at, true))); }) : h("p", { className: "wb-lib-muted" }, L("library.noNotes", "No notes yet."))));
   }
 
   function TagsWorkspace(props) {
@@ -641,8 +641,8 @@
   function RelationsWorkspace(props) {
     var relations = Array.isArray(props.item.relations) ? props.item.relations : [];
     return h("div", { className: "wb-lib-relations" }, relations.length ? relations.map(function (relation, index) {
-      return h("article", { key: relation.id || index }, h("span", null, icon("link", 17)), h("div", null, h("h4", null, relation.title || relation.name || relation.target_title || "关联条目"), h("p", null, relation.relation_type || relation.type || "related")));
-    }) : h(StatePanel, { title: "尚无关联条目", body: "同步 Zotero Related Items，或由 Agent 建立项目内的文献关系。" }));
+      return h("article", { key: relation.id || index }, h("span", null, icon("link", 17)), h("div", null, h("h4", null, relation.title || relation.name || relation.target_title || L("library.relatedItem", "Related item")), h("p", null, relation.relation_type || relation.type || L("library.related", "Related"))));
+    }) : h(StatePanel, { title: L("library.noRelations", "No related items"), body: L("library.noRelationsHint", "Sync Zotero Related Items or let an Agent create literature relationships in this project.") }));
   }
 
   function AttachmentsWorkspace(props) {
@@ -657,14 +657,14 @@
     var disabled = !props.citation && !props.bibtex;
     function copy(format) { setOpen(false); props.onCopy(format); }
     return h("div", { className: "wb-lib-menu-wrap wb-lib-copy-control" },
-      h("button", { type: "button", className: "wb-lib-copy-trigger", disabled: disabled, onClick: function () { setOpen(!open); } }, icon("copy", 13), " 复制", h("span", { className: "wb-lib-copy-chevron" }, icon("chevron", 11))),
+      h("button", { type: "button", className: "wb-lib-copy-trigger", disabled: disabled, onClick: function () { setOpen(!open); } }, icon("copy", 13), " ", L("common.copy", "Copy"), h("span", { className: "wb-lib-copy-chevron" }, icon("chevron", 11))),
       h(Dropdown, { open: open, onClose: function () { setOpen(false); }, className: "wb-lib-copy-menu" },
-        h("button", { type: "button", disabled: !props.citation, onClick: function () { copy("text"); } }, h("span", null, h("b", null, "复制纯文本"), h("small", null, "当前引用格式"))),
-        h("button", { type: "button", disabled: !props.bibtex, onClick: function () { copy("bibtex"); } }, h("span", null, h("b", null, "复制 BibTeX"), h("small", null, "可直接导入文献工具")))));
+        h("button", { type: "button", disabled: !props.citation, onClick: function () { copy("text"); } }, h("span", null, h("b", null, L("library.copyPlainText", "Copy plain text")), h("small", null, L("library.currentCitationStyle", "Current citation style")))),
+        h("button", { type: "button", disabled: !props.bibtex, onClick: function () { copy("bibtex"); } }, h("span", null, h("b", null, L("library.copyBibtex", "Copy BibTeX")), h("small", null, L("library.bibtexImportHint", "Ready to import into reference tools"))))));
   }
 
   function CitationWorkspace(props) {
-    return h("div", { className: "wb-lib-citation-workspace" }, h("div", { className: "wb-lib-citation-toolbar" }, h("label", null, "引用格式", h("select", { value: props.style, onChange: function (event) { props.onStyle(event.target.value); } }, ["ieee", "apa", "mla", "chicago-author-date", "gb-t-7714-2015-numeric"].map(function (style) { return h("option", { key: style, value: style }, style.toUpperCase()); }))), h(CitationCopyControl, { citation: props.citation, bibtex: props.bibtex, onCopy: props.onCopy })),
+    return h("div", { className: "wb-lib-citation-workspace" }, h("div", { className: "wb-lib-citation-toolbar" }, h("label", null, L("library.citationStyle", "Citation style"), h("select", { value: props.style, onChange: function (event) { props.onStyle(event.target.value); } }, ["ieee", "apa", "mla", "chicago-author-date", "gb-t-7714-2015-numeric"].map(function (style) { return h("option", { key: style, value: style }, style.toUpperCase()); }))), h(CitationCopyControl, { citation: props.citation, bibtex: props.bibtex, onCopy: props.onCopy })),
       props.loading ? h(StatePanel, { loading: true, title: "正在生成引用…" }) : props.error ? h(StatePanel, { kind: "error", title: "引用生成失败", body: props.error, action: props.onRetry, actionLabel: "重试" }) : h("blockquote", null, props.citation || "暂无可用引用。"),
       props.citekey && h("div", { className: "wb-lib-citekey" }, h("span", null, "Citation key"), h("code", null, props.citekey)));
   }

@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import importlib
 import json
 import logging
 import os
@@ -21,6 +22,7 @@ import tempfile
 import threading
 import urllib.parse
 import uuid
+import zipfile
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -45,6 +47,8 @@ logger = logging.getLogger(__name__)
 
 _ROOT = DATA_DIR / "extensions"
 _BIN_DIR = _ROOT / "bin"
+_AGENT_DIR = _ROOT / "agents"
+_AGENT_BIN_DIR = _AGENT_DIR / "bin"
 _MISE_DATA = _ROOT / "mise"
 _MISE_CONFIG = _ROOT / "mise-config"
 _MISE_CACHE = CACHE_DIR / "extensions" / "mise"
@@ -129,6 +133,8 @@ def _safe_version_text(value: str) -> str:
 
 def _extension_error_reason(exc: BaseException) -> str:
     message = str(exc).casefold()
+    if "requirements are unsatisfiable" in message or "does not satisfy python" in message:
+        return "dependency_conflict"
     if "could not be connected" in message or "not connected" in message:
         return "mcp_connection_failed"
     if "deterministic executable" in message or "did not expose" in message:
@@ -185,6 +191,17 @@ def _extract_verified_tar(archive: Path, destination: Path) -> None:
             raise RuntimeError("Archive failed the safe extraction policy") from exc
 
 
+def _extract_verified_zip(archive: Path, destination: Path) -> None:
+    """Extract a zip archive without allowing absolute or traversing paths."""
+    root = destination.resolve()
+    with zipfile.ZipFile(archive) as handle:
+        for member in handle.infolist():
+            target = (destination / member.filename).resolve()
+            if target != root and root not in target.parents:
+                raise RuntimeError("Archive contains an unsafe path")
+        handle.extractall(destination)
+
+
 def _which_candidates(names: tuple[str, ...]) -> list[Path]:
     candidates: list[Path] = []
     seen: set[str] = set()
@@ -211,6 +228,16 @@ def _platform_key() -> str:
     arch = "arm64" if machine in {"arm64", "aarch64"} else "x64"
     system = "windows" if os.name == "nt" else "macos" if os.sys.platform == "darwin" else "linux"
     return f"{system}-{arch}"
+
+
+async def _terminate_process(proc: Any) -> None:
+    """Terminate a stuck manager process, then kill and reap it if needed."""
+    proc.terminate()
+    try:
+        await asyncio.wait_for(proc.wait(), timeout=5)
+    except asyncio.TimeoutError:
+        proc.kill()
+        await proc.wait()
 
 
 def _bundled_binary(name: str) -> Path | None:
@@ -294,6 +321,8 @@ def agent_extension_paths() -> list[str]:
     )
     if managed_mise_enabled:
         candidates.append(_MISE_DATA / "shims")
+    if _AGENT_BIN_DIR.is_dir():
+        candidates.append(_AGENT_BIN_DIR)
     managed_tex = any(str(record.get("id") or "") == "tex" for record in managed_toolchains)
     if managed_tex and extension_is_enabled("toolchain", "tex"):
         candidates.append(_TEX_DIR / "bin")
@@ -441,6 +470,17 @@ def _audit(actor: str, action: str, target: str, detail: dict[str, Any], result:
     record = {"at": _now(), "actor": actor, "action": action, "target": target, "result": result, "detail": clean}
     with _AUDIT_FILE.open("a", encoding="utf-8") as handle:
         handle.write(json.dumps(record, ensure_ascii=False) + "\n")
+
+
+def audit_extension_event(
+    actor: str,
+    action: str,
+    target: str,
+    detail: dict[str, Any],
+    result: str = "ok",
+) -> None:
+    """Public, redacting audit boundary for extension subdomains."""
+    _audit(actor, action, target, detail, result)
 
 
 def audit_records(limit: int = 200) -> list[dict[str, Any]]:
@@ -710,6 +750,15 @@ class ExtensionService:
         _audit(actor, "default.set", f"toolchain:{extension_id}", {"version": version})
         return {"ok": True, "version": version}
 
+    def agent_listing(self) -> dict[str, Any]:
+        """Recommended and installed Agent lists for the Extension Center."""
+        agent_runtime = importlib.import_module("cyrene.extensions.agent_runtime")
+
+        return {
+            "recommended": agent_runtime.recommended_agent_cards(),
+            "installed": [agent_runtime.agent_card(record) for record in agent_runtime.list_agent_installations()],
+        }
+
     def list_extensions(self) -> dict[str, Any]:
         skill_cards = []
         for skill in build_skills():
@@ -740,7 +789,7 @@ class ExtensionService:
                 "path": str(config.get("command") or config.get("url") or ""), "health": "healthy" if status == "connected" else status,
                 "source": config.get("source", {"transport": config.get("transport", "stdio")}),
                 "capabilities": ["enable", "disable", "remove", "test"], "enabled": config.get("enabled", True),
-                "connection_status": status, "tool_count": int(live.get("tool_count") or 0), "config": config,
+                "connection_status": status, "tool_count": int(live.get("tool_count") or 0), "tools": list(live.get("tools") or []), "config": config,
             })
 
         cli_records = {str(item.get("id")): item for item in self._managed_records("extension_clis")}
@@ -775,6 +824,7 @@ class ExtensionService:
         recommended = [recommended_lookup[key] for key in RECOMMENDED_ORDER if key in recommended_lookup]
         return {
             "recommended": recommended, "skills": skill_cards, "mcp": mcp_cards, "cli": cli_cards, "toolchains": toolchain_cards,
+            "agents": self.agent_listing(),
             "infrastructure": {"uv": uv_card, "mise": self.infrastructure_status("mise")}, "tasks": self.tasks.list(),
             "python_prompt_required": next((item["observed_state"] == "missing" for item in toolchain_cards if item["id"] == "python"), False),
         }
@@ -806,6 +856,20 @@ class ExtensionService:
             action = "skill.enable" if enabled else "skill.disable"
         elif kind == "mcp":
             return await self.set_mcp_enabled(extension_id, enabled, actor=actor)
+        elif kind == "agent":
+            agent_runtime = importlib.import_module("cyrene.extensions.agent_runtime")
+            from cyrene.agent_runtime.process_manager import get_process_manager
+
+            record = agent_runtime.get_agent_installation(extension_id) or agent_runtime.find_installation_by_agent_id(extension_id)
+            if not record:
+                raise ValueError("Installed agent not found")
+            record["enabled"] = bool(enabled)
+            record["updated_at"] = _now()
+            agent_runtime.update_installation_record(record)
+            if not enabled:
+                await get_process_manager().release(str(record.get("installation_id") or ""))
+            extension_id = str(record.get("agent_id") or extension_id)
+            action = "agent.enable" if enabled else "agent.disable"
         elif kind in {"cli", "toolchain"}:
             if kind == "toolchain" and extension_id == "uv":
                 if not _bundled_binary("uv"):
@@ -836,6 +900,10 @@ class ExtensionService:
     async def search(self, kind: str, query: str, *, advanced: bool = False, cursor: str = "") -> dict[str, Any]:
         kind = str(kind or "").strip().lower()
         query = str(query or "").strip()
+        if kind == "agent":
+            # The Agent Tab deliberately has no remote search and the UI must
+            # not call it; return an empty result set instead of a network hit.
+            return {"results": [], "source": "none", "next_cursor": "", "note": "agent_search_disabled"}
         if kind == "cli":
             return await self._search_cli(query, advanced=advanced)
         if kind == "mcp":
@@ -1297,10 +1365,12 @@ class ExtensionService:
     def start_install(self, kind: str, extension_id: str, request: dict[str, Any], *, actor: str = "user") -> dict[str, Any]:
         kind = str(kind or "").strip().lower()
         extension_id = str(extension_id or "").strip()
-        if kind not in {"cli", "toolchain", "skill", "mcp"} or not extension_id:
+        if kind not in {"cli", "toolchain", "skill", "mcp", "agent"} or not extension_id:
             raise ValueError("kind and extension_id are required")
         manager = "skill" if kind == "skill" else "mise"
-        if kind == "toolchain":
+        if kind == "agent":
+            manager = "agent"
+        elif kind == "toolchain":
             spec = TOOLCHAINS.get(extension_id)
             if not spec:
                 request_spec = dict(request.get("spec") or {})
@@ -1320,10 +1390,52 @@ class ExtensionService:
         _audit(actor, "install.start", f"{kind}:{extension_id}", {"request": request})
         return task
 
+    async def create_agent_install_proposal(self, source: Any, requested_version: str = "", *, actor: str = "user") -> dict[str, Any]:
+        """Validate a cyrene.agent/v1 source and create a pending proposal.
+
+        External calls never install directly: a proposal must be created here,
+        reviewed, and then explicitly confirmed.
+        """
+        agent_runtime = importlib.import_module("cyrene.extensions.agent_runtime")
+
+        return await agent_runtime.create_agent_install_proposal(source, requested_version, actor=actor)
+
+    async def confirm_agent_install_proposal(self, proposal_id: str, *, actor: str = "user") -> dict[str, Any]:
+        """Confirm a pending proposal and feed the async install/audit pipeline.
+
+        Re-validates the stored manifest and is idempotent for the same
+        agent/source/version: an already confirmed proposal or an existing
+        installation returns the existing record instead of a duplicate task.
+        """
+        agent_runtime = importlib.import_module("cyrene.extensions.agent_runtime")
+
+        proposal = agent_runtime.get_agent_proposal(proposal_id)
+        if proposal is None:
+            raise ValueError("agent_proposal_not_found")
+        if proposal.get("status") != "pending":
+            existing = agent_runtime.find_installation_by_agent_id(str(proposal.get("agentId") or ""))
+            if existing:
+                return {"ok": True, "already_installed": True, "installation": agent_runtime.agent_card(existing), "proposalId": proposal_id}
+            raise ValueError("agent_proposal_not_pending")
+        agent_runtime.validate_agent_manifest(proposal.get("manifest"))
+        existing = agent_runtime.find_installation_by_agent_id(str(proposal.get("agentId") or ""))
+        if existing and str(existing.get("version")) == str(proposal.get("version") or ""):
+            agent_runtime.mark_proposal_confirmed(proposal_id)
+            return {"ok": True, "already_installed": True, "installation": agent_runtime.agent_card(existing), "proposalId": proposal_id}
+        task = self.start_install("agent", str(proposal.get("agentId") or ""), {
+            "proposal_id": proposal_id,
+            "manifest": proposal.get("manifest"),
+            "source": proposal.get("source"),
+            "source_trust": proposal.get("sourceTrust"),
+        }, actor=actor)
+        return {"ok": True, "task": task, "proposalId": proposal_id}
+
     async def _install_worker(self, task_id: str, kind: str, extension_id: str, request: dict[str, Any], actor: str) -> dict[str, Any]:
         staging = _STAGING_DIR / task_id
         staging.mkdir(parents=True, exist_ok=True)
         self.tasks.update(task_id, progress=8, message="Resolving exact version and source")
+        if kind == "agent":
+            return await self._install_agent(task_id, extension_id, request, actor)
         if kind == "skill":
             return await self._install_skill(task_id, extension_id, request, staging, actor)
         if kind == "mcp":
@@ -1334,18 +1446,170 @@ class ExtensionService:
             return await self._install_tex(task_id, request, staging, actor)
         return await self._install_mise(task_id, kind, extension_id, request, actor)
 
+    async def _install_agent(self, task_id: str, extension_id: str, request: dict[str, Any], actor: str) -> dict[str, Any]:
+        """Validate and register an Agent for on-demand ACP stdio execution.
+
+        Manifests never execute arbitrary installers. Recommended and external
+        records bind to a reviewed bare command, which the runtime resolves and
+        starts only when a conversation sends its first turn.
+        """
+        agent_runtime = importlib.import_module("cyrene.extensions.agent_runtime")
+        from cyrene.extensions.catalog import RECOMMENDED_AGENTS
+
+        self.tasks.update(task_id, progress=12, message="Validating Agent manifest")
+        proposal_id = str(request.get("proposal_id") or "").strip()
+        manifest: dict[str, Any] | None = None
+        source: dict[str, Any] = {}
+        source_trust = "external_unverified"
+        recommended = False
+        managed_path = ""
+        checksum = ""
+        if proposal_id:
+            proposal = agent_runtime.get_agent_proposal(proposal_id)
+            if not proposal or proposal.get("status") != "pending":
+                raise RuntimeError("Agent install proposal is missing or no longer pending")
+            manifest = proposal.get("manifest")
+            source = dict(proposal.get("source") or {})
+            source_trust = str(proposal.get("sourceTrust") or "external_unverified")
+        elif extension_id in RECOMMENDED_AGENTS:
+            manifest = agent_runtime.recommended_manifest(extension_id)
+            source = {"type": "recommended", "agentId": extension_id}
+            source_trust = "cyrene_recommended"
+            recommended = True
+        else:
+            raise ValueError("agent_install_invalid: non-recommended Agent installs require a valid pending proposal_id")
+        if not manifest:
+            raise ValueError("agent_manifest_invalid: no manifest provided for Agent installation")
+        manifest = agent_runtime.validate_agent_manifest(manifest)
+        agent_id = str(manifest["agentId"])
+        if extension_id and agent_id != extension_id:
+            raise ValueError("agent_manifest_invalid: manifest agentId does not match the requested extension id")
+        if recommended:
+            managed_path, checksum = await self._install_recommended_agent(
+                task_id,
+                agent_id,
+                RECOMMENDED_AGENTS[agent_id],
+            )
+        record = agent_runtime.register_agent_installation(
+            agent_id=agent_id,
+            manifest=manifest,
+            source=source,
+            source_trust=source_trust,
+            recommended=recommended,
+            proposal_id=proposal_id,
+            actor=actor,
+        )
+        if managed_path:
+            record["managed_path"] = managed_path
+            record["checksum"] = checksum
+            record["runtime_state"] = "not_started"
+            agent_runtime.update_installation_record(record)
+        if proposal_id:
+            agent_runtime.mark_proposal_confirmed(proposal_id)
+        self.tasks.update(task_id, progress=100, message="Agent installed")
+        _audit(actor, "install.finish", f"agent:{agent_id}", {
+            "installation_id": record["installation_id"],
+            "version": record["version"],
+            "source_trust": record["source_trust"],
+            "runtime_state": record["runtime_state"],
+        })
+        return {
+            "installed": True,
+            "installation_id": record["installation_id"],
+            "runtime_state": record["runtime_state"],
+            "blocked_reason": "",
+            "note": "Manifest validated; ACP stdio starts on demand when the Agent is selected.",
+        }
+
+    async def _install_recommended_agent(
+        self,
+        task_id: str,
+        agent_id: str,
+        profile: dict[str, Any],
+    ) -> tuple[str, str]:
+        """Install one exact, reviewed ACP-registry distribution."""
+        distribution = profile.get("distribution") if isinstance(profile.get("distribution"), dict) else {}
+        kind = str(distribution.get("kind") or "")
+        version = str(profile.get("recommended_version") or "")
+        install_root = _AGENT_DIR / agent_id / version
+        stage_root = _STAGING_DIR / task_id / "agent"
+        stage_root.mkdir(parents=True, exist_ok=True)
+        _AGENT_BIN_DIR.mkdir(parents=True, exist_ok=True)
+        command = str(profile.get("command") or "")
+        if kind == "npm":
+            npm_shim = command + (".cmd" if os.name == "nt" else "")
+            # npm packages land in a per-version node_modules/.bin layout; that
+            # exact path is the same-version idempotency check. npm packages
+            # have no pinned digest, so no self-computed checksum is claimed.
+            destination = install_root / "node_modules" / ".bin" / npm_shim
+            if destination.is_file():
+                return str(destination), ""
+            npm = shutil.which("npm", path=extension_environment().get("PATH"))
+            package = str(distribution.get("package") or "")
+            if not npm or not package:
+                raise RuntimeError("Recommended Agent requires the managed Node.js/npm runtime")
+            install_root.parent.mkdir(parents=True, exist_ok=True)
+            npm_stage = stage_root / "npm"
+            npm_stage.mkdir(parents=True, exist_ok=True)
+            await self._run_manager(
+                task_id,
+                [npm, "install", "--ignore-scripts", "--no-audit", "--no-fund", "--prefix", str(npm_stage), package],
+                env=extension_environment(),
+                timeout=900,
+            )
+            source = npm_stage / "node_modules" / ".bin" / npm_shim
+            if not source.is_file():
+                raise RuntimeError("Recommended Agent package did not expose its reviewed executable")
+            if install_root.exists():
+                shutil.rmtree(install_root)
+            shutil.move(str(npm_stage), str(install_root))
+            destination = install_root / "node_modules" / ".bin" / npm_shim
+            destination.chmod(destination.stat().st_mode | 0o111)
+            return str(destination), ""
+        destination = install_root / command
+        if destination.is_file():
+            expected = str((distribution.get("platforms") or {}).get(_platform_key(), {}).get("sha256") or "")
+            if not expected:
+                return str(destination), ""
+            actual = hashlib.sha256(destination.read_bytes()).hexdigest()
+            if actual.lower() != expected.lower():
+                raise RuntimeError("Installed Agent checksum does not match its pinned digest")
+            return str(destination), expected
+        platform_spec = (distribution.get("platforms") or {}).get(_platform_key())
+        if not isinstance(platform_spec, dict):
+            raise RuntimeError(f"Recommended Agent is unavailable for {_platform_key()}")
+        url = str(platform_spec.get("url") or "")
+        expected = str(platform_spec.get("sha256") or "")
+        if not url or not expected:
+            raise RuntimeError("Recommended Agent distribution is missing a verified source")
+        archive = stage_root / Path(urllib.parse.urlparse(url).path).name
+        checksum = await self._download(task_id, url, archive, expected)
+        extracted = stage_root / "extracted"
+        extracted.mkdir(parents=True, exist_ok=True)
+        if archive.suffix == ".zip":
+            _extract_verified_zip(archive, extracted)
+        else:
+            _extract_verified_tar(archive, extracted)
+        executable_name = str(platform_spec.get("executable") or command)
+        source = next((item for item in extracted.rglob(executable_name) if item.is_file()), None)
+        if source is None:
+            raise RuntimeError("Recommended Agent archive did not contain its reviewed executable")
+        install_root.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(source, destination)
+        destination.chmod(destination.stat().st_mode | 0o111)
+        return str(destination), checksum
+
     async def _run_manager(self, task_id: str, command: list[str], *, env: dict[str, str], timeout: float = 1800) -> tuple[str, str]:
         if task_id:
             self.tasks.update(task_id, progress=35, message="Downloading and installing")
         proc = await asyncio.create_subprocess_exec(*command, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE, env=env)
         try:
             stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=timeout)
+        except asyncio.TimeoutError:
+            await _terminate_process(proc)
+            raise RuntimeError(f"Installation timed out after {timeout:.0f} seconds") from None
         except asyncio.CancelledError:
-            proc.terminate()
-            try:
-                await asyncio.wait_for(proc.wait(), timeout=5)
-            except asyncio.TimeoutError:
-                proc.kill()
+            await _terminate_process(proc)
             raise
         if proc.returncode != 0:
             raise RuntimeError((stderr or stdout).decode("utf-8", errors="replace")[-2000:])
@@ -1488,7 +1752,7 @@ class ExtensionService:
         if last_error is not None:
             raise RuntimeError(f"All configured download sources failed: {last_error}") from last_error
         actual = digest.hexdigest()
-        if sources.get("verify_signatures", True) and expected_sha256 and actual.lower() != expected_sha256.lower().removeprefix("sha256:"):
+        if expected_sha256 and actual.lower() != expected_sha256.lower().removeprefix("sha256:"):
             raise RuntimeError("Downloaded file checksum does not match the publisher digest")
         return actual
 
@@ -1714,6 +1978,26 @@ class ExtensionService:
                     await self._run_manager("", [str(mise), "unuse", "--global", f"{managed_ref}@{managed_version}"], env=extension_environment(), timeout=300)
             _forget_extension_enabled(kind, extension_id)
             _audit(actor, "uninstall", f"mcp:{extension_id}", {})
+            return {"ok": True}
+        if kind == "agent":
+            agent_runtime = importlib.import_module("cyrene.extensions.agent_runtime")
+            from cyrene.agent_runtime.process_manager import get_process_manager
+
+            record = agent_runtime.get_agent_installation(extension_id) or agent_runtime.find_installation_by_agent_id(extension_id)
+            if not record:
+                return {"ok": False, "error": "Installed agent not found"}
+            await get_process_manager().release(str(record.get("installation_id") or ""))
+            managed_path = str(record.get("managed_path") or "")
+            if managed_path:
+                managed_root = _AGENT_DIR / str(record.get("agent_id") or "")
+                if _is_under(Path(managed_path), managed_root) and managed_root.is_dir():
+                    shutil.rmtree(managed_root)
+                shim = _AGENT_BIN_DIR / str(record.get("command") or "")
+                if shim.is_file():
+                    shim.unlink()
+            agent_runtime.delete_agent_installation(str(record.get("installation_id")))
+            _forget_extension_enabled(kind, str(record.get("agent_id") or extension_id))
+            _audit(actor, "uninstall", f"agent:{record.get('agent_id')}", {"installation_id": record.get("installation_id")})
             return {"ok": True}
         setting_key = "extension_toolchains" if kind == "toolchain" else "extension_clis"
         records = self._managed_records(setting_key)

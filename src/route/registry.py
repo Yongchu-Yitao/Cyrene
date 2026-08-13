@@ -12,6 +12,8 @@ from route.agent.chat import register_chat_routes
 from route.agent.claude_code import register_claude_code_routes
 from route.agent.collaboration import register_collaboration_routes
 from route.agent.sessions import register_session_routes
+from route.agents import register_agent_routes
+from route.agent_model_gateway import register_agent_model_gateway_routes
 from route.app_control import register_app_control_routes
 from route.backup import register_backup_routes
 from route.channels.wechat import register_wechat_routes
@@ -139,6 +141,7 @@ def register_routes(app: FastAPI, bot: Any, db_path: str) -> None:
         goal_loop_adapter=goal_loop_control_adapter,
     )
     register_pdf_routes(router)
+    register_agent_model_gateway_routes(router)
     register_voice_routes(router)
     router.include_router(code_router)
 
@@ -153,6 +156,7 @@ def register_routes(app: FastAPI, bot: Any, db_path: str) -> None:
         register_session_routes,
         register_learning_routes,
         register_extension_routes,
+        register_agent_routes,
         register_hook_routes,
         register_skill_routes,
         register_search_routes,

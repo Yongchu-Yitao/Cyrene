@@ -85,6 +85,7 @@ function Get-PeArchitecture {
     switch ($machine) {
         0x014c { return "x86" }
         0x8664 { return "x64" }
+        0xa641 { return "arm64ec" }
         0xaa64 { return "arm64" }
         default { return "unknown-0x$($machine.ToString('x4'))" }
     }
@@ -102,8 +103,30 @@ function Assert-PeArchitecture {
     }
 }
 
+function Assert-NativeArm64Tree {
+    param(
+        [Parameter(Mandatory = $true)][string]$Root,
+        [Parameter(Mandatory = $true)][string]$Label
+    )
+    $foreign = @()
+    foreach ($file in Get-ChildItem -Path $Root -Recurse -File) {
+        if ($file.Extension.ToLowerInvariant() -notin @(".exe", ".dll", ".pyd", ".node")) { continue }
+        $actual = Get-PeArchitecture -Path $file.FullName
+        if ($actual -notin @("arm64", "arm64ec")) {
+            $foreign += "$actual $($file.FullName)"
+        }
+    }
+    if ($foreign.Count -gt 0) {
+        throw "$Label contains non-ARM native binaries:`n$($foreign -join [Environment]::NewLine)"
+    }
+}
+
 if (-not (Test-Path $frozenExe)) { throw "Frozen backend missing: $frozenExe" }
-Assert-PeArchitecture -Path $frozenExe -Expected "x64" -Label "Portable Python backend"
+$backendArch = if ($Arch -eq "arm64") { "arm64" } else { "x64" }
+Assert-PeArchitecture -Path $frozenExe -Expected $backendArch -Label "Portable Python backend"
+if ($Arch -eq "arm64") {
+    Assert-NativeArm64Tree -Root (Join-Path $distRoot "Cyrene") -Label "Portable Python backend"
+}
 $numpyDir = Join-Path $distRoot "Cyrene\_internal\numpy"
 if (-not (Test-Path $numpyDir)) { throw "NumPy package missing from frozen backend" }
 $numpyCore = @(Get-ChildItem -Path $numpyDir -Recurse -Filter "_multiarray_umath*.pyd")
@@ -142,7 +165,22 @@ $installedBackend = Join-Path $installDir "resources\python-bundle\Cyrene.exe"
 if (-not (Test-Path $installedApp)) { throw "Installed Electron app missing: $installedApp" }
 if (-not (Test-Path $installedBackend)) { throw "Installed Python backend missing: $installedBackend" }
 Assert-PeArchitecture -Path $installedApp -Expected $Arch -Label "Installed Electron app"
-Assert-PeArchitecture -Path $installedBackend -Expected "x64" -Label "Installed Python backend"
+Assert-PeArchitecture -Path $installedBackend -Expected $backendArch -Label "Installed Python backend"
+if ($Arch -eq "arm64") {
+    Assert-NativeArm64Tree -Root (Join-Path $installDir "resources\python-bundle") -Label "Installed Python backend"
+}
+if ($Arch -eq "arm64") {
+    $ocrSidecar = Join-Path $installDir "resources\x64-sidecars\ocr\CyreneOcr.exe"
+    $searchSidecar = Join-Path $installDir "resources\x64-sidecars\simplexng\CyreneSimpleXNG.exe"
+    if (-not (Test-Path $ocrSidecar)) { throw "WoA OCR sidecar missing: $ocrSidecar" }
+    if (-not (Test-Path $searchSidecar)) { throw "WoA SimpleXNG sidecar missing: $searchSidecar" }
+    Assert-PeArchitecture -Path $ocrSidecar -Expected "x64" -Label "WoA OCR sidecar"
+    Assert-PeArchitecture -Path $searchSidecar -Expected "x64" -Label "WoA SimpleXNG sidecar"
+    $ocrSmoke = Invoke-CapturedProcess -Path $ocrSidecar -Arguments @("--smoke-test") -Label "woa-ocr-sidecar"
+    Assert-SmokeSucceeded -Result $ocrSmoke -SuccessMarker "CYRENE_OCR_SIDECAR_SMOKE=ok" -Label "WoA OCR sidecar smoke test"
+    $searchSmoke = Invoke-CapturedProcess -Path $searchSidecar -Arguments @("--smoke-test") -Label "woa-simplexng-sidecar"
+    Assert-SmokeSucceeded -Result $searchSmoke -SuccessMarker "CYRENE_SIMPLEXNG_SIDECAR_SMOKE=ok" -Label "WoA SimpleXNG sidecar smoke test"
+}
 
 $installedSmoke = Invoke-CapturedProcess `
     -Path $installedBackend `

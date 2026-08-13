@@ -34,6 +34,10 @@ TOKEN_HEADER = b"x-cyrene-token"
 # ``/api/instance-id`` is used by the CLI/browser-fallback health check
 # (see ``cyrene.runtime.host._fallback_to_browser``).
 _EXEMPT_PATHS = frozenset({"/api/instance-id"})
+_MODEL_GATEWAY_PATHS = frozenset({
+    "/api/agent-model-gateway/v1/chat/completions",
+    "/api/agent-model-gateway/v1/responses",
+})
 
 # Hostnames considered local (port suffix is validated separately).
 _LOCAL_HOSTS = frozenset({"127.0.0.1", "localhost", "[::1]", "::1"})
@@ -123,7 +127,8 @@ class LocalAuthMiddleware:
             return
 
         # --- Token enforcement ---------------------------------------------
-        if self._expected_token and path not in _EXEMPT_PATHS:
+        gateway_scoped_auth = path in _MODEL_GATEWAY_PATHS
+        if self._expected_token and path not in _EXEMPT_PATHS and not gateway_scoped_auth:
             provided = _header(headers, TOKEN_HEADER)
             if not provided or not hmac.compare_digest(provided, self._expected_token):
                 await self._reject(scope, send, http_status=401, reason="bad token")

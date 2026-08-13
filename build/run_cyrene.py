@@ -15,7 +15,6 @@ import jinja2
 import multipart
 from pathlib import Path
 import subprocess
-import simplexng
 import sniffio
 import websockets
 
@@ -39,7 +38,6 @@ def _run_smoke_test() -> None:
         "aiosqlite": getattr(aiosqlite, "__version__", "unknown"),
         "apscheduler": getattr(apscheduler, "__version__", "unknown"),
         "croniter": getattr(croniter, "__version__", "unknown"),
-        "simplexng": getattr(simplexng, "__version__", "unknown"),
         "multipart": getattr(multipart, "__version__", "unknown"),
     }
     compatibility_aliases = {
@@ -69,7 +67,12 @@ def _run_smoke_test() -> None:
         "starlette": None,
         "numpy": None,
         "numpy._core._multiarray_umath": None,
+        "onnxruntime": None,
     }
+    import os
+    import platform
+    if os.name == "nt" and platform.machine().lower() in {"arm64", "aarch64"}:
+        _smoke_imports["onnxruntime_qnn"] = None
     for _name in _smoke_imports:
         try:
             mod = importlib.import_module(_name)
@@ -102,21 +105,6 @@ def _run_smoke_test() -> None:
         raise RuntimeError(f"Bundled Codex runtime returned no version: {codex_path}")
     print(f"codex_runtime={codex_version}")
     print(f"codex_config={CodexConfig.__name__}")
-
-    # simplexng vendors SearXNG under its _vendor tree and injects that path at
-    # import time; verify the frozen copy is complete and importable.
-    try:
-        vendor_dir = Path(simplexng.__file__).parent / "_vendor"
-        if str(vendor_dir) not in sys.path:
-            sys.path.insert(0, str(vendor_dir))
-        import searx  # noqa: F401
-        import searx.network.client  # noqa: F401
-
-        print("searx_runtime=ok")
-    except Exception as exc:
-        print(f"searx_runtime=FAILED: {exc!r}")
-
-    import os
 
     if os.environ.get("PLAYWRIGHT_BROWSERS_PATH"):
         try:

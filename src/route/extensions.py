@@ -51,6 +51,23 @@ def register_extension_routes(router: APIRouter, _bot: Any, _db_path: str) -> No
         except Exception as exc:
             return _error(exc)
 
+    @router.post("/api/extensions/agents/install-proposals")
+    async def api_create_agent_install_proposal(request: Request):
+        try:
+            body = await request.json()
+            return await service.create_agent_install_proposal(body.get("source"), str(body.get("requestedVersion") or ""), actor="user")
+        except httpx.HTTPError as exc:
+            return _error(RuntimeError(f"Agent manifest source request failed: {exc}"), 502)
+        except Exception as exc:
+            return _error(exc)
+
+    @router.post("/api/extensions/agents/install-proposals/{proposal_id}/confirm")
+    async def api_confirm_agent_install_proposal(proposal_id: str):
+        try:
+            return await service.confirm_agent_install_proposal(proposal_id, actor="user")
+        except Exception as exc:
+            return _error(exc)
+
     @router.post("/api/extensions/install")
     async def api_install_extension(request: Request):
         try:

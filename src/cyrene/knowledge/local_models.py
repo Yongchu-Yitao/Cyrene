@@ -236,6 +236,79 @@ _TASKS: dict[str, asyncio.Task] = {}
 _PROGRESS: dict[str, dict[str, Any]] = {}
 _VALIDATED: set[str] = set()
 _RESETTERS: dict[str, Callable[[], None]] = {}
+_QNN_REGISTERED = False
+
+
+def _register_qnn_plugin(ort: Any) -> bool:
+    global _QNN_REGISTERED
+    if _QNN_REGISTERED:
+        return True
+    try:
+        import onnxruntime_qnn as qnn
+
+        ort.register_execution_provider_library(
+            "QNNExecutionProvider", qnn.get_library_path()
+        )
+        _QNN_REGISTERED = True
+        return True
+    except Exception:
+        return False
+
+
+def configure_qnn_session_options(options: Any, ort: Any) -> bool:
+    """Attach the WoA QNN HTP/NPU plugin to an ORT SessionOptions object."""
+    if not (
+        sys.platform == "win32"
+        and platform.machine().lower() in {"arm64", "aarch64"}
+        and _register_qnn_plugin(ort)
+    ):
+        return False
+    try:
+        import onnxruntime_qnn as qnn
+
+        devices = [
+            device for device in ort.get_ep_devices()
+            if device.ep_name == "QNNExecutionProvider"
+        ]
+        npu_devices = [
+            device for device in devices
+            if "NPU" in str(getattr(getattr(device, "device", None), "type", "")).upper()
+        ]
+        selected = npu_devices or devices
+        if not selected:
+            return False
+        options.add_provider_for_devices(selected, {
+            "backend_path": qnn.get_qnn_htp_path(),
+            "enable_htp_fp16_precision": "1",
+        })
+        return True
+    except Exception:
+        return False
+
+
+def onnx_execution_providers() -> list[Any]:
+    """Return the fastest safe ONNX Runtime providers for this host.
+
+    Windows ARM prefers Qualcomm's QNN HTP/NPU provider when the packaged
+    runtime exposes it. DirectML remains the broad Windows GPU fallback for a
+    compatible sidecar/runtime; CPU is always retained as the final fallback.
+    """
+    try:
+        import onnxruntime as ort
+
+        available = set(ort.get_available_providers())
+    except Exception:
+        available = set()
+
+    providers: list[Any] = []
+    if "DmlExecutionProvider" in available:
+        providers.append("DmlExecutionProvider")
+    if "CUDAExecutionProvider" in available:
+        providers.append("CUDAExecutionProvider")
+    if "CoreMLExecutionProvider" in available:
+        providers.append("CoreMLExecutionProvider")
+    providers.append("CPUExecutionProvider")
+    return providers
 
 
 def sherpa_provider(model_id: str = "") -> str:
@@ -380,11 +453,20 @@ def status() -> dict[str, Any]:
             try:
                 import onnxruntime as ort
 
-                runtime = (
-                    "cuda"
-                    if "CUDAExecutionProvider" in ort.get_available_providers()
-                    else "onnx-cpu"
-                )
+                available = set(ort.get_available_providers())
+                if (
+                    sys.platform == "win32"
+                    and platform.machine().lower() in {"arm64", "aarch64"}
+                    and _register_qnn_plugin(ort)
+                    and any(device.ep_name == "QNNExecutionProvider" for device in ort.get_ep_devices())
+                ):
+                    runtime = "qnn-npu"
+                elif "DmlExecutionProvider" in available:
+                    runtime = "directml"
+                elif "CUDAExecutionProvider" in available:
+                    runtime = "cuda"
+                else:
+                    runtime = "onnx-cpu"
             except Exception:
                 runtime = "onnx-cpu"
         models.append({

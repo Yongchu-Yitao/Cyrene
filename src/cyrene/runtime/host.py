@@ -535,6 +535,9 @@ def _run_electron_mode() -> None:
         )
 
         app = create_app(bot, str(DB_PATH), instance_id=instance_id, ui_mode=ui_mode)
+        app.state.web_port = int(selected_port)
+        from cyrene.agent_runtime.model_gateway import configure_model_gateway
+        configure_model_gateway(selected_port)
         import uvicorn
         config = uvicorn.Config(app, host="127.0.0.1", port=selected_port, log_level="info")
         server = uvicorn.Server(config)
@@ -721,6 +724,9 @@ def _run_web_gui() -> None:
         )
 
         app = create_app(bot, str(DB_PATH), instance_id=instance_id, ui_mode=ui_mode)
+        app.state.web_port = int(selected_port)
+        from cyrene.agent_runtime.model_gateway import configure_model_gateway
+        configure_model_gateway(selected_port)
         import uvicorn
         config = uvicorn.Config(app, host="127.0.0.1", port=selected_port, log_level="info")
         server = uvicorn.Server(config)

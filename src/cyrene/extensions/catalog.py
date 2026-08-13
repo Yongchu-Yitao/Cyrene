@@ -85,3 +85,72 @@ DEFAULT_SOURCE_SETTINGS = {
 
 ALLOWED_MISE_BACKENDS = frozenset({"core", "aqua", "github", "gitlab", "npm", "pipx", "gem", "cargo", "go"})
 HIGH_RISK_MISE_BACKENDS = frozenset({"npm", "pipx", "gem", "cargo", "go"})
+
+
+# ---------------------------------------------------------------------------
+# External Agent catalog (phase 1)
+# ---------------------------------------------------------------------------
+# Declarative, Cyrene-reviewed profiles only. Recommended distributions are
+# pinned to exact versions from the official ACP registry; binary archives
+# include the publisher digest and npm packages include the exact version.
+AGENT_MANIFEST_API = "cyrene.agent/v1"
+SUPPORTED_AGENT_DRIVERS = frozenset({"acp_stdio"})
+
+# Conservative declarative capability profiles, following the handoff
+# capability schema (supported/unsupported/unknown/degraded).  These are
+# placeholder profiles that a later protocol handshake or probe may refine.
+_AGENT_BASE_CAPABILITIES: dict[str, dict] = {
+    "session": {"load": "supported", "fork": "unknown", "close": "supported"},
+    "input": {"text": "supported", "image": "unknown", "file": "unknown", "audio": "unknown"},
+    "output": {"streaming": "supported", "reasoning": "unknown", "toolLifecycle": "supported", "artifacts": "unknown", "diff": "unknown"},
+    "interaction": {"permission": "agent_defined", "elicitation": "unknown", "steer": "unknown", "cancel": "supported"},
+    "model": {"agentManaged": "supported", "cyreneManaged": ["openai_chat", "openai_responses"], "switchDuringSession": "unsupported", "reasoningEffort": "supported"},
+}
+
+RECOMMENDED_AGENTS: dict[str, dict] = {
+    "opencode": {
+        "agentId": "opencode", "name": "OpenCode", "kind": "agent",
+        "displayName": "OpenCode", "publisher": "Anomaly", "recommended": True,
+        "description": "Open-source coding agent driven over ACP stdio.",
+        "driver": "acp_stdio", "protocol_version": 1, "command": "opencode",
+        "recommended_version": "1.18.18", "version_source": "acp_registry",
+        "default_model_access": "cyrene_managed", "risk": "medium",
+        "capabilities": _AGENT_BASE_CAPABILITIES,
+        "distribution": {
+            "kind": "binary",
+            "platforms": {
+                "macos-arm64": {"url": "https://github.com/anomalyco/opencode/releases/download/v1.18.18/opencode-darwin-arm64.zip", "sha256": "7d668bf26496fec8686d4e51ebb1ac2bd2e393f0c1620aa696c4c242a9e5806a", "executable": "opencode"},
+                "macos-x64": {"url": "https://github.com/anomalyco/opencode/releases/download/v1.18.18/opencode-darwin-x64.zip", "sha256": "9581bd7683a7528456179fb11e3377d9ef568e10a935611a2c6722e349454d83", "executable": "opencode"},
+                "linux-arm64": {"url": "https://github.com/anomalyco/opencode/releases/download/v1.18.18/opencode-linux-arm64.tar.gz", "sha256": "dcb1b5ec5687b43f87749560021f9203f3809e0ce5ae44ff9be8ae17083fe4ba", "executable": "opencode"},
+                "linux-x64": {"url": "https://github.com/anomalyco/opencode/releases/download/v1.18.18/opencode-linux-x64.tar.gz", "sha256": "0cddc222418b8553669905a8980c0cda7088f00da24d83d6ac76b01c9fdb2aaf", "executable": "opencode"},
+                "windows-arm64": {"url": "https://github.com/anomalyco/opencode/releases/download/v1.18.18/opencode-windows-arm64.zip", "sha256": "0d34d837ea3b5e10349d8550318083040a8b4c061d3faaa4eabd339984aa49b0", "executable": "opencode.exe"},
+                "windows-x64": {"url": "https://github.com/anomalyco/opencode/releases/download/v1.18.18/opencode-windows-x64.zip", "sha256": "c6d265376fdb93164013671b0cf402410184f73c34fc15d82d40a16a745b15f4", "executable": "opencode.exe"},
+            },
+        },
+        "repository": "https://github.com/anomalyco/opencode",
+    },
+    "codex-acp": {
+        "agentId": "codex-acp", "name": "Codex ACP", "kind": "agent",
+        "displayName": "Codex ACP", "publisher": "Agent Client Protocol", "recommended": True,
+        "description": "Codex CLI exposed through the Agent Client Protocol.",
+        "driver": "acp_stdio", "protocol_version": 1, "command": "codex-acp",
+        "recommended_version": "1.2.0", "version_source": "acp_registry",
+        "default_model_access": "agent_managed", "risk": "medium",
+        "capabilities": _AGENT_BASE_CAPABILITIES,
+        "distribution": {"kind": "npm", "package": "@agentclientprotocol/codex-acp@1.2.0"},
+        "repository": "https://github.com/agentclientprotocol/codex-acp",
+    },
+    "pi-acp": {
+        "agentId": "pi-acp", "name": "Pi ACP", "kind": "agent",
+        "displayName": "Pi ACP", "publisher": "Sergii Kozak", "recommended": True,
+        "description": "Pi coding agent exposed through the Agent Client Protocol.",
+        "driver": "acp_stdio", "protocol_version": 1, "command": "pi-acp",
+        "recommended_version": "0.0.33", "version_source": "acp_registry",
+        "default_model_access": "agent_managed", "risk": "medium",
+        "capabilities": _AGENT_BASE_CAPABILITIES,
+        "distribution": {"kind": "npm", "package": "pi-acp@0.0.33"},
+        "repository": "https://github.com/svkozak/pi-acp",
+    },
+}
+
+RECOMMENDED_AGENT_ORDER = ("opencode", "codex-acp", "pi-acp")

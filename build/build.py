@@ -27,6 +27,8 @@ PROJECT_ROOT = Path(__file__).resolve().parent.parent
 BUILD_DIR = PROJECT_ROOT / "build"
 DIST_DIR = PROJECT_ROOT / "dist"
 SPEC_FILE = BUILD_DIR / "cyrene.spec"
+OCR_SIDECAR_SPEC = BUILD_DIR / "cyrene_ocr_sidecar.spec"
+SIMPLEXNG_SIDECAR_SPEC = BUILD_DIR / "cyrene_simplexng_sidecar.spec"
 PLAYWRIGHT_BROWSERS_DIR = BUILD_DIR / ".playwright-browsers"
 WEB_LOGO_PATH = PROJECT_ROOT / "src" / "webui" / "static" / "app" / "logo-mark.png"
 
@@ -194,24 +196,36 @@ def run_pyinstaller(arch: str = "x64") -> None:
         "--noconfirm",
         str(SPEC_FILE),
     ]
-    # The Windows ARM64 package intentionally carries an x64 Python backend.
-    # Windows 11 on ARM runs that process natively through its compatibility
-    # layer, while Electron and the installer remain native ARM64. This keeps
-    # the full OCR/media stack available because several Python projects do not
-    # publish Windows ARM64 wheels yet.
     if sys.platform == "win32" and arch == "arm64":
-        bundle_arch = os.environ.get("CYRENE_PYTHON_BUNDLE_ARCH", "arm64").lower()
-        if bundle_arch == "x64":
-            os.environ.pop("PYINSTALLER_TARGET_ARCH", None)
-            print("  [python bundle] x64 compatibility backend for Windows ARM64")
-        else:
-            os.environ["PYINSTALLER_TARGET_ARCH"] = "ARM64"
-            print("  [target] ARM64")
+        if platform.machine().lower() not in {"arm64", "aarch64"}:
+            raise SystemExit("Windows ARM64 core must be built by an ARM64 Python runtime")
+        os.environ["PYINSTALLER_TARGET_ARCH"] = "ARM64"
+        os.environ["CYRENE_WOA_NATIVE_CORE"] = "1"
+        print("  [target] native ARM64 core backend")
     result = subprocess.run(cmd, cwd=str(PROJECT_ROOT))
     if result.returncode != 0:
         print("  [error] PyInstaller failed")
         sys.exit(1)
     print("  [ok] PyInstaller done")
+
+
+def stage_woa_x64_sidecars() -> None:
+    """Build x64-only optional services and stage them for electron-builder."""
+    if not (IS_WIN and platform.machine().lower() in {"amd64", "x86_64"}):
+        raise SystemExit("WoA compatibility sidecars must be built by x64 Python")
+    output_root = DIST_DIR / "x64-sidecars"
+    for name, spec in (("ocr", OCR_SIDECAR_SPEC), ("simplexng", SIMPLEXNG_SIDECAR_SPEC)):
+        target = output_root / name
+        target.mkdir(parents=True, exist_ok=True)
+        cmd = [
+            sys.executable, "-m", "PyInstaller", "--distpath", str(target),
+            "--workpath", str(BUILD_DIR / "build" / f"sidecar-{name}"),
+            "--noconfirm", str(spec),
+        ]
+        result = subprocess.run(cmd, cwd=str(PROJECT_ROOT))
+        if result.returncode != 0:
+            raise SystemExit(result.returncode)
+    print(f"  [ok] WoA x64 sidecars staged at {output_root}")
 
 
 def _codesign_mac(app_path: Path) -> None:
@@ -461,6 +475,20 @@ def configure_playwright_bundle(enabled: bool) -> Path | None:
 def run_electron_builder(arch: str = "x64") -> None:
     """Run electron-builder to package the Electron app around the PyInstaller bundle."""
     electron_dir = PROJECT_ROOT / "electron"
+    sidecar_target = DIST_DIR / "x64-sidecars"
+    sidecar_target.mkdir(parents=True, exist_ok=True)
+    if IS_WIN and arch == "arm64":
+        staged = BUILD_DIR / "woa-x64-sidecars"
+        if not staged.is_dir():
+            raise SystemExit(f"WoA x64 sidecar artifact is missing: {staged}")
+        shutil.copytree(staged, sidecar_target, dirs_exist_ok=True)
+        required = (
+            sidecar_target / "ocr" / "CyreneOcr.exe",
+            sidecar_target / "simplexng" / "CyreneSimpleXNG.exe",
+        )
+        missing = [str(path) for path in required if not path.is_file()]
+        if missing:
+            raise SystemExit("WoA x64 sidecar executable missing: " + ", ".join(missing))
 
     def find_electron_builder() -> str | None:
         """Locate the electron-builder binary, checking common locations."""
@@ -606,6 +634,11 @@ def main() -> None:
         help="在独立 PyInstaller 包中包含 Playwright + Chromium（Electron 桌面包不需要）",
     )
     parser.add_argument(
+        "--woa-x64-sidecars-only",
+        action="store_true",
+        help="构建 WoA 使用的 x64 OCR/SimpleXNG sidecar",
+    )
+    parser.add_argument(
         "--ui-mode",
         choices=["workbench", "agent"],
         default="workbench",
@@ -628,6 +661,10 @@ def main() -> None:
 
     if args.clean:
         clean()
+        return
+
+    if args.woa_x64_sidecars_only:
+        stage_woa_x64_sidecars()
         return
 
     clean()

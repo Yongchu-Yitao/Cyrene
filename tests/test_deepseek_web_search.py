@@ -197,37 +197,20 @@ async def test_native_search_errors_are_safe_and_do_not_include_api_key(monkeypa
         raise AssertionError("expected DeepSeekWebSearchError")
 
 
-async def test_deep_search_prefers_native_and_records_usage(monkeypatch):
-    from cyrene.runtime import database
+async def test_deep_search_keeps_native_search_disabled(monkeypatch):
     from cyrene.tooling.backends import deepseek_web_search as dws
     from cyrene.tooling.backends import search
 
-    candidate = dws.DeepSeekSearchCandidate("deepseek", "deepseek-v4-pro", "key")
-    native = dws.DeepSeekWebSearchResult(
-        text="native result",
-        usage={
-            "prompt_tokens": 10,
-            "completion_tokens": 5,
-            "total_tokens": 15,
-            "prompt_cache_hit_tokens": 2,
-            "prompt_cache_miss_tokens": 8,
-        },
-        duration_ms=321,
+    monkeypatch.setattr(
+        dws,
+        "find_official_deepseek_search_candidate",
+        lambda: (_ for _ in ()).throw(AssertionError("must not probe DeepSeek")),
     )
-    recorded = []
-
-    monkeypatch.setattr(dws, "find_official_deepseek_search_candidate", lambda: candidate)
-    monkeypatch.setattr(dws, "search_with_deepseek", lambda *_args: _async_value(native))
     monkeypatch.setattr(
         search,
         "_deep_search_simplexng",
-        lambda *_args: _async_failure(AssertionError("must not use SimpleXNG")),
+        lambda topic: _async_value(f"simplexng: {topic}"),
     )
-
-    async def record(db_path, **kwargs):
-        recorded.append((db_path, kwargs))
-
-    monkeypatch.setattr(database, "record_token_usage", record)
 
     result = await search.deep_search(
         "query",
@@ -236,58 +219,7 @@ async def test_deep_search_prefers_native_and_records_usage(monkeypatch):
         round_id="round-1",
     )
 
-    assert result == "native result"
-    assert recorded == [
-        (
-            "runtime.db",
-            {
-                "model": "deepseek-v4-flash",
-                "prompt_tokens": 10,
-                "completion_tokens": 5,
-                "total_tokens": 15,
-                "cache_hit_tokens": 2,
-                "cache_miss_tokens": 8,
-                "duration_ms": 321,
-                "round_id": "round-1",
-                "session_id": "chat-1",
-                "caller": "search",
-            },
-        )
-    ]
-
-
-async def test_deep_search_falls_back_when_native_search_fails(monkeypatch):
-    from cyrene.tooling.backends import deepseek_web_search as dws
-    from cyrene.tooling.backends import search
-
-    candidate = dws.DeepSeekSearchCandidate("deepseek", "deepseek-v4-flash", "key")
-    monkeypatch.setattr(dws, "find_official_deepseek_search_candidate", lambda: candidate)
-    monkeypatch.setattr(
-        dws,
-        "search_with_deepseek",
-        lambda *_args: _async_failure(dws.DeepSeekWebSearchError("safe failure")),
-    )
-    monkeypatch.setattr(
-        search,
-        "_deep_search_simplexng",
-        lambda topic: _async_value(f"simplexng: {topic}"),
-    )
-
-    assert await search.deep_search("query") == "simplexng: query"
-
-
-async def test_deep_search_uses_simplexng_without_official_candidate(monkeypatch):
-    from cyrene.tooling.backends import deepseek_web_search as dws
-    from cyrene.tooling.backends import search
-
-    monkeypatch.setattr(dws, "find_official_deepseek_search_candidate", lambda: None)
-    monkeypatch.setattr(
-        search,
-        "_deep_search_simplexng",
-        lambda topic: _async_value(f"simplexng: {topic}"),
-    )
-
-    assert await search.deep_search("query") == "simplexng: query"
+    assert result == "simplexng: query"
 
 
 async def test_tool_passes_run_context_to_search(monkeypatch):
@@ -321,7 +253,3 @@ async def test_tool_passes_run_context_to_search(monkeypatch):
 
 async def _async_value(value):
     return value
-
-
-async def _async_failure(exc):
-    raise exc

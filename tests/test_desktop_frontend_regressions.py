@@ -119,6 +119,7 @@ def test_calendar_expansion_uses_the_same_timezone_across_dst():
         "workbench-library.jsx",
         "workbench.jsx",
         "workbench-chat.jsx",
+        "workbench-quick-chat.jsx",
     ],
 )
 def test_changed_frontend_sources_compile_with_esbuild(filename, tmp_path):

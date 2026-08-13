@@ -3,6 +3,67 @@ import subprocess
 from pathlib import Path
 
 
+def test_external_agent_frontend_consumes_unified_dynamic_events_and_viewers():
+    root = Path(__file__).resolve().parent.parent
+    source = (root / "src" / "webui" / "frontend" / "workbench-chat.jsx").read_text(encoding="utf-8")
+    settings = (root / "src" / "webui" / "frontend" / "settings-overlay.jsx").read_text(encoding="utf-8")
+    i18n = (root / "src" / "webui" / "frontend" / "workbench-i18n.jsx").read_text(encoding="utf-8")
+
+    for handler in (
+        "onArtifactEvent", "onUsageUpdated", "onSessionUpdated",
+        "onPermissionResolved", "onElicitationResolved",
+    ):
+        assert handler in source
+    assert "wbcElicitationFields" in source
+    assert "__agentForm: true" in source
+    assert "session.configOptions" in source
+    assert "capabilitySource" in source
+    assert 'if (value === "agent_defined") return "agent_defined";' in source
+    assert '<audio className="wbc-viewer-media"' in source
+    assert '<video className="wbc-viewer-media"' in source
+    assert "wbcStructuredEventDetail" in source
+    assert "onUnknownAgentEvent" in source
+    assert "wbcToolPresentationKind" in source
+    assert 'notifyAgentCatalogChanged("installed")' in settings
+    assert '"workbenchChat.attachmentType.audio": "音频"' in i18n
+
+
+def test_external_agent_context_uses_report_then_transcript_fallback_copy():
+    root = Path(__file__).resolve().parent.parent
+    source = (root / "src" / "webui" / "frontend" / "workbench-chat.jsx").read_text(encoding="utf-8")
+    i18n = (root / "src" / "webui" / "frontend" / "workbench-i18n.jsx").read_text(encoding="utf-8")
+    assert 'data.compositionSource === "agent_report"' in source
+    assert 'data.compositionSource === "public_transcript"' in source
+    assert "workbenchChat.ctxBlocks.agentReportDetailed" in source
+    assert '"workbenchChat.ctxBlocks.externalEstimate": "以下为 Cyrene 可见的对话内容估算。' in i18n
+    assert 'className: "wbc-ctx-layer-row"' in source
+    assert '"workbenchChat.ctxBlocks.layer.agent_other": "External Agent"' in i18n
+    assert '"workbenchChat.ctxBlocks.layer.agent_other": "外部 Agent"' in i18n
+
+
+def test_external_agent_permission_labels_are_localized_by_protocol_semantics():
+    root = Path(__file__).resolve().parent.parent
+    source = (root / "src" / "webui" / "frontend" / "workbench-chat.jsx").read_text(encoding="utf-8")
+    i18n = (root / "src" / "webui" / "frontend" / "workbench-i18n.jsx").read_text(encoding="utf-8")
+    helper = "function wbcPermissionOptionLabel(" + source.split("function wbcPermissionOptionLabel(", 1)[1].split("function wbcPermissionQuestionText", 1)[0]
+    script = f'''\nfunction wbcT(key, fallback) {{\n  const zh = {{\n    "workbenchChat.permissionOnce": "允许一次",\n    "workbenchChat.permissionAlways": "始终允许",\n    "workbenchChat.permissionSession": "本次会话允许",\n    "workbenchChat.reject": "拒绝"\n  }};\n  return zh[key] || fallback;\n}}\nfunction wbcQuestionOptionValue(option) {{ return String(option.optionId || option.id || option.label || ""); }}\n{helper}\nconst labels = [\n  wbcPermissionOptionLabel({{optionId:"allow_once", label:"Allow once"}}, 0, 3),\n  wbcPermissionOptionLabel({{optionId:"allow_always", label:"Always allow"}}, 1, 3),\n  wbcPermissionOptionLabel({{optionId:"reject", label:"Reject"}}, 2, 3)\n];\nprocess.stdout.write(JSON.stringify(labels));\n'''
+    completed = subprocess.run(["node", "-e", script], check=True, capture_output=True, text=True)
+    assert json.loads(completed.stdout) == ["允许一次", "始终允许", "拒绝"]
+    assert '"workbenchChat.permissionAlways": "始终允许"' in i18n
+
+
+def test_system_default_model_description_is_localized_without_rewriting_custom_copy():
+    root = Path(__file__).resolve().parent.parent
+    source = (root / "src" / "webui" / "frontend" / "workbench-chat.jsx").read_text(encoding="utf-8")
+    i18n = (root / "src" / "webui" / "frontend" / "workbench-i18n.jsx").read_text(encoding="utf-8")
+    friendly = "function wbcFriendlyModelName(" + source.split("function wbcFriendlyModelName(", 1)[1].split("function wbcLocalizedModelDescription", 1)[0]
+    localized = "function wbcLocalizedModelDescription(" + source.split("function wbcLocalizedModelDescription(", 1)[1].split("function wbcNormalizePermissionMode", 1)[0]
+    script = f'''\nfunction wbcT(key, fallback, params) {{\n  if (key === "workbenchChat.modelProviderDefault") return params.provider + " 默认配置";\n  return fallback;\n}}\n{friendly}\n{localized}\nprocess.stdout.write(JSON.stringify([\n  wbcLocalizedModelDescription({{model:"deepseek-v4-flash", desc:"DeepSeek default"}}),\n  wbcLocalizedModelDescription({{model:"deepseek-v4-flash", desc:"团队默认模型"}})\n]));\n'''
+    completed = subprocess.run(["node", "-e", script], check=True, capture_output=True, text=True)
+    assert json.loads(completed.stdout) == ["DeepSeek 默认配置", "团队默认模型"]
+    assert '"workbenchChat.modelProviderDefault": "{provider} 默认配置"' in i18n
+
+
 def test_chat_files_merge_message_attachments_and_nested_agent_output():
     root = Path(__file__).resolve().parent.parent
     source = (root / "src" / "webui" / "frontend" / "workbench-chat.jsx").read_text(
@@ -583,6 +644,23 @@ def test_chat_sidebar_context_is_flat_and_overview_is_integrated():
         1,
     )[1].split("}", 1)[0]
     assert "border-top: 0;" in first_tool_package_css
+
+
+def test_builtin_agent_in_overview_uses_plain_text_without_builtin_suffix():
+    root = Path(__file__).resolve().parent.parent
+    source = (root / "src" / "webui" / "frontend" / "workbench-chat.jsx").read_text(
+        encoding="utf-8"
+    )
+    overview = source.split("function WbcOverviewTab(", 1)[1].split(
+        "function wbcBlockLabel(", 1
+    )[0]
+    builtin = overview.split("{overviewHasAgent && overviewIsBuiltin && (", 1)[1].split(
+        "          )}\n          {!overviewExternal", 1
+    )[0]
+
+    assert "<b>{overviewAgentName}</b>" in builtin
+    assert "wbc-overview-agent-name" not in builtin
+    assert "agentBuiltinSuffix" not in builtin
 
 
 def test_workbench_chat_cards_are_borderless_and_compact_overview_is_flat():
@@ -3636,8 +3714,8 @@ def test_electron_browser_video_fullscreen_is_platform_aware_and_shared_with_ui(
     assert "platform: process.platform" in main
 
     assert 'className="browser-video-fullscreen-overlay"' in browser_view
-    assert "已在全屏播放" in browser_view
-    assert "视频正在独立的全屏窗口中播放" in browser_view
+    assert 'browserLabel("browser.fullscreen.active", "Playing in full screen")' in browser_view
+    assert 'browserLabel("browser.fullscreen.external", "The video is playing in a separate full-screen window")' in browser_view
     assert ".browser-video-fullscreen-overlay" in styles
 
     session_guards = main.split("function installBrowserSessionGuards(", 1)[1].split("\nclass BrowserTabManager", 1)[0]
@@ -4064,7 +4142,7 @@ def test_workbench_chat_model_label_and_context_usage_use_live_data():
     assert "var modelName = wbcCurrentModel(chat, project, runtime, null);" in composer
     assert "var liveData = useWbcLiveChatMetrics(chat, !!runtime);" in overview
     assert "wbcCurrentModel(chat, null, runtime, liveData)" in overview
-    assert "var usage = (liveData && liveData.usage) || chat.usage || {};" in overview
+    assert "var usage = Object.assign({}, (liveData && liveData.usage) || chat.usage || {}, runtimeUsage);" in overview
     assert '<WbcOverviewUsage usage={usage} />' in overview
     assert '<WbcContextUsage data={liveData} compact={true} />' in overview
     assert '{!compact && (' not in usage
@@ -4460,8 +4538,9 @@ def test_workbench_permission_prompt_renders_every_scoped_option():
         "function WbcErrorNotice", 1
     )[0]
 
-    assert '(options.length ? options : ["在本次会话同意", "同意一次", "拒绝"]).map' in prompt
-    assert "onAnswer(pq.id, opt)" in prompt
+    assert "options.length ? options.map" in prompt
+    assert "wbc-question-protocol-error" in prompt
+    assert "onAnswer(pq.id, wbcQuestionOptionValue(opt))" in prompt
     assert "options[options.length - 1]" not in prompt.split(") : (", 1)[0]
 
     styles = (root / "src" / "webui" / "frontend" / "workbench.css").read_text(
@@ -4720,8 +4799,117 @@ def test_status_preview_answers_the_target_background_chat_without_opening_it():
     assert "isPermissionQuestionKind(kind)" in preview
     assert "pending.allowCustom" in preview
     assert "onAnswer(pending.id, text, resumeMode)" in preview
-    assert 'wbcT("workbenchChat.permissionSession"' in preview
-    assert 'wbcT("workbenchChat.permissionOnce"' in preview
+    assert "wbcPermissionOptionLabel(option, index, options.length)" in preview
+    assert "var actionOptions = options.length" in preview
+
+
+def test_permission_option_labels_follow_backend_values_instead_of_position():
+    root = Path(__file__).resolve().parents[1]
+    source = (root / "src" / "webui" / "frontend" / "workbench-chat.jsx").read_text(
+        encoding="utf-8"
+    )
+    labeler = source.split("function wbcPermissionOptionLabel", 1)[1].split(
+        "function wbcPermissionQuestionText", 1
+    )[0]
+
+    assert "var semanticValues = option" in labeler
+    assert "option.optionId, option.id, option.kind" in labeler
+    assert '"允许这次"' in labeler
+    assert '"本次会话内总是允许"' in labeler
+    assert '"拒绝"' in labeler
+    assert labeler.index('"允许这次"') < labeler.index("if (total <= 2)")
+
+
+def test_agent_tab_hides_search_filter_and_header_install_button():
+    root = Path(__file__).resolve().parents[1]
+    source = (root / "src" / "webui" / "frontend" / "settings-overlay.jsx").read_text(
+        encoding="utf-8"
+    )
+    panel = source.split("function ExtensionsPanel(", 1)[1].split(
+        "function ShortcutsPanel(", 1
+    )[0]
+
+    assert '"agent"' in panel
+    assert 'category !== "agent" && React.createElement("div", { className: "wb-extension-filter" }' in panel
+    assert 'category !== "recommended" && category !== "agent" && React.createElement("button"' in panel
+    assert 'category === "agent"\n      ? React.createElement(AgentTabPanel' in panel or 'category === "agent" ? React.createElement(AgentTabPanel' in panel
+
+
+def test_composer_model_flyout_lists_agent_row_before_model_row():
+    root = Path(__file__).resolve().parents[1]
+    source = (root / "src" / "webui" / "frontend" / "workbench-chat.jsx").read_text(
+        encoding="utf-8"
+    )
+    root_panel = source.split('{modelPanel === "root" && (', 1)[1].split(
+        '{modelPanel === "agents" && agentPickerEnabled && (', 1
+    )[0]
+
+    agent_marker = 'wbcT("workbenchChat.agent", "Agent")'
+    model_marker = 'wbcT("workbenchChat.model", "Model")'
+    assert "agentPickerEnabled && (" in root_panel
+    assert agent_marker in root_panel
+    assert model_marker in root_panel
+    assert root_panel.index(agent_marker) < root_panel.index(model_marker)
+
+
+def test_permission_buttons_submit_original_option_id():
+    root = Path(__file__).resolve().parents[1]
+    source = (root / "src" / "webui" / "frontend" / "workbench-chat.jsx").read_text(
+        encoding="utf-8"
+    )
+    option_value = source.split("function wbcQuestionOptionValue(", 1)[1].split(
+        "function wbcIsLiveAgentRequest", 1
+    )[0]
+    answer = source.split("function answerQuestionForChat(", 1)[1].split(
+        "// Regenerate the last assistant reply", 1
+    )[0]
+    question_buttons = source.split("function WbcQuestionPrompt", 1)[1].split(
+        "function WbcErrorNotice", 1
+    )[0]
+
+    assert "option.optionId" in option_value
+    assert "option.optionId" in option_value.split("option.label", 1)[0]
+    assert 'onAnswer(pq.id, wbcQuestionOptionValue(opt)' in question_buttons
+    assert '{ type: "option", optionId: String(optionText || "") }' in answer
+
+
+def test_quick_chat_inherits_agent_binding_without_picker():
+    root = Path(__file__).resolve().parents[1]
+    source = (root / "src" / "webui" / "frontend" / "workbench-quick-chat.jsx").read_text(
+        encoding="utf-8"
+    )
+    snapshot_block = source.split(
+        "var [selectedChatSnapshot, setSelectedChatSnapshot] = useQuickChatState(null);", 1
+    )[1].split("function refetchTargets(", 1)[0]
+
+    assert "model.getChat(selected.chatId)" in snapshot_block
+    assert "agent: snapshot && snapshot.agent ? snapshot.agent : undefined" in snapshot_block
+    assert "modelAccess: snapshot && snapshot.modelAccess ? snapshot.modelAccess : undefined" in snapshot_block
+    assert "capabilities: snapshot && snapshot.capabilities ? snapshot.capabilities : undefined" in snapshot_block
+    assert "capabilitiesRevision: snapshot ? snapshot.capabilitiesRevision : undefined" in snapshot_block
+
+    composer_call = source.split("React.createElement(chatService.Composer, {", 1)[1].split(
+        "})", 1
+    )[0]
+    assert "chat: composerChat" in composer_call
+    assert "onDraftAgentChange" not in composer_call
+
+
+def test_event_id_dedupe_is_bounded():
+    root = Path(__file__).resolve().parents[1]
+    source = (root / "src" / "webui" / "frontend" / "workbench-chat.jsx").read_text(
+        encoding="utf-8"
+    )
+    stream = source.split("function consumeEventStream(", 1)[1].split(
+        "function sendMessage(chatId, input, handlers, signal)", 1
+    )[0]
+
+    assert "var WBC_EVENT_ID_DEDUPE_LIMIT = 4096;" in stream
+    assert "function rememberEventId(eventId)" in stream
+    assert "seenEventIds.has(eventId)" in stream
+    assert "seenEventOrder.shift()" in stream
+    assert "seenEventIds.delete(oldest)" in stream
+    assert "if (!rememberEventId(eventId)) return;" in stream
 
 
 def test_workbench_split_chat_renders_and_answers_pending_question():
@@ -4754,7 +4942,7 @@ def test_permission_prompt_localizes_capability_ids_and_hides_internal_fingerpri
     assert "function workbenchPermissionQuestionText(pending, lang)" in i18n
     assert '/^cyrene-(?:setting|lifecycle):/' in i18n
     assert "legacyTool" in i18n
-    assert 'wbcPermissionOptionLabel(opt, i, permissionOptions.length)' in chat
+    assert 'wbcPermissionOptionLabel(opt, i, options.length)' in chat
     assert '? wbcPermissionQuestionText(pending)' in chat
     assert 'value: wbcQuestionOptionValue(option)' in chat
     assert 'raw = raw.replace(/\\.r[23]$/, "");' in i18n
@@ -5897,8 +6085,9 @@ def test_workbench_chat_tool_trace_preserves_i18n_metadata():
     segment_adapter = chat.split("function wbcRuntimeSegmentMessages(", 1)[1].split(
         "function wbcSubagentStatusText", 1
     )[0]
-    assert "if (!runtime.text) return null;" in live_message
-    assert "function wbcRuntimeTimelineMessages(runtime)" in chat
+    assert "if (!runtime.text && !(runtime.artifacts && runtime.artifacts.length)) return null;" in live_message
+    assert "<WbcLiveAgentArtifacts files={runtime.artifacts}" in live_message
+    assert "function wbcRuntimeTimelineMessages(runtime, options)" in chat
     assert "function wbcTraceDedupeKey(trace)" in chat
     assert "activityTraceKeys.has(messageTraceKey)" in chat
     assert "runtimeActivity: activity" in chat
@@ -5957,7 +6146,7 @@ def test_workbench_live_trace_keeps_each_llm_activity_independent():
     assert 'provider: String(event.provider || activity.provider || "")' in chat
     assert 'detail.scrollTop = active ? detail.scrollHeight : 0;' in activity_card
     assert "if (!msg.runtimeActivityActive && activityEntries.length === 0) return null;" in chat
-    assert "wbcRuntimeSegmentMessages(runtime).concat(wbcRuntimeTimelineMessages(runtime))" in chat
+    assert "wbcRuntimeSegmentMessages(runtime).concat(wbcRuntimeTimelineMessages(runtime, { showReasoningPlaceholder }))" in chat
     assert "if (msg.runtimeActivity || msg.activityCard)" in chat
     assert "activity={activity}" in chat
     assert "reasoning={phase1Detail}" in activity_card
@@ -6015,14 +6204,8 @@ def test_workbench_deepseek_reasoning_effort_matches_provider_capabilities():
     assert "font-size: 11px;" in model_name_css
     model_effort_css = styles.split(".wbc-model-button-effort {", 1)[1].split("}", 1)[0]
     assert "font-size: 11px;" in model_effort_css
-    assert 'className="wbc-model-menu-value wbc-model-menu-model-name"' in chat
-    menu_model_name_css = styles.split(
-        ".wbc-model-menu-model-name {", 1
-    )[1].split("}", 1)[0]
-    assert "font-size: 11px;" in menu_model_name_css
-    assert "white-space: nowrap;" in menu_model_name_css
-    assert "overflow-wrap:" not in menu_model_name_css
-    assert "text-overflow: clip;" in menu_model_name_css
+    assert 'className="wbc-model-menu-value">{modelName}</span>' in chat
+    assert ".wbc-model-menu-model-name" not in styles
 
 
 def test_workbench_chat_context_and_browser_trace_have_dynamic_i18n_labels():
@@ -8016,6 +8199,52 @@ def test_workbench_live_reply_disables_interactive_markdown_until_done():
     assert ":::card Title" in contract
 
 
+def test_workbench_agent_transport_notice_has_structured_event_and_durable_bubble():
+    root = Path(__file__).resolve().parent.parent
+    chat = (root / "src" / "webui" / "frontend" / "workbench-chat.jsx").read_text(encoding="utf-8")
+    styles = (root / "src" / "webui" / "frontend" / "workbench.css").read_text(encoding="utf-8")
+    events = (root / "src" / "cyrene" / "agent_runtime" / "events.py").read_text(encoding="utf-8")
+    route = (root / "src" / "route" / "workbench" / "chat.py").read_text(encoding="utf-8")
+
+    assert '"notification.created"' in events
+    assert '"notification.created": { handler: "onNotification"' in chat
+    assert "function WbcAgentNotification" in chat
+    assert "msg.runtimeNotification || msg.notificationCard" in chat
+    assert '"notificationCard": True' in route
+    assert ".wbc-agent-notification" in styles
+    assert 'role="status" aria-live="polite"' in chat
+
+
+def test_quick_chat_renders_live_and_durable_agent_notifications():
+    root = Path(__file__).resolve().parent.parent
+    chat = (root / "src" / "webui" / "frontend" / "workbench-chat.jsx").read_text(encoding="utf-8")
+    quick = (root / "src" / "webui" / "frontend" / "workbench-quick-chat.jsx").read_text(encoding="utf-8")
+
+    assert "AgentNotification: WbcAgentNotification" in chat
+    assert "RuntimeTranscript: WbcRuntimeTranscript" in chat
+    assert "m.notificationCard" in quick
+    assert "chatService.AgentNotification" in quick
+    assert "chatService.RuntimeTranscript" in quick
+    assert "runtime && runtime.notifications && runtime.notifications.length" in quick
+
+
+def test_compact_chat_surfaces_share_capability_driven_agent_runtime_ui():
+    root = Path(__file__).resolve().parent.parent
+    chat = (root / "src" / "webui" / "frontend" / "workbench-chat.jsx").read_text(encoding="utf-8")
+    quick = (root / "src" / "webui" / "frontend" / "workbench-quick-chat.jsx").read_text(encoding="utf-8")
+
+    assert "function wbcReduceDetachedRuntime" in chat
+    assert chat.count("<WbcRuntimeTranscript runtime=") >= 2
+    assert "onToolStarted:" in chat
+    assert "onArtifactEvent:" in chat
+    assert "WorkbenchChatModel.answerAgentRequest(current, questionId, response)" in chat
+    assert "WorkbenchChatModel.answerAgentRequest(current.id, questionId, response)" in chat
+    assert "QuestionPrompt: WbcQuestionPrompt" in chat
+    assert "pendingAgentRequest" in quick
+    assert "model.answerAgentRequest(chatId, questionId, response)" in quick
+    assert "chatService.QuestionPrompt" in quick
+
+
 def test_workbench_library_list_uses_explicit_pagination():
     root = Path(__file__).resolve().parent.parent
     source = (root / "src" / "webui" / "frontend" / "workbench-library.jsx").read_text(encoding="utf-8")
@@ -8096,6 +8325,117 @@ def test_account_menu_codex_quota_requires_primary_oauth_and_login():
     assert 'durationMins >= 10080' in model
     assert "codexQuotaModel.codexQuotaWindows(codexQuota.limits)" in settings
     assert 't("settings.codexQuotaPlan"' in settings
+
+
+def test_external_agent_probe_and_install_help_are_actionable():
+    root = Path(__file__).resolve().parent.parent
+    settings = (root / "src/webui/frontend/settings-overlay.jsx").read_text(encoding="utf-8")
+    i18n = (root / "src/webui/frontend/workbench-i18n.jsx").read_text(encoding="utf-8")
+
+    assert 'if (payload && payload.agent) props.onChanged(payload.agent);' in settings
+    assert 'not_started: t("settings.agentRuntime.notStarted"' in settings
+    assert 'source: { type: "inline", manifest: manifestExample }' in settings
+    assert 'settingsFetch(AGENT_PROPOSAL_ENDPOINT' in settings
+    assert '"/" + encodeURIComponent(proposalId) + "/confirm"' in settings
+    assert 't("settings.agentProposalConfirmInstall"' in settings
+    assert '"settings.agentRuntime.pendingTransport": "Not tested"' in i18n
+    assert '"settings.agentRuntime.pendingTransport": "尚未测试"' in i18n
+    assert i18n.count('"settings.agentProposalSubmitTitle"') == 2
+
+
+def test_agent_picker_rebinds_empty_chat_and_confirms_new_nonempty_chat():
+    root = Path(__file__).resolve().parent.parent
+    source = (root / "src/webui/frontend/workbench-chat.jsx").read_text(encoding="utf-8")
+    styles = (root / "src/webui/frontend/workbench.css").read_text(encoding="utf-8")
+
+    assert "function handleSwitchAgent(binding)" in source
+    assert 'model.createChatWithBinding(projectId, "", binding)' in source
+    assert "model.updateChatAgent(activeChat.id, binding)" in source
+    assert 'wbcT("workbenchChat.agentNewChatTitle"' in source
+    assert "onSwitchAgent={handleSwitchAgent}" in source
+    agent_panel = source.split('{modelPanel === "agents"', 1)[1].split('{modelPanel === "models"', 1)[0]
+    assert "locked: false" in agent_panel
+    assert 'canPick: availability.state === "available"' in agent_panel
+    assert "function pickAgentBinding(binding)" in source
+    assert "if (chat && chat.id && onSwitchAgent) onSwitchAgent(binding);" in source
+    assert agent_panel.count("pickAgentBinding(binding);") == 2
+    assert "if (agentBindingLocked && onSwitchAgent)" not in agent_panel
+    assert 'className="wbc-agent-menu-dot"' in source
+    assert ".wbc-agent-menu-row:focus-visible" in styles
+    assert "border: 0;" in styles.split(".wbc-agent-menu-row {", 1)[1].split("}", 1)[0]
+
+
+def test_agent_owned_model_picker_uses_acp_config_options():
+    root = Path(__file__).resolve().parent.parent
+    source = (root / "src/webui/frontend/workbench-chat.jsx").read_text(encoding="utf-8")
+    i18n = (root / "src/webui/frontend/workbench-i18n.jsx").read_text(encoding="utf-8")
+
+    assert '"/agent-config-options"' in source
+    assert "agentModelConfig.options" in source
+    assert "model.updateAgentConfigValues" in source
+    assert '<span className="wbc-model-button-name">{modelName}</span>' in source
+    assert 'wbcT("workbenchChat.modelSource.agentManaged"' not in source.split('className="wbc-model-button-name"', 1)[1].split("</button>", 1)[0]
+    assert '"workbenchChat.agentModelUnavailable": "此 Agent 未提供可选模型。"' in i18n
+    assert 'String(option.category || "") === "thought_level"' in source
+    assert 'var effectiveReasoningEffort = agentManagedModels ? agentReasoningValue : reasoningEffort;' in source
+    assert 'reasoningEffort: agentManagedModels ? "" : reasoningEffort' in source
+    assert 'model.updateAgentConfigValues(chatId, { [agentReasoningConfig.id]: effort })' in source
+
+
+def test_external_agent_usage_is_shared_with_the_reply_finalizer():
+    root = Path(__file__).resolve().parent.parent
+    route = (root / "src/route/workbench/chat.py").read_text(encoding="utf-8")
+    state_capture = route.index("state_ids_before: set[str] = set()")
+    runner = route.index("async def _run(run: ChatRun) -> str:", state_capture)
+    finalizer = route.index("def _finalize(reply_text: str)", runner)
+    usage_definition = route.index("external_usage: dict[str, int] = {}", state_capture)
+
+    assert state_capture < usage_definition < runner < finalizer
+    assert "external_usage: dict[str, int] = {}" not in route[runner:finalizer]
+    assert "effective_usage.update(external_usage)" in route[finalizer:]
+
+
+def test_agent_diagnostics_note_is_localized_from_a_stable_code():
+    root = Path(__file__).resolve().parent.parent
+    settings = (root / "src/webui/frontend/settings-overlay.jsx").read_text(encoding="utf-8")
+    i18n = (root / "src/webui/frontend/workbench-i18n.jsx").read_text(encoding="utf-8")
+    runtime = (root / "src/cyrene/extensions/agent_runtime.py").read_text(encoding="utf-8")
+
+    assert 'payload.noteCode || payload.reason' in settings
+    assert 't("settings.agentDiagnosticsStartsOnDemand"' in settings
+    assert 'diagnostics.note || ""' not in settings
+    assert '"noteCode": "starts_on_demand"' in runtime
+    assert "ACP stdio 会在需要时启动；诊断信息不会暴露进程环境变量或凭据。" in i18n
+
+
+def test_agent_settings_show_composer_usability_and_localized_reasons():
+    root = Path(__file__).resolve().parent.parent
+    settings = (root / "src/webui/frontend/settings-overlay.jsx").read_text(encoding="utf-8")
+    i18n = (root / "src/webui/frontend/workbench-i18n.jsx").read_text(encoding="utf-8")
+
+    assert "function agentUsabilityMeta(agent, t)" in settings
+    assert 't("settings.agentComposerAvailability"' in settings
+    assert 't("settings.agentUsability.available"' in settings
+    assert '["error", "crashed", "failed"].indexOf(runtimeState)' in settings
+    assert 'authState === "expired" || authState === "failed"' in settings
+    assert i18n.count('"settings.agentUsability.available"') == 2
+    assert '"settings.agentUsability.available": "可在 Composer 中使用"' in i18n
+
+
+def test_agent_network_errors_render_full_actionable_details():
+    root = Path(__file__).resolve().parent.parent
+    source = (root / "src/webui/frontend/workbench-chat.jsx").read_text(encoding="utf-8")
+    styles = (root / "src/webui/frontend/workbench.css").read_text(encoding="utf-8")
+    i18n = (root / "src/webui/frontend/workbench-i18n.jsx").read_text(encoding="utf-8")
+
+    assert "function wbcAgentErrorPresentation(detail, failureKind)" in source
+    assert "invalid peer certificate" in source
+    assert 'className="wbc-error-detail"' in source
+    assert 'wbcT("workbenchChat.error.copyDetail"' in source
+    assert "white-space: pre-wrap;" in styles.split(".wbc-error-detail {", 1)[1].split("}", 1)[0]
+    assert "overflow-wrap: anywhere;" in styles.split(".wbc-error-detail {", 1)[1].split("}", 1)[0]
+    assert i18n.count('"workbenchChat.error.tlsTitle"') == 2
+    assert i18n.count('"workbenchChat.error.copyDetail"') == 2
 
 
 def test_phase1_stream_is_rendered_as_a_distinct_execution_card():
@@ -8768,3 +9108,25 @@ def test_conversation_status_preview_controls_share_floating_material():
     assert "height: 38px;" in send_rule
     assert "color: var(--wb-text);" in send_rule
     assert "color-mix(in srgb, var(--wb-accent) 26%" in send_rule
+
+
+def test_performance_mode_disables_renderer_effects_and_is_boot_persistent():
+    frontend = Path("src/webui/frontend")
+    overlay = (frontend / "settings-overlay.jsx").read_text(encoding="utf-8")
+    workbench = (frontend / "workbench.jsx").read_text(encoding="utf-8")
+    css = (frontend / "workbench.css").read_text(encoding="utf-8")
+    index = (frontend / "index.html").read_text(encoding="utf-8")
+
+    assert 'JSON.stringify({ performance_mode: next })' in overlay
+    assert 'settings.performanceMode' in overlay
+    appearance = overlay.split("function AppearancePanel(p)", 1)[1].split("// ── Capabilities Panel ──", 1)[0]
+    general = overlay.split("function GeneralPanel(p)", 1)[1].split("// ── Models Panel ──", 1)[0]
+    assert 'settings.performanceMode' in appearance
+    assert 'settings.performanceMode' not in general
+    assert 'dataset.performanceMode = next ? "on" : "off"' in workbench
+    assert 'localStorage.getItem("cyrene-performance-mode") === "1"' in index
+    assert 'html[data-performance-mode="on"] *' in css
+    assert "backdrop-filter: none !important" in css
+    assert "box-shadow: none !important" in css
+    assert "animation: none !important" in css
+    assert "transition: none !important" in css

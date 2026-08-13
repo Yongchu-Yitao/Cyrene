@@ -15,6 +15,7 @@ _ENTRY = str(Path(SPECPATH).resolve() / "run_cyrene.py")
 _IS_MAC = sys.platform == "darwin"
 _IS_WIN = sys.platform == "win32"
 _BUNDLE_PLAYWRIGHT = os.environ.get("CYRENE_BUNDLE_PLAYWRIGHT") == "1"
+_WOA_NATIVE_CORE = _IS_WIN and os.environ.get("CYRENE_WOA_NATIVE_CORE") == "1"
 
 # 从 pyproject.toml 读取版本号
 import tomllib
@@ -72,12 +73,12 @@ _hidden += [
     "jinja2", "jinja2.ext",
     "uvicorn.loops.auto", "uvicorn.protocols.http.auto", "uvicorn.logging",
     "anyio", "websockets", "aiosqlite", "apscheduler", "croniter",
-    "httpx", "python_multipart", "sniffio", "simplexng",
+    "httpx", "python_multipart", "sniffio",
     "fastapi", "pydantic", "pydantic_core", "pydantic_core._pydantic_core",
     "starlette", "typing_extensions", "annotated_types",
     "dotenv", "telegram", "mcp", "httpx_sse", "sse_starlette", "requests",
     "packaging", "pypdf", "pypdfium2", "reportlab", "PIL",
-    "numpy", "onnxruntime", "rapidocr", "sherpa_onnx", "soundfile", "tokenizers",
+    "numpy", "onnxruntime", "sherpa_onnx", "soundfile", "tokenizers",
     # simplexng runtime deps (vendored searx pulls these in transitively;
     # listed explicitly so PyInstaller collects compiled extensions correctly)
     "waitress", "flask", "brotli", "lxml", "msgspec",
@@ -88,6 +89,12 @@ _hidden += [
     # fails silently on some platforms
     "PIL._imaging",
 ]
+if _WOA_NATIVE_CORE:
+    _hidden.append("onnxruntime_qnn")
+    _hidden = [
+        name for name in _hidden
+        if name not in {"brotli", "fasttext", "waitress", "flask"}
+    ]
 
 # pwd stub (exists only in CI; safe to skip on local builds)
 if _IS_WIN:
@@ -132,7 +139,6 @@ for _package in (
     "aiosqlite",
     "apscheduler",
     "croniter",
-    "simplexng",
     "fastapi",
     "pydantic",
     "pydantic_core",
@@ -152,21 +158,20 @@ for _package in (
     "PIL",
     "numpy",
     "onnxruntime",
-    "rapidocr",
     "sherpa_onnx",
     "soundfile",
     "tokenizers",
     "openai_codex",
     "codex_cli_bin",
-    # simplexng runtime deps
-    "waitress",
-    "flask",
-    "brotli",
-    "lxml",
-    "msgspec",
-    "fasttext",
 ):
     _collect_package(_package)
+
+if _WOA_NATIVE_CORE:
+    _collect_package("onnxruntime_qnn")
+
+if not _WOA_NATIVE_CORE:
+    for _package in ("simplexng", "rapidocr", "waitress", "flask", "brotli", "fasttext", "lxml", "msgspec"):
+        _collect_package(_package)
 
 # Electron owns the desktop browser runtime.  Playwright is intentionally
 # excluded from normal release builds and remains opt-in for standalone frozen
@@ -213,6 +218,8 @@ _excludes = [
 ]
 if not _BUNDLE_PLAYWRIGHT:
     _excludes.append("playwright")
+if _WOA_NATIVE_CORE:
+    _excludes.extend(["simplexng", "rapidocr", "pyclipper", "cv2", "brotli", "fasttext", "setproctitle"])
 
 # ---- 图标 ----
 _icon = None

@@ -188,10 +188,49 @@ class InitConfirmBody(APIBody):
     taskPlan: list[Any] = Field(default_factory=list, max_length=100)
 
 
+class AgentBindingBody(APIBody):
+    """Optional agent binding carried on Workbench chat creation/messages.
+
+    Only ``installationId`` is required to select an installed Agent; the
+    remaining fields accept a client-provided snapshot and are normalized by
+    the agent runtime.  Absent/legacy requests normalize to the built-in
+    Cyrene Agent.
+    """
+
+    installationId: str | None = Field(default=None, max_length=200)
+    agentId: str | None = Field(default=None, max_length=200)
+    displayName: str | None = Field(default=None, max_length=200)
+    version: str | None = Field(default=None, max_length=100)
+    driver: str | None = Field(default=None, max_length=100)
+    protocolVersion: int | None = Field(default=None, ge=0)
+    externalSessionId: str | None = Field(default=None, max_length=500)
+    bindingLocked: bool | None = None
+
+
+class ModelAccessBody(APIBody):
+    """Model source snapshot bound to an Agent conversation (handoff §10).
+
+    ``cyrene_managed`` routes through the Cyrene Model Gateway; ``agent_managed``
+    means the Agent uses its own provider/account configuration.  No credentials
+    are accepted or stored here.
+    """
+
+    mode: Literal["", "cyrene_managed", "agent_managed"] = ""
+    profileId: str | None = Field(default=None, max_length=200)
+    protocol: str | None = Field(default=None, max_length=200)
+    model: str | None = Field(default=None, max_length=500)
+
+
 class ChatCreateBody(APIBody):
     project: str | None = Field(default=None, max_length=200)
     projectId: str | None = Field(default=None, max_length=200)
     title: str | None = Field(default=None, max_length=160)
+    agent: AgentBindingBody | None = None
+    modelAccess: ModelAccessBody | None = None
+
+
+class AgentRequestResponseBody(APIBody):
+    response: dict[str, Any]
 
 
 class SideAgentCreateBody(APIBody):
@@ -201,6 +240,9 @@ class SideAgentCreateBody(APIBody):
 
 class ChatUpdateBody(APIBody):
     title: str | None = Field(default=None, max_length=160)
+    agent: AgentBindingBody | None = None
+    modelAccess: ModelAccessBody | None = None
+    agentConfigValues: dict[str, Any] | None = None
 
 
 class ChatGroupMetadataBody(APIBody):
@@ -234,6 +276,8 @@ class ChatMessageBody(APIBody):
     lang: Literal["", "en", "zh"] = ""
     workspaceOverride: str | None = Field(default=None, max_length=4096)
     uiInstanceId: str | None = Field(default=None, max_length=200)
+    agent: AgentBindingBody | None = None
+    modelAccess: ModelAccessBody | None = None
 
 
 class ChatGuidanceBody(APIBody):

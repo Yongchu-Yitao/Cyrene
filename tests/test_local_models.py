@@ -25,6 +25,76 @@ def test_sherpa_provider_prefers_cuda_then_apple_coreml(monkeypatch):
     assert local_models.sherpa_provider("fireredasr2-aed-int8") == "cpu"
 
 
+def test_onnx_provider_order_prefers_directml_before_cpu(monkeypatch):
+    monkeypatch.setitem(sys.modules, "onnxruntime", SimpleNamespace(
+        get_available_providers=lambda: ["DmlExecutionProvider", "CPUExecutionProvider"],
+    ))
+
+    assert local_models.onnx_execution_providers() == [
+        "DmlExecutionProvider", "CPUExecutionProvider",
+    ]
+
+
+def test_windows_arm_registers_qnn_npu_session(monkeypatch):
+    class Options:
+        def __init__(self):
+            self.calls = []
+
+        def add_provider_for_devices(self, devices, options):
+            self.calls.append((devices, options))
+
+    npu = SimpleNamespace(
+        ep_name="QNNExecutionProvider",
+        device=SimpleNamespace(type="NPU"),
+    )
+    ort = SimpleNamespace(get_ep_devices=lambda: [npu])
+    qnn = SimpleNamespace(get_qnn_htp_path=lambda: "QnnHtp.dll")
+    monkeypatch.setattr(local_models.sys, "platform", "win32")
+    monkeypatch.setattr(local_models.platform, "machine", lambda: "ARM64")
+    monkeypatch.setattr(local_models, "_register_qnn_plugin", lambda _ort: True)
+    monkeypatch.setitem(sys.modules, "onnxruntime_qnn", qnn)
+    options = Options()
+
+    assert local_models.configure_qnn_session_options(options, ort)
+    assert options.calls == [([npu], {
+        "backend_path": "QnnHtp.dll",
+        "enable_htp_fp16_precision": "1",
+    })]
+
+
+def test_windows_arm_ocr_uses_only_x64_sidecar(monkeypatch, tmp_path):
+    from cyrene.knowledge import ocr
+
+    sidecar = tmp_path / "CyreneOcr.exe"
+    sidecar.touch()
+    monkeypatch.setattr(ocr.sys, "platform", "win32")
+    monkeypatch.setattr(ocr.platform, "machine", lambda: "ARM64")
+    monkeypatch.setenv("CYRENE_X64_OCR_SIDECAR", str(sidecar))
+    monkeypatch.setattr(
+        ocr,
+        "_recognize_with_sidecar",
+        lambda image, executable: f"{image}:{executable.name}",
+    )
+    monkeypatch.setattr(
+        ocr,
+        "_load_engine",
+        lambda: (_ for _ in ()).throw(AssertionError("must not load RapidOCR in ARM core")),
+    )
+
+    assert ocr._recognize_sync("page.png") == "page.png:CyreneOcr.exe"
+
+
+def test_windows_arm_ocr_does_not_fall_back_to_x64_modules(monkeypatch):
+    from cyrene.knowledge import ocr
+
+    monkeypatch.setattr(ocr.sys, "platform", "win32")
+    monkeypatch.setattr(ocr.platform, "machine", lambda: "arm64")
+    monkeypatch.setattr(ocr, "_woa_x64_sidecar", lambda: None)
+
+    with pytest.raises(RuntimeError, match="x64 OCR sidecar"):
+        ocr._recognize_sync("page.png")
+
+
 def test_local_models_prefer_domestic_mirror_and_keep_fallbacks():
     for model in local_models.MODEL_CATALOG.values():
         for item in model["files"]:

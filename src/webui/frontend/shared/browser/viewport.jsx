@@ -42,6 +42,10 @@ function browserErrorText(err, key, fallback) {
   }
 }
 
+function browserLabel(key, fallback) {
+  try { return window.CyreneUI.require("i18n").t(key, null, fallback); } catch (e) { return fallback; }
+}
+
 function BrowserIcon({ name, size }) {
   size = size || 16;
   var common = {
@@ -922,30 +926,26 @@ function ElectronBrowserViewportPanel({ roundId, browserSessionId, onClose, brow
     });
   }
 
-  function browserLabel(key, fallback) {
-    try { return window.CyreneUI.require("i18n").t(key, null, fallback); } catch (e) { return fallback; }
-  }
-
   return (
     <div className={"browser-view native" + (splitChrome ? " split-chrome" : "")} data-browser-session-id={electronSessionId}>
       {!hideTabStrip && <div className="browser-tabs-strip">
         {tabs.map(function (tab) {
           return (
-            <button key={tab.id} type="button" data-cyrene-context-menu="true" className={"browser-tab" + (tab.id === state.activeTabId ? " active" : "")} onClick={function () { run(function () { return bridge.activateTab({ sessionId: electronSessionId, tabId: tab.id }); }); }} onContextMenu={function (event) { openTabContextMenu(tab, event); }} title={(tab.title || tab.url || "Browser") + (tab.audible ? " · audible" : "")}>
-              <span className="browser-tab-title">{tab.title || tab.url || "New tab"}</span>
+            <button key={tab.id} type="button" data-cyrene-context-menu="true" className={"browser-tab" + (tab.id === state.activeTabId ? " active" : "")} onClick={function () { run(function () { return bridge.activateTab({ sessionId: electronSessionId, tabId: tab.id }); }); }} onContextMenu={function (event) { openTabContextMenu(tab, event); }} title={(tab.title || tab.url || browserLabel("browser.title", "Browser")) + (tab.audible ? " · " + browserLabel("browser.audible", "Playing audio") : "")}>
+              <span className="browser-tab-title">{tab.title || tab.url || browserLabel("browser.newTab", "New tab")}</span>
               {tab.audible && <span className="browser-tab-audio" aria-hidden="true"><BrowserIcon name="volume" size={13} /></span>}
               <span
                 className="browser-tab-close"
                 role="button"
                 tabIndex={-1}
                 onClick={function (e) { e.stopPropagation(); run(function () { return bridge.closeTab({ sessionId: electronSessionId, tabId: tab.id }); }); }}
-                title="Close tab"
+                title={browserLabel("browser.context.close", "Close tab")}
               ><BrowserIcon name="close" size={12} /></span>
             </button>
           );
         })}
-        <button type="button" className="browser-icon-btn" onClick={function () { createTab("about:blank"); }} title="New tab"><BrowserIcon name="plus" /></button>
-        {onClose && <button type="button" className="browser-icon-btn" onClick={onClose} title="Close panel"><BrowserIcon name="close" /></button>}
+        <button type="button" className="browser-icon-btn" onClick={function () { createTab("about:blank"); }} title={browserLabel("browser.newTab", "New tab")}><BrowserIcon name="plus" /></button>
+        {onClose && <button type="button" className="browser-icon-btn" onClick={onClose} title={browserLabel("browser.closePanel", "Close panel")}><BrowserIcon name="close" /></button>}
       </div>}
       {tabContextMenu && (
         <div className="wb-item-context-layer">
@@ -953,7 +953,7 @@ function ElectronBrowserViewportPanel({ roundId, browserSessionId, onClose, brow
           <div
             className="wb-item-context-menu browser-tab-context-menu"
             role="menu"
-            aria-label={tabContextMenu.tab.title || tabContextMenu.tab.url || "Browser"}
+            aria-label={tabContextMenu.tab.title || tabContextMenu.tab.url || browserLabel("browser.title", "Browser")}
             style={{ left: tabContextMenu.left + "px", top: tabContextMenu.top + "px" }}
             onContextMenu={function (event) { event.preventDefault(); }}
           >
@@ -1021,7 +1021,7 @@ function ElectronBrowserViewportPanel({ roundId, browserSessionId, onClose, brow
           )}
           {!tabs.length && (
             <div className="browser-empty">
-              <button type="button" className="btn primary" onClick={function () { createTab("about:blank"); }}>打开浏览器</button>
+              <button type="button" className="btn primary" onClick={function () { createTab("about:blank"); }}>{browserLabel("browser.open", "Open browser")}</button>
             </div>
           )}
         </div>
@@ -1029,8 +1029,8 @@ function ElectronBrowserViewportPanel({ roundId, browserSessionId, onClose, brow
       {videoFullscreenActive && (
         <div className="browser-video-fullscreen-overlay" role="status" aria-live="polite">
           <span className="browser-video-fullscreen-icon" aria-hidden="true"><BrowserIcon name="fullscreen" size={24} /></span>
-          <strong>已在全屏播放</strong>
-          <span>{videoFullscreen.external ? "视频正在独立的全屏窗口中播放" : "视频正在 Cyrene 内全屏播放"}</span>
+          <strong>{browserLabel("browser.fullscreen.active", "Playing in full screen")}</strong>
+          <span>{videoFullscreen.external ? browserLabel("browser.fullscreen.external", "The video is playing in a separate full-screen window") : browserLabel("browser.fullscreen.embedded", "The video is playing full-screen in Cyrene")}</span>
         </div>
       )}
     </div>
@@ -1366,17 +1366,17 @@ function ScreencastBrowserViewportPanel({ roundId, onClose, onTakeoverComplete, 
       <div className="browser-view-bar">
         <span className={"browser-status-dot " + (connected ? "running" : "queued")}></span>
         <span className="browser-view-title" title={url}>
-          {title ? (title + " — ") : ""}{url || "浏览器"}
+          {title ? (title + " — ") : ""}{url || browserLabel("browser.title", "Browser")}
         </span>
         {showControls && (controlling ? (
           <React.Fragment>
-            <button type="button" className="browser-text-btn active" onClick={stopControl} title="把控制权交还给 Agent">退出控制</button>
-            <button type="button" className="browser-text-btn" onClick={openNativeWindow} disabled={nativeBusy} title="遇到验证码/反爬时，改用独立浏览器窗口">独立窗口</button>
+            <button type="button" className="browser-text-btn active" onClick={stopControl} title={browserLabel("browser.control.returnHint", "Return control to the Agent")}>{browserLabel("browser.control.exit", "Exit control")}</button>
+            <button type="button" className="browser-text-btn" onClick={openNativeWindow} disabled={nativeBusy} title={browserLabel("browser.nativeWindow.hint", "Use a separate browser window for verification or anti-bot checks")}>{browserLabel("browser.nativeWindow.action", "Separate window")}</button>
           </React.Fragment>
         ) : (
-          <button type="button" className="browser-text-btn active" onClick={startControl} disabled={!connected} title="在此面板内直接操作浏览器">接管</button>
+          <button type="button" className="browser-text-btn active" onClick={startControl} disabled={!connected} title={browserLabel("browser.control.takeoverHint", "Control the browser directly in this panel")}>{browserLabel("browser.control.takeover", "Take control")}</button>
         ))}
-        {onClose && <button type="button" className="browser-icon-btn compact" onClick={onClose} title="关闭"><BrowserIcon name="close" size={14} /></button>}
+        {onClose && <button type="button" className="browser-icon-btn compact" onClick={onClose} title={browserLabel("browser.closePanel", "Close panel")}><BrowserIcon name="close" size={14} /></button>}
       </div>
 
       <div
@@ -1407,24 +1407,24 @@ function ScreencastBrowserViewportPanel({ roundId, onClose, onTakeoverComplete, 
         )}
         {error ? (
           <div className="browser-state-card">
-            浏览器实时视图不可用：{error}
-            <div className="browser-state-note">请查看后端日志或重启 Cyrene 后重试。</div>
+            {browserLabel("browser.liveUnavailable", "Live browser view unavailable: {error}").replace("{error}", error)}
+            <div className="browser-state-note">{browserLabel("browser.retryBackend", "Check the backend logs or restart Cyrene, then try again.")}</div>
           </div>
         ) : nativeWindow ? (
           <div className="browser-state-card wide">
-            <div className="browser-state-title">已在独立浏览器窗口打开</div>
-            <div className="browser-state-copy">请在弹出的浏览器窗口里完成登录 / 验证码，完成后点下面切回内嵌视图继续。</div>
+            <div className="browser-state-title">{browserLabel("browser.nativeWindow.opened", "Opened in a separate browser window")}</div>
+            <div className="browser-state-copy">{browserLabel("browser.nativeWindow.instructions", "Complete login or verification in the browser window, then return to the embedded view.")}</div>
             <button type="button" className="btn primary" onClick={closeNativeWindow} disabled={nativeBusy} style={{ minWidth: 132 }}>
-              {nativeBusy ? "正在切回…" : "切回内嵌视图"}
+              {nativeBusy ? browserLabel("browser.nativeWindow.returning", "Returning…") : browserLabel("browser.nativeWindow.return", "Return to embedded view")}
             </button>
             {takeoverError && <div className="browser-error-text">{takeoverError}</div>}
           </div>
         ) : takeover.pending ? (
           <div className="browser-state-card wide browser-takeover">
-            <div className="browser-state-title">等待你在浏览器窗口登录…</div>
+            <div className="browser-state-title">{browserLabel("browser.takeover.waiting", "Waiting for you to sign in…")}</div>
             {takeover.reason && <div className="browser-state-copy">{takeover.reason}</div>}
             <div className="browser-state-url">{takeover.url || url}</div>
-            <div className="browser-state-copy">请在弹出的浏览器窗口完成登录，然后回到这里继续。</div>
+            <div className="browser-state-copy">{browserLabel("browser.takeover.instructions", "Complete sign-in in the browser window, then return here to continue.")}</div>
             <button
               type="button"
               className="btn primary"

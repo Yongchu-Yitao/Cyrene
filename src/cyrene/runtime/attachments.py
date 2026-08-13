@@ -1,5 +1,6 @@
 import base64
 import hashlib
+import io
 import json
 import mimetypes
 import os
@@ -249,6 +250,10 @@ def attachment_kind_from_meta(content_type: str, filename: str) -> str:
     suffix = Path(str(filename or "")).suffix.lower()
     if normalized_type.startswith("image/") or suffix in _IMAGE_EXTENSIONS:
         return "image"
+    if normalized_type.startswith("audio/"):
+        return "audio"
+    if normalized_type.startswith("video/"):
+        return "video"
     if normalized_type == "application/pdf" or suffix in _PDF_EXTENSIONS:
         return "pdf"
     if normalized_type in _MAP_CONTENT_TYPES or suffix in _MAP_EXTENSIONS:
@@ -315,6 +320,125 @@ def register_generated_attachment(path_str: str, display_name: str | None = None
         "url": f"/api/chat/export/{target.name}",
         **({"width": width} if isinstance(width, int) else {}),
         **({"height": height} if isinstance(height, int) else {}),
+    }
+
+
+_INLINE_IMAGE_FORMATS: dict[str, tuple[str, str]] = {
+    "PNG": ("image/png", ".png"),
+    "JPEG": ("image/jpeg", ".jpg"),
+    "GIF": ("image/gif", ".gif"),
+    "WEBP": ("image/webp", ".webp"),
+    "BMP": ("image/bmp", ".bmp"),
+}
+_GENERATED_IMAGE_MAX_PIXELS = 80_000_000
+
+
+def register_generated_image_bytes(
+    content: bytes,
+    *,
+    display_name: str | None = None,
+) -> dict[str, Any]:
+    """Register a decoded external-Agent image as a managed Cyrene export.
+
+    The image format is detected from its bytes rather than trusted protocol
+    metadata. A content-derived name makes repeated ACP updates idempotent and
+    the export route keeps the resulting viewer URL inside Cyrene's managed
+    file boundary.
+    """
+    if not content:
+        raise ValueError("generated image is empty")
+    try:
+        with Image.open(io.BytesIO(content)) as image:
+            image_format = str(image.format or "").upper()
+            width, height = int(image.width), int(image.height)
+            if width <= 0 or height <= 0 or width * height > _GENERATED_IMAGE_MAX_PIXELS:
+                raise ValueError("generated image dimensions are unsafe")
+            image.verify()
+    except Exception as exc:
+        raise ValueError("generated image data is invalid") from exc
+    detected = _INLINE_IMAGE_FORMATS.get(image_format)
+    if detected is None:
+        raise ValueError(f"generated image format is unsupported: {image_format or 'unknown'}")
+    content_type, suffix = detected
+
+    requested_name = safe_attachment_filename(display_name or f"agent-image{suffix}", "agent-image")
+    requested_stem = Path(requested_name).stem or "agent-image"
+    digest = hashlib.sha256(content).hexdigest()[:16]
+    export_id = f"{requested_stem[:40]}_{digest}{suffix}"
+    EXPORTS_DIR.mkdir(parents=True, exist_ok=True)
+    target = EXPORTS_DIR / export_id
+    if not target.exists():
+        try:
+            fd = os.open(target, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+        except FileExistsError:
+            pass
+        else:
+            with os.fdopen(fd, "wb") as stream:
+                stream.write(content)
+    if not target.is_file():
+        raise OSError(f"failed to register generated image: {target}")
+    return {
+        "id": target.name,
+        "name": display_name or f"agent-image{suffix}",
+        "path": str(target.resolve()),
+        "content_type": content_type,
+        "size": target.stat().st_size,
+        "kind": "image",
+        "url": f"/api/chat/export/{target.name}",
+        "width": width,
+        "height": height,
+    }
+
+
+def register_generated_attachment_bytes(
+    content: bytes,
+    *,
+    display_name: str | None = None,
+    content_type: str | None = None,
+) -> dict[str, Any]:
+    """Register bounded external-Agent bytes as a managed Cyrene export.
+
+    Images retain the stricter decode/dimension validation above. Other ACP
+    resources are content-addressed and stored with a safe filename so the
+    existing export route and Viewer can handle PDF, text, code, HTML, audio,
+    and arbitrary downloadable files without trusting an Agent-supplied path.
+    """
+    if not content:
+        raise ValueError("generated attachment is empty")
+    normalized_type = str(content_type or "").split(";", 1)[0].strip().lower()
+    if normalized_type.startswith("image/"):
+        return register_generated_image_bytes(content, display_name=display_name)
+
+    guessed_suffix = mimetypes.guess_extension(normalized_type) if normalized_type else ""
+    requested_name = safe_attachment_filename(
+        display_name or f"agent-file{guessed_suffix or '.bin'}",
+        "agent-file",
+    )
+    suffix = Path(requested_name).suffix or guessed_suffix or ".bin"
+    stem = Path(requested_name).stem or "agent-file"
+    digest = hashlib.sha256(content).hexdigest()[:16]
+    export_id = f"{stem[:40]}_{digest}{suffix}"
+    EXPORTS_DIR.mkdir(parents=True, exist_ok=True)
+    target = EXPORTS_DIR / export_id
+    if not target.exists():
+        try:
+            fd = os.open(target, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+        except FileExistsError:
+            pass
+        else:
+            with os.fdopen(fd, "wb") as stream:
+                stream.write(content)
+    if not target.is_file():
+        raise OSError(f"failed to register generated attachment: {target}")
+    effective_type = normalized_type or mimetypes.guess_type(str(target))[0] or "application/octet-stream"
+    return {
+        "id": target.name,
+        "name": display_name or requested_name,
+        "path": str(target.resolve()),
+        "content_type": effective_type,
+        "size": target.stat().st_size,
+        "kind": attachment_kind_from_meta(effective_type, requested_name),
+        "url": f"/api/chat/export/{target.name}",
     }
 
 

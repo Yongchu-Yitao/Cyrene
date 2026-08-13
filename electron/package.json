@@ -37,6 +37,13 @@
         ]
       },
       {
+        "from": "../dist/x64-sidecars",
+        "to": "x64-sidecars",
+        "filter": [
+          "**/*"
+        ]
+      },
+      {
         "from": "runtime-tools",
         "to": "runtime-tools",
         "filter": [

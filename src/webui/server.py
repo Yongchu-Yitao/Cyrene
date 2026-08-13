@@ -67,6 +67,7 @@ def create_app(bot: Any, db_path: str, instance_id: str = "", ui_mode: str = "wo
     # ``ui_mode`` remains in the Python call signature for historical callers,
     # but Workbench is now the only served UI.
     app.state.ui_mode = "workbench"
+    app.state.web_port = WEB_PORT
     app.mount("/static", StaticFiles(directory=str(_STATIC_DIR)), name="static")
 
     register_routes(app, bot, db_path)
@@ -216,6 +217,9 @@ def create_app(bot: Any, db_path: str, instance_id: str = "", ui_mode: str = "wo
 
 async def run_web(bot: Any, db_path: str, port: int = WEB_PORT, instance_id: str = "", ui_mode: str = "workbench") -> None:
     app = create_app(bot, db_path, instance_id=instance_id, ui_mode=ui_mode)
+    app.state.web_port = int(port)
+    from cyrene.agent_runtime.model_gateway import configure_model_gateway
+    configure_model_gateway(port)
     config = uvicorn.Config(app, host="127.0.0.1", port=port, log_level="info", loop="asyncio")
     server = uvicorn.Server(config)
     logger.info("Web UI at http://0.0.0.0:%d", port)

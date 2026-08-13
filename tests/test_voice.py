@@ -261,6 +261,10 @@ def test_voice_controls_follow_existing_chat_layout():
     assert 'if (tab === "capabilities") return;' in settings
     assert "wbcStartVoiceRecorder().then" in settings
     assert "autoStopOnSilence: true" not in settings.split("function startVoiceReferenceRecording", 1)[1].split("useEffectSt(function ()", 1)[0]
+    capabilities_call = settings.split('tab === "capabilities" && CapabilitiesPanel({', 1)[1].split("}),", 1)[0]
+    capabilities_props = settings.split("function CapabilitiesPanel(p)", 1)[1].split("} = p;", 1)[0]
+    assert "voiceReferencePhase, voiceReferenceElapsed" in capabilities_call
+    assert "voiceReferencePhase, voiceReferenceElapsed" in capabilities_props
     assert "voiceReferenceElapsed.toFixed(1)" in custom_voice
     assert 'settings.voiceReferenceRecordingStatus' in custom_voice
     assert "if (elapsed >= 14) finishVoiceReferenceRecording(recorder);" in settings

@@ -325,6 +325,62 @@ def register_workbench_chat_routes(
         from cyrene.workbench.project_memory_prompt import current_snapshot
         memory_snapshot = await asyncio.to_thread(current_snapshot, project_id)
 
+        requested_agent = body.get("agent") if isinstance(body.get("agent"), dict) else None
+        requested_installation_id = str((requested_agent or {}).get("installationId") or "").strip()
+        agent_snapshot = None
+        model_access_snapshot = None
+        capabilities_snapshot = None
+        if requested_installation_id:
+            from cyrene.agent_runtime.builtin import BUILTIN_INSTALLATION_ID
+
+            if requested_installation_id == BUILTIN_INSTALLATION_ID:
+                agent_snapshot = {"installationId": BUILTIN_INSTALLATION_ID}
+                model_access_snapshot = (
+                    body.get("modelAccess")
+                    if isinstance(body.get("modelAccess"), dict)
+                    else None
+                )
+            else:
+                from cyrene.extensions import agent_runtime as extension_agents
+
+                installation = await asyncio.to_thread(
+                    extension_agents.get_agent_installation,
+                    requested_installation_id,
+                )
+                if installation is None:
+                    return JSONResponse(
+                        {
+                            "error": "Agent installation not found",
+                            "code": "dependency_missing",
+                            "failureKind": "dependency_missing",
+                        },
+                        status_code=404,
+                    )
+                if not bool(installation.get("enabled", True)):
+                    return JSONResponse(
+                        {
+                            "error": "Agent installation is disabled",
+                            "code": "agent_disabled",
+                            "failureKind": "agent_disabled",
+                        },
+                        status_code=409,
+                    )
+                # Identity, driver and capabilities are server-owned. Never
+                # persist a client-authored snapshot for an external Agent.
+                agent_snapshot = {
+                    "installationId": installation.get("installation_id", ""),
+                    "agentId": installation.get("agent_id", ""),
+                    "displayName": installation.get("display_name", ""),
+                    "version": installation.get("version", ""),
+                    "driver": installation.get("driver", ""),
+                    "protocolVersion": installation.get("protocol_version", 1),
+                }
+                model_access_snapshot = dict(
+                    installation.get("model_access")
+                    or {"mode": "cyrene_managed", "profileId": "primary"}
+                )
+                capabilities_snapshot = dict(installation.get("capabilities") or {})
+
         def create_and_persist() -> dict[str, Any]:
             payload = _read_chats_store()
             chat = _new_chat(
@@ -332,6 +388,9 @@ def register_workbench_chat_routes(
                 str(body.get("title") or ""),
                 R._get_model(),
                 project_memory_snapshot=memory_snapshot,
+                agent=agent_snapshot,
+                model_access=model_access_snapshot,
+                capabilities=capabilities_snapshot,
             )
             payload.setdefault("chats", []).insert(0, chat)
             _write_chats_store(payload)
@@ -744,16 +803,76 @@ def register_workbench_chat_routes(
             state_id = chat_id
 
         data = read_json_safe(_session_state_file(state_id))
-        if not isinstance(data, dict):
-            return {"layers": [], "totalTokensEst": 0}
-
+        data = data if isinstance(data, dict) else {}
         messages = data.get("messages")
         if not isinstance(messages, list):
             messages = []
+
+        # ACP Agents own their private context and usually do not write
+        # Cyrene's session state file.  The public transcript is still known,
+        # so use it as an honest fallback instead of claiming that a non-empty
+        # conversation has no context.  This remains explicitly marked as an
+        # estimate; system prompts and any Agent-private memory are not guessed.
+        composition_source = "agent_state"
+        agent_context_detail_available = True
+        agent_report: dict[str, Any] = {}
+        if not chat_id.startswith("legacy:"):
+            chats_payload = await asyncio.to_thread(_read_chats_store)
+            chat = _find_chat(chats_payload, chat_id)
+            if isinstance(chat, dict):
+                agent_fields = _agent_runtime_builtin.chat_agent_fields(chat)
+                agent = agent_fields.get("agent") if isinstance(agent_fields, dict) else {}
+                installation_id = str((agent or {}).get("installationId") or "")
+                if installation_id and installation_id != _agent_runtime_builtin.BUILTIN_INSTALLATION_ID:
+                    stored_report = chat.get("agentContextReport")
+                    agent_report = stored_report if isinstance(stored_report, dict) else {}
+                    if agent_report:
+                        composition_source = "agent_report"
+                        agent_context_detail_available = bool(agent_report.get("segments"))
+                    elif not messages:
+                        transcript = chat.get("messages")
+                        messages = transcript if isinstance(transcript, list) else []
+                        composition_source = "public_transcript"
+                        agent_context_detail_available = False
         seg = _context_segment_tokens(messages)
         msg_total = sum(seg.values())
 
         layers: list[dict[str, Any]] = []
+
+        if composition_source == "agent_report":
+            reported_segments = agent_report.get("segments") if isinstance(agent_report.get("segments"), list) else []
+            segment_total = 0
+            for index, item in enumerate(reported_segments[:32]):
+                if not isinstance(item, dict):
+                    continue
+                tokens = max(0, int(item.get("tokens") or 0))
+                if tokens <= 0:
+                    continue
+                segment_total += tokens
+                layers.append({
+                    "id": "agent_segment_" + str(index + 1),
+                    "label": str(item.get("label") or item.get("key") or f"Segment {index + 1}"),
+                    "sublabel": None,
+                    "blocks": [],
+                    "totalTokens": tokens,
+                })
+            reported_used = max(0, int(agent_report.get("used") or 0))
+            if reported_used > segment_total:
+                layers.append({
+                    "id": "agent_other",
+                    "label": "Other Agent context",
+                    "sublabel": None,
+                    "blocks": [],
+                    "totalTokens": reported_used - segment_total,
+                })
+            if not layers and reported_used > 0:
+                layers.append({
+                    "id": "agent_reported",
+                    "label": "Agent context",
+                    "sublabel": None,
+                    "blocks": [],
+                    "totalTokens": reported_used,
+                })
 
         # Layer 1: System Prefix — from separately-saved blocks (not in state.json)
         sys_blocks = data.get("system_context_blocks")
@@ -802,7 +921,15 @@ def register_workbench_chat_routes(
             })
 
         total = sum(layer["totalTokens"] for layer in layers)
-        return {"layers": layers, "totalTokensEst": total, "messageTokens": msg_total}
+        return {
+            "layers": layers,
+            "totalTokensEst": total,
+            "messageTokens": msg_total,
+            "compositionSource": composition_source,
+            "agentContextDetailAvailable": agent_context_detail_available,
+            "contextUsed": int(agent_report.get("used") or 0) if agent_report else 0,
+            "contextLimit": int(agent_report.get("size") or 0) if agent_report else 0,
+        }
 
     @router.get("/api/workbench/chats/{chat_id}/inbox")
     async def api_workbench_chat_inbox(chat_id: str):
@@ -1022,12 +1149,134 @@ def register_workbench_chat_routes(
         chat = _find_chat(payload, chat_id)
         if not chat:
             return JSONResponse({"error": "chat not found"}, status_code=404)
+        R = _routes()
         if "title" in body:
             chat["title"] = str(body.get("title") or "").strip()[:60] or chat.get("title")
             chat["titleLocked"] = True
+        if "agent" in body:
+            if chat.get("messages"):
+                return JSONResponse(
+                    {"error": "Agent binding can only change on an empty chat", "code": "agent_binding_locked"},
+                    status_code=409,
+                )
+            requested = body.get("agent") if isinstance(body.get("agent"), dict) else {}
+            installation_id = str(requested.get("installationId") or "").strip()
+            from cyrene.agent_runtime.builtin import BUILTIN_INSTALLATION_ID, normalize_agent_fields
+
+            if not installation_id or installation_id == BUILTIN_INSTALLATION_ID:
+                fields = normalize_agent_fields(
+                    {"installationId": BUILTIN_INSTALLATION_ID},
+                    body.get("modelAccess") if isinstance(body.get("modelAccess"), dict) else None,
+                    default_model=R._get_model(),
+                )
+            else:
+                from cyrene.extensions import agent_runtime as extension_agents
+
+                installation = await asyncio.to_thread(extension_agents.get_agent_installation, installation_id)
+                if installation is None:
+                    return JSONResponse({"error": "Agent installation not found", "code": "dependency_missing"}, status_code=404)
+                if not bool(installation.get("enabled", True)):
+                    return JSONResponse({"error": "Agent installation is disabled", "code": "agent_disabled"}, status_code=409)
+                fields = normalize_agent_fields(
+                    {
+                        "installationId": installation.get("installation_id", ""),
+                        "agentId": installation.get("agent_id", ""),
+                        "displayName": installation.get("display_name", ""),
+                        "version": installation.get("version", ""),
+                        "driver": installation.get("driver", ""),
+                        "protocolVersion": installation.get("protocol_version", 1),
+                    },
+                    dict(installation.get("model_access") or {"mode": "cyrene_managed", "profileId": "primary"}),
+                    capabilities_raw=dict(installation.get("capabilities") or {}),
+                )
+            chat.update(fields)
+            chat.pop("agentConfigOptions", None)
+            chat.pop("agentConfigValues", None)
+            chat.pop("modelSelectionId", None)
+        if "agentConfigValues" in body:
+            from cyrene.agent_runtime.builtin import normalize_agent_binding
+
+            if normalize_agent_binding(chat.get("agent")).is_builtin:
+                return JSONResponse({"error": "Built-in chats do not use Agent config options"}, status_code=400)
+            values = body.get("agentConfigValues")
+            if not isinstance(values, dict):
+                return JSONResponse({"error": "agentConfigValues must be an object"}, status_code=400)
+            allowed = {
+                str(option.get("id") or ""): option
+                for option in chat.get("agentConfigOptions") or []
+                if isinstance(option, dict) and option.get("id")
+            }
+            normalized_values: dict[str, Any] = {}
+            for config_id, value in values.items():
+                config_id = str(config_id or "")[:200]
+                option = allowed.get(config_id)
+                if option is None:
+                    return JSONResponse({"error": "Agent config option not found"}, status_code=400)
+                if option.get("type") == "boolean":
+                    normalized_values[config_id] = bool(value)
+                else:
+                    valid_values = {str(item.get("value") or "") for item in option.get("options") or [] if isinstance(item, dict)}
+                    value = str(value or "")[:500]
+                    if value not in valid_values:
+                        return JSONResponse({"error": "Agent config option value is invalid"}, status_code=400)
+                    normalized_values[config_id] = value
+            chat.setdefault("agentConfigValues", {}).update(normalized_values)
+            for config_id, value in normalized_values.items():
+                option = allowed.get(config_id) or {}
+                if str(option.get("category") or "") != "model" and config_id.lower() != "model":
+                    continue
+                selected = next(
+                    (item for item in option.get("options") or [] if isinstance(item, dict) and str(item.get("value") or "") == str(value)),
+                    None,
+                )
+                chat["modelSelectionId"] = str(value)
+                chat["model"] = str((selected or {}).get("name") or value)
         chat["updatedAt"] = _utc_now_iso()
         await asyncio.to_thread(_write_chats_store, payload)
         return {"ok": True, "chat": _public_chat_full(chat)}
+
+    @router.get("/api/workbench/chats/{chat_id}/agent-config-options")
+    async def api_workbench_agent_config_options(chat_id: str):
+        R = _routes()
+        payload = await asyncio.to_thread(_read_chats_store)
+        chat = _find_chat(payload, chat_id)
+        if not chat:
+            return JSONResponse({"error": "chat not found"}, status_code=404)
+        from cyrene.agent_runtime.builtin import normalize_agent_binding
+
+        if normalize_agent_binding(chat.get("agent")).is_builtin:
+            return {"configOptions": [], "values": {}}
+        project_store = await asyncio.to_thread(R._read_workbench_store)
+        project = R._workbench_find_project(project_store, str(chat.get("projectId") or ""))
+        if not project:
+            return JSONResponse({"error": "project not found"}, status_code=404)
+        try:
+            workspace_dir = _resolve_chat_workspace_dir(chat, project, R._workbench_resolve_workspace_dir)
+            from cyrene.agent_runtime import discover_external_agent_config_options
+
+            options = await discover_external_agent_config_options(chat=chat, workspace_path=workspace_dir)
+        except Exception as exc:
+            kind = str(getattr(exc, "kind", "") or "agent_config_unavailable")
+            return JSONResponse({"error": str(exc), "code": kind}, status_code=409)
+        chat["agentConfigOptions"] = options
+        values = dict(chat.get("agentConfigValues") or {})
+        for option in options:
+            option_id = str(option.get("id") or "")
+            current_value = option.get("currentValue")
+            if option.get("type") == "select":
+                valid_values = {
+                    str(item.get("value") or "")
+                    for item in option.get("options") or []
+                    if isinstance(item, dict)
+                }
+                if str(values.get(option_id, "")) not in valid_values:
+                    values[option_id] = current_value
+            else:
+                values.setdefault(option_id, current_value)
+        chat["agentConfigValues"] = values
+        chat["updatedAt"] = _utc_now_iso()
+        await asyncio.to_thread(_write_chats_store, payload)
+        return {"configOptions": options, "values": values}
 
     @router.get("/api/workbench/chat-groups")
     async def api_workbench_chat_groups(project: str = ""):
@@ -1217,6 +1466,9 @@ def register_workbench_chat_routes(
         payload["chats"] = next_chats
         await asyncio.to_thread(_write_chats_store, payload)
         for removed_chat_id in removed_chat_ids:
+            from cyrene.agent_runtime.model_gateway import revoke_model_gateway_scope
+
+            revoke_model_gateway_scope(chat_id=removed_chat_id)
             try:
                 await asyncio.to_thread(
                     delete_chat_change_sets,
@@ -1334,6 +1586,22 @@ def register_workbench_chat_routes(
         chat = _find_chat(payload, chat_id)
         if not chat:
             return JSONResponse({"error": "chat not found"}, status_code=404)
+        from cyrene.agent_runtime.builtin import normalize_agent_binding
+
+        agent_binding = normalize_agent_binding(
+            chat.get("agent") if isinstance(chat.get("agent"), dict) else None
+        )
+        is_external_agent = not agent_binding.is_builtin
+        requested_agent = body.get("agent") if isinstance(body.get("agent"), dict) else None
+        requested_installation_id = str((requested_agent or {}).get("installationId") or "").strip()
+        if requested_installation_id and requested_installation_id != agent_binding.installation_id:
+            return JSONResponse(
+                {
+                    "error": "Agent binding cannot be changed from the message endpoint",
+                    "code": "agent_binding_locked",
+                },
+                status_code=409,
+            )
         is_side_agent = str(chat.get("kind") or "") == "side-agent"
         completed_turn_count_before = _completed_turn_count(chat)
         parent_chat = (
@@ -1372,7 +1640,8 @@ def register_workbench_chat_routes(
             return JSONResponse({"error": str(exc)}, status_code=400)
         selected_candidate = None
         recovered_stale_selection = False
-        selected_key = requested_model or str(chat.get("modelSelectionId") or "").strip()
+        agent_owns_models = is_external_agent and str((chat.get("modelAccess") or {}).get("mode") or "") == "agent_managed"
+        selected_key = "" if agent_owns_models else requested_model or str(chat.get("modelSelectionId") or "").strip()
         if selected_key:
             from cyrene.runtime.settings_store import get_models
 
@@ -1500,6 +1769,10 @@ def register_workbench_chat_routes(
                 user_entry["agentAttachments"] = normalized
             is_first_message = not any(m.get("role") == "user" for m in messages)
             messages.append(user_entry)
+            if is_first_message:
+                locked_agent = dict(chat.get("agent") or {})
+                locked_agent["bindingLocked"] = True
+                chat["agent"] = locked_agent
             if is_first_message and chat.get("title") in ("", "新对话", None) and message:
                 chat["title"] = message.replace("\n", " ")[:24]
             if (
@@ -1529,7 +1802,7 @@ def register_workbench_chat_routes(
                     status_code=503,
                 )
         chat["status"] = "running"
-        if selected_candidate is None:
+        if selected_candidate is None and not agent_owns_models:
             chat["model"] = R._get_model()
         _mark_user_activity(chat, now)
         await asyncio.to_thread(_write_chats_store, payload)
@@ -1615,6 +1888,8 @@ def register_workbench_chat_routes(
             _track_session_title_task(asyncio.create_task(_name_session_once()))
 
         agent_message = message
+        if is_external_agent and command:
+            agent_message = "/" + command + ((" " + message) if message else "")
         if is_side_agent:
             source_quote = str(chat.get("sourceQuote") or "").strip()
             agent_message = (
@@ -1653,7 +1928,282 @@ def register_workbench_chat_routes(
             if mid:
                 state_ids_before.add(mid)
 
-        async def _run() -> str:
+        # External Agent usage is collected by the nested runtime callback and
+        # consumed later by the sibling finalizer. Keep it in their shared
+        # enclosing scope; defining it inside _run makes successful streamed
+        # replies crash during persistence after they have already rendered.
+        external_usage: dict[str, int] = {}
+        external_context_report: dict[str, Any] = {}
+        external_artifacts: list[dict[str, Any]] = []
+        external_commands: list[Any] | None = None
+        external_plan: dict[str, Any] | None = None
+        external_agent_mode: Any = None
+        external_config_options: dict[str, dict[str, Any]] = {}
+        external_trace: list[dict[str, Any]] = []
+        external_reasoning_parts: list[str] = []
+        external_notifications: list[dict[str, Any]] = []
+        external_notification_keys: set[str] = set()
+
+        async def _run(run: ChatRun) -> str:
+            if is_external_agent:
+                from cyrene.agent_runtime import run_external_agent_turn
+                from cyrene.agent_runtime.events import event_envelope
+                from cyrene.agent_runtime.notices import LeadingOperationalNoticeFilter
+
+                reply_parts: list[str] = []
+                completed_reply = ""
+                external_session_id = ""
+                notice_filter = LeadingOperationalNoticeFilter()
+
+                async def publish_notice(
+                    notice: dict[str, Any], source_event: dict[str, Any]
+                ) -> None:
+                    key = "\n".join((
+                        str(notice.get("category") or "transport_warning"),
+                        str(notice.get("message") or "").strip(),
+                    ))
+                    if not key.strip() or key in external_notification_keys:
+                        return
+                    await publish_external(event_envelope(
+                        type="notification.created",
+                        payload=notice,
+                        timestamp=str(source_event.get("timestamp") or ""),
+                        agent_id=str(source_event.get("agentId") or ""),
+                        installation_id=str(source_event.get("installationId") or ""),
+                        chat_id=str(source_event.get("chatId") or chat_id),
+                        run_id=str(source_event.get("runId") or run.run_id),
+                        session_id=str(source_event.get("sessionId") or ""),
+                        actor_id=str(source_event.get("actorId") or "primary"),
+                        parent_run_id=source_event.get("parentRunId"),
+                        extensions={
+                            "originEventId": str(source_event.get("eventId") or ""),
+                            "normalizedFrom": "message_text",
+                        },
+                    ))
+
+                async def publish_external(event: dict[str, Any]) -> None:
+                    nonlocal completed_reply, external_usage, external_context_report, external_session_id, external_commands, external_plan, external_agent_mode
+                    payload = event.get("payload") if isinstance(event.get("payload"), dict) else {}
+                    event_type = str(event.get("type") or "")
+                    if event_type == "message.delta":
+                        delta = str(payload.get("delta") or payload.get("text") or "")
+                        notices, visible_delta = notice_filter.feed(delta)
+                        for notice in notices:
+                            await publish_notice(notice, event)
+                        if not visible_delta:
+                            return
+                        if visible_delta != delta:
+                            payload = {**payload, "delta": visible_delta}
+                            if "text" in payload:
+                                payload["text"] = visible_delta
+                            event = {**event, "payload": payload}
+                        reply_parts.append(visible_delta)
+                    elif event_type == "message.completed":
+                        raw_completed_reply = str(
+                            payload.get("response") or payload.get("text") or payload.get("content") or ""
+                        )
+                        if raw_completed_reply:
+                            notices, completed_reply = notice_filter.complete(raw_completed_reply)
+                        else:
+                            notices, visible_tail = notice_filter.finish()
+                            if visible_tail:
+                                reply_parts.append(visible_tail)
+                                await run.publish(event_envelope(
+                                    type="message.delta",
+                                    payload={"delta": visible_tail},
+                                    timestamp=str(event.get("timestamp") or ""),
+                                    agent_id=str(event.get("agentId") or ""),
+                                    installation_id=str(event.get("installationId") or ""),
+                                    chat_id=str(event.get("chatId") or chat_id),
+                                    run_id=str(event.get("runId") or run.run_id),
+                                    session_id=str(event.get("sessionId") or ""),
+                                    actor_id=str(event.get("actorId") or "primary"),
+                                    parent_run_id=event.get("parentRunId"),
+                                ))
+                        for notice in notices:
+                            await publish_notice(notice, event)
+                        if raw_completed_reply and completed_reply != raw_completed_reply:
+                            payload = {**payload}
+                            for key in ("response", "text", "content"):
+                                if key in payload:
+                                    payload[key] = completed_reply
+                            event = {**event, "payload": payload}
+                    elif event_type in {"run.completed", "run.failed", "run.cancelled"}:
+                        notices, visible_tail = notice_filter.finish()
+                        for notice in notices:
+                            await publish_notice(notice, event)
+                        if visible_tail:
+                            await publish_external(event_envelope(
+                                type="message.delta",
+                                payload={"delta": visible_tail},
+                                timestamp=str(event.get("timestamp") or ""),
+                                agent_id=str(event.get("agentId") or ""),
+                                installation_id=str(event.get("installationId") or ""),
+                                chat_id=str(event.get("chatId") or chat_id),
+                                run_id=str(event.get("runId") or run.run_id),
+                                session_id=str(event.get("sessionId") or ""),
+                                actor_id=str(event.get("actorId") or "primary"),
+                                parent_run_id=event.get("parentRunId"),
+                            ))
+                    elif event_type == "notification.created":
+                        notice_message = str(payload.get("message") or payload.get("detail") or "").strip()
+                        notice_category = str(payload.get("category") or "transport_warning")
+                        notice_key = "\n".join((notice_category, notice_message))
+                        if notice_message and notice_key not in external_notification_keys:
+                            external_notification_keys.add(notice_key)
+                            external_notifications.append({
+                                "eventId": str(event.get("eventId") or ""),
+                                "createdAt": str(event.get("timestamp") or _utc_now_iso()),
+                                "severity": str(payload.get("severity") or "warning"),
+                                "category": notice_category,
+                                "message": notice_message,
+                                "source": str(payload.get("source") or "agent_runtime"),
+                                "terminal": bool(payload.get("terminal")),
+                            })
+                    elif event_type == "reasoning.delta":
+                        reasoning_delta = str(payload.get("delta") or payload.get("text") or "")
+                        if reasoning_delta:
+                            external_reasoning_parts.append(reasoning_delta)
+                    elif event_type == "reasoning.completed":
+                        reasoning_text = str(payload.get("response") or payload.get("text") or payload.get("content") or "")
+                        if reasoning_text:
+                            external_reasoning_parts[:] = [reasoning_text]
+                    elif event_type in {"tool.started", "tool.updated", "tool.completed"}:
+                        tool_call_id = str(payload.get("toolCallId") or payload.get("tool_call_id") or "")
+                        tool_entry: dict[str, Any] = {
+                            "kind": "tool",
+                            "toolCallId": tool_call_id,
+                            "tool": str(payload.get("name") or payload.get("tool") or payload.get("title") or "tool"),
+                            "status": str(payload.get("status") or ("completed" if event_type == "tool.completed" else "running")),
+                            "failed": bool(payload.get("failed")),
+                        }
+                        if payload.get("inputSummary") is not None:
+                            tool_entry["input"] = payload.get("inputSummary")
+                        if payload.get("outputSummary") is not None:
+                            tool_entry["output"] = payload.get("outputSummary")
+                        if isinstance(payload.get("presentation"), dict):
+                            tool_entry["presentation"] = payload.get("presentation")
+                        existing_tool_index = next((
+                            index for index, item in enumerate(external_trace)
+                            if tool_call_id and str(item.get("toolCallId") or "") == tool_call_id
+                        ), -1)
+                        if existing_tool_index >= 0:
+                            external_trace[existing_tool_index] = {
+                                **external_trace[existing_tool_index],
+                                **tool_entry,
+                            }
+                        else:
+                            external_trace.append(tool_entry)
+                    elif event_type == "usage.updated":
+                        for source, target in (
+                            ("inputTokens", "prompt_tokens"),
+                            ("outputTokens", "completion_tokens"),
+                            ("totalTokens", "total_tokens"),
+                            ("used", "total_tokens"),
+                        ):
+                            try:
+                                value = int(payload.get(source) or 0)
+                            except (TypeError, ValueError):
+                                value = 0
+                            if value > 0:
+                                external_usage[target] = value
+                        context_candidate = next((
+                            payload.get(key) for key in ("contextComposition", "context", "contextWindow")
+                            if isinstance(payload.get(key), dict)
+                        ), {})
+                        if isinstance(context_candidate, dict):
+                            external_context_report.update(context_candidate)
+                        if isinstance(payload.get("segments"), list):
+                            external_context_report["segments"] = payload.get("segments")
+                        for key in ("used", "size"):
+                            if payload.get(key) is not None:
+                                external_context_report[key] = payload.get(key)
+                    elif event_type == "session.updated":
+                        next_session_id = str(
+                            payload.get("sessionId") or payload.get("session_id") or ""
+                        ).strip()
+                        if next_session_id:
+                            external_session_id = next_session_id
+                        commands = payload.get("commands")
+                        if isinstance(commands, list):
+                            external_commands = commands[:200]
+                        if payload.get("mode") is not None:
+                            external_agent_mode = payload.get("mode")
+                        plan = payload.get("plan")
+                        if isinstance(plan, dict):
+                            external_plan = dict(plan)
+                            external_plan.setdefault("status", "active")
+                        config_option = payload.get("configOption")
+                        if isinstance(config_option, dict) and str(config_option.get("id") or ""):
+                            external_config_options[str(config_option.get("id") or "")] = config_option
+                        for config_option in payload.get("configOptions") or []:
+                            if isinstance(config_option, dict) and str(config_option.get("id") or ""):
+                                external_config_options[str(config_option.get("id") or "")] = config_option
+                    elif event_type in {"artifact.created", "artifact.updated"}:
+                        attachment = payload.get("attachment")
+                        if isinstance(attachment, dict):
+                            public_attachment = {
+                                key: attachment[key]
+                                for key in (
+                                    "id", "name", "content_type", "size", "kind",
+                                    "url", "width", "height",
+                                )
+                                if key in attachment
+                            }
+                            artifact_id = str(payload.get("artifactId") or "")
+                            if artifact_id:
+                                public_attachment["artifactId"] = artifact_id
+                            artifact_key = str(
+                                public_attachment.get("artifactId")
+                                or public_attachment.get("id")
+                                or public_attachment.get("url")
+                                or ""
+                            )
+                            if artifact_key:
+                                artifact_index = next((
+                                    index for index, item in enumerate(external_artifacts)
+                                    if str(item.get("artifactId") or item.get("id") or item.get("url") or "") == artifact_key
+                                ), -1)
+                                if artifact_index >= 0:
+                                    external_artifacts[artifact_index] = public_attachment
+                                else:
+                                    external_artifacts.append(public_attachment)
+                    elif event_type:
+                        from cyrene.agent_runtime.events import CORE_EVENT_TYPES
+                        if event_type not in CORE_EVENT_TYPES:
+                            external_trace.append({
+                                "kind": "event",
+                                "toolCallId": str(event.get("eventId") or event.get("event_id") or ""),
+                                "tool": f"Agent event · {event_type}",
+                                "status": "completed",
+                                "output": payload,
+                                "presentation": {"kind": "event"},
+                            })
+                    await run.publish(event)
+
+                result = await run_external_agent_turn(
+                    chat=chat,
+                    message=agent_message,
+                    publish=publish_external,
+                    attachments=normalized,
+                    workspace_path=workspace_dir,
+                    run_id=run.run_id,
+                )
+                external_session_id = str(result.get("sessionId") or external_session_id or "")
+                if external_session_id:
+                    await asyncio.to_thread(
+                        _service.set_chat_external_session_id,
+                        chat_id,
+                        external_session_id,
+                    )
+                if external_context_report:
+                    await asyncio.to_thread(
+                        _service.update_chat_agent_context_report,
+                        chat_id,
+                        external_context_report,
+                    )
+                return completed_reply or "".join(reply_parts)
+
             from cyrene.workbench.project_memory_prompt import build_main_agent_suffix
             from cyrene.runtime.host_bridge import resolve_conversation_source
 
@@ -1706,11 +2256,70 @@ def register_workbench_chat_routes(
                     0, int(round((time.monotonic() - processing_started_at) * 1000))
                 ),
             }
-            if any(usage.values()):
-                assistant_entry["usage"] = usage
-            if files:
-                assistant_entry["attachments"] = files
+            effective_usage = dict(usage)
+            if is_external_agent:
+                effective_usage.update(external_usage)
+            if any(effective_usage.values()):
+                assistant_entry["usage"] = effective_usage
+            reply_files: list[dict[str, Any]] = []
+            known_reply_files: set[str] = set()
+            for file in [*files, *external_artifacts]:
+                if not isinstance(file, dict):
+                    continue
+                key = str(file.get("id") or file.get("url") or file.get("path") or "")
+                if not key or key in known_reply_files:
+                    continue
+                known_reply_files.add(key)
+                reply_files.append(file)
+            if reply_files:
+                assistant_entry["attachments"] = reply_files
+            if external_commands is not None:
+                fresh_chat["agentCommands"] = external_commands
+            if isinstance(external_plan, dict):
+                fresh_chat["activePlan"] = external_plan
+            if external_agent_mode is not None:
+                fresh_chat["agentMode"] = external_agent_mode
+            if external_config_options:
+                config_options = [
+                    item for item in (fresh_chat.get("agentConfigOptions") or [])
+                    if isinstance(item, dict)
+                    and str(item.get("id") or "") not in external_config_options
+                ]
+                config_options.extend(external_config_options.values())
+                fresh_chat["agentConfigOptions"] = config_options[:100]
             fresh_chat["lastModel"] = model_name
+            if external_trace:
+                timeline_entries.insert(0, {
+                    "id": _short_id("activity"),
+                    "role": "assistant",
+                    "content": "",
+                    "createdAt": assistant_entry["createdAt"],
+                    "activityCard": True,
+                    "reasoning": "".join(external_reasoning_parts),
+                    "trace": external_trace[:40],
+                    "intermediate": True,
+                    "model": model_name,
+                })
+            if external_notifications:
+                timeline_entries[0:0] = [
+                    {
+                        "id": str(notice.get("eventId") or _short_id("notice")),
+                        "role": "assistant",
+                        "content": "",
+                        "createdAt": str(notice.get("createdAt") or assistant_entry["createdAt"]),
+                        "notificationCard": True,
+                        "notification": {
+                            key: notice[key]
+                            for key in (
+                                "severity", "category", "message", "source", "terminal"
+                            )
+                            if key in notice
+                        },
+                        "intermediate": True,
+                        "model": model_name,
+                    }
+                    for notice in external_notifications
+                ]
             saved_messages = [*timeline_entries, assistant_entry]
             _merge_chat_messages_chronologically(fresh_chat, saved_messages)
             completed_turn_count = _next_completed_turn_count(
@@ -1862,7 +2471,7 @@ def register_workbench_chat_routes(
                 workspace_dir, run.run_id
             )
             try:
-                reply = await _run()
+                reply = await _run(run)
             except asyncio.CancelledError:
                 await _finalize_workspace_changes(
                     chat_id=chat_id,
@@ -1965,7 +2574,7 @@ def register_workbench_chat_routes(
                     {
                         "error": error,
                         "detail": str(exc),
-                        **_workbench_chat_error_metadata(exc),
+                        **_service._workbench_chat_error_metadata(exc),
                     },
                     status_code=502,
                 )
@@ -2008,7 +2617,7 @@ def register_workbench_chat_routes(
             )
             try:
                 try:
-                    reply = await _run()
+                    reply = await _run(run)
                 except asyncio.CancelledError:
                     await _finalize_workspace_changes(
                         chat_id=chat_id,
@@ -2037,7 +2646,7 @@ def register_workbench_chat_routes(
                         "type": "error",
                         "error": "model_call_failed",
                         "message": _workbench_chat_run_error_message(exc, lang),
-                        **_workbench_chat_error_metadata(exc),
+                        **_service._workbench_chat_error_metadata(exc),
                     })
                     return
                 # The agent has returned and can no longer absorb new guidance.
@@ -2079,9 +2688,10 @@ def register_workbench_chat_routes(
                     })
                     return
                 if not run.saw_reply_events:
-                    await run.publish({"type": "reply_start"})
-                    for chunk in R._reply_stream_chunks(reply):
-                        await run.publish({"type": "reply_delta", "delta": chunk})
+                    if not is_external_agent:
+                        await run.publish({"type": "reply_start"})
+                        for chunk in R._reply_stream_chunks(reply):
+                            await run.publish({"type": "reply_delta", "delta": chunk})
                 # A streamed model call can finish before the agent reopens the
                 # tool channel, so its reply_done is not necessarily the text
                 # that _finalize_async will persist. Publish one authoritative
@@ -2089,7 +2699,8 @@ def register_workbench_chat_routes(
                 # The client replaces (rather than appends) on reply_done, which
                 # also makes this harmless when the last model call already
                 # streamed exactly the same text.
-                await run.publish({"type": "reply_done", "response": reply})
+                if not is_external_agent:
+                    await run.publish({"type": "reply_done", "response": reply})
                 # The agent coroutine has returned and only durable finalization
                 # remains. The UI can stop tool animations without pretending the
                 # transcript and workspace change set are already saved.
@@ -2189,6 +2800,44 @@ def register_workbench_chat_routes(
             chat_id,
             api_models.body_dict(body_model),
         )
+
+    @router.post("/api/workbench/chats/{chat_id}/agent-requests/{request_id}/respond")
+    async def api_workbench_agent_request_respond(
+        chat_id: str,
+        request_id: str,
+        body_model: api_models.AgentRequestResponseBody,
+    ):
+        """Forward a dynamic Agent-owned permission or elicitation response."""
+        payload = await asyncio.to_thread(_read_chats_store)
+        chat = _find_chat(payload, chat_id)
+        if not chat:
+            return JSONResponse({"error": "chat not found"}, status_code=404)
+        if _CHAT_RUN_MANAGER.get(chat_id) is None:
+            return JSONResponse(
+                {
+                    "error": "the Agent request is no longer active",
+                    "code": "request_expired",
+                    "failureKind": "request_expired",
+                },
+                status_code=409,
+            )
+        from cyrene.agent_runtime import (
+            AgentRuntimeError,
+            respond_to_external_agent_request,
+        )
+
+        body = api_models.body_dict(body_model)
+        try:
+            return await respond_to_external_agent_request(
+                chat_id,
+                request_id,
+                body.get("response") if isinstance(body.get("response"), dict) else {},
+            )
+        except AgentRuntimeError as exc:
+            return JSONResponse(
+                {"ok": False, "error": str(exc), **exc.to_public_dict()},
+                status_code=409 if exc.kind == "request_expired" else 400,
+            )
 
     @router.post("/api/workbench/chats/{chat_id}/actions")
     async def api_workbench_chat_action(
@@ -2298,6 +2947,19 @@ def register_workbench_chat_routes(
         chat = _find_chat(payload, chat_id)
         if not chat:
             return JSONResponse({"error": "chat not found"}, status_code=404)
+        from cyrene.agent_runtime.builtin import normalize_agent_binding
+
+        if not normalize_agent_binding(
+            chat.get("agent") if isinstance(chat.get("agent"), dict) else None
+        ).is_builtin:
+            return JSONResponse(
+                {
+                    "error": "This Agent does not support conversation forks",
+                    "code": "capability_missing",
+                    "failureKind": "capability_missing",
+                },
+                status_code=409,
+            )
         messages = chat.get("messages") if isinstance(chat.get("messages"), list) else []
         if not messages:
             return JSONResponse({"error": "chat has no messages"}, status_code=400)
@@ -2718,7 +3380,7 @@ def register_workbench_chat_routes(
                 {
                     "error": "answer resume failed",
                     "detail": str(exc),
-                    **_workbench_chat_error_metadata(exc),
+                    **_service._workbench_chat_error_metadata(exc),
                 },
                 status_code=502,
             )

@@ -10,6 +10,7 @@ import asyncio
 import ipaddress
 import logging
 import re
+import time
 from urllib.parse import urlparse
 
 import requests
@@ -31,6 +32,12 @@ def _proxied_session() -> requests.Session:
 
 _HTTP_TIMEOUT = 30.0
 _MAX_CONCURRENT = 20
+_EVIDENCE_EXCERPT_CHARS = 1_500
+
+# Native DeepSeek web search is intentionally disabled while its latency and
+# output size are being evaluated.  Keep the adapter available for a future
+# explicit rollout, but do not probe credentials or call it from WebSearch.
+_NATIVE_DEEPSEEK_SEARCH_ENABLED = False
 
 # ---------------------------------------------------------------------------
 # LLM call (same pattern as agent.py, text-only, no tools)
@@ -310,12 +317,57 @@ def _fallback_synthesis(relevant_results: list[dict], fetched_contents: list[str
     return "\n".join(parts)
 
 
+def _self_contained_search_result(
+    answer: str,
+    relevant_results: list[dict],
+    fetched_contents: list[str],
+) -> str:
+    """Preserve the synthesized answer and expose already-fetched evidence.
+
+    The previous pipeline fetched page bodies but discarded nearly all of them
+    after synthesis.  That made the main Agent call WebFetch for a URL it had
+    effectively already paid to retrieve.  This projection performs no new
+    network or model work and keeps the synthesized answer unchanged.
+    """
+    sections = [
+        "WebSearch completed search, page retrieval, relevance filtering, and synthesis. "
+        "Use this self-contained result directly. Do not call WebFetch for the listed "
+        "sources unless the user explicitly requests an exact quotation/full-page "
+        "verification or a required detail is absent below.",
+        "",
+        "Synthesized answer:",
+        answer.strip(),
+        "",
+        "Fetched source evidence:",
+    ]
+    for index, result in enumerate(relevant_results, start=1):
+        content = (
+            fetched_contents[index - 1]
+            if index - 1 < len(fetched_contents)
+            else ""
+        ) or str(result.get("snippet") or "")
+        excerpt = str(content).strip()[:_EVIDENCE_EXCERPT_CHARS]
+        sections.extend(
+            [
+                f"[{index}] {result.get('title', '?')}",
+                f"URL: {result.get('url', '')}",
+                f"Excerpt: {excerpt}" if excerpt else "Excerpt: unavailable",
+                "",
+            ]
+        )
+    return "\n".join(sections).rstrip()
+
+
 # ---------------------------------------------------------------------------
 # Main entry: deep_search
 # ---------------------------------------------------------------------------
 
 
-async def _deep_search_simplexng(topic: str) -> str:
+async def _deep_search_simplexng(
+    topic: str,
+    *,
+    _parallel_prepare: bool = True,
+) -> str:
     """Run the existing multi-stage SimpleXNG search pipeline.
 
     Stages:
@@ -375,22 +427,60 @@ async def _deep_search_simplexng(topic: str) -> str:
     # Cap at 15 results
     deduped = deduped[:15]
 
-    # Fetch content for top 8 results in parallel
-    async def _limited_fetch(r: dict) -> str:
-        url = r.get("url", "")
-        if not url:
-            return ""
-        async with semaphore:
-            return await _fetch_url(url)
+    # Fetching page bodies and filtering search-result metadata are independent:
+    # the filter prompt consumes only title, URL, and snippet.  Run both stages
+    # concurrently, preserving the exact result set, prompts, fetch budget, and
+    # synthesis inputs used by the previous serial pipeline.
+    async def _fetch_stage() -> tuple[list[object], float]:
+        async def _limited_fetch(r: dict) -> str:
+            url = r.get("url", "")
+            if not url:
+                return ""
+            async with semaphore:
+                return await _fetch_url(url)
 
-    fetch_tasks = [_limited_fetch(r) for r in deduped[:8]]
+        fetch_tasks = [_limited_fetch(r) for r in deduped[:8]]
+        started = time.perf_counter()
+        async with trace_span(
+            "search_stage", "simplexng_fetch", attributes={"url_count": len(fetch_tasks)}
+        ) as fetch_span:
+            fetched_results = await asyncio.gather(*fetch_tasks, return_exceptions=True)
+            fetch_span.set_attribute(
+                "fetched_count",
+                sum(1 for item in fetched_results if isinstance(item, str) and item),
+            )
+        return list(fetched_results), (time.perf_counter() - started) * 1000
+
+    async def _filter_stage() -> tuple[list[dict], float]:
+        started = time.perf_counter()
+        async with trace_span(
+            "search_stage", "simplexng_filter", attributes={"input_count": len(deduped)}
+        ) as filter_span:
+            filtered_results = await _filter_results(deduped, topic)
+            filter_span.set_attribute("output_count", len(filtered_results))
+        return filtered_results, (time.perf_counter() - started) * 1000
+
+    prepare_started = time.perf_counter()
+    prepare_mode = "parallel" if _parallel_prepare else "serial_reference"
     async with trace_span(
-        "search_stage", "simplexng_fetch", attributes={"url_count": len(fetch_tasks)}
-    ) as fetch_span:
-        fetched = await asyncio.gather(*fetch_tasks, return_exceptions=True)
-        fetch_span.set_attribute(
-            "fetched_count", sum(1 for f in fetched if isinstance(f, str) and f)
-        )
+        "search_stage",
+        "simplexng_prepare_sources",
+        attributes={"mode": prepare_mode, "quality_contract": "byte_identical"},
+    ) as prepare_span:
+        if _parallel_prepare:
+            (fetched, fetch_ms), (filtered, filter_ms) = await asyncio.gather(
+                _fetch_stage(),
+                _filter_stage(),
+            )
+        else:
+            # Benchmark-only reference for the pre-optimization critical path.
+            fetched, fetch_ms = await _fetch_stage()
+            filtered, filter_ms = await _filter_stage()
+        prepare_ms = (time.perf_counter() - prepare_started) * 1000
+        prepare_span.set_attribute("fetch_ms", round(fetch_ms, 3))
+        prepare_span.set_attribute("filter_ms", round(filter_ms, 3))
+        prepare_span.set_attribute("serial_equivalent_ms", round(fetch_ms + filter_ms, 3))
+        prepare_span.set_attribute("overlap_saved_ms", round(max(0.0, fetch_ms + filter_ms - prepare_ms), 3))
 
     # Attach fetched content back to results
     for i, r in enumerate(deduped[:8]):
@@ -409,13 +499,8 @@ async def _deep_search_simplexng(topic: str) -> str:
         logger.warning("=== end raw results ===")
 
     # -----------------------------------------------------------------------
-    # Stage 3: Filter
+    # Stage 3: Filter (already completed alongside page fetching above)
     # -----------------------------------------------------------------------
-    async with trace_span(
-        "search_stage", "simplexng_filter", attributes={"input_count": len(deduped)}
-    ) as filter_span:
-        filtered = await _filter_results(deduped, topic)
-        filter_span.set_attribute("output_count", len(filtered))
     if not filtered:
         logger.warning("Stage 3 filter returned empty, falling back to top 5 results")
         filtered = deduped[:5]
@@ -432,7 +517,13 @@ async def _deep_search_simplexng(topic: str) -> str:
         synthesize_span.set_attribute("answer_chars", len(answer))
     logger.info("Stage 4 complete: synthesis generated (%d chars)", len(answer))
 
-    return answer
+    result = _self_contained_search_result(answer, filtered, fetched_contents)
+    logger.info(
+        "WebSearch self-contained result generated (%d chars, %d evidence sources)",
+        len(result),
+        len(filtered),
+    )
+    return result
 
 
 async def _deep_search_impl(
@@ -442,74 +533,17 @@ async def _deep_search_impl(
     session_id: str = "",
     round_id: str = "",
 ) -> str:
-    """Search with official DeepSeek first, then fall back to SimpleXNG."""
-    from cyrene.tooling.backends.deepseek_web_search import (
-        DeepSeekWebSearchError,
-        find_official_deepseek_search_candidate,
-        search_with_deepseek,
+    """Search exclusively through SimpleXNG while native search is disabled."""
+    del db_path, session_id, round_id
+    logger.info(
+        "Web search using SimpleXNG (native DeepSeek enabled=%s)",
+        _NATIVE_DEEPSEEK_SEARCH_ENABLED,
     )
-
-    try:
-        candidate = find_official_deepseek_search_candidate()
-    except Exception as exc:
-        logger.warning(
-            "DeepSeek web_search candidate discovery failed (%s); using SimpleXNG",
-            exc.__class__.__name__,
-        )
-        candidate = None
-
-    if candidate is not None:
-        logger.info(
-            "Web search using official DeepSeek Responses API "
-            "(candidate=%s configured_model=%s search_model=%s)",
-            candidate.candidate_id,
-            candidate.configured_model,
-            candidate.search_model,
-        )
-        try:
-            async with trace_span(
-                "search_stage",
-                "deepseek_provider",
-                attributes={"candidate_id": candidate.candidate_id},
-            ) as provider_span:
-                result = await search_with_deepseek(topic, candidate)
-                provider_span.set_attribute("answer_chars", len(result.text))
-        except DeepSeekWebSearchError as exc:
-            logger.warning("%s; falling back to SimpleXNG", exc)
-        except Exception as exc:
-            logger.warning(
-                "Unexpected DeepSeek web_search failure (%s); falling back to SimpleXNG",
-                exc.__class__.__name__,
-            )
-        else:
-            if db_path:
-                try:
-                    from cyrene.runtime.database import record_token_usage
-
-                    await record_token_usage(
-                        db_path,
-                        model=result.model,
-                        prompt_tokens=result.usage["prompt_tokens"],
-                        completion_tokens=result.usage["completion_tokens"],
-                        total_tokens=result.usage["total_tokens"],
-                        cache_hit_tokens=result.usage["prompt_cache_hit_tokens"],
-                        cache_miss_tokens=result.usage["prompt_cache_miss_tokens"],
-                        duration_ms=result.duration_ms,
-                        round_id=round_id,
-                        session_id=session_id,
-                        caller="search",
-                    )
-                except Exception as exc:
-                    # Search succeeded; telemetry failure must not discard a
-                    # valid answer or trigger a second paid search pipeline.
-                    logger.warning(
-                        "Failed to record DeepSeek web_search usage (%s)",
-                        exc.__class__.__name__,
-                    )
-            return result.text
-
-    logger.info("Web search using SimpleXNG fallback")
-    async with trace_span("search_stage", "simplexng_pipeline"):
+    async with trace_span(
+        "search_stage",
+        "simplexng_pipeline",
+        attributes={"backend": "simplexng", "deepseek_disabled": True},
+    ):
         return await _deep_search_simplexng(topic)
 
 

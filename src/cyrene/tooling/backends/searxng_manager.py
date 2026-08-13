@@ -6,6 +6,7 @@ vendors SearXNG and runs it via waitress on a configurable port.
 
 import asyncio
 import importlib.util
+import json
 import logging
 import os
 import secrets
@@ -19,15 +20,30 @@ from urllib.parse import urlparse
 from urllib.request import getproxies
 
 import httpx
-import yaml
 
-from cyrene.config import DATA_DIR, SEARCH_PROXY, SEARXNG_URL, TEMP_DIR
+from cyrene.config import DATA_DIR, INSTALL_RESOURCES_DIR, SEARCH_PROXY, SEARXNG_URL, TEMP_DIR
 
 logger = logging.getLogger(__name__)
 
 _HEALTH_CHECK_TIMEOUT = 30.0
 _HEALTH_CHECK_INTERVAL = 0.5
 _SIMPLEXNG_SETTINGS_PATH = DATA_DIR / "simplexng_settings.yml"
+
+
+def _is_windows_arm() -> bool:
+    return sys.platform == "win32" and platform_machine() in {"arm64", "aarch64"}
+
+
+def _woa_simplexng_sidecar() -> Path | None:
+    if not _is_windows_arm():
+        return None
+    override = os.environ.get("CYRENE_X64_SIMPLEXNG_SIDECAR", "").strip()
+    candidate = (
+        Path(override)
+        if override
+        else Path(INSTALL_RESOURCES_DIR) / "x64-sidecars" / "simplexng" / "CyreneSimpleXNG.exe"
+    )
+    return candidate if candidate.is_file() else None
 
 
 class SearXNGManager:
@@ -96,7 +112,7 @@ class SearXNGManager:
                 )
         except FileNotFoundError:
             raise RuntimeError(
-                "SimpleXNG is not installed. Run: pip install simplexng"
+                "SimpleXNG runtime is unavailable (the WoA x64 sidecar may be missing)"
             ) from None
         except Exception as exc:
             raise RuntimeError(
@@ -190,7 +206,34 @@ def get_manager() -> SearXNGManager:
 
 def _write_simplexng_settings(port: int, host: str) -> Path:
     """Write the SimpleXNG settings file managed by Cyrene."""
+    proxy_url = _get_effective_search_proxy()
+    sidecar = _woa_simplexng_sidecar()
+    if sidecar is not None:
+        _SIMPLEXNG_SETTINGS_PATH.parent.mkdir(parents=True, exist_ok=True)
+        completed = subprocess.run(
+            [str(sidecar), "--cyrene-prepare-settings"],
+            input=json.dumps({
+                "path": str(_SIMPLEXNG_SETTINGS_PATH),
+                "port": port,
+                "host": host,
+                "secret_key": secrets.token_hex(16),
+                "proxy_url": proxy_url,
+            }),
+            capture_output=True,
+            text=True,
+            timeout=30,
+            check=False,
+            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+        )
+        if completed.returncode != 0 or not _SIMPLEXNG_SETTINGS_PATH.is_file():
+            raise RuntimeError(
+                (completed.stderr or completed.stdout or "SimpleXNG sidecar could not prepare settings").strip()
+            )
+        return _SIMPLEXNG_SETTINGS_PATH
+    if _is_windows_arm():
+        raise FileNotFoundError("Windows ARM x64 SimpleXNG sidecar is missing")
     try:
+        import yaml
         from simplexng.settings import get_bundled_template
 
         template_path = get_bundled_template()
@@ -206,7 +249,6 @@ def _write_simplexng_settings(port: int, host: str) -> Path:
     if "json" not in formats:
         formats.append("json")
 
-    proxy_url = _get_effective_search_proxy()
     outgoing = settings.setdefault("outgoing", {})
     if proxy_url:
         outgoing["proxies"] = {"all://": [proxy_url]}
@@ -314,6 +356,15 @@ def _build_simplexng_launch_cmd(port: int, host: str, *, settings_path: Path | N
     if settings_path is not None:
         args.extend(["--settings", str(settings_path)])
 
+    # WoA keeps the main backend native ARM64. SimpleXNG still depends on a
+    # handful of x64-only wheels (Brotli/fastText), so only this child service
+    # crosses the Windows compatibility boundary.
+    if _is_windows_arm():
+        sidecar = _woa_simplexng_sidecar()
+        if sidecar is not None:
+            return [str(sidecar), *args]
+        raise FileNotFoundError("Windows ARM x64 SimpleXNG sidecar is missing")
+
     # In a PyInstaller frozen build, sys.executable is the app binary itself.
     # Running it with "-m" would launch another full instance — recursive spawn.
     # Instead we use a trampoline flag that run_cyrene.py understands.
@@ -331,6 +382,12 @@ def _build_simplexng_launch_cmd(port: int, host: str, *, settings_path: Path | N
         return [str(script_path), *args]
 
     raise FileNotFoundError("Could not locate a runnable SimpleXNG entrypoint")
+
+
+def platform_machine() -> str:
+    import platform
+
+    return platform.machine().lower()
 
 
 async def start_searxng(port: int = 8888, host: str = "127.0.0.1") -> str:

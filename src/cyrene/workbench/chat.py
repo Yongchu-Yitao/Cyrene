@@ -35,6 +35,8 @@ import httpx
 
 from cyrene.call_llm import NETWORK_RETRY_LIMIT
 from cyrene.config import DATA_DIR, WORKSPACE_DIR
+from cyrene.agent_runtime import builtin as _agent_runtime_builtin
+from cyrene.agent_runtime.capabilities import normalize_capabilities as _normalize_capabilities
 from cyrene.runtime.memory.conversations import archive_session_exchange
 from cyrene.runtime.io import atomic_write_json, read_json_safe
 from cyrene.workbench.store import read_document, write_document
@@ -458,6 +460,12 @@ def _workbench_chat_error_metadata(exc: Exception) -> dict[str, str]:
     error code/key to render the banner in its current language. Unknown errors
     intentionally return no metadata and keep their diagnostic message.
     """
+    failure_kind = str(getattr(exc, "kind", "") or "").strip()
+    if failure_kind:
+        failure_key = _WORKBENCH_CHAT_ERROR_I18N_KEYS.get(failure_kind, "")
+        if failure_key:
+            return {"code": failure_kind, "detail_key": failure_key}
+        return {"code": failure_kind, "failureKind": failure_kind}
     direct_code = str(getattr(exc, "code", "") or "").strip()
     direct_key = _WORKBENCH_CHAT_ERROR_I18N_KEYS.get(direct_code, "")
     if direct_code and direct_key:
@@ -942,6 +950,9 @@ def _new_chat(
     model: str = "",
     *,
     project_memory_snapshot: dict[str, Any] | None = None,
+    agent: dict[str, Any] | None = None,
+    model_access: dict[str, Any] | None = None,
+    capabilities: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     now = _utc_now_iso()
     supplied_title = str(title or "").strip()
@@ -965,6 +976,16 @@ def _new_chat(
             "modifiedAt": str(project_memory_snapshot.get("modifiedAt") or ""),
             "hash": str(project_memory_snapshot.get("hash") or ""),
         }
+    # Agent binding / model source / capability snapshot. Legacy calls without
+    # agent fields normalize to the built-in Cyrene Agent (backward compatible).
+    chat.update(
+        _agent_runtime_builtin.normalize_agent_fields(
+            agent,
+            model_access,
+            default_model=model,
+            capabilities_raw=capabilities,
+        )
+    )
     return chat
 
 
@@ -1042,6 +1063,149 @@ def get_workbench_chat(chat_id: str) -> dict[str, Any] | None:
 def completed_turn_count(chat: dict[str, Any]) -> int:
     """Public boundary for counting completed conversation turns."""
     return _completed_turn_count(chat)
+
+
+def _persist_agent_fields(chat: dict[str, Any], fields: dict[str, Any]) -> None:
+    chat.update(fields)
+    chat["updatedAt"] = _utc_now_iso()
+
+
+def apply_chat_agent_binding(
+    chat_id: str,
+    *,
+    agent: dict[str, Any] | None = None,
+    model_access: dict[str, Any] | None = None,
+) -> dict[str, Any] | None:
+    """Attach a draft agent binding/model access to an existing empty chat.
+
+    Used by the composer draft-binding flow (handoff §8.3) when the frontend
+    created the chat lazily.  Refuses (returns ``None``) once the chat has
+    messages or a locked binding — the caller maps that to the ``409
+    agent_binding_locked`` contract.  Returns the updated chat when applied.
+    """
+    payload = _read_chats_store()
+    chat = _find_chat(payload, str(chat_id or ""))
+    if not chat:
+        return None
+    existing_agent = chat.get("agent") if isinstance(chat.get("agent"), dict) else {}
+    if bool(existing_agent.get("bindingLocked")) or bool(chat.get("messages")):
+        return None
+    _persist_agent_fields(
+        chat,
+        _agent_runtime_builtin.normalize_agent_fields(
+            agent,
+            model_access,
+            default_model=str(chat.get("model") or ""),
+        ),
+    )
+    _write_chats_store(payload)
+    return chat
+
+
+def lock_chat_agent_binding(chat_id: str) -> dict[str, Any] | None:
+    """Lock the persisted agent binding after the first message is queued."""
+    payload = _read_chats_store()
+    chat = _find_chat(payload, str(chat_id or ""))
+    if not chat:
+        return None
+    agent = dict(_agent_runtime_builtin.chat_agent_fields(chat)["agent"])
+    agent["bindingLocked"] = True
+    chat["agent"] = agent
+    chat["updatedAt"] = _utc_now_iso()
+    _write_chats_store(payload)
+    return chat
+
+
+def set_chat_external_session_id(
+    chat_id: str,
+    external_session_id: str,
+) -> dict[str, Any] | None:
+    """Persist the Agent-side session id on the chat binding (§14)."""
+    payload = _read_chats_store()
+    chat = _find_chat(payload, str(chat_id or ""))
+    if not chat:
+        return None
+    agent = dict(_agent_runtime_builtin.chat_agent_fields(chat)["agent"])
+    agent["externalSessionId"] = str(external_session_id or "").strip()
+    chat["agent"] = agent
+    chat["updatedAt"] = _utc_now_iso()
+    _write_chats_store(payload)
+    return chat
+
+
+def update_chat_agent_context_report(
+    chat_id: str,
+    report: dict[str, Any],
+) -> dict[str, Any] | None:
+    """Persist a bounded context-window report supplied by an external Agent."""
+    payload = _read_chats_store()
+    chat = _find_chat(payload, str(chat_id or ""))
+    if not chat:
+        return None
+
+    def safe_int(value: Any) -> int:
+        try:
+            return max(0, int(value or 0))
+        except (TypeError, ValueError):
+            return 0
+
+    normalized_segments: list[dict[str, Any]] = []
+    raw_segments = report.get("segments")
+    if isinstance(raw_segments, list):
+        for index, item in enumerate(raw_segments[:32]):
+            if not isinstance(item, dict):
+                continue
+            tokens = safe_int(item.get("tokens") or item.get("tokens_est") or item.get("used"))
+            if tokens <= 0:
+                continue
+            key = str(item.get("key") or item.get("id") or item.get("type") or f"segment_{index + 1}").strip()[:80]
+            label = str(item.get("label") or item.get("name") or key).strip()[:120]
+            normalized_segments.append({"key": key, "label": label, "tokens": tokens})
+
+    normalized = {
+        "used": safe_int(report.get("used") or report.get("totalTokens")),
+        "size": safe_int(report.get("size") or report.get("limit") or report.get("contextWindow")),
+        "segments": normalized_segments,
+        "updatedAt": _utc_now_iso(),
+    }
+    if normalized["used"] <= 0 and normalized_segments:
+        normalized["used"] = sum(item["tokens"] for item in normalized_segments)
+    if normalized["used"] <= 0 and normalized["size"] <= 0 and not normalized_segments:
+        return chat
+    chat["agentContextReport"] = normalized
+    chat["updatedAt"] = _utc_now_iso()
+    _write_chats_store(payload)
+    return chat
+
+
+def update_chat_capabilities(
+    chat_id: str,
+    capabilities: dict[str, Any],
+    *,
+    revision: int | None = None,
+) -> dict[str, Any] | None:
+    """Persist a normalized capability snapshot with a bumped revision.
+
+    Probe results update capabilities over the chat lifetime; every update
+    requires an increasing ``capabilitiesRevision`` (handoff §14).  When
+    ``revision`` is omitted it is derived from the stored value + 1.
+    """
+    payload = _read_chats_store()
+    chat = _find_chat(payload, str(chat_id or ""))
+    if not chat:
+        return None
+    stored = chat.get("capabilitiesRevision")
+    if not isinstance(revision, int) or revision < 0:
+        revision = (
+            stored
+            if isinstance(stored, int) and not isinstance(stored, bool) and stored >= 0
+            else 0
+        ) + 1
+    chat["capabilities"] = _normalize_capabilities(capabilities)
+    chat["capabilitiesRevision"] = revision
+    chat["updatedAt"] = _utc_now_iso()
+    _write_chats_store(payload)
+    return chat
 
 
 _FORK_METADATA_FIELDS = ("forkedFromChatId", "forkedAtMessageId", "forkMessage")
@@ -1238,6 +1402,18 @@ def _public_chat_light(chat: dict[str, Any]) -> dict[str, Any]:
         payload["forkedAtMessageId"] = chat.get("forkedAtMessageId")
     if chat.get("forkMessage"):
         payload["forkMessage"] = str(chat.get("forkMessage"))[:80]
+    # Agent binding / model source / capabilities snapshot (handoff §14).
+    # Legacy chats without agent fields surface the built-in Cyrene Agent.
+    agent_fields = _agent_runtime_builtin.chat_agent_fields(chat)
+    payload["agent"] = agent_fields["agent"]
+    payload["modelAccess"] = agent_fields["modelAccess"]
+    payload["capabilities"] = agent_fields["capabilities"]
+    payload["capabilitiesRevision"] = agent_fields["capabilitiesRevision"]
+    payload["agentConfigOptions"] = chat.get("agentConfigOptions") or []
+    payload["agentConfigValues"] = chat.get("agentConfigValues") or {}
+    payload["agentCommands"] = chat.get("agentCommands") or []
+    if chat.get("agentMode") is not None:
+        payload["agentMode"] = chat.get("agentMode")
     return payload
 
 
@@ -1246,6 +1422,38 @@ def _public_message(message: dict[str, Any]) -> dict[str, Any]:
     if isinstance(message, dict) and "agentAttachments" in message:
         return {k: v for k, v in message.items() if k != "agentAttachments"}
     return message
+
+
+def _public_messages(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Expand legacy inline transport warnings into notification transcript rows."""
+    from cyrene.agent_runtime.notices import split_leading_operational_notices
+
+    public: list[dict[str, Any]] = []
+    for raw_message in messages:
+        message = _public_message(raw_message)
+        if not isinstance(message, dict) or message.get("role") != "assistant":
+            public.append(message)
+            continue
+        content = str(message.get("content") or "")
+        notices, visible = split_leading_operational_notices(content)
+        if not notices:
+            public.append(message)
+            continue
+        message_id = str(message.get("id") or "message")
+        created_at = str(message.get("createdAt") or message.get("created_at") or "")
+        for index, notice in enumerate(notices):
+            public.append({
+                "id": f"{message_id}_notice_{index}",
+                "role": "assistant",
+                "content": "",
+                "createdAt": created_at,
+                "notificationCard": True,
+                "notification": notice,
+                "intermediate": True,
+                "model": message.get("model"),
+            })
+        public.append({**message, "content": visible})
+    return public
 
 
 def _merge_chat_messages_chronologically(
@@ -1391,7 +1599,7 @@ def _remove_retry_replaced_messages(
 def _public_chat_full(chat: dict[str, Any]) -> dict[str, Any]:
     payload = _public_chat_light(chat)
     ordered_messages = _messages_in_chronological_order(chat.get("messages") or [])
-    payload["messages"] = [_public_message(m) for m in ordered_messages]
+    payload["messages"] = _public_messages(ordered_messages)
     payload["files"] = [
         dict(item)
         for item in (chat.get("generatedFiles") or [])

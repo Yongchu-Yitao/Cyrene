@@ -17,6 +17,13 @@ def register_settings_routes(router: APIRouter, bot: Any, db_path: str) -> None:
     ) -> None:
         from cyrene.observability import debug
 
+        if {"external_agent_proxy_enabled", "external_agent_proxy_port"}.intersection(changed):
+            # ACP transports are process-scoped and retain their spawn env.
+            # Recycle them after a proxy change so the next turn applies the
+            # new setting without requiring a full Cyrene restart.
+            from cyrene.agent_runtime.process_manager import get_process_manager
+
+            await get_process_manager().close_all()
         await debug.publish_event({
             "type": "settings_changed",
             "namespace": namespace,

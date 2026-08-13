@@ -7,6 +7,37 @@ var {
 } = React;
 var WorkbenchModel = window.CyreneUI.require("model");
 
+// Apply the persisted low-overhead visual profile before React mounts. The
+// server value is authoritative, while localStorage prevents a flash of glass
+// effects and motion on subsequent launches.
+function wbApplyPerformanceMode(enabled) {
+  var next = enabled === true;
+  try {
+    document.documentElement.dataset.performanceMode = next ? "on" : "off";
+    localStorage.setItem("cyrene-performance-mode", next ? "1" : "0");
+  } catch (e) {}
+  window.dispatchEvent(new CustomEvent("cyrene:performance-mode", {
+    detail: { enabled: next },
+  }));
+}
+
+(function initializeWorkbenchPerformanceMode() {
+  var cached = false;
+  try { cached = localStorage.getItem("cyrene-performance-mode") === "1"; } catch (e) {}
+  wbApplyPerformanceMode(cached);
+  fetch("/api/settings/config", { credentials: "same-origin" })
+    .then(function (response) { return response.ok ? response.json() : Promise.reject(new Error("HTTP " + response.status)); })
+    .then(function (payload) { wbApplyPerformanceMode(payload.performance_mode === true); })
+    .catch(function () {});
+})();
+
+window.CyreneUI.performanceMode = {
+  apply: wbApplyPerformanceMode,
+  enabled: function () {
+    return document.documentElement.dataset.performanceMode === "on";
+  },
+};
+
 function wbErrorText(err) {
   try {
     var api = window.CyreneUI.require("api");
@@ -846,20 +877,23 @@ function wbActorLabel(caller, agentId) {
   if (aid) return aid;
   var raw = String(caller || "").trim();
   if (raw.indexOf("subagent_") === 0) return raw.slice("subagent_".length) || raw;
-  if (raw === "main_agent") return "main agent";
-  return raw || "agent";
+  if (raw === "main_agent") return wbT("workbench.actor.mainAgent", "Main Agent");
+  return raw || wbT("workbench.actor.agent", "Agent");
 }
 
 function wbSubagentStatusText(status) {
   var map = {
-    running: "正在执行",
-    resumed: "恢复执行",
-    waiting: "等待其他 subagent",
-    done: "已完成",
-    timeout: "已超时",
-    error: "执行失败",
+    running: ["workbench.subagentStatus.running", "Running"],
+    resumed: ["workbench.subagentStatus.resumed", "Resumed"],
+    waiting: ["workbench.subagentStatus.waiting", "Waiting for other subagents"],
+    done: ["workbench.subagentStatus.done", "Completed"],
+    timeout: ["workbench.subagentStatus.timeout", "Timed out"],
+    error: ["workbench.subagentStatus.error", "Failed"],
   };
-  return map[String(status || "").trim()] || String(status || "状态更新");
+  var raw = String(status || "").trim();
+  return map[raw]
+    ? wbT(map[raw][0], map[raw][1])
+    : wbT("workbench.statusUnknown", "Unknown status: {status}", { status: raw || "—" });
 }
 
 function wbLiveEventFromSse(data) {
@@ -7198,10 +7232,10 @@ function TaskWorkArea(props) {
     } catch (e) {}
   }, taskDropEnabled);
   if (props.loading && (!project || !session)) {
-    return <main className="workbench-main"><div className="workbench-empty">正在加载工作台...</div></main>;
+    return <main className="workbench-main"><div className="workbench-empty">{wbT("workbench.loading", "Loading workbench…")}</div></main>;
   }
   if (!project || !session) {
-    return <main className="workbench-main"><div className="workbench-empty">请选择项目和任务。</div></main>;
+    return <main className="workbench-main"><div className="workbench-empty">{wbT("workbench.selectProjectTask", "Select a project and task.")}</div></main>;
   }
   // "初始化项目" onboarding sessions take over the whole work area with their
   // own agent-led question flow (WorkbenchInitView), bypassing the task state
@@ -8065,27 +8099,27 @@ function StepSummary({ session, step, steps }) {
     <div className="wbp-summary">
       {step.description ? (
         <div className="wbp-summary-row">
-          <span className="wbp-summary-k">说明</span>
+          <span className="wbp-summary-k">{wbT("workbench.step.description", "Description")}</span>
           <span className="wbp-summary-v">{step.description}</span>
         </div>
       ) : null}
       <div className="wbp-summary-row">
-        <span className="wbp-summary-k">前置</span>
+        <span className="wbp-summary-k">{wbT("workbench.step.prerequisites", "Prerequisites")}</span>
         <span className="wbp-summary-v">
           {prereqTitles.length ? (
             <span className="wbp-summary-chips">
               {prereqTitles.map(function (title, i) { return <span key={i}>{title}</span>; })}
             </span>
-          ) : <em className="wbp-summary-none">无</em>}
+          ) : <em className="wbp-summary-none">{wbT("common.none", "None")}</em>}
         </span>
       </div>
       <div className="wbp-summary-row">
-        <span className="wbp-summary-k">命令</span>
+        <span className="wbp-summary-k">{wbT("workbench.step.command", "Command")}</span>
         <span className="wbp-summary-v wbp-summary-cmd">{command || "—"}</span>
       </div>
       {ctxFiles.length > 0 ? (
         <div className="wbp-summary-row">
-          <span className="wbp-summary-k">文件</span>
+          <span className="wbp-summary-k">{wbT("workbench.step.files", "Files")}</span>
           <span className="wbp-summary-v">
             <span className="wbp-summary-chips">
               {ctxFiles.map(function (f, i) {
@@ -8217,15 +8251,15 @@ function StepEditor({ session, step, steps, controller }) {
   return (
     <div className="wbp-summary wbp-summary-edit">
       <label className="wbp-summary-row">
-        <span className="wbp-summary-k">标题</span>
-        <input className="wbp-edit-input" value={title} disabled={saving} placeholder="步骤标题" onChange={function (e) { setTitle(e.target.value); }} />
+        <span className="wbp-summary-k">{wbT("workbench.step.title", "Title")}</span>
+        <input className="wbp-edit-input" value={title} disabled={saving} placeholder={wbT("workbench.step.titlePlaceholder", "Step title")} onChange={function (e) { setTitle(e.target.value); }} />
       </label>
       <label className="wbp-summary-row">
-        <span className="wbp-summary-k">说明</span>
-        <textarea className="wbp-edit-input" rows={2} value={description} disabled={saving} placeholder="说明这个步骤要完成什么" onChange={function (e) { setDescription(e.target.value); }} />
+        <span className="wbp-summary-k">{wbT("workbench.step.description", "Description")}</span>
+        <textarea className="wbp-edit-input" rows={2} value={description} disabled={saving} placeholder={wbT("workbench.step.descriptionPlaceholder", "Describe what this step should accomplish")} onChange={function (e) { setDescription(e.target.value); }} />
       </label>
       <div className="wbp-summary-row">
-        <span className="wbp-summary-k">前置</span>
+        <span className="wbp-summary-k">{wbT("workbench.step.prerequisites", "Prerequisites")}</span>
         <div className="wbp-summary-v">
           {dependencyOptions.length ? (
             <div className="wbp-dependency-options">
@@ -8245,26 +8279,26 @@ function StepEditor({ session, step, steps, controller }) {
         </div>
       </div>
       <div className="wbp-summary-row">
-        <span className="wbp-summary-k">命令</span>
+        <span className="wbp-summary-k">{wbT("workbench.step.command", "Command")}</span>
         <div className="wbp-summary-v">
           <textarea
             className="wbp-edit-input wbp-edit-cmd"
             value={draft}
             rows={5}
             spellCheck={false}
-            placeholder="描述要交给 subagent 执行的指令…"
+            placeholder={wbT("workbench.step.commandPlaceholder", "Describe the instruction for the subagent…")}
             onChange={function (e) { setDraft(e.target.value); }}
             onBlur={persistPrompt}
           />
           {hasOverride && (
             <div className="wbp-edit-cmd-actions">
-              <button type="button" className="wbp-tiny-btn" onClick={resetPrompt}>恢复默认</button>
+              <button type="button" className="wbp-tiny-btn" onClick={resetPrompt}>{wbT("workbench.step.restoreDefault", "Restore default")}</button>
             </div>
           )}
         </div>
       </div>
       <div className="wbp-summary-row">
-        <span className="wbp-summary-k">文件</span>
+        <span className="wbp-summary-k">{wbT("workbench.step.files", "Files")}</span>
         <div className="wbp-summary-v">
           {contextFiles.length > 0 && (
             <div className="wbp-ctx-list">
@@ -8522,7 +8556,7 @@ function TaskPlanList({ session, expandedStepId, onToggleStep, onRightTab, contr
                   </div>
                   <span className={"wbp-status " + state}>{statusLabel}</span>
                   <time className="wbp-time">{time}</time>
-                  <span className="wbp-dur">{duration ? <>{ICON_CLOCK}<span>{duration}</span></> : estimate ? <span className="wbp-estimate">预计 {estimate}</span> : null}</span>
+                  <span className="wbp-dur">{duration ? <>{ICON_CLOCK}<span>{duration}</span></> : estimate ? <span className="wbp-estimate">{wbT("workbench.step.estimated", "Estimated {duration}", { duration: estimate })}</span> : null}</span>
                   <span className={"wbp-caret" + (expanded ? " open" : "")}>{ICON_CHEVRON}</span>
                 </div>
                 {expanded && (
@@ -8536,9 +8570,9 @@ function TaskPlanList({ session, expandedStepId, onToggleStep, onRightTab, contr
                     ) : (
                       <div className="wbp-summary">
                         <div className="wbp-summary-row">
-                          <span className="wbp-summary-k">进展</span>
+                          <span className="wbp-summary-k">{wbT("workbench.step.progress", "Progress")}</span>
                           <span className="wbp-summary-v">
-                            {progressText || "等待 Agent 更新这个步骤的进展。"}
+                            {progressText || wbT("workbench.step.waitingProgress", "Waiting for the Agent to update this step.")}
                             {Array.isArray(step.progressEvents) && step.progressEvents.length > 0 && (
                               <ul className="wbp-events">
                                 {step.progressEvents.slice(-3).map(function (ev, i) {
@@ -8549,7 +8583,7 @@ function TaskPlanList({ session, expandedStepId, onToggleStep, onRightTab, contr
                           </span>
                         </div>
                         <div className="wbp-summary-row">
-                          <span className="wbp-summary-k">文件</span>
+                          <span className="wbp-summary-k">{wbT("workbench.step.files", "Files")}</span>
                           <span className="wbp-summary-v">
                             {hasFiles ? (
                               <div className="wbp-file-chips">
@@ -8557,7 +8591,7 @@ function TaskPlanList({ session, expandedStepId, onToggleStep, onRightTab, contr
                                   return <button key={file.path || file.name} type="button" className="wbp-file-chip" onClick={function () { onRightTab("files"); }}>{(file.path || file.name || "").split("/").pop()}</button>;
                                 })}
                               </div>
-                            ) : <em className="wbp-summary-none">暂无相关文件</em>}
+                            ) : <em className="wbp-summary-none">{wbT("workbench.step.noFiles", "No related files")}</em>}
                           </span>
                         </div>
                       </div>
@@ -8565,11 +8599,11 @@ function TaskPlanList({ session, expandedStepId, onToggleStep, onRightTab, contr
                     {!doneStep && (
                       <div className="wbp-detail-actions">
                         {runningStep ? (
-                          <button type="button" className="wb-btn danger" onClick={function () { controller.interrupt(); }}>停止执行</button>
+                          <button type="button" className="wb-btn danger" onClick={function () { controller.interrupt(); }}>{wbT("workbench.step.stop", "Stop")}</button>
                         ) : (
-                          <button type="button" className="wb-btn primary" disabled={controller.busy || unmetDependencyIds.length > 0} onClick={function () { controller.runStep(step); }}>执行此步骤</button>
+                          <button type="button" className="wb-btn primary" disabled={controller.busy || unmetDependencyIds.length > 0} onClick={function () { controller.runStep(step); }}>{wbT("workbench.step.run", "Run this step")}</button>
                         )}
-                        <button type="button" className="wb-btn ghost" onClick={function () { onRightTab("logs"); }}>查看日志</button>
+                        <button type="button" className="wb-btn ghost" onClick={function () { onRightTab("logs"); }}>{wbT("workbench.step.viewLogs", "View logs")}</button>
                         {unmetDependencyIds.length > 0 && <span className="wbp-blocked-hint">{wbT("task.plan.completePrerequisitesFirst", "Complete prerequisite steps first.")}</span>}
                       </div>
                     )}
@@ -9838,7 +9872,7 @@ function WorkbenchFullPage({ config, onClose }) {
   return (
     <div className="workbench-fullscreen">
       <div className="workbench-fullscreen-head">
-        <button type="button" onClick={onClose}>← 返回工作台</button>
+        <button type="button" onClick={onClose}>← {wbT("workbench.back", "Back to workbench")}</button>
         <b>{config.title}</b>
       </div>
       <div className="workbench-fullscreen-body">
@@ -9849,7 +9883,7 @@ function WorkbenchFullPage({ config, onClose }) {
 }
 
 function workbenchFullPageConfig(page, setFullPage, store) {
-  return { title: page, render: function () { return <div className="workbench-empty">未找到页面。</div>; } };
+  return { title: page, render: function () { return <div className="workbench-empty">{wbT("workbench.pageNotFound", "Page not found.")}</div>; } };
 }
 
 window.CyreneUI.shell = window.CyreneUI.register("shell", {

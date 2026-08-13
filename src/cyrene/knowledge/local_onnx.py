@@ -50,17 +50,35 @@ def _load() -> tuple[Any, Any]:
         options.inter_op_num_threads = 1
         options.graph_optimization_level = ort.GraphOptimizationLevel.ORT_ENABLE_ALL
         root = local_models.model_dir(MODEL_ID)
-        available = set(ort.get_available_providers())
-        providers = (
-            ["CUDAExecutionProvider", "CPUExecutionProvider"]
-            if "CUDAExecutionProvider" in available
-            else ["CPUExecutionProvider"]
-        )
-        session = ort.InferenceSession(
-            str(root / "model.onnx"),
-            sess_options=options,
-            providers=providers,
-        )
+        qnn_enabled = local_models.configure_qnn_session_options(options, ort)
+        providers = local_models.onnx_execution_providers()
+        if any(
+            (provider[0] if isinstance(provider, tuple) else provider) == "DmlExecutionProvider"
+            for provider in providers
+        ):
+            options.enable_mem_pattern = False
+            options.execution_mode = ort.ExecutionMode.ORT_SEQUENTIAL
+        model_path = str(root / "model.onnx")
+        try:
+            session = ort.InferenceSession(
+                model_path,
+                sess_options=options,
+                **({} if qnn_enabled else {"providers": providers}),
+            )
+        except Exception:
+            if not qnn_enabled:
+                raise
+            # QNN HTP requires a supported/QDQ graph. Retain a reliable native
+            # ARM CPU fallback for models that have not been converted yet.
+            options = ort.SessionOptions()
+            options.intra_op_num_threads = max(1, min(4, (os.cpu_count() or 2) // 2))
+            options.inter_op_num_threads = 1
+            options.graph_optimization_level = ort.GraphOptimizationLevel.ORT_ENABLE_ALL
+            session = ort.InferenceSession(
+                model_path,
+                sess_options=options,
+                providers=providers,
+            )
         tokenizer = Tokenizer.from_file(str(root / "tokenizer.json"))
         tokenizer.enable_truncation(max_length=1024)
         tokenizer.enable_padding()

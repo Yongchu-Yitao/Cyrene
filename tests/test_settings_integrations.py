@@ -336,3 +336,27 @@ def test_settings_ui_keeps_zotero_in_general_and_embedding_in_models():
     assert '"/api/workbench/knowledge/reembed?workspace="' in library
     assert 'L("library.vectorizeAll", "Vectorize all")' in library
     assert translations.count('"library.vectorizeAll"') == 2
+
+
+def test_general_settings_has_opt_in_external_agent_proxy():
+    root = Path(__file__).resolve().parent.parent
+    source = (root / "src/webui/frontend/settings-overlay.jsx").read_text(encoding="utf-8")
+    i18n = (root / "src/webui/frontend/workbench-i18n.jsx").read_text(encoding="utf-8")
+    general_panel = source.split("function GeneralPanel(p) {", 1)[1].split("// ── Models Panel ──", 1)[0]
+
+    assert 't("settings.agentProxyEnabled")' in general_panel
+    assert 'external_agent_proxy_enabled: !!nextEnabled' in general_panel
+    assert 'external_agent_proxy_port: port' in general_panel
+    assert 'disabled: !agentProxyEnabled' in general_panel
+    assert i18n.count('"settings.agentProxyEnabled"') == 2
+    assert i18n.count('"settings.agentProxyPort"') == 2
+def test_performance_mode_is_an_appearance_runtime_setting():
+    from cyrene.runtime.settings_service import SETTING_SPECS
+    from cyrene.workbench.runtime import _build_config
+
+    spec = next(item for item in SETTING_SPECS if item.key == "performance_mode")
+    assert spec.namespace == "runtime"
+    assert spec.tab == "appearance"
+    assert spec.value_type == "boolean"
+    assert spec.default is False
+    assert "performance_mode" in _build_config()

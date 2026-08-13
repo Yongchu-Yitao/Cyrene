@@ -23,15 +23,20 @@ def test_windows_release_installs_required_native_runtime_packages():
     arm_job = workflow.split("  build-windows-arm:", 1)[1].split(
         "  build-linux:", 1
     )[0]
-    assert "CYRENE_PYTHON_BUNDLE_ARCH: x64" in arm_job
-    assert "architecture: x64" in arm_job
-    assert "vcpkg" not in arm_job
-    assert "pip install --upgrade cryptography" in arm_job
-    assert "--no-binary cryptography" not in arm_job
+    assert "runs-on: windows-11-arm" in arm_job
+    assert "architecture: arm64" in arm_job
+    assert "CYRENE_PYTHON_BUNDLE_ARCH: x64" not in arm_job
+    assert "windows-arm-x64-sidecars" in arm_job
+    assert "onnxruntime_qnn" in arm_job
+    assert "vcpkg install openssl:arm64-windows" in arm_job
+    assert "--force-reinstall --no-binary cryptography" in arm_job
 
     build = (ROOT / "build" / "build.py").read_text(encoding="utf-8")
-    assert 'os.environ.get("CYRENE_PYTHON_BUNDLE_ARCH", "arm64")' in build
-    assert 'os.environ.pop("PYINSTALLER_TARGET_ARCH", None)' in build
+    assert 'os.environ["CYRENE_WOA_NATIVE_CORE"] = "1"' in build
+    assert "stage_woa_x64_sidecars" in build
+    assert "build-windows-arm-sidecars:" in workflow
+    assert "CYRENE_OCR_SIDECAR_SMOKE=ok" in workflow
+    assert "CYRENE_SIMPLEXNG_SIDECAR_SMOKE=ok" in workflow
 
     dependency_check = (
         ROOT / "build" / "check_windows_dependencies.py"
@@ -60,8 +65,11 @@ def test_windows_release_installs_and_runs_the_built_nsis_package():
     assert 'SuccessMarker "Cyrene smoke test OK:"' in smoke
     assert 'SuccessMarker "DESKTOP_SMOKE_TEST=ok"' in smoke
     assert "function Get-PeArchitecture" in smoke
+    assert "function Assert-NativeArm64Tree" in smoke
+    assert 'contains non-ARM native binaries' in smoke
     assert 'Assert-PeArchitecture -Path $installedApp -Expected $Arch' in smoke
-    assert 'Assert-PeArchitecture -Path $installedBackend -Expected "x64"' in smoke
+    assert 'Assert-PeArchitecture -Path $installedBackend -Expected $backendArch' in smoke
+    assert 'Assert-PeArchitecture -Path $ocrSidecar -Expected "x64"' in smoke
     assert '$portableLauncherArch -notin @("x86", $Arch)' in smoke
     assert '0x014c { return "x86" }' in smoke
     assert "SMOKE TEST FAILED|DESKTOP_SMOKE_TEST=failed" in smoke
@@ -73,3 +81,20 @@ def test_frozen_smoke_imports_numpy_native_extension():
     entrypoint = (ROOT / "build" / "run_cyrene.py").read_text(encoding="utf-8")
 
     assert '"numpy._core._multiarray_umath": None' in entrypoint
+
+
+def test_woa_core_excludes_x64_only_features_and_packages_sidecars():
+    spec = (ROOT / "build" / "cyrene.spec").read_text(encoding="utf-8")
+    package = (ROOT / "electron" / "package.json").read_text(encoding="utf-8")
+    manager = (
+        ROOT / "src" / "cyrene" / "tooling" / "backends" / "searxng_manager.py"
+    ).read_text(encoding="utf-8")
+
+    assert '"simplexng", "rapidocr", "pyclipper", "cv2", "brotli", "fasttext"' in spec
+    assert '"from": "../dist/x64-sidecars"' in package
+    assert '"x64-sidecars" / "simplexng" / "CyreneSimpleXNG.exe"' in manager
+
+    ocr_spec = (ROOT / "build" / "cyrene_ocr_sidecar.spec").read_text(encoding="utf-8")
+    search_spec = (ROOT / "build" / "cyrene_simplexng_sidecar.spec").read_text(encoding="utf-8")
+    assert '"shapely", "yaml", "omegaconf", "tqdm", "colorlog", "requests", "six"' in ocr_spec
+    assert '"httpx", "httpcore", "httpx_socks", "anyio", "sniffio", "certifi"' in search_spec

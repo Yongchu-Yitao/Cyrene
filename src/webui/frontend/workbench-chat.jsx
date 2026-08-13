@@ -399,6 +399,253 @@ window.CyreneUI.resources = window.CyreneUI.register("resources", {
 });
 
 // ---------------------------------------------------------------------------
+// Unified Agent event router (handoff §12)
+// ---------------------------------------------------------------------------
+// Phase-1 Agent events arrive in a versioned envelope { schemaVersion, eventId,
+// type, payload, agentId, installationId, ... }. This router maps the new core
+// event names onto the existing stream handlers so the runtime keeps a single
+// rendering path; legacy snake_case stream events remain first-class. Unknown
+// core events are ignored safely (diagnostics only), and the same eventId is
+// processed at most once per stream so a reconnect cannot duplicate cards.
+function wbcAgentEventPayload(event) {
+  return (
+    event
+    && event.payload
+    && typeof event.payload === "object"
+    && !Array.isArray(event.payload)
+  ) ? event.payload : event;
+}
+
+function wbcAgentDeltaPayload(event) {
+  var payload = wbcAgentEventPayload(event);
+  return String(
+    payload.delta != null ? payload.delta : (payload.text != null ? payload.text : (payload.content || ""))
+  );
+}
+
+function wbcAgentDonePayload(event) {
+  var payload = wbcAgentEventPayload(event);
+  return String(
+    payload.response != null ? payload.response : (payload.text != null ? payload.text : (payload.content || ""))
+  );
+}
+
+function wbcAgentReasoningDelta(event) {
+  var payload = wbcAgentEventPayload(event);
+  return String(payload.delta != null ? payload.delta : (payload.text || ""));
+}
+
+function wbcAgentReasoningDone(event) {
+  var payload = wbcAgentEventPayload(event);
+  return String(
+    payload.response != null ? payload.response : (payload.text != null ? payload.text : (payload.content || ""))
+  );
+}
+
+function wbcAgentPhasePayload(event) {
+  var payload = wbcAgentEventPayload(event);
+  return {
+    phase: String(payload.phase || payload.phaseKey || payload.phase_key || ""),
+    provider: String(payload.provider || ""),
+  };
+}
+
+function wbcAgentToolPayload(event) {
+  var payload = wbcAgentEventPayload(event);
+  var progress = payload.progress && typeof payload.progress === "object"
+    ? {
+        current: Number(payload.progress.current) || 0,
+        total: Number(payload.progress.total) || 0,
+        label: String(payload.progress.label || ""),
+      }
+    : null;
+  return {
+    toolCallId: String(payload.toolCallId || payload.tool_call_id || ""),
+    name: String(payload.name || payload.tool || payload.title || ""),
+    title: String(payload.title || payload.name || ""),
+    status: String(payload.status || "running"),
+    failed: !!payload.failed,
+    inputSummary: wbcStructuredEventSummary(payload.inputSummary != null ? payload.inputSummary : payload.input_summary),
+    outputSummary: wbcStructuredEventSummary(payload.outputSummary != null ? payload.outputSummary : payload.output_summary),
+    input: payload.inputSummary != null ? payload.inputSummary : payload.input_summary,
+    output: payload.outputSummary != null ? payload.outputSummary : payload.output_summary,
+    progress: progress,
+    presentation: payload.presentation && typeof payload.presentation === "object" ? payload.presentation : {},
+  };
+}
+
+function wbcAgentPermissionPayload(event) {
+  var payload = wbcAgentEventPayload(event);
+  var options = Array.isArray(payload.options) ? payload.options.map(function (opt) {
+    if (typeof opt === "string") return { id: "", optionId: String(opt), label: String(opt), kind: "" };
+    var id = String(opt.id != null ? opt.id : (opt.optionId != null ? opt.optionId : ""));
+    return {
+      id: id,
+      optionId: id,
+      label: String(opt.label || opt.title || ""),
+      description: String(opt.description || ""),
+      kind: String(opt.kind || ""),
+    };
+  }) : [];
+  return {
+    id: String(payload.requestId || payload.request_id || payload.id || ""),
+    kind: String(payload.type || "permission.requested"),
+    text: String(payload.title || payload.description || payload.message || ""),
+    description: String(payload.description || ""),
+    toolCallId: String(payload.toolCallId || payload.tool_call_id || ""),
+    options: options,
+    allowCustom: false,
+    permission: true,
+    meta: payload.meta && typeof payload.meta === "object" ? payload.meta : {},
+  };
+}
+
+function wbcAgentElicitationPayload(event) {
+  var payload = wbcAgentEventPayload(event);
+  return {
+    id: String(payload.requestId || payload.request_id || payload.id || ""),
+    kind: String(payload.type || "elicitation.requested"),
+    text: String(payload.text || payload.message || payload.title || ""),
+    options: Array.isArray(payload.options) ? payload.options : [],
+    allowCustom: payload.allowCustom !== false,
+    schema: payload.schema && typeof payload.schema === "object" ? payload.schema : null,
+    fields: Array.isArray(payload.fields) ? payload.fields : [],
+    meta: payload.meta && typeof payload.meta === "object" ? payload.meta : {},
+  };
+}
+
+function wbcStructuredEventSummary(value) {
+  if (value == null) return "";
+  if (typeof value === "string" || typeof value === "number" || typeof value === "boolean") {
+    return String(value);
+  }
+  if (Array.isArray(value)) {
+    var parts = value.map(function (item) {
+      if (item && typeof item === "object") {
+        var nested = item.content && typeof item.content === "object" ? item.content : item;
+        return nested.text || nested.message || nested.title || nested.name || nested.path || nested.uri || nested.url || "";
+      }
+      return item == null ? "" : String(item);
+    }).filter(Boolean);
+    if (parts.length) return parts.join(" · ");
+  }
+  try {
+    var serialized = JSON.stringify(value);
+    return serialized === "{}" || serialized === "[]" ? "" : serialized;
+  } catch (e) {
+    return "";
+  }
+}
+
+function wbcAgentSessionPayload(event) {
+  var payload = wbcAgentEventPayload(event);
+  return {
+    sessionId: String(payload.sessionId || payload.session_id || event.sessionId || event.session_id || ""),
+    updateKind: String(payload.updateKind || payload.update_kind || ""),
+    commands: Array.isArray(payload.commands) ? payload.commands : [],
+    mode: payload.mode,
+    configOption: payload.configOption && typeof payload.configOption === "object" ? payload.configOption : null,
+    configOptions: Array.isArray(payload.configOptions) ? payload.configOptions : [],
+    plan: payload.plan && typeof payload.plan === "object" ? payload.plan : null,
+    sessionInfo: payload.sessionInfo && typeof payload.sessionInfo === "object" ? payload.sessionInfo : null,
+    update: payload.update && typeof payload.update === "object" ? payload.update : null,
+  };
+}
+
+function wbcAgentAwaitingPayload(event) {
+  var payload = wbcAgentEventPayload(event);
+  if (payload.pending_question || payload.pendingQuestion) {
+    return payload.pending_question || payload.pendingQuestion;
+  }
+  return {
+    id: String(payload.requestId || payload.request_id || payload.id || ""),
+    kind: String(payload.kind || "ask_user"),
+    text: String(payload.text || payload.message || payload.title || ""),
+    options: Array.isArray(payload.options) ? payload.options : [],
+    allowCustom: !!payload.allowCustom,
+    meta: payload.meta && typeof payload.meta === "object" ? payload.meta : {},
+  };
+}
+
+function wbcAgentRunFailedError(event) {
+  var payload = wbcAgentEventPayload(event);
+  var failureKind = String(payload.failureKind || payload.failure_kind || payload.code || "").trim();
+  var message = String(payload.message || payload.detail || payload.error || "").trim();
+  var err = new Error(message || wbcT("workbenchChat.agentError.failed", "Agent run failed"));
+  err.code = failureKind || "agent_run_failed";
+  err.failureKind = failureKind || err.code;
+  err.detailKey = String(payload.detail_key || payload.detailKey || "");
+  err.detailParams = payload.detail_params || payload.detailParams || {};
+  err.errorType = String(payload.error || "");
+  err.agentId = String(event.agentId || payload.agentId || "");
+  err.installationId = String(event.installationId || payload.installationId || "");
+  return err;
+}
+
+function wbcAgentNotificationPayload(event) {
+  var payload = wbcAgentEventPayload(event);
+  var timestamp = String(event && event.timestamp || payload.createdAt || "");
+  var parsedAt = timestamp ? Date.parse(timestamp) : NaN;
+  return {
+    id: String(event && (event.eventId || event.event_id) || payload.id || ""),
+    createdAt: Number.isFinite(parsedAt) ? parsedAt : Date.now(),
+    severity: String(payload.severity || "warning"),
+    category: String(payload.category || "transport_warning"),
+    message: String(payload.message || payload.detail || "").trim(),
+    source: String(payload.source || "agent_runtime"),
+    terminal: payload.terminal === true,
+  };
+}
+
+var AGENT_EVENT_ROUTER = {
+  "run.started": { handler: "onRunStarted" },
+  "run.awaiting_input": { handler: "onAwaitingUser", normalize: wbcAgentAwaitingPayload },
+  "run.completed": { handler: "onFinalizing" },
+  "run.failed": { dispatch: function (handlers, event) { if (handlers.onError) handlers.onError(wbcAgentRunFailedError(event)); } },
+  "run.cancelled": { handler: "onInterrupted" },
+  "message.started": { handler: "onReplyStart" },
+  "message.delta": { handler: "onReplyDelta", normalize: wbcAgentDeltaPayload },
+  "message.completed": { handler: "onReplyDone", normalize: wbcAgentDonePayload },
+  "notification.created": { handler: "onNotification", normalize: wbcAgentNotificationPayload },
+  "reasoning.started": { handler: "onReasoningStart", normalize: wbcAgentPhasePayload },
+  "reasoning.delta": { handler: "onReasoningDelta", normalize: wbcAgentReasoningDelta },
+  "reasoning.completed": { handler: "onReasoningDone", normalize: wbcAgentReasoningDone },
+  "tool.started": { handler: "onToolStarted", normalize: wbcAgentToolPayload },
+  "tool.updated": { handler: "onToolUpdated", normalize: wbcAgentToolPayload },
+  "tool.completed": { handler: "onToolCompleted", normalize: wbcAgentToolPayload },
+  "permission.requested": { handler: "onAwaitingUser", normalize: wbcAgentPermissionPayload },
+  "permission.resolved": { handler: "onPermissionResolved" },
+  "elicitation.requested": { handler: "onAwaitingUser", normalize: wbcAgentElicitationPayload },
+  "elicitation.resolved": { handler: "onElicitationResolved" },
+  "artifact.created": { handler: "onArtifactEvent" },
+  "artifact.updated": { handler: "onArtifactEvent" },
+  "usage.updated": { handler: "onUsageUpdated" },
+  "session.updated": { handler: "onSessionUpdated", normalize: wbcAgentSessionPayload },
+};
+
+function wbcRouteAgentEvent(type, event, handlers) {
+  var entry = AGENT_EVENT_ROUTER[type];
+  if (!entry) return false;
+  if (typeof entry.dispatch === "function") {
+    entry.dispatch(handlers, event);
+    return true;
+  }
+  var handler = handlers[entry.handler];
+  if (!handler) return true; // recognized but no consumer — safe ignore
+  var value = entry.normalize ? entry.normalize(event) : event;
+  try {
+    if (entry.handler === "onReasoningDelta" || entry.handler === "onReasoningDone") {
+      handler(value, event);
+    } else {
+      handler(value);
+    }
+  } catch (e) {
+    try { console.warn("[agent-event] handler failed for " + type, e); } catch (_e) {}
+  }
+  return true;
+}
+
+// ---------------------------------------------------------------------------
 // Data access
 // ---------------------------------------------------------------------------
 
@@ -418,11 +665,40 @@ var WorkbenchChatModel = (function () {
   }
 
   function createChat(projectId, title) {
+    return createChatWithBinding(projectId, title, null);
+  }
+
+  // Create a chat with an optional draft Agent binding (handoff §8.4). Absent
+  // binding keeps the legacy create path exactly as before — the backend
+  // normalizes missing agent fields to the built-in Cyrene Agent.
+  function createChatWithBinding(projectId, title, binding) {
+    var body = { project: projectId, title: title || "" };
+    if (binding && typeof binding === "object") {
+      if (binding.agent && typeof binding.agent === "object" && binding.agent.installationId) {
+        body.agent = binding.agent;
+      }
+      if (binding.modelAccess && typeof binding.modelAccess === "object" && binding.modelAccess.mode) {
+        body.modelAccess = binding.modelAccess;
+      }
+    }
     return apiJson("/api/workbench/chats", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ project: projectId, title: title || "" }),
+      body: JSON.stringify(body),
     }).then(function (payload) { return payload.chat; });
+  }
+
+  // Installed Agent catalog for the Composer submenu. Phase 1 lists the
+  // built-in Cyrene Agent plus every installed external Agent with its
+  // availability state; the backend supplies the definitive cards.
+  function listAgents() {
+    return apiJson("/api/agents", { toast: false })
+      .then(function (payload) { return Array.isArray(payload.agents) ? payload.agents : []; });
+  }
+
+  function getAgent(installationId) {
+    return apiJson("/api/agents/" + encodeURIComponent(String(installationId || "")), { toast: false })
+      .then(function (payload) { return payload.agent || null; });
   }
 
   function listSideAgents(chatId) {
@@ -497,6 +773,26 @@ var WorkbenchChatModel = (function () {
       method: "PATCH",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ title: title }),
+    }).then(function (payload) { return payload.chat; });
+  }
+
+  function updateChatAgent(chatId, binding) {
+    return apiJson("/api/workbench/chats/" + encodeURIComponent(chatId), {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(binding || {}),
+    }).then(function (payload) { return payload.chat; });
+  }
+
+  function getAgentConfigOptions(chatId) {
+    return apiJson("/api/workbench/chats/" + encodeURIComponent(chatId) + "/agent-config-options", { toast: false });
+  }
+
+  function updateAgentConfigValues(chatId, values) {
+    return apiJson("/api/workbench/chats/" + encodeURIComponent(chatId), {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ agentConfigValues: values || {} }),
     }).then(function (payload) { return payload.chat; });
   }
 
@@ -607,12 +903,37 @@ var WorkbenchChatModel = (function () {
     var reader = response.body.getReader();
     var decoder = new TextDecoder();
     var buffer = "";
+    // Idempotency for the versioned Agent envelope: the same eventId is never
+    // dispatched twice within one stream (a reconnect starts a fresh stream).
+    // The dedupe window is bounded so a very long stream cannot grow the set
+    // without limit; the oldest seen ids fall out of the window.
+    var seenEventIds = new Set();
+    var seenEventOrder = [];
+    var WBC_EVENT_ID_DEDUPE_LIMIT = 4096;
+
+    function rememberEventId(eventId) {
+      if (seenEventIds.has(eventId)) return false;
+      seenEventIds.add(eventId);
+      seenEventOrder.push(eventId);
+      if (seenEventOrder.length > WBC_EVENT_ID_DEDUPE_LIMIT) {
+        var oldest = seenEventOrder.shift();
+        seenEventIds.delete(oldest);
+      }
+      return true;
+    }
 
     function handleLine(line) {
       if (!line.trim()) return;
       var event;
       try { event = JSON.parse(line); } catch (e) { return; }
       var type = String(event.type || "");
+      var eventId = String(event.eventId || event.event_id || "");
+      if (eventId) {
+        if (!rememberEventId(eventId)) return;
+      }
+      // Versioned Agent core events first; legacy snake_case events below stay
+      // untouched so the built-in runtime keeps its exact historical behavior.
+      if (wbcRouteAgentEvent(type, event, handlers)) return;
       if (type === "ack" && handlers.onAck) handlers.onAck(event);
       else if (type === "intermediate_message" && handlers.onIntermediateMessage) handlers.onIntermediateMessage(event);
       else if (type === "reasoning_start" && handlers.onReasoningStart) handlers.onReasoningStart(event);
@@ -637,6 +958,17 @@ var WorkbenchChatModel = (function () {
         streamError.detailParams = event.detail_params || event.detailParams || {};
         streamError.errorType = event.error || "";
         handlers.onError(streamError);
+      }
+      else if (
+        type.indexOf(".") >= 0
+        || event.schemaVersion != null
+        || event.agentId != null
+        || event.installationId != null
+      ) {
+        // Unknown namespaced/Agent event — keep a sanitized, expandable
+        // diagnostic card instead of silently losing protocol information.
+        if (handlers.onUnknownAgentEvent) handlers.onUnknownAgentEvent(event);
+        try { console.debug("[agent-event] unhandled event " + type); } catch (_e) {}
       }
     }
 
@@ -735,6 +1067,20 @@ var WorkbenchChatModel = (function () {
     });
   }
 
+  function answerAgentRequest(chatId, requestId, response) {
+    return window.CyreneUI.require("api").json(
+      "/api/workbench/chats/" + encodeURIComponent(chatId) + "/agent-requests/"
+        + encodeURIComponent(requestId) + "/respond",
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ response: response || {} }),
+        timeout: 0,
+        toast: false,
+      }
+    );
+  }
+
   // Fork a conversation at an edited user message. Creates a new chat with the
   // prefix transcript + the edited user entry, and seeds the agent state. The
   // caller then replays the edit via sendMessage({ retry: true, forkReplay: true }).
@@ -749,6 +1095,9 @@ var WorkbenchChatModel = (function () {
   var service = {
     listChats: listChats,
     createChat: createChat,
+    createChatWithBinding: createChatWithBinding,
+    listAgents: listAgents,
+    getAgent: getAgent,
     listSideAgents: listSideAgents,
     createSideAgent: createSideAgent,
     getChat: getChat,
@@ -757,6 +1106,9 @@ var WorkbenchChatModel = (function () {
     getChangeDiff: getChangeDiff,
     getInbox: getInbox,
     renameChat: renameChat,
+    updateChatAgent: updateChatAgent,
+    getAgentConfigOptions: getAgentConfigOptions,
+    updateAgentConfigValues: updateAgentConfigValues,
     generateChatGroupMetadata: generateChatGroupMetadata,
     listChatGroups: listChatGroups,
     replaceChatGroups: replaceChatGroups,
@@ -771,6 +1123,7 @@ var WorkbenchChatModel = (function () {
     sendGuidance: sendGuidance,
     reconnectRun: reconnectRun,
     answerChat: answerChat,
+    answerAgentRequest: answerAgentRequest,
     forkChat: forkChat,
   };
   return service;
@@ -999,6 +1352,7 @@ function wbcMergeSavedAssistantMessages(chat, assistantMessages) {
   return {
     ...chat,
     status: "idle",
+    liveAgentArtifacts: [],
     messages: wbcMergeChronologicalMessages(current, additions),
   };
 }
@@ -1020,12 +1374,13 @@ function wbcRuntimeSegmentMessages(runtime) {
   });
 }
 
-function wbcRuntimeTimelineMessages(runtime) {
+function wbcRuntimeTimelineMessages(runtime, options) {
   if (!runtime) return [];
+  var showReasoningPlaceholder = !options || options.showReasoningPlaceholder !== false;
   var startedAt = Number(runtime.startedAt || Date.now());
   var activities = Array.isArray(runtime.activities) && runtime.activities.length
     ? runtime.activities
-    : [{ id: "activity_1", reasoning: "", progress: [] }];
+    : (showReasoningPlaceholder ? [{ id: "activity_1", reasoning: "", progress: [] }] : []);
   var items = [{
     id: "runtime_heartbeat_" + String(runtime.chatId || "chat"),
     role: "assistant",
@@ -1043,7 +1398,16 @@ function wbcRuntimeTimelineMessages(runtime) {
       runtimeActivityHasReplyText: !!runtime.text,
     });
   });
-  return items;
+  (Array.isArray(runtime.notifications) ? runtime.notifications : []).forEach(function (notice, index) {
+    items.push({
+      id: String(notice.id || ("runtime_notice_" + index)),
+      role: "assistant",
+      createdAt: new Date(Number(notice.createdAt || startedAt + index + 2)).toISOString(),
+      runtimeNotification: true,
+      notification: notice,
+    });
+  });
+  return wbcMergeChronologicalMessages([], items);
 }
 
 function wbcFinalizeRuntime(runtime) {
@@ -1070,6 +1434,105 @@ function wbcFinalizeRuntime(runtime) {
   };
 }
 
+function wbcCreateDetachedRuntime(startedAt) {
+  var now = Number(startedAt || Date.now());
+  return {
+    text: "",
+    streamDone: false,
+    activities: [],
+    activitySeq: 0,
+    notifications: [],
+    artifacts: [],
+    startedAt: now,
+    lastEventAt: now,
+    finalizing: false,
+  };
+}
+
+function wbcReduceDetachedRuntime(runtime, action, value, sourceEvent) {
+  var current = runtime || wbcCreateDetachedRuntime();
+  var now = Date.now();
+  function withActivity(updater) {
+    var activities = Array.isArray(current.activities) ? current.activities.slice() : [];
+    if (!activities.length || activities[activities.length - 1].timelineClosed) {
+      var seq = Number(current.activitySeq || 0) + 1;
+      activities.push({ id: "activity_" + seq, reasoning: "", reasoningActive: false, progress: [], createdAt: now });
+      current = { ...current, activitySeq: seq };
+    }
+    var index = activities.length - 1;
+    activities[index] = updater(activities[index] || {});
+    return { ...current, activities: activities, lastEventAt: now };
+  }
+  if (action === "reply_start") return { ...current, text: "", streamDone: false, lastEventAt: now };
+  if (action === "reply_delta") return { ...current, text: String(current.text || "") + String(value || ""), streamDone: false, lastEventAt: now };
+  if (action === "reply_done") return { ...current, text: String(value || current.text || ""), streamDone: true, lastEventAt: now };
+  if (action === "finalizing") return { ...wbcFinalizeRuntime(current), lastEventAt: now };
+  if (action === "reasoning_start") return withActivity(function (activity) {
+    return { ...activity, reasoningActive: true };
+  });
+  if (action === "reasoning_delta") return withActivity(function (activity) {
+    return { ...activity, reasoning: String(activity.reasoning || "") + String(value || ""), reasoningActive: true };
+  });
+  if (action === "reasoning_done") return withActivity(function (activity) {
+    return { ...activity, reasoning: String(value || activity.reasoning || ""), reasoningActive: false };
+  });
+  if (action === "tool") {
+    var tool = value && typeof value === "object" ? value : {};
+    var toolCallId = String(tool.toolCallId || tool.tool_call_id || "");
+    var status = String(tool.status || "running").toLowerCase();
+    var terminal = status === "completed" || status === "failed" || tool.terminal === true;
+    var entry = {
+      kind: "tool",
+      toolCallId: toolCallId,
+      text: String(tool.name || tool.tool || tool.title || "tool"),
+      preview: String(tool.outputSummary || tool.inputSummary || ""),
+      status: terminal ? "completed" : "running",
+      failed: !!tool.failed || status === "failed",
+      input: tool.input,
+      output: tool.output,
+      presentation: tool.presentation && typeof tool.presentation === "object" ? tool.presentation : {},
+    };
+    return withActivity(function (activity) {
+      var progress = Array.isArray(activity.progress) ? activity.progress.slice() : [];
+      var index = toolCallId ? progress.findIndex(function (item) { return String(item && item.toolCallId || "") === toolCallId; }) : -1;
+      if (index >= 0) progress[index] = wbcMergeToolLifecycleEntry(progress[index], entry, terminal);
+      else progress.push(entry);
+      return { ...activity, progress: progress.slice(-30) };
+    });
+  }
+  if (action === "notification") {
+    var notice = value && typeof value === "object" ? value : {};
+    if (!notice.message) return current;
+    var notifications = Array.isArray(current.notifications) ? current.notifications.slice() : [];
+    var noticeKey = String(notice.id || (notice.category + "\n" + notice.message));
+    if (!notifications.some(function (item) { return String(item.id || (item.category + "\n" + item.message)) === noticeKey; })) notifications.push(notice);
+    return { ...current, notifications: notifications, lastEventAt: now };
+  }
+  if (action === "artifact") {
+    var payload = wbcAgentEventPayload(sourceEvent || value || {});
+    var attachment = payload.attachment && typeof payload.attachment === "object" ? payload.attachment : null;
+    if (!attachment && (payload.uri || payload.url)) {
+      attachment = {
+        id: String(payload.artifactId || payload.id || payload.uri || payload.url || ""),
+        name: String(payload.title || payload.name || "artifact"),
+        content_type: String(payload.mimeType || payload.content_type || "application/octet-stream"),
+        kind: String(payload.kind || "file"),
+        url: String(payload.uri || payload.url || ""),
+        size: Number(payload.size || 0),
+      };
+    }
+    if (!attachment) return current;
+    var artifacts = Array.isArray(current.artifacts) ? current.artifacts.slice() : [];
+    var artifactId = String(payload.artifactId || attachment.id || attachment.url || "");
+    var artifactIndex = artifacts.findIndex(function (item) { return String(item && (item.artifactId || item.id || item.url) || "") === artifactId; });
+    var artifact = { ...attachment, artifactId: artifactId };
+    if (artifactIndex >= 0) artifacts[artifactIndex] = { ...artifacts[artifactIndex], ...artifact };
+    else artifacts.push(artifact);
+    return { ...current, artifacts: artifacts, lastEventAt: now };
+  }
+  return current;
+}
+
 function wbcMergeToolLifecycleEntry(current, incoming, terminalOnly) {
   if (!terminalOnly) return {
     ...current,
@@ -1083,7 +1546,38 @@ function wbcMergeToolLifecycleEntry(current, incoming, terminalOnly) {
     ...current,
     status: incoming.status,
     failed: incoming.failed,
+    preview: current.preview || incoming.preview,
+    input: incoming.input != null ? incoming.input : current.input,
+    output: incoming.output != null ? incoming.output : current.output,
+    presentation: incoming.presentation && Object.keys(incoming.presentation).length ? incoming.presentation : current.presentation,
   };
+}
+
+function wbcStructuredEventDetail(entry) {
+  var item = entry || {};
+  var detail = {};
+  if (item.input != null && typeof item.input === "object") detail.input = item.input;
+  if (item.output != null && typeof item.output === "object") detail.output = item.output;
+  if (item.presentation && typeof item.presentation === "object" && Object.keys(item.presentation).length) detail.presentation = item.presentation;
+  if (!Object.keys(detail).length) return "";
+  try {
+    var text = JSON.stringify(detail, null, 2);
+    return text.length > 12000 ? text.slice(0, 12000) + "\n…" : text;
+  } catch (e) {
+    return "";
+  }
+}
+
+function wbcToolPresentationKind(entry) {
+  var raw = String(entry && entry.presentation && entry.presentation.kind || "").trim().toLowerCase();
+  return ["terminal", "file", "diff", "browser", "error", "event"].indexOf(raw) >= 0 ? raw : "generic";
+}
+
+function wbcToolPresentationText(entry, kind) {
+  if (["terminal", "diff", "error"].indexOf(kind) < 0) return "";
+  var value = entry && entry.output != null ? entry.output : entry && entry.input;
+  if (typeof value === "string") return value.slice(0, 12000);
+  return wbcStructuredEventSummary(value).slice(0, 12000);
 }
 
 function wbcTraceDedupeKey(trace) {
@@ -1660,6 +2154,46 @@ function wbcErrorText(err) {
     if (api && typeof api.errorText === "function") return api.errorText(err);
   } catch (e) {}
   return raw;
+}
+
+function wbcAgentErrorPresentation(detail, failureKind) {
+  var signature = [failureKind, detail].join(" ").toLowerCase();
+  var stable = {
+    dependency_missing: ["dependency", "workbenchChat.error.agentDependencyTitle", "Agent dependency is missing", "workbenchChat.error.agentDependencySummary", "The installed Agent cannot start because its executable or runtime dependency is unavailable.", "workbenchChat.error.agentDependencyHint", "Reinstall the Agent or repair the executable shown in Agent settings."],
+    agent_disabled: ["configuration", "workbenchChat.error.agentDisabledTitle", "Agent is disabled", "workbenchChat.error.agentDisabledSummary", "This Agent is installed but disabled in Extensions.", "workbenchChat.error.agentDisabledHint", "Enable it in the installed Agent details, then retry."],
+    auth_required: ["authentication", "workbenchChat.error.agentAuthTitle", "Agent login is required", "workbenchChat.error.agentAuthSummary", "The Agent requires its own login or credentials before it can run.", "workbenchChat.error.agentAuthHint", "Open the Agent details and complete login, then retry."],
+    auth_expired: ["authentication", "workbenchChat.error.agentAuthExpiredTitle", "Agent login expired", "workbenchChat.error.agentAuthExpiredSummary", "The Agent's independent login is no longer valid.", "workbenchChat.error.agentAuthExpiredHint", "Sign in again from the Agent details."],
+    protocol_mismatch: ["protocol", "workbenchChat.error.agentProtocolTitle", "Agent protocol is incompatible", "workbenchChat.error.agentProtocolSummary", "The Agent returned an ACP message that Cyrene cannot safely interpret.", "workbenchChat.error.agentProtocolHint", "Update the Agent or run Test connection to inspect its protocol version."],
+    capability_missing: ["capability", "workbenchChat.error.agentCapabilityTitle", "Agent capability is unavailable", "workbenchChat.error.agentCapabilitySummary", "This operation requires a capability the selected Agent did not provide.", "workbenchChat.error.agentCapabilityHint", "Choose a supported action or another Agent."],
+    model_binding_unsupported: ["model", "workbenchChat.error.agentModelBindingTitle", "Agent cannot use this model source", "workbenchChat.error.agentModelBindingSummary", "The Agent does not support the selected Cyrene or Agent-owned model configuration.", "workbenchChat.error.agentModelBindingHint", "Change Model source in the Agent details."],
+    model_gateway_unavailable: ["model", "workbenchChat.error.agentGatewayTitle", "Cyrene Model Gateway is unavailable", "workbenchChat.error.agentGatewaySummary", "The Agent could not access the selected Cyrene model configuration.", "workbenchChat.error.agentGatewayHint", "Check the Cyrene model configuration and proxy, then retry."],
+    agent_crashed: ["runtime", "workbenchChat.error.agentCrashedTitle", "Agent process stopped", "workbenchChat.error.agentCrashedSummary", "The external Agent process exited before completing the request.", "workbenchChat.error.agentCrashedHint", "Open diagnostics, restart the Agent, and retry."],
+    session_not_loadable: ["session", "workbenchChat.error.agentSessionTitle", "Agent session cannot be restored", "workbenchChat.error.agentSessionSummary", "The Agent no longer has the session associated with this conversation.", "workbenchChat.error.agentSessionHint", "Retry to start a replacement session with Cyrene's visible conversation history."],
+    request_expired: ["request", "workbenchChat.error.agentRequestExpiredTitle", "Agent request expired", "workbenchChat.error.agentRequestExpiredSummary", "The permission or input request is no longer active.", "workbenchChat.error.agentRequestExpiredHint", "Retry the message and answer the new request."],
+  }[String(failureKind || "").toLowerCase()];
+  if (stable) return {
+    tone: stable[0],
+    title: wbcT(stable[1], stable[2]),
+    summary: wbcT(stable[3], stable[4]),
+    hint: wbcT(stable[5], stable[6]),
+  };
+  if (/invalid peer certificate|certificate (?:is )?not valid for name|certificate verification|certificate_verify_failed|tls handshake/.test(signature)) {
+    return {
+      tone: "security",
+      title: wbcT("workbenchChat.error.tlsTitle", "Secure connection was intercepted"),
+      summary: wbcT("workbenchChat.error.tlsSummary", "The server certificate does not match the requested Agent service, so Cyrene stopped the connection to protect your credentials."),
+      hint: wbcT("workbenchChat.error.tlsHint", "Check the system proxy, VPN, DNS, or TLS-inspection rules, then retry. Do not disable certificate verification."),
+    };
+  }
+  if (/websocket|stream disconnected|connection reset|connection refused|network|timed?\s*out|econn/.test(signature)) {
+    return {
+      tone: "network",
+      title: wbcT("workbenchChat.error.networkTitle", "Agent network connection failed"),
+      summary: wbcT("workbenchChat.error.networkSummary", "The Agent could not keep a connection to its model service."),
+      hint: wbcT("workbenchChat.error.networkHint", "Check the proxy and network connection, then retry."),
+    };
+  }
+  return null;
 }
 
 var WBC_ICONS = {
@@ -2877,6 +3411,17 @@ function wbcFriendlyModelName(model, fallback) {
   }).join(" ");
 }
 
+function wbcLocalizedModelDescription(model) {
+  var description = String(model && (model.desc || model.description) || "").trim();
+  if (!description) return "";
+  var modelName = wbcFriendlyModelName(model, model && (model.model || model.value || model.id));
+  var providerName = String(modelName || "").split(/\s+/)[0];
+  if (providerName && description.toLowerCase() === (providerName + " default").toLowerCase()) {
+    return wbcT("workbenchChat.modelProviderDefault", "{provider} default", { provider: providerName });
+  }
+  return description;
+}
+
 function wbcNormalizePermissionMode(value, fallback) {
   var normalized = String(value || "").trim().toLowerCase();
   if (WBC_MODES.some(function (item) { return item.id === normalized; })) {
@@ -2898,6 +3443,250 @@ function wbcModeMeta(id) {
   };
 }
 
+// ---- external Agent identity, capability and binding helpers ----------------
+// The built-in Agent installation id mirrors the backend Agent Runtime
+// (cyrene/agent_runtime/builtin.py). The composer treats it as the default.
+var WBC_BUILTIN_AGENT_INSTALLATION = "agent_cyrene_builtin";
+var WBC_BUILTIN_AGENT_ID = "cyrene";
+var WBC_OPEN_AGENT_DETAIL_EVENT = "cyrene:open-agent-detail";
+
+function wbcIsBuiltinAgent(agent) {
+  agent = agent || {};
+  return String(agent.installationId || "") === WBC_BUILTIN_AGENT_INSTALLATION
+    || String(agent.agentId || "") === WBC_BUILTIN_AGENT_ID
+    || !!agent.builtin;
+}
+
+// A capability snapshot exists when the chat was created with (or later
+// received) an Agent binding and a probed/declared capabilities object.
+// Legacy chats without one keep their historical full-surface behavior.
+function wbcHasAgentCapabilitySnapshot(chat) {
+  return !!(chat && chat.capabilities && typeof chat.capabilities === "object");
+}
+
+function wbcCapabilityStatus(chat, group, key) {
+  var caps = chat && chat.capabilities;
+  if (!caps || typeof caps !== "object") return "unknown";
+  var section = caps[group];
+  if (!section || typeof section !== "object") return "unknown";
+  var value = section[key];
+  if (value === true || value === "supported") return "supported";
+  if (value === false || value === "unsupported") return "unsupported";
+  if (value === "degraded") return "degraded";
+  if (value === "agent_defined") return "agent_defined";
+  return "unknown";
+}
+
+// Capability-driven composer gating. Legacy chats (no snapshot) always allow
+// the current behavior. For Agent chats, unknown input/side-effect capabilities
+// are treated as unsupported (handoff §13) via opts.strictUnknown.
+function wbcCapabilityEnabled(chat, group, key, opts) {
+  if (!wbcHasAgentCapabilitySnapshot(chat)) return true;
+  var status = wbcCapabilityStatus(chat, group, key);
+  if (status === "unsupported") return false;
+  if (status === "unknown") return !(opts && opts.strictUnknown);
+  return true;
+}
+
+function wbcChatAgent(chat) {
+  return (chat && chat.agent && typeof chat.agent === "object") ? chat.agent : null;
+}
+
+function wbcAgentDisplayName(agent) {
+  agent = agent || {};
+  var name = String(agent.displayName || agent.name || "").trim();
+  if (wbcIsBuiltinAgent(agent)) return name || "Cyrene";
+  return name || String(agent.agentId || agent.installationId || "Agent");
+}
+
+// Availability states shown in the Composer Agent submenu. The backend's
+// agent_card supplies installState / enabled / authState / runtimeState;
+// conservative phase-1 defaults keep an unprobed Agent unselectable until its
+// detail page has configured login and runtime.
+function wbcAgentAvailability(agent) {
+  agent = agent || {};
+  if (wbcIsBuiltinAgent(agent)) return { state: "available", reasonKey: "" };
+  if (agent.enabled === false) return { state: "disabled", reasonKey: "workbenchChat.agentState.disabled" };
+  var installState = String(agent.installState || "");
+  if (installState && installState !== "installed" && installState !== "upgrade_available") {
+    return { state: "not_installed", reasonKey: "workbenchChat.agentState.notInstalled" };
+  }
+  var auth = String(agent.authState || "").toLowerCase();
+  if (auth === "expired") return { state: "auth_required", reasonKey: "workbenchChat.agentState.authExpired" };
+  if (auth === "failed") return { state: "auth_required", reasonKey: "workbenchChat.agentState.needsLogin" };
+  var runtime = String(agent.runtimeState || "").toLowerCase();
+  if (["error", "crashed", "failed"].indexOf(runtime) >= 0) {
+    return { state: "not_started", reasonKey: "workbenchChat.agentState.notStarted" };
+  }
+  return { state: "available", reasonKey: "" };
+}
+
+function wbcAgentStateLabel(state) {
+  var labels = {
+    available: wbcT("workbenchChat.agentState.available", "Available"),
+    disabled: wbcT("workbenchChat.agentState.disabled", "Disabled"),
+    not_installed: wbcT("workbenchChat.agentState.notInstalled", "Not installed"),
+    auth_required: wbcT("workbenchChat.agentState.needsLogin", "Needs login / configuration"),
+    not_started: wbcT("workbenchChat.agentState.notStarted", "Not started"),
+    incompatible: wbcT("workbenchChat.agentState.incompatible", "Version incompatible"),
+  };
+  return labels[state] || String(state || "");
+}
+
+// One row of the Composer Agent submenu (handoff §8.2). Available Agents pick
+// a draft binding; unavailable Agents open their extension detail; locked
+// chats (first message already sent) render the row disabled with a lock note
+// and can never silently re-bind.
+function wbcComposerAgentRow(props) {
+  var agent = props.agent || {};
+  var availability = props.availability || wbcAgentAvailability(agent);
+  var name = wbcAgentDisplayName(agent);
+  var meta = [wbcDriverLabel(agent.driver), String(agent.version || "")].filter(Boolean).join(" · ");
+  var stateLabel = availability.state === "available" ? "" : wbcAgentStateLabel(availability.state);
+  return (
+    <button
+      key={props.key}
+      type="button"
+      className={"wbc-agent-menu-row"
+        + (props.active ? " active" : "")
+        + (props.locked ? " locked" : "")
+        + (props.canPick ? "" : " unavailable state-" + String(availability.state || "unknown"))}
+      disabled={!!props.locked}
+      aria-disabled={props.canPick ? undefined : "true"}
+      aria-label={[name, stateLabel, props.active ? wbcT("workbenchChat.agentCurrent", "Current Agent") : ""].filter(Boolean).join(" · ")}
+      title={stateLabel || meta || undefined}
+      onClick={function () {
+        if (props.locked) return;
+        if (props.canPick) { if (props.onPick) props.onPick(); }
+        else if (props.onOpen) props.onOpen(agent);
+      }}
+    >
+      <span className="wbc-agent-menu-dot" aria-hidden="true" />
+      <span className="wbc-agent-menu-name">{name}</span>
+      {meta ? <span className="wbc-agent-menu-meta">{meta}</span> : null}
+      {stateLabel ? <span className="wbc-agent-menu-state">{stateLabel}</span> : null}
+      {props.active ? <span className="wbc-popmenu-check">{WBC_ICONS.check}</span> : null}
+    </button>
+  );
+}
+
+function wbcDriverLabel(driver) {
+  driver = String(driver || "").trim();
+  if (!driver || driver === "cyrene_builtin") return "";
+  if (driver === "acp_stdio") return "ACP · stdio";
+  return wbcT("workbenchChat.agentDriver.unknown", "Other driver · {driver}", { driver: driver });
+}
+
+function wbcAgentConnectionLabel(chat) {
+  var agent = wbcChatAgent(chat);
+  if (!agent) return "";
+  if (wbcIsBuiltinAgent(agent)) return wbcT("workbenchChat.connection.builtin", "Built-in · ready");
+  var driver = wbcDriverLabel(agent.driver);
+  var runtime = String(agent.runtimeState || agent.connectionState || "").toLowerCase();
+  var stateLabel = "";
+  if (runtime === "ready" || runtime === "connected" || runtime === "running") {
+    stateLabel = wbcT("workbenchChat.connection.connected", "Connected");
+  } else if (runtime === "error" || runtime === "crashed") {
+    stateLabel = wbcT("workbenchChat.connection.failed", "Error");
+  } else if (runtime) {
+    stateLabel = wbcT("workbenchChat.agentState.unknownValue", "Unknown · {value}", { value: runtime });
+  }
+  return [driver, stateLabel].filter(Boolean).join(" · ") || wbcT("workbenchChat.connection.unknown", "Unknown");
+}
+
+function wbcModelAccessLabel(chat) {
+  var access = chat && chat.modelAccess && typeof chat.modelAccess === "object" ? chat.modelAccess : null;
+  if (!access) return "";
+  if (String(access.mode || "") === "agent_managed") {
+    return wbcT("workbenchChat.modelSource.agentManaged", "Agent-owned configuration");
+  }
+  return wbcT("workbenchChat.modelSource.cyrene", "Cyrene");
+}
+
+// Hide usage statistics for Agents that do not report token usage instead of
+// painting fake zeros (handoff §9). Legacy chats without an Agent binding keep
+// the historical always-visible summary.
+function wbcUsageReported(usage) {
+  usage = usage || {};
+  return !!(
+    Number(usage.prompt_tokens || 0)
+    || Number(usage.completion_tokens || 0)
+    || Number(usage.total_tokens || 0)
+    || Number(usage.prompt_cache_hit_tokens || 0)
+    || Number(usage.prompt_cache_miss_tokens || 0)
+  );
+}
+
+// Slash commands are capability/command driven (handoff §13): when an Agent
+// chat snapshot exists, only commands declared by the Agent are offered.
+// The built-in Cyrene Agent (and legacy chats without a snapshot) keep the
+// historical command list — external Agents never inherit Cyrene-only commands.
+function wbcComposerSlashCommands(chat) {
+  if (!wbcHasAgentCapabilitySnapshot(chat)) return null;
+  if (wbcIsBuiltinAgent(wbcChatAgent(chat))) return null;
+  var raw = chat && (
+    (Array.isArray(chat.agentCommands) && chat.agentCommands)
+    || (Array.isArray(chat.capabilities.commands) && chat.capabilities.commands)
+    || (Array.isArray(chat.capabilities.slash) && chat.capabilities.slash)
+  );
+  if (!raw) return [];
+  return raw.map(function (item) {
+    if (typeof item === "string") return { id: item, label: item, description: "", inputHint: "" };
+    var id = String(item && (item.id || item.name || item.command) || "");
+    return {
+      id: id,
+      label: String(item && (item.label || item.title || item.name) || id),
+      description: String(item && (item.description || item.help) || ""),
+      inputHint: String(item && (item.inputHint || item.input_hint) || ""),
+    };
+  }).filter(function (item) { return !!item.id; });
+}
+
+function wbcDraftAgentBindingKey(projectId) {
+  return "wbc-draft-agent-binding:" + String(projectId || "default");
+}
+
+function wbcSaveDraftAgentBinding(projectId, binding) {
+  try {
+    if (!binding) localStorage.removeItem(wbcDraftAgentBindingKey(projectId));
+    else localStorage.setItem(wbcDraftAgentBindingKey(projectId), JSON.stringify(binding));
+  } catch (e) {}
+}
+
+function wbcLoadDraftAgentBinding(projectId) {
+  try {
+    var raw = localStorage.getItem(wbcDraftAgentBindingKey(projectId));
+    if (!raw) return null;
+    var parsed = JSON.parse(raw);
+    return parsed && parsed.agent && parsed.agent.installationId ? parsed : null;
+  } catch (e) {
+    return null;
+  }
+}
+
+function wbcDefaultAgentBinding() {
+  return {
+    agent: { installationId: WBC_BUILTIN_AGENT_INSTALLATION },
+    modelAccess: { mode: "cyrene_managed", profileId: "primary" },
+  };
+}
+
+// Ask the Settings overlay to open the Extension Center on this Agent's
+// installed detail. The overlay mounts only inside the Workbench shell, so a
+// no-op here simply leaves the composer submenu's disabled row in place.
+function wbcOpenAgentDetail(agent) {
+  agent = agent || {};
+  try {
+    window.dispatchEvent(new CustomEvent(WBC_OPEN_AGENT_DETAIL_EVENT, {
+      detail: {
+        installationId: String(agent.installationId || ""),
+        agentId: String(agent.agentId || ""),
+        displayName: wbcAgentDisplayName(agent),
+      },
+    }));
+  } catch (e) {}
+}
+
 // ---- file classification for the side viewer -------------------------------
 
 var WBC_CODE_EXTS = ["py","js","ts","jsx","tsx","css","json","yaml","yml","toml","xml","sql","sh","bash","rs","go","java","c","cpp","h","rb","php","swift","kt","txt","csv","ini","cfg","env","log"];
@@ -2907,6 +3696,8 @@ function wbcFileViewKind(file) {
   var ct = String(file.content_type || "").split(";", 1)[0].trim().toLowerCase();
   var ext = String(file.name || file.filename || "").split(".").pop().toLowerCase();
   if (ct.indexOf("image/") === 0 || file.kind === "image") return "image";
+  if (ct.indexOf("audio/") === 0 || file.kind === "audio") return "audio";
+  if (ct.indexOf("video/") === 0 || file.kind === "video") return "video";
   if (ct === "application/pdf" || ext === "pdf" || file.kind === "pdf") return "pdf";
   if (ct === "text/html" || ct === "application/xhtml+xml" || ext === "html" || ext === "htm") return "html";
   if (file.kind === "markdown" || ext === "md" || ext === "markdown") return "markdown";
@@ -2951,6 +3742,8 @@ function wbcAttachmentTypeLabel(file) {
   var kind = wbcAttachmentVisualKind(file);
   var fallbacks = {
     image: "Image",
+    audio: "Audio",
+    video: "Video",
     pdf: "PDF document",
     doc: "Word document",
     sheet: "Spreadsheet",
@@ -3434,8 +4227,173 @@ var WorkbenchChatRuntimes = (function () {
     });
   }
 
+  // Fold a unified ``tool.*`` stream event into the live runtime's tool
+  // timeline, mirroring the persistent SSE path: a stable toolCallId updates
+  // its row in place so concurrent tools keep their start order, and a
+  // completion never regresses richer identity fields.
+  function applyStreamToolEvent(chatId, event) {
+    if (!chatId || !event) return;
+    var toolCallId = String(event.toolCallId || event.tool_call_id || "");
+    var toolName = String(event.name || event.tool || event.title || "");
+    if (!toolCallId && !toolName) return;
+    var status = String(event.status || "running").toLowerCase();
+    var terminal = status === "completed" || status === "failed" || event.terminal === true;
+    var progress = event.progress && typeof event.progress === "object" ? event.progress : null;
+    var entry = {
+      kind: "tool",
+      toolCallId: toolCallId,
+      text: toolName || undefined,
+      preview: terminal
+        ? String(event.outputSummary || event.inputSummary || "")
+        : String(progress && progress.label || event.inputSummary || event.title || ""),
+      status: terminal ? "completed" : "running",
+      failed: !!event.failed || status === "failed",
+      progress: !terminal && progress && Number(progress.total) > 0
+        ? Math.max(0, Math.min(1, Number(progress.current) / Number(progress.total)))
+        : undefined,
+      progressCurrent: progress ? Math.max(0, Number(progress.current) || 0) : undefined,
+      progressTotal: progress ? Math.max(0, Number(progress.total) || 0) : undefined,
+      input: event.input,
+      output: event.output,
+      presentation: event.presentation && typeof event.presentation === "object" ? event.presentation : {},
+    };
+    update(chatId, function (latest) {
+      if (!latest) return null;
+      if (entry.toolCallId) {
+        var matchedToolCall = false;
+        function mergeToolProgress(items) {
+          return (Array.isArray(items) ? items : []).map(function (item) {
+            if (String(item && item.toolCallId || "") !== entry.toolCallId) return item;
+            matchedToolCall = true;
+            return wbcMergeToolLifecycleEntry(item, entry, terminal);
+          });
+        }
+        var mergedActivities = (Array.isArray(latest.activities) ? latest.activities : []).map(function (activity) {
+          return { ...activity, progress: mergeToolProgress(activity && activity.progress) };
+        });
+        var mergedProgress = mergeToolProgress(latest.progress);
+        if (matchedToolCall) {
+          return {
+            ...latest,
+            activities: mergedActivities,
+            progress: mergedProgress,
+            lastEventAt: Date.now(),
+          };
+        }
+      }
+      var latestActivities = Array.isArray(latest.activities) ? latest.activities : [];
+      var latestActivity = latestActivities.length ? latestActivities[latestActivities.length - 1] : null;
+      var activityBase = latestActivity && latestActivity.timelineClosed
+        ? appendActivity(latest, {})
+        : latest;
+      var next = updateLastActivity(activityBase, function (activity) {
+        var activityProgress = Array.isArray(activity.progress) ? activity.progress : [];
+        return { ...activity, progress: activityProgress.concat([entry]).slice(-30) };
+      });
+      return {
+        ...next,
+        lastEventAt: Date.now(),
+        progress: latest.progress.concat([entry]).slice(-30),
+      };
+    });
+  }
+
+  function applyAgentArtifactEvent(chatId, event) {
+    if (!chatId || !event) return;
+    var payload = wbcAgentEventPayload(event);
+    var attachment = payload.attachment && typeof payload.attachment === "object"
+      ? payload.attachment
+      : null;
+    if (!attachment && (payload.uri || payload.url)) {
+      var uri = String(payload.uri || payload.url || "");
+      attachment = {
+        id: String(payload.artifactId || payload.id || uri),
+        name: String(payload.title || payload.name || "artifact"),
+        content_type: String(payload.mimeType || payload.content_type || "application/octet-stream"),
+        kind: String(payload.kind || "file"),
+        url: uri,
+        size: Number(payload.size || 0),
+      };
+    }
+    if (!attachment) return;
+    var artifactId = String(payload.artifactId || attachment.id || attachment.url || "");
+    update(chatId, function (cur) {
+      if (!cur) return null;
+      var artifacts = Array.isArray(cur.artifacts) ? cur.artifacts.slice() : [];
+      var index = artifacts.findIndex(function (item) {
+        return String(item && (item.artifactId || item.id || item.url) || "") === artifactId;
+      });
+      var next = { ...attachment, artifactId: artifactId, state: String(payload.state || "") };
+      if (index >= 0) artifacts[index] = { ...artifacts[index], ...next };
+      else artifacts.push(next);
+      return { ...cur, artifacts: artifacts, lastEventAt: Date.now() };
+    });
+    fire("onAgentArtifact", chatId, { attachment: attachment, artifactId: artifactId });
+  }
+
+  function applyAgentUsageEvent(chatId, event) {
+    var payload = wbcAgentEventPayload(event);
+    update(chatId, function (cur) {
+      if (!cur) return null;
+      var usage = { ...(cur.usage || {}) };
+      [["inputTokens", "prompt_tokens"], ["outputTokens", "completion_tokens"], ["totalTokens", "total_tokens"], ["used", "total_tokens"]].forEach(function (pair) {
+        var value = Number(payload[pair[0]] || 0);
+        if (value > 0) usage[pair[1]] = value;
+      });
+      return { ...cur, usage: usage, contextUsage: payload, lastEventAt: Date.now() };
+    });
+    fire("onAgentUsageUpdated", chatId, payload);
+  }
+
+  function applyAgentSessionEvent(chatId, session) {
+    if (!chatId || !session) return;
+    update(chatId, function (cur) {
+      if (!cur) return null;
+      var patch = { lastEventAt: Date.now() };
+      if (session.sessionId) patch.externalSessionId = session.sessionId;
+      if (session.commands.length) patch.agentCommands = session.commands;
+      if (session.mode != null) patch.agentMode = session.mode;
+      if (session.plan) patch.activePlan = session.plan;
+      if (session.configOption || session.configOptions.length) {
+        var options = Array.isArray(cur.agentConfigOptions) ? cur.agentConfigOptions.slice() : [];
+        var incomingOptions = session.configOptions.concat(session.configOption ? [session.configOption] : []);
+        incomingOptions.forEach(function (incoming) {
+          var optionId = String(incoming && incoming.id || "");
+          var optionIndex = options.findIndex(function (item) { return String(item && item.id || "") === optionId; });
+          if (optionId && optionIndex >= 0) options[optionIndex] = { ...options[optionIndex], ...incoming };
+          else if (optionId) options.push(incoming);
+        });
+        patch.agentConfigOptions = options;
+      }
+      return { ...cur, ...patch };
+    });
+    fire("onAgentSessionUpdated", chatId, session);
+  }
+
+  function resolveAgentRequestEvent(chatId, event) {
+    var payload = wbcAgentEventPayload(event);
+    var requestId = String(payload.requestId || payload.request_id || "");
+    update(chatId, function (cur) {
+      if (!cur) return null;
+      return { ...cur, awaitingRequestId: "", lastEventAt: Date.now() };
+    });
+    fire("onAgentRequestResolved", chatId, event);
+  }
+
   function streamHandlers(chatId) {
     return {
+      onRunStarted: function (event) {
+        update(chatId, function (cur) {
+          if (!cur) return null;
+          var next = { ...cur, lastEventAt: Date.now() };
+          if (event && event.activeModel) next.activeModel = String(event.activeModel);
+          if (event && (event.session_id || event.sessionId)) {
+            next.externalSessionId = String(event.session_id || event.sessionId);
+          }
+          return next;
+        });
+        fire("onAgentSessionUpdated", chatId, wbcAgentSessionPayload(event || {}));
+      },
       onAck: function (event) {
         if (event.retry) return;
         if (event.userMessage) {
@@ -3549,10 +4507,40 @@ var WorkbenchChatRuntimes = (function () {
         var next = update(chatId, function (cur) { return cur ? { ...cur, streamDone: true, text: text || cur.text, lastEventAt: Date.now() } : null; });
         if (next) fire("onReplyStream", chatId, { text: next.text, start: false, done: true });
       },
+      onNotification: function (notice) {
+        if (!notice || !notice.message) return;
+        update(chatId, function (cur) {
+          if (!cur) return null;
+          var notices = Array.isArray(cur.notifications) ? cur.notifications.slice() : [];
+          var key = String(notice.id || (notice.category + "\n" + notice.message));
+          if (!notices.some(function (item) {
+            return String(item.id || (item.category + "\n" + item.message)) === key;
+          })) notices.push(notice);
+          return { ...cur, notifications: notices, lastEventAt: Date.now() };
+        });
+      },
       onFinalizing: function () {
         update(chatId, function (cur) {
           return cur ? { ...wbcFinalizeRuntime(cur), lastEventAt: Date.now() } : null;
         });
+      },
+      onToolStarted: function (event) { applyStreamToolEvent(chatId, event); },
+      onToolUpdated: function (event) { applyStreamToolEvent(chatId, event); },
+      onToolCompleted: function (event) { applyStreamToolEvent(chatId, event, true); },
+      onArtifactEvent: function (event) { applyAgentArtifactEvent(chatId, event); },
+      onUsageUpdated: function (event) { applyAgentUsageEvent(chatId, event); },
+      onSessionUpdated: function (event) { applyAgentSessionEvent(chatId, event); },
+      onPermissionResolved: function (event) { resolveAgentRequestEvent(chatId, event); },
+      onElicitationResolved: function (event) { resolveAgentRequestEvent(chatId, event); },
+      onUnknownAgentEvent: function (event) {
+        applyStreamToolEvent(chatId, {
+          toolCallId: "agent-event:" + String(event && (event.eventId || event.event_id) || Date.now()),
+          name: wbcT("workbenchChat.agentEvent", "Agent event") + " · " + String(event && event.type || "unknown"),
+          status: "completed",
+          outputSummary: wbcStructuredEventSummary(wbcAgentEventPayload(event || {})),
+          output: wbcAgentEventPayload(event || {}),
+          presentation: { kind: "event" },
+        }, true);
       },
       onIntermediateMessage: function (event) {
         appendIntermediate(chatId, event && event.message);
@@ -3594,8 +4582,16 @@ var WorkbenchChatRuntimes = (function () {
         }
         var awaitingMessages = Array.isArray(event.assistantMessages) ? event.assistantMessages : [];
         if (awaitingMessages.length) fire("onAssistantSaved", chatId, awaitingMessages);
-        fire("onAwaitingUser", chatId, event.pending_question || null);
+        var pending = event.pending_question || event.pendingQuestion
+          || (event && event.kind ? event : null);
+        fire("onAwaitingUser", chatId, pending);
         publishLifecycle(chatId, "awaiting_user", event);
+        // ACP permission/elicitation requests pause the external process but do
+        // not end its event stream. Keep the runtime alive so the same stream
+        // can resume after the original optionId/text response is forwarded.
+        if (pending && ["permission.requested", "elicitation.requested"].indexOf(String(pending.kind || "")) >= 0) {
+          return;
+        }
         update(chatId, null);
         fire("onSettled", chatId);
       },
@@ -3677,6 +4673,7 @@ var WorkbenchChatRuntimes = (function () {
       activities: [],
       activitySeq: 0,
       segments: [],
+      notifications: [],
       startedAt: startedAt,
       lastEventAt: startedAt,
       replying: false,
@@ -3695,7 +4692,7 @@ var WorkbenchChatRuntimes = (function () {
     if (!chatId || runtimes[chatId] || !model || !model.reconnectRun) return null;
     var ac = (typeof AbortController !== "undefined") ? new AbortController() : null;
     if (ac) aborts[chatId] = ac;
-    update(chatId, { chatId: chatId, text: "", progress: [], activities: [], activitySeq: 0, segments: [], startedAt: Date.now(), lastEventAt: Date.now(), replying: false, reconnecting: true });
+    update(chatId, { chatId: chatId, text: "", progress: [], activities: [], activitySeq: 0, segments: [], notifications: [], startedAt: Date.now(), lastEventAt: Date.now(), replying: false, reconnecting: true });
     return ownStream(
       chatId,
       model.reconnectRun(chatId, streamHandlers(chatId), ac ? ac.signal : undefined),
@@ -3990,6 +4987,57 @@ function WorkbenchChatPage({ active, project, newChatRequestId, onOpenTask, onAc
   var chatsProjectIdRef = useWbcRef("");
   var [activeChatId, setActiveChatId] = useWbcState("");
   var activeChatIdRef = useWbcRef("");
+  // Draft Agent binding for a not-yet-created chat (handoff §8.3): the first
+  // message's lazy createChat() submits this binding instead of creating a
+  // default-Agent chat and immediately rebinding it.
+  var [draftAgentBinding, setDraftAgentBinding] = useWbcState(function () {
+    return wbcLoadDraftAgentBinding(projectId);
+  });
+  var draftAgentBindingRef = useWbcRef(draftAgentBinding);
+  useWbcEffect(function () { draftAgentBindingRef.current = draftAgentBinding; }, [draftAgentBinding]);
+  function handleDraftAgentChange(binding) {
+    setDraftAgentBinding(binding || null);
+    wbcSaveDraftAgentBinding(projectId, binding || null);
+  }
+  function handleSwitchAgent(binding) {
+    if (!binding || !activeChat || !activeChat.id) return Promise.resolve(null);
+    setError("");
+    var hasMessages = (Array.isArray(activeChat.messages) && activeChat.messages.length > 0)
+      || Number(activeChat.messageCount || 0) > 0;
+    if (!hasMessages && model.updateChatAgent) {
+      return model.updateChatAgent(activeChat.id, binding).then(function (chat) {
+        setChats(function (prev) { return prev.map(function (item) { return item.id === chat.id ? chat : item; }); });
+        setActiveChat(chat);
+        return chat;
+      }).catch(function (err) {
+        setError(wbcErrorText(err));
+        return null;
+      });
+    }
+    var confirmModal = window.CyreneUI.require("feedback").confirmModal;
+    var confirmation = confirmModal ? confirmModal({
+      title: wbcT("workbenchChat.agentNewChatTitle", "Use in a new chat"),
+      body: wbcT("workbenchChat.agentNewChatBody", "This conversation already has messages. The selected Agent will be used in a new chat."),
+      confirmLabel: wbcT("workbenchChat.agentNewChatConfirm", "Use in new chat"),
+    }) : Promise.resolve(window.confirm(wbcT("workbenchChat.agentNewChatBody", "This conversation already has messages. The selected Agent will be used in a new chat.")));
+    return confirmation.then(function (confirmed) {
+      if (!confirmed) return null;
+      return model.createChatWithBinding(projectId, "", binding);
+    }).then(function (chat) {
+      if (!chat) return null;
+      setChats(function (prev) { return [chat].concat(prev); });
+      skipNextHydrationChatIdRef.current = chat.id;
+      selectChat(chat.id);
+      setActiveChat(chat);
+      return chat;
+    }).catch(function (err) {
+      setError(wbcErrorText(err));
+      return null;
+    });
+  }
+  function handleOpenAgentDetail(agent) {
+    wbcOpenAgentDetail(agent);
+  }
   function selectChat(chatId) {
     var nextId = String(chatId || "");
     // Publish selection intent immediately. Passive effects run too late to
@@ -4578,6 +5626,7 @@ function WorkbenchChatPage({ active, project, newChatRequestId, onOpenTask, onAc
     setLoading(!cachedList);
     setError("");
     setErrorKind("load");
+    setDraftAgentBinding(wbcLoadDraftAgentBinding(requestedProjectId));
     if (!projectId) { setChats([]); setLoading(false); return; }
     var navigation = window.CyreneUI.require("navigation");
     var pending = navigation.getPending();
@@ -5011,7 +6060,15 @@ function WorkbenchChatPage({ active, project, newChatRequestId, onOpenTask, onAc
 
   function ensureChat() {
     if (activeChatId) return Promise.resolve(activeChatId);
-    return model.createChat(projectId).then(function (chat) {
+    var binding = draftAgentBindingRef.current;
+    var bindingChat = model.createChatWithBinding
+      ? model.createChatWithBinding(projectId, "", binding)
+      : model.createChat(projectId);
+    return bindingChat.then(function (chat) {
+      if (binding) {
+        setDraftAgentBinding(null);
+        wbcSaveDraftAgentBinding(projectId, null);
+      }
       try {
         window.dispatchEvent(new CustomEvent("cyrene:wbc-chat-created", {
           detail: { projectId: projectId, chatId: chat.id },
@@ -5157,6 +6214,64 @@ function WorkbenchChatPage({ active, project, newChatRequestId, onOpenTask, onAc
           return wbcMergeSavedAssistantMessages(prev, assistantMessages);
         });
       },
+      onAgentArtifact: function (chatId, artifactEvent) {
+        var attachment = artifactEvent && artifactEvent.attachment;
+        if (!attachment) return;
+        setActiveChat(function (prev) {
+          if (!prev || prev.id !== chatId) return prev;
+          var live = Array.isArray(prev.liveAgentArtifacts) ? prev.liveAgentArtifacts.slice() : [];
+          var key = String(artifactEvent.artifactId || attachment.id || attachment.url || "");
+          var index = live.findIndex(function (item) {
+            return String(item && (item.artifactId || item.id || item.url) || "") === key;
+          });
+          var next = { ...attachment, artifactId: key };
+          if (index >= 0) live[index] = { ...live[index], ...next };
+          else live.push(next);
+          return { ...prev, liveAgentArtifacts: live };
+        });
+      },
+      onAgentUsageUpdated: function (chatId, payload) {
+        setActiveChat(function (prev) {
+          if (!prev || prev.id !== chatId) return prev;
+          var usage = { ...(prev.usage || {}) };
+          [["inputTokens", "prompt_tokens"], ["outputTokens", "completion_tokens"], ["totalTokens", "total_tokens"], ["used", "total_tokens"]].forEach(function (pair) {
+            var value = Number(payload && payload[pair[0]] || 0);
+            if (value > 0) usage[pair[1]] = value;
+          });
+          return { ...prev, usage: usage, liveAgentContextUsage: payload || {} };
+        });
+      },
+      onAgentSessionUpdated: function (chatId, session) {
+        setActiveChat(function (prev) {
+          if (!prev || prev.id !== chatId) return prev;
+          var next = { ...prev };
+          if (session.sessionId) next.agent = { ...(prev.agent || {}), externalSessionId: session.sessionId, runtimeState: "ready" };
+          if (session.commands.length) next.agentCommands = session.commands;
+          if (session.mode != null) next.agentMode = session.mode;
+          if (session.plan) next.activePlan = session.plan;
+          if (session.configOption || session.configOptions.length) {
+            var options = Array.isArray(prev.agentConfigOptions) ? prev.agentConfigOptions.slice() : [];
+            var incomingOptions = session.configOptions.concat(session.configOption ? [session.configOption] : []);
+            incomingOptions.forEach(function (incoming) {
+              var id = String(incoming && incoming.id || "");
+              var index = options.findIndex(function (item) { return String(item && item.id || "") === id; });
+              if (id && index >= 0) options[index] = { ...options[index], ...incoming };
+              else if (id) options.push(incoming);
+            });
+            next.agentConfigOptions = options;
+          }
+          return next;
+        });
+      },
+      onAgentRequestResolved: function (chatId, event) {
+        var payload = wbcAgentEventPayload(event);
+        var requestId = String(payload.requestId || payload.request_id || "");
+        setActiveChat(function (prev) {
+          if (!prev || prev.id !== chatId || !prev.pendingQuestion) return prev;
+          if (requestId && String(prev.pendingQuestion.id || "") !== requestId) return prev;
+          return { ...prev, pendingQuestion: null, status: "running" };
+        });
+      },
       onAwaitingUser: function (chatId, pendingQuestion) {
         // The run paused for a permission / clarification answer — stash the
         // question so the composer shows an answer prompt instead of a reply.
@@ -5185,7 +6300,7 @@ function WorkbenchChatPage({ active, project, newChatRequestId, onOpenTask, onAc
       },
       onError: function (chatId, err) {
         setErrorKind("message");
-        setError(wbcErrorText(err));
+        setError(err || wbcT("workbenchChat.agentError.failed", "Agent run failed"));
         if (String(activeChatIdRef.current || "") === String(chatId || "")) WbcVoice.stop();
       },
       onSettled: function (chatId) {
@@ -5922,10 +7037,41 @@ function WorkbenchChatPage({ active, project, newChatRequestId, onOpenTask, onAc
   // (swap the prompt). Optimistically clears the prompt while resuming.
   function answerQuestionForChat(chatId, questionId, optionText, resumeMode) {
     chatId = String(chatId || "");
-    if (!chatId || !questionId || !optionText) return Promise.resolve(null);
+    var formAnswer = optionText && typeof optionText === "object" && optionText.__agentForm === true;
+    if (!chatId || !questionId || (!formAnswer && !optionText)) return Promise.resolve(null);
     WbcVoice.stop();
     var targetSummary = chatsRef.current.find(function (chat) { return String(chat && chat.id || "") === chatId; }) || {};
+    var targetDetail = activeChatIdRef.current === chatId ? (activeChat || {}) : (chatCache.details[chatId] || {});
+    var liveAgentRequest = targetDetail.pendingQuestion || targetSummary.pendingQuestion || null;
     if (activeChatIdRef.current === chatId) setError("");
+    if (wbcIsLiveAgentRequest(liveAgentRequest)) {
+      var response = String(liveAgentRequest.kind || "") === "permission.requested"
+        ? { type: "option", optionId: String(optionText || "") }
+        : (formAnswer
+          ? { type: "form", form: optionText.values && typeof optionText.values === "object" ? optionText.values : {} }
+          : { type: "text", text: String(optionText || "") });
+      setChats(function (previous) {
+        return previous.map(function (chat) {
+          return String(chat && chat.id || "") === chatId
+            ? { ...chat, pendingQuestion: null, status: "running", runStatus: "running" }
+            : chat;
+        });
+      });
+      setActiveChat(function (prev) {
+        return prev && String(prev.id || "") === chatId
+          ? { ...prev, pendingQuestion: null, status: "running" }
+          : prev;
+      });
+      return model.answerAgentRequest(chatId, questionId, response).catch(function (err) {
+        setActiveChat(function (prev) {
+          return prev && String(prev.id || "") === chatId
+            ? { ...prev, pendingQuestion: liveAgentRequest, status: "idle" }
+            : prev;
+        });
+        if (activeChatIdRef.current === chatId) setError(wbcErrorText(err));
+        throw err;
+      });
+    }
     var optimisticAnswer = {
       id: "answer_pending_" + Date.now(),
       role: "user",
@@ -5965,7 +7111,7 @@ function WorkbenchChatPage({ active, project, newChatRequestId, onOpenTask, onAc
     // Without it the resume ran invisibly — an empty thread while the side panel
     // showed a frozen "Replying" — and the composer offered no way to stop it.
     var answerStartedAt = Date.parse(String(optimisticAnswer.createdAt || "")) || Date.now();
-    runtimeEngine.update(chatId, { chatId: chatId, text: "", progress: [], activities: [], activitySeq: 0, segments: [], userMessages: [optimisticAnswer], startedAt: answerStartedAt, lastEventAt: answerStartedAt, replying: true });
+    runtimeEngine.update(chatId, { chatId: chatId, text: "", progress: [], activities: [], activitySeq: 0, segments: [], notifications: [], userMessages: [optimisticAnswer], startedAt: answerStartedAt, lastEventAt: answerStartedAt, replying: true });
     var targetPermissionMode = activeChatIdRef.current === chatId && activeChat && activeChat.permissionMode
       ? activeChat.permissionMode
       : targetSummary.permissionMode;
@@ -6629,6 +7775,10 @@ function WorkbenchChatPage({ active, project, newChatRequestId, onOpenTask, onAc
         onBrowserMinimize={function () { setActiveBrowserWindowMode("minimized"); }}
         onBrowserMaximize={function () { setActiveBrowserWindowMode("maximized"); }}
         onBrowserRestore={function () { setActiveBrowserWindowMode("pip"); }}
+        draftAgent={draftAgentBinding}
+        onDraftAgentChange={handleDraftAgentChange}
+        onSwitchAgent={handleSwitchAgent}
+        onOpenAgentDetail={handleOpenAgentDetail}
         onBrowserTakeoverComplete={function (payload) {
           var pending = activeChat && activeChat.pendingQuestion;
           if (!pending || !pending.id) return Promise.reject(new Error("登录确认已不在等待中。"));
@@ -7270,7 +8420,8 @@ function WbcConversationStatusPreview({ chat, state, runtime, busy, result, erro
   var pending = chat && chat.pendingQuestion || null;
   var options = pending && Array.isArray(pending.options) ? pending.options : [];
   var kind = String(pending && pending.kind || "");
-  var isPermission = window.CyreneUI.require("model").isPermissionQuestionKind(kind);
+  var isPermission = kind === "permission.requested"
+    || window.CyreneUI.require("model").isPermissionQuestionKind(kind);
   var actionOptions = options.length
     ? options.map(function (option, index) {
       return {
@@ -7280,11 +8431,7 @@ function WbcConversationStatusPreview({ chat, state, runtime, busy, result, erro
           : wbcQuestionOptionValue(option),
       };
     })
-    : (isPermission ? [
-      { value: "在本次会话同意", label: wbcT("workbenchChat.permissionSession", "Allow for this session") },
-      { value: "同意一次", label: wbcT("workbenchChat.permissionOnce", "Allow once") },
-      { value: "拒绝", label: wbcT("workbenchChat.reject", "Reject") },
-    ] : []);
+    : [];
   var customState = useWbcState("");
   var customText = customState[0], setCustomText = customState[1];
   useWbcEffect(function () { setCustomText(""); }, [chat && chat.id, pending && pending.id]);
@@ -10707,7 +11854,7 @@ function WbcConversationNavigator({ threadRef, chatId }) {
   );
 }
 
-function WbcMain({ project, chat, chatSummary, loading, runtime, error, errorKind, onRetry, running, onSend, onGuidance, onInterrupt, onAnswer, onRetryMessage, onEditMessage, onAskSelection, sideAgentCreating, onConversationContextMenu, onRename, onDelete, onToTask, toTaskBusy, onOpenFile, onOpenDroppedChat, sideVisible, sidePanelTabExpanded, onToggleSide, browserState, browserSessionId, browserVisible, browserWindowMode, onBrowserMinimize, onBrowserMaximize, onBrowserRestore, onBrowserTakeoverComplete, splitOpen }) {
+function WbcMain({ project, chat, chatSummary, loading, runtime, error, errorKind, onRetry, running, onSend, onGuidance, onInterrupt, onAnswer, onRetryMessage, onEditMessage, onAskSelection, sideAgentCreating, onConversationContextMenu, onRename, onDelete, onToTask, toTaskBusy, onOpenFile, onOpenDroppedChat, sideVisible, sidePanelTabExpanded, onToggleSide, browserState, browserSessionId, browserVisible, browserWindowMode, onBrowserMinimize, onBrowserMaximize, onBrowserRestore, onBrowserTakeoverComplete, splitOpen, draftAgent, onDraftAgentChange, onSwitchAgent, onOpenAgentDetail }) {
   var mainRef = useWbcRef(null);
   var stageRef = useWbcRef(null);
   var scrollRef = useWbcRef(null);
@@ -10760,7 +11907,11 @@ function WbcMain({ project, chat, chatSummary, loading, runtime, error, errorKin
     chat && Array.isArray(chat.messages) ? chat.messages : [],
     runtime && runtime.userMessages
   );
-  var runtimeTimeline = wbcRuntimeSegmentMessages(runtime).concat(wbcRuntimeTimelineMessages(runtime));
+  var reasoningStatus = wbcCapabilityStatus(chat, "output", "reasoning");
+  var showReasoningPlaceholder = !wbcHasAgentCapabilitySnapshot(chat)
+    || reasoningStatus === "supported"
+    || reasoningStatus === "degraded";
+  var runtimeTimeline = wbcRuntimeSegmentMessages(runtime).concat(wbcRuntimeTimelineMessages(runtime, { showReasoningPlaceholder }));
   var messages = wbcMergeChronologicalMessages(durableMessages, runtimeTimeline);
   var activityTraceKeys = new Set();
   messages.forEach(function (message) {
@@ -11281,7 +12432,11 @@ function WbcMain({ project, chat, chatSummary, loading, runtime, error, errorKin
         {messages.map(function (msg) {
           var canRetryAssistant = !isLegacy && !running && String(msg.id || "") === lastAssistantId;
           var canRetryUser = !isLegacy && !running && msg.role === "user" && String(msg.id || "") === lastUserId;
-          var canEdit = !isLegacy && !running && msg.role === "user" && !!onEditMessage;
+          var canEdit = !isLegacy
+            && !running
+            && msg.role === "user"
+            && !!onEditMessage
+            && (!wbcChatAgent(chat) || wbcIsBuiltinAgent(wbcChatAgent(chat)) || wbcCapabilityEnabled(chat, "session", "fork", { strictUnknown: true }));
           var isActiveQuestion = !!(
             msg.questionPrompt
             && chat.pendingQuestion
@@ -11289,6 +12444,9 @@ function WbcMain({ project, chat, chatSummary, loading, runtime, error, errorKin
           );
           if (msg.runtimeHeartbeat) {
             return <WbcThreadItem key={msg.id}><WbcHeartbeat startedAt={runtime && runtime.startedAt} lastEventAt={runtime && runtime.lastEventAt} finalizing={!!msg.runtimeFinalizing} /></WbcThreadItem>;
+          }
+          if (msg.runtimeNotification || msg.notificationCard) {
+            return <WbcThreadItem key={msg.id}><WbcAgentNotification notice={msg.notification} /></WbcThreadItem>;
           }
           if (msg.runtimeActivity || msg.activityCard) {
             var activity = msg.runtimeActivity || {
@@ -11326,11 +12484,11 @@ function WbcMain({ project, chat, chatSummary, loading, runtime, error, errorKin
             </WbcThreadItem>
           );
         })}
-        {runtime && runtime.text && <WbcThreadItem><WbcLiveMessage runtime={runtime} onOpenFile={onOpenFile} /></WbcThreadItem>}
-        {chat && chat.pendingQuestion && chat.pendingQuestion.id && !runtime && !messages.some(function (msg) {
+        {runtime && (runtime.text || (runtime.artifacts && runtime.artifacts.length)) && <WbcThreadItem><WbcLiveMessage runtime={runtime} onOpenFile={onOpenFile} /></WbcThreadItem>}
+        {chat && chat.pendingQuestion && chat.pendingQuestion.id && (!runtime || wbcIsLiveAgentRequest(chat.pendingQuestion)) && !messages.some(function (msg) {
           return msg.questionPrompt && String(msg.questionId || "") === String(chat.pendingQuestion.id || "");
         }) && (
-          <WbcThreadItem><WbcQuestionPrompt pending={chat.pendingQuestion} onAnswer={onAnswer} busy={running} /></WbcThreadItem>
+          <WbcThreadItem><WbcQuestionPrompt pending={chat.pendingQuestion} onAnswer={onAnswer} busy={running && !wbcIsLiveAgentRequest(chat.pendingQuestion)} /></WbcThreadItem>
         )}
       </div>
       <WbcConversationNavigator threadRef={scrollRef} chatId={chat && chat.id} />
@@ -11397,6 +12555,10 @@ function WbcMain({ project, chat, chatSummary, loading, runtime, error, errorKin
         onSend={onSend}
         onGuidance={onGuidance}
         onInterrupt={onInterrupt}
+        draftAgent={draftAgent}
+        onDraftAgentChange={onDraftAgentChange}
+        onSwitchAgent={onSwitchAgent}
+        onOpenAgentDetail={onOpenAgentDetail}
         hideDisclaimer={splitOpen}
       />
     </main>
@@ -11405,10 +12567,52 @@ function WbcMain({ project, chat, chatSummary, loading, runtime, error, errorKin
 
 function wbcQuestionOptionValue(option) {
   if (typeof option === "string") return option;
-  return String(option && (option.label || option.title || option.value || option.description) || "").trim();
+  // Agent-defined permission options submit their original option id
+  // (handoff §11.1); never re-map by localized label or index. Legacy string
+  // options and label-only objects keep their historical behavior.
+  return String(
+    option
+    && (
+      option.optionId
+      || option.id
+      || option.label
+      || option.title
+      || option.value
+      || option.description
+    )
+    || ""
+  ).trim();
+}
+
+function wbcIsLiveAgentRequest(pending) {
+  var kind = String(pending && pending.kind || "");
+  return kind === "permission.requested" || kind === "elicitation.requested";
 }
 
 function wbcPermissionOptionLabel(option, index, total) {
+  // Translate protocol semantics first. External Agents commonly include an
+  // English display label, but that label must not bypass the current locale.
+  var semanticValues = option && typeof option === "object"
+    ? [option.optionId, option.id, option.kind, option.value, option.label, option.title]
+    : [option];
+  var semantics = semanticValues.map(function (value) {
+    return String(value || "").trim().toLowerCase().replace(/[\s-]+/g, "_");
+  }).filter(Boolean);
+  if (semantics.some(function (value) { return ["allow_once", "once", "同意一次", "仅这次允许", "允许这次", "允许一次"].indexOf(value) >= 0; })) {
+    return wbcT("workbenchChat.permissionOnce", "Allow once");
+  }
+  if (semantics.some(function (value) { return ["allow_always", "always_allow", "always", "always_allow_globally", "始终允许", "总是允许"].indexOf(value) >= 0; })) {
+    return wbcT("workbenchChat.permissionAlways", "Always allow");
+  }
+  if (semantics.some(function (value) { return ["allow_session", "allow_for_this_session", "always_allow_this_session", "session", "在本次会话同意", "本次会话内总是允许", "本次会话允许", "本轮总是允许"].indexOf(value) >= 0; })) {
+    return wbcT("workbenchChat.permissionSession", "Allow for this session");
+  }
+  if (semantics.some(function (value) { return ["reject", "deny", "denied", "拒绝"].indexOf(value) >= 0; })) {
+    return wbcT("workbenchChat.reject", "Reject");
+  }
+  if (option && typeof option === "object" && String(option.label || option.title || "").trim()) {
+    return String(option.label || option.title).trim();
+  }
   if (total <= 2) {
     return index === 0
       ? wbcT("workbenchChat.permissionOnce", "Allow once")
@@ -11427,19 +12631,117 @@ function wbcPermissionQuestionText(pending) {
 function wbcVoiceQuestionText(pending) {
   var question = pending && typeof pending === "object" ? pending : {};
   var kind = String(question.kind || "");
-  var isPermission = window.CyreneUI.require("model").isPermissionQuestionKind(kind);
+  var isPermission = kind === "permission.requested"
+    || window.CyreneUI.require("model").isPermissionQuestionKind(kind);
   var text = String(isPermission
     ? wbcPermissionQuestionText(question)
     : (question.text || wbcT("workbenchChat.questionFallback", "Agent needs your confirmation to continue."))).trim();
   var options = Array.isArray(question.options) ? question.options : [];
-  if (isPermission && !options.length) {
-    options = ["在本次会话同意", "同意一次", "拒绝"];
-  }
   var optionText = options.map(function (option, index) {
     if (isPermission) return wbcPermissionOptionLabel(option, index, options.length);
     return wbcQuestionOptionValue(option);
   }).filter(Boolean).join("。 ");
   return [text, optionText].filter(Boolean).join("。 ");
+}
+
+function wbcElicitationFields(pending) {
+  var question = pending && typeof pending === "object" ? pending : {};
+  var schema = question.schema && typeof question.schema === "object" ? question.schema : {};
+  var properties = schema.properties && typeof schema.properties === "object" ? schema.properties : {};
+  var required = new Set(Array.isArray(schema.required) ? schema.required.map(String) : []);
+  var fields = [];
+  Object.keys(properties).slice(0, 50).forEach(function (name) {
+    var item = properties[name];
+    if (!item || typeof item !== "object") return;
+    var type = Array.isArray(item.type) ? item.type.find(function (value) { return value !== "null"; }) : item.type;
+    type = String(type || (Array.isArray(item.enum) ? "string" : "string"));
+    if (["string", "number", "integer", "boolean"].indexOf(type) < 0 && !Array.isArray(item.enum)) return;
+    var enumNames = Array.isArray(item.enumNames) ? item.enumNames : (Array.isArray(item["x-enumNames"]) ? item["x-enumNames"] : []);
+    fields.push({
+      name: String(name),
+      title: String(item.title || name),
+      description: String(item.description || ""),
+      type: type,
+      inputType: type === "number" || type === "integer" ? "number" : (String(item.format || "") === "password" ? "password" : "text"),
+      required: required.has(String(name)),
+      defaultValue: item.default,
+      placeholder: String(item.placeholder || item.examples && item.examples[0] || ""),
+      minimum: item.minimum,
+      maximum: item.maximum,
+      minLength: item.minLength,
+      maxLength: item.maxLength,
+      enumValues: (Array.isArray(item.enum) ? item.enum : []).map(function (value, index) {
+        return { value: value, label: String(enumNames[index] != null ? enumNames[index] : value) };
+      }),
+    });
+  });
+  (Array.isArray(question.fields) ? question.fields : []).slice(0, 50).forEach(function (item, index) {
+    if (!item || typeof item !== "object") return;
+    var name = String(item.name || item.id || ("field_" + index));
+    if (fields.some(function (field) { return field.name === name; })) return;
+    var choices = Array.isArray(item.options) ? item.options : (Array.isArray(item.enum) ? item.enum : []);
+    var type = String(item.type || (choices.length ? "string" : "string")).toLowerCase();
+    fields.push({
+      name: name,
+      title: String(item.label || item.title || name),
+      description: String(item.description || item.help || ""),
+      type: type,
+      inputType: type === "number" || type === "integer" ? "number" : (type === "password" ? "password" : "text"),
+      required: item.required === true,
+      defaultValue: item.defaultValue != null ? item.defaultValue : item.default,
+      placeholder: String(item.placeholder || ""),
+      minimum: item.minimum,
+      maximum: item.maximum,
+      minLength: item.minLength,
+      maxLength: item.maxLength,
+      enumValues: choices.map(function (choice) {
+        if (choice && typeof choice === "object") return { value: choice.value != null ? choice.value : choice.id, label: String(choice.label || choice.name || choice.value || choice.id || "") };
+        return { value: choice, label: String(choice) };
+      }),
+    });
+  });
+  return fields;
+}
+
+function wbcElicitationInitialValues(fields) {
+  var values = {};
+  (fields || []).forEach(function (field) {
+    if (field.defaultValue != null) values[field.name] = field.defaultValue;
+    else if (field.type === "boolean") values[field.name] = false;
+    else if (field.required && field.enumValues.length) values[field.name] = field.enumValues[0].value;
+    else values[field.name] = "";
+  });
+  return values;
+}
+
+function wbcValidateElicitationForm(fields, values) {
+  var errors = {};
+  var normalized = {};
+  (fields || []).forEach(function (field) {
+    var raw = values[field.name];
+    var empty = raw == null || raw === "";
+    if (field.required && empty) {
+      errors[field.name] = wbcT("workbenchChat.elicitationRequired", "This field is required.");
+      return;
+    }
+    if (empty && !field.required) return;
+    if (field.type === "number" || field.type === "integer") {
+      var numeric = Number(raw);
+      if (!Number.isFinite(numeric) || (field.type === "integer" && !Number.isInteger(numeric))) {
+        errors[field.name] = field.type === "integer" ? wbcT("workbenchChat.elicitationInteger", "Enter a whole number.") : wbcT("workbenchChat.elicitationNumber", "Enter a valid number.");
+        return;
+      }
+      if (field.minimum != null && numeric < Number(field.minimum)) errors[field.name] = wbcT("workbenchChat.elicitationMinimum", "Value must be at least {value}.", { value: field.minimum });
+      if (field.maximum != null && numeric > Number(field.maximum)) errors[field.name] = wbcT("workbenchChat.elicitationMaximum", "Value must be at most {value}.", { value: field.maximum });
+      normalized[field.name] = numeric;
+      return;
+    }
+    var text = String(raw);
+    if (field.minLength != null && text.length < Number(field.minLength)) errors[field.name] = wbcT("workbenchChat.elicitationMinLength", "Enter at least {value} characters.", { value: field.minLength });
+    if (field.maxLength != null && text.length > Number(field.maxLength)) errors[field.name] = wbcT("workbenchChat.elicitationMaxLength", "Enter no more than {value} characters.", { value: field.maxLength });
+    normalized[field.name] = field.type === "boolean" ? raw === true : raw;
+  });
+  return { valid: Object.keys(errors).length === 0, errors: errors, values: normalized };
 }
 
 // A paused chat run awaiting the user's answer to a permission elevation or a
@@ -11449,11 +12751,21 @@ function WbcQuestionPrompt({ pending, onAnswer, busy, trace }) {
   var pq = pending || {};
   var options = Array.isArray(pq.options) ? pq.options : [];
   var kind = String(pq.kind || "");
-  var isPermission = window.CyreneUI.require("model").isPermissionQuestionKind(kind);
+  var isPermission = kind === "permission.requested"
+    || window.CyreneUI.require("model").isPermissionQuestionKind(kind);
   var isPlanConfirmation = kind === "plan_confirmation";
-  var treeOptions = isPermission && !options.length ? ["在本次会话同意", "同意一次", "拒绝"] : options;
+  // Permission choices are Agent-owned protocol data. Never fabricate option
+  // ids from localized labels when the Agent omitted them.
+  var treeOptions = options;
   var customState = useWbcState("");
   var customText = customState[0], setCustomText = customState[1];
+  var schema = pq.schema && typeof pq.schema === "object" ? pq.schema : null;
+  var schemaFields = wbcElicitationFields(pq);
+  var formState = useWbcState(function () { return wbcElicitationInitialValues(schemaFields); });
+  var formValues = formState[0], setFormValues = formState[1];
+  var formErrorsState = useWbcState({});
+  var formErrors = formErrorsState[0], setFormErrors = formErrorsState[1];
+  var hasSchemaForm = !isPermission && schemaFields.length > 0;
   var optionSignature = JSON.stringify(treeOptions);
   useWbcEffect(function () {
     if (!pq.id || busy || !onAnswer || !window.CyreneUI.has("uiSurface")) return undefined;
@@ -11519,11 +12831,23 @@ function WbcQuestionPrompt({ pending, onAnswer, busy, trace }) {
       handlers: handlers,
     });
   }, [pq.id, pq.allowCustom, kind, busy, onAnswer, optionSignature, isPermission, isPlanConfirmation]);
+  useWbcEffect(function () {
+    setFormValues(wbcElicitationInitialValues(schemaFields));
+    setFormErrors({});
+  }, [pq.id, JSON.stringify(schema || pq.fields || [])]);
   function submitCustom() {
     var t = String(customText || "").trim();
     if (!t || busy || !onAnswer) return;
     setCustomText("");
     onAnswer(pq.id, t);
+  }
+  function submitForm(event) {
+    if (event) event.preventDefault();
+    if (busy || !onAnswer) return;
+    var validation = wbcValidateElicitationForm(schemaFields, formValues);
+    setFormErrors(validation.errors);
+    if (!validation.valid) return;
+    onAnswer(pq.id, { __agentForm: true, values: validation.values });
   }
   return (
     <div className="wbc-question-group">
@@ -11538,11 +12862,28 @@ function WbcQuestionPrompt({ pending, onAnswer, busy, trace }) {
           : (pq.text || wbcT("workbenchChat.questionFallback", "Agent needs your confirmation to continue."))}</p>
         {isPermission ? (
           <div className="wbc-question-options">
-            {(options.length ? options : ["在本次会话同意", "同意一次", "拒绝"]).map(function (opt, i) {
-              var permissionOptions = options.length ? options : ["在本次会话同意", "同意一次", "拒绝"];
-              return <button key={i} type="button" className={"wbc-question-opt" + (i === 0 ? " primary" : "")} disabled={busy} onClick={function () { if (!busy && onAnswer) onAnswer(pq.id, wbcQuestionOptionValue(opt)); }}>{wbcPermissionOptionLabel(opt, i, permissionOptions.length)}</button>;
-            })}
+            {options.length ? options.map(function (opt, i) {
+              return <button key={wbcQuestionOptionValue(opt) || i} type="button" className={"wbc-question-opt" + (i === 0 ? " primary" : "")} disabled={busy} onClick={function () { if (!busy && onAnswer) onAnswer(pq.id, wbcQuestionOptionValue(opt)); }}><span>{wbcPermissionOptionLabel(opt, i, options.length)}</span>{opt && opt.description ? <small>{String(opt.description)}</small> : null}</button>;
+            }) : <div className="wbc-question-protocol-error" role="alert">{wbcT("workbenchChat.permissionNoOptions", "This Agent did not provide valid permission choices. Restart the Agent or check its protocol compatibility.")}</div>}
           </div>
+        ) : hasSchemaForm ? (
+          <form className="wbc-agent-schema-form" onSubmit={submitForm} noValidate>
+            {schemaFields.map(function (field) {
+              var value = Object.prototype.hasOwnProperty.call(formValues, field.name) ? formValues[field.name] : "";
+              var error = formErrors[field.name];
+              var controlId = "agent-field-" + String(pq.id || "request") + "-" + field.name.replace(/[^a-zA-Z0-9_-]/g, "-");
+              return <label className={"wbc-agent-schema-field" + (error ? " invalid" : "")} key={field.name} htmlFor={controlId}>
+                <span>{field.title || field.name}{field.required ? <b aria-hidden="true"> *</b> : null}</span>
+                {field.description ? <small className="wbc-agent-schema-help">{field.description}</small> : null}
+                {field.enumValues.length ? <select id={controlId} value={String(value == null ? "" : value)} disabled={busy} required={field.required} onChange={function (e) { setFormValues({ ...formValues, [field.name]: e.target.value }); }}>
+                  {!field.required ? <option value="">{wbcT("workbenchChat.elicitationOptional", "Optional")}</option> : null}
+                  {field.enumValues.map(function (option, index) { return <option key={String(option.value) + index} value={String(option.value)}>{option.label}</option>; })}
+                </select> : field.type === "boolean" ? <input id={controlId} type="checkbox" checked={value === true} disabled={busy} onChange={function (e) { setFormValues({ ...formValues, [field.name]: e.target.checked }); }} /> : <input id={controlId} type={field.inputType} value={String(value == null ? "" : value)} disabled={busy} required={field.required} min={field.minimum} max={field.maximum} minLength={field.minLength} maxLength={field.maxLength} placeholder={field.placeholder || ""} aria-invalid={error ? "true" : undefined} aria-describedby={error ? controlId + "-error" : undefined} onChange={function (e) { setFormValues({ ...formValues, [field.name]: field.type === "number" || field.type === "integer" ? e.target.value : e.target.value }); }} />}
+                {error ? <small id={controlId + "-error"} className="wbc-agent-schema-error" role="alert">{error}</small> : null}
+              </label>;
+            })}
+            <button type="submit" className="wbc-question-opt primary wbc-agent-schema-submit" disabled={busy}>{wbcT("workbenchChat.elicitationSubmit", "Submit to Agent")}</button>
+          </form>
         ) : (
           <React.Fragment>
             {isPlanConfirmation && options.length > 0 ? (
@@ -11584,7 +12925,9 @@ function WbcErrorNotice({ message, kind, onRetry }) {
     : (isMessageError
       ? wbcT("workbenchChat.error.messageTitle", "Message processing failed")
       : wbcT("workbenchChat.error.title", "Could not load this chat"));
-  var detail = String(message || "").trim() || wbcT("workbenchChat.error.loadFailed", "Load failed");
+  var failureKind = String(message && (message.failureKind || message.code) || "").trim();
+  var agentName = String(message && message.agentId || "").trim();
+  var detail = wbcErrorText(message) || wbcT("workbenchChat.error.loadFailed", "Load failed");
   var generic = wbcT("workbenchChat.error.loadFailed", "Load failed");
   var body = detail === generic
     ? (isMemoryError
@@ -11593,19 +12936,78 @@ function WbcErrorNotice({ message, kind, onRetry }) {
         ? wbcT("workbenchChat.error.messageBody", "The message was saved but could not be processed. Retry to run it again.")
         : wbcT("workbenchChat.error.body", "The conversation data did not load. Check the local service and try again.")))
     : detail;
+  var agentPresentation = isMessageError ? wbcAgentErrorPresentation(detail, failureKind) : null;
+  if (isMessageError && failureKind && !agentPresentation) {
+    agentPresentation = {
+      tone: "runtime",
+      title: wbcT("workbenchChat.agentError.failed", "Agent run failed"),
+      summary: body,
+      hint: wbcT("workbenchChat.error.agentGenericHint", "Open Agent diagnostics for details, then retry."),
+    };
+  }
+  if (agentPresentation) title = agentPresentation.title;
+  function copyErrorDetail() {
+    var copied = navigator.clipboard && navigator.clipboard.writeText
+      ? navigator.clipboard.writeText(detail || body)
+      : Promise.reject(new Error("Clipboard unavailable"));
+    copied.then(function () {
+      window.CyreneUI.require("feedback").showToast(wbcT("workbenchChat.error.copied", "Error details copied"), "success");
+    }).catch(function () {
+      window.CyreneUI.require("feedback").showToast(wbcT("workbenchChat.error.copyFailed", "Could not copy error details"), "error");
+    });
+  }
   return (
-    <div className="workbench-error wbc-error-card" role="alert">
+    <div className={"workbench-error wbc-error-card" + (agentPresentation ? " is-agent-error is-" + agentPresentation.tone : "")} role="alert">
       <span className="wbc-error-icon">{WBC_ICONS.alert}</span>
       <span className="wbc-error-copy">
         <b>{title}</b>
-        <small>{body}</small>
+        {failureKind ? <small className="wbc-error-meta">{[agentName, failureKind].filter(Boolean).join(" · ")}</small> : null}
+        {agentPresentation ? <React.Fragment>
+          <small className="wbc-error-summary">{agentPresentation.summary}</small>
+          <small className="wbc-error-hint">{agentPresentation.hint}</small>
+          <pre className="wbc-error-detail" aria-label={wbcT("workbenchChat.error.technicalDetail", "Technical details")}>{detail}</pre>
+        </React.Fragment> : <small>{body}</small>}
       </span>
-      {onRetry && (
-        <button type="button" className="wbc-error-retry" onClick={onRetry}>
-          {wbcT("workbenchChat.error.retry", "Retry")}
-        </button>
-      )}
+      <span className="wbc-error-actions">
+        {agentPresentation ? <button type="button" className="wbc-error-copy-button" onClick={copyErrorDetail}>{WBC_ICONS.copy}<span>{wbcT("workbenchChat.error.copyDetail", "Copy details")}</span></button> : null}
+        {onRetry && <button type="button" className="wbc-error-retry" onClick={onRetry}>{wbcT("workbenchChat.error.retry", "Retry")}</button>}
+      </span>
     </div>
+  );
+}
+
+function WbcAgentNotification({ notice }) {
+  var item = notice && typeof notice === "object" ? notice : {};
+  var category = String(item.category || "transport_warning");
+  var message = String(item.message || "").trim();
+  var titleByCategory = {
+    transport_fallback: wbcT("workbenchChat.notification.transportFallback", "Transport fallback"),
+    transport_timeout: wbcT("workbenchChat.notification.transportTimeout", "Transport timed out"),
+    tls_certificate: wbcT("workbenchChat.notification.tlsCertificate", "Secure connection warning"),
+    transport_warning: wbcT("workbenchChat.notification.transportWarning", "Connection warning"),
+  };
+  var title = titleByCategory[category] || titleByCategory.transport_warning;
+  function copyDetail() {
+    var copied = navigator.clipboard && navigator.clipboard.writeText
+      ? navigator.clipboard.writeText(message)
+      : Promise.reject(new Error("Clipboard unavailable"));
+    copied.then(function () {
+      window.CyreneUI.require("feedback").showToast(wbcT("workbenchChat.notification.copied", "Notification details copied"), "success");
+    }).catch(function () {
+      window.CyreneUI.require("feedback").showToast(wbcT("workbenchChat.error.copyFailed", "Could not copy error details"), "error");
+    });
+  }
+  if (!message) return null;
+  return (
+    <aside className="wbc-agent-notification is-warning" role="status" aria-live="polite">
+      <span className="wbc-agent-notification-icon" aria-hidden="true">{WBC_ICONS.alert}</span>
+      <span className="wbc-agent-notification-copy">
+        <b>{title}</b>
+        <small>{wbcT("workbenchChat.notification.nonTerminal", "The Agent reported a recoverable connection issue. This is not part of its reply.")}</small>
+        <code>{message}</code>
+      </span>
+      <button type="button" className="wbc-agent-notification-action" onClick={copyDetail} aria-label={wbcT("workbenchChat.notification.copy", "Copy notification details")} title={wbcT("workbenchChat.notification.copy", "Copy notification details")}>{WBC_ICONS.copy}</button>
+    </aside>
   );
 }
 
@@ -11924,6 +13326,20 @@ function WbcAgentFiles({ files, onOpenFile }) {
   );
 }
 
+function WbcLiveAgentArtifacts({ files, onOpenFile }) {
+  var list = Array.isArray(files) ? files : [];
+  if (!list.length) return null;
+  return (
+    <div className="wbc-live-agent-artifacts" aria-live="polite">
+      <div className="wbc-live-agent-artifacts-head">
+        <span className="wbc-live-agent-artifacts-pulse" aria-hidden="true" />
+        <b>{wbcT("workbenchChat.liveArtifacts", "Agent output")}</b>
+      </div>
+      <WbcAgentFiles files={list} onOpenFile={onOpenFile} />
+    </div>
+  );
+}
+
 function WbcTraceCard({ trace, live, running, label, reasoning, showReasoning, onToggle, cardRef, reasoningRef, lockedHeight }) {
   var entries = Array.isArray(trace) ? trace : [];
   if (!entries.length && !live) return null;
@@ -11969,8 +13385,11 @@ function WbcTraceCard({ trace, live, running, label, reasoning, showReasoning, o
               {entries.map(function (entry, i) {
                 var isRunning = activityRunning && entry.status === "running";
                 var failed = !!entry.failed;
+                var presentationKind = wbcToolPresentationKind(entry);
+                var presentationText = wbcToolPresentationText(entry, presentationKind);
+                var structuredDetail = wbcStructuredEventDetail(entry);
                 return (
-                  <li key={entry.toolCallId || i} className={failed ? "failed" : (isRunning ? "active" : "done")}>
+                  <li key={entry.toolCallId || i} className={(failed ? "failed" : (isRunning ? "active" : "done")) + " presentation-" + presentationKind}>
                     <span className="wbc-trace-mark">{failed ? WBC_ICONS.x : (isRunning ? <span className="wb-spinner small" /> : WBC_ICONS.check)}</span>
                     <span className="wbc-trace-text">
                       {(function () {
@@ -11981,12 +13400,18 @@ function WbcTraceCard({ trace, live, running, label, reasoning, showReasoning, o
                         return toolKey;
                       })()}
                       {(entry.preview) ? <small>（{wbcToolPreviewText(entry.preview)}）</small> : null}
+                      {presentationKind !== "generic" ? <em className="wbc-tool-presentation-kind">{wbcT("workbenchChat.toolPresentation." + presentationKind, presentationKind)}</em> : null}
                       {isRunning && Number(entry.progressTotal) > 0 ? (
                         <span className="wbc-transfer-progress" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow={Math.round(Number(entry.progress || 0) * 100)}>
                           <span style={{ width: Math.round(Number(entry.progress || 0) * 100) + "%" }} />
                           <small>{Math.round(Number(entry.progress || 0) * 100)}%</small>
                         </span>
                       ) : null}
+                      {presentationText ? <pre className={"wbc-tool-presentation-body " + presentationKind} role={presentationKind === "error" ? "alert" : undefined}>{presentationText}</pre> : null}
+                      {structuredDetail ? <details className="wbc-tool-structured" onClick={function (event) { event.stopPropagation(); }}>
+                        <summary>{wbcT("workbenchChat.toolDetails", "Tool details")}</summary>
+                        <pre>{structuredDetail}</pre>
+                      </details> : null}
                     </span>
                   </li>
                 );
@@ -12292,15 +13717,42 @@ function WbcLiveMessage({ runtime, onOpenFile }) {
   var liveHtml = useWbcMemo(function () {
     return renderedText ? wbcRenderMarkdown(renderedText, { interactive: false }) : "";
   }, [renderedText]);
-  if (!runtime.text) return null;
+  if (!runtime.text && !(runtime.artifacts && runtime.artifacts.length)) return null;
   return (
     <React.Fragment>
       <div className="wbc-msg assistant">
-        <div className="wbc-msg-body markdown">
+        {runtime.text ? <div className="wbc-msg-body markdown">
           <div dangerouslySetInnerHTML={{ __html: liveHtml }} />
           <span className="wbc-caret" />
-        </div>
+        </div> : null}
+        <WbcLiveAgentArtifacts files={runtime.artifacts} onOpenFile={onOpenFile} />
       </div>
+    </React.Fragment>
+  );
+}
+
+function WbcRuntimeTranscript({ runtime, onOpenFile }) {
+  if (!runtime) return null;
+  var timeline = wbcRuntimeTimelineMessages(runtime, { showReasoningPlaceholder: true });
+  return (
+    <React.Fragment>
+      {timeline.map(function (item) {
+        if (item.runtimeHeartbeat) {
+          return <WbcThreadItem key={item.id}><WbcHeartbeat startedAt={runtime.startedAt} lastEventAt={runtime.lastEventAt} finalizing={!!item.runtimeFinalizing} /></WbcThreadItem>;
+        }
+        if (item.runtimeNotification) {
+          return <WbcThreadItem key={item.id}><WbcAgentNotification notice={item.notification} /></WbcThreadItem>;
+        }
+        if (item.runtimeActivity) {
+          var entries = Array.isArray(item.runtimeActivity.progress) ? item.runtimeActivity.progress : [];
+          if (!item.runtimeActivityActive && entries.length === 0 && !String(item.runtimeActivity.reasoning || "").trim()) return null;
+          return <WbcThreadItem key={item.id}><WbcLiveActivityCard activity={item.runtimeActivity} active={!!item.runtimeActivityActive} hasReplyText={!!item.runtimeActivityHasReplyText} /></WbcThreadItem>;
+        }
+        return null;
+      })}
+      {(runtime.text || (runtime.artifacts && runtime.artifacts.length))
+        ? <WbcThreadItem><WbcLiveMessage runtime={runtime} onOpenFile={onOpenFile} /></WbcThreadItem>
+        : null}
     </React.Fragment>
   );
 }
@@ -12458,7 +13910,7 @@ var WbcRemoteDeviceCatalog = (function () {
   return { subscribe: subscribe, refresh: refresh, invalidate: invalidate };
 })();
 
-function WbcComposer({ chat, project, runtime, running, onSend, onGuidance, onInterrupt, draftNamespace, autoFocus, clearOnSend, error, errorKind, compact, placeholder, runningPlaceholder, hideDisclaimer, topOverlay }) {
+function WbcComposer({ chat, project, runtime, running, onSend, onGuidance, onInterrupt, draftNamespace, autoFocus, clearOnSend, error, errorKind, compact, placeholder, runningPlaceholder, hideDisclaimer, topOverlay, draftAgent, onDraftAgentChange, onSwitchAgent, onOpenAgentDetail }) {
   var model = WorkbenchChatModel;
   var chatId = chat ? chat.id : "";
   var projectId = (project && project.id) || "";
@@ -12480,7 +13932,12 @@ function WbcComposer({ chat, project, runtime, running, onSend, onGuidance, onIn
   var [toolsOpen, setToolsOpen] = useWbcState(false);
   var [modelOpen, setModelOpen] = useWbcState(false);
   var [modelPanel, setModelPanel] = useWbcState("root");
+  var [agentOptions, setAgentOptions] = useWbcState([]);
+  var [agentOptionsLoaded, setAgentOptionsLoaded] = useWbcState(false);
   var [configuredModels, setConfiguredModels] = useWbcState([]);
+  var [agentConfigOptions, setAgentConfigOptions] = useWbcState([]);
+  var [agentConfigValues, setAgentConfigValues] = useWbcState({});
+  var [agentConfigLoading, setAgentConfigLoading] = useWbcState(false);
   var [selectedModelId, setSelectedModelId] = useWbcState("");
   var [reasoningEffort, setReasoningEffort] = useWbcState(function () {
     return String(chat && chat.reasoningEffort || "").trim().toLowerCase();
@@ -12523,6 +13980,84 @@ function WbcComposer({ chat, project, runtime, running, onSend, onGuidance, onIn
   var agentFlow = agentFlowState.chatId === String(chatId || "")
     ? String(agentFlowState.kind || "")
     : "";
+  // Effective Agent identity: an existing chat carries its locked binding; an
+  // empty draft carries the composer's draft selection; otherwise the built-in
+  // Cyrene Agent is the default.
+  var boundAgent = wbcChatAgent(chat);
+  var draftAgentIdentity = draftAgent && draftAgent.agent && typeof draftAgent.agent === "object"
+    ? draftAgent.agent
+    : draftAgent;
+  var effectiveAgent = boundAgent || draftAgentIdentity || { installationId: WBC_BUILTIN_AGENT_INSTALLATION, agentId: WBC_BUILTIN_AGENT_ID, displayName: "Cyrene", builtin: true };
+  var effectiveCatalogAgent = agentOptions.find(function (agent) {
+    return String(agent && agent.installationId || "") === String(effectiveAgent.installationId || "");
+  }) || null;
+  var effectiveAgentName = wbcAgentDisplayName(effectiveCatalogAgent || effectiveAgent);
+  // Probe/auth/settings changes refresh the installed catalog. Overlay that
+  // current snapshot so an open composer is never gated by stale capabilities
+  // captured when the chat was first created.
+  var capabilitySource = (!wbcIsBuiltinAgent(effectiveAgent) && effectiveCatalogAgent)
+    ? { capabilities: effectiveCatalogAgent.capabilities || {} }
+    : chat;
+  var agentBindingLocked = !!(chat && ((chat.agent && chat.agent.bindingLocked) || (chat.messages && chat.messages.length > 0)));
+  function pickAgentBinding(binding) {
+    var targetId = String(binding && binding.agent && binding.agent.installationId || WBC_BUILTIN_AGENT_INSTALLATION);
+    if (targetId === String(effectiveAgent.installationId || WBC_BUILTIN_AGENT_INSTALLATION)) return;
+    // Persisted empty chats are safely rebound in place by the backend. Chats
+    // with messages ask before creating a new Agent-bound conversation.
+    if (chat && chat.id && onSwitchAgent) onSwitchAgent(binding);
+    else onDraftAgentChange(binding);
+  }
+  var chatCapabilitySnapshot = wbcHasAgentCapabilitySnapshot(capabilitySource);
+  var capText = wbcCapabilityEnabled(capabilitySource, "input", "text", { strictUnknown: true });
+  var capImage = wbcCapabilityEnabled(capabilitySource, "input", "image", { strictUnknown: true });
+  var capFile = wbcCapabilityEnabled(capabilitySource, "input", "file", { strictUnknown: true });
+  var capAudio = wbcCapabilityEnabled(capabilitySource, "input", "audio", { strictUnknown: true });
+  var capSteer = wbcCapabilityEnabled(capabilitySource, "interaction", "steer", { strictUnknown: true });
+  var capCancel = wbcCapabilityEnabled(capabilitySource, "interaction", "cancel", { strictUnknown: true });
+  var capReasoningEffort = wbcCapabilityEnabled(capabilitySource, "model", "reasoningEffort");
+  var capSwitchModel = wbcCapabilityEnabled(capabilitySource, "model", "switchDuringSession", { strictUnknown: true });
+  var effectiveModelAccess = (effectiveCatalogAgent && effectiveCatalogAgent.modelAccess)
+    || (draftAgent && draftAgent.modelAccess)
+    || (chat && chat.modelAccess)
+    || {};
+  var agentManagedModels = effectiveModelAccess.mode === "agent_managed";
+  var agentPickerEnabled = typeof onDraftAgentChange === "function";
+  var permissionCapability = chatCapabilitySnapshot
+    ? wbcCapabilityStatus(capabilitySource, "interaction", "permission")
+    : "supported";
+  var permissionAgentDefined = chatCapabilitySnapshot
+    && permissionCapability === "agent_defined";
+  var permissionModeVisible = permissionCapability === "supported" || permissionAgentDefined;
+  var commandSource = {
+    ...(chat || {}),
+    agent: effectiveAgent,
+    capabilities: capabilitySource && capabilitySource.capabilities,
+  };
+  var agentSlashCommands = wbcComposerSlashCommands(commandSource);
+  var slashCommandsCapabilityDriven = agentSlashCommands !== null;
+
+  useWbcEffect(function () {
+    if (!agentPickerEnabled || agentOptionsLoaded || !model || !model.listAgents) return;
+    var cancelled = false;
+    model.listAgents().then(function (list) {
+      if (cancelled) return;
+      setAgentOptions(Array.isArray(list) ? list : []);
+      setAgentOptionsLoaded(true);
+    }).catch(function () {
+      if (cancelled) return;
+      setAgentOptionsLoaded(true);
+    });
+    return function () { cancelled = true; };
+  }, [agentOptionsLoaded, agentPickerEnabled]);
+
+  useWbcEffect(function () {
+    function refreshAgentOptions() {
+      if (!agentPickerEnabled) return;
+      setAgentOptionsLoaded(false);
+    }
+    window.addEventListener("cyrene:agents-changed", refreshAgentOptions);
+    return function () { window.removeEventListener("cyrene:agents-changed", refreshAgentOptions); };
+  }, [agentPickerEnabled]);
 
   useWbcEffect(function () { draftRef.current = draft; });
   useWbcEffect(function () { attachRef.current = attachments; });
@@ -12638,6 +14173,39 @@ function WbcComposer({ chat, project, runtime, running, onSend, onGuidance, onIn
   }, [modelOpen]);
 
   useWbcEffect(function () {
+    if (!agentManagedModels || !chatId || !model.getAgentConfigOptions) {
+      setAgentConfigOptions([]);
+      setAgentConfigValues({});
+      setAgentConfigLoading(false);
+      return undefined;
+    }
+    var cancelled = false;
+    setAgentConfigLoading(true);
+    model.getAgentConfigOptions(chatId).then(function (payload) {
+      if (cancelled) return;
+      setAgentConfigOptions(Array.isArray(payload.configOptions) ? payload.configOptions : []);
+      setAgentConfigValues(payload.values && typeof payload.values === "object" ? payload.values : {});
+      setAgentConfigLoading(false);
+    }).catch(function () {
+      if (cancelled) return;
+      setAgentConfigOptions([]);
+      setAgentConfigLoading(false);
+    });
+    return function () { cancelled = true; };
+  }, [chatId, agentManagedModels]);
+
+  useWbcEffect(function () {
+    if (!chat || !agentManagedModels) return;
+    if (Array.isArray(chat.agentConfigOptions) && chat.agentConfigOptions.length) {
+      setAgentConfigOptions(chat.agentConfigOptions);
+    }
+    if (chat.agentConfigValues && typeof chat.agentConfigValues === "object") {
+      setAgentConfigValues(chat.agentConfigValues);
+    }
+  }, [chat && chat.agentConfigOptions, chat && chat.agentConfigValues, agentManagedModels]);
+
+  useWbcEffect(function () {
+    if (agentManagedModels) return undefined;
     var cancelled = false;
     window.CyreneUI.require("api").json("/api/settings/models", { toast: false })
       .then(function (payload) {
@@ -12688,7 +14256,7 @@ function WbcComposer({ chat, project, runtime, running, onSend, onGuidance, onIn
         if (!cancelled) setConfiguredModels([]);
       });
     return function () { cancelled = true; };
-  }, [chatId]);
+  }, [chatId, agentManagedModels]);
 
   useWbcEffect(function () {
     var prev = prevChatIdRef.current;
@@ -12836,8 +14404,8 @@ function WbcComposer({ chat, project, runtime, running, onSend, onGuidance, onIn
       attachments: attachments,
       mode: mode,
       command: command,
-      model: selectedModelId,
-      reasoningEffort: reasoningEffort,
+      model: agentManagedModels ? "" : selectedModelId,
+      reasoningEffort: agentManagedModels ? "" : reasoningEffort,
       workspaceOverride: workspaceOverride,
     };
     // Optimistically clear on send; restored in the running-transition effect
@@ -12956,6 +14524,38 @@ function WbcComposer({ chat, project, runtime, running, onSend, onGuidance, onIn
   }
   function addFiles(files) {
     if (!files || !files.length) return;
+    if (!capFile) {
+      var nonImageFiles = Array.prototype.filter.call(files || [], function (file) {
+        return !(file && (String(file.type || "").indexOf("image/") === 0 || String(file.kind || "") === "image"));
+      });
+      if (nonImageFiles.length) {
+        window.CyreneUI.require("feedback").showToast(
+          wbcT("workbenchChat.capability.noFile", "This Agent does not support file input"),
+          "error"
+        );
+      }
+      files = Array.prototype.filter.call(files || [], function (file) {
+        return file && (String(file.type || "").indexOf("image/") === 0 || String(file.kind || "") === "image");
+      });
+      if (!files.length) return;
+    }
+    // Capability gate: an Agent without input.image rejects image attachments
+    // with a clear notice instead of silently uploading them (handoff §13).
+    if (!capImage) {
+      var imageFiles = Array.prototype.filter.call(files || [], function (file) {
+        return file && (String(file.type || "").indexOf("image/") === 0 || String(file.kind || "") === "image");
+      });
+      if (imageFiles.length) {
+        window.CyreneUI.require("feedback").showToast(
+          wbcT("workbenchChat.capability.noImage", "This Agent does not support image input"),
+          "error"
+        );
+      }
+      files = Array.prototype.filter.call(files || [], function (file) {
+        return !(file && (String(file.type || "").indexOf("image/") === 0 || String(file.kind || "") === "image"));
+      });
+      if (!files.length) return;
+    }
     uploadCountRef.current += 1;
     setUploading(true);
     model.uploadFiles(files)
@@ -12991,6 +14591,22 @@ function WbcComposer({ chat, project, runtime, running, onSend, onGuidance, onIn
       if (detail.targetChatId && String(detail.targetChatId) !== String(chatId)) return;
       if (detail.resource && detail.resource.kind === "file") {
         var file = detail.resource.file || detail.resource;
+        var resourceIsImage = file
+          && (String(file.kind || "") === "image" || String(file.content_type || file.type || "").indexOf("image/") === 0);
+        if (!capImage && resourceIsImage) {
+          window.CyreneUI.require("feedback").showToast(
+            wbcT("workbenchChat.capability.noImage", "This Agent does not support image input"),
+            "error"
+          );
+          return;
+        }
+        if (!capFile && !resourceIsImage) {
+          window.CyreneUI.require("feedback").showToast(
+            wbcT("workbenchChat.capability.noFile", "This Agent does not support file input"),
+            "error"
+          );
+          return;
+        }
         setAttachments(function (prev) {
           var key = String(file.id || file.path || file.url || file.name || "");
           if (key && prev.some(function (item) {
@@ -13017,12 +14633,20 @@ function WbcComposer({ chat, project, runtime, running, onSend, onGuidance, onIn
   var slashQuery = draft.indexOf("/") === 0 ? draft.slice(1).toLowerCase() : "";
   var translatedCommands = WBC_COMMANDS.map(function (c) { return wbcCommandMeta(c.id); }).filter(Boolean);
   var translatedModes = WBC_MODES.map(function (m) { return wbcModeMeta(m.id); });
-  var slashItems = translatedCommands.filter(function (c) {
+  // Slash commands come from the Agent's declared command list when a
+  // capability snapshot exists; the built-in command set stays legacy-only.
+  var slashPool = slashCommandsCapabilityDriven
+    ? agentSlashCommands.map(function (declared) {
+        var builtin = translatedCommands.find(function (item) { return item.id === declared.id; });
+        return builtin || { id: declared.id, label: declared.label || declared.id, desc: declared.description || declared.inputHint || "", external: true };
+      })
+    : translatedCommands;
+  var slashItems = slashPool.filter(function (c) {
     return !slashQuery || c.id.indexOf(slashQuery) !== -1 || c.label.toLowerCase().indexOf(slashQuery) !== -1;
   });
   var slashDraftOpen = draft.indexOf("/") === 0 && draft.indexOf(" ") === -1 && slashItems.length > 0 && !running;
   var showToolsMenu = (toolsOpen || slashDraftOpen) && !running;
-  var activeCommand = command ? wbcCommandMeta(command) : null;
+  var activeCommand = command ? (slashPool.find(function (item) { return item.id === command; }) || wbcCommandMeta(command) || { id: command, label: command, desc: "" }) : null;
   var currentMode = wbcModeMeta(mode);
   var personaOn = !contextState || contextState.soul_active !== false;
   var workspaceOn = !!(contextState && contextState.workspace_active !== false);
@@ -13040,14 +14664,52 @@ function WbcComposer({ chat, project, runtime, running, onSend, onGuidance, onIn
   var selectedModel = configuredModels.find(function (item) {
     return String(item.id || item.model || "") === String(selectedModelId || "");
   });
+  var agentModelConfig = agentConfigOptions.find(function (option) {
+    return String(option.category || "") === "model";
+  }) || agentConfigOptions.find(function (option) {
+    return String(option.id || "").toLowerCase() === "model";
+  });
+  var agentModelValue = String(
+    agentModelConfig && Object.prototype.hasOwnProperty.call(agentConfigValues, agentModelConfig.id)
+      ? agentConfigValues[agentModelConfig.id]
+      : agentModelConfig && agentModelConfig.currentValue || ""
+  );
+  var agentSelectedModel = agentModelConfig && (agentModelConfig.options || []).find(function (item) {
+    return String(item.value || "") === agentModelValue;
+  });
+  var agentReasoningConfig = agentConfigOptions.find(function (option) {
+    return String(option.category || "") === "thought_level";
+  }) || agentConfigOptions.find(function (option) {
+    return ["reasoning_effort", "reasoning-effort"].indexOf(String(option.id || "").toLowerCase()) >= 0;
+  });
+  var agentReasoningValue = String(
+    agentReasoningConfig && Object.prototype.hasOwnProperty.call(agentConfigValues, agentReasoningConfig.id)
+      ? agentConfigValues[agentReasoningConfig.id]
+      : agentReasoningConfig && agentReasoningConfig.currentValue || ""
+  );
+  var modelLocked = agentManagedModels
+    ? agentConfigLoading || !agentModelConfig || !(agentModelConfig.options || []).length
+    : agentBindingLocked && !capSwitchModel;
   var modelName = wbcCurrentModel(chat, project, runtime, null);
   modelName = wbcFriendlyModelName(selectedModel, modelName);
-  var effortLabel = reasoningEffort
-    ? wbcT("settings.reasoningEffortValue." + reasoningEffort, reasoningEffort)
+  if (agentManagedModels) {
+    modelName = agentSelectedModel && (agentSelectedModel.name || agentSelectedModel.value)
+      || agentModelValue
+      || (agentConfigLoading
+        ? wbcT("workbenchChat.agentModelLoading", "Loading Agent models…")
+        : wbcT("workbenchChat.agentModelUnavailable", "Agent did not provide model choices"));
+  }
+  var effectiveReasoningEffort = agentManagedModels ? agentReasoningValue : reasoningEffort;
+  var effortLabel = effectiveReasoningEffort
+    ? wbcT("settings.reasoningEffortValue." + effectiveReasoningEffort, effectiveReasoningEffort)
     : "";
   var modelButtonLabel = wbcT("workbenchChat.chooseModel", "Choose model")
     + ": " + modelName + (effortLabel ? " · " + effortLabel : "");
-  var supportedReasoningEfforts = wbcSupportedReasoningEfforts(selectedModel);
+  var supportedReasoningEfforts = agentManagedModels
+    ? (agentReasoningConfig && agentReasoningConfig.options || []).map(function (item) {
+        return String(item.value || "");
+      }).filter(Boolean)
+    : wbcSupportedReasoningEfforts(selectedModel);
 
   function wbcTogglePersona() {
     window.CyreneUI.require("api").fetch(personaOn ? "/api/context/remove-soul" : "/api/context/add-soul", { method: "POST" })
@@ -13148,8 +14810,19 @@ function WbcComposer({ chat, project, runtime, running, onSend, onGuidance, onIn
       setRemoteDeviceIds(previousIds);
     });
   }
+  // Steer is capability-driven: an Agent that cannot steer mid-run only offers
+  // stop, so the running composer never fabricates a guidance send path.
+  var canSteerWhileRunning = !running || capSteer;
   var hasRuntimeGuidance = running && !!draft.trim();
-  var sendDisabled = running ? false : (!draft.trim() && attachments.length === 0);
+  if (!capSteer) hasRuntimeGuidance = false;
+  var cancelUnsupported = running && !capCancel;
+  // An Agent without interaction.cancel never shows a misleading Stop action;
+  // the composer waits (read-only) until the Agent finishes (handoff §13).
+  var waitingForAgent = running && !capCancel && !hasRuntimeGuidance;
+  var showStopButton = running && !hasRuntimeGuidance && capCancel;
+  var sendDisabled = running
+    ? waitingForAgent
+    : (!draft.trim() && attachments.length === 0) || (!!draft.trim() && !capText);
   var isLegacy = !!(chat && chat.legacy);
 
   // Self-management may prepare text in the current visible composer. Submit
@@ -13328,23 +15001,31 @@ function WbcComposer({ chat, project, runtime, running, onSend, onGuidance, onIn
         )}
         <textarea
           ref={taRef}
-          aria-label={running
+          aria-label={capText ? (running
             ? (runningPlaceholder || wbcT("workbenchChat.placeholderRunning", "Send guidance to the running agent..."))
-            : (placeholder || wbcT("workbenchChat.placeholder", "Message Cyrene..."))}
+            : (placeholder || wbcT("workbenchChat.placeholder", "Message Cyrene...")))
+            : wbcT("workbenchChat.capability.noText", "This Agent does not support text input")}
           value={draft}
           rows={compact ? 1 : 2}
+          disabled={!capText || (running && !capSteer) || cancelUnsupported}
           onChange={function (e) { setDraft(e.target.value); syncHeight(); }}
           onKeyDown={onKeyDown}
           onPaste={onPaste}
-          placeholder={running
-            ? (runningPlaceholder || wbcT("workbenchChat.placeholderRunning", "Send guidance to the running agent..."))
-            : (placeholder || wbcT("workbenchChat.placeholder", "Message Cyrene..."))}
+          placeholder={!capText
+            ? wbcT("workbenchChat.capability.noText", "This Agent does not support text input")
+            : cancelUnsupported
+              ? wbcT("workbenchChat.capability.waitForAgent", "Waiting for the Agent to finish…")
+              : running
+                ? (capSteer ? (runningPlaceholder || wbcT("workbenchChat.placeholderRunning", "Send guidance to the running agent...")) : wbcT("workbenchChat.capability.waitForAgent", "Waiting for the Agent to finish…"))
+                : (placeholder || wbcT("workbenchChat.placeholder", "Message Cyrene..."))}
         />
         <div className="wbc-composer-actions">
-          <input ref={fileRef} type="file" multiple style={{ display: "none" }} onChange={onFilePick} />
-          <button type="button" className="wbc-composer-icon" title={uploading ? wbcT("workbenchChat.uploading", "Uploading...") : wbcT("workbenchChat.addAttachment", "Add attachment")} disabled={uploading || running} onClick={pickFiles}>
-            {uploading ? <span className="wb-spinner small" /> : WBC_ICONS.attach}
-          </button>
+          <input ref={fileRef} type="file" multiple accept={!capFile && capImage ? "image/*" : undefined} style={{ display: "none" }} onChange={onFilePick} />
+          {(capFile || capImage) && (
+            <button type="button" className="wbc-composer-icon" title={uploading ? wbcT("workbenchChat.uploading", "Uploading...") : wbcT("workbenchChat.addAttachment", "Add attachment")} disabled={uploading || running} onClick={pickFiles}>
+              {uploading ? <span className="wb-spinner small" /> : WBC_ICONS.attach}
+            </button>
+          )}
           {!compact && (
             <span className="wbc-pop-anchor wbc-tools-anchor" ref={toolsPickerRef}>
               <button
@@ -13470,30 +15151,103 @@ function WbcComposer({ chat, project, runtime, running, onSend, onGuidance, onIn
               >
                 <span className="wbc-model-button-icon" aria-hidden="true">{WBC_ICONS.model}</span>
                 <span className="wbc-model-button-name">{modelName}</span>
-                {effortLabel ? <span className="wbc-model-button-effort">{effortLabel}</span> : null}
+                {!agentManagedModels && effortLabel ? <span className="wbc-model-button-effort">{effortLabel}</span> : null}
                 <span className="wbc-model-button-chevron">{WBC_ICONS.chevronDown}</span>
               </button>
               {modelOpen && (
                 <div className="wbc-popmenu wbc-model-menu" role="menu">
                   {modelPanel === "root" && (
                     <>
-                      <button type="button" className="wbc-model-menu-row" onClick={function () { setModelPanel("models"); }}>
+                      {agentPickerEnabled && (
+                        <button type="button" className="wbc-model-menu-row" onClick={function () { setModelPanel("agents"); }}>
+                          <span className="wbc-model-menu-key">{wbcT("workbenchChat.agent", "Agent")}</span>
+                          <span className="wbc-model-menu-value wbc-model-menu-agent-name">{effectiveAgentName}</span>
+                          <span className="wbc-model-menu-chevron">{WBC_ICONS.chevronRight}</span>
+                        </button>
+                      )}
+                      <button type="button" className={"wbc-model-menu-row" + (modelLocked ? " locked" : "")} disabled={modelLocked} aria-disabled={modelLocked ? "true" : undefined} onClick={modelLocked ? undefined : function () { setModelPanel("models"); }}>
                         <span className="wbc-model-menu-key">{wbcT("workbenchChat.model", "Model")}</span>
-                        <span className="wbc-model-menu-value wbc-model-menu-model-name">{modelName}</span>
-                        <span className="wbc-model-menu-chevron">{WBC_ICONS.chevronRight}</span>
+                        <span className="wbc-model-menu-value">{modelName}</span>
+                        {!modelLocked ? <span className="wbc-model-menu-chevron">{WBC_ICONS.chevronRight}</span> : null}
                       </button>
-                      {supportedReasoningEfforts.length > 0 && (
+                      {capReasoningEffort && supportedReasoningEfforts.length > 0 && (
                         <button type="button" className="wbc-model-menu-row" onClick={function () { setModelPanel("effort"); }}>
                           <span className="wbc-model-menu-key">{wbcT("workbenchChat.reasoningEffort", "Reasoning effort")}</span>
                           <span className="wbc-model-menu-value">{effortLabel || "—"}</span>
                           <span className="wbc-model-menu-chevron">{WBC_ICONS.chevronRight}</span>
                         </button>
                       )}
-                      <button type="button" className="wbc-model-menu-row" onClick={function () { setModelPanel("permission"); }}>
-                        <span className="wbc-model-menu-key">{wbcT("workbenchChat.permissionMode", "Permission mode")}</span>
-                        <span className="wbc-model-menu-value">{currentMode.label}</span>
-                        <span className="wbc-model-menu-chevron">{WBC_ICONS.chevronRight}</span>
+                      {permissionModeVisible && (permissionAgentDefined ? (
+                        <button type="button" className="wbc-model-menu-row" onClick={function () { setModelPanel("root"); }}>
+                          <span className="wbc-model-menu-key">{wbcT("workbenchChat.permissionMode", "Permission mode")}</span>
+                          <span className="wbc-model-menu-value">{wbcT("workbenchChat.permissionAgentManaged", "Managed by Agent")}</span>
+                          <span className="wbc-model-menu-chevron">{WBC_ICONS.chevronRight}</span>
+                        </button>
+                      ) : (
+                        <button type="button" className="wbc-model-menu-row" onClick={function () { setModelPanel("permission"); }}>
+                          <span className="wbc-model-menu-key">{wbcT("workbenchChat.permissionMode", "Permission mode")}</span>
+                          <span className="wbc-model-menu-value">{currentMode.label}</span>
+                          <span className="wbc-model-menu-chevron">{WBC_ICONS.chevronRight}</span>
+                        </button>
+                      ))}
+                    </>
+                  )}
+                  {modelPanel === "agents" && agentPickerEnabled && (
+                    <>
+                      <button type="button" className="wbc-model-menu-back" onClick={function () { setModelPanel("root"); }}>
+                        <span>{WBC_ICONS.chevronLeft}</span>
+                        <span>{wbcT("workbenchChat.agent", "Agent")}</span>
                       </button>
+                      {agentBindingLocked ? (
+                        <div className="wbc-agent-menu-note" role="status">
+                          {wbcT("workbenchChat.agentLockedNote", "This conversation is bound to its Agent. Choose another Agent to continue in a new chat.")}
+                        </div>
+                      ) : null}
+                      <div className="wbc-agent-menu-group">
+                        <div className="wbc-agent-menu-group-title">{wbcT("workbenchChat.agentGroup.builtin", "Cyrene built-in")}</div>
+                        {wbcComposerAgentRow({
+                          key: "builtin",
+                          agent: { installationId: WBC_BUILTIN_AGENT_INSTALLATION, agentId: WBC_BUILTIN_AGENT_ID, displayName: "Cyrene", builtin: true, installState: "installed", authState: "connected", runtimeState: "ready" },
+                          active: effectiveAgent.installationId === WBC_BUILTIN_AGENT_INSTALLATION,
+                          locked: false,
+                          canPick: true,
+                          onPick: function () {
+                            var binding = wbcDefaultAgentBinding();
+                            pickAgentBinding(binding);
+                            setModelOpen(false); setModelPanel("root");
+                          },
+                          onOpen: onOpenAgentDetail,
+                        })}
+                      </div>
+                      <div className="wbc-agent-menu-group">
+                        <div className="wbc-agent-menu-group-title">{wbcT("workbenchChat.agentGroup.installed", "Installed Agents")}</div>
+                        {agentOptions.filter(function (agent) { return !wbcIsBuiltinAgent(agent); }).map(function (agent) {
+                          var availability = wbcAgentAvailability(agent);
+                          var active = String(effectiveAgent.installationId || "") === String(agent.installationId || "");
+                          return wbcComposerAgentRow({
+                            key: String(agent.installationId || agent.agentId || ""),
+                            agent: agent,
+                            active: active,
+                            locked: false,
+                            availability: availability,
+                            canPick: availability.state === "available",
+                            onPick: function () {
+                              var binding = {
+                                agent: { installationId: String(agent.installationId || "") },
+                                modelAccess: agent.modelAccess && agent.modelAccess.mode
+                                  ? { mode: String(agent.modelAccess.mode), profileId: String(agent.modelAccess.profileId || "primary") }
+                                  : { mode: "cyrene_managed", profileId: "primary" },
+                              };
+                              pickAgentBinding(binding);
+                              setModelOpen(false); setModelPanel("root");
+                            },
+                            onOpen: onOpenAgentDetail,
+                          });
+                        })}
+                        {agentOptionsLoaded && agentOptions.filter(function (agent) { return !wbcIsBuiltinAgent(agent); }).length === 0 ? (
+                          <div className="wbc-agent-menu-empty">{wbcT("workbenchChat.agentGroup.installedEmpty", "No installed Agents yet — install one from Extensions.")}</div>
+                        ) : null}
+                      </div>
                     </>
                   )}
                   {modelPanel === "models" && (
@@ -13502,21 +15256,44 @@ function WbcComposer({ chat, project, runtime, running, onSend, onGuidance, onIn
                         <span>{WBC_ICONS.chevronLeft}</span>
                         <span>{wbcT("workbenchChat.model", "Model")}</span>
                       </button>
-                      {configuredModels.map(function (item) {
-                        var id = String(item.id || item.model || "");
-                        var active = id === selectedModelId;
+                      {modelLocked ? (
+                        <div className="wbc-agent-menu-note" role="status">
+                          {wbcT("workbenchChat.modelLockedNote", "This Agent does not support switching models after the first message.")}
+                        </div>
+                      ) : null}
+                      {(agentManagedModels ? (agentModelConfig && agentModelConfig.options || []) : configuredModels).map(function (item) {
+                        var id = String(agentManagedModels ? item.value || "" : item.id || item.model || "");
+                        var active = agentManagedModels ? id === agentModelValue : id === selectedModelId;
                         return (
-                          <button key={id} type="button" className={active ? "active" : ""} onClick={function () {
-                            setSelectedModelId(id);
-                            setReasoningEffort(wbcReasoningEffortForModel(item, ""));
+                          <button key={id} type="button" className={active ? "active" : ""} disabled={modelLocked} aria-disabled={modelLocked ? "true" : undefined} onClick={modelLocked ? undefined : function () {
+                            if (agentManagedModels) {
+                              var nextValues = Object.assign({}, agentConfigValues, { [agentModelConfig.id]: id });
+                              setAgentConfigValues(nextValues);
+                              model.updateAgentConfigValues(chatId, { [agentModelConfig.id]: id }).then(function (nextChat) {
+                                if (nextChat && nextChat.agentConfigValues) setAgentConfigValues(nextChat.agentConfigValues);
+                                return model.getAgentConfigOptions(chatId);
+                              }).then(function (payload) {
+                                if (!payload) return;
+                                setAgentConfigOptions(Array.isArray(payload.configOptions) ? payload.configOptions : []);
+                                setAgentConfigValues(payload.values && typeof payload.values === "object" ? payload.values : {});
+                              }).catch(function () {
+                                setAgentConfigValues(agentConfigValues);
+                              });
+                            } else {
+                              setSelectedModelId(id);
+                              setReasoningEffort(wbcReasoningEffortForModel(item, ""));
+                            }
                             setModelPanel("root");
                           }}>
-                            <span className="wbc-popmenu-label">{item.name || item.model}</span>
-                            {item.desc ? <span className="wbc-popmenu-desc">{item.desc}</span> : null}
+                            <span className="wbc-popmenu-label">{item.name || item.model || item.value}</span>
+                            {wbcLocalizedModelDescription(item) ? <span className="wbc-popmenu-desc">{wbcLocalizedModelDescription(item)}</span> : null}
                             {active ? <span className="wbc-popmenu-check">{WBC_ICONS.check}</span> : null}
                           </button>
                         );
                       })}
+                      {agentManagedModels && !agentConfigLoading && (!agentModelConfig || !(agentModelConfig.options || []).length) ? (
+                        <div className="wbc-agent-menu-empty">{wbcT("workbenchChat.agentModelUnavailable", "This Agent did not provide model choices.")}</div>
+                      ) : null}
                     </>
                   )}
                   {modelPanel === "effort" && (
@@ -13526,10 +15303,21 @@ function WbcComposer({ chat, project, runtime, running, onSend, onGuidance, onIn
                         <span>{wbcT("workbenchChat.reasoningEffort", "Reasoning effort")}</span>
                       </button>
                       {supportedReasoningEfforts.map(function (effort) {
-                        var active = effort === reasoningEffort;
+                        var active = effort === effectiveReasoningEffort;
                         return (
                           <button key={effort} type="button" className={active ? "active" : ""} onClick={function () {
-                            setReasoningEffort(effort);
+                            if (agentManagedModels && agentReasoningConfig) {
+                              var previousValues = agentConfigValues;
+                              var nextValues = Object.assign({}, previousValues, { [agentReasoningConfig.id]: effort });
+                              setAgentConfigValues(nextValues);
+                              model.updateAgentConfigValues(chatId, { [agentReasoningConfig.id]: effort }).then(function (nextChat) {
+                                if (nextChat && nextChat.agentConfigValues) setAgentConfigValues(nextChat.agentConfigValues);
+                              }).catch(function () {
+                                setAgentConfigValues(previousValues);
+                              });
+                            } else {
+                              setReasoningEffort(effort);
+                            }
                             setModelPanel("root");
                           }}>
                             <span className="wbc-popmenu-label">{wbcT("settings.reasoningEffortValue." + effort, effort)}</span>
@@ -13539,7 +15327,7 @@ function WbcComposer({ chat, project, runtime, running, onSend, onGuidance, onIn
                       })}
                     </>
                   )}
-                  {modelPanel === "permission" && (
+                  {modelPanel === "permission" && permissionCapability === "supported" && (
                     <>
                       <button type="button" className="wbc-model-menu-back" onClick={function () { setModelPanel("root"); }}>
                         <span>{WBC_ICONS.chevronLeft}</span>
@@ -13564,7 +15352,7 @@ function WbcComposer({ chat, project, runtime, running, onSend, onGuidance, onIn
               )}
             </span>
           ) : null}
-          {!compact && voiceSnapshot.status.asr_ready ? (
+          {!compact && capAudio && voiceSnapshot.status.asr_ready ? (
             <button
               type="button"
               className={"wbc-composer-icon wbc-voice-input" + (voicePhase ? " " + voicePhase : "")}
@@ -13593,17 +15381,25 @@ function WbcComposer({ chat, project, runtime, running, onSend, onGuidance, onIn
           <button
             ref={sendButtonRef}
             type="button"
-            className={"wbc-send" + (running && !hasRuntimeGuidance ? " stop" : "")}
+            className={"wbc-send" + (showStopButton ? " stop" : "")}
             onClick={running && !hasRuntimeGuidance ? onInterrupt : submit}
             disabled={sendDisabled}
             title={running
-              ? (hasRuntimeGuidance ? wbcT("workbenchChat.sendGuidance", "Send guidance") : wbcT("workbenchChat.stop", "Stop"))
+              ? (hasRuntimeGuidance
+                  ? wbcT("workbenchChat.sendGuidance", "Send guidance")
+                  : showStopButton
+                    ? wbcT("workbenchChat.stop", "Stop")
+                    : wbcT("workbenchChat.capability.waitForAgent", "Waiting for the Agent to finish…"))
               : wbcT("workbenchChat.send", "Send")}
             aria-label={running
-              ? (hasRuntimeGuidance ? wbcT("workbenchChat.sendGuidance", "Send guidance") : wbcT("workbenchChat.stop", "Stop"))
+              ? (hasRuntimeGuidance
+                  ? wbcT("workbenchChat.sendGuidance", "Send guidance")
+                  : showStopButton
+                    ? wbcT("workbenchChat.stop", "Stop")
+                    : wbcT("workbenchChat.capability.waitForAgent", "Waiting for the Agent to finish…"))
               : wbcT("workbenchChat.send", "Send")}
           >
-            {running && !hasRuntimeGuidance ? WBC_ICONS.stop : WBC_ICONS.send}
+            {showStopButton ? WBC_ICONS.stop : WBC_ICONS.send}
           </button>
         </div>
       </div>
@@ -13842,6 +15638,9 @@ function wbcChatArtifactFiles(chat) {
       : file;
     add(withUrl, "assistant");
   });
+  (chat && chat.liveAgentArtifacts || []).forEach(function (file) {
+    add(file, "assistant");
+  });
   return files;
 }
 
@@ -13860,6 +15659,13 @@ function wbcChatDeliveredArtifacts(chat) {
       seen.add(key);
       files.push({ file: file, role: "assistant" });
     });
+  });
+  (chat && chat.liveAgentArtifacts || []).forEach(function (file) {
+    if (!file) return;
+    var key = String(file.id || file.url || file.path || file.name || "").trim();
+    if (!key || seen.has(key)) return;
+    seen.add(key);
+    files.push({ file: file, role: "assistant", live: true });
   });
   return files;
 }
@@ -14434,6 +16240,8 @@ function WbcChatSplit({ chatId, project, onOpenContent, browserActiveByChat, onC
   var [loading, setLoading] = useWbcState(true);
   var [error, setError] = useWbcState("");
   var [streamText, setStreamText] = useWbcState("");
+  var [streamNotifications, setStreamNotifications] = useWbcState([]);
+  var [streamRuntime, setStreamRuntime] = useWbcState(null);
   var [running, setRunning] = useWbcState(false);
   // The grip menu's "open conversation panel" action floats this split chat's
   // own conversation panel here — never the main conversation's panel. Like
@@ -14480,6 +16288,8 @@ function WbcChatSplit({ chatId, project, onOpenContent, browserActiveByChat, onC
     disposedRef.current = false;
     setChat(null);
     setError("");
+    setStreamNotifications([]);
+    setStreamRuntime(null);
     setLoading(true);
     setSplitPanelOpen(false);
     setSplitPanelTab("");
@@ -14523,15 +16333,35 @@ function WbcChatSplit({ chatId, project, onOpenContent, browserActiveByChat, onC
       onReplyStart: function () {
         if (disposedRef.current) return;
         setStreamText("");
+        setStreamRuntime(function (current) { return wbcReduceDetachedRuntime(current, "reply_start"); });
       },
       onReplyDelta: function (delta) {
         if (disposedRef.current) return;
         setStreamText(function (current) { return current + delta; });
+        setStreamRuntime(function (current) { return wbcReduceDetachedRuntime(current, "reply_delta", delta); });
       },
       onReplyDone: function (text) {
         if (disposedRef.current) return;
         setStreamText(String(text || ""));
+        setStreamRuntime(function (current) { return wbcReduceDetachedRuntime(current, "reply_done", text); });
       },
+      onNotification: function (notice) {
+        if (disposedRef.current || !notice || !notice.message) return;
+        setStreamNotifications(function (current) {
+          var key = String(notice.id || (notice.category + "\n" + notice.message));
+          if (current.some(function (item) { return String(item.id || (item.category + "\n" + item.message)) === key; })) return current;
+          return current.concat([notice]);
+        });
+        setStreamRuntime(function (current) { return wbcReduceDetachedRuntime(current, "notification", notice); });
+      },
+      onReasoningStart: function () { if (!disposedRef.current) setStreamRuntime(function (current) { return wbcReduceDetachedRuntime(current, "reasoning_start"); }); },
+      onReasoningDelta: function (delta) { if (!disposedRef.current) setStreamRuntime(function (current) { return wbcReduceDetachedRuntime(current, "reasoning_delta", delta); }); },
+      onReasoningDone: function (text) { if (!disposedRef.current) setStreamRuntime(function (current) { return wbcReduceDetachedRuntime(current, "reasoning_done", text); }); },
+      onFinalizing: function () { if (!disposedRef.current) setStreamRuntime(function (current) { return wbcReduceDetachedRuntime(current, "finalizing"); }); },
+      onToolStarted: function (event) { if (!disposedRef.current) setStreamRuntime(function (current) { return wbcReduceDetachedRuntime(current, "tool", event); }); },
+      onToolUpdated: function (event) { if (!disposedRef.current) setStreamRuntime(function (current) { return wbcReduceDetachedRuntime(current, "tool", event); }); },
+      onToolCompleted: function (event) { if (!disposedRef.current) setStreamRuntime(function (current) { return wbcReduceDetachedRuntime(current, "tool", event); }); },
+      onArtifactEvent: function (event) { if (!disposedRef.current) setStreamRuntime(function (current) { return wbcReduceDetachedRuntime(current, "artifact", null, event); }); },
       onSaved: function () {
         if (disposedRef.current) return;
         setRunning(false);
@@ -14539,15 +16369,25 @@ function WbcChatSplit({ chatId, project, onOpenContent, browserActiveByChat, onC
         refresh(true).finally(function () {
           if (disposedRef.current) return;
           setStreamText("");
+          setStreamNotifications([]);
+          setStreamRuntime(null);
         });
       },
-      onAwaitingUser: function () {
+      onAwaitingUser: function (pending) {
         if (disposedRef.current) return;
+        if (wbcIsLiveAgentRequest(pending)) {
+          setChat(function (prev) {
+            return prev ? { ...prev, pendingQuestion: pending, status: "running" } : prev;
+          });
+          return;
+        }
         setRunning(false);
         streamAttachedRef.current = false;
         refresh(true).finally(function () {
           if (disposedRef.current) return;
           setStreamText("");
+          setStreamNotifications([]);
+          setStreamRuntime(null);
         });
       },
       onGuidanceReceived: function (event) {
@@ -14560,12 +16400,20 @@ function WbcChatSplit({ chatId, project, onOpenContent, browserActiveByChat, onC
           };
         });
       },
+      onPermissionResolved: function () {
+        if (!disposedRef.current) setChat(function (prev) { return prev ? { ...prev, pendingQuestion: null } : prev; });
+      },
+      onElicitationResolved: function () {
+        if (!disposedRef.current) setChat(function (prev) { return prev ? { ...prev, pendingQuestion: null } : prev; });
+      },
       onError: function (err) {
         if (disposedRef.current) return;
         setError(wbcErrorText(err));
         setRunning(false);
         streamAttachedRef.current = false;
         setStreamText("");
+        setStreamNotifications([]);
+        setStreamRuntime(null);
       },
     };
   }
@@ -14574,7 +16422,7 @@ function WbcChatSplit({ chatId, project, onOpenContent, browserActiveByChat, onC
     streamAttachedRef.current = true;
     setRunning(true);
     promise.catch(function (err) {
-      if (disposedRef.current || !(err && err.name === "AbortError")) {
+      if (!disposedRef.current && !(err && err.name === "AbortError")) {
         setError(wbcErrorText(err));
       }
     }).finally(function () {
@@ -14584,6 +16432,8 @@ function WbcChatSplit({ chatId, project, onOpenContent, browserActiveByChat, onC
       refresh(true).catch(function () {}).finally(function () {
         if (disposedRef.current) return;
         setStreamText("");
+        setStreamNotifications([]);
+        setStreamRuntime(null);
       });
     });
   }
@@ -14608,9 +16458,13 @@ function WbcChatSplit({ chatId, project, onOpenContent, browserActiveByChat, onC
     setError("");
     setStreamText("");
     runStartedAtRef.current = Date.now();
+    setStreamRuntime(wbcCreateDetachedRuntime(runStartedAtRef.current));
     ownStream(WorkbenchChatModel.sendMessage(current, {
       message: question,
       attachments: attachments,
+      mode: chat && chat.permissionMode || payload.mode || "default",
+      model: chat && chat.modelSelectionId || payload.model || "",
+      reasoningEffort: chat && chat.reasoningEffort || payload.reasoningEffort || "",
     }, streamHandlers()));
   }
 
@@ -14653,12 +16507,29 @@ function WbcChatSplit({ chatId, project, onOpenContent, browserActiveByChat, onC
   // may be a different chat while this pane is open.
   function answerPendingQuestion(questionId, optionText, resumeMode) {
     var current = chatIdRef.current;
-    var answer = String(optionText || "").trim();
-    if (!current || !questionId || !answer || running) return;
+    var pending = chat && chat.pendingQuestion || null;
+    var formAnswer = optionText && typeof optionText === "object" && optionText.__agentForm === true;
+    var answer = formAnswer ? optionText : String(optionText || "").trim();
+    var liveRequest = wbcIsLiveAgentRequest(pending);
+    if (!current || !questionId || (!formAnswer && !answer) || (running && !liveRequest)) return;
+    if (liveRequest) {
+      var response = String(pending.kind || "") === "permission.requested"
+        ? { type: "option", optionId: String(answer || "") }
+        : (formAnswer
+          ? { type: "form", form: answer.values && typeof answer.values === "object" ? answer.values : {} }
+          : { type: "text", text: String(answer || "") });
+      setError("");
+      setChat(function (prev) { return prev ? { ...prev, pendingQuestion: null, status: "running" } : prev; });
+      return WorkbenchChatModel.answerAgentRequest(current, questionId, response).catch(function (err) {
+        if (disposedRef.current) return;
+        setError(wbcErrorText(err));
+        setChat(function (prev) { return prev ? { ...prev, pendingQuestion: pending } : prev; });
+      });
+    }
     var optimisticAnswer = {
       id: "chat_split_answer_pending_" + Date.now(),
       role: "user",
-      content: answer,
+      content: String(answer),
       createdAt: new Date().toISOString(),
       answerToQuestionId: questionId,
       optimistic: true,
@@ -14784,7 +16655,10 @@ function WbcChatSplit({ chatId, project, onOpenContent, browserActiveByChat, onC
             && String(chat.pendingQuestion.id || "") === String(message.questionId || "")
           );
           if (isActiveQuestion) {
-            return <WbcThreadItem key={message.id || message.createdAt}><WbcQuestionPrompt pending={chat.pendingQuestion} onAnswer={answerPendingQuestion} busy={running} trace={message.trace} /></WbcThreadItem>;
+            return <WbcThreadItem key={message.id || message.createdAt}><WbcQuestionPrompt pending={chat.pendingQuestion} onAnswer={answerPendingQuestion} busy={running && !wbcIsLiveAgentRequest(chat.pendingQuestion)} trace={message.trace} /></WbcThreadItem>;
+          }
+          if (message.notificationCard) {
+            return <WbcThreadItem key={message.id || message.createdAt}><WbcAgentNotification notice={message.notification} /></WbcThreadItem>;
           }
           return (
             <WbcThreadItem key={message.id || message.createdAt}>
@@ -14794,20 +16668,11 @@ function WbcChatSplit({ chatId, project, onOpenContent, browserActiveByChat, onC
             </WbcThreadItem>
           );
         })}
-        {running && !streamText && (
-          <WbcThreadItem>
-            <WbcHeartbeat startedAt={runStartedAtRef.current} />
-          </WbcThreadItem>
-        )}
-        {running && streamText && (
-          <WbcThreadItem>
-            <WbcLiveMessage runtime={{ text: streamText }} onOpenFile={openFile} />
-          </WbcThreadItem>
-        )}
-        {chat && chat.pendingQuestion && chat.pendingQuestion.id && !running && !messages.some(function (message) {
+        {running && <WbcRuntimeTranscript runtime={streamRuntime || { ...wbcCreateDetachedRuntime(runStartedAtRef.current), text: streamText, notifications: streamNotifications }} onOpenFile={openFile} />}
+        {chat && chat.pendingQuestion && chat.pendingQuestion.id && (!running || wbcIsLiveAgentRequest(chat.pendingQuestion)) && !messages.some(function (message) {
           return message.questionPrompt && String(message.questionId || "") === String(chat.pendingQuestion.id || "");
         }) && (
-          <WbcThreadItem><WbcQuestionPrompt pending={chat.pendingQuestion} onAnswer={answerPendingQuestion} busy={running} /></WbcThreadItem>
+          <WbcThreadItem><WbcQuestionPrompt pending={chat.pendingQuestion} onAnswer={answerPendingQuestion} busy={running && !wbcIsLiveAgentRequest(chat.pendingQuestion)} /></WbcThreadItem>
         )}
         </div>
       </div>
@@ -15080,6 +16945,8 @@ function WbcSideAgentTab({ agent, project, onOpenFile, onUpdate }) {
   var runStartedAtRef = useWbcRef(Date.now());
   var [running, setRunning] = useWbcState(!!(agent && agent.status === "running"));
   var [streamText, setStreamText] = useWbcState("");
+  var [streamNotifications, setStreamNotifications] = useWbcState([]);
+  var [streamRuntime, setStreamRuntime] = useWbcState(null);
   var [error, setError] = useWbcState("");
 
   useWbcEffect(function () {
@@ -15110,30 +16977,80 @@ function WbcSideAgentTab({ agent, project, onOpenFile, onUpdate }) {
     return {
       onReplyStart: function () {
         if (mountedRef.current) setStreamText("");
+        if (mountedRef.current) setStreamRuntime(function (current) { return wbcReduceDetachedRuntime(current, "reply_start"); });
       },
       onReplyDelta: function (delta) {
         if (mountedRef.current) setStreamText(function (current) { return current + delta; });
+        if (mountedRef.current) setStreamRuntime(function (current) { return wbcReduceDetachedRuntime(current, "reply_delta", delta); });
       },
       onReplyDone: function (text) {
         if (mountedRef.current) setStreamText(String(text || ""));
+        if (mountedRef.current) setStreamRuntime(function (current) { return wbcReduceDetachedRuntime(current, "reply_done", text); });
       },
+      onNotification: function (notice) {
+        if (!mountedRef.current || !notice || !notice.message) return;
+        setStreamNotifications(function (current) {
+          var key = String(notice.id || (notice.category + "\n" + notice.message));
+          if (current.some(function (item) { return String(item.id || (item.category + "\n" + item.message)) === key; })) return current;
+          return current.concat([notice]);
+        });
+        setStreamRuntime(function (current) { return wbcReduceDetachedRuntime(current, "notification", notice); });
+      },
+      onReasoningStart: function () { if (mountedRef.current) setStreamRuntime(function (current) { return wbcReduceDetachedRuntime(current, "reasoning_start"); }); },
+      onReasoningDelta: function (delta) { if (mountedRef.current) setStreamRuntime(function (current) { return wbcReduceDetachedRuntime(current, "reasoning_delta", delta); }); },
+      onReasoningDone: function (text) { if (mountedRef.current) setStreamRuntime(function (current) { return wbcReduceDetachedRuntime(current, "reasoning_done", text); }); },
+      onFinalizing: function () { if (mountedRef.current) setStreamRuntime(function (current) { return wbcReduceDetachedRuntime(current, "finalizing"); }); },
+      onToolStarted: function (event) { if (mountedRef.current) setStreamRuntime(function (current) { return wbcReduceDetachedRuntime(current, "tool", event); }); },
+      onToolUpdated: function (event) { if (mountedRef.current) setStreamRuntime(function (current) { return wbcReduceDetachedRuntime(current, "tool", event); }); },
+      onToolCompleted: function (event) { if (mountedRef.current) setStreamRuntime(function (current) { return wbcReduceDetachedRuntime(current, "tool", event); }); },
+      onArtifactEvent: function (event) { if (mountedRef.current) setStreamRuntime(function (current) { return wbcReduceDetachedRuntime(current, "artifact", null, event); }); },
       onSaved: function () {
         refreshAgent().finally(function () {
           streamAttachedRef.current = false;
           if (mountedRef.current) {
             setStreamText("");
+            setStreamNotifications([]);
+            setStreamRuntime(null);
             setRunning(false);
           }
         });
       },
-      onAwaitingUser: function () {
+      onAwaitingUser: function (pending) {
+        if (!mountedRef.current) return;
+        if (wbcIsLiveAgentRequest(pending)) {
+          var current = agentRef.current;
+          if (current && current.id) {
+            var next = { ...current, pendingQuestion: pending, status: "running" };
+            agentRef.current = next;
+            onUpdate(next);
+          }
+          return;
+        }
         refreshAgent().finally(function () {
           streamAttachedRef.current = false;
           if (mountedRef.current) {
             setStreamText("");
+            setStreamNotifications([]);
+            setStreamRuntime(null);
             setRunning(false);
           }
         });
+      },
+      onPermissionResolved: function () {
+        if (!mountedRef.current) return;
+        var current = agentRef.current;
+        if (!current || !current.id) return;
+        var next = { ...current, pendingQuestion: null };
+        agentRef.current = next;
+        onUpdate(next);
+      },
+      onElicitationResolved: function () {
+        if (!mountedRef.current) return;
+        var current = agentRef.current;
+        if (!current || !current.id) return;
+        var next = { ...current, pendingQuestion: null };
+        agentRef.current = next;
+        onUpdate(next);
       },
       onGuidanceReceived: function (event) {
         if (!mountedRef.current || !event || !event.userMessage) return;
@@ -15164,6 +17081,8 @@ function WbcSideAgentTab({ agent, project, onOpenFile, onUpdate }) {
       refreshAgent().catch(function () {}).finally(function () {
         if (mountedRef.current) {
           setStreamText("");
+          setStreamNotifications([]);
+          setStreamRuntime(null);
           setRunning(false);
         }
       });
@@ -15200,7 +17119,9 @@ function WbcSideAgentTab({ agent, project, onOpenFile, onUpdate }) {
     onUpdate(next);
     setError("");
     setStreamText("");
+    setStreamNotifications([]);
     runStartedAtRef.current = Date.now();
+    setStreamRuntime(wbcCreateDetachedRuntime(runStartedAtRef.current));
     setRunning(true);
     ownStream(WorkbenchChatModel.sendMessage(
       current.id,
@@ -15248,6 +17169,30 @@ function WbcSideAgentTab({ agent, project, onOpenFile, onUpdate }) {
     });
   }
 
+  function answerPendingQuestion(questionId, optionText) {
+    var current = agentRef.current;
+    var pending = current && current.pendingQuestion || null;
+    var formAnswer = optionText && typeof optionText === "object" && optionText.__agentForm === true;
+    var answer = formAnswer ? optionText : String(optionText || "").trim();
+    if (!current || !current.id || !questionId || !wbcIsLiveAgentRequest(pending) || (!formAnswer && !answer)) return;
+    var response = String(pending.kind || "") === "permission.requested"
+      ? { type: "option", optionId: String(answer || "") }
+      : (formAnswer
+        ? { type: "form", form: answer.values && typeof answer.values === "object" ? answer.values : {} }
+        : { type: "text", text: String(answer || "") });
+    var next = { ...current, pendingQuestion: null, status: "running" };
+    agentRef.current = next;
+    onUpdate(next);
+    setError("");
+    return WorkbenchChatModel.answerAgentRequest(current.id, questionId, response).catch(function (err) {
+      if (!mountedRef.current) return;
+      setError(wbcErrorText(err));
+      var restored = { ...agentRef.current, pendingQuestion: pending };
+      agentRef.current = restored;
+      onUpdate(restored);
+    });
+  }
+
   var messages = agent && Array.isArray(agent.messages) ? agent.messages : [];
   var hasAsked = messages.some(function (message) { return message.role === "user"; });
   return (
@@ -15264,6 +17209,9 @@ function WbcSideAgentTab({ agent, project, onOpenFile, onUpdate }) {
           </div>
         )}
         {messages.map(function (message) {
+          if (message.notificationCard) {
+            return <WbcThreadItem key={message.id || message.createdAt}><WbcAgentNotification notice={message.notification} /></WbcThreadItem>;
+          }
           return (
             <WbcThreadItem key={message.id || message.createdAt}>
               {message.role === "user"
@@ -15272,15 +17220,9 @@ function WbcSideAgentTab({ agent, project, onOpenFile, onUpdate }) {
             </WbcThreadItem>
           );
         })}
-        {running && !streamText && (
-          <WbcThreadItem>
-            <WbcHeartbeat startedAt={runStartedAtRef.current} />
-          </WbcThreadItem>
-        )}
-        {running && streamText && (
-          <WbcThreadItem>
-            <WbcLiveMessage runtime={{ text: streamText }} onOpenFile={onOpenFile} />
-          </WbcThreadItem>
+        {running && <WbcRuntimeTranscript runtime={streamRuntime || { ...wbcCreateDetachedRuntime(runStartedAtRef.current), text: streamText, notifications: streamNotifications }} onOpenFile={onOpenFile} />}
+        {agent && agent.pendingQuestion && wbcIsLiveAgentRequest(agent.pendingQuestion) && (
+          <WbcThreadItem><WbcQuestionPrompt pending={agent.pendingQuestion} onAnswer={answerPendingQuestion} busy={false} /></WbcThreadItem>
         )}
       </div>
       {error && <div className="wbc-side-agent-error" role="alert">{error}</div>}
@@ -16045,7 +17987,8 @@ function wbcActivePlan(chat) {
   var pq = chat && chat.pendingQuestion;
   var plan = pq && pq.plan;
   if (!plan || typeof plan !== "object") return null;
-  var hasSteps = Array.isArray(plan.steps) && plan.steps.length > 0;
+  var hasSteps = (Array.isArray(plan.steps) && plan.steps.length > 0)
+    || (Array.isArray(plan.entries) && plan.entries.length > 0);
   return (plan.title || plan.summary || hasSteps) ? plan : null;
 }
 
@@ -16070,7 +18013,7 @@ function wbcPlanStepStatusText(status) {
 // Right-panel 计划 tab — durable from proposal through execution completion.
 function WbcPlanTab({ plan }) {
   var p = plan || {};
-  var steps = Array.isArray(p.steps) ? p.steps : [];
+  var steps = Array.isArray(p.steps) ? p.steps : (Array.isArray(p.entries) ? p.entries : []);
   return (
     <div className="workbench-side-stack">
       <section className="workbench-side-section wbc-plan">
@@ -16090,7 +18033,7 @@ function WbcPlanTab({ plan }) {
               return (
                 <li key={step.id || i} className={"wbc-plan-step " + status}>
                   <div className="wbc-plan-step-title">
-                    <b>{step.title || (wbcT("chat.side.planStep", "Step") + " " + (i + 1))}</b>
+                    <b>{step.title || step.content || (wbcT("chat.side.planStep", "Step") + " " + (i + 1))}</b>
                     <span>{wbcPlanStepStatusText(status)}</span>
                   </div>
                   {tasks.length > 0 && (
@@ -16452,6 +18395,10 @@ function WbcViewerTab({ file, onViewed, hideHeader, htmlMode: controlledHtmlMode
     body = <p className="workbench-muted wbc-viewer-pad">{wbcT("workbenchChat.viewerLoadFailed", "File failed to load.")}{url ? " " + wbcT("workbenchChat.viewerOpenFallback", "Try opening it in a new window.") : ""}</p>;
   } else if (kind === "image") {
     body = <div className="wbc-viewer-scroll center"><img className="wbc-viewer-img" src={url} alt={file.name || "image"} onLoad={confirmViewed} /></div>;
+  } else if (kind === "audio") {
+    body = <div className="wbc-viewer-media-wrap"><audio className="wbc-viewer-media" src={url} controls onCanPlay={confirmViewed} /></div>;
+  } else if (kind === "video") {
+    body = <div className="wbc-viewer-media-wrap"><video className="wbc-viewer-media" src={url} controls onCanPlay={confirmViewed} /></div>;
   } else if (kind === "html") {
     body = htmlMode === "rendered"
       ? <iframe key={url + "::" + (text ? "1" : "0")} className="wbc-viewer-iframe" sandbox="allow-scripts" srcDoc={htmlPreview} title={file.name || "HTML"} />
@@ -17096,9 +19043,37 @@ function WbcOverviewTab({ chat, loading, detailed, runtime }) {
       ? wbcT("workbenchChat.loadingConversation", "Loading conversation…")
       : wbcT("workbenchChat.noMessages", "Select or create a chat.")}</p>;
   }
-  var usage = (liveData && liveData.usage) || chat.usage || {};
+  var runtimeUsage = runtime && runtime.usage && typeof runtime.usage === "object" ? runtime.usage : {};
+  var usage = Object.assign({}, (liveData && liveData.usage) || chat.usage || {}, runtimeUsage);
+  if (runtime && runtime.contextUsage && typeof runtime.contextUsage === "object") {
+    var context = runtime.contextUsage;
+    var used = Number(context.used || 0);
+    var size = Number(context.size || 0);
+    liveData = Object.assign({}, liveData || {}, {
+      ctxUsed: used || (liveData && liveData.ctxUsed) || 0,
+      ctxLimit: size || (liveData && liveData.ctxLimit) || 0,
+      ratio: size > 0 ? used / size : (liveData && liveData.ratio),
+      segments: Array.isArray(context.segments) ? context.segments : (liveData && liveData.segments),
+      usage: usage,
+    });
+  }
   var currentModel = wbcCurrentModel(chat, null, runtime, liveData);
   var convertedTitle = chat.convertedSessionId ? String(chat.convertedTaskTitle || "").trim() : "";
+  // Agent identity block (handoff §9). Legacy chats normalize to the built-in
+  // Cyrene Agent; external Agents surface connection, model source and both
+  // session ids. Token usage stays hidden for Agents that report none.
+  var overviewAgent = wbcChatAgent(chat);
+  var overviewHasAgent = !!overviewAgent;
+  var overviewAgentName = wbcAgentDisplayName(overviewAgent);
+  var overviewIsBuiltin = wbcIsBuiltinAgent(overviewAgent);
+  var overviewExternal = overviewHasAgent && !overviewIsBuiltin;
+  var overviewConnection = wbcAgentConnectionLabel(chat);
+  var overviewModelSource = wbcModelAccessLabel(chat);
+  var overviewExternalSessionId = String((overviewAgent && overviewAgent.externalSessionId) || "");
+  var overviewShowUsage = !overviewHasAgent || overviewIsBuiltin || wbcUsageReported(usage);
+  var overviewModelDisplay = currentModel || (overviewExternal
+    ? wbcT("workbenchChat.modelSource.agentConfigured", "Configured by Agent")
+    : "");
   return (
     <div className="wbc-overview-compact">
       {loading && <p className="workbench-muted wbc-side-loading" role="status">
@@ -17112,9 +19087,39 @@ function WbcOverviewTab({ chat, loading, detailed, runtime }) {
             {runtime ? wbcT("workbenchChat.status.replying", "Replying") : wbcT("workbenchChat.status.idle", "Idle")}
           </b>
         </div>
+        {overviewExternal && (
+          <div className="wbc-overview-agent-block">
+            <div className="wbc-overview-agent-row">
+              <span>{wbcT("workbenchChat.agent", "Agent")}</span>
+              <b>
+                <button
+                  type="button"
+                  className="wbc-overview-agent-name"
+                  onClick={function () { wbcOpenAgentDetail(overviewAgent); }}
+                  title={wbcT("workbenchChat.agentOpenDetail", "Open Agent details")}
+                >
+                  <span>{overviewAgentName}</span>
+                  <span className="wbc-overview-agent-chevron" aria-hidden="true">{WBC_ICONS.chevronRight}</span>
+                </button>
+              </b>
+            </div>
+            <div><span>{wbcT("workbenchChat.connection", "Connection")}</span><b>{overviewConnection || "—"}</b></div>
+            <div><span>{wbcT("workbenchChat.modelSource", "Model source")}</span><b>{overviewModelSource || "—"}</b></div>
+            <div><span>{wbcT("workbenchChat.model", "Model")}</span><b className="wbc-kv-mono" title={overviewModelDisplay || ""}>{overviewModelDisplay || "—"}</b></div>
+            {chat.agentMode != null ? <div><span>{wbcT("workbenchChat.agentMode", "Agent mode")}</span><b>{wbcStructuredEventSummary(chat.agentMode) || "—"}</b></div> : null}
+            <div><span>{wbcT("workbenchChat.externalSessionId", "Agent session ID")}</span><b className="wbc-kv-mono" title={overviewExternalSessionId}>{overviewExternalSessionId || "—"}</b></div>
+            <div><span>{wbcT("workbenchChat.cyreneChatId", "Cyrene chat ID")}</span><b className="wbc-kv-mono" title={chat.id}>{chat.id}</b></div>
+          </div>
+        )}
         <div className="wbc-overview-details">
-          <div><span>{wbcT("workbenchChat.model", "Model")}</span><b className="wbc-kv-mono" title={currentModel || ""}>{currentModel || "—"}</b></div>
-          <div><span>{wbcT("chat.runId", "Session ID")}</span><b className="wbc-kv-mono" title={chat.id}>{chat.id}</b></div>
+          {overviewHasAgent && overviewIsBuiltin && (
+            <div>
+              <span>{wbcT("workbenchChat.agent", "Agent")}</span>
+              <b>{overviewAgentName}</b>
+            </div>
+          )}
+          {!overviewExternal && <div><span>{wbcT("workbenchChat.model", "Model")}</span><b className="wbc-kv-mono" title={currentModel || ""}>{currentModel || "—"}</b></div>}
+          {!overviewExternal && <div><span>{wbcT("chat.runId", "Session ID")}</span><b className="wbc-kv-mono" title={chat.id}>{chat.id}</b></div>}
         </div>
         <div className="wbc-overview-facts">
           <div>
@@ -17127,7 +19132,7 @@ function WbcOverviewTab({ chat, loading, detailed, runtime }) {
           </div>
         </div>
       </section>
-      <WbcOverviewUsage usage={usage} />
+      {overviewShowUsage ? <WbcOverviewUsage usage={usage} /> : null}
       {detailed && liveData && <WbcContextUsage data={liveData} compact={true} />}
       {convertedTitle && (
         <section className="workbench-side-section wbc-overview-converted">
@@ -17181,6 +19186,8 @@ function WbcContextBlockList({ chat, running, compact }) {
   }
 
   var layers = data.layers;
+  var usesTranscriptEstimate = data.compositionSource === "public_transcript";
+  var usesAgentReport = data.compositionSource === "agent_report";
   var msgTokens = data.messageTokens || 0;
   // Total for the bar: include all layers (system + ephemeral + messages)
   var barTotal = layers.reduce(function (sum, l) { return sum + (Number(l.totalTokens) || 0); }, 0);
@@ -17300,10 +19307,23 @@ function WbcContextBlockList({ chat, running, compact }) {
   });
 
   return React.createElement("div", { className: "wbc-context-detail" },
+    usesAgentReport && React.createElement("p", { className: "wbc-context-source-note is-agent-report" },
+      data.agentContextDetailAvailable
+        ? wbcT("workbenchChat.ctxBlocks.agentReportDetailed", "Context composition reported by the Agent.")
+        : wbcT("workbenchChat.ctxBlocks.agentReportTotal", "Context usage reported by the Agent; no detailed composition was provided.")
+    ),
+    usesTranscriptEstimate && React.createElement("p", { className: "wbc-context-source-note" },
+      wbcT(
+        "workbenchChat.ctxBlocks.externalEstimate",
+        "Showing the conversation visible to Cyrene. This Agent does not expose its private system prompt, memory, or full context composition."
+      )
+    ),
     // Gauge head
     React.createElement("div", { className: "wbc-ctx-gauge-head" },
       React.createElement("b", null, wbcCompactNumber(total)),
-      React.createElement("span", null, wbcT("workbenchChat.ctxBlocks.totalTokens", "tokens"))
+      React.createElement("span", null, usesAgentReport && Number(data.contextLimit || 0) > 0
+        ? ("/ " + wbcCompactNumber(data.contextLimit) + " " + wbcT("workbenchChat.ctxBlocks.totalTokens", "tokens"))
+        : wbcT("workbenchChat.ctxBlocks.totalTokens", "tokens"))
     ),
     // Split bar
     segItems.length > 0 && React.createElement("div", { className: "wbc-ctx-split" },
@@ -17326,6 +19346,13 @@ function WbcContextBlockList({ chat, running, compact }) {
           var isMsg = layer.id === "messages";
           var isSys = layer.id === "system_prefix";
           var layerLabel = wbcT("workbenchChat.ctxBlocks.layer." + layer.id, layer.label);
+          if (!(isMsg || isSys) || blocks.length === 0) {
+            return React.createElement("div", { key: layer.id, className: "wbc-ctx-layer-row" },
+              React.createElement("i", { className: "wbc-ctx-dot seg-" + layer.id, "aria-hidden": "true" }),
+              React.createElement("span", null, layerLabel),
+              React.createElement("em", null, wbcCompactNumber(tokens))
+            );
+          }
           return React.createElement("details", { key: layer.id, className: "wbc-ctx-layer-detail", open: true },
             React.createElement("summary", { className: "wbc-ctx-legend-layer-head" },
               React.createElement("i", { className: "wbc-ctx-dot seg-" + layer.id, "aria-hidden": "true" }),
@@ -17334,8 +19361,7 @@ function WbcContextBlockList({ chat, running, compact }) {
               React.createElement("span", { className: "wbc-ctx-layer-chevron", "aria-hidden": "true" }, WBC_ICONS.chevronDown)
             ),
             React.createElement("div", { className: "wbc-ctx-legend-layer-body" },
-              (isMsg || isSys) && blocks.length > 0
-                ? blocks.map(function (b) {
+              blocks.map(function (b) {
                     var seg = _ctxSegFromBlock(b, isMsg);
                     if (!seg) return null;
                     return React.createElement("div", { key: seg.key, className: "wbc-ctx-legend-item" },
@@ -17344,11 +19370,6 @@ function WbcContextBlockList({ chat, running, compact }) {
                       React.createElement("em", null, wbcCompactNumber(seg.tokens))
                     );
                   }).filter(Boolean)
-                : React.createElement("div", { className: "wbc-ctx-legend-item" },
-                    React.createElement("i", { className: "wbc-ctx-dot seg-" + layer.id }),
-                    React.createElement("span", null, layerLabel),
-                    React.createElement("em", null, wbcCompactNumber(tokens))
-                  )
             )
           );
         })
@@ -17734,7 +19755,11 @@ window.CyreneUI.chat = window.CyreneUI.register("chat", {
   Composer: WbcComposer,
   UserMessage: WbcUserMessage,
   AssistantMessage: WbcAssistantMessage,
+  AgentNotification: WbcAgentNotification,
+  QuestionPrompt: WbcQuestionPrompt,
+  ThreadItem: WbcThreadItem,
   LiveMessage: WbcLiveMessage,
+  RuntimeTranscript: WbcRuntimeTranscript,
   clearComposerDraft: wbcClearComposerDraft,
   Page: WorkbenchChatPage,
 });

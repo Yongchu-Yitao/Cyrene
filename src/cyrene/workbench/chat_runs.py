@@ -74,7 +74,15 @@ _DURABLE_RETENTION_DAYS = 7
 # events continue to force an immediate flush.
 _DURABLE_EVENT_BATCH_INTERVAL_SECONDS = 0.2
 _DURABLE_EVENT_BATCH_MAX = 512
-_BATCHABLE_DURABLE_EVENT_TYPES = frozenset({"reasoning_delta", "reply_delta"})
+_BATCHABLE_DURABLE_EVENT_TYPES = frozenset({
+    "reasoning_delta",
+    "reply_delta",
+    "message.delta",
+    "reasoning.delta",
+    "tool.updated",
+    "usage.updated",
+    "artifact.updated",
+})
 
 # Event types that suppress the synthesized reply (the agent already streamed a
 # real reply). Mirrors the legacy generator's ``startswith("reply_")`` check.

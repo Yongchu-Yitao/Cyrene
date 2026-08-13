@@ -6,6 +6,8 @@ import os
 import sys
 import types
 
+import pytest
+
 
 class _FakeProcess:
     pid = 43210
@@ -77,6 +79,39 @@ def test_source_launch_uses_parent_watching_wrapper(monkeypatch, tmp_path):
     )
 
     assert command[:3] == [manager_module.sys.executable, "-m", "cyrene.simplexng_child"]
+
+
+def test_windows_arm_launches_only_the_x64_simplexng_sidecar(monkeypatch, tmp_path):
+    from cyrene.tooling.backends import searxng_manager as manager_module
+
+    sidecar = tmp_path / "CyreneSimpleXNG.exe"
+    sidecar.touch()
+    monkeypatch.setattr(manager_module.sys, "platform", "win32")
+    monkeypatch.setattr(manager_module, "platform_machine", lambda: "arm64")
+    monkeypatch.setenv("CYRENE_X64_SIMPLEXNG_SIDECAR", str(sidecar))
+
+    command = manager_module._build_simplexng_launch_cmd(
+        8888,
+        "127.0.0.1",
+        settings_path=tmp_path / "settings.yml",
+    )
+
+    assert command == [
+        str(sidecar), "-p", "8888", "-H", "127.0.0.1",
+        "--settings", str(tmp_path / "settings.yml"),
+    ]
+
+
+def test_windows_arm_does_not_fall_back_to_in_process_simplexng(monkeypatch):
+    from cyrene.tooling.backends import searxng_manager as manager_module
+
+    monkeypatch.setattr(manager_module.sys, "platform", "win32")
+    monkeypatch.setattr(manager_module, "platform_machine", lambda: "arm64")
+    monkeypatch.delenv("CYRENE_X64_SIMPLEXNG_SIDECAR", raising=False)
+    monkeypatch.setattr(manager_module, "INSTALL_RESOURCES_DIR", "/missing")
+
+    with pytest.raises(FileNotFoundError, match="x64 SimpleXNG sidecar"):
+        manager_module._build_simplexng_launch_cmd(8888, "127.0.0.1")
 
 
 def test_external_searxng_url_is_used_without_starting_child(monkeypatch):

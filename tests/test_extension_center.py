@@ -276,6 +276,7 @@ def test_agent_process_environment_appends_managed_paths_without_installer_token
     monkeypatch.setattr(service, "_UV_PYTHON_DIR", tmp_path / "extensions" / "python")
     monkeypatch.setattr(service, "_UV_BIN_DIR", uv_bin)
     monkeypatch.setattr(service, "_TEX_DIR", tmp_path / "extensions" / "tex")
+    monkeypatch.setattr(service, "_AGENT_BIN_DIR", tmp_path / "extensions" / "agents" / "bin")
     monkeypatch.setattr(service, "_bundled_binary", lambda _name: None)
     settings = {
         "extension_clis": [{
@@ -330,6 +331,7 @@ async def test_bash_can_run_a_cyrene_managed_mise_shim(tmp_path, monkeypatch):
     monkeypatch.setattr(service, "_UV_PYTHON_DIR", tmp_path / "extensions" / "python")
     monkeypatch.setattr(service, "_UV_BIN_DIR", tmp_path / "extensions" / "python-bin")
     monkeypatch.setattr(service, "_TEX_DIR", tmp_path / "extensions" / "tex")
+    monkeypatch.setattr(service, "_AGENT_BIN_DIR", tmp_path / "extensions" / "agents" / "bin")
     monkeypatch.setattr(service, "_bundled_binary", lambda _name: None)
     settings = {
         "extension_clis": [{
@@ -383,6 +385,7 @@ def test_disabled_managed_mise_extensions_are_hidden_from_the_agent_environment(
     monkeypatch.setattr(service, "_UV_PYTHON_DIR", tmp_path / "extensions" / "python")
     monkeypatch.setattr(service, "_UV_BIN_DIR", tmp_path / "extensions" / "python-bin")
     monkeypatch.setattr(service, "_TEX_DIR", tmp_path / "extensions" / "tex")
+    monkeypatch.setattr(service, "_AGENT_BIN_DIR", tmp_path / "extensions" / "agents" / "bin")
     monkeypatch.setattr(service, "_bundled_binary", lambda _name: None)
     monkeypatch.setattr(service, "get_setting", lambda key, default=None: settings.get(key, default))
     monkeypatch.setattr(service, "source_settings", lambda **_kwargs: {"verify_signatures": True})
@@ -605,6 +608,51 @@ def test_mcp_manual_fallback_ui_is_actionable_and_uses_structured_arguments():
     assert 'disabled: remoteLoading || item.installable === false' not in frontend
     assert 'manualMcp.args.split(/\\r?\\n/)' in frontend
     assert 'setInstallOpen(false); tell(t("settings.extensionInstallStarted")' not in frontend
+
+
+def test_extension_install_errors_are_localized_compact_and_expire():
+    root = Path(__file__).resolve().parents[1]
+    frontend = root.joinpath("src/webui/frontend/settings-overlay.jsx").read_text(encoding="utf-8")
+    styles = root.joinpath("src/webui/frontend/workbench.css").read_text(encoding="utf-8")
+    translations = root.joinpath("src/webui/frontend/workbench-i18n.jsx").read_text(encoding="utf-8")
+
+    assert "function extensionTaskErrorContent(task, t)" in frontend
+    assert "function extensionTaskIsVisible(task, now)" in frontend
+    assert "now - finishedAt < 30000" in frontend
+    assert 'React.createElement("details", null' in frontend
+    assert ".wb-extension-task-error pre" in styles
+    assert translations.count('"settings.extensionTaskError.dependency_conflict.title"') == 2
+
+
+def test_extension_dependency_conflicts_have_a_stable_reason_code():
+    from cyrene.extensions.service import _extension_error_reason
+
+    error = RuntimeError("package does not satisfy Python >=3.10 and requirements are unsatisfiable")
+    assert _extension_error_reason(error) == "dependency_conflict"
+
+
+def test_mcp_details_render_discovered_tool_names_and_descriptions():
+    root = Path(__file__).resolve().parents[1]
+    frontend = root.joinpath("src/webui/frontend/settings-overlay.jsx").read_text(encoding="utf-8")
+    translations = root.joinpath("src/webui/frontend/workbench-i18n.jsx").read_text(encoding="utf-8")
+
+    assert 'className: "wb-extension-mcp-tools"' in frontend
+    assert "item.tools.map(function (tool)" in frontend
+    assert "tool.description" in frontend
+    assert translations.count('"settings.extensionMcpTools"') == 2
+
+
+def test_cli_hook_integration_is_a_compact_localized_detail_action():
+    root = Path(__file__).resolve().parents[1]
+    frontend = root.joinpath("src/webui/frontend/settings-overlay.jsx").read_text(encoding="utf-8")
+    styles = root.joinpath("src/webui/frontend/workbench.css").read_text(encoding="utf-8")
+    translations = root.joinpath("src/webui/frontend/workbench-i18n.jsx").read_text(encoding="utf-8")
+
+    assert 'className: "wb-extension-hook-copy"' in frontend
+    assert ".wb-extension-hook-action .wb-btn" in styles
+    assert '"settings.extensionHookTitle": "Automatic integration"' in translations
+    assert '"settings.extensionHookTitle": "自动接入"' in translations
+    assert '"settings.extensionConfigureHook": "让 Agent 配置"' in translations
 
 
 @pytest.mark.asyncio
