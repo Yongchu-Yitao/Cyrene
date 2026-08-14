@@ -5,6 +5,27 @@
 This English edition preserves the release history of the Chinese changelog.
 The Chinese edition remains the most detailed record for older releases.
 
+## [0.7.8] - 2026-08-15
+
+### Features and interface changes
+
+- Workbench now uses a solid main panel with multiple floating cards. The conversation directory, content cards, conversation panel, and browser window share consistent color, depth, corner radius, shadow, and 12 px spacing aligned with the top bar and page edges.
+- Conversations and files can now form left/right splits, and either side can contain an additional top/bottom split. Conversation/conversation, file/file, and mixed conversation/file layouts are supported up to two levels; dropping onto a full target clearly replaces that split.
+- Split drag feedback and spring animations are now consistent: the hint appears only on the targeted card and the drag ghost starts from its original position. With no split open, content can be dropped above, below, or to the right, or used to replace the current conversation.
+- Every content card has a direction-aware grip and menu for resizing width or height, swapping positions, closing the split, and opening the conversation panel or creating a conversation as appropriate. Grips always sit in the gap between cards.
+- Outside split mode, hover-only grips between the conversation, context panel, and browser area now resize the panel width. Expanded panels no longer show unnecessary grips, while a collapsed panel can be reopened from the content-card menu.
+- The browser mini-window is anchored beneath the conversation panel with matching width and bottom alignment, a complete title bar, and a maximize action. Its vertical position and height are adjustable; until height is manually changed, it follows panel width at a 4:3 ratio without lag during fast resizing.
+- Browser notifications now overlay the browser content without hiding the title bar or turning the page blank, and browser split views also expose a maximize action.
+- The project rail can switch among conversations, tasks, and files and search the current project. Both files and conversations can be dragged directly into the workspace or resource shelf.
+- Project files now have a complete in-app viewing and editing flow with source and live Markdown modes, save-state feedback, external-change conflict handling, downloading, and opening in another application.
+- DOCX and PPTX files can now be previewed in the app, with clear messages and original-file fallbacks for oversized, invalid, or timed-out Office documents.
+- The resource shelf can now pin conversations, files, selected text, browser items, and knowledge entries. Pinned conversations are shared with other agents as read-only summaries.
+- Persona and workspace context can be controlled independently for each conversation without affecting concurrent chats. Editing, reading, searching, browser, desktop, and other activity is summarized in compact natural language.
+- Local voice adds the bilingual Kokoro preset model with 103 selectable voices. ZipVoice supports both its bundled default voice and fully on-device custom voice cloning, with Settings showing options based on downloaded models.
+- The composer now shows how many persona, workspace, and device sources are enabled, makes tool and command selection clearer, and enables automatic reading only when the selected voice is ready.
+- Continuous agent runs, search, and reply recovery are more reliable in long conversations and tool-heavy work, reducing repeated work, unnecessary waits, and search stalls while showing clearer recoverable connection notices.
+- Linux desktop rendering is smoother across large cards, overlays, animations, scrolling, typing, and window resizing, while retaining a compatibility mode for exceptional graphics environments.
+
 ## [0.7.7] - 2026-08-14
 
 ### Feature changes
