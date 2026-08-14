@@ -30,7 +30,8 @@ def main() -> int:
     unexpected = [
         line
         for line in lines
-        if not any(pattern.fullmatch(line) for pattern in _ALLOWED_WINDOWS_CONFLICTS)
+        if line != "No broken requirements found."
+        and not any(pattern.fullmatch(line) for pattern in _ALLOWED_WINDOWS_CONFLICTS)
         and not any(
             line.startswith(f"cyrene ") and f" requires {package}, which is not installed." in line
             for package in expected_missing_for_native_woa

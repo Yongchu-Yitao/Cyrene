@@ -31,6 +31,22 @@ def test_known_winloop_substitution_is_allowed(monkeypatch):
     assert module.main() == 0
 
 
+def test_success_message_from_newer_pip_is_allowed(monkeypatch):
+    module = _module()
+    monkeypatch.setattr(
+        module.subprocess,
+        "run",
+        lambda *args, **kwargs: subprocess.CompletedProcess(
+            args[0],
+            0,
+            "No broken requirements found.\n",
+            "",
+        ),
+    )
+
+    assert module.main() == 0
+
+
 def test_every_other_dependency_conflict_still_blocks_release(monkeypatch):
     module = _module()
     monkeypatch.setattr(
