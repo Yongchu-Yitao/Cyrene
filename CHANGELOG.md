@@ -6,6 +6,7 @@
 
 ### 功能变更
 
+- Linux 桌面版恢复默认硬件加速，避免大面积毛玻璃、遮罩与动画在软件渲染下导致滚动、输入和窗口缩放卡顿；不兼容的 Wayland、Mesa 或虚拟 GPU 环境可用 `CYRENE_DISABLE_HARDWARE_ACCELERATION=1` 显式回退软件渲染。
 - 修复 Apple Silicon 安装包的本地 Qwen3 Embedding 运行环境，显式打包 MLX 与 MLX-LM 依赖，避免模型已下载并启用后连接测试仍失败、知识库无法向量化。
 - 本地 Qwen3 Embedding 在 MLX 初始化或推理失败时会自动尝试已有 ONNX 权重；两条路径均不可用时会保留各自失败原因，提升安装版容错能力。
 - 本地 Embedding 连接测试会返回可操作的具体错误，不再统一显示 `connection test failed`，便于区分依赖缺失、权重不可用与推理失败。

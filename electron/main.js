@@ -236,12 +236,12 @@ if (isLinux) {
   }
 }
 
-// Electron's GPU process can start successfully while producing an entirely
-// white compositor surface on some Linux/Wayland, virtualized, and older Mesa
-// setups. AppImage users cannot switch Electron builds or system libraries, so
-// prefer Chromium's software renderer there. Set the opt-out only when
-// diagnosing a machine known to have a working GPU stack.
-if (isLinux && process.env.CYRENE_ENABLE_HARDWARE_ACCELERATION !== '1') {
+// Cyrene's glass and mask-heavy workbench relies on Chromium's GPU compositor
+// for responsive scrolling, typing, and window resizing. Keep acceleration on
+// by default on Linux, as it is on macOS and Windows. A small number of older
+// Mesa, virtual-GPU, or Wayland setups can still produce a blank surface; those
+// machines can explicitly opt into the compatibility renderer.
+if (isLinux && process.env.CYRENE_DISABLE_HARDWARE_ACCELERATION === '1') {
   app.disableHardwareAcceleration();
 }
 

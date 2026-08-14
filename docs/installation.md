@@ -53,9 +53,11 @@ sudo apt install ./Cyrene-*-x64.deb
 sudo dnf install ./Cyrene-*-x64.rpm
 ```
 
-The desktop app uses software rendering by default on Linux to avoid blank
-Electron surfaces caused by incompatible Wayland, Mesa, or virtual GPU stacks.
-Set `CYRENE_ENABLE_HARDWARE_ACCELERATION=1` only to opt back into GPU rendering.
+The desktop app uses hardware acceleration by default on Linux so that the
+Workbench's glass and compositing effects remain responsive. If an older Mesa,
+Wayland, or virtual-GPU stack produces a blank Electron window, launch Cyrene
+with `CYRENE_DISABLE_HARDWARE_ACCELERATION=1` to use the compatibility software
+renderer instead.
 
 ## Windows
 

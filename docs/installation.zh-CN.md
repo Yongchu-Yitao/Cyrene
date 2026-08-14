@@ -52,9 +52,9 @@ sudo apt install ./Cyrene-*-x64.deb
 sudo dnf install ./Cyrene-*-x64.rpm
 ```
 
-Linux 桌面版默认使用软件渲染，规避 Wayland、Mesa 或虚拟 GPU
-不兼容导致的 Electron 纯白窗口。仅在确认 GPU Stack 工作正常时设置
-`CYRENE_ENABLE_HARDWARE_ACCELERATION=1` 恢复硬件加速。
+Linux 桌面版默认使用硬件加速，保证 Workbench 的毛玻璃与合成效果流畅。
+如果较旧的 Mesa、Wayland 或虚拟 GPU 环境出现 Electron 纯白窗口，可设置
+`CYRENE_DISABLE_HARDWARE_ACCELERATION=1` 启用兼容性软件渲染。
 
 ## Windows
 

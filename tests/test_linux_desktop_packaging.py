@@ -110,11 +110,17 @@ def test_release_pipeline_smoke_tests_and_publishes_all_linux_packages():
     assert "LINUX_RPM_INSTALL_SMOKE_TEST=ok" in rpm_smoke
 
 
-def test_linux_desktop_uses_software_rendering_and_reports_renderer_failures():
+def test_linux_desktop_uses_gpu_by_default_with_explicit_software_fallback():
     main = (ROOT / "electron" / "main.js").read_text(encoding="utf-8")
 
-    assert "CYRENE_ENABLE_HARDWARE_ACCELERATION" in main
+    assert "CYRENE_DISABLE_HARDWARE_ACCELERATION === '1'" in main
+    assert "CYRENE_ENABLE_HARDWARE_ACCELERATION" not in main
     assert "app.disableHardwareAcceleration()" in main
+    linux_fallback = main.split(
+        "if (isLinux && process.env.CYRENE_DISABLE_HARDWARE_ACCELERATION === '1')",
+        1,
+    )[1].split("}", 1)[0]
+    assert "app.disableHardwareAcceleration()" in linux_fallback
     assert "sandboxStat.uid === 0" in main
     assert "(sandboxStat.mode & 0o4000) !== 0" in main
     assert "app.commandLine.appendSwitch('no-sandbox')" in main

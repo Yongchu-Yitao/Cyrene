@@ -4,6 +4,17 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 
 
+def test_windows_arm_keeps_electron_hardware_acceleration_enabled():
+    main = (ROOT / "electron" / "main.js").read_text(encoding="utf-8")
+    fallback_guard = (
+        "if (isLinux && "
+        "process.env.CYRENE_DISABLE_HARDWARE_ACCELERATION === '1') {"
+    )
+
+    acceleration_prefix = main.split("app.disableHardwareAcceleration()", 1)[0]
+    assert acceleration_prefix.rstrip().endswith(fallback_guard)
+
+
 def test_windows_release_installs_required_native_runtime_packages():
     requirements = (
         ROOT / "build" / "requirements-windows-release.txt"
