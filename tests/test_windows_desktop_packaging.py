@@ -37,6 +37,8 @@ def test_windows_release_installs_required_native_runtime_packages():
 
     build = (ROOT / "build" / "build.py").read_text(encoding="utf-8")
     assert 'os.environ["CYRENE_WOA_NATIVE_CORE"] = "1"' in build
+    assert "_ensure_windows_arm_runtime_dlls" in build
+    assert '"vcruntime140_1.dll"' in build
     assert "stage_woa_x64_sidecars" in build
     assert "build-windows-arm-sidecars:" in workflow
     assert "CYRENE_OCR_SIDECAR_SMOKE=ok" in workflow

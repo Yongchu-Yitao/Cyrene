@@ -186,6 +186,49 @@ def build_webui_js() -> None:
     print("  [ok] JSX compiled")
 
 
+def _pe_machine(path: Path) -> int:
+    """Return the PE machine field for a Windows native binary."""
+    with path.open("rb") as stream:
+        stream.seek(0x3C)
+        pe_offset = struct.unpack("<I", stream.read(4))[0]
+        stream.seek(pe_offset + 4)
+        return struct.unpack("<H", stream.read(2))[0]
+
+
+def _ensure_windows_arm_runtime_dlls() -> None:
+    """Replace an emulated x64 VC runtime accidentally collected by PyInstaller."""
+    target = DIST_DIR / "Cyrene" / "_internal" / "vcruntime140_1.dll"
+    if not target.is_file() or _pe_machine(target) in {0xAA64, 0xA641}:
+        return
+
+    candidates: list[Path] = []
+    system_root = os.environ.get("SystemRoot")
+    if system_root:
+        candidates.append(Path(system_root) / "System32" / target.name)
+    redist_root = os.environ.get("VCToolsRedistDir")
+    if redist_root:
+        candidates.extend(Path(redist_root).glob(f"arm64/**/{target.name}"))
+    program_files_x86 = os.environ.get("ProgramFiles(x86)")
+    if program_files_x86:
+        vs_root = Path(program_files_x86) / "Microsoft Visual Studio" / "2022"
+        candidates.extend(
+            vs_root.glob(f"*/VC/Redist/MSVC/*/arm64/**/{target.name}")
+        )
+
+    native = next(
+        (
+            candidate
+            for candidate in candidates
+            if candidate.is_file() and _pe_machine(candidate) in {0xAA64, 0xA641}
+        ),
+        None,
+    )
+    if native is None:
+        raise SystemExit(f"Native ARM64 {target.name} was not found on the build host")
+    shutil.copy2(native, target)
+    print(f"  [ok] replaced emulated VC runtime with {native}")
+
+
 def run_pyinstaller(arch: str = "x64") -> None:
     """运行 PyInstaller。"""
     print("\n[PyInstaller] Building...")
@@ -206,6 +249,8 @@ def run_pyinstaller(arch: str = "x64") -> None:
     if result.returncode != 0:
         print("  [error] PyInstaller failed")
         sys.exit(1)
+    if sys.platform == "win32" and arch == "arm64":
+        _ensure_windows_arm_runtime_dlls()
     print("  [ok] PyInstaller done")
 
 
