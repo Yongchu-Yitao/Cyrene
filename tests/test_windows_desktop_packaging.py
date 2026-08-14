@@ -28,8 +28,12 @@ def test_windows_release_installs_required_native_runtime_packages():
     assert "CYRENE_PYTHON_BUNDLE_ARCH: x64" not in arm_job
     assert "windows-arm-x64-sidecars" in arm_job
     assert "onnxruntime_qnn" in arm_job
-    assert "vcpkg install openssl:arm64-windows" in arm_job
-    assert "--force-reinstall --no-binary cryptography" in arm_job
+    assert "vcpkg install openssl:arm64-windows-static-md" in arm_job
+    assert "--force-reinstall --no-deps --no-binary cryptography" in arm_job
+    assert arm_job.index("Build native ARM64 cryptography runtime") < arm_job.index(
+        "Install MCP runtime"
+    )
+    assert "$PSNativeCommandUseErrorActionPreference = $true" in arm_job
 
     build = (ROOT / "build" / "build.py").read_text(encoding="utf-8")
     assert 'os.environ["CYRENE_WOA_NATIVE_CORE"] = "1"' in build
