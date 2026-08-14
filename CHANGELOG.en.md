@@ -12,6 +12,7 @@ The Chinese edition remains the most detailed record for older releases.
 - Fixed the local Qwen3 Embedding runtime in Apple Silicon desktop packages by explicitly bundling MLX and MLX-LM, preventing downloaded and enabled models from failing connection tests and blocking Knowledge Library vectorization.
 - Local Qwen3 Embedding now falls back to an existing ONNX pack when MLX initialization or inference fails; when both paths are unavailable, both failure causes are retained for better diagnostics and resilience.
 - Local embedding connection tests now return actionable failure details instead of the generic `connection test failed`, making missing dependencies, unavailable weights, and inference failures easier to distinguish.
+- Workbench inbox telemetry and result acknowledgements now use serialized short transactions, preventing concurrent SQLite writes from blocking Agent tool-result processing.
 
 ### Interface changes
 

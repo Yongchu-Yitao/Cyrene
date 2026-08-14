@@ -15,7 +15,9 @@ import asyncio
 import json
 import logging
 import sqlite3
+import threading
 import time
+from contextlib import contextmanager
 from contextvars import ContextVar
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -97,6 +99,10 @@ class WorkbenchAgentInbox:
         self._live_dedupe_events: dict[str, dict[str, Any]] = {}
         self._termination_reason = ""
         self._telemetry_tail: asyncio.Task[Any] | None = None
+        # Telemetry and queue acknowledgements can run concurrently in worker
+        # threads. Serialize this inbox's short SQLite transactions so a
+        # background trace write cannot hold up the agent's result path.
+        self._db_lock = threading.RLock()
         self._result_queued_at: dict[str, float] = {}
         self._tool_submitted_at: dict[str, float] = {}
         self._live_tool_states: dict[str, dict[str, Any]] = {}
@@ -114,8 +120,19 @@ class WorkbenchAgentInbox:
         conn.execute("PRAGMA journal_mode = WAL")
         return conn
 
+    @contextmanager
+    def _db_connection(self):
+        """Commit and close one serialized inbox database transaction."""
+        with self._db_lock:
+            conn = self._connect()
+            try:
+                with conn:
+                    yield conn
+            finally:
+                conn.close()
+
     def _ensure_schema(self) -> None:
-        with self._connect() as conn:
+        with self._db_connection() as conn:
             conn.execute(
                 """
                 CREATE TABLE IF NOT EXISTS workbench_agent_inbox (
@@ -333,7 +350,7 @@ class WorkbenchAgentInbox:
         if not self.db_path:
             return
         try:
-            with self._connect() as conn:
+            with self._db_connection() as conn:
                 conn.execute(
                     """
                     INSERT INTO workbench_agent_run_events
@@ -361,7 +378,7 @@ class WorkbenchAgentInbox:
         if not self.db_path:
             return True
         try:
-            with self._connect() as conn:
+            with self._db_connection() as conn:
                 cursor = conn.execute(
                     """
                     INSERT OR IGNORE INTO workbench_agent_inbox
@@ -388,7 +405,7 @@ class WorkbenchAgentInbox:
         if not self.db_path or not dedupe_key:
             return ""
         try:
-            with self._connect() as conn:
+            with self._db_connection() as conn:
                 row = conn.execute(
                     "SELECT event_id FROM workbench_agent_inbox WHERE session_id=? AND dedupe_key=?",
                     (self.session_id, dedupe_key),
@@ -409,7 +426,7 @@ class WorkbenchAgentInbox:
         if not self.db_path or not dedupe_key:
             return None
         try:
-            with self._connect() as conn:
+            with self._db_connection() as conn:
                 row = conn.execute(
                     """
                     SELECT event_id, run_id, round_id, batch_id, event_type,
@@ -445,7 +462,7 @@ class WorkbenchAgentInbox:
         if not self.db_path:
             return
         try:
-            with self._connect() as conn:
+            with self._db_connection() as conn:
                 conn.execute(
                     "UPDATE workbench_agent_inbox SET status='completed', completed_at=? "
                     "WHERE event_id=? AND session_id=?",
@@ -458,7 +475,7 @@ class WorkbenchAgentInbox:
         if not self.db_path:
             return
         try:
-            with self._connect() as conn:
+            with self._db_connection() as conn:
                 conn.execute(
                     "UPDATE workbench_agent_inbox SET status='claimed' "
                     "WHERE event_id=? AND session_id=? AND status='queued'",
@@ -475,7 +492,7 @@ class WorkbenchAgentInbox:
         next resumed.
         """
         try:
-            with self._connect() as conn:
+            with self._db_connection() as conn:
                 conn.execute(
                     "UPDATE workbench_agent_inbox SET status='failed', completed_at=?, "
                     "termination_reason='process_recovery' "
@@ -1195,7 +1212,7 @@ class WorkbenchAgentInbox:
         if not self.db_path:
             return
         try:
-            with self._connect() as conn:
+            with self._db_connection() as conn:
                 conn.execute(
                     "UPDATE workbench_agent_inbox SET status='cancelled', completed_at=?, "
                     "termination_reason=? WHERE session_id=? AND run_id=? "
@@ -1209,7 +1226,7 @@ class WorkbenchAgentInbox:
         if not self.db_path:
             return
         try:
-            with self._connect() as conn:
+            with self._db_connection() as conn:
                 conn.execute(
                     "UPDATE workbench_agent_inbox SET status='cancelled', completed_at=?, "
                     "termination_reason=? WHERE event_id=? AND session_id=? "

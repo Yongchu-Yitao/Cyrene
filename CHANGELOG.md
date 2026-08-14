@@ -9,6 +9,7 @@
 - 修复 Apple Silicon 安装包的本地 Qwen3 Embedding 运行环境，显式打包 MLX 与 MLX-LM 依赖，避免模型已下载并启用后连接测试仍失败、知识库无法向量化。
 - 本地 Qwen3 Embedding 在 MLX 初始化或推理失败时会自动尝试已有 ONNX 权重；两条路径均不可用时会保留各自失败原因，提升安装版容错能力。
 - 本地 Embedding 连接测试会返回可操作的具体错误，不再统一显示 `connection test failed`，便于区分依赖缺失、权重不可用与推理失败。
+- Workbench inbox 的后台遥测与结果确认改为串行短事务，避免并发写入 SQLite 时锁住 Agent 的工具结果处理。
 
 ### 界面变化
 
