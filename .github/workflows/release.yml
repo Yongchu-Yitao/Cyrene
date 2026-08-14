@@ -342,7 +342,9 @@ jobs:
           if ($process.ExitCode -notin @(0, 1638, 3010)) {
             throw "ARM64 VC runtime installer exited with code $($process.ExitCode)"
           }
-          python -c "from pathlib import Path; import os, struct; p=Path(os.environ['SystemRoot'])/'System32'/'vcruntime140_1.dll'; f=p.open('rb'); f.seek(0x3c); o=struct.unpack('<I',f.read(4))[0]; f.seek(o+4); m=struct.unpack('<H',f.read(2))[0]; f.close(); assert m in {0xaa64,0xa641}, hex(m); print(f'arm64-vc-runtime-ok: {p}')"
+          # Microsoft's ARM64 redistributable ships this runtime as ARM64X. A
+          # final ARM64X DLL may carry either the AMD64 or ARM64 PE machine value.
+          python -c "from pathlib import Path; import os, struct; p=Path(os.environ['SystemRoot'])/'System32'/'vcruntime140_1.dll'; f=p.open('rb'); f.seek(0x3c); o=struct.unpack('<I',f.read(4))[0]; f.seek(o+4); m=struct.unpack('<H',f.read(2))[0]; f.close(); assert m in {0x8664,0xaa64}, hex(m); print(f'arm64x-vc-runtime-ok: {p} ({hex(m)})')"
 
       - name: Install Electron deps
         run: cd electron && npm ci --prefer-offline --no-audit --no-fund

@@ -75,6 +75,7 @@ def test_windows_release_installs_and_runs_the_built_nsis_package():
     assert "function Get-PeArchitecture" in smoke
     assert "function Assert-NativeArm64Tree" in smoke
     assert 'contains non-ARM native binaries' in smoke
+    assert '$file.Name -ieq "vcruntime140_1.dll" -and $actual -eq "x64"' in smoke
     assert 'Assert-PeArchitecture -Path $installedApp -Expected $Arch' in smoke
     assert 'Assert-PeArchitecture -Path $installedBackend -Expected $backendArch' in smoke
     assert 'Assert-PeArchitecture -Path $ocrSidecar -Expected "x64"' in smoke

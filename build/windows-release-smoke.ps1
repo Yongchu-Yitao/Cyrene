@@ -112,6 +112,10 @@ function Assert-NativeArm64Tree {
     foreach ($file in Get-ChildItem -Path $Root -Recurse -File) {
         if ($file.Extension.ToLowerInvariant() -notin @(".exe", ".dll", ".pyd", ".node")) { continue }
         $actual = Get-PeArchitecture -Path $file.FullName
+        # Microsoft ships vcruntime140_1.dll in the ARM64 redistributable as
+        # ARM64X. Final ARM64X DLLs may expose the x64 PE machine value while
+        # remaining natively loadable by ARM64 processes.
+        if ($file.Name -ieq "vcruntime140_1.dll" -and $actual -eq "x64") { continue }
         if ($actual -notin @("arm64", "arm64ec")) {
             $foreign += "$actual $($file.FullName)"
         }

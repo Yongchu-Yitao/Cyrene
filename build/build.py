@@ -196,7 +196,7 @@ def _pe_machine(path: Path) -> int:
 
 
 def _ensure_windows_arm_runtime_dlls() -> None:
-    """Replace an emulated x64 VC runtime accidentally collected by PyInstaller."""
+    """Replace PyInstaller's VC runtime with the official ARM64X redistributable."""
     target = DIST_DIR / "Cyrene" / "_internal" / "vcruntime140_1.dll"
     if not target.is_file() or _pe_machine(target) in {0xAA64, 0xA641}:
         return
@@ -219,7 +219,10 @@ def _ensure_windows_arm_runtime_dlls() -> None:
         (
             candidate
             for candidate in candidates
-            if candidate.is_file() and _pe_machine(candidate) in {0xAA64, 0xA641}
+            # The official ARM64 redistributable uses an ARM64X final DLL,
+            # which may carry the AMD64 machine value while remaining loadable
+            # by both native ARM64 and x64 processes.
+            if candidate.is_file() and _pe_machine(candidate) in {0x8664, 0xAA64}
         ),
         None,
     )
