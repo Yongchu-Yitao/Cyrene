@@ -805,6 +805,22 @@ def test_browser_can_be_copied_to_another_conversation_by_drop():
     assert '{ [targetChatId]: "pip" }' in chat
 
 
+def test_conversation_drag_can_be_pinned_as_a_read_only_topbar_resource():
+    shell = (ROOT / "src/webui/frontend/workbench.jsx").read_text(encoding="utf-8")
+    chat = (ROOT / "src/webui/frontend/workbench-chat.jsx").read_text(
+        encoding="utf-8"
+    )
+
+    assert 'transfer.effectAllowed = "copyMove"' in chat
+    assert 'chatMime: WBC_CHAT_DRAG_MIME' in chat
+    assert 'kind: "conversation"' in chat
+    assert 'conversationId: String(chat.id)' in chat
+    assert '["file", "browser", "snippet", "conversation"]' in shell
+    assert "acceptsResourceDrag(event, resourceApi, true)" in shell
+    assert 'resource.kind === "conversation"' in shell
+    assert 'chatId: resource.conversationId || resource.ownerSessionId' in shell
+
+
 def test_browser_copy_helper_creates_target_session_tab_without_reusing_owner():
     source = (ROOT / "src/webui/frontend/workbench.jsx").read_text(encoding="utf-8")
     helper = source.split("function wbCopyBrowserToChat", 1)[1].split(
@@ -881,7 +897,7 @@ def test_topbar_sessions_and_resources_have_keyboard_control():
     assert 'keys: ["mod", "W"]' in shortcuts
 
 
-def test_empty_resource_shelf_uses_a_right_aligned_pin_hint():
+def test_resource_shelf_fills_topbar_gap_with_a_left_aligned_pin_hint():
     shell = (ROOT / "src/webui/frontend/workbench.jsx").read_text(encoding="utf-8")
     css = (ROOT / "src/webui/frontend/workbench.css").read_text(encoding="utf-8")
 
@@ -891,8 +907,11 @@ def test_empty_resource_shelf_uses_a_right_aligned_pin_hint():
     empty_hint_css = css.split(".workbench-resource-shelf-empty {", 1)[1].split(
         "}", 1
     )[0]
+    shelf_css = css.split(".workbench-resource-shelf {", 1)[1].split("}", 1)[0]
 
     assert 'viewBox="0 0 24 24"' in empty_hint
     assert '<path d="M12 17v5" />' in empty_hint
     assert '<path d="M5 17h14" />' in empty_hint
-    assert "margin-left: auto" in empty_hint_css
+    assert "width: 100%" in shelf_css
+    assert "max-width: none" in shelf_css
+    assert "margin-left: 0" in empty_hint_css

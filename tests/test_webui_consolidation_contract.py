@@ -211,6 +211,8 @@ def test_single_webui_source_build_and_entrypoint_shape():
 
     package = json.loads((WEBUI_ROOT / "package.json").read_text(encoding="utf-8"))
     assert set(package["dependencies"]) == {
+        "@aiden0z/pptx-renderer",
+        "docx-preview",
         "esbuild",
         "echarts",
         "katex",

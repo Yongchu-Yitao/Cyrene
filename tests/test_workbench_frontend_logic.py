@@ -160,6 +160,68 @@ process.stdout.write(JSON.stringify(files.map(wbcAttachmentVisualKind)));
     assert json.loads(completed.stdout) == ["markdown", "code", "note", "doc", "markdown"]
 
 
+def test_file_view_kind_recognizes_project_images_without_mime_metadata():
+    root = Path(__file__).resolve().parent.parent
+    source = (root / "src" / "webui" / "frontend" / "workbench-chat.jsx").read_text(
+        encoding="utf-8"
+    )
+    constants = "var WBC_CODE_EXTS" + source.split("var WBC_CODE_EXTS", 1)[1].split(
+        "function wbcFileViewKind", 1
+    )[0]
+    helper = "function wbcFileViewKind" + source.split(
+        "function wbcFileViewKind", 1
+    )[1].split("function wbcAttachmentVisualKind", 1)[0]
+    script = f"""
+eval({json.dumps(constants + helper)});
+const files = [
+  {{ name: 'sorting_viz_preview.png' }},
+  {{ path: 'images/photo.JPG' }},
+  {{ filename: 'cover.avif' }},
+  {{ contentType: 'image/jpeg' }}
+];
+process.stdout.write(JSON.stringify(files.map(wbcFileViewKind)));
+"""
+    completed = subprocess.run(["node", "-e", script], check=True, capture_output=True, text=True)
+
+    assert json.loads(completed.stdout) == ["image", "image", "image", "image"]
+
+
+def test_office_files_use_lazy_browser_renderers_with_resource_limits():
+    root = Path(__file__).resolve().parent.parent
+    source = (root / "src" / "webui" / "frontend" / "workbench-chat.jsx").read_text(
+        encoding="utf-8"
+    )
+    build_script = (root / "src" / "webui" / "build-jsx.mjs").read_text(
+        encoding="utf-8"
+    )
+    package = json.loads(
+        (root / "src" / "webui" / "package.json").read_text(encoding="utf-8")
+    )
+
+    assert 'return "docx";' in source
+    assert 'return "pptx";' in source
+    assert 'return <WbcOfficeViewer key={url} file={file}' in source
+    assert 'renderAltChunks: false' in source
+    assert 'zipLimits: renderer.RECOMMENDED_ZIP_LIMITS' in source
+    assert 'fitMode: "contain"' in source
+    assert 'scrollContainer: container' in source
+    assert 'lazySlides: true' in source
+    assert 'lazyMedia: true' in source
+    assert 'var fitScale = Math.min(1, availableWidth / pageWidth);' in source
+    assert 'page.style.zoom = String(fitScale);' in source
+    assert 'renderTarget.className = "wbc-office-content";' in source
+    assert 'contentRef.current.style.transform = "scale(" + (next / 100) + ")";' in source
+    assert 'Math.max(100, Math.min(300, Number(nextZoom) || 100))' in source
+    assert 'viewerRef.current.setZoom(next)' not in source
+    assert 'viewerRef.current.destroy()' in source
+    assert 'wbcValidateOfficeArchive(buffer)' in source
+    assert 'script.src = "/static/app/office/"' in source
+    assert "office-docx.js" in build_script
+    assert "office-pptx.js" in build_script
+    assert package["dependencies"]["docx-preview"] == "0.4.0"
+    assert package["dependencies"]["@aiden0z/pptx-renderer"] == "1.2.4"
+
+
 def test_chat_file_visual_uses_the_precise_attachment_kind_for_icon_and_tone():
     root = Path(__file__).resolve().parent.parent
     source = (root / "src" / "webui" / "frontend" / "workbench-chat.jsx").read_text(
@@ -1352,11 +1414,12 @@ def test_workbench_side_question_opens_the_existing_conversation_ui_in_a_split()
     assert "function wbcHasSplitDrag" in source
     assert "function handleSplitDragStart" in source
     assert "setDragImage" in source
-    # The native ghost is hidden (1x1 canvas); a raw-DOM overlay (drag ghost
+    # The native ghost is hidden with a preloaded transparent image; a raw-DOM overlay (drag ghost
     # + drop zones) follows the pointer and shrinks to a chat card over the
     # conversation rail. It is built outside React so the drag source's DOM
     # never changes mid-drag (a re-render there cancels the drag).
-    assert "canvas.width = 1;" in source
+    assert "var WBC_EMPTY_DRAG_IMAGE = new Image(1, 1);" in source
+    assert "function wbcHideNativeDragImage(transfer)" in source
     assert "splitOverlayCleanupRef" in source
     assert "onDocumentDrop" in source
     assert "function zoneAt" in source
@@ -1367,7 +1430,20 @@ def test_workbench_side_question_opens_the_existing_conversation_ui_in_a_split()
     assert "var scrollTop = Number(source.scrollTop) || 0;" in source
     assert "if (scrollTop || scrollLeft)" in source
     assert "viewportState[j].target.scrollTop = viewportState[j].scrollTop;" in source
-    assert "if (restoreGhostViewport) restoreGhostViewport();" in source
+    assert "if (restoreGhostViewport) {" in source
+    assert "restoreGhostViewport();" in source
+    assert "var removedThreadPadding = Math.max(0, sourceThreadPaddingTop - ghostThreadPaddingTop);" in source
+    assert "ghostThread.scrollTop = Math.max(0, ghostThread.scrollTop - removedThreadPadding);" in source
+    assert "var dragHandleRect = dragHandle && dragHandle.getBoundingClientRect" in source
+    assert "var ghostTopGrabOffset = dragHandleRect" in source
+    assert 'ghost.style.top = (event.clientY - ghostTopGrabOffset) + "px";' in source
+    assert "y: ghostTopGrabOffset" in source
+    assert "function positionGhostAt(clientX, clientY)" in source
+    assert 'ghost.classList.contains("card") && cardW ? cardW' in source
+    assert "window.innerWidth - targetWidth - viewportInset" in source
+    assert "window.innerHeight - targetHeight - viewportInset" in source
+    assert "positionGhostAt(ev.clientX, ev.clientY);" in source
+    assert "positionGhostAt(event.clientX, event.clientY);" in source
     assert "cardClone" in source
     assert 'data-chat-id={String(chat.id)}' in source
     assert "wbc-split-card-lifted" in styles
@@ -1455,6 +1531,15 @@ process.stdout.write(JSON.stringify([
         body = source.split(marker, 1)[1].split(tail, 1)[0]
         assert "<WbcSplitGripBar" not in body, name
     assert "wbc-split-drag-ghost" in styles
+    drag_ghost_css = styles.split(".wbc-split-drag-ghost {", 1)[1].split("}", 1)[0]
+    assert "box-sizing: border-box;" in drag_ghost_css
+    assert "background: var(--wb-main-bg);" in drag_ghost_css
+    assert "0 6px 18px rgba(15, 23, 42, 0.08)" in drag_ghost_css
+    assert "--wbc-thread-inset-top: 24px;" in styles
+    assert ".wbc-split-drag-ghost .wbc-thread" in styles
+    assert "padding-inline: 24px;" in styles
+    assert ".wbc-split-drag-ghost > .wbc-conversation-split" in styles
+    assert ".wbc-split-drag-ghost .wbc-split-panel-grip" in styles
     assert 'wbcT("workbenchChat.splitDropClose"' in source
     assert 'wbcT("workbenchChat.splitDropLeft"' in source
     assert 'wbcT("workbenchChat.splitDropRight"' in source
@@ -1887,6 +1972,46 @@ def test_workbench_message_viewer_action_opens_the_file_split_directly():
     assert 'setSideTab("viewer");' not in open_viewer
     assert 'selectResourceSplit("viewer", wbcArtifactFileKey(file));' in open_viewer
     assert "viewerFile && wbcArtifactFileKey(viewerFile)" in source
+    close_viewer = source.split("  function closeResourceSplit() {", 1)[1].split(
+        "\n  function closeMainConversationSplit", 1
+    )[0]
+    assert 'resourceSplitByChat[chatId].type === "viewer"' in close_viewer
+    assert "setViewerFile(null);" in close_viewer
+    assert 'return current === "viewer" ? "" : current;' in close_viewer
+
+
+def test_project_file_rows_drag_to_viewer_split_and_topbar_resource_shelf():
+    root = Path(__file__).resolve().parent.parent
+    source = (root / "src" / "webui" / "frontend" / "workbench-chat.jsx").read_text(
+        encoding="utf-8"
+    )
+    styles = (root / "src" / "webui" / "frontend" / "workbench.css").read_text(
+        encoding="utf-8"
+    )
+
+    project_resource = source.split("function wbcProjectFileResource", 1)[1].split(
+        "function WbcRail", 1
+    )[0]
+    project_rows = source.split('{railMode === "files" ? (', 1)[1].split(
+        ") : (", 1
+    )[0]
+    split_drop = source.split("  function resourceSplitSideAt", 1)[1].split(
+        "\n  function revealTopbarResource", 1
+    )[0]
+
+    assert 'source: "project"' in project_resource
+    assert '"/api/projects/" + encodeURIComponent(projectId) + "/files/content/"' in project_resource
+    assert 'draggable={projectFile ? "true" : undefined}' in project_rows
+    assert "wbcStartFileDrag(event, projectFile)" in project_rows
+    assert "wbcSetResourceDrag(event, wbcFileDragPayload(" in source
+    assert "path: file && file.path" in source
+    assert "source: file && file.source" in source
+    assert "wbcHasResourceDrag(event)" in split_drop
+    assert 'resource.kind !== "file"' in split_drop
+    assert "setSplitSideDirect(side);" in split_drop
+    assert "openViewer(resource.file" in split_drop
+    assert 'className="wbc-resource-file-drop-zones"' in source
+    assert ".wbc-resource-file-drop-zones" in styles
 
 
 def test_workbench_changes_panel_is_list_only_and_opens_shared_diff_split():
@@ -4272,7 +4397,7 @@ def test_workbench_chat_cards_reorder_and_open_when_dropped_on_conversation():
     assert 'clone.classList.remove("track-marker-ready", "dragging")' in rail
     assert 'document.body.appendChild(host)' in rail
     assert 'document.addEventListener("dragover", moveDragImage, true)' in rail
-    assert "transfer.setDragImage(canvas, 0, 0)" in rail
+    assert "wbcHideNativeDragImage(transfer)" in rail
     assert "clearRailDragImage();" in rail
     assert ".wbc-native-chat-drag-image::before" in styles
     drag_image_css = styles.split(
@@ -4735,6 +4860,8 @@ def test_collapsed_chat_rail_measures_expanded_row_centres_for_spatial_mapping()
     assert "--wbc-track-blue: #4f83e8" in base_track
     assert "top: 62px" in base_track
     assert "bottom: 270px" in base_track
+    assert "clip-path" not in base_track
+    assert "overflow: hidden" not in base_track
     assert "visibility" not in collapsed_track
 
     anchor_css = styles.split(".wbc-conversation-status-anchor {", 1)[1].split("}", 1)[0]
@@ -4780,6 +4907,15 @@ def test_collapsed_chat_rail_measures_expanded_row_centres_for_spatial_mapping()
     assert "transition-delay: 0ms !important" in reduced_motion_css
     assert "wbc-status-enable-interaction 240ms" in collapsed_anchor_css
     assert ".wbc-chat-card.track-marker-ready .wbc-chat-row-icon" in styles
+    marker_css = styles.split(".wbc-conversation-status-marker {", 1)[1].split("}", 1)[0]
+    assert "opacity: 0" in marker_css
+    assert "is-collapsed .wbc-conversation-status-marker" in styles
+    settled_row_icon_css = styles.split(
+        ".wbc-chat-card.track-marker-ready .wbc-chat-row-icon {", 1
+    )[1].split("}", 1)[0]
+    assert "opacity: 1" in settled_row_icon_css
+    assert "is-status-expanding .wbc-chat-card.track-marker-ready .wbc-chat-row-icon" in styles
+    assert "is-status-collapsing .wbc-chat-card.track-marker-ready .wbc-chat-row-icon" in styles
     assert "@keyframes wbc-status-enable-interaction" in styles
 
     collapsed_list_css = styles.split(
@@ -5567,7 +5703,12 @@ def test_workbench_keeps_one_persistent_module_dock_across_workspace_switches():
     assert "--wb-floating-rail-border:" in integrated_grid_css
     assert "--wb-floating-rail-radius: 18px;" in integrated_grid_css
     assert "--wb-floating-rail-bg:" in integrated_grid_css
+    assert "--wb-floating-rail-bg: var(--wb-composer-surface-color);" in integrated_grid_css
     assert "--wb-floating-rail-shadow:" in integrated_grid_css
+    assert "0 5px 14px rgba(15, 23, 42, .02)" in integrated_grid_css
+    agent_notification_css = styles.split(".wbc-agent-notification {", 1)[1].split("}", 1)[0]
+    assert "border: 1px solid" in agent_notification_css
+    assert "border-left:" not in agent_notification_css
     assert "--wb-floating-control-border:" in integrated_grid_css
     assert "--wb-floating-control-radius: 12px;" in integrated_grid_css
     assert "--wb-floating-control-bg:" in integrated_grid_css
@@ -5579,6 +5720,12 @@ def test_workbench_keeps_one_persistent_module_dock_across_workspace_switches():
     assert "border-radius: var(--wb-floating-rail-radius);" in integrated_rail_css
     assert "background: var(--wb-floating-rail-bg);" in integrated_rail_css
     assert "box-shadow: var(--wb-floating-rail-shadow);" in integrated_rail_css
+    assert ".workbench-integrated-rail:is(:hover, :focus-within)" in styles
+    shared_glass_css = styles.split(
+        "/* One shared glass material for every integrated module rail.", 1
+    )[1].split("}", 1)[0]
+    assert "box-shadow: var(--wb-floating-rail-shadow);" in shared_glass_css
+    assert "0 18px 44px" not in shared_glass_css
     assert "color-mix(in srgb, var(--wb-floating-rail-tint) 65%, transparent)" in integrated_grid_css
     assert ".workbench-grid.integrated-sidebars.rail-collapsed {" in styles
     collapsed_grid_css = styles.split(
@@ -5605,7 +5752,7 @@ def test_workbench_keeps_one_persistent_module_dock_across_workspace_switches():
     shared_body_css = styles.split(".workbench-integrated-rail-body {", 1)[1].split("}", 1)[0]
     assert "flex: 1 1 auto;" in shared_body_css
     assert "overflow-y: auto;" in shared_body_css
-    assert 'className="workbench-rail-head workbench-integrated-rail-head"' in source
+    assert 'className="workbench-rail-head workbench-integrated-rail-head workbench-integrated-rail-search-head"' in source
     assert 'className={"workbench-task-list workbench-integrated-rail-body"' in source
     assert "workbench-integrated-rail-head workbench-integrated-rail-search-head" in chat
     assert "wbc-chat-list workbench-integrated-rail-body" in chat
@@ -6478,7 +6625,20 @@ def test_workbench_side_viewer_keeps_html_sandboxed_and_uses_pdfjs_text_layer():
     assert '<WbcViewerList files={viewerItems} selectedFile={viewerFile} onSelect={onSelectViewer} />' in source
     assert 'selectResourceSplit("viewer", wbcArtifactFileKey(file))' in source
     assert 'onLoad={confirmViewed}' in source
+    assert 'onError={function () { setFailed(true); }}' in source
+    assert 'function handleMarkdownLink(event)' in source
+    assert 'href.charAt(0) !== "#"' in source
+    assert 'target.scrollIntoView({ behavior: "smooth", block: "start" });' in source
+    assert 'onClick={handleMarkdownLink}' in source
     assert 'return <WbcPdfJsViewer file={file} url={url} onViewed={confirmViewed} />;' in source
+    assert "viewer.currentScaleValue = 'page-width';" in source
+    assert 'fitScaleRef.current = viewer.currentScale;' in source
+    assert 'applyPdfGestureScale(v.currentScale / 1.15);' in source
+    assert 'Math.max(fitScaleRef.current, Math.min(5, nextScale))' in source
+    assert 'eventBus.on(\'pagesinit\', onPagesInit);' in source
+    assert 'new ResizeObserver(onContainerResize)' in source
+    assert 'Math.abs(measuredWidth - lastFitWidth) < 1' in source
+    assert 'function onSplitResizeEnd() { fitViewerWidth(true); }' in source
     assert '.wbc-viewer .pdfViewer .textLayer' not in styles
     viewer_pre_rule = styles.split('.wbc-viewer-pre {', 1)[1].split('}', 1)[0]
     assert 'color: #c9d1d9;' in viewer_pre_rule
@@ -6494,6 +6654,33 @@ def test_workbench_side_viewer_keeps_html_sandboxed_and_uses_pdfjs_text_layer():
     assert '.wbc-viewer-pre .hljs-built_in,' in styles
     assert "width: 100%;" in styles
     assert "height: 100%;" in styles
+    viewer_image_rule = styles.split('.wbc-viewer-img {', 1)[1].split('}', 1)[0]
+    assert 'object-fit: contain;' in viewer_image_rule
+    assert '.wbc-artifact-split .wbc-viewer-head:has(.wbc-viewer-zoom)' in styles
+    assert 'applyOfficeZoom(zoomRef.current + 25)' in source
+    assert 'applyImageZoom(imageZoomRef.current + 25)' in source
+    assert 'Math.max(100, Math.min(400, Number(nextZoom) || 100))' in source
+    assert 'style={{ width: imageZoom + "%", height: imageZoom + "%" }}' in source
+    assert 'function handleImageWheel(event)' in source
+    assert 'function handleOfficeWheel(event)' in source
+    assert 'function handlePdfWheel(event)' in source
+    assert 'function wbcZoomAnchorRestorer(container, oldScale, clientX, clientY)' in source
+    assert 'rect.width / 2' in source
+    assert 'contentX * safeNewScale - anchorX' in source
+    assert 'event.clientX, event.clientY' in source
+    assert '(event.touches[0].clientX + event.touches[1].clientX) / 2' in source
+    assert 'addEventListener("wheel", handleImageWheel, { passive: false })' in source
+    assert 'addEventListener("wheel", handleOfficeWheel, { passive: false })' in source
+    assert 'addEventListener("wheel", handlePdfWheel, { passive: false })' in source
+    assert 'addEventListener("touchmove", handleImageTouchMove, { passive: false })' in source
+    assert 'addEventListener("touchmove", handleOfficeTouchMove, { passive: false })' in source
+    assert 'addEventListener("touchmove", handlePdfTouchMove, { passive: false })' in source
+    pptx_surface_rule = styles.split(
+        '.wbc-office-viewer.is-pptx .wbc-office-render-surface {', 1
+    )[1].split('}', 1)[0]
+    assert 'overflow-x: hidden;' in pptx_surface_rule
+    assert 'background: #d9dde4;' in pptx_surface_rule
+    assert 'color-scheme: light;' in pptx_surface_rule
     assert r"/\.html?$/i.test(target.pathname)" in main
 
 
@@ -9072,6 +9259,9 @@ def test_profile_rail_displays_budget_in_existing_spacer():
 
 def test_task_board_scroll_canvas_reaches_behind_floating_rail_gutter():
     root = Path(__file__).resolve().parent.parent
+    source = (root / "src" / "webui" / "frontend" / "workbench.jsx").read_text(
+        encoding="utf-8"
+    )
     styles = (root / "src" / "webui" / "frontend" / "workbench.css").read_text(
         encoding="utf-8"
     )
@@ -9093,6 +9283,12 @@ def test_task_board_scroll_canvas_reaches_behind_floating_rail_gutter():
     assert "margin-inline: calc(0px - var(--wb-task-board-canvas-gutter));" in scroll_rule
     assert "background: var(--wb-floating-rail-bg);" in floating_rail_rule
     assert "opacity:" not in floating_rail_rule
+    assert "function handleBoardWheel(event)" in source
+    assert 'target.closest(".wb-board-column-body")' in source
+    assert "columnBody.scrollTop < maxColumnTop - 1" in source
+    assert "viewport.scrollWidth - viewport.clientWidth" in source
+    assert "viewport.scrollLeft = nextLeft;" in source
+    assert 'className="wb-board-scroll" onWheel={handleBoardWheel}' in source
 
 
 def test_conversation_status_preview_controls_share_floating_material():

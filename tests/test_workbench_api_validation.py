@@ -108,6 +108,30 @@ def test_activate_returns_small_selection_payload_without_heavy_store_read(monke
     }
 
 
+def test_project_file_content_streams_inline_and_rejects_symlinks(monkeypatch, tmp_path):
+    client = _client(monkeypatch, tmp_path)
+    workspace = tmp_path / "workspace"
+    nested = workspace / "docs"
+    nested.mkdir()
+    preview = nested / "说明.md"
+    preview.write_text("# Project preview\n", encoding="utf-8")
+
+    response = client.get("/api/projects/project_1/files/content/docs/%E8%AF%B4%E6%98%8E.md")
+
+    assert response.status_code == 200
+    assert response.text == "# Project preview\n"
+    assert response.headers["content-type"].startswith("text/markdown")
+    assert response.headers["content-disposition"].startswith("inline;")
+
+    outside = tmp_path / "outside.txt"
+    outside.write_text("private", encoding="utf-8")
+    (workspace / "outside-link.txt").symlink_to(outside)
+
+    blocked = client.get("/api/projects/project_1/files/content/outside-link.txt")
+    assert blocked.status_code == 403
+    assert blocked.json()["code"] == "symlink_not_allowed"
+
+
 def test_context_state_uses_lightweight_store_read_off_event_loop(
     monkeypatch, tmp_path,
 ):

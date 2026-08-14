@@ -10,6 +10,7 @@ from __future__ import annotations
 import threading
 import uuid
 import re
+from html import escape
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -48,17 +49,91 @@ def _write(payload: dict[str, Any]) -> None:
 def list_resources() -> list[dict[str, Any]]:
     with _LOCK:
         payload = _read()
-        return [
+        resources = [
             dict(item)
             for item in payload.get("resources", [])
             if isinstance(item, dict) and item.get("id")
         ]
+    return [
+        {**item, **_conversation_summary(item)}
+        if item.get("kind") == "conversation"
+        else item
+        for item in resources
+    ]
+
+
+def _bounded_message_text(message: Any, limit: int) -> str:
+    if not isinstance(message, dict) or not isinstance(message.get("content"), str):
+        return ""
+    text = re.sub(r"\s+", " ", message["content"]).strip()
+    return text[:limit]
+
+
+def _conversation_summary(item: dict[str, Any]) -> dict[str, Any]:
+    """Build bounded, read-only context without exposing the full transcript."""
+    chat_id = str(item.get("conversationId") or item.get("ownerSessionId") or "").strip()
+    if not chat_id:
+        return {"conversationId": "", "availability": "missing"}
+    try:
+        from cyrene.workbench import chat as chat_store
+
+        chat = chat_store.get_workbench_chat(chat_id)
+        if not chat:
+            return {"conversationId": chat_id, "availability": "missing"}
+        public = chat_store._public_chat_light(chat)
+    except Exception:
+        return {"conversationId": chat_id, "availability": "unavailable"}
+
+    visible_messages = [
+        message
+        for message in (chat.get("messages") or [])
+        if isinstance(message, dict)
+        and str(message.get("role") or "") in {"user", "assistant"}
+        and not bool(message.get("systemInitiated"))
+        and not bool(message.get("notificationCard"))
+        and isinstance(message.get("content"), str)
+        and message.get("content", "").strip()
+    ]
+    user_messages = [message for message in visible_messages if message.get("role") == "user"]
+    assistant_messages = [
+        message
+        for message in visible_messages
+        if message.get("role") == "assistant" and not bool(message.get("intermediate"))
+    ]
+    pending = chat.get("pendingQuestion") if isinstance(chat.get("pendingQuestion"), dict) else {}
+    open_question = next(
+        (
+            re.sub(r"\s+", " ", str(pending.get(key) or "")).strip()[:600]
+            for key in ("question", "prompt", "text", "message")
+            if str(pending.get(key) or "").strip()
+        ),
+        "",
+    )
+    generated_files = [
+        str(file.get("name") or Path(str(file.get("path") or "")).name).strip()
+        for file in (chat.get("generatedFiles") or [])
+        if isinstance(file, dict) and str(file.get("name") or file.get("path") or "").strip()
+    ][-8:]
+    return {
+        "conversationId": chat_id,
+        "availability": "available",
+        "title": str(public.get("title") or item.get("title") or "Conversation").strip(),
+        "status": str(public.get("runStatus") or public.get("status") or "idle"),
+        "updatedAt": str(public.get("updatedAt") or item.get("updatedAt") or ""),
+        "summary": {
+            "goal": _bounded_message_text(user_messages[0], 800) if user_messages else "",
+            "currentRequest": _bounded_message_text(user_messages[-1], 800) if user_messages else "",
+            "latestResult": _bounded_message_text(assistant_messages[-1], 1600) if assistant_messages else "",
+            "openQuestion": open_question,
+            "artifacts": generated_files,
+        },
+    }
 
 
 def upsert_resource(raw: dict[str, Any]) -> dict[str, Any]:
     kind = str(raw.get("kind") or "").strip().lower()
-    if kind not in {"file", "browser", "snippet"}:
-        raise ValueError("kind must be file, browser, or snippet")
+    if kind not in {"file", "browser", "snippet", "conversation"}:
+        raise ValueError("kind must be file, browser, snippet, or conversation")
     if kind == "snippet":
         text = str(raw.get("text") or "").strip()
         if not text:
@@ -115,6 +190,7 @@ def upsert_resource(raw: dict[str, Any]) -> dict[str, Any]:
         "kind": kind,
         "ownerSessionId": owner_session_id,
         "ownerProjectId": str(raw.get("ownerProjectId") or "").strip(),
+        "ownerProjectName": str(raw.get("ownerProjectName") or "").strip(),
         "title": str(raw.get("title") or raw.get("name") or ("Browser" if kind == "browser" else "file")).strip(),
         "url": str(raw.get("url") or "").strip(),
         "stableRef": stable_ref,
@@ -141,6 +217,11 @@ def upsert_resource(raw: dict[str, Any]) -> dict[str, Any]:
     elif kind == "browser":
         item.update({
             "tabId": str(raw.get("tabId") or "").strip(),
+            "readOnlyForOtherSessions": True,
+        })
+    elif kind == "conversation":
+        item.update({
+            "conversationId": str(raw.get("conversationId") or owner_session_id).strip(),
             "readOnlyForOtherSessions": True,
         })
 
@@ -218,6 +299,7 @@ def global_agent_context(current_session_id: str = "") -> str:
         "<pinned_topbar_resources>",
         "The user pinned these Workbench resources globally. Treat files as user-provided context.",
         "Pinned browsers owned by another session are strictly read-only: use browser.snapshot with resource_id; never navigate, click, type, reload, upload, or otherwise mutate them.",
+        "Pinned conversations are bounded read-only summaries. Never continue, stop, message, or otherwise control another conversation unless the user explicitly requests that separate action.",
     ]
     for item in resources:
         kind = str(item.get("kind") or "")
@@ -234,6 +316,27 @@ def global_agent_context(current_session_id: str = "") -> str:
                 f'- browser resource_id="{rid}" title="{item.get("title") or "Browser"}" '
                 f'url="{item.get("url") or ""}" owner_session="{owner}" access="{access}"'
             )
+        elif kind == "conversation":
+            summary = item.get("summary") if isinstance(item.get("summary"), dict) else {}
+            access = "owner" if owner == str(current_session_id or "") else "read-only"
+            lines.extend([
+                (
+                    f'- <conversation resource_id="{escape(rid, quote=True)}" '
+                    f'title="{escape(str(item.get("title") or "Conversation"), quote=True)}" '
+                    f'project="{escape(str(item.get("ownerProjectName") or item.get("ownerProjectId") or ""), quote=True)}" '
+                    f'project_id="{escape(str(item.get("ownerProjectId") or ""), quote=True)}" '
+                    f'owner_session="{escape(owner, quote=True)}" '
+                    f'status="{escape(str(item.get("status") or "unknown"), quote=True)}" '
+                    f'updated_at="{escape(str(item.get("updatedAt") or ""), quote=True)}" '
+                    f'access="{access}">'
+                ),
+                f'  <goal>{escape(str(summary.get("goal") or ""))}</goal>',
+                f'  <current_request>{escape(str(summary.get("currentRequest") or ""))}</current_request>',
+                f'  <latest_result>{escape(str(summary.get("latestResult") or ""))}</latest_result>',
+                f'  <open_question>{escape(str(summary.get("openQuestion") or ""))}</open_question>',
+                f'  <artifacts>{escape(", ".join(summary.get("artifacts") or []))}</artifacts>',
+                "  </conversation>",
+            ])
     lines.append("</pinned_topbar_resources>")
     return "\n".join(lines)
 

@@ -9,6 +9,12 @@ const APP_DIR = resolve(__dirname, 'static/app')
 const OUT_DIR = resolve(APP_DIR, 'compiled')
 const WORKBENCH_DIR = resolve(__dirname, 'frontend')
 const ASSETS_DIR = resolve(WORKBENCH_DIR, 'assets')
+const VENDOR_DIR = resolve(__dirname, 'vendor')
+const OFFICE_OUT_DIR = resolve(APP_DIR, 'office')
+const OFFICE_ENTRIES = [
+  [resolve(VENDOR_DIR, 'office-docx.js'), 'docx-viewer.js'],
+  [resolve(VENDOR_DIR, 'office-pptx.js'), 'pptx-viewer.js'],
+]
 const INDEX_SOURCE = resolve(WORKBENCH_DIR, 'index.html')
 const ELECTRON_MAIN_SOURCE = resolve(__dirname, '../../electron/main.js')
 const PROJECT_FILE = resolve(__dirname, '../../pyproject.toml')
@@ -90,7 +96,9 @@ async function build() {
   const assetFiles = existsSync(ASSETS_DIR) ? collectAssets(ASSETS_DIR) : []
   const files = workbenchFiles
   rmSync(OUT_DIR, { recursive: true, force: true })
+  rmSync(OFFICE_OUT_DIR, { recursive: true, force: true })
   mkdirSync(OUT_DIR, { recursive: true })
+  mkdirSync(OFFICE_OUT_DIR, { recursive: true })
 
   for (const file of files) {
     const srcDir = file.startsWith(WORKBENCH_DIR) ? WORKBENCH_DIR : APP_DIR
@@ -128,8 +136,29 @@ async function build() {
   const total = files.length
   console.log(`\nDone. ${total} JSX file${total > 1 ? 's' : ''} compiled to ${OUT_DIR}`)
 
+  // Office renderers are large and needed only after a DOCX/PPTX is opened.
+  // Keep them out of the startup scripts and expose one small global API per
+  // format so the split viewer can load the matching bundle on demand.
+  for (const [entry, output] of OFFICE_ENTRIES) {
+    await esbuild.build({
+      entryPoints: [entry],
+      outfile: join(OFFICE_OUT_DIR, output),
+      bundle: true,
+      format: 'iife',
+      platform: 'browser',
+      target: 'es2020',
+      minify: true,
+      logLevel: 'silent',
+    })
+    console.log(`✓ office/${output}`)
+  }
+
   const indexTemplate = readFileSync(INDEX_SOURCE, 'utf8')
-  const revision = frontendRevision(files, cssFiles, assetFiles, indexTemplate)
+  const revisionSources = files.concat(
+    OFFICE_ENTRIES.map(([entry]) => entry),
+    [resolve(__dirname, 'package-lock.json')],
+  )
+  const revision = frontendRevision(revisionSources, cssFiles, assetFiles, indexTemplate)
   const indexHtml = indexTemplate.replace(
     /(\?v=)[A-Za-z0-9.+-]+/g,
     `$1${revision}`,

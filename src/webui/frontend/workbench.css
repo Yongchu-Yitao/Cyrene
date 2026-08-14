@@ -1609,10 +1609,12 @@ html[data-platform="darwin"] .workbench-top-project-menu {
 }
 
 .workbench-resource-shelf {
+  width: 100%;
   min-width: 34px;
-  max-width: min(34vw, 420px);
+  max-width: none;
   height: 40px;
   padding: 0 3px;
+  box-sizing: border-box;
   display: flex;
   align-items: center;
   justify-content: flex-start;
@@ -1631,7 +1633,7 @@ html[data-platform="darwin"] .workbench-top-project-menu {
 .workbench-resource-shelf-empty {
   width: 26px;
   height: 26px;
-  margin-left: auto;
+  margin-left: 0;
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -1690,6 +1692,10 @@ html[data-platform="darwin"] .workbench-top-project-menu {
 
 .workbench-resource-chip.browser .workbench-resource-chip-icon {
   color: var(--wb-green);
+}
+
+.workbench-resource-chip.conversation .workbench-resource-chip-icon {
+  color: var(--wb-accent);
 }
 
 .workbench-resource-chip-label {
@@ -19034,6 +19040,46 @@ body.wbc-resizing-side-agent .wbc-page.wbc-split-left .wbc-side-agent-split-moti
   left: var(--wbc-rail-width);
 }
 
+/* Project files use the same shared viewer as message attachments. During a
+   drag, preview the two possible viewer anchors without intercepting native
+   hit testing (the page handles the actual drop). */
+.wbc-resource-file-drop-zones {
+  position: absolute;
+  z-index: 61;
+  inset: 0 0 0 var(--wbc-rail-width);
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  pointer-events: none;
+}
+
+.wbc-resource-file-drop-zone {
+  display: grid;
+  place-items: center;
+  background: transparent;
+  transition: background 140ms ease;
+}
+
+.wbc-resource-file-drop-zone.active {
+  background: color-mix(in srgb, var(--wb-accent) 9%, transparent);
+}
+
+.wbc-resource-file-drop-zone span {
+  opacity: 0;
+  padding: 8px 12px;
+  border: 1px solid color-mix(in srgb, var(--wb-accent) 32%, var(--wb-line));
+  border-radius: 10px;
+  background: var(--wb-card-bg);
+  color: var(--wb-text);
+  box-shadow: var(--wb-shadow-sm);
+  transition: opacity 100ms ease, transform 140ms ease;
+  transform: scale(.98);
+}
+
+.wbc-resource-file-drop-zone.active span {
+  opacity: 1;
+  transform: scale(1);
+}
+
 /* ── Split panel drag ghost ─────────────────────────────────────────────────
    The native ghost is hidden; this fixed overlay follows the pointer and
    carries a clone of the real split panel, so the lifted "thing" reads as
@@ -19044,10 +19090,13 @@ body.wbc-resizing-side-agent .wbc-page.wbc-split-left .wbc-side-agent-split-moti
 .wbc-split-drag-ghost {
   position: fixed;
   z-index: 90;
+  box-sizing: border-box;
   border-radius: 14px;
   border: 1px solid color-mix(in srgb, var(--wb-line) 72%, transparent);
-  background: var(--wb-card-bg-strong);
-  box-shadow: 0 18px 44px rgba(15, 23, 42, 0.28);
+  background: var(--wb-main-bg);
+  box-shadow:
+    0 1px 2px rgba(15, 23, 42, 0.04),
+    0 6px 18px rgba(15, 23, 42, 0.08);
   opacity: 0.92;
   overflow: hidden;
   pointer-events: none;
@@ -19057,6 +19106,18 @@ body.wbc-resizing-side-agent .wbc-page.wbc-split-left .wbc-side-agent-split-moti
   width: 100%;
   height: 100%;
   min-height: 0;
+}
+/* The source panes reserve room for the fixed app bar and split grip. The
+   detached preview has neither, so carrying those insets into the clone
+   exposes a blank light strip above the conversation. */
+.wbc-split-drag-ghost > .wbc-main {
+  --wbc-thread-inset-top: 24px;
+}
+.wbc-split-drag-ghost > .wbc-conversation-split {
+  padding-top: 0;
+}
+.wbc-split-drag-ghost .wbc-split-panel-grip {
+  display: none;
 }
 .wbc-split-drag-ghost > .wbc-chat-card {
   display: none;
@@ -19473,7 +19534,8 @@ body.wbc-resizing-side-agent .wbc-page.wbc-split-left .wbc-side-agent-split-moti
 }
 
 .wbc-artifact-split-viewer > .wbc-viewer,
-.wbc-artifact-split-viewer > .wbc-pdf-viewer {
+.wbc-artifact-split-viewer > .wbc-pdf-viewer,
+.wbc-artifact-split-viewer > .wbc-office-viewer {
   width: 100%;
   height: 100%;
   min-height: 0;
@@ -20009,6 +20071,13 @@ body.wbc-resizing-side-agent .wbc-page.wbc-split-left .wbc-side-agent-split-moti
   /* Match the main thread's under-composer scroll runway so real transcript
      content reaches the shared glass plane instead of ending above it. */
   padding: 4px 18px var(--wbc-thread-inset-bottom);
+}
+
+/* Apply the compact, even transcript inset after both main and split thread
+   defaults so the lifted preview keeps readable space around its content. */
+.wbc-split-drag-ghost .wbc-thread {
+  padding-top: 24px;
+  padding-inline: 24px;
 }
 
 /* Every descendant in a narrow split must be allowed to yield inline space.
@@ -21301,7 +21370,6 @@ html[data-platform="darwin"] .wbc-browser-window.maximized .wbc-browser-window-b
   width: min(720px, 100%);
   padding: 12px 10px 12px 14px;
   border: 1px solid color-mix(in srgb, var(--wb-amber) 42%, var(--wb-line));
-  border-left: 3px solid var(--wb-amber);
   border-radius: 12px;
   background: color-mix(in srgb, var(--wb-amber) 8%, var(--wb-card-bg));
   color: var(--wb-text);
@@ -27449,6 +27517,11 @@ html[data-theme="dark"] .wbc-trace {
   color: var(--wb-text);
 }
 
+.wbc-viewer-switch button:disabled {
+  cursor: default;
+  opacity: 0.38;
+}
+
 .wbc-viewer-open,
 .wbc-viewer-download {
   flex: 0 0 auto;
@@ -27474,11 +27547,37 @@ html[data-theme="dark"] .wbc-trace {
   align-items: center;
   justify-content: center;
   padding: 12px;
+  box-sizing: border-box;
+}
+
+.wbc-viewer-scroll.is-image {
+  overflow: auto;
+}
+
+.wbc-viewer-image-stage {
+  width: 100%;
+  height: 100%;
+  min-width: 100%;
+  min-height: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 12px;
+  box-sizing: border-box;
+}
+
+.wbc-gesture-zoom {
+  touch-action: pan-x pan-y;
+  overscroll-behavior: contain;
 }
 
 .wbc-viewer-img {
+  display: block;
+  width: 100%;
+  height: 100%;
   max-width: 100%;
   max-height: 100%;
+  object-fit: contain;
   border-radius: 8px;
 }
 
@@ -27599,12 +27698,128 @@ html[data-theme="dark"] .wbc-trace {
   padding: 12px 14px;
 }
 
+.wbc-viewer-md :is(h1, h2, h3, h4, h5, h6) {
+  scroll-margin-top: 16px;
+}
+
 .wbc-viewer-pad {
   padding: 14px;
   display: flex;
   flex-direction: column;
   gap: 10px;
   align-items: flex-start;
+}
+
+.wbc-office-viewer {
+  position: relative;
+  flex: 1 1 auto;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+  background: var(--wb-panel-2);
+}
+
+.wbc-office-zoom {
+  position: absolute;
+  top: 10px;
+  right: 10px;
+  z-index: 8;
+  background: color-mix(in srgb, var(--wb-card-bg) 94%, transparent);
+  box-shadow: 0 3px 12px rgba(15, 23, 42, 0.12);
+  backdrop-filter: blur(8px);
+}
+
+.wbc-artifact-split .wbc-viewer {
+  position: relative;
+}
+
+.wbc-artifact-split .wbc-viewer-head:has(.wbc-viewer-zoom) {
+  position: absolute;
+  top: 10px;
+  right: 10px;
+  z-index: 8;
+  display: flex;
+  padding: 0;
+  border: 0;
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--wb-card-bg) 94%, transparent);
+  box-shadow: 0 3px 12px rgba(15, 23, 42, 0.12);
+  backdrop-filter: blur(8px);
+}
+
+.wbc-artifact-split .wbc-viewer-head:has(.wbc-viewer-zoom) > :not(.wbc-viewer-zoom) {
+  display: none;
+}
+
+.wbc-office-render-surface {
+  width: 100%;
+  height: 100%;
+  min-height: 0;
+  overflow: auto;
+  box-sizing: border-box;
+  overscroll-behavior: contain;
+}
+
+.wbc-office-content {
+  width: 100%;
+  min-height: 100%;
+  transform-origin: top left;
+}
+
+.wbc-office-viewer.is-docx .wbc-office-render-surface {
+  padding: 18px;
+  background: #d9dde4;
+  color: #111827;
+  color-scheme: light;
+}
+
+.wbc-office-viewer.is-docx .cyrene-docx-wrapper {
+  padding: 0;
+  background: transparent;
+}
+
+.wbc-office-viewer.is-docx .cyrene-docx-wrapper > section.cyrene-docx {
+  margin: 0 auto 18px;
+  box-shadow: 0 3px 14px rgba(15, 23, 42, 0.18);
+}
+
+.wbc-office-viewer.is-pptx .wbc-office-render-surface {
+  padding: 0;
+  overflow-x: hidden;
+  background: #d9dde4;
+  color-scheme: light;
+}
+
+.wbc-office-viewer-state {
+  position: absolute;
+  inset: 0;
+  z-index: 10;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  padding: 24px;
+  box-sizing: border-box;
+  background: color-mix(in srgb, var(--wb-card-bg) 94%, transparent);
+  color: var(--wb-muted);
+  font-size: calc(12px * var(--wb-ui-font-scale, 1));
+  text-align: center;
+  backdrop-filter: blur(6px);
+}
+
+.wbc-office-viewer-state.is-error {
+  flex-direction: column;
+}
+
+.wbc-office-viewer-state p {
+  margin: 0;
+  color: var(--wb-text);
+  font-weight: 650;
+}
+
+.wbc-office-viewer-state small {
+  color: var(--wb-muted);
+  line-height: 1.5;
 }
 
 
@@ -30540,13 +30755,15 @@ html[data-density="compact"] .workbench-shell :where(.wb-budget-model-head, .wb-
      Floating rails sit above varied content, so using that stable result keeps
      them neutral instead of letting blue board columns tint the whole card. */
   --wb-composer-surface-color: color-mix(in srgb, var(--wb-card-bg) 72%, var(--wb-surface));
-  /* Apply the requested alpha to the original card colour. Reusing the
-     pre-mixed composer surface here would compound both blends and darken it. */
-  --wb-floating-rail-bg: color-mix(in srgb, var(--wb-floating-rail-tint) 65%, transparent);
+  /* Resolve every module rail against the same neutral canvas as the chat
+     composer. A transparent rail lets task/schedule canvas tints leak through
+     and makes identical cards look green on non-chat tabs. */
+  --wb-floating-rail-bg: var(--wb-composer-surface-color);
   --wb-floating-rail-shadow:
-    0 8px 22px rgba(9, 17, 30, .055),
-    inset 0 1px 0 color-mix(in srgb, #fff 9%, transparent),
-    inset 0 0 0 1px color-mix(in srgb, var(--wb-line) 18%, transparent);
+    0 1px 2px rgba(15, 23, 42, .028),
+    0 5px 14px rgba(15, 23, 42, .02),
+    inset 0 1px 0 color-mix(in srgb, #fff 10%, transparent),
+    inset 0 0 0 1px color-mix(in srgb, var(--wb-line) 14%, transparent);
   --wb-floating-control-border: 1px solid color-mix(in srgb, var(--wb-line-2) 70%, transparent);
   --wb-floating-control-radius: 12px;
   --wb-floating-control-bg: color-mix(in srgb, var(--wb-card-bg) 88%, var(--wb-surface));
@@ -30767,6 +30984,14 @@ html[data-density="compact"] .workbench-shell :where(.wb-budget-model-head, .wb-
   will-change: width, flex-basis;
 }
 
+/* The legacy collapsed rail adds a strong right-facing shadow while it is
+   temporarily expanded by hover/focus. Integrated sidebars already own their
+   elevation token, so keep that state from replacing it with 18px 0 50px. */
+.workbench-grid.integrated-sidebars.rail-collapsed
+  .workbench-integrated-rail:is(:hover, :focus-within) {
+  box-shadow: var(--wb-floating-rail-shadow);
+}
+
 /* The collapsed Account menu opens into the conversation lane.  Lift the
    whole rail while that popover exists, otherwise the main composer (which
    owns its own stacking context) can paint over the menu even when the menu's
@@ -30935,6 +31160,153 @@ html[data-density="compact"] .workbench-shell :where(.wb-budget-model-head, .wb-
 .workbench-grid.integrated-sidebars .workbench-integrated-rail-search-head {
   gap: 6px;
   padding-inline: 12px;
+}
+
+.workbench-grid.integrated-sidebars .workbench-task-search {
+  min-width: 0;
+  flex: 1 1 auto;
+}
+
+.workbench-rail-mode-toggle {
+  flex: 0 0 66px;
+  width: 66px;
+  height: 38px;
+  min-width: 0;
+  padding: 0 6px;
+  border: 1px solid color-mix(in srgb, var(--wb-line-2) 68%, transparent);
+  border-radius: 12px;
+  background: color-mix(in srgb, var(--wb-card-bg) 66%, transparent);
+  color: var(--wb-text);
+  font: inherit;
+  font-size: calc(12px * var(--wb-ui-font-scale, 1));
+  cursor: pointer;
+}
+
+.workbench-rail-mode-toggle:hover {
+  border-color: color-mix(in srgb, var(--wb-accent) 28%, var(--wb-line-2));
+  background: var(--wb-row-hover-bg);
+}
+
+.wb-task-rail-no-results {
+  padding: 18px 8px;
+  text-align: center;
+}
+
+.workbench-project-files-path {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  padding: 4px 2px 10px;
+  color: var(--wb-muted);
+}
+
+.workbench-project-files-path button {
+  width: 28px;
+  height: 28px;
+  border: 0;
+  border-radius: 8px;
+  background: var(--wb-row-hover-bg);
+  color: inherit;
+  display: grid;
+  place-items: center;
+}
+
+.workbench-project-files-path button svg {
+  width: 15px;
+  height: 15px;
+}
+
+.workbench-project-files-path span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.workbench-project-file-row {
+  width: 100%;
+  min-height: 38px;
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  padding: 0 9px;
+  border: 0;
+  border-radius: 9px;
+  background: transparent;
+  color: var(--wb-text);
+  text-align: left;
+  cursor: pointer;
+}
+
+.workbench-project-file-row:hover {
+  background: var(--wb-row-hover-bg);
+}
+
+.workbench-project-file-row[draggable="true"]:active {
+  cursor: grabbing;
+}
+
+.workbench-project-file-row > span {
+  width: 16px;
+  display: inline-flex;
+  color: var(--wb-faint);
+}
+
+.workbench-project-file-row .workbench-project-file-icon {
+  flex: 0 0 18px;
+  width: 18px;
+}
+
+.workbench-project-file-row .workbench-project-file-chevron {
+  width: 14px;
+  margin-left: auto;
+}
+
+.workbench-project-file-row.is-folder .workbench-project-file-icon { color: #d59a35; }
+.workbench-project-file-row.is-code .workbench-project-file-icon { color: #5b8def; }
+.workbench-project-file-row.is-image .workbench-project-file-icon { color: #a66fe0; }
+.workbench-project-file-row.is-pdf .workbench-project-file-icon { color: #df6262; }
+.workbench-project-file-row.is-document .workbench-project-file-icon { color: #45a17b; }
+.workbench-project-file-row.is-archive .workbench-project-file-icon { color: #b27a55; }
+.workbench-project-file-row.is-config .workbench-project-file-icon { color: #788394; }
+
+.workbench-project-file-row.enter-forward {
+  animation: wb-project-file-row-forward 260ms cubic-bezier(.22, .8, .3, 1) both;
+}
+
+.workbench-project-file-row.enter-back {
+  animation: wb-project-file-row-back 260ms cubic-bezier(.22, .8, .3, 1) both;
+}
+
+@keyframes wb-project-file-row-forward {
+  from { opacity: .82; transform: translateX(5px); }
+  to { opacity: 1; transform: translateX(0); }
+}
+
+@keyframes wb-project-file-row-back {
+  from { opacity: .82; transform: translateX(-5px); }
+  to { opacity: 1; transform: translateX(0); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .workbench-project-file-row.enter-forward,
+  .workbench-project-file-row.enter-back {
+    animation: none;
+  }
+}
+
+.workbench-project-file-row svg {
+  width: 15px;
+  height: 15px;
+}
+
+.workbench-project-file-row b {
+  min-width: 0;
+  overflow: hidden;
+  font-size: calc(12.5px * var(--wb-ui-font-scale, 1));
+  font-weight: 560;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .wb-lib-sidebar.workbench-integrated-rail {
@@ -31574,6 +31946,10 @@ html[data-density="compact"] .workbench-shell :where(.wb-budget-model-head, .wb-
   left: 0;
   display: block;
   min-height: 82px;
+  /* Keep this surface unclipped: collapsed hover cards deliberately extend
+     above or below the marker track when they align to an edge. Settled
+     expanded rows use their own in-flow icons, so the overlay no longer needs
+     a track-wide clip to prevent icons leaking out while the list scrolls. */
   pointer-events: none;
 }
 
@@ -31660,6 +32036,17 @@ html[data-density="compact"] .workbench-shell :where(.wb-budget-model-head, .wb-
   background: transparent;
   color: var(--wbc-track-blue);
   cursor: default;
+  /* In the settled expanded rail, use the icon that is part of the row. It is
+     moved by the compositor with the row text, whereas this measured overlay
+     is updated through React and can trail fast scrolling by a frame. */
+  opacity: 0;
+  transition: opacity 120ms ease;
+}
+
+.workbench-grid.integrated-sidebars .wbc-rail.workbench-integrated-rail.is-collapsed .wbc-conversation-status-marker,
+.workbench-grid.integrated-sidebars .wbc-rail.workbench-integrated-rail.is-status-expanding .wbc-conversation-status-marker,
+.workbench-grid.integrated-sidebars .wbc-rail.workbench-integrated-rail.is-status-collapsing .wbc-conversation-status-marker {
+  opacity: 1;
 }
 
 .wbc-conversation-status-glyph,
@@ -31743,6 +32130,15 @@ html[data-density="compact"] .workbench-shell :where(.wb-budget-model-head, .wb-
 }
 
 .wbc-chat-card.track-marker-ready .wbc-chat-row-icon {
+  opacity: 1;
+}
+
+/* During the rail width transition the overlay owns the shared icon motion.
+   Once the transition ends the row icon takes over and scrolls in the same
+   compositor layer as its title/status text. */
+.wbc-rail.is-collapsed .wbc-chat-card.track-marker-ready .wbc-chat-row-icon,
+.wbc-rail.is-status-expanding .wbc-chat-card.track-marker-ready .wbc-chat-row-icon,
+.wbc-rail.is-status-collapsing .wbc-chat-card.track-marker-ready .wbc-chat-row-icon {
   opacity: 0;
 }
 
@@ -32239,11 +32635,7 @@ html[data-theme="dark"] .workbench-grid.integrated-sidebars.is-task-board {
   background: var(--wb-floating-rail-bg);
   -webkit-backdrop-filter: blur(32px) saturate(170%) contrast(102%);
   backdrop-filter: blur(32px) saturate(170%) contrast(102%);
-  box-shadow:
-    0 18px 44px rgba(9, 17, 30, .13),
-    0 3px 12px rgba(9, 17, 30, .08),
-    inset 0 1px 0 color-mix(in srgb, #fff 12%, transparent),
-    inset 0 0 0 1px color-mix(in srgb, var(--wb-line) 18%, transparent);
+  box-shadow: var(--wb-floating-rail-shadow);
 }
 
 .workbench-grid.integrated-sidebars.is-task-board .workbench-task-rail {

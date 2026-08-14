@@ -27,6 +27,84 @@ def register_project_routes(
         payload = _read_workbench_store()
         return payload
 
+    @router.get("/api/projects/{project_id}/files")
+    async def api_workbench_project_files(project_id: str, path: str = "."):
+        project = _workbench_find_project_lightweight(project_id)
+        if project is None:
+            return error_response("Project not found", 404, "project_not_found")
+        raw_root = _workbench_resolve_workspace_dir(project)
+        if not raw_root:
+            return error_response("Project has no workspace", 404, "workspace_unavailable")
+        root = Path(raw_root).expanduser().resolve()
+        requested = str(path or ".").replace("\\", "/").strip() or "."
+        candidate = (root / requested).resolve(strict=False)
+        if candidate != root and root not in candidate.parents:
+            return error_response("Path escapes the project workspace", 400, "invalid_workspace_path")
+        if not candidate.is_dir():
+            return error_response("Directory not found", 404, "directory_not_found")
+
+        def list_entries() -> list[dict[str, Any]]:
+            entries: list[dict[str, Any]] = []
+            for item in sorted(candidate.iterdir(), key=lambda value: (not value.is_dir(), value.name.lower())):
+                if item.is_symlink() or item.name in {".git", "node_modules", "__pycache__"}:
+                    continue
+                info = item.stat()
+                entries.append({
+                    "name": item.name,
+                    "path": item.relative_to(root).as_posix(),
+                    "kind": "directory" if item.is_dir() else "file",
+                    "size": int(info.st_size) if item.is_file() else 0,
+                    "modifiedNs": int(info.st_mtime_ns),
+                })
+                if len(entries) >= 500:
+                    break
+            return entries
+
+        return {
+            "ok": True,
+            "path": "." if candidate == root else candidate.relative_to(root).as_posix(),
+            "entries": await asyncio.to_thread(list_entries),
+        }
+
+    @router.get("/api/projects/{project_id}/files/content/{file_path:path}")
+    async def api_workbench_project_file_content(project_id: str, file_path: str):
+        """Stream a regular project file for the Workbench split viewer."""
+        project = _workbench_find_project_lightweight(project_id)
+        if project is None:
+            return error_response("Project not found", 404, "project_not_found")
+        raw_root = _workbench_resolve_workspace_dir(project)
+        if not raw_root:
+            return error_response("Project has no workspace", 404, "workspace_unavailable")
+        root = Path(raw_root).expanduser().resolve()
+        requested = str(file_path or "").replace("\\", "/").strip()
+        if not requested:
+            return error_response("File path is required", 400, "invalid_workspace_path")
+
+        unresolved = root / requested
+        cursor = root
+        for part in Path(requested).parts:
+            if part in {"", "."}:
+                continue
+            cursor = cursor / part
+            if cursor.is_symlink():
+                return error_response("Symbolic links cannot be previewed", 403, "symlink_not_allowed")
+        try:
+            target = unresolved.resolve(strict=False)
+        except (OSError, RuntimeError):
+            return error_response("Invalid project file path", 400, "invalid_workspace_path")
+        if target != root and root not in target.parents:
+            return error_response("Path escapes the project workspace", 400, "invalid_workspace_path")
+        if not target.is_file():
+            return error_response("File not found", 404, "file_not_found")
+
+        media_type = mimetypes.guess_type(target.name)[0] or "application/octet-stream"
+        return FileResponse(
+            target,
+            filename=target.name,
+            media_type=media_type,
+            content_disposition_type="inline",
+        )
+
     @router.get("/api/workbench/notifications")
     async def api_workbench_notifications(
         tab: str = "all",

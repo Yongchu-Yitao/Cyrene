@@ -1501,13 +1501,16 @@ function WorkbenchApp({ theme, actualTheme, onToggleTheme, needsOnboarding }) {
   }
 
   function pinTopbarResource(resource) {
-    if (!resource || ["file", "browser", "snippet"].indexOf(resource.kind) < 0) return Promise.resolve(null);
+    if (!resource || ["file", "browser", "snippet", "conversation"].indexOf(resource.kind) < 0) return Promise.resolve(null);
     var enriched = Object.assign({}, resource);
-    if (!enriched.ownerProjectId && enriched.ownerSessionId) {
-      var owner = recentSessionTabs.find(function (item) {
+    if (enriched.ownerSessionId && (!enriched.ownerProjectId || !enriched.ownerProjectName)) {
+      var owner = (sessionTabCandidates || []).find(function (item) {
         return item.kind === "chat" && String(item.id || "") === String(enriched.ownerSessionId || "");
       });
-      if (owner) enriched.ownerProjectId = owner.projectId;
+      if (owner) {
+        if (!enriched.ownerProjectId) enriched.ownerProjectId = owner.projectId;
+        enriched.ownerProjectName = owner.projectName || "";
+      }
     }
     return window.CyreneUI.require("api").json("/api/workbench/pinned-resources", {
       method: "POST",
@@ -2887,6 +2890,14 @@ function WorkbenchApp({ theme, actualTheme, onToggleTheme, needsOnboarding }) {
         onUnpinResource={unpinTopbarResource}
         onOpenPinnedResource={function (resource) {
           if (!resource) return;
+          if (resource.kind === "conversation") {
+            navigateFromSearch({
+              type: "chat",
+              projectId: resource.ownerProjectId,
+              chatId: resource.conversationId || resource.ownerSessionId,
+            });
+            return;
+          }
           if (resource.kind === "snippet") {
             var snippetTarget = activePage === "chat" && activeChatId
               ? activeChatId
@@ -3422,11 +3433,12 @@ function WorkbenchTopbar({ projects, activeProject, activePage, taskView, active
     var timer = setTimeout(function () { setActivityClock(Date.now()); }, Math.max(16, nextExpiry - now + 20));
     return function () { clearTimeout(timer); };
   }, [terminalMorphKey]);
-  function acceptsResourceDrag(event, resourceApi) {
+  function acceptsResourceDrag(event, resourceApi, includeConversation) {
     var transfer = event && event.dataTransfer;
     if (!transfer || !resourceApi) return false;
     var types = Array.prototype.slice.call(transfer.types || []);
     if (types.indexOf(resourceApi.mime) >= 0) return true;
+    if (includeConversation && resourceApi.chatMime && types.indexOf(resourceApi.chatMime) >= 0) return true;
     // Selected text on macOS uses Chromium's native text/plain drag. Files are
     // deliberately excluded because their cards have the richer custom type.
     return types.indexOf("text/plain") >= 0 && types.indexOf("Files") < 0;
@@ -4020,19 +4032,25 @@ function WorkbenchTopbar({ projects, activeProject, activePage, taskView, active
             if (onOpenPinnedResource) onOpenPinnedResource(resource);
           }}>
             <span className="workbench-session-menu-icon" aria-hidden="true">
-              {resourceMenu.resource.kind === "browser"
+              {resourceMenu.resource.kind === "conversation"
+                ? <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d="M21 15a4 4 0 0 1-4 4H8l-5 3V7a4 4 0 0 1 4-4h10a4 4 0 0 1 4 4Z"/><path d="M8 9h8M8 13h5"/></svg>
+                : resourceMenu.resource.kind === "browser"
                 ? <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" strokeWidth="1.8"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M3 8h18M6 6h.01M9 6h.01"/></svg>
                 : <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" strokeWidth="1.8"><path d="M6 2h8l4 4v16H6Z"/><path d="M14 2v5h5"/></svg>}
             </span>
-            <span>{resourceMenu.resource.kind === "browser"
+            <span>{resourceMenu.resource.kind === "conversation"
+              ? t("workbench.resourceShelf.openConversation", "Open conversation")
+              : resourceMenu.resource.kind === "browser"
               ? t("workbench.resourceShelf.openBrowser", "Open owner conversation")
               : resourceMenu.resource.kind === "snippet"
                 ? t("workbench.resourceShelf.useSnippet", "Add to current conversation")
                 : t("workbench.resourceShelf.openFile", "Open file")}</span>
           </button>
-          {resourceMenu.resource.kind === "browser" ? (
+          {resourceMenu.resource.kind === "browser" || resourceMenu.resource.kind === "conversation" ? (
             <div className="workbench-resource-readonly-note">
-              {t("workbench.resourceShelf.readOnly", "Other sessions can only view this browser")}
+              {resourceMenu.resource.kind === "conversation"
+                ? t("workbench.resourceShelf.conversationReadOnly", "Other agents receive a read-only conversation summary")
+                : t("workbench.resourceShelf.readOnly", "Other sessions can only view this browser")}
             </div>
           ) : null}
           <button type="button" role="menuitem" onClick={function () {
@@ -4307,14 +4325,14 @@ function WorkbenchTopbar({ projects, activeProject, activePage, taskView, active
         aria-label={t("workbench.resourceShelf.title", "Pinned resources")}
         onDragEnter={function (event) {
           var resourceApi = window.CyreneUI.require("resources");
-          if (acceptsResourceDrag(event, resourceApi)) {
+          if (acceptsResourceDrag(event, resourceApi, true)) {
             event.preventDefault();
             setResourceDropActive(true);
           }
         }}
         onDragOver={function (event) {
           var resourceApi = window.CyreneUI.require("resources");
-          if (acceptsResourceDrag(event, resourceApi)) {
+          if (acceptsResourceDrag(event, resourceApi, true)) {
             event.preventDefault();
             event.dataTransfer.dropEffect = "copy";
             setResourceDropActive(true);
@@ -4334,6 +4352,8 @@ function WorkbenchTopbar({ projects, activeProject, activePage, taskView, active
         {resources.map(function (resource) {
           var label = resource.kind === "file"
             ? (resource.name || resource.title || "file")
+            : resource.kind === "conversation"
+              ? (resource.title || t("workbench.page.chat", "Conversation"))
             : resource.kind === "snippet"
               ? (resource.title || String(resource.text || "").slice(0, 48) || t("workbench.resourceShelf.snippet", "Text"))
               : (resource.title || resource.url || t("workbench.resourceShelf.browser", "Browser"));
@@ -4360,7 +4380,9 @@ function WorkbenchTopbar({ projects, activeProject, activePage, taskView, active
               onContextMenu={function (event) { openResourceMenu(event, resource); }}
             >
               <span className="workbench-resource-chip-icon" aria-hidden="true">
-                {resource.kind === "browser" ? (
+                {resource.kind === "conversation" ? (
+                  <svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d="M21 15a4 4 0 0 1-4 4H8l-5 3V7a4 4 0 0 1 4-4h10a4 4 0 0 1 4 4Z"/><path d="M8 9h8M8 13h5"/></svg>
+                ) : resource.kind === "browser" ? (
                   <svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M3 8h18M6 6h.01M9 6h.01"/></svg>
                 ) : resource.kind === "snippet" ? (
                   <svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round"><path d="M7 8h10M7 12h7M7 16h5"/><rect x="3" y="3" width="18" height="18" rx="3"/></svg>
@@ -4376,8 +4398,8 @@ function WorkbenchTopbar({ projects, activeProject, activePage, taskView, active
           <span
             className="workbench-resource-shelf-empty"
             role="img"
-            aria-label={t("workbench.resourceShelf.dropHint", "Drag a file, selected text, browser, or knowledge item here to pin it")}
-            title={t("workbench.resourceShelf.dropHint", "Drag a file, selected text, browser, or knowledge item here to pin it")}
+            aria-label={t("workbench.resourceShelf.dropHint", "Drag a conversation, file, selected text, browser, or knowledge item here to pin it")}
+            title={t("workbench.resourceShelf.dropHint", "Drag a conversation, file, selected text, browser, or knowledge item here to pin it")}
           >
             <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
               <path d="M12 17v5" />
@@ -5837,6 +5859,35 @@ function TaskBoard({ project, loading, error, onOpenSession, onCreateSession, on
     setMenuId("");
   }, [project && project.id]);
 
+  function handleBoardWheel(event) {
+    var viewport = event.currentTarget;
+    var deltaX = Number(event.deltaX || 0);
+    var deltaY = Number(event.deltaY || 0);
+    // Trackpads already provide a native horizontal delta. Only translate a
+    // primarily vertical mouse-wheel gesture so both input types feel natural.
+    if (!viewport || Math.abs(deltaY) <= Math.abs(deltaX) || Math.abs(deltaY) < 1) return;
+
+    // A task column owns vertical wheel input while it can still move in that
+    // direction. At its boundary, hand the same gesture to the board canvas.
+    var target = event.target;
+    var columnBody = target && target.closest ? target.closest(".wb-board-column-body") : null;
+    if (columnBody) {
+      var maxColumnTop = Math.max(0, columnBody.scrollHeight - columnBody.clientHeight);
+      var canScrollColumn = deltaY < 0
+        ? columnBody.scrollTop > 1
+        : columnBody.scrollTop < maxColumnTop - 1;
+      if (canScrollColumn) return;
+    }
+
+    var maxBoardLeft = Math.max(0, viewport.scrollWidth - viewport.clientWidth);
+    if (!maxBoardLeft) return;
+    var scale = event.deltaMode === 1 ? 16 : (event.deltaMode === 2 ? viewport.clientWidth : 1);
+    var nextLeft = Math.max(0, Math.min(maxBoardLeft, viewport.scrollLeft + deltaY * scale));
+    if (nextLeft === viewport.scrollLeft) return;
+    event.preventDefault();
+    viewport.scrollLeft = nextLeft;
+  }
+
   var visibleSessions = sessions;
   if (recentFirst) {
     visibleSessions = visibleSessions.slice().sort(function (a, b) {
@@ -5877,7 +5928,7 @@ function TaskBoard({ project, loading, error, onOpenSession, onCreateSession, on
       {loading && sessions.length === 0 ? (
         <div className="wb-board-loading">{t("rail.loadingTasks")}</div>
       ) : (
-        <div className="wb-board-scroll">
+        <div className="wb-board-scroll" onWheel={handleBoardWheel}>
           <div className="wb-board-columns">
             {WB_TASK_BOARD_COLUMNS.map(function (column) {
               var cards = visibleSessions.filter(function (session) {
@@ -5986,7 +6037,20 @@ function TaskRail({ project, activeSessionId, onSelectSession, onCreateSession, 
   var { t } = window.CyreneUI.require("i18n").use();
   var sessions = project && Array.isArray(project.sessions) ? project.sessions : [];
   var [menuId, setMenuId] = useWorkbenchState("");
-
+  var [query, setQuery] = useWorkbenchState("");
+  var normalizedQuery = query.trim().toLowerCase();
+  var visibleSessions = normalizedQuery ? sessions.filter(function (session) {
+    return [
+      session.title,
+      session.goal,
+      session.summary,
+      session.status,
+      session.priority,
+      sessionSummaryText(session),
+    ].some(function (value) {
+      return String(value || "").toLowerCase().indexOf(normalizedQuery) !== -1;
+    });
+  }) : sessions;
   useWorkbenchEffect(function () {
     if (!menuId) return undefined;
     function closeOnOutside(event) {
@@ -6004,14 +6068,31 @@ function TaskRail({ project, activeSessionId, onSelectSession, onCreateSession, 
 
   return (
     <aside className={"workbench-task-rail workbench-integrated-rail" + (collapsed ? " is-collapsed" : "")}>
-      <div className="workbench-rail-head workbench-integrated-rail-head">
-        <span>{t("rail.tasks")}</span>
-        <div className="workbench-integrated-rail-actions">
-          <button type="button" className="workbench-integrated-rail-primary-action" onClick={onCreateSession} disabled={!project}>+ {t("rail.newTask")}</button>
-          {collapseControl}
-        </div>
+      <div className="workbench-integrated-rail-head workbench-integrated-rail-search-head">
+        {!collapsed && (
+          <div className="wbc-search workbench-task-search">
+            <span className="wbc-search-icon">{ICONS.cmdResearch}</span>
+            <input
+              value={query}
+              onChange={function (event) { setQuery(event.target.value); }}
+              placeholder={t("rail.searchCurrentProject", null, "Search current project...")}
+              aria-label={t("rail.searchTasks", null, "Search tasks")}
+            />
+          </div>
+        )}
+        {!collapsed && (
+          <button
+            type="button"
+            className="wbc-project-new-chat"
+            onClick={onCreateSession}
+            disabled={!project}
+            title={t("rail.newTask")}
+            aria-label={t("rail.newTask")}
+          >{ICONS.plus}</button>
+        )}
+        {collapseControl}
       </div>
-      <div className={"workbench-task-list workbench-integrated-rail-body" + (!loading && sessions.length === 0 ? " is-empty" : "")}>
+      <div className={"workbench-task-list workbench-integrated-rail-body" + (!loading && visibleSessions.length === 0 ? " is-empty" : "")}>
         {loading && <div className="workbench-muted wb-task-rail-loading">{t("rail.loadingTasks")}</div>}
         {!loading && sessions.length === 0 && (
           <div className="wb-task-rail-empty">
@@ -6026,7 +6107,12 @@ function TaskRail({ project, activeSessionId, onSelectSession, onCreateSession, 
             <button type="button" onClick={onCreateSession} disabled={!project}>+ {t("rail.newTask")}</button>
           </div>
         )}
-        {sessions.map(function (session) {
+        {!loading && sessions.length > 0 && visibleSessions.length === 0 && (
+          <div className="workbench-muted wb-task-rail-no-results">
+            {t("rail.noMatchingTasks", null, "No matching tasks.")}
+          </div>
+        )}
+        {visibleSessions.map(function (session) {
           var tone = WorkbenchModel.statusTone(session.status);
           var isMenuOpen = menuId === session.id;
           return (
@@ -6090,6 +6176,7 @@ function TaskRail({ project, activeSessionId, onSelectSession, onCreateSession, 
 // ===================================================================
 
 var ICONS = {
+  plus: <svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round"><path d="M12 5v14M5 12h14"/></svg>,
   target: <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="9"/><circle cx="12" cy="12" r="5"/><circle cx="12" cy="12" r="1.4" fill="currentColor"/></svg>,
   spark: <svg viewBox="0 0 24 24" width="18" height="18" fill="currentColor"><path d="M12 2.5 13.7 9 20 10.7 13.7 12.4 12 19l-1.7-6.6L4 10.7 10.3 9Z"/></svg>,
   shield: <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d="M12 3 5 6v5c0 4.2 2.8 7.7 7 9 4.2-1.3 7-4.8 7-9V6Z"/><path d="m9.2 12 2 2 3.6-3.8"/></svg>,

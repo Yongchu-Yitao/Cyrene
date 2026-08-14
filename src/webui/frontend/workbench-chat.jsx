@@ -23,6 +23,18 @@ var WBC_CHAT_GROUP_DRAG_MIME = "application/x-cyrene-chat-group+json";
 var WBC_AGENT_CHAT_FLOW_EVENT = "cyrene:agent-chat-flow";
 var WBC_AGENT_CHAT_FLOW_TTLS = { created: 4200, typing: 3200 };
 var WBC_AGENT_CHAT_FLOW_STATE = Object.create(null);
+// Chromium on macOS shows a globe placeholder when setDragImage receives an
+// image that was created during dragstart and has not finished loading yet.
+// Keep one transparent pixel ready for every custom DOM drag preview.
+var WBC_EMPTY_DRAG_IMAGE = new Image(1, 1);
+WBC_EMPTY_DRAG_IMAGE.src = "data:image/gif;base64,R0lGODlhAQABAIAAAP///wAAACH5BAEAAAAALAAAAAABAAEAAAICRAEAOw==";
+
+function wbcHideNativeDragImage(transfer) {
+  if (!transfer || !WBC_EMPTY_DRAG_IMAGE.complete) return;
+  try {
+    transfer.setDragImage(WBC_EMPTY_DRAG_IMAGE, 0, 0);
+  } catch (e) {}
+}
 
 function wbcAgentChatFlowSnapshot(chatId) {
   var normalizedChatId = String(chatId || "").trim();
@@ -55,7 +67,9 @@ function wbcSetChatDrag(event, chat) {
   var transfer = event && (event.dataTransfer || (event.nativeEvent && event.nativeEvent.dataTransfer));
   if (!transfer || !chat || !chat.id) return;
   try {
-    transfer.effectAllowed = "move";
+    // Chat cards still move when reordered in the rail, while the topbar
+    // consumes the same drag as a copy that creates a pinned conversation.
+    transfer.effectAllowed = "copyMove";
     transfer.setData(WBC_CHAT_DRAG_MIME, JSON.stringify({
       kind: "chat",
       id: String(chat.id),
@@ -341,6 +355,20 @@ function wbcReadResourceDrag(event) {
   var transfer = event && (event.dataTransfer || (event.nativeEvent && event.nativeEvent.dataTransfer));
   if (!transfer) return null;
   try {
+    var chatRaw = transfer.getData(WBC_CHAT_DRAG_MIME);
+    if (chatRaw) {
+      var chat = JSON.parse(chatRaw);
+      if (chat && chat.kind === "chat" && chat.id) {
+        return {
+          kind: "conversation",
+          ownerSessionId: String(chat.id),
+          ownerProjectId: String(chat.projectId || ""),
+          conversationId: String(chat.id),
+          stableRef: String(chat.id),
+          title: String(chat.title || "Conversation"),
+        };
+      }
+    }
     var raw = transfer.getData(WBC_RESOURCE_DRAG_MIME);
     if (raw) return JSON.parse(raw);
     var types = Array.prototype.slice.call(transfer.types || []);
@@ -366,6 +394,16 @@ function wbcReadResourceDrag(event) {
   }
 }
 
+function wbcHasResourceDrag(event) {
+  var transfer = event && (event.dataTransfer || (event.nativeEvent && event.nativeEvent.dataTransfer));
+  if (!transfer) return false;
+  try {
+    return Array.prototype.slice.call(transfer.types || []).indexOf(WBC_RESOURCE_DRAG_MIME) >= 0;
+  } catch (e) {
+    return false;
+  }
+}
+
 function wbcFileDragPayload(file, ownerSessionId, ownerProjectId) {
   var safeFile = {
     id: file && file.id,
@@ -376,6 +414,9 @@ function wbcFileDragPayload(file, ownerSessionId, ownerProjectId) {
     url: file && file.url,
     width: file && file.width,
     height: file && file.height,
+    path: file && file.path,
+    source: file && file.source,
+    projectId: file && file.projectId,
   };
   return {
     kind: "file",
@@ -393,6 +434,8 @@ function wbcFileDragPayload(file, ownerSessionId, ownerProjectId) {
 
 window.CyreneUI.resources = window.CyreneUI.register("resources", {
   mime: WBC_RESOURCE_DRAG_MIME,
+  hasDrag: wbcHasResourceDrag,
+  chatMime: WBC_CHAT_DRAG_MIME,
   readDrag: wbcReadResourceDrag,
   setDrag: wbcSetResourceDrag,
   filePayload: wbcFileDragPayload,
@@ -2244,6 +2287,9 @@ var WBC_ICONS = {
   layers: <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d="m12 2.8 8.2 4.6L12 12 3.8 7.4 12 2.8Z"/><path d="m3.8 12 8.2 4.6 8.2-4.6M3.8 16.6l8.2 4.6 8.2-4.6"/></svg>,
   chat: <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d="M21 11.5a8.5 8.5 0 0 1-12.2 7.6L3 21l1.9-5.8A8.5 8.5 0 1 1 21 11.5Z"/></svg>,
   file: <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d="M14 2H7a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V7Z"/><path d="M14 2v5h5"/></svg>,
+  fileText: <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d="M14 2H7a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V7Z"/><path d="M14 2v5h5M9 13h6M9 17h5"/></svg>,
+  image: <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><rect x="3" y="4" width="18" height="16" rx="2"/><circle cx="8.5" cy="9" r="1.5"/><path d="m4 17 5-5 3.5 3.5 2-2L20 19"/></svg>,
+  pdf: <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d="M14 2H7a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V7Z"/><path d="M14 2v5h5M8 16c3-5 5-5 8 0M10 13h4"/></svg>,
   trash: <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d="M3 6h18M8 6V4a1 1 0 0 1 1-1h6a1 1 0 0 1 1 1v2M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/></svg>,
   task: <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d="M9 5H7a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V7a2 2 0 0 0-2-2h-2"/><rect x="9" y="3" width="6" height="4" rx="1.5"/><path d="M9 14 10.5 15.5 15 11"/></svg>,
   compact: <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d="m8 3 4 4 4-4M12 7V1M8 21l4-4 4 4M12 17v6"/><path d="M4 10h16v4H4z"/></svg>,
@@ -3714,15 +3760,114 @@ function wbcOpenAgentDetail(agent) {
 // ---- file classification for the side viewer -------------------------------
 
 var WBC_CODE_EXTS = ["py","js","ts","jsx","tsx","css","json","yaml","yml","toml","xml","sql","sh","bash","rs","go","java","c","cpp","h","rb","php","swift","kt","txt","csv","ini","cfg","env","log"];
+var WBC_OFFICE_MAX_FILE_BYTES = 100 * 1024 * 1024;
+var WBC_OFFICE_MAX_ZIP_ENTRIES = 4000;
+var WBC_OFFICE_MAX_ZIP_ENTRY_BYTES = 32 * 1024 * 1024;
+var WBC_OFFICE_MAX_ZIP_TOTAL_BYTES = 256 * 1024 * 1024;
+var WBC_OFFICE_RENDERER_LOADS = {};
+
+function wbcOfficeAssetRevisionQuery() {
+  try {
+    var script = Array.from(document.scripts || []).find(function (item) {
+      return String(item && item.src || "").indexOf("/compiled/workbench-chat.js") !== -1;
+    });
+    return script ? new URL(script.src, window.location.href).search : "";
+  } catch (e) {
+    return "";
+  }
+}
+
+function wbcLoadOfficeRenderer(kind) {
+  var isDocx = kind === "docx";
+  var globalKey = isDocx ? "CyreneOfficeDocx" : "CyreneOfficePptx";
+  var fileName = isDocx ? "docx-viewer.js" : "pptx-viewer.js";
+  if (window[globalKey]) return Promise.resolve(window[globalKey]);
+  if (WBC_OFFICE_RENDERER_LOADS[kind]) return WBC_OFFICE_RENDERER_LOADS[kind];
+  WBC_OFFICE_RENDERER_LOADS[kind] = new Promise(function (resolve, reject) {
+    var script = document.createElement("script");
+    script.async = true;
+    script.dataset.cyreneOfficeRenderer = kind;
+    script.src = "/static/app/office/" + fileName + wbcOfficeAssetRevisionQuery();
+    script.onload = function () {
+      if (window[globalKey]) resolve(window[globalKey]);
+      else reject(new Error("office_renderer_unavailable"));
+    };
+    script.onerror = function () { reject(new Error("office_renderer_unavailable")); };
+    document.head.appendChild(script);
+  }).catch(function (error) {
+    delete WBC_OFFICE_RENDERER_LOADS[kind];
+    throw error;
+  });
+  return WBC_OFFICE_RENDERER_LOADS[kind];
+}
+
+function wbcValidateOfficeArchive(buffer) {
+  if (!(buffer instanceof ArrayBuffer) || buffer.byteLength < 22) throw new Error("office_invalid_archive");
+  var view = new DataView(buffer);
+  var minimum = Math.max(0, buffer.byteLength - 65557);
+  var eocd = -1;
+  for (var offset = buffer.byteLength - 22; offset >= minimum; offset -= 1) {
+    if (
+      view.getUint32(offset, true) === 0x06054b50
+      && offset + 22 + view.getUint16(offset + 20, true) === buffer.byteLength
+    ) { eocd = offset; break; }
+  }
+  if (eocd < 0) throw new Error("office_invalid_archive");
+  var entryCount = view.getUint16(eocd + 10, true);
+  var directorySize = view.getUint32(eocd + 12, true);
+  var directoryOffset = view.getUint32(eocd + 16, true);
+  if (entryCount === 0xffff || directorySize === 0xffffffff || directoryOffset === 0xffffffff) {
+    throw new Error("office_archive_too_large");
+  }
+  if (entryCount > WBC_OFFICE_MAX_ZIP_ENTRIES || directoryOffset + directorySize > buffer.byteLength) {
+    throw new Error("office_archive_too_large");
+  }
+  var cursor = directoryOffset;
+  var totalBytes = 0;
+  for (var index = 0; index < entryCount; index += 1) {
+    if (cursor + 46 > buffer.byteLength || view.getUint32(cursor, true) !== 0x02014b50) {
+      throw new Error("office_invalid_archive");
+    }
+    var uncompressedBytes = view.getUint32(cursor + 24, true);
+    var fileNameLength = view.getUint16(cursor + 28, true);
+    var extraLength = view.getUint16(cursor + 30, true);
+    var commentLength = view.getUint16(cursor + 32, true);
+    if (uncompressedBytes === 0xffffffff || uncompressedBytes > WBC_OFFICE_MAX_ZIP_ENTRY_BYTES) {
+      throw new Error("office_archive_too_large");
+    }
+    totalBytes += uncompressedBytes;
+    if (totalBytes > WBC_OFFICE_MAX_ZIP_TOTAL_BYTES) throw new Error("office_archive_too_large");
+    cursor += 46 + fileNameLength + extraLength + commentLength;
+    if (cursor > directoryOffset + directorySize || cursor > buffer.byteLength) {
+      throw new Error("office_invalid_archive");
+    }
+  }
+}
+
+function wbcHardenOfficeLinks(container) {
+  if (!container || !container.querySelectorAll) return;
+  container.querySelectorAll("a[href]").forEach(function (link) {
+    var raw = String(link.getAttribute("href") || "").trim();
+    if (!/^(https?:|mailto:)/i.test(raw)) {
+      link.removeAttribute("href");
+      return;
+    }
+    link.setAttribute("target", "_blank");
+    link.setAttribute("rel", "noopener noreferrer");
+  });
+}
 
 function wbcFileViewKind(file) {
   if (!file) return "";
-  var ct = String(file.content_type || "").split(";", 1)[0].trim().toLowerCase();
-  var ext = String(file.name || file.filename || "").split(".").pop().toLowerCase();
-  if (ct.indexOf("image/") === 0 || file.kind === "image") return "image";
+  var ct = String(file.content_type || file.contentType || file.mime_type || file.mimeType || "").split(";", 1)[0].trim().toLowerCase();
+  var fileLabel = String(file.name || file.filename || file.path || file.url || "").split(/[?#]/, 1)[0];
+  var ext = fileLabel.indexOf(".") >= 0 ? fileLabel.split(".").pop().toLowerCase() : "";
+  if (ct.indexOf("image/") === 0 || file.kind === "image" || ["png", "jpg", "jpeg", "gif", "webp", "svg", "bmp", "ico", "avif"].indexOf(ext) !== -1) return "image";
   if (ct.indexOf("audio/") === 0 || file.kind === "audio") return "audio";
   if (ct.indexOf("video/") === 0 || file.kind === "video") return "video";
   if (ct === "application/pdf" || ext === "pdf" || file.kind === "pdf") return "pdf";
+  if (ext === "docx" || ct === "application/vnd.openxmlformats-officedocument.wordprocessingml.document") return "docx";
+  if (ext === "pptx" || ct === "application/vnd.openxmlformats-officedocument.presentationml.presentation") return "pptx";
   if (ct === "text/html" || ct === "application/xhtml+xml" || ext === "html" || ext === "htm") return "html";
   if (file.kind === "markdown" || ext === "md" || ext === "markdown") return "markdown";
   if (file.kind === "code" || WBC_CODE_EXTS.indexOf(ext) !== -1 || ct.indexOf("text/") === 0) return "code";
@@ -5166,14 +5311,9 @@ function WorkbenchChatPage({ active, project, newChatRequestId, onOpenTask, onAc
     var transfer = event && event.dataTransfer;
     if (!transfer) return;
     wbcSetSplitDrag(event);
-    // Hide the native ghost with a transparent 1x1 image; the custom overlay
+    // Hide the native ghost with a preloaded transparent image; the custom overlay
     // (panel-shaped, shrinking to a chat card over the rail) takes over.
-    try {
-      var canvas = document.createElement("canvas");
-      canvas.width = 1;
-      canvas.height = 1;
-      transfer.setDragImage(canvas, 0, 0);
-    } catch (e) {}
+    wbcHideNativeDragImage(transfer);
     var page = pageRef.current;
     if (!page) return;
     if (splitOverlayCleanupRef.current) splitOverlayCleanupRef.current();
@@ -5213,15 +5353,19 @@ function WorkbenchChatPage({ active, project, newChatRequestId, onOpenTask, onAc
         : null);
     if (panel) {
       var panelRect = panel.getBoundingClientRect();
-      // The clone keeps the panel's own padding (top bar clearance + grip
-      // band), so the lifted ghost mirrors the real panel one-to-one.
+      // The clone keeps the live content and scroll state. Ghost-only CSS
+      // removes the app-bar/grip clearance because the detached preview no
+      // longer sits underneath the real window chrome.
       var clonedPane = wbcClonePaneWithLiveState(panel);
       var clone = clonedPane.clone;
       restoreGhostViewport = clonedPane.restoreViewport;
       clone.style.border = "0";
       clone.style.boxShadow = "none";
       ghost.appendChild(clone);
-      panelW = Math.round(panelRect.width);
+      panelW = Math.max(120, Math.min(
+        Math.round(panelRect.width),
+        Math.round(window.innerWidth - 16)
+      ));
       panelH = Math.max(120, Math.min(
         Math.round(panelRect.height),
         Math.round(window.innerHeight * 0.72)
@@ -5229,10 +5373,20 @@ function WorkbenchChatPage({ active, project, newChatRequestId, onOpenTask, onAc
       ghost.style.width = panelW + "px";
       ghost.style.height = panelH + "px";
       ghost.style.left = panelRect.left + "px";
-      ghost.style.top = panelRect.top + "px";
+      var dragHandleRect = dragHandle && dragHandle.getBoundingClientRect
+        ? dragHandle.getBoundingClientRect()
+        : null;
+      // The live pane begins underneath the fixed app bar, but the detached
+      // ghost does not. Anchor its vertical grab point to the handle itself so
+      // the pointer stays on the ghost's top edge instead of floating inside
+      // the transcript at the live pane's old app-bar offset.
+      var ghostTopGrabOffset = dragHandleRect
+        ? Math.max(0, Math.min(dragHandleRect.height, event.clientY - dragHandleRect.top))
+        : 0;
+      ghost.style.top = (event.clientY - ghostTopGrabOffset) + "px";
       grabOffset = {
         x: Math.max(0, Math.min(panelRect.width, event.clientX - panelRect.left)),
-        y: Math.max(0, Math.min(panelRect.height, event.clientY - panelRect.top)),
+        y: ghostTopGrabOffset,
       };
     } else {
       ghost.style.left = event.clientX + "px";
@@ -5274,7 +5428,25 @@ function WorkbenchChatPage({ active, project, newChatRequestId, onOpenTask, onAc
       }
     }
     document.body.appendChild(ghost);
-    if (restoreGhostViewport) restoreGhostViewport();
+    if (restoreGhostViewport) {
+      restoreGhostViewport();
+      // Ghost-only CSS replaces the live app-bar clearance with compact,
+      // even content padding. Compensate the raw scrollTop by that difference
+      // so adding breathing room does not change the visible reading anchor.
+      var sourceThread = panel && panel.querySelector ? panel.querySelector(".wbc-thread") : null;
+      var ghostThread = clone && clone.querySelector ? clone.querySelector(".wbc-thread") : null;
+      if (sourceThread && ghostThread) {
+        var sourceThreadPaddingTop = parseFloat(window.getComputedStyle(sourceThread).paddingTop) || 0;
+        var ghostThreadPaddingTop = parseFloat(window.getComputedStyle(ghostThread).paddingTop) || 0;
+        var removedThreadPadding = Math.max(0, sourceThreadPaddingTop - ghostThreadPaddingTop);
+        if (removedThreadPadding) {
+          ghostThread.scrollTop = Math.max(0, ghostThread.scrollTop - removedThreadPadding);
+        }
+      }
+    }
+    // Native dragover may arrive a frame late (or not at all until the pointer
+    // moves). Clamp the first painted frame as soon as the ghost is measurable.
+    positionGhostAt(event.clientX, event.clientY);
     // The zones are pure visual (never hit-testable): an interactive overlay
     // covering the drag source would make Chromium cancel the drag. Zone
     // detection happens on document-level dragover/drop via pointer position.
@@ -5336,23 +5508,35 @@ function WorkbenchChatPage({ active, project, newChatRequestId, onOpenTask, onAc
         el.classList.toggle("active", el.getAttribute("data-zone") === zone);
       }
     }
+    function positionGhostAt(clientX, clientY) {
+      var rect = ghost.getBoundingClientRect();
+      var viewportInset = 8;
+      // Width/height animate between the rail card and full pane. Clamp using
+      // the destination size so the growing ghost cannot cross the viewport
+      // after a correct position was calculated from its smaller start size.
+      var targetWidth = ghost.classList.contains("card") && cardW ? cardW : (panelW || rect.width);
+      var targetHeight = ghost.classList.contains("card") && cardH ? cardH : (panelH || rect.height);
+      var rawLeft = clientX - (grabOffset ? grabOffset.x : 0);
+      var rawTop = clientY - (grabOffset ? grabOffset.y : 0);
+      var maxLeft = Math.max(viewportInset, window.innerWidth - targetWidth - viewportInset);
+      var maxTop = Math.max(viewportInset, window.innerHeight - targetHeight - viewportInset);
+      ghost.style.left = Math.max(viewportInset, Math.min(maxLeft, rawLeft)) + "px";
+      ghost.style.top = Math.max(viewportInset, Math.min(maxTop, rawTop)) + "px";
+    }
     function onDocumentDragOver(ev) {
-      if (grabOffset) {
-        ghost.style.left = (ev.clientX - grabOffset.x) + "px";
-        ghost.style.top = (ev.clientY - grabOffset.y) + "px";
-      } else {
-        ghost.style.left = ev.clientX + "px";
-        ghost.style.top = ev.clientY + "px";
-      }
       if (clearTimer) { clearTimeout(clearTimer); clearTimer = null; }
       var zone = zoneAt(ev.clientX, ev.clientY);
       if (!zone) {
         setActive("");
+        positionGhostAt(ev.clientX, ev.clientY);
         return;
       }
       ev.preventDefault();
       if (ev.dataTransfer) ev.dataTransfer.dropEffect = "move";
       setActive(zone);
+      // Position after the panel/card size switch so the current ghost box,
+      // including its rounded border, always stays inside the viewport.
+      positionGhostAt(ev.clientX, ev.clientY);
       if (zone !== "rail") {
         // Live preview follows the conversation under this handle. For the
         // main grip the split anchor is the opposite side, so merely starting
@@ -5554,6 +5738,7 @@ function WorkbenchChatPage({ active, project, newChatRequestId, onOpenTask, onAc
   // A topbar context-menu action can navigate to another conversation and
   // reveal one of its resources in the same operation.
   var pendingTopbarResourceRef = useWbcRef(null);
+  var [resourceSplitDropSide, setResourceSplitDropSide] = useWbcState("");
   var chatFileDropActive = useWorkbenchFileDrop(function (files) {
     try {
       window.dispatchEvent(new CustomEvent("cyrene:add-chat-attachments", { detail: { files: files } }));
@@ -5571,6 +5756,54 @@ function WorkbenchChatPage({ active, project, newChatRequestId, onOpenTask, onAc
     selectResourceSplit("viewer", wbcArtifactFileKey(file));
   }
 
+  function openProjectFile(entry) {
+    var file = wbcProjectFileResource(projectId, entry);
+    if (file) openViewer(file);
+  }
+
+  function resourceSplitSideAt(event) {
+    var page = pageRef.current;
+    if (!page) return "";
+    var pageRect = page.getBoundingClientRect();
+    var rail = page.querySelector(".wbc-rail");
+    var railRect = rail && rail.getBoundingClientRect ? rail.getBoundingClientRect() : null;
+    var contentLeft = railRect && railRect.right > pageRect.left ? railRect.right : pageRect.left;
+    var contentRight = pageRect.right;
+    if (
+      event.clientX < contentLeft || event.clientX > contentRight
+      || event.clientY < pageRect.top || event.clientY > pageRect.bottom
+    ) return "";
+    return event.clientX < contentLeft + ((contentRight - contentLeft) / 2) ? "left" : "right";
+  }
+
+  function handleResourceSplitDragOver(event) {
+    if (!wbcHasResourceDrag(event)) return;
+    if (event.target && event.target.closest && event.target.closest(".wbc-rail")) {
+      if (resourceSplitDropSide) setResourceSplitDropSide("");
+      return;
+    }
+    var side = resourceSplitSideAt(event);
+    if (!side) {
+      if (resourceSplitDropSide) setResourceSplitDropSide("");
+      return;
+    }
+    event.preventDefault();
+    if (event.dataTransfer) event.dataTransfer.dropEffect = "copy";
+    if (resourceSplitDropSide !== side) setResourceSplitDropSide(side);
+  }
+
+  function handleResourceSplitDrop(event) {
+    if (!wbcHasResourceDrag(event)) return;
+    var side = resourceSplitSideAt(event);
+    var resource = wbcReadResourceDrag(event);
+    setResourceSplitDropSide("");
+    if (!side || !resource || resource.kind !== "file") return;
+    event.preventDefault();
+    event.stopPropagation();
+    setSplitSideDirect(side);
+    openViewer(resource.file && Object.keys(resource.file).length ? resource.file : resource);
+  }
+
   function revealTopbarResource(chatId, resource) {
     if (!chatId || !resource) return;
     if (resource.type === "browser") {
@@ -5586,7 +5819,7 @@ function WorkbenchChatPage({ active, project, newChatRequestId, onOpenTask, onAc
   }
 
   function markViewerFileRead(file) {
-    if (!file || !projectId || !file.url) return;
+    if (!file || file.source === "project" || !projectId || !file.url) return;
     fetch("/api/workbench/library/read?workspace=" + encodeURIComponent(projectId), {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -6887,12 +7120,20 @@ function WorkbenchChatPage({ active, project, newChatRequestId, onOpenTask, onAc
     if (restoreFloatingPanelSplit()) return;
     var chatId = String(activeChatIdRef.current || "");
     if (!chatId) return;
+    var closingViewer = !!(
+      resourceSplitByChat[chatId]
+      && resourceSplitByChat[chatId].type === "viewer"
+    );
     setResourceSplitByChat(function (current) {
       if (!current[chatId]) return current;
       var updated = Object.assign({}, current);
       delete updated[chatId];
       return updated;
     });
+    if (closingViewer) {
+      setViewerFile(null);
+      setSideTab(function (current) { return current === "viewer" ? "" : current; });
+    }
   }
 
   function closeMainConversationSplit() {
@@ -7537,7 +7778,11 @@ function WorkbenchChatPage({ active, project, newChatRequestId, onOpenTask, onAc
   }) || null;
   var splitArtifact = splitArtifactItem && splitArtifactItem.file;
   var splitChange = changeSplitByChat[activeChatId] || null;
-  var viewerItems = artifactItems;
+  var viewerItems = viewerFile && viewerFile.source === "project"
+    ? [{ file: viewerFile, role: "project" }].concat(artifactItems.filter(function (item) {
+      return wbcArtifactFileKey(item && item.file) !== wbcArtifactFileKey(viewerFile);
+    }))
+    : artifactItems;
   var splitViewer = splitResource && splitResource.type === "viewer"
     ? (
       viewerFile && wbcArtifactFileKey(viewerFile) === String(splitResource.payload || "")
@@ -7698,9 +7943,29 @@ function WorkbenchChatPage({ active, project, newChatRequestId, onOpenTask, onAc
       }}
       data-active-chat-id={activeChatId || ""}
       data-project-id={projectId || ""}
+      onDragOver={handleResourceSplitDragOver}
+      onDragLeave={function (event) {
+        var rect = event.currentTarget.getBoundingClientRect();
+        if (
+          event.clientX <= rect.left || event.clientX >= rect.right
+          || event.clientY <= rect.top || event.clientY >= rect.bottom
+        ) setResourceSplitDropSide("");
+      }}
+      onDragEnd={function () { setResourceSplitDropSide(""); }}
+      onDrop={handleResourceSplitDrop}
     >
       {chatFileDropActive && <WorkbenchFileDropOverlay key="file-drop-overlay" label={wbcT("workbenchChat.dropToAttach", "Release to add files to the message input")} />}
       <div className="wbc-glass-junction" aria-hidden="true" />
+      {resourceSplitDropSide && (
+        <div className="wbc-resource-file-drop-zones" aria-hidden="true">
+          <div className={"wbc-resource-file-drop-zone left" + (resourceSplitDropSide === "left" ? " active" : "")}>
+            <span>{wbcT("workbenchChat.dropFileSplitLeft", "Release to open the file on the left")}</span>
+          </div>
+          <div className={"wbc-resource-file-drop-zone right" + (resourceSplitDropSide === "right" ? " active" : "")}>
+            <span>{wbcT("workbenchChat.dropFileSplitRight", "Release to open the file on the right")}</span>
+          </div>
+        </div>
+      )}
       {chatDragSession && (function () {
         var zone = wbcChatSideZoneRect();
         if (!zone) return null;
@@ -7736,6 +8001,7 @@ function WorkbenchChatPage({ active, project, newChatRequestId, onOpenTask, onAc
       )}
       <WbcRail
         projectId={projectId}
+        projectName={project && project.name || ""}
         chats={chats}
         pinnedChatIds={pinnedChatIds}
         activeChatId={activeChatId}
@@ -7750,6 +8016,7 @@ function WorkbenchChatPage({ active, project, newChatRequestId, onOpenTask, onAc
         onToTask={handleToTask}
         toTaskBusy={toTaskBusy}
         onTogglePinned={onTogglePinnedChat}
+        onOpenFile={openProjectFile}
         collapsed={navCollapsed}
         onToggleCollapsed={onToggleNavCollapsed}
         collapseControl={collapseControl}
@@ -8558,8 +8825,46 @@ function wbcViewportChatIds(list) {
   return result;
 }
 
-function WbcRail({ projectId, chats, pinnedChatIds, activeChatId, loading, runningChatIds, runtimeEngine, onSelect, onAnswer, onCreate, onRename, onDelete, onToTask, toTaskBusy, onTogglePinned, collapsed, onToggleCollapsed, collapseControl, moduleDock }) {
+function wbcProjectFileVisual(entry) {
+  if (entry && entry.kind === "directory") return { kind: "folder", icon: WBC_ICONS.folder };
+  var name = String(entry && entry.name || "").toLowerCase();
+  var extension = name.indexOf(".") >= 0 ? name.split(".").pop() : "";
+  if (["js", "jsx", "ts", "tsx", "py", "kt", "java", "go", "rs", "swift", "c", "cc", "cpp", "h", "hpp", "css", "scss", "html", "vue", "svelte", "sh"].indexOf(extension) >= 0) return { kind: "code", icon: WBC_ICONS.slash };
+  if (["png", "jpg", "jpeg", "gif", "webp", "svg", "bmp", "ico"].indexOf(extension) >= 0) return { kind: "image", icon: WBC_ICONS.image };
+  if (extension === "pdf") return { kind: "pdf", icon: WBC_ICONS.pdf };
+  if (["md", "mdx", "txt", "rst"].indexOf(extension) >= 0) return { kind: "document", icon: WBC_ICONS.fileText };
+  if (["zip", "tar", "gz", "tgz", "rar", "7z"].indexOf(extension) >= 0) return { kind: "archive", icon: WBC_ICONS.layers };
+  if (["json", "yaml", "yml", "toml", "xml", "ini", "env", "lock"].indexOf(extension) >= 0 || name === "dockerfile") return { kind: "config", icon: WBC_ICONS.model };
+  return { kind: "file", icon: WBC_ICONS.file };
+}
+
+function wbcProjectFileResource(projectId, entry) {
+  if (!entry || entry.kind !== "file" || !projectId) return null;
+  var path = String(entry.path || entry.name || "").replace(/\\/g, "/");
+  var encodedPath = path.split("/").filter(Boolean).map(encodeURIComponent).join("/");
+  if (!encodedPath) return null;
+  return {
+    name: String(entry.name || "file"),
+    path: path,
+    size: Number(entry.size || 0),
+    content_type: String(entry.content_type || entry.contentType || ""),
+    kind: wbcFileViewKind(entry) === "image" ? "image" : "file",
+    source: "project",
+    projectId: String(projectId),
+    url: "/api/projects/" + encodeURIComponent(projectId) + "/files/content/" + encodedPath,
+  };
+}
+
+function WbcRail({ projectId, projectName, chats, pinnedChatIds, activeChatId, loading, runningChatIds, runtimeEngine, onSelect, onAnswer, onCreate, onRename, onDelete, onToTask, toTaskBusy, onTogglePinned, onOpenFile, collapsed, onToggleCollapsed, collapseControl, moduleDock }) {
   var [query, setQuery] = useWbcState("");
+  var [railMode, setRailMode] = useWbcState("chat");
+  var [filePath, setFilePath] = useWbcState(".");
+  var [fileEntries, setFileEntries] = useWbcState([]);
+  var [filesLoading, setFilesLoading] = useWbcState(false);
+  var [filesError, setFilesError] = useWbcState("");
+  var [hasLoadedFiles, setHasLoadedFiles] = useWbcState(false);
+  var [fileDirection, setFileDirection] = useWbcState("forward");
+  var fileDirectionRef = useWbcRef("forward");
   var [showAllRecent, setShowAllRecent] = useWbcState(false);
   var [menuId, setMenuId] = useWbcState("");
   var [renameChat, setRenameChat] = useWbcState(null);
@@ -8588,6 +8893,27 @@ function WbcRail({ projectId, chats, pinnedChatIds, activeChatId, loading, runni
   var [agentFlowByChatId, setAgentFlowByChatId] = useWbcState({});
   var [railMotionPhase, setRailMotionPhase] = useWbcState("");
   var [uiViewportRevision, setUiViewportRevision] = useWbcState(0);
+  var normalizedFileQuery = query.trim().toLowerCase();
+  var visibleFiles = normalizedFileQuery ? fileEntries.filter(function (entry) {
+    return String(entry && entry.name || "").toLowerCase().indexOf(normalizedFileQuery) !== -1;
+  }) : fileEntries;
+  useWbcEffect(function () {
+    if (railMode !== "files" || !projectId) return undefined;
+    var cancelled = false;
+    setFilesLoading(true);
+    setFilesError("");
+    fetch("/api/projects/" + encodeURIComponent(projectId) + "/files?path=" + encodeURIComponent(filePath), { cache: "no-store" })
+      .then(function (response) { return response.ok ? response.json() : Promise.reject(new Error(String(response.status))); })
+      .then(function (payload) { if (!cancelled) { setFileDirection(fileDirectionRef.current); setFileEntries(Array.isArray(payload.entries) ? payload.entries : []); setHasLoadedFiles(true); } })
+      .catch(function () { if (!cancelled) { setFileEntries([]); setFilesError(wbcT("rail.filesUnavailable", "Unable to load project files.")); } })
+      .finally(function () { if (!cancelled) setFilesLoading(false); });
+    return function () { cancelled = true; };
+  }, [railMode, filePath, projectId]);
+
+  function toggleRailMode() {
+    setQuery("");
+    setRailMode(railMode === "files" ? "chat" : "files");
+  }
   var railMotionCollapsedRef = useWbcRef(!!collapsed);
   /* Derive the phase during the first render that sees the new collapsed prop.
      Waiting for an Effect (or scheduling state while rendering) leaves one
@@ -9264,10 +9590,7 @@ function WbcRail({ projectId, chats, pinnedChatIds, activeChatId, loading, runni
     document.addEventListener("drag", moveDragImage, true);
     document.addEventListener("dragover", moveDragImage, true);
     document.addEventListener("drop", finishDragImage, true);
-    var canvas = document.createElement("canvas");
-    canvas.width = 1;
-    canvas.height = 1;
-    transfer.setDragImage(canvas, 0, 0);
+    wbcHideNativeDragImage(transfer);
     railDragImageCleanupRef.current = function () {
       document.removeEventListener("drag", moveDragImage, true);
       document.removeEventListener("dragover", moveDragImage, true);
@@ -10223,6 +10546,11 @@ function WbcRail({ projectId, chats, pinnedChatIds, activeChatId, loading, runni
         <div className="wbc-nav-card">
           <div className="wbc-nav-card-head workbench-integrated-rail-head workbench-integrated-rail-search-head">
             {!collapsed && (
+              <button type="button" className="workbench-rail-mode-toggle" onClick={toggleRailMode} aria-label={wbcT("rail.toggleChatFiles", "Toggle chats and files")}>
+                {railMode === "files" ? wbcT("rail.files", "Files") : wbcT("workbench.page.chat", "Chats")}
+              </button>
+            )}
+            {!collapsed && (
               <div className="wbc-search">
                 <span className="wbc-search-icon">{WBC_ICONS.search}</span>
                 <input
@@ -10230,11 +10558,12 @@ function WbcRail({ projectId, chats, pinnedChatIds, activeChatId, loading, runni
                   data-cyrene-node-id="chat_search_input"
                   value={query}
                   onChange={function (e) { setQuery(e.target.value); }}
-                  placeholder={wbcT("workbenchChat.searchCurrentProject", "Search current project...")}
+                  placeholder=""
+                  aria-label={railMode === "files" ? wbcT("rail.searchFiles", "Search files") : wbcT("workbenchChat.searchCurrentProject", "Search current project")}
                 />
               </div>
             )}
-            {!collapsed && (
+            {!collapsed && railMode === "chat" && (
               <button
                 ref={newChatButtonRef}
                 data-cyrene-node-id="new_chat"
@@ -10259,6 +10588,39 @@ function WbcRail({ projectId, chats, pinnedChatIds, activeChatId, loading, runni
         </div>
       </div>
       {menuId && <div className="wb-card-menu-scrim" onClick={function () { setMenuId(""); }} />}
+      {railMode === "files" ? (
+        <div className="wbc-chat-list workbench-integrated-rail-body workbench-project-files">
+          <div className="workbench-project-files-path">
+            <button type="button" disabled={filePath === "."} onClick={function () { fileDirectionRef.current = "back"; setFilePath(filePath.indexOf("/") === -1 ? "." : filePath.split("/").slice(0, -1).join("/")); }}>{WBC_ICONS.chevronLeft}</button>
+            <span title={filePath}>{filePath === "." ? (projectName || ".") : filePath}</span>
+          </div>
+          {filesLoading && !hasLoadedFiles && <div className="workbench-muted wbc-rail-loading">{wbcT("rail.loadingFiles", "Loading files...")}</div>}
+          {!filesLoading && filesError && <div className="workbench-error wbc-rail-empty">{filesError}</div>}
+          {visibleFiles.map(function (entry) {
+            var visual = wbcProjectFileVisual(entry);
+            var projectFile = wbcProjectFileResource(projectId, entry);
+            return <button
+              key={entry.path}
+              type="button"
+              className={"workbench-project-file-row is-" + visual.kind + " enter-" + fileDirection}
+              draggable={projectFile ? "true" : undefined}
+              onDragStart={projectFile ? function (event) { wbcStartFileDrag(event, projectFile); } : undefined}
+              onClick={function () {
+              if (entry.kind === "directory") {
+                fileDirectionRef.current = "forward";
+                setFilePath(entry.path);
+              } else if (onOpenFile) {
+                onOpenFile(entry);
+              }
+            }}>
+              <span className="workbench-project-file-icon" aria-hidden="true">{visual.icon}</span>
+              <b title={entry.path}>{entry.name}</b>
+              {entry.kind === "directory" && <span className="workbench-project-file-chevron" aria-hidden="true">{WBC_ICONS.chevronRight}</span>}
+            </button>;
+          })}
+          {!filesLoading && !filesError && visibleFiles.length === 0 && <div className="workbench-muted wbc-rail-empty">{query ? wbcT("rail.noMatchingFiles", "No matching files.") : wbcT("rail.noFiles", "This folder is empty.")}</div>}
+        </div>
+      ) : (
       <div
         ref={chatListRef}
         data-cyrene-node-id="chat_list"
@@ -10329,7 +10691,8 @@ function WbcRail({ projectId, chats, pinnedChatIds, activeChatId, loading, runni
         )}
         <span className="wbc-sr-only" aria-live="polite">{announcement}</span>
       </div>
-      <div ref={trackRef} className="wbc-conversation-status-track" role="navigation" aria-label={wbcT("workbenchChat.track.label", "Conversation status map")}>
+      )}
+      {railMode === "chat" && <div ref={trackRef} className="wbc-conversation-status-track" role="navigation" aria-label={wbcT("workbenchChat.track.label", "Conversation status map")}>
         {!railDragActive && statusTrackItems.map(function (item) {
           var chat = item.chat;
           var previewOpen = previewChatId === String(chat.id);
@@ -10406,7 +10769,7 @@ function WbcRail({ projectId, chats, pinnedChatIds, activeChatId, loading, runni
             </div>
           );
         })}
-      </div>
+      </div>}
       {moduleDock}
       <WbcRenameDialog
         chat={renameChat}
@@ -18076,12 +18439,33 @@ function WbcPlanTab({ plan }) {
   );
 }
 
+function wbcZoomAnchorRestorer(container, oldScale, clientX, clientY) {
+  if (!container) return function () {};
+  var rect = container.getBoundingClientRect();
+  var anchorX = Number.isFinite(clientX) ? clientX - rect.left : rect.width / 2;
+  var anchorY = Number.isFinite(clientY) ? clientY - rect.top : rect.height / 2;
+  anchorX = Math.max(0, Math.min(rect.width, anchorX));
+  anchorY = Math.max(0, Math.min(rect.height, anchorY));
+  var safeOldScale = Math.max(0.0001, Number(oldScale) || 1);
+  var contentX = (container.scrollLeft + anchorX) / safeOldScale;
+  var contentY = (container.scrollTop + anchorY) / safeOldScale;
+  return function (newScale) {
+    var safeNewScale = Math.max(0.0001, Number(newScale) || 1);
+    window.requestAnimationFrame(function () {
+      container.scrollLeft = Math.max(0, contentX * safeNewScale - anchorX);
+      container.scrollTop = Math.max(0, contentY * safeNewScale - anchorY);
+    });
+  };
+}
+
 // ---- PDF.js viewer (replaces <embed> for PDF files) -------------------------
 
 function WbcPdfJsViewer({ file, url, onViewed }) {
   var pdf = window.CyreneUI.require("pdf");
+  var gestureRef = useWbcRef(null);
   var containerRef = useWbcRef(null);
   var viewerRef = useWbcRef(null);
+  var fitScaleRef = useWbcRef(1);
   var [pageNum, setPageNum] = useWbcState(1);
   var [pageCount, setPageCount] = useWbcState(0);
   var [scale, setScale] = useWbcState(1);
@@ -18091,6 +18475,7 @@ function WbcPdfJsViewer({ file, url, onViewed }) {
   var [analyzing, setAnalyzing] = useWbcState(false);
   var [analysisResult, setAnalysisResult] = useWbcState("");
   var analyzeButtonRef = useWbcRef(null);
+  var pdfPinchRef = useWbcRef({ distance: 0, scale: 1 });
 
   useWbcEffect(function () {
     var container = containerRef.current;
@@ -18113,7 +18498,15 @@ function WbcPdfJsViewer({ file, url, onViewed }) {
     var viewer = result.viewer;
     var eventBus = result.eventBus;
     var loadedDocument = null;
+    var fitFrame = 0;
+    var lastFitWidth = 0;
     viewerRef.current = viewer;
+    var gestureSurface = gestureRef.current;
+    if (gestureSurface) {
+      gestureSurface.addEventListener("wheel", handlePdfWheel, { passive: false });
+      gestureSurface.addEventListener("touchstart", handlePdfTouchStart, { passive: true });
+      gestureSurface.addEventListener("touchmove", handlePdfTouchMove, { passive: false });
+    }
 
     // Track page changes
     function onPageChanging(evt) {
@@ -18122,13 +18515,29 @@ function WbcPdfJsViewer({ file, url, onViewed }) {
     eventBus.on('pagechanging', onPageChanging);
 
     // Handle resize (e.g. sidebar panel resize)
-    function updateViewerSize() {
-      if (document.body.classList.contains("wbc-resizing-side-agent")) return;
-      viewer.update();
+    function fitViewerWidth(force) {
+      var measuredWidth = container.getBoundingClientRect().width;
+      if (!force && lastFitWidth && Math.abs(measuredWidth - lastFitWidth) < 1) {
+        viewer.update();
+        return;
+      }
+      lastFitWidth = measuredWidth;
+      window.cancelAnimationFrame(fitFrame);
+      fitFrame = window.requestAnimationFrame(function () {
+        if (cancelled || document.body.classList.contains("wbc-resizing-side-agent")) return;
+        viewer.currentScaleValue = 'page-width';
+        viewer.update();
+        fitScaleRef.current = viewer.currentScale;
+        setScale(viewer.currentScale);
+      });
     }
-    var resizeObserver = new ResizeObserver(updateViewerSize);
+    function onPagesInit() { fitViewerWidth(true); }
+    function onContainerResize() { fitViewerWidth(false); }
+    function onSplitResizeEnd() { fitViewerWidth(true); }
+    eventBus.on('pagesinit', onPagesInit);
+    var resizeObserver = new ResizeObserver(onContainerResize);
     resizeObserver.observe(container);
-    window.addEventListener("workbench:split-resize-end", updateViewerSize);
+    window.addEventListener("workbench:split-resize-end", onSplitResizeEnd);
 
     // Copy the original PDF text rather than browser-measured text-layer content.
     var selectionSanitizer = pdf.installSelectionSanitizer(container, viewer, eventBus);
@@ -18145,7 +18554,7 @@ function WbcPdfJsViewer({ file, url, onViewed }) {
       setPageCount(doc.numPages);
       setPageNum(1);
       setLoading(false);
-      setScale(viewer.currentScale);
+      fitViewerWidth(true);
       if (onViewed) onViewed();
     }).catch(function (err) {
       if (!cancelled) {
@@ -18158,13 +18567,20 @@ function WbcPdfJsViewer({ file, url, onViewed }) {
 
     return function () {
       cancelled = true;
+      window.cancelAnimationFrame(fitFrame);
       clearTimeout(timer);
       abortLoader.abort();
       selectionSanitizer.abort();
       copyFix.abort();
       resizeObserver.disconnect();
-      window.removeEventListener("workbench:split-resize-end", updateViewerSize);
+      if (gestureSurface) {
+        gestureSurface.removeEventListener("wheel", handlePdfWheel);
+        gestureSurface.removeEventListener("touchstart", handlePdfTouchStart);
+        gestureSurface.removeEventListener("touchmove", handlePdfTouchMove);
+      }
+      window.removeEventListener("workbench:split-resize-end", onSplitResizeEnd);
       eventBus.off('pagechanging', onPageChanging);
+      eventBus.off('pagesinit', onPagesInit);
       if (viewerRef.current) {
         try { viewerRef.current.setDocument(null); } catch (e) {}
       }
@@ -18177,15 +18593,53 @@ function WbcPdfJsViewer({ file, url, onViewed }) {
 
   function zoomIn() {
     var v = viewerRef.current;
-    if (v) { v.currentScale = Math.min(5, v.currentScale * 1.15); setScale(v.currentScale); }
+    if (v) applyPdfGestureScale(v.currentScale * 1.15);
   }
   function zoomOut() {
     var v = viewerRef.current;
-    if (v) { v.currentScale = Math.max(0.25, v.currentScale / 1.15); setScale(v.currentScale); }
+    if (v) applyPdfGestureScale(v.currentScale / 1.15);
   }
   function zoomReset() {
     var v = viewerRef.current;
-    if (v) { v.currentScaleValue = 'page-width'; setScale(v.currentScale); }
+    if (v) {
+      var restoreAnchor = wbcZoomAnchorRestorer(containerRef.current, v.currentScale);
+      v.currentScaleValue = 'page-width';
+      fitScaleRef.current = v.currentScale;
+      setScale(v.currentScale);
+      restoreAnchor(v.currentScale);
+    }
+  }
+  function applyPdfGestureScale(nextScale, clientX, clientY) {
+    var v = viewerRef.current;
+    if (!v) return;
+    var oldScale = v.currentScale;
+    var restoreAnchor = wbcZoomAnchorRestorer(containerRef.current, oldScale, clientX, clientY);
+    v.currentScale = Math.max(fitScaleRef.current, Math.min(5, nextScale));
+    setScale(v.currentScale);
+    restoreAnchor(v.currentScale);
+  }
+  function handlePdfWheel(event) {
+    if (!event.ctrlKey && !event.metaKey) return;
+    event.preventDefault();
+    var v = viewerRef.current;
+    if (v) applyPdfGestureScale(v.currentScale * Math.exp(-event.deltaY * 0.01), event.clientX, event.clientY);
+  }
+  function handlePdfTouchStart(event) {
+    if (event.touches.length !== 2) return;
+    var dx = event.touches[0].clientX - event.touches[1].clientX;
+    var dy = event.touches[0].clientY - event.touches[1].clientY;
+    pdfPinchRef.current = { distance: Math.hypot(dx, dy), scale: viewerRef.current ? viewerRef.current.currentScale : scale };
+  }
+  function handlePdfTouchMove(event) {
+    if (event.touches.length !== 2 || !pdfPinchRef.current.distance) return;
+    event.preventDefault();
+    var dx = event.touches[0].clientX - event.touches[1].clientX;
+    var dy = event.touches[0].clientY - event.touches[1].clientY;
+    applyPdfGestureScale(
+      pdfPinchRef.current.scale * Math.hypot(dx, dy) / pdfPinchRef.current.distance,
+      (event.touches[0].clientX + event.touches[1].clientX) / 2,
+      (event.touches[0].clientY + event.touches[1].clientY) / 2
+    );
   }
 
   // Text selection → agent analysis
@@ -18263,8 +18717,8 @@ function WbcPdfJsViewer({ file, url, onViewed }) {
     <div className="wbc-viewer-head">
       <span className="wbc-viewer-name" title={file && file.name}>{(file && file.name) || "PDF"}</span>
       {!loading && !failed && (
-        <span className="wbc-viewer-switch">
-          <button type="button" onClick={zoomOut}>−</button>
+        <span className="wbc-viewer-switch wbc-viewer-zoom">
+          <button type="button" onClick={zoomOut} disabled={scale <= fitScaleRef.current + 0.001}>−</button>
           <button type="button" onClick={zoomReset}>{Math.round(scale * 100) + "%"}</button>
           <button type="button" onClick={zoomIn}>+</button>
         </span>
@@ -18280,7 +18734,7 @@ function WbcPdfJsViewer({ file, url, onViewed }) {
   );
 
   var body = (
-    <div className="wbc-viewer-scroll" style={{ overflow: 'hidden', position: 'relative' }} onMouseUp={function () {
+    <div ref={gestureRef} className="wbc-viewer-scroll wbc-gesture-zoom" style={{ overflow: 'hidden', position: 'relative' }} onMouseUp={function () {
       if (loading || failed) return;
       setTimeout(function () {
         if (pdf.getSelectedText(containerRef.current).trim()) {
@@ -18340,7 +18794,228 @@ function WbcPdfJsViewer({ file, url, onViewed }) {
   );
 }
 
-// ---- side viewer (PDF / HTML / Markdown / 代码 / 图片) ----------------------
+function WbcOfficeViewer({ file, url, kind, onViewed }) {
+  var containerRef = useWbcRef(null);
+  var contentRef = useWbcRef(null);
+  var viewerRef = useWbcRef(null);
+  var docxFitRef = useWbcRef(null);
+  var zoomRef = useWbcRef(100);
+  var [loading, setLoading] = useWbcState(true);
+  var [failureCode, setFailureCode] = useWbcState("");
+  var [zoomPercent, setZoomPercent] = useWbcState(100);
+  var officePinchRef = useWbcRef({ distance: 0, zoom: 100 });
+
+  useWbcEffect(function () {
+    var container = containerRef.current;
+    if (!container || !url) {
+      setLoading(false);
+      setFailureCode("office_renderer_unavailable");
+      return undefined;
+    }
+    var cancelled = false;
+    var timedOut = false;
+    var officeFitFrame = 0;
+    var officeResizeObserver = null;
+    var abortController = new AbortController();
+    setLoading(true);
+    setFailureCode("");
+    zoomRef.current = 100;
+    setZoomPercent(100);
+    docxFitRef.current = null;
+    container.replaceChildren();
+    var renderTarget = document.createElement("div");
+    renderTarget.className = "wbc-office-content";
+    renderTarget.style.transform = "scale(1)";
+    container.appendChild(renderTarget);
+    contentRef.current = renderTarget;
+    container.addEventListener("wheel", handleOfficeWheel, { passive: false });
+    container.addEventListener("touchstart", handleOfficeTouchStart, { passive: true });
+    container.addEventListener("touchmove", handleOfficeTouchMove, { passive: false });
+    var timer = window.setTimeout(function () {
+      if (cancelled) return;
+      timedOut = true;
+      abortController.abort();
+      setLoading(false);
+      setFailureCode("office_render_timeout");
+    }, 60000);
+
+    Promise.resolve().then(function () {
+      if (Number(file && file.size || 0) > WBC_OFFICE_MAX_FILE_BYTES) {
+        throw new Error("office_file_too_large");
+      }
+      return fetch(url, { signal: abortController.signal });
+    }).then(function (response) {
+      if (!response.ok) throw new Error("HTTP " + response.status);
+      var contentLength = Number(response.headers.get("content-length") || 0);
+      if (contentLength > WBC_OFFICE_MAX_FILE_BYTES) throw new Error("office_file_too_large");
+      return response.arrayBuffer();
+    }).then(function (buffer) {
+      if (buffer.byteLength > WBC_OFFICE_MAX_FILE_BYTES) throw new Error("office_file_too_large");
+      wbcValidateOfficeArchive(buffer);
+      return Promise.all([buffer, wbcLoadOfficeRenderer(kind)]);
+    }).then(function (result) {
+      var buffer = result[0];
+      var renderer = result[1];
+      if (cancelled || timedOut) return null;
+      if (kind === "docx") {
+        return renderer.renderAsync(buffer, renderTarget, renderTarget, {
+          className: "cyrene-docx",
+          inWrapper: true,
+          breakPages: true,
+          ignoreLastRenderedPageBreak: false,
+          useBase64URL: true,
+          renderChanges: false,
+          renderComments: false,
+          renderAltChunks: false,
+          experimental: false,
+          debug: false,
+        }).then(function () {
+          wbcHardenOfficeLinks(container);
+          function fitDocxPages() {
+            window.cancelAnimationFrame(officeFitFrame);
+            officeFitFrame = window.requestAnimationFrame(function () {
+              if (cancelled) return;
+              var availableWidth = Math.max(1, container.clientWidth - 36);
+              Array.prototype.forEach.call(renderTarget.querySelectorAll("section.cyrene-docx"), function (page) {
+                page.style.zoom = "1";
+                var pageWidth = Math.max(1, page.offsetWidth);
+                var fitScale = Math.min(1, availableWidth / pageWidth);
+                page.style.zoom = String(fitScale);
+              });
+            });
+          }
+          docxFitRef.current = fitDocxPages;
+          officeResizeObserver = new ResizeObserver(fitDocxPages);
+          officeResizeObserver.observe(container);
+          fitDocxPages();
+          return null;
+        });
+      }
+      return renderer.PptxViewer.open(buffer, renderTarget, {
+        signal: abortController.signal,
+        zipLimits: renderer.RECOMMENDED_ZIP_LIMITS,
+        fitMode: "contain",
+        zoomPercent: 100,
+        scrollContainer: container,
+        lazySlides: true,
+        lazyMedia: true,
+        listOptions: {
+          windowed: true,
+          initialSlides: 4,
+          batchSize: 6,
+          overscanViewport: 1.25,
+        },
+      }).then(function (viewer) {
+        viewerRef.current = viewer;
+        wbcHardenOfficeLinks(renderTarget);
+        return viewer;
+      });
+    }).then(function () {
+      if (cancelled || timedOut) {
+        if (viewerRef.current) {
+          try { viewerRef.current.destroy(); } catch (e) {}
+          viewerRef.current = null;
+        }
+        container.replaceChildren();
+        return;
+      }
+      window.clearTimeout(timer);
+      setLoading(false);
+      if (onViewed) onViewed();
+    }).catch(function (error) {
+      if (cancelled || timedOut) return;
+      window.clearTimeout(timer);
+      setLoading(false);
+      setFailureCode(String(error && error.message || "office_renderer_unavailable"));
+    });
+
+    return function () {
+      cancelled = true;
+      window.cancelAnimationFrame(officeFitFrame);
+      if (officeResizeObserver) officeResizeObserver.disconnect();
+      container.removeEventListener("wheel", handleOfficeWheel);
+      container.removeEventListener("touchstart", handleOfficeTouchStart);
+      container.removeEventListener("touchmove", handleOfficeTouchMove);
+      docxFitRef.current = null;
+      contentRef.current = null;
+      window.clearTimeout(timer);
+      abortController.abort();
+      if (viewerRef.current) {
+        try { viewerRef.current.destroy(); } catch (e) {}
+        viewerRef.current = null;
+      }
+      container.replaceChildren();
+    };
+  }, [url, kind]);
+
+  function applyOfficeZoom(nextZoom, clientX, clientY) {
+    var next = Math.max(100, Math.min(300, Number(nextZoom) || 100));
+    var restoreAnchor = wbcZoomAnchorRestorer(containerRef.current, zoomRef.current / 100, clientX, clientY);
+    zoomRef.current = next;
+    setZoomPercent(Math.round(next));
+    if (contentRef.current) contentRef.current.style.transform = "scale(" + (next / 100) + ")";
+    restoreAnchor(next / 100);
+  }
+  function handleOfficeWheel(event) {
+    if (!event.ctrlKey && !event.metaKey) return;
+    event.preventDefault();
+    applyOfficeZoom(zoomRef.current * Math.exp(-event.deltaY * 0.01), event.clientX, event.clientY);
+  }
+  function handleOfficeTouchStart(event) {
+    if (event.touches.length !== 2) return;
+    var dx = event.touches[0].clientX - event.touches[1].clientX;
+    var dy = event.touches[0].clientY - event.touches[1].clientY;
+    officePinchRef.current = { distance: Math.hypot(dx, dy), zoom: zoomRef.current };
+  }
+  function handleOfficeTouchMove(event) {
+    if (event.touches.length !== 2 || !officePinchRef.current.distance) return;
+    event.preventDefault();
+    var dx = event.touches[0].clientX - event.touches[1].clientX;
+    var dy = event.touches[0].clientY - event.touches[1].clientY;
+    applyOfficeZoom(
+      officePinchRef.current.zoom * Math.hypot(dx, dy) / officePinchRef.current.distance,
+      (event.touches[0].clientX + event.touches[1].clientX) / 2,
+      (event.touches[0].clientY + event.touches[1].clientY) / 2
+    );
+  }
+
+  var failureText = failureCode === "office_file_too_large"
+    ? wbcT("workbenchChat.officeFileTooLarge", "This Office file is too large to preview safely.")
+    : (failureCode === "office_archive_too_large"
+      ? wbcT("workbenchChat.officeArchiveTooLarge", "The expanded Office document is too large to preview safely.")
+      : (failureCode === "office_invalid_archive"
+        ? wbcT("workbenchChat.officeInvalid", "This is not a valid DOCX or PPTX file.")
+        : (failureCode === "office_render_timeout"
+          ? wbcT("workbenchChat.officeTimeout", "Office preview timed out.")
+          : wbcT("workbenchChat.viewerLoadFailed", "File failed to load."))));
+
+  return (
+    <div className={"wbc-office-viewer is-" + kind}>
+      {!loading && !failureCode && (
+        <span className="wbc-viewer-switch wbc-viewer-zoom wbc-office-zoom">
+          <button type="button" disabled={zoomPercent <= 100} onClick={function () { applyOfficeZoom(zoomRef.current - 25); }} aria-label={wbcT("workbenchChat.zoomOut", "Zoom out")}>−</button>
+          <button type="button" onClick={function () { applyOfficeZoom(100); }} title={wbcT("workbenchChat.fitWidth", "Fit width")}>{zoomPercent + "%"}</button>
+          <button type="button" onClick={function () { applyOfficeZoom(zoomRef.current + 25); }} aria-label={wbcT("workbenchChat.zoomIn", "Zoom in")}>+</button>
+        </span>
+      )}
+      <div ref={containerRef} className="wbc-office-render-surface wbc-gesture-zoom" />
+      {loading && (
+        <div className="wbc-office-viewer-state" role="status">
+          <span className="wbc-pdf-analysis-spinner" aria-hidden="true" />
+          <span>{wbcT("workbenchChat.officeLoading", "Preparing Office preview...")}</span>
+        </div>
+      )}
+      {!loading && failureCode && (
+        <div className="wbc-office-viewer-state is-error" role="alert">
+          <p>{failureText}</p>
+          <small>{wbcT("workbenchChat.officeDownloadFallback", "You can still download or open the original file.")}</small>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ---- side viewer (PDF / Office / HTML / Markdown / 代码 / 图片) -------------
 
 function WbcViewerTab({ file, onViewed, hideHeader, htmlMode: controlledHtmlMode, onHtmlModeChange }) {
   var kind = wbcFileViewKind(file);
@@ -18352,7 +19027,12 @@ function WbcViewerTab({ file, onViewed, hideHeader, htmlMode: controlledHtmlMode
     if (onHtmlModeChange) onHtmlModeChange(next);
   }
   var [failed, setFailed] = useWbcState(false);
+  var [imageZoom, setImageZoom] = useWbcState(100);
+  var imageZoomRef = useWbcRef(100);
+  var imagePinchRef = useWbcRef({ distance: 0, zoom: 100 });
+  var imageSurfaceRef = useWbcRef(null);
   var codeRef = useWbcRef(null);
+  var markdownRef = useWbcRef(null);
   var viewedRef = useWbcRef("");
   var url = file && file.url;
   function confirmViewed() {
@@ -18369,6 +19049,8 @@ function WbcViewerTab({ file, onViewed, hideHeader, htmlMode: controlledHtmlMode
   useWbcEffect(function () {
     setText("");
     setFailed(false);
+    imageZoomRef.current = 100;
+    setImageZoom(100);
     setHtmlMode("rendered");
     if (!url) return;
     var cancelled = false;
@@ -18393,11 +19075,98 @@ function WbcViewerTab({ file, onViewed, hideHeader, htmlMode: controlledHtmlMode
     }
   }, [text, kind]);
 
+  useWbcEffect(function () {
+    if (kind !== "markdown" || !markdownRef.current) return;
+    var container = markdownRef.current;
+    var usedIds = Object.create(null);
+    Array.prototype.forEach.call(container.querySelectorAll("h1,h2,h3,h4,h5,h6"), function (heading) {
+      var base = String(heading.id || heading.textContent || "")
+        .trim()
+        .toLowerCase()
+        .replace(/[\s]+/g, "-")
+        .replace(/[^\p{L}\p{N}_-]+/gu, "")
+        .replace(/-+/g, "-")
+        .replace(/^-|-$/g, "") || "section";
+      var id = base;
+      var suffix = 1;
+      while (usedIds[id]) { id = base + "-" + suffix; suffix += 1; }
+      usedIds[id] = true;
+      heading.id = id;
+    });
+    Array.prototype.forEach.call(container.querySelectorAll("a[href]"), function (anchor) {
+      if (/^https?:\/\//i.test(String(anchor.getAttribute("href") || ""))) {
+        anchor.setAttribute("target", "_blank");
+        anchor.setAttribute("rel", "noopener noreferrer");
+      }
+    });
+  }, [text, kind]);
+
+  function handleMarkdownLink(event) {
+    var anchor = event.target && event.target.closest ? event.target.closest("a[href]") : null;
+    if (!anchor || !markdownRef.current || !markdownRef.current.contains(anchor)) return;
+    var href = String(anchor.getAttribute("href") || "").trim();
+    if (href.charAt(0) !== "#") return;
+    event.preventDefault();
+    event.stopPropagation();
+    var id = href.slice(1);
+    try { id = decodeURIComponent(id); } catch (e) {}
+    var target = Array.prototype.find.call(markdownRef.current.querySelectorAll("[id]"), function (node) {
+      return node.id === id;
+    });
+    if (target) target.scrollIntoView({ behavior: "smooth", block: "start" });
+  }
+
+  function applyImageZoom(nextZoom, clientX, clientY) {
+    var next = Math.max(100, Math.min(400, Number(nextZoom) || 100));
+    var restoreAnchor = wbcZoomAnchorRestorer(imageSurfaceRef.current, imageZoomRef.current / 100, clientX, clientY);
+    imageZoomRef.current = next;
+    setImageZoom(Math.round(next));
+    restoreAnchor(next / 100);
+  }
+  function handleImageWheel(event) {
+    if (!event.ctrlKey && !event.metaKey) return;
+    event.preventDefault();
+    applyImageZoom(imageZoomRef.current * Math.exp(-event.deltaY * 0.01), event.clientX, event.clientY);
+  }
+  function handleImageTouchStart(event) {
+    if (event.touches.length !== 2) return;
+    var dx = event.touches[0].clientX - event.touches[1].clientX;
+    var dy = event.touches[0].clientY - event.touches[1].clientY;
+    imagePinchRef.current = { distance: Math.hypot(dx, dy), zoom: imageZoomRef.current };
+  }
+  function handleImageTouchMove(event) {
+    if (event.touches.length !== 2 || !imagePinchRef.current.distance) return;
+    event.preventDefault();
+    var dx = event.touches[0].clientX - event.touches[1].clientX;
+    var dy = event.touches[0].clientY - event.touches[1].clientY;
+    applyImageZoom(
+      imagePinchRef.current.zoom * Math.hypot(dx, dy) / imagePinchRef.current.distance,
+      (event.touches[0].clientX + event.touches[1].clientX) / 2,
+      (event.touches[0].clientY + event.touches[1].clientY) / 2
+    );
+  }
+
+  useWbcEffect(function () {
+    var surface = kind === "image" ? imageSurfaceRef.current : null;
+    if (!surface) return undefined;
+    surface.addEventListener("wheel", handleImageWheel, { passive: false });
+    surface.addEventListener("touchstart", handleImageTouchStart, { passive: true });
+    surface.addEventListener("touchmove", handleImageTouchMove, { passive: false });
+    return function () {
+      surface.removeEventListener("wheel", handleImageWheel);
+      surface.removeEventListener("touchstart", handleImageTouchStart);
+      surface.removeEventListener("touchmove", handleImageTouchMove);
+    };
+  }, [kind, url]);
+
   if (!file) return <p className="workbench-muted">{wbcT("workbenchChat.viewerEmpty", "Select a file from message attachments or artifacts.")}</p>;
 
   // PDF is handled entirely by its own component — skip the wrapper.
   if (kind === "pdf") {
     return <WbcPdfJsViewer file={file} url={url} onViewed={confirmViewed} />;
+  }
+  if (kind === "docx" || kind === "pptx") {
+    return <WbcOfficeViewer key={url} file={file} url={url} kind={kind} onViewed={confirmViewed} />;
   }
 
   var head = (
@@ -18409,6 +19178,13 @@ function WbcViewerTab({ file, onViewed, hideHeader, htmlMode: controlledHtmlMode
           <button type="button" className={htmlMode === "source" ? "active" : ""} onClick={function () { setHtmlMode("source"); }}>{wbcT("workbenchChat.viewerSource", "Source")}</button>
         </span>
       )}
+      {kind === "image" && (
+        <span className="wbc-viewer-switch wbc-viewer-zoom">
+          <button type="button" disabled={imageZoom <= 100} onClick={function () { applyImageZoom(imageZoomRef.current - 25); }} aria-label={wbcT("workbenchChat.zoomOut", "Zoom out")}>−</button>
+          <button type="button" onClick={function () { applyImageZoom(100); }} title={wbcT("workbenchChat.fitWidth", "Fit width")}>{imageZoom + "%"}</button>
+          <button type="button" onClick={function () { applyImageZoom(imageZoomRef.current + 25); }} aria-label={wbcT("workbenchChat.zoomIn", "Zoom in")}>+</button>
+        </span>
+      )}
       {wbcCanOpenExternally(file) ? <a className="wbc-viewer-open" href={url} target="_blank" rel="noreferrer" title={wbcT("workbenchChat.viewerOpenExternal", "Open in a new window")}>↗</a> : null}
       {wbcDownloadLink(file, { className: "wbc-viewer-download" })}
     </div>
@@ -18418,7 +19194,7 @@ function WbcViewerTab({ file, onViewed, hideHeader, htmlMode: controlledHtmlMode
   if (failed) {
     body = <p className="workbench-muted wbc-viewer-pad">{wbcT("workbenchChat.viewerLoadFailed", "File failed to load.")}{url ? " " + wbcT("workbenchChat.viewerOpenFallback", "Try opening it in a new window.") : ""}</p>;
   } else if (kind === "image") {
-    body = <div className="wbc-viewer-scroll center"><img className="wbc-viewer-img" src={url} alt={file.name || "image"} onLoad={confirmViewed} /></div>;
+    body = <div ref={imageSurfaceRef} className="wbc-viewer-scroll is-image wbc-gesture-zoom"><div className="wbc-viewer-image-stage" style={{ width: imageZoom + "%", height: imageZoom + "%" }}><img className="wbc-viewer-img" src={url} alt={file.name || "image"} decoding="async" onLoad={confirmViewed} onError={function () { setFailed(true); }} /></div></div>;
   } else if (kind === "audio") {
     body = <div className="wbc-viewer-media-wrap"><audio className="wbc-viewer-media" src={url} controls onCanPlay={confirmViewed} /></div>;
   } else if (kind === "video") {
@@ -18428,7 +19204,7 @@ function WbcViewerTab({ file, onViewed, hideHeader, htmlMode: controlledHtmlMode
       ? <iframe key={url + "::" + (text ? "1" : "0")} className="wbc-viewer-iframe" sandbox="allow-scripts" srcDoc={htmlPreview} title={file.name || "HTML"} />
       : <pre className="wbc-viewer-pre">{text}</pre>;
   } else if (kind === "markdown") {
-    body = <div className="wbc-viewer-md wbc-msg-body markdown" dangerouslySetInnerHTML={{ __html: wbcRenderMarkdown(text) }} />;
+    body = <div ref={markdownRef} className="wbc-viewer-md wbc-msg-body markdown" onClick={handleMarkdownLink} dangerouslySetInnerHTML={{ __html: wbcRenderMarkdown(text) }} />;
   } else if (kind === "code") {
     body = <pre className="wbc-viewer-pre"><code ref={codeRef}>{text}</code></pre>;
   } else {
@@ -18442,7 +19218,7 @@ function WbcViewerTab({ file, onViewed, hideHeader, htmlMode: controlledHtmlMode
 
   return (
     <div className="wbc-viewer">
-      {!hideHeader && head}
+      {(!hideHeader || kind === "image") && head}
       {body}
     </div>
   );
