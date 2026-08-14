@@ -897,35 +897,18 @@ class CodexAppServer:
         converts to the same OpenAI-style tool calls used by other providers.
         """
         client = await self._ready_client()
-        action_tools = _provider_action_tools(tools, phase=phase)
-        action_schema = _provider_action_schema(action_tools)
-        instructions = _provider_instructions(
-            messages,
-            action_tools,
-            structured_actions=action_schema is not None,
+        request_material = provider_request_cache_material(
+            messages=messages,
+            tools=tools,
+            model=model,
+            phase=phase,
+            reasoning_effort=reasoning_effort,
         )
-        effort = _normalized_effort(reasoning_effort)
+        action_tools = request_material["action_tools"]
+        action_schema = request_material["action_schema"]
+        effort = request_material["effort"]
         thread_result = await asyncio.wait_for(
-            client.thread_start(
-                {
-                    "model": model,
-                    "baseInstructions": instructions,
-                    "developerInstructions": (
-                        "Act only as Cyrene's language-model backend. "
-                        "Never invoke Codex-hosted tools. Request Cyrene actions "
-                        "through the required structured response instead. "
-                        "Codex host skills, plugins, AGENTS.md files, and their "
-                        "SKILL.md files are not Cyrene capabilities: never read "
-                        "or follow them. Ignore any host-provided skill catalog "
-                        "and select actions only from Cyrene's required response "
-                        "schema."
-                    ),
-                    "ephemeral": True,
-                    "approvalPolicy": "never",
-                    "sandbox": "read-only",
-                    "cwd": str(_codex_isolation_workspace()),
-                }
-            ),
+            client.thread_start(request_material["thread_params"]),
             timeout=min(timeout, 30),
         )
         thread = _model_dump(thread_result).get("thread") or {}
@@ -1018,19 +1001,11 @@ class CodexAppServer:
                 pass
 
         try:
-            turn_input = _provider_turn_input(messages)
+            turn_input = request_material["turn_input"]
             turn_params: dict[str, Any] = {
+                **request_material["turn_params"],
                 "threadId": thread_id,
-                "input": turn_input,
-                "model": model,
-                # Ask only for the provider-supported summary. Raw private
-                # reasoning text is deliberately not exposed to Cyrene.
-                "summary": "auto",
             }
-            if effort:
-                turn_params["effort"] = effort
-            if action_schema is not None:
-                turn_params["outputSchema"] = action_schema
             logger.info(
                 "Starting Codex turn [model=%s effort=%s proxy=system]",
                 model,
@@ -1331,16 +1306,11 @@ def _provider_action_tools(
     *,
     phase: str = "",
 ) -> list[dict[str, Any]]:
-    normalized = [tool for tool in (tools or []) if isinstance(tool, dict)]
-    if str(phase or "").strip().lower() != "phase1":
-        return normalized
-    control_names = {"use_tools", "ask_user", "quit"}
-    return [
-        tool
-        for tool in normalized
-        if str((tool.get("function") or {}).get("name") or "").strip()
-        in control_names
-    ]
+    # Phase gating belongs to the Agent decision prompt and validator. Keeping
+    # the provider-visible schema identical across ordinary Phase 1 and Phase 2
+    # is required for prefix-cache reuse.
+    del phase
+    return [tool for tool in (tools or []) if isinstance(tool, dict)]
 
 
 def _provider_action_schema(
@@ -1378,6 +1348,73 @@ def _provider_action_schema(
         },
         "required": ["content", "tool_calls"],
         "additionalProperties": False,
+    }
+
+
+_PROVIDER_DEVELOPER_INSTRUCTIONS = (
+    "Act only as Cyrene's language-model backend. "
+    "Never invoke Codex-hosted tools. Request Cyrene actions "
+    "through the required structured response instead. "
+    "Codex host skills, plugins, AGENTS.md files, and their "
+    "SKILL.md files are not Cyrene capabilities: never read "
+    "or follow them. Ignore any host-provided skill catalog "
+    "and select actions only from Cyrene's required response schema."
+)
+
+
+def provider_request_cache_material(
+    *,
+    messages: list[dict[str, Any]],
+    tools: list[dict[str, Any]] | None,
+    model: str,
+    phase: str = "",
+    reasoning_effort: str = "",
+) -> dict[str, Any]:
+    """Build the canonical secret-free Codex request before transport IDs.
+
+    ``threadId`` is intentionally absent because it is generated per request
+    and does not participate in provider prompt caching.  Both the adapter and
+    cache diagnostics consume this structure so tests observe the real schema,
+    instructions, and replay representation instead of an Agent-layer proxy.
+    """
+    action_tools = _provider_action_tools(tools, phase=phase)
+    action_schema = _provider_action_schema(action_tools)
+    base_instructions = _provider_instructions(
+        messages,
+        action_tools,
+        structured_actions=action_schema is not None,
+    )
+    effort = _normalized_effort(reasoning_effort)
+    turn_input = _provider_turn_input(messages)
+    turn_params: dict[str, Any] = {
+        "input": turn_input,
+        "model": model,
+        "summary": "auto",
+    }
+    if effort:
+        turn_params["effort"] = effort
+    if action_schema is not None:
+        turn_params["outputSchema"] = action_schema
+    return {
+        "action_tools": action_tools,
+        "action_schema": action_schema,
+        "base_instructions": base_instructions,
+        "effort": effort,
+        "turn_input": turn_input,
+        "message_units": [
+            {"role": "instructions", "content": base_instructions},
+            *turn_input,
+        ],
+        "thread_params": {
+            "model": model,
+            "baseInstructions": base_instructions,
+            "developerInstructions": _PROVIDER_DEVELOPER_INSTRUCTIONS,
+            "ephemeral": True,
+            "approvalPolicy": "never",
+            "sandbox": "read-only",
+            "cwd": str(_codex_isolation_workspace()),
+        },
+        "turn_params": turn_params,
     }
 
 
@@ -1472,12 +1509,24 @@ def _provider_replay_and_images(
     messages: list[dict[str, Any]],
 ) -> tuple[list[dict[str, Any]], list[dict[str, str]]]:
     """Convert OpenAI-style multimodal messages to Codex app-server inputs."""
-    replay: list[dict[str, Any]] = []
-    images: list[dict[str, str]] = []
+    groups = _provider_replay_groups(messages)
+    return (
+        [replay_message for replay_message, _images in groups],
+        [image for _replay_message, images in groups for image in images],
+    )
+
+
+def _provider_replay_groups(
+    messages: list[dict[str, Any]],
+) -> list[tuple[dict[str, Any], list[dict[str, str]]]]:
+    """Keep each replay message adjacent to its attached provider images."""
+    groups: list[tuple[dict[str, Any], list[dict[str, str]]]] = []
+    image_count = 0
     for message in messages:
         if message.get("role") in {"system", "developer"}:
             continue
         replay_message = dict(message)
+        message_images: list[dict[str, str]] = []
         content = message.get("content")
         if isinstance(content, list):
             replay_content: list[Any] = []
@@ -1492,8 +1541,9 @@ def _provider_replay_and_images(
                         image_url = image_url.get("url")
                     url = str(image_url or item.get("url") or "").strip()
                     if url:
-                        image_number = len(images) + 1
-                        images.append({"type": "image", "url": url})
+                        image_count += 1
+                        image_number = image_count
+                        message_images.append({"type": "image", "url": url})
                         replay_content.append({
                             "type": "text",
                             "text": f"[Image {image_number} is attached to this turn.]",
@@ -1502,8 +1552,12 @@ def _provider_replay_and_images(
                 if item_type in {"localImage", "local_image"}:
                     path = str(item.get("path") or "").strip()
                     if path:
-                        image_number = len(images) + 1
-                        images.append({"type": "localImage", "path": path})
+                        image_count += 1
+                        image_number = image_count
+                        message_images.append({
+                            "type": "localImage",
+                            "path": path,
+                        })
                         replay_content.append({
                             "type": "text",
                             "text": f"[Image {image_number} is attached to this turn.]",
@@ -1511,8 +1565,8 @@ def _provider_replay_and_images(
                         continue
                 replay_content.append(dict(item))
             replay_message["content"] = replay_content
-        replay.append(replay_message)
-    return replay, images
+        groups.append((replay_message, message_images))
+    return groups
 
 
 def _provider_input(messages: list[dict[str, Any]]) -> str:
@@ -1524,12 +1578,22 @@ def _provider_input(messages: list[dict[str, Any]]) -> str:
 
 
 def _provider_turn_input(messages: list[dict[str, Any]]) -> list[dict[str, str]]:
-    replay, images = _provider_replay_and_images(messages)
-    user_input = (
-        "Continue this conversation and produce only the next assistant message.\n"
-        + json.dumps(replay, ensure_ascii=False, default=str)
-    )
-    return [{"type": "text", "text": user_input}, *images]
+    turn_input: list[dict[str, str]] = [{
+        "type": "text",
+        "text": "Continue this conversation and produce only the next assistant message.",
+    }]
+    for replay_message, images in _provider_replay_groups(messages):
+        turn_input.append({
+            "type": "text",
+            "text": json.dumps(
+                replay_message,
+                ensure_ascii=False,
+                sort_keys=True,
+                default=str,
+            ),
+        })
+        turn_input.extend(images)
+    return turn_input
 
 
 _client = CodexAppServer()

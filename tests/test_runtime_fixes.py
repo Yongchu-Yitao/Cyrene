@@ -5890,7 +5890,7 @@ async def test_run_main_agent_retries_invalid_phase1_tool_and_returns_model_expl
         {
             "content": "好的，先看天气。",
             "tool_calls": [
-                {"id": "w1", "function": {"name": "WebSearch", "arguments": '{"query":"Toronto weather today"}'}},
+                {"id": "w1", "function": {"name": "UnavailableTool", "arguments": '{"query":"Toronto weather today"}'}},
             ],
         },
         {

@@ -217,10 +217,21 @@ CREATE TABLE IF NOT EXISTS llm_latency_events (
     total_call_ms REAL NOT NULL DEFAULT 0,
     prompt_tokens INTEGER NOT NULL DEFAULT 0,
     completion_tokens INTEGER NOT NULL DEFAULT 0,
+    prompt_cache_hit_tokens INTEGER NOT NULL DEFAULT 0,
+    prompt_cache_miss_tokens INTEGER NOT NULL DEFAULT 0,
+    cache_hit_ratio REAL NOT NULL DEFAULT 0,
     output_tokens_per_second REAL,
     fallback_used INTEGER NOT NULL DEFAULT 0,
     client_pool_reused INTEGER NOT NULL DEFAULT 0,
-    connection_pool_key TEXT NOT NULL DEFAULT ''
+    connection_pool_key TEXT NOT NULL DEFAULT '',
+    model_lease_id TEXT NOT NULL DEFAULT '',
+    request_messages_fingerprint TEXT NOT NULL DEFAULT '',
+    request_tools_fingerprint TEXT NOT NULL DEFAULT '',
+    request_payload_fingerprint TEXT NOT NULL DEFAULT '',
+    previous_payload_fingerprint TEXT NOT NULL DEFAULT '',
+    cache_prefix_status TEXT NOT NULL DEFAULT '',
+    cache_invalidation_reason TEXT NOT NULL DEFAULT '',
+    cache_prefix_message_count INTEGER NOT NULL DEFAULT 0
 );
 CREATE INDEX IF NOT EXISTS idx_llm_latency_created_at ON llm_latency_events(created_at);
 CREATE INDEX IF NOT EXISTS idx_llm_latency_call_id ON llm_latency_events(call_id);
@@ -1198,9 +1209,20 @@ async def _ensure_llm_latency_table(db: aiosqlite.Connection) -> None:
             retry_backoff_ms REAL NOT NULL DEFAULT 0, total_call_ms REAL NOT NULL DEFAULT 0,
             prompt_tokens INTEGER NOT NULL DEFAULT 0,
             completion_tokens INTEGER NOT NULL DEFAULT 0,
+            prompt_cache_hit_tokens INTEGER NOT NULL DEFAULT 0,
+            prompt_cache_miss_tokens INTEGER NOT NULL DEFAULT 0,
+            cache_hit_ratio REAL NOT NULL DEFAULT 0,
             output_tokens_per_second REAL, fallback_used INTEGER NOT NULL DEFAULT 0,
             client_pool_reused INTEGER NOT NULL DEFAULT 0,
-            connection_pool_key TEXT NOT NULL DEFAULT ''
+            connection_pool_key TEXT NOT NULL DEFAULT '',
+            model_lease_id TEXT NOT NULL DEFAULT '',
+            request_messages_fingerprint TEXT NOT NULL DEFAULT '',
+            request_tools_fingerprint TEXT NOT NULL DEFAULT '',
+            request_payload_fingerprint TEXT NOT NULL DEFAULT '',
+            previous_payload_fingerprint TEXT NOT NULL DEFAULT '',
+            cache_prefix_status TEXT NOT NULL DEFAULT '',
+            cache_invalidation_reason TEXT NOT NULL DEFAULT '',
+            cache_prefix_message_count INTEGER NOT NULL DEFAULT 0
         )
         """
     )
@@ -1211,6 +1233,17 @@ async def _ensure_llm_latency_table(db: aiosqlite.Connection) -> None:
         "response_headers_ms": "REAL",
         "first_token_after_headers_ms": "REAL",
         "client_pool_reused": "INTEGER NOT NULL DEFAULT 0",
+        "prompt_cache_hit_tokens": "INTEGER NOT NULL DEFAULT 0",
+        "prompt_cache_miss_tokens": "INTEGER NOT NULL DEFAULT 0",
+        "cache_hit_ratio": "REAL NOT NULL DEFAULT 0",
+        "model_lease_id": "TEXT NOT NULL DEFAULT ''",
+        "request_messages_fingerprint": "TEXT NOT NULL DEFAULT ''",
+        "request_tools_fingerprint": "TEXT NOT NULL DEFAULT ''",
+        "request_payload_fingerprint": "TEXT NOT NULL DEFAULT ''",
+        "previous_payload_fingerprint": "TEXT NOT NULL DEFAULT ''",
+        "cache_prefix_status": "TEXT NOT NULL DEFAULT ''",
+        "cache_invalidation_reason": "TEXT NOT NULL DEFAULT ''",
+        "cache_prefix_message_count": "INTEGER NOT NULL DEFAULT 0",
     }
     for name, definition in migrations.items():
         if name not in columns:
@@ -1287,6 +1320,12 @@ def _llm_trace_event(event: dict, now: str) -> dict:
             "outcome": str(event.get("outcome") or "unknown"),
             "prompt_tokens": int(event.get("prompt_tokens") or 0),
             "completion_tokens": int(event.get("completion_tokens") or 0),
+            "prompt_cache_hit_tokens": int(
+                event.get("prompt_cache_hit_tokens") or 0
+            ),
+            "prompt_cache_miss_tokens": int(
+                event.get("prompt_cache_miss_tokens") or 0
+            ),
             "fallback_used": bool(event.get("fallback_used")),
             "queue_wait_ms": float(event.get("queue_wait_ms") or 0),
             "pre_attempt_wait_ms": float(event.get("pre_attempt_wait_ms") or 0),
@@ -1296,6 +1335,26 @@ def _llm_trace_event(event: dict, now: str) -> dict:
             "first_token_after_headers_ms": event.get("first_token_after_headers_ms"),
             "generation_ms": event.get("generation_ms"),
             "retry_backoff_ms": float(event.get("retry_backoff_ms") or 0),
+            "model_lease_id": str(event.get("model_lease_id") or ""),
+            "request_messages_fingerprint": str(
+                event.get("request_messages_fingerprint") or ""
+            ),
+            "request_tools_fingerprint": str(
+                event.get("request_tools_fingerprint") or ""
+            ),
+            "request_payload_fingerprint": str(
+                event.get("request_payload_fingerprint") or ""
+            ),
+            "previous_payload_fingerprint": str(
+                event.get("previous_payload_fingerprint") or ""
+            ),
+            "cache_prefix_status": str(event.get("cache_prefix_status") or ""),
+            "cache_invalidation_reason": str(
+                event.get("cache_invalidation_reason") or ""
+            ),
+            "cache_prefix_message_count": int(
+                event.get("cache_prefix_message_count") or 0
+            ),
         },
     }
 
@@ -1381,6 +1440,13 @@ def _token_usage_row(event: dict, now: str) -> tuple:
 
 
 def _llm_latency_row(event: dict, now: str) -> tuple:
+    prompt_tokens = int(event.get("prompt_tokens") or 0)
+    cache_hit_tokens = int(event.get("prompt_cache_hit_tokens") or 0)
+    cache_miss_tokens = int(event.get("prompt_cache_miss_tokens") or 0)
+    cache_denominator = cache_hit_tokens + cache_miss_tokens
+    cache_hit_ratio = (
+        cache_hit_tokens / cache_denominator if cache_denominator > 0 else 0.0
+    )
     return (
         str(event.get("call_id") or ""),
         str(event.get("created_at") or now),
@@ -1407,12 +1473,23 @@ def _llm_latency_row(event: dict, now: str) -> tuple:
         event.get("generation_ms"),
         float(event.get("retry_backoff_ms") or 0),
         float(event.get("total_call_ms") or 0),
-        int(event.get("prompt_tokens") or 0),
+        prompt_tokens,
         int(event.get("completion_tokens") or 0),
+        cache_hit_tokens,
+        cache_miss_tokens,
+        cache_hit_ratio,
         event.get("output_tokens_per_second"),
         1 if event.get("fallback_used") else 0,
         1 if event.get("client_pool_reused") else 0,
         str(event.get("connection_pool_key") or ""),
+        str(event.get("model_lease_id") or ""),
+        str(event.get("request_messages_fingerprint") or ""),
+        str(event.get("request_tools_fingerprint") or ""),
+        str(event.get("request_payload_fingerprint") or ""),
+        str(event.get("previous_payload_fingerprint") or ""),
+        str(event.get("cache_prefix_status") or ""),
+        str(event.get("cache_invalidation_reason") or ""),
+        int(event.get("cache_prefix_message_count") or 0),
     )
 
 
@@ -1452,9 +1529,15 @@ async def record_llm_telemetry_batch(
                  outcome, status_code, error_type, queue_wait_ms, pre_attempt_wait_ms,
                  request_ms, response_headers_ms, ttft_ms, first_token_after_headers_ms,
                  generation_ms, retry_backoff_ms, total_call_ms, prompt_tokens,
-                 completion_tokens, output_tokens_per_second, fallback_used,
-                 client_pool_reused, connection_pool_key)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                 completion_tokens, prompt_cache_hit_tokens,
+                 prompt_cache_miss_tokens, cache_hit_ratio,
+                 output_tokens_per_second, fallback_used,
+                 client_pool_reused, connection_pool_key, model_lease_id,
+                 request_messages_fingerprint, request_tools_fingerprint,
+                 request_payload_fingerprint, previous_payload_fingerprint,
+                 cache_prefix_status, cache_invalidation_reason,
+                 cache_prefix_message_count)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 [_llm_latency_row(event, now) for event in latency_events],
             )
@@ -1480,6 +1563,48 @@ async def record_llm_latency(
 ) -> None:
     """Persist one endpoint attempt with optimization-oriented latency spans."""
     await record_llm_telemetry_batch(db_path, latency_events=[event])
+
+
+async def get_llm_cache_stats_by_phase(
+    db_path: str,
+    *,
+    since: datetime | None = None,
+    caller: str = "main_agent",
+) -> list[dict]:
+    """Aggregate provider-reported prompt-cache usage by execution phase."""
+    since_value = since or (datetime.now(timezone.utc) - timedelta(days=7))
+    if since_value.tzinfo is None:
+        since_value = since_value.replace(tzinfo=timezone.utc)
+    async with aiosqlite.connect(db_path) as db:
+        await _ensure_llm_latency_table(db)
+        db.row_factory = aiosqlite.Row
+        cursor = await db.execute(
+            """
+            SELECT phase,
+                   COUNT(*) AS requests,
+                   COALESCE(SUM(prompt_tokens), 0) AS prompt_tokens,
+                   COALESCE(SUM(prompt_cache_hit_tokens), 0) AS cache_hit_tokens,
+                   COALESCE(SUM(prompt_cache_miss_tokens), 0) AS cache_miss_tokens
+            FROM llm_latency_events
+            WHERE created_at >= ? AND caller = ? AND outcome = 'success'
+            GROUP BY phase ORDER BY requests DESC, phase
+            """,
+            (since_value.isoformat(), str(caller)),
+        )
+        rows = await cursor.fetchall()
+    result = []
+    for row in rows:
+        item = dict(row)
+        denominator = int(item["cache_hit_tokens"]) + int(
+            item["cache_miss_tokens"]
+        )
+        item["cache_hit_ratio"] = (
+            int(item["cache_hit_tokens"]) / denominator
+            if denominator > 0
+            else 0.0
+        )
+        result.append(item)
+    return result
 
 
 async def get_token_usage_stats(

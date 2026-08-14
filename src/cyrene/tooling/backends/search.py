@@ -1,9 +1,8 @@
 """
-Deep Search Pipeline -- Multi-stage search with query generation, parallel fetching,
-filtering, and synthesis.
+Deep Search Pipeline -- search, parallel fetching, and relevance filtering.
 
 Architecture:
-  Query Generator (LLM) --> SimpleXNG Searcher --> Filter (LLM) --> Synthesizer (LLM)
+  SimpleXNG Searcher --> parallel Fetch + Filter (LLM) --> Evidence
 """
 
 import asyncio
@@ -257,88 +256,25 @@ async def _filter_results(raw_results: list[dict], topic: str) -> list[dict]:
     return filtered
 
 
-# ---------------------------------------------------------------------------
-# Stage 4: Synthesis
-# ---------------------------------------------------------------------------
-
-
-async def _synthesize(relevant_results: list[dict], fetched_contents: list[str], topic: str) -> str:
-    """Synthesize filtered results into a structured answer."""
-    if not relevant_results:
-        return ""
-
-    lines: list[str] = []
-    for i, r in enumerate(relevant_results):
-        content = (fetched_contents[i] if i < len(fetched_contents) else "") or r.get("snippet", "")
-        lines.append(
-            f"{i + 1}. {r.get('title', '?')} ({r.get('url', '')})\n"
-            f"   {content[:500]}"
-        )
-
-    system_msg = (
-        "You are a research synthesizer. Combine the following search results "
-        "into a clear, factual answer. Cite sources when possible. "
-        "If sources disagree, note the disagreement.\n\n"
-        f"Topic: {topic}\n\n"
-        "Search results:\n"
-        f"{chr(10).join(lines)}\n\n"
-        "Answer:"
-    )
-
-    messages = [
-        {"role": "system", "content": system_msg},
-        {"role": "user", "content": f"Provide a comprehensive answer about: {topic}"},
-    ]
-
-    try:
-        answer = await _call_llm(messages)
-    except Exception as exc:
-        logger.warning("Synthesis LLM call failed: %s", exc)
-        # Fallback: build a simple text summary from results
-        return _fallback_synthesis(relevant_results, fetched_contents)
-
-    return answer or _fallback_synthesis(relevant_results, fetched_contents)
-
-
-def _fallback_synthesis(relevant_results: list[dict], fetched_contents: list[str]) -> str:
-    """Build a simple text summary when the LLM synthesis fails."""
-    parts: list[str] = ["Search results for your question:\n"]
-    for i, r in enumerate(relevant_results):
-        title = r.get("title", "?")
-        url = r.get("url", "")
-        snippet = r.get("snippet", "")
-        content = (fetched_contents[i][:500] if i < len(fetched_contents) and fetched_contents[i] else "")
-        detail = content or snippet
-        parts.append(f"Source {i + 1}: {title}")
-        parts.append(f"URL: {url}")
-        if detail:
-            parts.append(f"Summary: {detail}")
-        parts.append("")
-    return "\n".join(parts)
-
-
 def _self_contained_search_result(
-    answer: str,
     relevant_results: list[dict],
     fetched_contents: list[str],
 ) -> str:
-    """Preserve the synthesized answer and expose already-fetched evidence.
+    """Expose filtered, already-fetched evidence for the main agent.
 
     The previous pipeline fetched page bodies but discarded nearly all of them
-    after synthesis.  That made the main Agent call WebFetch for a URL it had
-    effectively already paid to retrieve.  This projection performs no new
-    network or model work and keeps the synthesized answer unchanged.
+    after an internal synthesis call. That duplicated the main Agent's final
+    synthesis and made it call WebFetch for evidence already retrieved. This
+    projection performs no new network or model work.
     """
     sections = [
-        "WebSearch completed search, page retrieval, relevance filtering, and synthesis. "
-        "Use this self-contained result directly. Do not call WebFetch for the listed "
-        "sources unless the user explicitly requests an exact quotation/full-page "
+        "WebSearch completed search, page retrieval, and relevance filtering. "
+        "No internal answer synthesis was performed; synthesize the final answer "
+        "from the evidence below. Do not call WebFetch for the listed sources "
+        "unless the user explicitly requests an exact quotation/full-page "
         "verification or a required detail is absent below.",
         "",
-        "Synthesized answer:",
-        answer.strip(),
-        "",
-        "Fetched source evidence:",
+        "Filtered source evidence:",
     ]
     for index, result in enumerate(relevant_results, start=1):
         content = (
@@ -374,7 +310,6 @@ async def _deep_search_simplexng(
         1. Query selection: use the original user topic
         2. SimpleXNG search + fetch URL contents
         3. Filter (LLM): keep only relevant results
-        4. Synthesize (LLM): produce structured answer
 
     This remains the dependency-free fallback when DeepSeek native search is
     unavailable or the user has not configured an official DeepSeek account.
@@ -506,20 +441,10 @@ async def _deep_search_simplexng(
         filtered = deduped[:5]
     logger.info("Stage 3 complete: %d relevant results", len(filtered))
 
-    # -----------------------------------------------------------------------
-    # Stage 4: Synthesize
-    # -----------------------------------------------------------------------
     fetched_contents = [r.get("fetched_content", "") or r.get("snippet", "") for r in filtered]
-    async with trace_span(
-        "search_stage", "simplexng_synthesize", attributes={"source_count": len(filtered)}
-    ) as synthesize_span:
-        answer = await _synthesize(filtered, fetched_contents, topic)
-        synthesize_span.set_attribute("answer_chars", len(answer))
-    logger.info("Stage 4 complete: synthesis generated (%d chars)", len(answer))
-
-    result = _self_contained_search_result(answer, filtered, fetched_contents)
+    result = _self_contained_search_result(filtered, fetched_contents)
     logger.info(
-        "WebSearch self-contained result generated (%d chars, %d evidence sources)",
+        "WebSearch evidence result generated (%d chars, %d sources)",
         len(result),
         len(filtered),
     )

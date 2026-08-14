@@ -137,7 +137,12 @@ async def _run_scenario(scenario: BenchmarkScenario) -> dict[str, Any]:
                     _tool_call(
                         "use_tools_1",
                         "use_tools",
-                        {"task": "deterministic benchmark"},
+                        {
+                            "execution_brief": (
+                                "Intent: run the deterministic fixture. "
+                                "First: execute its initial tool."
+                            )
+                        },
                     )
                 ],
             }

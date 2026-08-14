@@ -6,6 +6,7 @@ search.py, scheduler.py, attachments.py, and onboarding.py.
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import html
 import json
 import logging
@@ -746,17 +747,13 @@ _INTERNAL_MSG_KEYS = frozenset({
     "report_title", "deep_reflection_record", "reflection_id",
     "subagent_flow_snapshot", "proactive",
     "runtime_guidance",
+    "volatile_context_version",
     "ephemeral_model_observation",
     "_candidate_identity",
     # Per-response metadata we attach to the returned message for callers to
     # inspect (e.g. detecting a max_tokens truncation), but which must not be
     # echoed back upstream when the message is replayed in history.
     "finish_reason",
-    # Past-turn chain-of-thought must never be echoed back upstream: it bloats the
-    # context (accelerating cache-breaking compaction) and DeepSeek's reasoner API
-    # rejects inputs that carry reasoning_content. It stays in the stored history
-    # for the UI; this strip only applies to the payload sent to the model.
-    "reasoning_content",
 })
 
 
@@ -794,6 +791,7 @@ def sanitize_messages_for_llm(
     messages: list[dict],
     *,
     materialize_internal_media: bool = True,
+    preserve_tool_reasoning: bool = False,
 ) -> list[dict]:
     """Normalize model messages without leaking internal transport metadata.
 
@@ -811,6 +809,19 @@ def sanitize_messages_for_llm(
         )
         for m in strip_context_metadata(messages)
     ]
+    if not preserve_tool_reasoning:
+        for message in messages:
+            message.pop("reasoning_content", None)
+    else:
+        # DeepSeek V4 requires complete reasoning_content replay for assistant
+        # turns that performed tool calls. Reasoning from ordinary assistant
+        # turns remains unnecessary and is omitted to avoid context growth.
+        for message in messages:
+            if not (
+                message.get("role") == "assistant"
+                and message.get("tool_calls")
+            ):
+                message.pop("reasoning_content", None)
     seen_ids: set[str] = set()
     result: list[dict[str, Any]] = []
     i = 0
@@ -970,9 +981,13 @@ def _build_payload(
     response_format: dict[str, Any] | None = None,
     reasoning_effort: str = "",
 ) -> dict[str, Any]:
+    is_deepseek = "deepseek" in model.lower()
     payload: dict[str, Any] = {
         "model": model,
-        "messages": sanitize_messages_for_llm(messages),
+        "messages": sanitize_messages_for_llm(
+            messages,
+            preserve_tool_reasoning=is_deepseek,
+        ),
     }
     if max_tokens is not None:
         payload["max_tokens"] = max_tokens
@@ -988,7 +1003,6 @@ def _build_payload(
         payload["stream"] = True
         payload["stream_options"] = {"include_usage": True}
 
-    is_deepseek = "deepseek" in model.lower()
     if thinking == "auto":
         if is_deepseek:
             payload["thinking"] = {"type": "enabled"}
@@ -1011,6 +1025,42 @@ def _build_payload(
             effort = "high"
         payload["reasoning_effort"] = effort
     return payload
+
+
+def _stable_request_fingerprint(value: Any) -> str:
+    """Return a short deterministic hash without retaining request content."""
+    encoded = json.dumps(
+        value,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+        default=str,
+    ).encode("utf-8")
+    return hashlib.sha256(encoded).hexdigest()[:24]
+
+
+def _request_cache_diagnostics(
+    candidate_lease: Any,
+    *,
+    model_type: str,
+    identity: dict[str, Any],
+    message_units: list[Any],
+    tools_material: Any,
+    payload_material: Any,
+) -> dict[str, Any]:
+    """Compute metadata-only provider request diagnostics for a run lease."""
+    if candidate_lease is None or not hasattr(candidate_lease, "observe_request"):
+        return {}
+    message_fingerprints = [
+        _stable_request_fingerprint(unit) for unit in message_units
+    ]
+    return candidate_lease.observe_request(
+        model_type,
+        identity=identity,
+        message_fingerprints=message_fingerprints,
+        tools_fingerprint=_stable_request_fingerprint(tools_material or []),
+        payload_fingerprint=_stable_request_fingerprint(payload_material),
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -1653,6 +1703,7 @@ async def call_llm(
     tools: list | None = None,
     model_type: str = "primary",
     candidates: list[dict] | None = None,
+    candidate_lease: Any = None,
     max_tokens: int | None = None,
     timeout: float = 120.0,
     stream: bool = False,
@@ -1675,6 +1726,8 @@ async def call_llm(
         tools: Optional tool definitions (triggers ``tool_choice="auto"``).
         model_type: ``"primary"``, ``"secondary"``, or ``"vision"``.
         candidates: Explicit candidate list (overrides ``model_type``).
+        candidate_lease: Optional run-owned lease used to retain candidate
+            affinity and compare final provider request fingerprints.
         max_tokens: If ``None``, omit from payload (let the model decide).
         timeout: HTTP client timeout in seconds.
         stream: If ``True``, emit ``reply_start`` / ``reply_delta`` / ``reply_done``
@@ -1723,9 +1776,9 @@ async def call_llm(
         resolved = [
             {
                 **candidate,
-                "_configured_rank": index,
+                "_configured_rank": candidate.get("_configured_rank", index),
                 "_endpoint_ranks": {
-                    endpoint: rank
+                    endpoint: (candidate.get("_endpoint_ranks") or {}).get(endpoint, rank)
                     for rank, endpoint in enumerate(candidate.get("endpoints") or [])
                 },
             }
@@ -1862,6 +1915,21 @@ async def call_llm(
                     response_format,
                     reasoning_effort=str(candidate.get("reasoning_effort") or ""),
                 )
+                codex_request_material: dict[str, Any] | None = None
+                if provider == "codex_oauth":
+                    from cyrene.model_runtime.codex_provider import (
+                        provider_request_cache_material,
+                    )
+
+                    codex_request_material = provider_request_cache_material(
+                        messages=messages,
+                        tools=tools,
+                        model=model,
+                        phase=phase,
+                        reasoning_effort=str(
+                            candidate.get("reasoning_effort") or ""
+                        ),
+                    )
 
                 headers = {"Content-Type": "application/json"}
                 api_key = str(candidate.get("api_key") or "").strip()
@@ -1886,6 +1954,43 @@ async def call_llm(
                             attempt_started = _time.monotonic()
                             stream_timing: dict[str, float] = {}
                             stream_event_emitted = False
+                            request_identity = {
+                                "candidateId": str(candidate.get("id") or ""),
+                                "provider": provider,
+                                "model": model,
+                                "endpoint": endpoint,
+                                "reasoningEffort": str(
+                                    candidate.get("reasoning_effort") or ""
+                                ).strip().lower(),
+                            }
+                            request_material = (
+                                {
+                                    "thread_params": codex_request_material[
+                                        "thread_params"
+                                    ],
+                                    "turn_params": codex_request_material[
+                                        "turn_params"
+                                    ],
+                                }
+                                if codex_request_material is not None
+                                else payload
+                            )
+                            request_diagnostics = _request_cache_diagnostics(
+                                candidate_lease,
+                                model_type=model_type,
+                                identity=request_identity,
+                                message_units=(
+                                    list(codex_request_material["message_units"])
+                                    if codex_request_material is not None
+                                    else list(payload.get("messages") or [])
+                                ),
+                                tools_material=(
+                                    codex_request_material["action_tools"]
+                                    if codex_request_material is not None
+                                    else payload.get("tools") or []
+                                ),
+                                payload_material=request_material,
+                            )
 
                             async def _tracked_stream_callback(event: dict[str, Any]) -> None:
                                 nonlocal stream_event_emitted
@@ -1987,6 +2092,7 @@ async def call_llm(
                                     ),
                                     "client_pool_reused": client_pool_reused,
                                     "connection_pool_key": connection_pool_key,
+                                    **request_diagnostics,
                                     })
                                 # Restarting a stream after visible deltas would
                                 # duplicate text in the UI. Only retry before the
@@ -2034,6 +2140,7 @@ async def call_llm(
                                     ),
                                     "client_pool_reused": client_pool_reused,
                                     "connection_pool_key": connection_pool_key,
+                                    **request_diagnostics,
                                     })
                                 # Transient upstream 5xx (incl. non-standard overload
                                 # codes like 550 / 529): back off and retry the same
@@ -2118,12 +2225,19 @@ async def call_llm(
                             ),
                             "client_pool_reused": client_pool_reused,
                             "connection_pool_key": connection_pool_key,
+                            "prompt_cache_hit_tokens": int(
+                                usage.get("prompt_cache_hit_tokens") or 0
+                            ),
+                            "prompt_cache_miss_tokens": int(
+                                usage.get("prompt_cache_miss_tokens") or 0
+                            ),
+                            **request_diagnostics,
                             }
 
                         _clear_candidate_cooldown(
                             _candidate_key(candidate, session_id)
                         )
-                        if candidates is None:
+                        if candidates is None or candidate_lease is not None:
                             _remember_success(
                                 model_type, candidate, endpoint, session_id
                             )
@@ -2169,6 +2283,7 @@ async def call_llm(
                             "provider": provider,
                             "model": model,
                             "baseUrl": _public_base_url(candidate.get("base_url") or ""),
+                            "endpoint": endpoint,
                             "reasoningEffort": str(candidate.get("reasoning_effort") or "").strip().lower(),
                         }
                         return msg

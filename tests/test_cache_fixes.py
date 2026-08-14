@@ -48,6 +48,155 @@ def test_normalized_usage_reads_provider_prompt_cache_fields():
     assert anthropic_usage["prompt_cache_miss_tokens"] == 30
 
 
+async def test_run_model_lease_pins_candidates_across_calls():
+    """Model settings changed mid-run are deferred until the next run."""
+    from cyrene.model_runtime import client as model_client
+
+    generation = {"model": "deepseek-before"}
+    captured_candidates = []
+
+    def fake_resolve(model_type):
+        return [{
+            "id": model_type,
+            "provider": "openai_compatible",
+            "model": generation["model"],
+            "base_url": "https://api.deepseek.com",
+            "api_key": "secret",
+            "endpoints": ["https://api.deepseek.com/chat/completions"],
+        }]
+
+    async def fake_unified_call(messages, **kwargs):
+        captured_candidates.append(kwargs.get("candidates"))
+        return {"role": "assistant", "content": "ok"}
+
+    _orig_resolve = _patch(model_client, "_resolve_candidates", fake_resolve)
+    _orig_prioritize = _patch(
+        model_client,
+        "_prioritize_last_success",
+        lambda candidates, model_type, session_id: candidates,
+    )
+    _orig_call = _patch(model_client, "call_llm", fake_unified_call)
+    lease_token = _agent_state.activate_run_model_lease()
+    try:
+        generation["model"] = "deepseek-after"
+        await _agent_state._call_llm([{"role": "user", "content": "one"}])
+        await _agent_state._call_llm([{"role": "user", "content": "two"}])
+    finally:
+        _agent_state.reset_run_model_lease(lease_token)
+        _patch(model_client, "call_llm", _orig_call)
+        _patch(model_client, "_prioritize_last_success", _orig_prioritize)
+        _patch(model_client, "_resolve_candidates", _orig_resolve)
+
+    assert [items[0]["model"] for items in captured_candidates] == [
+        "deepseek-before",
+        "deepseek-before",
+    ]
+
+
+async def test_run_model_lease_child_task_pins_successful_candidate_and_endpoint():
+    """A model call running in a child task must update the shared run lease."""
+    captured_candidates = []
+    responses = iter([
+        {
+            "role": "assistant",
+            "content": "phase one",
+            "_candidate_identity": {
+                "candidateId": "backup",
+                "provider": "openai_compatible",
+                "model": "backup-model",
+                "endpoint": "https://backup.example/v1/second",
+            },
+        },
+        {"role": "assistant", "content": "phase two"},
+    ])
+
+    async def fake_unified_call(messages, **kwargs):
+        captured_candidates.append(kwargs["candidates"])
+        assert kwargs["candidate_lease"] is not None
+        return next(responses)
+
+    lease = _agent_state.RunModelLease(
+        "lease-test",
+        {
+            "primary": (
+                {
+                    "id": "primary",
+                    "provider": "openai_compatible",
+                    "model": "primary-model",
+                    "endpoints": ["https://primary.example/v1"],
+                },
+                {
+                    "id": "backup",
+                    "provider": "openai_compatible",
+                    "model": "backup-model",
+                    "endpoints": [
+                        "https://backup.example/v1/first",
+                        "https://backup.example/v1/second",
+                    ],
+                },
+            ),
+        },
+    )
+    lease_token = _agent_state._run_model_lease.set(lease)
+    from cyrene.model_runtime import client as model_client
+    original_call = _patch(model_client, "call_llm", fake_unified_call)
+    try:
+        await asyncio.create_task(
+            _agent_state._call_llm([{"role": "user", "content": "one"}])
+        )
+        await _agent_state._call_llm([{"role": "user", "content": "two"}])
+    finally:
+        _patch(model_client, "call_llm", original_call)
+        _agent_state._run_model_lease.reset(lease_token)
+
+    second_call = captured_candidates[1]
+    assert second_call[0]["id"] == "backup"
+    assert second_call[0]["endpoints"][0] == "https://backup.example/v1/second"
+
+
+def test_run_model_lease_reports_strict_prefix_and_invalidation_reasons():
+    lease = _agent_state.RunModelLease("lease-fingerprint", {"primary": ()})
+    identity = {
+        "candidateId": "primary",
+        "provider": "openai_compatible",
+        "model": "model",
+        "endpoint": "https://model.example/v1",
+        "reasoningEffort": "high",
+    }
+
+    first = lease.observe_request(
+        "primary",
+        identity=identity,
+        message_fingerprints=["system", "user", "decision"],
+        tools_fingerprint="tools-a",
+        payload_fingerprint="payload-a",
+    )
+    second = lease.observe_request(
+        "primary",
+        identity=identity,
+        message_fingerprints=["system", "user", "decision", "assistant", "tool"],
+        tools_fingerprint="tools-a",
+        payload_fingerprint="payload-b",
+    )
+    invalidated = lease.observe_request(
+        "primary",
+        identity={**identity, "endpoint": "https://other.example/v1"},
+        message_fingerprints=["changed"],
+        tools_fingerprint="tools-b",
+        payload_fingerprint="payload-c",
+    )
+
+    assert first["cache_prefix_status"] == "first_request"
+    assert second["cache_prefix_status"] == "strict_prefix_reuse"
+    assert second["cache_prefix_message_count"] == 3
+    assert invalidated["cache_prefix_status"] == "invalidated"
+    assert set(invalidated["cache_invalidation_reason"].split(",")) == {
+        "endpoint_changed",
+        "tools_changed",
+        "message_prefix_changed",
+    }
+
+
 def test_workbench_new_session_memory_moves_to_volatile_tail(monkeypatch, tmp_path):
     from cyrene.workbench import runtime as routes
     from cyrene.workbench import memory as memory
@@ -100,7 +249,7 @@ async def test_phase1_retry_with_unified_system_prompt():
         {
             "content": "ok, checking weather.",
             "tool_calls": [
-                {"id": "w1", "function": {"name": "WebSearch", "arguments": json.dumps({"query": "Toronto weather"})}},
+                {"id": "w1", "function": {"name": "UnavailableTool", "arguments": json.dumps({"query": "Toronto weather"})}},
             ],
         },
         {
@@ -138,10 +287,227 @@ async def test_phase1_retry_with_unified_system_prompt():
     print("PASS: test_phase1_retry_with_unified_system_prompt")
 
 
+async def test_phase1_concrete_tool_is_promoted_without_correction_call():
+    """A valid concrete decision executes immediately in the Phase-2 loop."""
+    from cyrene import agent
+
+    llm_inputs = []
+    responses = iter([
+        {
+            "content": "",
+            "tool_calls": [{
+                "id": "r1",
+                "function": {
+                    "name": "Read",
+                    "arguments": json.dumps({"path": "notes.txt"}),
+                },
+            }],
+        },
+        {
+            "content": "The file contains the requested notes.",
+            "tool_calls": [{
+                "id": "q1",
+                "function": {"name": "quit", "arguments": "{}"},
+            }],
+        },
+    ])
+
+    async def fake_call_llm(messages, tools=None, max_tokens=32000, **kwargs):
+        llm_inputs.append([dict(message) for message in messages])
+        return next(responses)
+
+    execute = AsyncMock(return_value="file contents")
+    _orig_llm = _patch(_agent_core, "_call_llm", fake_call_llm)
+    _orig_exec = _patch(_agent_core, "_execute_tool", execute)
+    _orig_save = _patch(_agent_core, "_save_session_messages", AsyncMock())
+    try:
+        result = await agent._run_main_agent(
+            "read notes.txt", [], None, 0, "db.sqlite3"
+        )
+    finally:
+        _patch(_agent_core, "_call_llm", _orig_llm)
+        _patch(_agent_core, "_execute_tool", _orig_exec)
+        _patch(_agent_core, "_save_session_messages", _orig_save)
+
+    assert result == "The file contains the requested notes."
+    assert len(llm_inputs) == 2
+    execute.assert_awaited_once()
+    assert execute.await_args.args[:2] == ("Read", {"path": "notes.txt"})
+    phase1_messages, phase2_messages = llm_inputs
+    assert phase2_messages[:len(phase1_messages)] == phase1_messages
+    appended = phase2_messages[len(phase1_messages):]
+    assert appended[0]["role"] == "assistant"
+    assert appended[0]["tool_calls"][0]["id"] == "r1"
+    assert appended[1]["role"] == "tool"
+    assert appended[1]["tool_call_id"] == "r1"
+
+
+async def test_phase1_multiple_concrete_tools_share_one_promoted_batch():
+    """Every concrete call is resolved before the next model turn."""
+    from cyrene import agent
+
+    llm_inputs = []
+    responses = iter([
+        {
+            "content": "",
+            "tool_calls": [
+                {
+                    "id": "r1",
+                    "function": {
+                        "name": "Read",
+                        "arguments": json.dumps({"path": "one.txt"}),
+                    },
+                },
+                {
+                    "id": "r2",
+                    "function": {
+                        "name": "Read",
+                        "arguments": json.dumps({"path": "two.txt"}),
+                    },
+                },
+            ],
+        },
+        {
+            "content": "Both files were inspected.",
+            "tool_calls": [{
+                "id": "q1",
+                "function": {"name": "quit", "arguments": "{}"},
+            }],
+        },
+    ])
+
+    async def fake_call_llm(messages, tools=None, max_tokens=32000, **kwargs):
+        llm_inputs.append([dict(message) for message in messages])
+        return next(responses)
+
+    execute = AsyncMock(side_effect=["one", "two"])
+    _orig_llm = _patch(_agent_core, "_call_llm", fake_call_llm)
+    _orig_exec = _patch(_agent_core, "_execute_tool", execute)
+    _orig_save = _patch(_agent_core, "_save_session_messages", AsyncMock())
+    try:
+        result = await agent._run_main_agent(
+            "read both files", [], None, 0, "db.sqlite3"
+        )
+    finally:
+        _patch(_agent_core, "_call_llm", _orig_llm)
+        _patch(_agent_core, "_execute_tool", _orig_exec)
+        _patch(_agent_core, "_save_session_messages", _orig_save)
+
+    assert result == "Both files were inspected."
+    assert execute.await_count == 2
+    appended = llm_inputs[1][len(llm_inputs[0]):]
+    assert [message["role"] for message in appended] == [
+        "assistant", "tool", "tool",
+    ]
+    assert [message["tool_call_id"] for message in appended[1:]] == ["r1", "r2"]
+
+
+async def test_phase1_ask_user_wins_over_promoted_concrete_tool():
+    """Clarification remains terminal for the turn when calls are mixed."""
+    from cyrene import agent
+
+    llm_calls = 0
+
+    async def fake_call_llm(messages, tools=None, max_tokens=32000, **kwargs):
+        nonlocal llm_calls
+        llm_calls += 1
+        return {
+            "content": "I need one detail first.",
+            "tool_calls": [
+                {
+                    "id": "a1",
+                    "function": {
+                        "name": "ask_user",
+                        "arguments": json.dumps({"text": "Which file?"}),
+                    },
+                },
+                {
+                    "id": "r1",
+                    "function": {
+                        "name": "Read",
+                        "arguments": json.dumps({"path": "guessed.txt"}),
+                    },
+                },
+            ],
+        }
+
+    execute = AsyncMock(return_value="must not run")
+    ask = AsyncMock(return_value='{"status":"awaiting_user"}')
+    _orig_llm = _patch(_agent_core, "_call_llm", fake_call_llm)
+    _orig_exec = _patch(_agent_core, "_execute_tool", execute)
+    _orig_wire = _patch(_agent_core, "execute_wire_tool", ask)
+    try:
+        result = await agent._run_main_agent(
+            "read the file", [], None, 0, "db.sqlite3"
+        )
+    finally:
+        _patch(_agent_core, "_call_llm", _orig_llm)
+        _patch(_agent_core, "_execute_tool", _orig_exec)
+        _patch(_agent_core, "execute_wire_tool", _orig_wire)
+
+    assert result == agent._AWAITING_USER_SENTINEL
+    assert llm_calls == 1
+    execute.assert_not_awaited()
+    ask.assert_awaited_once()
+    assert ask.await_args.args[0] == "ask_user"
+
+
+async def test_quick_answer_does_not_promote_concrete_phase1_tool():
+    """Quick Answer keeps its no-execution contract and requests correction."""
+    from cyrene import agent
+
+    llm_inputs = []
+    responses = iter([
+        {
+            "content": "",
+            "tool_calls": [{
+                "id": "r1",
+                "function": {
+                    "name": "Read",
+                    "arguments": json.dumps({"path": "notes.txt"}),
+                },
+            }],
+        },
+        {
+            "content": "I cannot execute tools in Quick Answer mode.",
+            "tool_calls": [{
+                "id": "q1",
+                "function": {"name": "quit", "arguments": "{}"},
+            }],
+        },
+    ])
+
+    async def fake_call_llm(messages, tools=None, max_tokens=32000, **kwargs):
+        llm_inputs.append([dict(message) for message in messages])
+        return next(responses)
+
+    execute = AsyncMock(return_value="must not run")
+    _orig_llm = _patch(_agent_core, "_call_llm", fake_call_llm)
+    _orig_exec = _patch(_agent_core, "_execute_tool", execute)
+    _orig_save = _patch(_agent_core, "_save_session_messages", AsyncMock())
+    command_token = _agent_state._current_command.set("quick-answer")
+    try:
+        result = await agent._run_main_agent(
+            "answer briefly", [], None, 0, "db.sqlite3"
+        )
+    finally:
+        _agent_state._current_command.reset(command_token)
+        _patch(_agent_core, "_call_llm", _orig_llm)
+        _patch(_agent_core, "_execute_tool", _orig_exec)
+        _patch(_agent_core, "_save_session_messages", _orig_save)
+
+    assert result == "I cannot execute tools in Quick Answer mode."
+    assert len(llm_inputs) == 2
+    assert "Quick Answer mode does not allow execution tools" in llm_inputs[1][-1]["content"]
+    execute.assert_not_awaited()
+
+
 async def test_phase2_prefix_matches_phase1():
     """Phase 2 prefix is identical to Phase 1 for cache hits."""
     from cyrene import agent
 
+    llm_inputs = []
+    llm_tools = []
     phase1_done = False
     phase1_responses = iter([
         {
@@ -158,6 +524,8 @@ async def test_phase2_prefix_matches_phase1():
 
     async def fake_call_llm(messages, tools=None, max_tokens=32000, **kwargs):
         nonlocal phase1_done
+        llm_inputs.append([dict(message) for message in messages])
+        llm_tools.append(tools)
         if not phase1_done:
             phase1_done = True
             return next(phase1_responses)
@@ -172,6 +540,14 @@ async def test_phase2_prefix_matches_phase1():
         _patch(_agent_core, "_save_session_messages", _orig_save)
 
     assert "Task is done" in result
+    phase1_messages, phase2_messages = llm_inputs
+    assert phase2_messages[:len(phase1_messages)] == phase1_messages
+    assert llm_tools[1] == llm_tools[0]
+    appended = phase2_messages[len(phase1_messages):]
+    assert appended[0]["role"] == "assistant"
+    assert appended[0]["tool_calls"][0]["id"] == "u1"
+    assert appended[1]["role"] == "tool"
+    assert appended[1]["tool_call_id"] == "u1"
     print("PASS: test_phase2_prefix_matches_phase1")
 
 
@@ -193,6 +569,8 @@ async def test_phase1_execution_brief_is_handed_to_phase2():
                 "function": {
                     "name": "use_tools",
                     "arguments": json.dumps({
+                        # Simulate a stale provider response from the old schema;
+                        # the Phase-2 protocol must remove this duplicate.
                         "task": "improve the prompt",
                         "execution_brief": brief,
                     }),
@@ -228,16 +606,72 @@ async def test_phase1_execution_brief_is_handed_to_phase2():
     handoff = next(
         message
         for message in phase2_messages
-        if "[Phase 1 execution brief]" in str(message.get("content") or "")
+        if message.get("role") == "assistant" and message.get("tool_calls")
     )
-    assert handoff["role"] == "user"
-    assert handoff["hidden_from_ui"] is True
-    assert brief in handoff["content"]
+    assert handoff["tool_calls"][0]["id"] == "u1"
+    arguments = json.loads(handoff["tool_calls"][0]["function"]["arguments"])
+    assert arguments["execution_brief"] == brief
+    assert "task" not in arguments
+    tool_result = phase2_messages[phase2_messages.index(handoff) + 1]
+    assert tool_result["role"] == "tool"
+    assert tool_result["tool_call_id"] == "u1"
     saved_messages = save_mock.await_args.args[0]
     assert all(
-        "[Phase 1 execution brief]" not in str(message.get("content") or "")
+        not any(
+            str(call.get("function", {}).get("name") or "") == "use_tools"
+            for call in message.get("tool_calls") or []
+        )
         for message in saved_messages
     )
+
+
+async def test_volatile_context_is_versioned_inside_strict_prefix():
+    """Volatile context stays in place instead of moving to each new tail."""
+    from cyrene import agent
+
+    llm_inputs = []
+    responses = iter([
+        {
+            "content": "",
+            "tool_calls": [{
+                "id": "u1",
+                "function": {"name": "use_tools", "arguments": json.dumps({"task": "inspect"})},
+            }],
+        },
+        {
+            "content": "Inspection completed successfully.",
+            "tool_calls": [{
+                "id": "q1",
+                "type": "function",
+                "function": {"name": "quit", "arguments": "{}"},
+            }],
+        },
+    ])
+
+    async def fake_call_llm(messages, tools=None, max_tokens=32000, **kwargs):
+        llm_inputs.append([dict(message) for message in messages])
+        return next(responses)
+
+    _orig_llm = _patch(_agent_core, "_call_llm", fake_call_llm)
+    _orig_save = _patch(_agent_core, "_save_session_messages", AsyncMock())
+    try:
+        await agent._run_main_agent(
+            "inspect",
+            [],
+            None,
+            0,
+            "db.sqlite3",
+            ephemeral_system="VOLATILE_V1",
+        )
+    finally:
+        _patch(_agent_core, "_call_llm", _orig_llm)
+        _patch(_agent_core, "_save_session_messages", _orig_save)
+
+    phase1_messages, phase2_messages = llm_inputs
+    assert phase2_messages[:len(phase1_messages)] == phase1_messages
+    volatile = [m for m in phase1_messages if m.get("content") == "VOLATILE_V1"]
+    assert len(volatile) == 1
+    assert volatile[0]["role"] == "system"
 
 
 async def test_first_round_phase1_uses_full_wire_tools():
@@ -325,8 +759,9 @@ async def test_fixed_ephemeral_stays_before_user_across_tool_rounds():
         "FIXED_CONTEXT",
         "inspect",
     ]
-    assert phase2_second[3]["role"] == "assistant"
-    assert phase2_second[4]["role"] == "tool"
+    assert phase2_second[:len(phase2_first)] == phase2_first
+    assert phase2_second[len(phase2_first)]["role"] == "assistant"
+    assert phase2_second[len(phase2_first) + 1]["role"] == "tool"
     assert saved_messages
     assert all(m.get("content") != "FIXED_CONTEXT" for m in saved_messages[-1])
 

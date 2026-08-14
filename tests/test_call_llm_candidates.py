@@ -44,6 +44,48 @@ def test_deepseek_legacy_disabled_request_keeps_thinking_enabled():
     assert payload["reasoning_effort"] == "high"
 
 
+def test_deepseek_tool_turn_replays_reasoning_content_only_when_required():
+    messages = [
+        {
+            "role": "assistant",
+            "content": "",
+            "reasoning_content": "must be replayed",
+            "tool_calls": [{
+                "id": "call_1",
+                "type": "function",
+                "function": {"name": "lookup", "arguments": "{}"},
+            }],
+        },
+        {"role": "tool", "tool_call_id": "call_1", "content": "result"},
+        {
+            "role": "assistant",
+            "content": "ordinary answer",
+            "reasoning_content": "not needed without a tool call",
+        },
+    ]
+
+    deepseek_payload = cl._build_payload(
+        messages,
+        tools=None,
+        max_tokens=24,
+        stream=False,
+        model="deepseek-v4-flash",
+        thinking="auto",
+    )
+    generic_payload = cl._build_payload(
+        messages,
+        tools=None,
+        max_tokens=24,
+        stream=False,
+        model="gpt-compatible-model",
+        thinking="disabled",
+    )
+
+    assert deepseek_payload["messages"][0]["reasoning_content"] == "must be replayed"
+    assert "reasoning_content" not in deepseek_payload["messages"][2]
+    assert all("reasoning_content" not in message for message in generic_payload["messages"])
+
+
 @pytest.mark.parametrize(
     ("requested", "expected"),
     [
@@ -82,6 +124,55 @@ def test_generic_model_does_not_receive_deepseek_thinking_extension():
 
     assert "thinking" not in payload
     assert "reasoning_effort" not in payload
+
+
+def test_openai_final_provider_payload_is_strictly_append_only_across_phases():
+    tools = [{
+        "type": "function",
+        "function": {"name": "use_tools", "parameters": {"type": "object"}},
+    }]
+    phase1_messages = [
+        {"role": "system", "content": "stable system"},
+        {"role": "user", "content": "inspect"},
+        {"role": "user", "content": "decision rules"},
+    ]
+    phase2_messages = [
+        *phase1_messages,
+        {
+            "role": "assistant",
+            "content": "",
+            "tool_calls": [{
+                "id": "use-1",
+                "function": {"name": "use_tools", "arguments": "{}"},
+            }],
+        },
+        {"role": "tool", "tool_call_id": "use-1", "content": "entered"},
+    ]
+
+    phase1 = cl._build_payload(
+        phase1_messages,
+        tools=tools,
+        max_tokens=None,
+        stream=True,
+        model="deepseek-v4-flash",
+        thinking="auto",
+        reasoning_effort="high",
+    )
+    phase2 = cl._build_payload(
+        phase2_messages,
+        tools=tools,
+        max_tokens=None,
+        stream=True,
+        model="deepseek-v4-flash",
+        thinking="auto",
+        reasoning_effort="high",
+    )
+
+    assert phase2["messages"][:len(phase1["messages"])] == phase1["messages"]
+    assert phase2["tools"] == phase1["tools"]
+    assert phase2["model"] == phase1["model"]
+    assert phase2["thinking"] == phase1["thinking"]
+    assert phase2["reasoning_effort"] == phase1["reasoning_effort"]
 
 
 class _CountingHandler(BaseHTTPRequestHandler):
@@ -178,6 +269,44 @@ async def test_failed_candidate_gets_cooldown_and_is_skipped(stub_server_factory
     assert msg.get("content") == "pong"
     assert bad_server.hits == expected_bad_hits  # unchanged — skipped
     assert good_server.hits == 2
+
+
+async def test_final_http_request_is_observed_by_run_cache_diagnostics(
+    stub_server_factory,
+):
+    _server, candidate = stub_server_factory(200)
+    observed = []
+
+    class Lease:
+        def observe_request(self, model_type, **kwargs):
+            observed.append((model_type, kwargs))
+            return {
+                "model_lease_id": "lease-http",
+                "cache_prefix_status": "first_request",
+            }
+
+    tools = [{
+        "type": "function",
+        "function": {"name": "use_tools", "parameters": {"type": "object"}},
+    }]
+    result = await cl.call_llm(
+        [{"role": "user", "content": "inspect"}],
+        tools=tools,
+        candidates=[candidate],
+        candidate_lease=Lease(),
+        publish_events=False,
+        record_usage=False,
+        record_latency=False,
+    )
+
+    assert result["content"] == "pong"
+    assert len(observed) == 1
+    model_type, request = observed[0]
+    assert model_type == "primary"
+    assert request["identity"]["endpoint"] == candidate["endpoints"][0]
+    assert request["message_fingerprints"]
+    assert request["tools_fingerprint"]
+    assert request["payload_fingerprint"]
 
 
 async def test_transient_server_error_retries_then_succeeds(stub_server_factory, monkeypatch):
@@ -986,7 +1115,10 @@ async def test_last_success_affinity_does_not_publish_fallback_ui_event(monkeypa
 
 
 async def test_actionable_llm_latency_event_is_persisted(tmp_path):
-    from cyrene.runtime.database import record_llm_latency
+    from cyrene.runtime.database import (
+        get_llm_cache_stats_by_phase,
+        record_llm_latency,
+    )
 
     db_path = tmp_path / "latency.db"
     await record_llm_latency(
@@ -998,17 +1130,40 @@ async def test_actionable_llm_latency_event_is_persisted(tmp_path):
         response_headers_ms=120.0, ttft_ms=300.0,
         first_token_after_headers_ms=180.0, generation_ms=600.0,
         retry_backoff_ms=0.0, total_call_ms=904.0, prompt_tokens=100,
-        completion_tokens=60, output_tokens_per_second=100.0,
+        completion_tokens=60, prompt_cache_hit_tokens=80,
+        prompt_cache_miss_tokens=20, output_tokens_per_second=100.0,
         fallback_used=False, connection_pool_key="loop:1:timeout:120",
+        model_lease_id="lease-1", request_messages_fingerprint="messages-1",
+        request_tools_fingerprint="tools-1",
+        request_payload_fingerprint="payload-1",
+        previous_payload_fingerprint="payload-0",
+        cache_prefix_status="strict_prefix_reuse",
+        cache_invalidation_reason="", cache_prefix_message_count=3,
     )
 
     with sqlite3.connect(db_path) as conn:
         row = conn.execute(
             "SELECT call_id, request_ms, response_headers_ms, ttft_ms, "
             "first_token_after_headers_ms, generation_ms, "
-            "output_tokens_per_second, connection_pool_key FROM llm_latency_events"
+            "output_tokens_per_second, connection_pool_key, "
+            "prompt_cache_hit_tokens, prompt_cache_miss_tokens, cache_hit_ratio, "
+            "model_lease_id, request_messages_fingerprint, "
+            "request_tools_fingerprint, request_payload_fingerprint, "
+            "previous_payload_fingerprint, cache_prefix_status, "
+            "cache_invalidation_reason, cache_prefix_message_count "
+            "FROM llm_latency_events"
         ).fetchone()
     assert row == (
         "llm_1", 900.0, 120.0, 300.0, 180.0, 600.0, 100.0,
-        "loop:1:timeout:120",
+        "loop:1:timeout:120", 80, 20, 0.8, "lease-1", "messages-1",
+        "tools-1", "payload-1", "payload-0", "strict_prefix_reuse", "", 3,
     )
+    phase_stats = await get_llm_cache_stats_by_phase(str(db_path))
+    assert phase_stats == [{
+        "phase": "phase2",
+        "requests": 1,
+        "prompt_tokens": 100,
+        "cache_hit_tokens": 80,
+        "cache_miss_tokens": 20,
+        "cache_hit_ratio": 0.8,
+    }]

@@ -55,6 +55,8 @@ from cyrene.agent.state import (
     _streaming_reply_requested,
     _ui_round_assistant_meta,
     _ui_round_hide_initial_detail,
+    activate_run_model_lease,
+    reset_run_model_lease,
 )
 from cyrene.model_runtime.messages import (
     assistant_text,
@@ -517,17 +519,6 @@ async def _run_main_agent_impl(
             ephemeral_context=saved_ephemeral,
         )
 
-    # Prefix-cache discipline:
-    # - fixed_ephemeral_system is stable for this run, so it sits before the
-    #   current user turn. Tool rounds then append assistant/tool messages after
-    #   it, making the previous request a true prefix of the next request.
-    # - ephemeral_system remains an escape hatch for genuinely volatile tail
-    #   context. It should be rare because it cannot share the full prior prompt.
-    def _pin_tail(msgs: list[dict[str, Any]]) -> list[dict[str, Any]]:
-        if ephemeral_system:
-            return [*msgs, {"role": "system", "content": ephemeral_system}]
-        return msgs
-
     # Phase 1 and Phase 2 use the same deterministic bundle for the current
     # package settings. Disabling a package intentionally changes the cache key:
     # its gateway schema and package-specific prompt lines are both omitted.
@@ -634,7 +625,27 @@ async def _run_main_agent_impl(
         reason="decision-phase tool-gating rules",
         content=phase1_decision,
     ))
+    phase1_decision_entry["hidden_from_ui"] = True
     phase1_messages = [*run_prefix, llm_user_entry, phase1_decision_entry]
+    if ephemeral_system:
+        # Once observed, volatile context is immutable. Later in-run changes
+        # append a new version instead of moving or rewriting this prompt tail.
+        phase1_messages.append(attach_context(
+            {
+                "role": "system",
+                "content": ephemeral_system,
+                "hidden_from_ui": True,
+                "volatile_context_version": 1,
+            },
+            context_block(
+                "run.volatile_ephemeral.v1",
+                "system",
+                source="run_agent(volatile_ephemeral_system)",
+                reason="append-only volatile context version observed by this run",
+                content=ephemeral_system,
+                metadata={"version": 1},
+            ),
+        ))
 
     async def _ensure_text_reply(
         response_obj: dict[str, Any],
@@ -705,7 +716,7 @@ async def _run_main_agent_impl(
     response = await _call_with_runtime_guidance(
         phase1_messages,
         lambda: _call_phase1_llm(
-            _pin_tail(project_history_for_llm(phase1_messages)),
+            project_history_for_llm(phase1_messages),
             tools=phase1_wire_tools,
         ),
     )
@@ -727,16 +738,34 @@ async def _run_main_agent_impl(
             response = await _call_with_runtime_guidance(
                 phase1_messages,
                 lambda: _call_phase1_llm(
-                    _pin_tail(project_history_for_llm(phase1_messages)),
+                    project_history_for_llm(phase1_messages),
                     tools=phase1_wire_tools,
                 ),
             )
     tool_calls = response.get("tool_calls") or []
     phase1_allowed = {_tool_def_name(tool_def) for tool_def in phase1_tools}
+    phase1_wire_names = {
+        _tool_def_name(tool_def) for tool_def in phase1_wire_tools
+    }
+    phase1_can_promote_tools = (
+        not _deep_research_first_round.get()
+        and _current_command.get() != "quick-answer"
+    )
+    promotable_phase1_tool_names = {
+        str(tc.get("function", {}).get("name") or "").strip()
+        for tc in tool_calls
+        if phase1_can_promote_tools
+        and str(tc.get("function", {}).get("name") or "").strip()
+        in phase1_wire_names
+        and str(tc.get("function", {}).get("name") or "").strip()
+        not in phase1_allowed
+    }
     invalid_phase1_tools = [
         str(tc.get("function", {}).get("name") or "").strip()
         for tc in tool_calls
         if str(tc.get("function", {}).get("name") or "").strip() not in phase1_allowed
+        and str(tc.get("function", {}).get("name") or "").strip()
+        not in promotable_phase1_tool_names
     ]
     phase1_context_messages = phase1_messages
     if invalid_phase1_tools:
@@ -752,11 +781,14 @@ async def _run_main_agent_impl(
                     f"[Decision-phase correction] You attempted unavailable tool(s): {', '.join(invalid_phase1_tools)}. "
                     + ("This is a proactive system-initiated round. `ask_user` is forbidden; use an available tool or finish without pausing for user input."
                        if system_initiated
+                       else "Quick Answer mode does not allow execution tools. Answer directly with `quit`, or use `ask_user` only when the request is genuinely unclear."
+                       if _current_command.get() == "quick-answer"
                        else "Only `ask_user` and `quit` are available in this phase. You MUST ask the user about the report length before starting research."
                        if _deep_research_first_round.get()
                        else "Only `use_tools`, `ask_user`, and `quit` are available in this phase. "
-                            "If real tool work is needed, complete the bounded planning pass, then call `use_tools` "
-                            "with the user's exact original message in `task` and the concise plan in `execution_brief`. "
+                            "If real tool work is needed, make the shortest reliable decision and call `use_tools` "
+                            "with an `execution_brief` under 300 characters "
+                            "containing only the intent, first useful action, and hard user constraints. "
                             "If clarification is needed before acting, call `ask_user`. "
                             "Otherwise say there is no suitable tool in this phase.")
                 ),
@@ -765,12 +797,74 @@ async def _run_main_agent_impl(
         response = await _call_with_runtime_guidance(
             retry_messages,
             lambda: _call_phase1_llm(
-                _pin_tail(project_history_for_llm(retry_messages)),
+                project_history_for_llm(retry_messages),
                 tools=phase1_wire_tools,
             ),
         )
         phase1_context_messages = retry_messages
     tool_calls = response.get("tool_calls") or []
+    normalized_phase1_calls: list[dict[str, Any]] = []
+    for tool_call in tool_calls:
+        if str(tool_call.get("function", {}).get("name") or "") != "use_tools":
+            normalized_phase1_calls.append(tool_call)
+            continue
+        try:
+            raw_use_tools_args = parse_tool_arguments(
+                tool_call.get("function", {}).get("arguments")
+            )
+        except Exception:
+            raw_use_tools_args = {}
+        execution_brief = str(
+            raw_use_tools_args.get("execution_brief") or ""
+        ).strip()[:300]
+        normalized_call = {
+            **tool_call,
+            "function": {
+                **tool_call.get("function", {}),
+                "name": "use_tools",
+                "arguments": json.dumps(
+                    {"execution_brief": execution_brief},
+                    ensure_ascii=False,
+                    separators=(",", ":"),
+                ),
+            },
+        }
+        normalized_phase1_calls.append(normalized_call)
+    tool_calls = normalized_phase1_calls
+    if response.get("tool_calls") is not None:
+        response = {**response, "tool_calls": tool_calls}
+    phase1_concrete_calls = [
+        tool_call
+        for tool_call in tool_calls
+        if phase1_can_promote_tools
+        and str(tool_call.get("function", {}).get("name") or "")
+        in phase1_wire_names
+        and str(tool_call.get("function", {}).get("name") or "")
+        not in {"use_tools", "ask_user", "quit"}
+    ]
+    phase1_ask_calls = [
+        tool_call
+        for tool_call in tool_calls
+        if not system_initiated
+        and str(tool_call.get("function", {}).get("name") or "") == "ask_user"
+    ]
+    if phase1_concrete_calls and phase1_ask_calls:
+        # Clarification wins over execution. Drop sibling actions so the saved
+        # assistant/tool protocol cannot contain unresolved concrete calls.
+        tool_calls = phase1_ask_calls
+        phase1_concrete_calls = []
+        response = {**response, "tool_calls": tool_calls}
+    elif phase1_concrete_calls:
+        # A concrete action is stronger evidence of execution intent than a
+        # contradictory quit emitted in the same decision response. Keep
+        # use_tools as a harmless gateway result, but let Phase 2 execute the
+        # concrete calls before asking the model whether the run is complete.
+        tool_calls = [
+            tool_call
+            for tool_call in tool_calls
+            if str(tool_call.get("function", {}).get("name") or "") != "quit"
+        ]
+        response = {**response, "tool_calls": tool_calls}
     phase1_runtime_guidance_entries = [
         message
         for message in phase1_context_messages
@@ -795,7 +889,11 @@ async def _run_main_agent_impl(
     # Phase 1 has several direct-return branches. Atomically close guidance
     # admission before taking one; if a durable command won the race, promote
     # this turn into Phase 2 so the command is applied instead of cancelled.
-    if use_tools_call is None and runtime_inbox is not None:
+    if (
+        use_tools_call is None
+        and not phase1_concrete_calls
+        and runtime_inbox is not None
+    ):
         boundary_guidance = await runtime_inbox.collect_guidance_or_seal()
         if boundary_guidance:
             phase1_messages.append(_assistant_entry_from_response(response, round_id))
@@ -813,8 +911,16 @@ async def _run_main_agent_impl(
                 if message.get("runtime_guidance")
             ]
             use_tools_call = {
-                "function": {"arguments": "{}"},
+                "id": f"guidance_use_tools_{uuid4().hex}",
+                "function": {
+                    "name": "use_tools",
+                    "arguments": json.dumps({
+                        "execution_brief": "Apply the newly delivered runtime guidance.",
+                    }),
+                },
             }
+            phase1_context_messages = phase1_messages
+            phase1_concrete_calls = []
             ask_user_call = None
             quit_call = None
 
@@ -858,7 +964,7 @@ async def _run_main_agent_impl(
         await _save(_session_messages_to_save(messages))
         return (await _ensure_text_reply(response, messages, fallback=str(result)))
 
-    if use_tools_call:
+    if use_tools_call or phase1_concrete_calls:
         event = {"type": "phase_transition", "from": "phase1_decision", "to": "phase2_execution"}
         if not suppress_initial_detail:
             phase_task = visible_user_message.strip()[:120]
@@ -869,60 +975,94 @@ async def _run_main_agent_impl(
             else:
                 event["detail"] = "Phase 1 decided to use tools. Task: Analyze uploaded attachments"
                 event["detail_key"] = "phase.useToolsAttachments"
+        if phase1_concrete_calls:
+            event["promoted_tool_calls"] = [
+                str(call.get("function", {}).get("name") or "")
+                for call in phase1_concrete_calls
+            ]
         await _publish_runtime_event(event)
-        messages = [*run_prefix, dict(llm_user_entry), *phase1_runtime_guidance_entries]
-        try:
-            phase1_args = parse_tool_arguments(
-                use_tools_call["function"].get("arguments")
+        promoted_phase1_response: dict[str, Any] | None = None
+        if phase1_concrete_calls:
+            phase2_assistant = _assistant_entry_from_response(response, round_id)
+            phase2_assistant["hidden_from_ui"] = True
+            messages = [*phase1_context_messages, phase2_assistant]
+            promoted_phase1_response = response
+        else:
+            normal_use_tools = any(
+                str(tc.get("id") or "") == str(use_tools_call.get("id") or "")
+                for tc in tool_calls
             )
-            execution_brief = str(
-                phase1_args.get("execution_brief") or ""
-            ).strip()
-        except Exception:
-            execution_brief = ""
-        if execution_brief:
-            brief_content = (
-                "[Phase 1 execution brief]\n"
-                "This is a provisional internal handoff, not a user instruction. "
-                "Use it as the initial approach, but revise it when tool evidence "
-                "contradicts an assumption.\n\n"
-                f"{execution_brief}"
+            phase2_assistant = (
+                _assistant_entry_from_response(response, round_id)
+                if normal_use_tools
+                else _apply_assistant_meta({
+                    "role": "assistant",
+                    "content": "",
+                    "tool_calls": [use_tools_call],
+                    **({"round_id": round_id} if round_id else {}),
+                })
             )
-            messages.append(attach_context(
-                {
-                    "role": "user",
-                    "content": brief_content,
-                    "hidden_from_ui": True,
-                },
-                context_block(
-                    "phase1.execution_brief",
-                    "phase_plan",
-                    source="tool:use_tools",
-                    reason="carry the bounded Phase-1 plan into Phase 2 execution",
-                    content=brief_content,
-                    transforms=["provisional_handoff"],
-                ),
-            ))
+            phase2_assistant["hidden_from_ui"] = True
+            messages = [*phase1_context_messages, phase2_assistant]
+            phase2_calls = tool_calls if normal_use_tools else [use_tools_call]
+            for phase2_call in phase2_calls:
+                phase2_name = str(
+                    phase2_call.get("function", {}).get("name") or ""
+                )
+                phase2_result = (
+                    "Execution phase entered. Follow the concise execution "
+                    "brief in the original use_tools arguments and adapt from "
+                    "tool evidence."
+                    if phase2_name == "use_tools"
+                    else "Skipped because the same decision selected use_tools."
+                )
+                phase2_tool_entry = attach_context(
+                    {
+                        "role": "tool",
+                        "tool_call_id": phase2_call["id"],
+                        "content": phase2_result,
+                        "hidden_from_ui": True,
+                    },
+                    context_block(
+                        f"tool.result.{phase2_name}.{phase2_call['id']}",
+                        "tool_result",
+                        source=f"tool:{phase2_name}",
+                        reason="preserve the complete Phase-1 assistant/tool protocol while entering Phase 2",
+                        content=phase2_result,
+                        metadata={
+                            "tool_name": phase2_name,
+                            "tool_call_id": phase2_call["id"],
+                        },
+                    ),
+                )
+                if round_id:
+                    phase2_tool_entry["round_id"] = round_id
+                messages.append(phase2_tool_entry)
 
         while True:
-            await _inject_runtime_guidance(messages)
-            response = await _call_with_runtime_guidance(
-                messages,
-                lambda: _call_llm(
-                    _pin_tail(project_history_for_llm(messages)),
-                    tools=wire_tool_defs,
-                ),
-            )
-            entry: dict = {"role": "assistant", "content": response.get("content") or ""}
-            if response.get("reasoning_content"):
-                entry["reasoning_content"] = response["reasoning_content"]
-            if response.get("tool_calls"):
-                entry["tool_calls"] = response["tool_calls"]
-            if response.get("usage"):
-                entry["usage"] = response["usage"]
-            if round_id:
-                entry["round_id"] = round_id
-            messages.append(_apply_assistant_meta(entry))
+            if promoted_phase1_response is not None:
+                response = promoted_phase1_response
+                promoted_phase1_response = None
+                entry = phase2_assistant
+            else:
+                await _inject_runtime_guidance(messages)
+                response = await _call_with_runtime_guidance(
+                    messages,
+                    lambda: _call_llm(
+                        project_history_for_llm(messages),
+                        tools=wire_tool_defs,
+                    ),
+                )
+                entry = {"role": "assistant", "content": response.get("content") or ""}
+                if response.get("reasoning_content"):
+                    entry["reasoning_content"] = response["reasoning_content"]
+                if response.get("tool_calls"):
+                    entry["tool_calls"] = response["tool_calls"]
+                if response.get("usage"):
+                    entry["usage"] = response["usage"]
+                if round_id:
+                    entry["round_id"] = round_id
+                messages.append(_apply_assistant_meta(entry))
 
             tcs = response.get("tool_calls") or []
             tool_names = [str(t.get("function", {}).get("name") or "") for t in tcs]
@@ -1516,7 +1656,7 @@ async def _run_main_agent_impl(
         response = await _call_with_runtime_guidance(
             retry_messages,
             lambda: _call_phase1_llm(
-                _pin_tail(project_history_for_llm(retry_messages)),
+                project_history_for_llm(retry_messages),
                 tools=phase1_tools,
             ),
         )
@@ -1595,22 +1735,26 @@ async def _run_main_agent(
 
     snapshot_token = activate_catalog_snapshot("main")
     try:
-        return await _run_main_agent_impl(
-            user_message,
-            history,
-            bot,
-            chat_id,
-            db_path,
-            system_prompt=system_prompt,
-            client_request_id=client_request_id,
-            persist_user_message=persist_user_message,
-            public_user_message=public_user_message,
-            public_attachments=public_attachments,
-            llm_user_content=llm_user_content,
-            lang=lang,
-            system_context=system_context,
-            ephemeral_system=ephemeral_system,
-            fixed_ephemeral_system=fixed_ephemeral_system,
-        )
+        model_lease_token = activate_run_model_lease()
+        try:
+            return await _run_main_agent_impl(
+                user_message,
+                history,
+                bot,
+                chat_id,
+                db_path,
+                system_prompt=system_prompt,
+                client_request_id=client_request_id,
+                persist_user_message=persist_user_message,
+                public_user_message=public_user_message,
+                public_attachments=public_attachments,
+                llm_user_content=llm_user_content,
+                lang=lang,
+                system_context=system_context,
+                ephemeral_system=ephemeral_system,
+                fixed_ephemeral_system=fixed_ephemeral_system,
+            )
+        finally:
+            reset_run_model_lease(model_lease_token)
     finally:
         reset_catalog_snapshot(snapshot_token)

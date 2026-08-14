@@ -56,30 +56,24 @@ _USE_TOOLS_DEF = {
     "function": {
         "name": "use_tools",
         "description": (
-            "Decision-phase gateway for actions or when retrieval or verification "
-            "materially improves the answer; stable low-risk facts and explanations "
-            "may be answered directly. Before calling it, make a bounded plan. Keep "
-            "task equal to the user's exact original message and put the concise "
-            "provisional plan in execution_brief. It is a no-op in execution."
+            "Decision-phase gateway to execution. Use it when actions, inspection, "
+            "retrieval, or verification are needed. Do not make a full plan first. "
+            "Provide only a short execution_brief; the original user message is "
+            "already present in the conversation. It is a no-op in execution."
         ),
         "parameters": {
             "type": "object",
             "properties": {
-                "task": {
-                    "type": "string",
-                    "description": "The user's exact original message, unchanged.",
-                },
                 "execution_brief": {
                     "type": "string",
+                    "maxLength": 300,
                     "description": (
-                        "Concise Phase-2 handoff: objective and acceptance "
-                        "evidence, constraints and assumptions, chosen approach, "
-                        "ordered initial steps/tools, validation, and material "
-                        "risks or fallbacks. Do not include private chain-of-thought."
+                        "Phase-2 handoff under 300 characters containing only the "
+                        "intent, first useful action, and hard user constraints."
                     ),
                 },
             },
-            "required": ["task", "execution_brief"],
+            "required": ["execution_brief"],
             "additionalProperties": False,
         },
     },

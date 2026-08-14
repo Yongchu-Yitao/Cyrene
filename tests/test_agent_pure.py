@@ -56,25 +56,29 @@ def test_main_agent_prompt_proactively_consults_knowledge_base():
     assert "`knowledge.list_documents`" in _MAIN_AGENT_PROMPT
     assert "`knowledge.library.search`" in _MAIN_AGENT_PROMPT
     assert "`knowledge.library.update_metadata`" in _MAIN_AGENT_PROMPT
-    assert "user-specific, or project-specific" in _PHASE1_DECISION_PROMPT
+    assert "file or project inspection" in _PHASE1_DECISION_PROMPT
     assert "`knowledge.search`" in _EXECUTION_SYSTEM_PROMPT
     assert "`knowledge.library.search`" in _EXECUTION_SYSTEM_PROMPT
 
 
-def test_phase1_prompt_requires_bounded_plan_before_execution():
+def test_phase1_prompt_routes_without_building_a_full_execution_plan():
     from cyrene.agent.prompts import _PHASE1_DECISION_PROMPT
     from cyrene.agent.state import _LIGHT_TOOL_DEFS
     from cyrene.tooling.wire import _USE_TOOLS_DEF
 
-    assert "bounded execution-planning pass" in _PHASE1_DECISION_PROMPT
-    assert "observable completion evidence" in _PHASE1_DECISION_PROMPT
-    assert "material risks or fallbacks" in _PHASE1_DECISION_PROMPT
-    assert "ordered initial steps/tools" in _PHASE1_DECISION_PROMPT
-    assert "Do not expose private chain-of-thought" in _PHASE1_DECISION_PROMPT
+    assert "Do not create a full plan" in _PHASE1_DECISION_PROMPT
+    assert "under 300 characters" in _PHASE1_DECISION_PROMPT
+    assert "Phase 2 owns planning" in _PHASE1_DECISION_PROMPT
+    assert "observable completion evidence" not in _PHASE1_DECISION_PROMPT
+    assert "ordered initial steps/tools" not in _PHASE1_DECISION_PROMPT
+    assert len(_PHASE1_DECISION_PROMPT) <= 1300
     for tool_def in (_LIGHT_TOOL_DEFS[0], _USE_TOOLS_DEF):
         parameters = tool_def["function"]["parameters"]
-        assert parameters["required"] == ["task", "execution_brief"]
-        assert "execution_brief" in parameters["properties"]
+        assert parameters["required"] == ["execution_brief"]
+        assert "task" not in parameters["properties"]
+        brief = parameters["properties"]["execution_brief"]
+        assert brief["maxLength"] == 300
+        assert "under 300 characters" in brief["description"]
 
 
 def test_browser_prompts_prefer_visible_clicks_over_direct_url_navigation():

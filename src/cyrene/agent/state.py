@@ -7,6 +7,7 @@ import from it without circular-dependency risk.
 
 import asyncio
 import copy
+import hashlib
 import json
 import logging
 from dataclasses import dataclass, field
@@ -87,6 +88,153 @@ response_capabilities: ContextVar[frozenset[str]] = ContextVar(
     "response_capabilities",
     default=frozenset(),
 )
+
+
+@dataclass
+class RunModelLease:
+    """Mutable run-owned model snapshot shared by inherited asyncio tasks.
+
+    A ``ContextVar`` copies its value into child tasks, but later ``set`` calls
+    in a child do not propagate back to the parent.  Keeping the run state in
+    one shared object lets the first successful request pin both its candidate
+    and endpoint for every subsequent phase without depending on ContextVar
+    write-back semantics.
+    """
+
+    lease_id: str
+    candidates_by_type: dict[str, tuple[dict[str, Any], ...]] = field(repr=False)
+    last_requests_by_type: dict[str, dict[str, Any]] = field(
+        default_factory=dict,
+        repr=False,
+    )
+
+    def candidates_for(self, model_type: str) -> list[dict[str, Any]]:
+        return copy.deepcopy(list(self.candidates_by_type.get(model_type, ())))
+
+    def bind(self, model_type: str, identity: dict[str, Any]) -> None:
+        """Pin the successful candidate and endpoint for later run calls."""
+        candidates = list(self.candidates_by_type.get(model_type, ()))
+        candidate_id = str(identity.get("candidateId") or "")
+        model = str(identity.get("model") or "")
+        endpoint = str(identity.get("endpoint") or "")
+        candidates.sort(key=lambda item: 0 if (
+            str(item.get("id") or "") == candidate_id
+            and str(item.get("model") or "") == model
+        ) else 1)
+        if candidates and endpoint:
+            selected = dict(candidates[0])
+            endpoints = list(selected.get("endpoints") or [])
+            if endpoint in endpoints:
+                selected["endpoints"] = [
+                    endpoint,
+                    *(item for item in endpoints if item != endpoint),
+                ]
+            candidates[0] = selected
+        self.candidates_by_type[model_type] = tuple(candidates)
+
+    def observe_request(
+        self,
+        model_type: str,
+        *,
+        identity: dict[str, Any],
+        message_fingerprints: list[str],
+        tools_fingerprint: str,
+        payload_fingerprint: str,
+    ) -> dict[str, Any]:
+        """Describe whether one final provider request can reuse its predecessor."""
+        current = {
+            "candidate_id": str(identity.get("candidateId") or ""),
+            "provider": str(identity.get("provider") or ""),
+            "model": str(identity.get("model") or ""),
+            "endpoint": str(identity.get("endpoint") or ""),
+            "reasoning_effort": str(identity.get("reasoningEffort") or ""),
+            "message_fingerprints": tuple(message_fingerprints),
+            "tools_fingerprint": str(tools_fingerprint),
+            "payload_fingerprint": str(payload_fingerprint),
+        }
+        previous = self.last_requests_by_type.get(model_type)
+        status = "first_request"
+        reasons: list[str] = []
+        prefix_count = 0
+        if previous is not None:
+            for key, reason in (
+                ("candidate_id", "candidate_changed"),
+                ("provider", "provider_changed"),
+                ("model", "model_changed"),
+                ("endpoint", "endpoint_changed"),
+                ("reasoning_effort", "reasoning_effort_changed"),
+                ("tools_fingerprint", "tools_changed"),
+            ):
+                if current[key] != previous.get(key):
+                    reasons.append(reason)
+            previous_messages = tuple(previous.get("message_fingerprints") or ())
+            current_messages = current["message_fingerprints"]
+            if current_messages[:len(previous_messages)] == previous_messages:
+                prefix_count = len(previous_messages)
+            else:
+                reasons.append("message_prefix_changed")
+            if reasons:
+                status = "invalidated"
+            elif current["payload_fingerprint"] == previous.get("payload_fingerprint"):
+                status = "identical_retry"
+                reasons.append("retry_same_request")
+            else:
+                status = "strict_prefix_reuse"
+        self.last_requests_by_type[model_type] = current
+        return {
+            "model_lease_id": self.lease_id,
+            "request_messages_fingerprint": hashlib.sha256(
+                "\n".join(message_fingerprints).encode("utf-8")
+            ).hexdigest()[:24],
+            "request_tools_fingerprint": tools_fingerprint,
+            "request_payload_fingerprint": payload_fingerprint,
+            "previous_payload_fingerprint": str(
+                (previous or {}).get("payload_fingerprint") or ""
+            ),
+            "cache_prefix_status": status,
+            "cache_invalidation_reason": ",".join(reasons),
+            "cache_prefix_message_count": prefix_count,
+        }
+
+
+_run_model_lease: ContextVar[RunModelLease | None] = ContextVar(
+    "_run_model_lease",
+    default=None,
+)
+
+
+def activate_run_model_lease():
+    """Pin the current model configuration until the token is reset."""
+    from cyrene.model_runtime import client as model_client
+
+    session_id = _current_session_id.get()
+    snapshots: dict[str, tuple[dict[str, Any], ...]] = {}
+    identity_parts: list[str] = []
+    for model_type in ("primary", "secondary", "vision"):
+        candidates = model_client._prioritize_last_success(
+            model_client._resolve_candidates(model_type),
+            model_type,
+            session_id,
+        )
+        frozen_candidates = tuple(copy.deepcopy(candidates))
+        snapshots[model_type] = frozen_candidates
+        identity_parts.extend(
+            "|".join((
+                model_type,
+                str(candidate.get("id") or ""),
+                str(candidate.get("provider") or ""),
+                str(candidate.get("model") or ""),
+                str(candidate.get("base_url") or ""),
+                str(candidate.get("reasoning_effort") or ""),
+            ))
+            for candidate in frozen_candidates
+        )
+    lease_id = hashlib.sha256("\n".join(identity_parts).encode("utf-8")).hexdigest()[:16]
+    return _run_model_lease.set(RunModelLease(lease_id, snapshots))
+
+
+def reset_run_model_lease(token) -> None:
+    _run_model_lease.reset(token)
 
 
 def has_response_capability(name: str) -> bool:
@@ -304,7 +452,7 @@ _REPORT_REF_MAX_PREVIEW = 280
 # ---------------------------------------------------------------------------
 
 _LIGHT_TOOL_DEFS = [
-    {"type": "function", "function": {"name": "use_tools", "description": "Gateway to execution. Use it for actions or when retrieval or verification materially improves the answer; stable low-risk facts and explanations may be answered directly. First make a bounded plan, then call this without an assistant preamble. Keep task equal to the user's exact original message and put the concise provisional plan in execution_brief.", "parameters": {"type": "object", "properties": {"task": {"type": "string", "description": "The user's exact original message, unchanged."}, "execution_brief": {"type": "string", "description": "Concise handoff with objective, acceptance evidence, constraints/assumptions, approach, initial steps/tools, validation, and material risks/fallbacks; no private chain-of-thought."}}, "required": ["task", "execution_brief"], "additionalProperties": False}}},
+    {"type": "function", "function": {"name": "use_tools", "description": "Decision-phase gateway to execution. Use it when actions, inspection, retrieval, or verification are needed. Do not make a full plan first. Provide only a short execution_brief; the original user message is already present in the conversation.", "parameters": {"type": "object", "properties": {"execution_brief": {"type": "string", "maxLength": 300, "description": "Phase-2 handoff under 300 characters containing only the intent, first useful action, and hard user constraints."}}, "required": ["execution_brief"], "additionalProperties": False}}},
     {"type": "function", "function": {"name": "ask_user", "description": "Ask the user a clarification question. Use this proactively whenever: the request is ambiguous, a critical detail is missing, multiple approaches exist and the choice matters, or you need confirmation before a destructive/irreversible action. Guessing is worse than asking. If you need to ask the user anything, use this tool instead of writing a question in assistant text. Use freeform text, or add a short options array when structured choices help. Do not combine with other tools in the same turn.", "parameters": {"type": "object", "properties": {"text": {"type": "string"}, "options": {"type": "array", "items": {"type": "string"}}}, "required": ["text"]}}},
     {"type": "function", "function": {"name": "quit", "description": "Terminal control signal. Call this only after writing the complete user-facing answer in normal assistant content. Do not put answer text or tool syntax in the arguments. A quit call ends the current run and never reopens tools.", "parameters": {"type": "object", "properties": {}}}},
 ]
@@ -478,11 +626,18 @@ async def _call_llm(
         if stream_writer is not None and str(event.get("type") or "").startswith("reasoning_"):
             await stream_writer(event)
 
+    lease = _run_model_lease.get()
+    effective_candidates = candidates
+    if effective_candidates is None and lease is not None:
+        effective_candidates = lease.candidates_for(
+            "secondary" if secondary else "primary"
+        )
     response = await _unified_call_llm(
         messages,
         tools=tools,
         max_tokens=max_tokens,
-        candidates=candidates,
+        candidates=effective_candidates,
+        candidate_lease=lease if candidates is None else None,
         model_type="secondary" if secondary else "primary",
         thinking=thinking,
         response_format=response_format,
@@ -493,6 +648,11 @@ async def _call_llm(
         round_id=_current_round_id.get(),
         session_id=_current_session_id.get(),
     )
+    if lease is not None and candidates is None and isinstance(response, dict):
+        identity = response.get("_candidate_identity")
+        if isinstance(identity, dict):
+            model_type = "secondary" if secondary else "primary"
+            lease.bind(model_type, identity)
     _record_last_main_model_context(messages, response, secondary=secondary)
     return response
 
@@ -506,10 +666,18 @@ async def _call_llm_stream(
 ) -> dict[str, Any]:
     from cyrene.call_llm import call_llm as _unified_call_llm
 
+    lease = _run_model_lease.get()
+    effective_candidates = (
+        lease.candidates_for("secondary" if secondary else "primary")
+        if lease is not None
+        else None
+    )
     response = await _unified_call_llm(
         messages,
         max_tokens=max_tokens,
         model_type="secondary" if secondary else "primary",
+        candidates=effective_candidates,
+        candidate_lease=lease,
         stream=True,
         stream_callback=_reply_stream_writer.get(),
         tools=tools,
@@ -518,6 +686,11 @@ async def _call_llm_stream(
         round_id=_current_round_id.get(),
         session_id=_current_session_id.get(),
     )
+    if lease is not None and isinstance(response, dict):
+        identity = response.get("_candidate_identity")
+        if isinstance(identity, dict):
+            model_type = "secondary" if secondary else "primary"
+            lease.bind(model_type, identity)
     _record_last_main_model_context(messages, response, secondary=secondary)
     return response
 

@@ -63,3 +63,40 @@ async def test_model_latency_is_projected_into_unified_trace(tmp_path):
     assert waterfall[0]["kind"] == "model"
     assert waterfall[0]["parent_span_id"] == "round_model"
     assert waterfall[0]["attributes"]["ttft_ms"] == 50
+
+
+@pytest.mark.asyncio
+async def test_standalone_inbox_trace_does_not_write_sqlite_on_result_path(
+    monkeypatch,
+    tmp_path,
+):
+    """Inbox diagnostics without a run root must not create a synchronous trace root."""
+    from cyrene.runtime import database
+    from cyrene.workbench.inbox import WorkbenchAgentInbox
+
+    persistence_calls = 0
+
+    async def forbidden_trace_write(*_args, **_kwargs):
+        nonlocal persistence_calls
+        persistence_calls += 1
+        raise AssertionError("trace persistence entered the tool result hot path")
+
+    monkeypatch.setattr(
+        database,
+        "record_runtime_trace_spans",
+        forbidden_trace_write,
+    )
+    for index in range(20):
+        inbox = WorkbenchAgentInbox(
+            f"chat-{index}",
+            str(tmp_path / f"inbox-{index}.sqlite3"),
+        )
+
+        async def runner() -> str:
+            return "ok"
+
+        inbox.submit_tool_batch([(f"call-{index}", "Read", runner)])
+        assert await inbox.wait_for_tool_result(f"call-{index}") == "ok"
+        await inbox.close()
+
+    assert persistence_calls == 0

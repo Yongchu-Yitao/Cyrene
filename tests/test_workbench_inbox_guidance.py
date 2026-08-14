@@ -1073,6 +1073,79 @@ async def test_main_agent_resumes_from_tool_result_and_applies_runtime_guidance(
     assert len(model_calls) == 3
 
 
+async def test_promoted_phase1_tool_keeps_runtime_guidance_open(monkeypatch, tmp_path):
+    from cyrene.agent import agent as agent_mod
+    from cyrene.agent import state as state_mod
+    from cyrene.workbench.inbox import WorkbenchAgentInbox, _workbench_agent_inbox
+
+    inbox = WorkbenchAgentInbox("chat_promoted", str(tmp_path / "workbench.db"))
+    tool_started = asyncio.Event()
+    release_tool = asyncio.Event()
+    model_calls = []
+
+    async def fake_llm(messages, tools=None, **_kwargs):
+        model_calls.append(messages)
+        if len(model_calls) == 1:
+            return {
+                "role": "assistant",
+                "content": "",
+                "tool_calls": [{
+                    "id": "call_promoted_read",
+                    "type": "function",
+                    "function": {
+                        "name": "Read",
+                        "arguments": '{"file_path":"x"}',
+                    },
+                }],
+            }
+        assert any(
+            "只读取摘要" in str(message.get("content") or "")
+            for message in messages
+        )
+        return {
+            "role": "assistant",
+            "content": "已读取摘要",
+            "tool_calls": [{
+                "id": "call_promoted_quit",
+                "type": "function",
+                "function": {"name": "quit", "arguments": "{}"},
+            }],
+        }
+
+    async def fake_tool(name, _args, _bot, _chat_id, _db_path, _notify):
+        assert name == "Read"
+        tool_started.set()
+        await release_tool.wait()
+        return "read result"
+
+    async def noop(*_args, **_kwargs):
+        return None
+
+    monkeypatch.setattr(agent_mod, "_call_llm", fake_llm)
+    monkeypatch.setattr(agent_mod, "_execute_tool", fake_tool)
+    monkeypatch.setattr(agent_mod, "_append_session_message", noop)
+    monkeypatch.setattr(agent_mod, "_save_session_messages", noop)
+    monkeypatch.setattr(agent_mod, "_publish_runtime_event", noop)
+
+    round_token = state_mod._current_round_id.set("round_promoted")
+    inbox_token = _workbench_agent_inbox.set(inbox)
+    try:
+        task = asyncio.create_task(
+            agent_mod._run_main_agent("inspect", [], None, 0, "db.sqlite3")
+        )
+        await asyncio.wait_for(tool_started.wait(), timeout=1)
+        await inbox.put_guidance("只读取摘要", client_request_id="guide_promoted")
+        release_tool.set()
+        assert await asyncio.wait_for(task, timeout=2) == "已读取摘要"
+    finally:
+        release_tool.set()
+        _workbench_agent_inbox.reset(inbox_token)
+        state_mod._current_round_id.reset(round_token)
+        await inbox.close()
+
+    assert len(model_calls) == 2
+
+
 async def test_main_agent_quit_waits_for_already_submitted_tool(monkeypatch, tmp_path):
     from cyrene.agent import agent as agent_mod
     from cyrene.agent import state as state_mod

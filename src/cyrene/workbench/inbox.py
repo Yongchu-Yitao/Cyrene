@@ -787,7 +787,6 @@ class WorkbenchAgentInbox:
             "tool",
             tool_name,
             span_id=tool_call_id,
-            db_path=self.db_path,
             attributes={
                 "batch_id": batch_id,
                 "queue_wait_ms": (started - submitted_at) * 1000,
@@ -1095,7 +1094,6 @@ class WorkbenchAgentInbox:
             "tool_consume",
             "wait_for_tool_result",
             span_id=f"{tool_call_id}.consume",
-            db_path=self.db_path,
         ).start()
         while True:
             event = self._pending_tool_results.pop(tool_call_id, None)

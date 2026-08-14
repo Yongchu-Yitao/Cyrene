@@ -31,6 +31,7 @@ from cyrene.model_runtime.codex_provider import (
     _provider_turn_input,
     codex_availability_error,
     codex_error_should_cooldown,
+    provider_request_cache_material,
 )
 
 
@@ -703,7 +704,7 @@ async def test_codex_completion_forwards_reasoning_summary_and_low_effort(
 
     assert seen_turn_params["effort"] == "low"
     assert seen_turn_params["summary"] == "auto"
-    assert seen_turn_input[1] == {
+    assert seen_turn_input[2] == {
         "type": "image",
         "url": "data:image/png;base64,aW1hZ2U=",
     }
@@ -845,8 +846,8 @@ async def test_codex_completion_uses_structured_cyrene_actions_without_leaking_j
     action_names = seen_turn_params["outputSchema"]["properties"]["tool_calls"][
         "items"
     ]["properties"]["name"]["enum"]
-    assert action_names == ["use_tools", "quit"]
-    assert "WebSearch" not in seen_thread_params["baseInstructions"]
+    assert action_names == ["use_tools", "quit", "WebSearch"]
+    assert "WebSearch" in seen_thread_params["baseInstructions"]
     assert "DSML" not in seen_thread_params["baseInstructions"]
     assert "Do not invoke Codex built-in tools" in seen_thread_params[
         "baseInstructions"
@@ -934,7 +935,7 @@ def test_codex_multi_tool_action_contract_allows_direct_completion() -> None:
     assert response["tool_calls"] == []
 
 
-def test_codex_phase1_action_contract_hides_execution_tools() -> None:
+def test_codex_phase1_and_phase2_keep_identical_action_schema() -> None:
     tools = [
         {"type": "function", "function": {"name": "use_tools"}},
         {"type": "function", "function": {"name": "ask_user"}},
@@ -945,13 +946,68 @@ def test_codex_phase1_action_contract_hides_execution_tools() -> None:
     action_tools = _provider_action_tools(tools, phase="phase1")
     schema = _provider_action_schema(action_tools)
 
-    assert [
-        tool["function"]["name"] for tool in action_tools
-    ] == ["use_tools", "ask_user", "quit"]
+    assert [tool["function"]["name"] for tool in action_tools] == [
+        "use_tools",
+        "ask_user",
+        "quit",
+        "browser_tools",
+    ]
     assert schema is not None
     assert schema["properties"]["tool_calls"]["items"]["properties"]["name"][
         "enum"
-    ] == ["use_tools", "ask_user", "quit"]
+    ] == ["use_tools", "ask_user", "quit", "browser_tools"]
+
+
+def test_codex_final_provider_material_is_strictly_append_only_across_phases() -> None:
+    tools = [
+        {"type": "function", "function": {"name": "use_tools"}},
+        {"type": "function", "function": {"name": "quit"}},
+        {"type": "function", "function": {"name": "browser_tools"}},
+    ]
+    phase1_messages = [
+        {"role": "system", "content": "stable system"},
+        {"role": "user", "content": "inspect"},
+        {"role": "user", "content": "decision rules"},
+    ]
+    phase2_messages = [
+        *phase1_messages,
+        {
+            "role": "assistant",
+            "content": "",
+            "tool_calls": [{
+                "id": "use-1",
+                "function": {"name": "use_tools", "arguments": "{}"},
+            }],
+        },
+        {"role": "tool", "tool_call_id": "use-1", "content": "entered"},
+    ]
+
+    phase1 = provider_request_cache_material(
+        messages=phase1_messages,
+        tools=tools,
+        model="gpt-5.3-codex",
+        phase="phase1",
+        reasoning_effort="high",
+    )
+    phase2 = provider_request_cache_material(
+        messages=phase2_messages,
+        tools=tools,
+        model="gpt-5.3-codex",
+        phase="phase2",
+        reasoning_effort="high",
+    )
+
+    assert phase2["action_tools"] == phase1["action_tools"]
+    assert phase2["action_schema"] == phase1["action_schema"]
+    assert phase2["thread_params"]["baseInstructions"] == phase1["thread_params"][
+        "baseInstructions"
+    ]
+    assert phase2["turn_input"][:len(phase1["turn_input"])] == phase1[
+        "turn_input"
+    ]
+    assert phase2["message_units"][:len(phase1["message_units"])] == phase1[
+        "message_units"
+    ]
 
 
 @pytest.mark.asyncio
@@ -1169,6 +1225,8 @@ def test_codex_provider_converts_openai_image_content_to_turn_input() -> None:
 
     turn_input = _provider_turn_input(messages)
 
-    assert turn_input[1] == {"type": "image", "url": data_url}
-    assert data_url not in turn_input[0]["text"]
-    assert "[Image 1 is attached to this turn.]" in turn_input[0]["text"]
+    assert turn_input[2] == {"type": "image", "url": data_url}
+    assert data_url not in "".join(
+        item.get("text", "") for item in turn_input if item["type"] == "text"
+    )
+    assert "[Image 1 is attached to this turn.]" in turn_input[1]["text"]

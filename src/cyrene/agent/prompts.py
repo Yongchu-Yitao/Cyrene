@@ -369,17 +369,20 @@ _MAIN_AGENT_PROMPT = prompt_for_enabled_tool_packs(
     frozenset(_TOOL_PACK_PROMPT_TERMS),
 )
 
-_PHASE1_DECISION_PROMPT = """Decision phase rules:
-- This is the decision phase. The tool list shows direct tools and stable module gateways, but here you may ONLY call `use_tools`, `ask_user`, or `quit`. Route real work through `use_tools`, which enters the execution phase.
-- Call `use_tools` for requested actions, inspection, search, verification, citations, or facts that are current, niche, high-stakes, uncertain, user-specific, or project-specific. Stable low-risk facts and explanations may be answered directly when the available context is sufficient.
-- If the request needs `use_tools`, do a bounded execution-planning pass before entering the execution phase. Think through the problem sufficiently to give Phase 2 a deliberate starting point instead of merely routing the request.
-- In that pass, identify the objective, deliverables, constraints, observable completion evidence, important assumptions, initial tool actions, validation, and material risks or fallbacks.
-- Resolve uncertainty deliberately: use tools for discoverable facts, call `ask_user` only for a missing preference, scope, authority, or safety choice that would materially change the result, and otherwise proceed with a brief consequential assumption.
-- Then call `use_tools` with `task` set to the user's exact original message and `execution_brief` set to a concise handoff containing: objective and acceptance evidence, relevant constraints/assumptions, chosen approach, ordered initial steps/tools, validation, and important risks/fallbacks. The brief is provisional: Phase 2 must revise it when tool evidence contradicts an assumption.
-- Do not expose private chain-of-thought or write a preamble in assistant content. Put only the concise decision artifact in `execution_brief`. The execution phase will use that brief, send the required user-visible opening update through `send_message`, and start the first useful tool in the same batch.
-- Call `quit` when you can give a complete, reliable answer from the current context or stable knowledge and tools would not materially improve it. Write the COMPLETE reply as normal assistant content and call `quit` only as the terminal signal; its arguments must not contain the answer or another tool call.
-- If you need to ask the user anything at all, use `ask_user`. Never put a question to the user in plain assistant text.
-- Prefer the least costly reliable route. Use `use_tools` only when it materially improves correctness, completeness, action, or verification.
+_PHASE1_DECISION_PROMPT = """Decision phase:
+Choose exactly one action: `use_tools`, `ask_user`, or `quit`.
+
+- Call `use_tools` when the request requires execution, file or project inspection, search, verification, citations, current information, or other tool-derived evidence.
+- Call `ask_user` only when a missing preference, scope, authority, or safety decision would materially change the action. Do not ask questions in plain assistant text.
+- Call `quit` when you can provide a complete and reliable answer from the current context without tools.
+
+When calling `use_tools`:
+- Do not create a full plan, tool sequence, validation plan, risk analysis, or fallback strategy.
+- Keep `execution_brief` under 300 characters and state only the intent, first useful action, and any hard constraint already given by the user.
+- Keep assistant content empty and do not call an execution tool directly in this phase.
+
+When calling `quit`, put the complete user-facing answer in assistant content and use `quit` only as the terminal signal.
+Prefer the shortest reliable decision. Phase 2 owns planning, execution, adaptation, and validation.
 """
 
 _DEEP_RESEARCH_PHASE1_DECISION = """## Deep Research — Length Preference

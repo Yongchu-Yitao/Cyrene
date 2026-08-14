@@ -2,7 +2,8 @@
 
 The fixture replaces network and model boundaries with stable delayed functions.
 It compares the previous serial fetch-then-filter schedule with the production
-parallel schedule while requiring byte-identical output and synthesis inputs.
+parallel schedule while requiring byte-identical evidence output and exactly one
+internal model call for relevance filtering.
 
 Run with::
 
@@ -25,7 +26,6 @@ from typing import Any
 _SEARCH_DELAY_SECONDS = 0.010
 _FETCH_DELAY_SECONDS = 0.060
 _FILTER_DELAY_SECONDS = 0.040
-_SYNTHESIS_DELAY_SECONDS = 0.020
 
 _RESULTS = tuple(
     {
@@ -55,9 +55,8 @@ async def _run_once(*, parallel_prepare: bool) -> dict[str, Any]:
         "_search_simplexng": search._search_simplexng,
         "_fetch_url": search._fetch_url,
         "_filter_results": search._filter_results,
-        "_synthesize": search._synthesize,
     }
-    synthesis_inputs: list[dict[str, Any]] = []
+    filter_inputs: list[dict[str, Any]] = []
 
     async def fake_search(_query: str) -> list[dict]:
         await asyncio.sleep(_SEARCH_DELAY_SECONDS)
@@ -70,32 +69,17 @@ async def _run_once(*, parallel_prepare: bool) -> dict[str, Any]:
     async def fake_filter(raw_results: list[dict], topic: str) -> list[dict]:
         await asyncio.sleep(_FILTER_DELAY_SECONDS)
         assert topic == "fixture query"
+        filter_inputs.append({
+            "topic": topic,
+            "sources": [dict(item) for item in raw_results],
+        })
         return [raw_results[index] for index in (0, 2, 4)]
-
-    async def fake_synthesize(
-        relevant_results: list[dict],
-        fetched_contents: list[str],
-        topic: str,
-    ) -> str:
-        await asyncio.sleep(_SYNTHESIS_DELAY_SECONDS)
-        synthesis_inputs.append(
-            {
-                "topic": topic,
-                "sources": [dict(item) for item in relevant_results],
-                "contents": list(fetched_contents),
-            }
-        )
-        return "\n".join(
-            f"{item['title']}|{item['url']}|{content}"
-            for item, content in zip(relevant_results, fetched_contents, strict=True)
-        )
 
     started = time.perf_counter()
     try:
         search._search_simplexng = fake_search
         search._fetch_url = fake_fetch
         search._filter_results = fake_filter
-        search._synthesize = fake_synthesize
         output = await search._deep_search_simplexng(
             "fixture query",
             _parallel_prepare=parallel_prepare,
@@ -107,7 +91,8 @@ async def _run_once(*, parallel_prepare: bool) -> dict[str, Any]:
     return {
         "wall_ms": (time.perf_counter() - started) * 1000,
         "output": output,
-        "synthesis_input": synthesis_inputs[0],
+        "filter_input": filter_inputs[0],
+        "internal_model_calls": len(filter_inputs),
     }
 
 
@@ -122,16 +107,22 @@ async def run_benchmark(*, repeats: int = 5) -> dict[str, Any]:
     ]
 
     reference_output = serial_samples[0]["output"]
-    reference_input = serial_samples[0]["synthesis_input"]
+    reference_input = serial_samples[0]["filter_input"]
     output_identical = all(
         sample["output"] == reference_output
         for sample in [*serial_samples, *parallel_samples]
     )
-    synthesis_input_identical = all(
-        sample["synthesis_input"] == reference_input
+    filter_input_identical = all(
+        sample["filter_input"] == reference_input
         for sample in [*serial_samples, *parallel_samples]
     )
-    quality_preserved = output_identical and synthesis_input_identical
+    one_internal_model_call = all(
+        sample["internal_model_calls"] == 1
+        for sample in [*serial_samples, *parallel_samples]
+    )
+    quality_preserved = (
+        output_identical and filter_input_identical and one_internal_model_call
+    )
 
     serial_ms = statistics.median(sample["wall_ms"] for sample in serial_samples)
     parallel_ms = statistics.median(sample["wall_ms"] for sample in parallel_samples)
@@ -150,7 +141,6 @@ async def run_benchmark(*, repeats: int = 5) -> dict[str, Any]:
                 "search": int(_SEARCH_DELAY_SECONDS * 1000),
                 "fetch": int(_FETCH_DELAY_SECONDS * 1000),
                 "filter": int(_FILTER_DELAY_SECONDS * 1000),
-                "synthesis": int(_SYNTHESIS_DELAY_SECONDS * 1000),
             },
         },
         "repeats": repeats,
@@ -162,9 +152,10 @@ async def run_benchmark(*, repeats: int = 5) -> dict[str, Any]:
         "quality": {
             "preserved": quality_preserved,
             "output_byte_identical": output_identical,
-            "synthesis_input_identical": synthesis_input_identical,
+            "filter_input_identical": filter_input_identical,
+            "one_internal_model_call": one_internal_model_call,
             "output_sha256": hashlib.sha256(reference_output.encode("utf-8")).hexdigest(),
-            "synthesis_input_sha256": _fingerprint(reference_input),
+            "filter_input_sha256": _fingerprint(reference_input),
         },
     }
 
@@ -184,7 +175,8 @@ def render_markdown(report: dict[str, Any]) -> str:
             f"| Median time saved | {report['saved_ms']:.3f} ms |",
             f"| Latency reduction | {report['latency_reduction_percent']:.2f}% |",
             f"| Output byte-identical | {quality['output_byte_identical']} |",
-            f"| Synthesis input identical | {quality['synthesis_input_identical']} |",
+            f"| Filter input identical | {quality['filter_input_identical']} |",
+            f"| One internal model call | {quality['one_internal_model_call']} |",
             f"| Quality contract preserved | {quality['preserved']} |",
             "",
             "This is a deterministic orchestration benchmark. It performs no network or real model calls.",
