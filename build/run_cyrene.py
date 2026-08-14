@@ -13,7 +13,6 @@ import importlib
 import importlib.util
 import jinja2
 import multipart
-from pathlib import Path
 import subprocess
 import sniffio
 import websockets

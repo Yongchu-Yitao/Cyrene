@@ -1021,6 +1021,39 @@ def _save_steward_run(timestamp: float) -> None:
         logger.exception("Failed to save steward state")
 
 
+def _steward_soul_commands(result: str) -> str:
+    """Return normalized SOUL commands from a mixed Steward/entity response."""
+    sections = (
+        "SELF:IDENTITY",
+        "SELF:BELIEFS",
+        "RELATIONSHIP:USER",
+        "MEMORY:HIGH_IMPACT",
+        "PATTERN:USER",
+        "TEMPORARY",
+    )
+    section_pattern = "(?:" + "|".join(_re.escape(item) for item in sections) + ")"
+    command_pattern = _re.compile(
+        rf"^(APPEND|ERASE|MERGE):?\s+\(?({section_pattern})\)?\s*"
+        rf"(?:::|:|—|\||-)\s*(.+)$",
+        _re.IGNORECASE,
+    )
+    commands: list[str] = []
+    for raw_line in str(result or "").splitlines():
+        line = raw_line.strip()
+        if not line:
+            continue
+        if line.upper() == "SKIP":
+            commands.append("SKIP")
+            continue
+        match = command_pattern.match(line)
+        if match:
+            command, section, content = match.groups()
+            commands.append(
+                f"{command.upper()} {section.upper()} :: {content.strip()}"
+            )
+    return "\n".join(commands)
+
+
 def _has_new_conversation() -> bool:
     """Check whether today's conversation file exists and has actual content.
 
@@ -1158,10 +1191,11 @@ async def _run_steward_if_needed(bot, db_path: str) -> None:
         )
 
         result_stripped = (result or "").strip()
-        if result_stripped.upper().startswith("SKIP") and "ENTITY" not in result_stripped:
+        soul_commands = _steward_soul_commands(result_stripped)
+        if soul_commands.upper().startswith("SKIP") and "\n" not in soul_commands:
             logger.info("Steward returned SKIP -- no changes to SOUL.md")
-        elif result_stripped:
-            changes = apply_soul_update(result)
+        elif soul_commands:
+            changes = apply_soul_update(soul_commands)
             logger.info(
                 "Steward applied %d change(s) to SOUL.md", len(changes),
             )

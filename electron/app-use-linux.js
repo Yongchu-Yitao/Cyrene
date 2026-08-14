@@ -177,6 +177,7 @@ class LinuxAtspiProvider {
         nativeActions: actions.map((item) => item.name),
         actionDescriptors: actions,
         interfaces: info.interfaces,
+        childCount: info.children.length,
       },
       children: info.children,
     };
@@ -226,10 +227,16 @@ class LinuxAtspiProvider {
     const maxNodes = Math.max(1, Math.min(500, Number(options.maxNodes || 120)));
     const maxDepth = Math.max(1, Math.min(24, Number(options.maxDepth || 12)));
     const maxVisited = Math.max(maxNodes * 4, 200);
-    const queue = [{ ref: start, depth: 0, parentRef: '' }];
+    const root = await this._node(start, '');
+    const rootNativeRef = root.raw.nativeRef;
+    const queue = root.children.map((ref) => ({ ref, depth: 1 }));
     const nodes = [];
-    const seen = new Set();
-    let visited = 0;
+    nodes.push(root.raw);
+    const seen = new Set([`${start.busName}:${start.objectPath}`]);
+    let visited = 1;
+    let failedNodes = 0;
+    let depthLimited = false;
+    const errors = [];
     while (queue.length && nodes.length < maxNodes && visited < maxVisited) {
       const current = queue.shift();
       const key = `${current.ref.busName}:${current.ref.objectPath}`;
@@ -237,16 +244,41 @@ class LinuxAtspiProvider {
       seen.add(key);
       visited += 1;
       try {
-        const item = await this._node(current.ref, current.parentRef);
-        nodes.push(item.raw);
-        if (current.depth < maxDepth) {
-          for (const child of item.children) {
-            queue.push({ ref: child, depth: current.depth + 1, parentRef: item.raw.nativeRef });
+        const item = await this._node(current.ref, rootNativeRef);
+        const role = String(item.raw.role || '').toLowerCase();
+        const name = String(item.raw.name || '').trim();
+        const description = String(item.raw.description || '').trim().toLowerCase();
+        const genericDescription = ['', 'group', 'application', 'pane', 'container', 'unknown', '组', '应用', '窗格', '容器', '未知'].includes(description);
+        const transparent = item.children.length > 0 && !name && genericDescription
+          && /application|group|pane|panel|container|unknown/.test(role);
+        if (transparent) {
+          if (current.depth < maxDepth) {
+            for (const child of item.children) {
+              queue.push({ ref: child, depth: current.depth + 1 });
+            }
+          } else {
+            depthLimited = true;
+            nodes.push(item.raw);
           }
+        } else {
+          nodes.push(item.raw);
         }
-      } catch (_) {}
+      } catch (error) {
+        failedNodes += 1;
+        if (errors.length < 5) errors.push(String(error && error.message ? error.message : error));
+      }
     }
-    return { ok: true, nodes, truncated: queue.length > 0, visited, provider: 'at-spi2' };
+    return {
+      ok: true,
+      nodes,
+      truncated: queue.length > 0 || failedNodes > 0 || depthLimited || visited >= maxVisited,
+      depthLimited,
+      visited,
+      failedNodes,
+      errors,
+      traversal: 'at_spi2_current_semantic_layer',
+      provider: 'at-spi2',
+    };
   }
 
   async inspect(target, nativeRef, options = {}) {

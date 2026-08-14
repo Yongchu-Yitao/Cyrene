@@ -33,6 +33,8 @@ def test_windows_release_installs_required_native_runtime_packages():
     assert arm_job.index("Build native ARM64 cryptography runtime") < arm_job.index(
         "Install MCP runtime"
     )
+    assert "Install native ARM64 VC runtime" in arm_job
+    assert "vc_redist.arm64.exe" in arm_job
     assert "$PSNativeCommandUseErrorActionPreference = $true" in arm_job
 
     build = (ROOT / "build" / "build.py").read_text(encoding="utf-8")

@@ -258,7 +258,10 @@ function Get-Root($Target) {
 
 function Get-Children([System.Windows.Automation.AutomationElement]$Element) {
     $children = @()
-    $walker = [System.Windows.Automation.TreeWalker]::ControlViewWalker
+    # ControlView intentionally hides structural UIA nodes and can collapse an
+    # Electron/Chromium subtree to a few generic containers. RawView is the
+    # provider's complete semantic tree; downstream node limits keep it bounded.
+    $walker = [System.Windows.Automation.TreeWalker]::RawViewWalker
     $child = $walker.GetFirstChild($Element)
     while ($null -ne $child) {
         $children += $child
@@ -324,31 +327,57 @@ function Get-Snapshot($Payload, [bool]$InspectOnly) {
     $options = $Payload.options
     $nativeRef = if ($Payload.nativeRef) { [string]$Payload.nativeRef } elseif ($options.nativeRef) { [string]$options.nativeRef } else { 'w0' }
     $start = Resolve-Element $root $nativeRef
-    $maxNodes = if ($options.maxNodes) { [Math]::Max(1, [Math]::Min(200, [int]$options.maxNodes)) } else { if ($InspectOnly) { 40 } else { 80 } }
-    $maxDepth = if ($options.maxDepth) { [Math]::Max(1, [Math]::Min(16, [int]$options.maxDepth)) } else { if ($InspectOnly) { 3 } else { 8 } }
+    $maxNodes = if ($options.maxNodes) { [Math]::Max(1, [Math]::Min(500, [int]$options.maxNodes)) } else { if ($InspectOnly) { 40 } else { 80 } }
+    $maxDepth = if ($options.maxDepth) { [Math]::Max(1, [Math]::Min(24, [int]$options.maxDepth)) } else { if ($InspectOnly) { 3 } else { 8 } }
     $nodes = [System.Collections.Generic.List[object]]::new()
     $queue = [System.Collections.Generic.Queue[object]]::new()
-    $queue.Enqueue(@($start, $nativeRef, 0, ''))
+    $rootNode = Get-Node $start $nativeRef
+    $rootNode['childCount'] = @(Get-Children $start).Count
+    $nodes.Add($rootNode)
+    $rootChildren = @(Get-Children $start)
+    for ($childIndex = 0; $childIndex -lt $rootChildren.Count; $childIndex += 1) {
+        $queue.Enqueue(@($rootChildren[$childIndex], "$nativeRef/e$childIndex", 1))
+    }
     $truncated = $false
-    while ($queue.Count -gt 0) {
+    $failedNodes = 0
+    $depthLimited = $false
+    $visited = 1
+    while ($queue.Count -gt 0 -and $nodes.Count -lt $maxNodes) {
         $entry = $queue.Dequeue()
         $element = $entry[0]
         $elementRef = [string]$entry[1]
         $depth = [int]$entry[2]
-        $parentRef = [string]$entry[3]
+        $visited += 1
         try {
             $node = Get-Node $element $elementRef
-            if (-not [string]::IsNullOrWhiteSpace($parentRef)) { $node.parentNativeRef = $parentRef }
-            $nodes.Add($node)
-        } catch {}
+            $role = ([string]$node.role).ToLowerInvariant()
+            $name = ([string]$node.name).Trim()
+            $description = ([string]$node.description).Trim().ToLowerInvariant()
+            $genericDescription = @('', 'group', 'application', 'pane', 'panel', 'container', 'unknown', '组', '应用', '窗格', '面板', '容器', '未知') -contains $description
+            $children = @(Get-Children $element)
+            $node['childCount'] = $children.Count
+            $transparent = $children.Count -gt 0 -and [string]::IsNullOrWhiteSpace($name) -and $genericDescription -and $role -match 'application|group|pane|panel|container|custom|unknown'
+            if ($transparent) {
+                if ($depth -lt $maxDepth) {
+                    for ($index = 0; $index -lt $children.Count; $index += 1) {
+                        $queue.Enqueue(@($children[$index], "$elementRef/e$index", $depth + 1))
+                    }
+                } else {
+                    $depthLimited = $true
+                    $node.parentNativeRef = $nativeRef
+                    $nodes.Add($node)
+                }
+            } else {
+                $node.parentNativeRef = $nativeRef
+                $nodes.Add($node)
+            }
+        } catch { $failedNodes += 1 }
         if ($nodes.Count -ge $maxNodes) { $truncated = $queue.Count -gt 0; break }
-        if ($depth -ge $maxDepth) { continue }
-        $children = @(Get-Children $element)
-        for ($index = 0; $index -lt $children.Count; $index += 1) {
-            $queue.Enqueue(@($children[$index], "$elementRef/e$index", $depth + 1, $elementRef))
-        }
     }
-    return @{ ok = $true; nodes = @($nodes); truncated = $truncated }
+    if ($queue.Count -gt 0) { $truncated = $true }
+    if ($failedNodes -gt 0) { $truncated = $true }
+    if ($depthLimited) { $truncated = $true }
+    return @{ ok = $true; nodes = @($nodes); truncated = $truncated; depthLimited = $depthLimited; visited = $visited; failedNodes = $failedNodes; traversal = 'uia_raw_view_current_semantic_layer'; provider = 'UIAutomation' }
 }
 
 function Invoke-BackgroundAction($Element, [string]$Action) {

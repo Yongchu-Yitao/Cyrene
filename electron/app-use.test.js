@@ -5,13 +5,9 @@ const test = require('node:test');
 
 const {
   AppUseManager,
-  CAPABILITIES,
-  DARWIN_MENU_CAPABILITY,
-  DARWIN_PID_TYPE_CAPABILITY,
   capabilitiesForTarget,
   resolveDarwinHitTestHelperPath,
   resolveProviderScriptPath,
-  SAFARI_CAPABILITIES,
 } = require('./app-use');
 
 test('packaged provider resolves from external resources instead of app.asar', () => {
@@ -46,6 +42,23 @@ test('Windows provider source includes Win32 bounds and robust focus fallbacks',
   assert.match(source, /sameIntegrityLevelRequired/);
 });
 
+test('semantic providers use complete native accessibility traversal on macOS and Windows', () => {
+  const managerSource = fs.readFileSync(path.join(__dirname, 'app-use.js'), 'utf8');
+  const macSource = fs.readFileSync(path.join(__dirname, 'app-use-macos-hit-test.swift'), 'utf8');
+  const macJxaSource = fs.readFileSync(path.join(__dirname, 'app-use-macos.jxa'), 'utf8');
+  const windowsSource = fs.readFileSync(path.join(__dirname, 'app-use-windows.ps1'), 'utf8');
+  assert.match(managerSource, /nativeSemanticOperation/);
+  assert.match(managerSource, /operation === 'perform' && SEMANTIC_MODE_CAPABILITIES/);
+  assert.match(managerSource, /resolveDarwinHitTestHelperPath\(this\)/);
+  assert.match(macSource, /AXUIElementCopyMultipleAttributeValues/);
+  assert.match(macSource, /native_ax_current_semantic_layer/);
+  assert.doesNotMatch(macJxaSource, /function snapshot\(/);
+  assert.doesNotMatch(macJxaSource, /semantic_double_click|function nodeFor\(/);
+  assert.match(windowsSource, /RawViewWalker/);
+  assert.match(windowsSource, /uia_raw_view_current_semantic_layer/);
+  assert.doesNotMatch(windowsSource, /\$walker = \[System\.Windows\.Automation\.TreeWalker\]::ControlViewWalker/);
+});
+
 test('coordinate scroll providers split large amounts into safe wheel events', () => {
   const macSource = fs.readFileSync(path.join(__dirname, 'app-use-macos.jxa'), 'utf8');
   const windowsSource = fs.readFileSync(path.join(__dirname, 'app-use-windows.ps1'), 'utf8');
@@ -64,16 +77,17 @@ test('coordinate scroll providers split large amounts into safe wheel events', (
 });
 
 test('Windows runtime capabilities exclude macOS PID typing and menu commands', () => {
-  const names = capabilitiesForTarget({ platform: 'win32', applicationId: 'C:\\Demo\\demo.exe' })
+  const names = capabilitiesForTarget({ platform: 'win32', applicationId: 'C:\\Demo\\demo.exe' }, { mode: 'visual' })
     .map((item) => item.name);
   assert.equal(names.includes('virtual_type_at'), false);
   assert.equal(names.includes('menu_command'), false);
   assert.equal(names.includes('visual_describe'), true);
-  assert.equal(names.includes('virtual_click_at'), true);
+  assert.equal(names.includes('virtual_click_at'), false);
+  assert.equal(names.includes('snapshot'), false);
 });
 
 test('Linux runtime exposes semantic capabilities without visual or focus input', () => {
-  const names = capabilitiesForTarget({ platform: 'linux', applicationId: 'org.demo.App' })
+  const names = capabilitiesForTarget({ platform: 'linux', applicationId: 'org.demo.App' }, { mode: 'semantic' })
     .map((item) => item.name);
   assert.equal(names.includes('snapshot'), true);
   assert.equal(names.includes('find'), true);
@@ -152,7 +166,8 @@ class FakeProvider {
     };
   }
 
-  async inspect(target, nativeRef) {
+  async inspect(target, nativeRef, options = {}) {
+    this.lastInspect = { target, nativeRef, options };
     return { ok: true, nodes: [{ nativeRef, role: 'Button', name: 'Save', enabled: true, actions: ['press'] }] };
   }
 
@@ -204,14 +219,14 @@ class FakeProvider {
   }
 }
 
-async function connectedManager({ focusPolicy = 'when_required' } = {}) {
+async function connectedManager({ focusPolicy = 'when_required', mode = 'visual' } = {}) {
   const provider = new FakeProvider();
   const manager = new AppUseManager({ provider, ownPid: 999, sessionTtlMs: 60_000 });
   const listed = await manager.handle('list_targets', {});
   const background = listed.targets.find((target) => target.app_name === 'TextEdit');
   const connected = await manager.handle('connect', {
     target_id: background.target_id,
-    parameters: { focus_policy: focusPolicy },
+    parameters: { focus_policy: focusPolicy, mode },
   });
   return { provider, manager, listed, connected };
 }
@@ -243,20 +258,66 @@ test('lists foreground and background targets with stable opaque ids', async () 
   assert.equal(first.targets.find((item) => !item.foreground).app_name, 'TextEdit');
 });
 
-test('connect discloses runtime capabilities without changing the gateway', async () => {
-  const { connected } = await connectedManager();
+test('visual connect discloses only visual runtime capabilities', async () => {
+  const { connected, provider } = await connectedManager();
   assert.equal(connected.status, 'success');
   assert.match(connected.session_id, /^app_session_/);
   assert.equal(connected.target.app_name, 'TextEdit');
-  assert.deepEqual(connected.capabilities, [DARWIN_MENU_CAPABILITY, DARWIN_PID_TYPE_CAPABILITY, ...CAPABILITIES]);
-  assert.ok(connected.capabilities.some((item) => item.name === 'menu_command'));
-  assert.ok(connected.capabilities.some((item) => item.name === 'snapshot'));
+  assert.ok(connected.capabilities.some((item) => item.name === 'virtual_type_at'));
+  assert.equal(connected.capabilities.some((item) => item.name === 'menu_command'), false);
+  assert.equal(connected.capabilities.some((item) => item.name === 'snapshot'), false);
   assert.ok(connected.capabilities.some((item) => item.name === 'key_chord'));
   assert.ok(connected.capabilities.some((item) => item.name === 'click_at'));
   assert.ok(connected.capabilities.some((item) => item.name === 'drag'));
-  assert.ok(connected.capabilities.some((item) => item.name === 'select_text'));
+  assert.equal(connected.capabilities.some((item) => item.name === 'select_text'), false);
   assert.ok(connected.capabilities.some((item) => item.name === 'key_sequence'));
   assert.ok(connected.capabilities.some((item) => item.name === 'visual_describe'));
+  assert.equal(provider.snapshotCount, 0);
+});
+
+test('visual pointer actions verify from captures without reading the accessibility tree', async () => {
+  const provider = new FakeProvider();
+  const manager = new AppUseManager({
+    provider,
+    ownPid: 999,
+    captureTarget: async () => ({
+      imageBase64: Buffer.from(provider.performed.length ? 'after' : 'before').toString('base64'),
+      mimeType: 'image/png', width: 800, height: 600,
+    }),
+  });
+  const listed = await manager.handle('list_targets', {});
+  const connected = await manager.handle('connect', {
+    target_id: listed.targets.find((target) => target.app_name === 'TextEdit').target_id,
+    parameters: { mode: 'visual' },
+  });
+  const result = await manager.handle('call', {
+    session_id: connected.session_id,
+    capability: 'click_at',
+    parameters: { x: 80, y: 45, allow_foreground_input: true },
+  });
+  assert.equal(result.status, 'success');
+  assert.equal(provider.snapshotCount, 0);
+  assert.equal(result.verification, null);
+  assert.equal(result.visual_verification.changed, true);
+});
+
+test('visual and semantic sessions are disjoint and hybrid mode is rejected', async () => {
+  const visual = await connectedManager({ mode: 'visual' });
+  const semantic = await connectedManager({ mode: 'semantic' });
+  const visualNames = new Set(visual.connected.capabilities.map((item) => item.name));
+  const semanticNames = new Set(semantic.connected.capabilities.map((item) => item.name));
+  assert.equal([...visualNames].some((name) => semanticNames.has(name)), false);
+  assert.equal(visual.connected.semantic_profile, undefined);
+  assert.equal(semantic.connected.mode, 'semantic');
+
+  const provider = new FakeProvider();
+  const manager = new AppUseManager({ provider, ownPid: 999 });
+  const listed = await manager.handle('list_targets', {});
+  const rejected = await manager.handle('connect', {
+    target_id: listed.targets[0].target_id, parameters: { mode: 'hybrid' },
+  });
+  assert.equal(rejected.status, 'error');
+  assert.equal(rejected.type, 'invalid_arguments');
 });
 
 test('connect keeps semantic capabilities retryable while a container-only tree initializes', async () => {
@@ -272,7 +333,7 @@ test('connect keeps semantic capabilities retryable while a container-only tree 
   const listed = await manager.handle('list_targets', {});
   const connected = await manager.handle('connect', {
     target_id: listed.targets.find((target) => target.app_name === 'TextEdit').target_id,
-    parameters: { focus_policy: 'never' },
+    parameters: { focus_policy: 'never', mode: 'semantic' },
   });
   const names = connected.capabilities.map((capability) => capability.name);
   assert.deepEqual(connected.semantic_profile, {
@@ -281,8 +342,8 @@ test('connect keeps semantic capabilities retryable while a container-only tree 
   assert.equal(names.includes('snapshot'), true);
   assert.equal(names.includes('find'), true);
   assert.equal(names.includes('press'), true);
-  assert.ok(names.includes('virtual_click_at'));
-  assert.ok(names.includes('visual_describe'));
+  assert.equal(names.includes('virtual_click_at'), false);
+  assert.equal(names.includes('visual_describe'), false);
   const retried = await manager.handle('call', {
     session_id: connected.session_id,
     capability: 'snapshot',
@@ -303,7 +364,7 @@ test('connect treats a bounded semantic probe timeout as retryable initializatio
   const listed = await manager.handle('list_targets', {});
   const connected = await manager.handle('connect', {
     target_id: listed.targets.find((target) => target.app_name === 'TextEdit').target_id,
-    parameters: { focus_policy: 'never' },
+    parameters: { focus_policy: 'never', mode: 'semantic' },
   });
   const names = connected.capabilities.map((capability) => capability.name);
   assert.deepEqual(connected.semantic_profile, {
@@ -311,10 +372,61 @@ test('connect treats a bounded semantic probe timeout as retryable initializatio
   });
   assert.equal(names.includes('snapshot'), true);
   assert.equal(names.includes('find'), true);
-  assert.ok(names.includes('virtual_click_at'));
+  assert.equal(names.includes('virtual_click_at'), false);
 });
 
-test('Safari connections disclose native background browser capabilities only at runtime', async () => {
+test('generic actionable labels mark semantic coverage partial and recommend visual', async () => {
+  const provider = new FakeProvider();
+  provider.snapshot = async (target) => ({
+    ok: true,
+    nodes: [
+      { nativeRef: 'w0', role: 'Window', name: target.windowTitle, actions: [], bounds: target.bounds },
+      { nativeRef: 'w0/e0', role: 'Button', subrole: 'CloseButton', name: 'Close', actions: ['press'] },
+      { nativeRef: 'w0/e1', role: 'Group', description: '组', actions: ['press'] },
+      { nativeRef: 'w0/e2', role: 'Application', description: '应用', actions: ['press'] },
+    ],
+  });
+  const manager = new AppUseManager({ provider, ownPid: 999 });
+  const listed = await manager.handle('list_targets', {});
+  const connected = await manager.handle('connect', {
+    target_id: listed.targets.find((target) => target.app_name === 'TextEdit').target_id,
+    parameters: { focus_policy: 'never', mode: 'semantic' },
+  });
+  const snapshot = await manager.handle('call', {
+    session_id: connected.session_id, capability: 'snapshot', parameters: {},
+  });
+  assert.equal(snapshot.semantic_profile.status, 'partial');
+  assert.equal(snapshot.semantic_profile.reason, 'generic_or_unlabeled_actions');
+  assert.equal(snapshot.semantic_coverage.meaningful_actionable_nodes, 1);
+  assert.equal(snapshot.semantic_coverage.generic_or_unlabeled_actionable_nodes, 2);
+  assert.equal(snapshot.semantic_coverage.visual_recommended, true);
+});
+
+test('a depth-limited semantic layer requests deeper inspection instead of visual fallback', async () => {
+  const provider = new FakeProvider();
+  provider.snapshot = async () => ({
+    ok: true,
+    truncated: true,
+    depthLimited: true,
+    nodes: [{
+      nativeRef: 'w0/e0', role: 'Group', description: '组', childCount: 3,
+      actions: ['press'], nativeActions: ['AXPress'],
+    }],
+  });
+  const manager = new AppUseManager({ provider, ownPid: 999 });
+  const listed = await manager.handle('list_targets', {});
+  const connected = await manager.handle('connect', {
+    target_id: listed.targets.find((target) => target.app_name === 'TextEdit').target_id,
+    parameters: { mode: 'semantic' },
+  });
+  const snapshot = await manager.handle('call', {
+    session_id: connected.session_id, capability: 'snapshot', parameters: { max_depth: 2 },
+  });
+  assert.equal(snapshot.truncated, true);
+  assert.equal(snapshot.semantic_coverage.visual_recommended, false);
+});
+
+test('visual connections do not disclose Safari native capabilities', async () => {
   const provider = new FakeProvider();
   provider.targets.push({
     platform: 'darwin', pid: 40, processStartTime: '4', appName: 'Safari', applicationId: 'com.apple.Safari',
@@ -333,15 +445,14 @@ test('Safari connections disclose native background browser capabilities only at
     target_id: listed.targets.find((target) => target.app_name === 'Safari').target_id,
     parameters: {},
   });
-  assert.deepEqual(connected.capabilities.slice(0, SAFARI_CAPABILITIES.length), SAFARI_CAPABILITIES);
+  assert.equal(connected.capabilities.some((item) => ['browser_state', 'navigate', 'reload'].includes(item.name)), false);
   const result = await manager.handle('call', {
     session_id: connected.session_id,
     capability: 'navigate',
     parameters: { url: 'https://github.com' },
   });
-  assert.equal(result.status, 'success');
-  assert.equal(result.focused_temporarily, false);
-  assert.equal(result.verification.url, 'https://github.com');
+  assert.equal(result.status, 'error');
+  assert.equal(result.type, 'unsupported_capability');
   assert.deepEqual(provider.focused, []);
 });
 
@@ -361,7 +472,7 @@ test('visual describe captures the connected window for the Python vision adapte
 });
 
 test('snapshot creates refs and semantic coverage for a background window', async () => {
-  const { manager, connected } = await connectedManager();
+  const { manager, connected } = await connectedManager({ mode: 'semantic' });
   const snapshot = await manager.handle('call', {
     session_id: connected.session_id,
     capability: 'snapshot',
@@ -375,7 +486,7 @@ test('snapshot creates refs and semantic coverage for a background window', asyn
 });
 
 test('semantic action resolves ref and returns a verification snapshot', async () => {
-  const { manager, provider, connected } = await connectedManager();
+  const { manager, provider, connected } = await connectedManager({ mode: 'semantic' });
   const snapshot = await manager.handle('call', {
     session_id: connected.session_id, capability: 'snapshot', parameters: {},
   });
@@ -391,7 +502,7 @@ test('semantic action resolves ref and returns a verification snapshot', async (
 });
 
 test('inspect does not invalidate refs outside the inspected subtree', async () => {
-  const { manager, connected } = await connectedManager();
+  const { manager, connected } = await connectedManager({ mode: 'semantic' });
   const snapshot = await manager.handle('call', {
     session_id: connected.session_id, capability: 'snapshot', parameters: {},
   });
@@ -407,8 +518,23 @@ test('inspect does not invalidate refs outside the inspected subtree', async () 
   assert.equal(result.status, 'success');
 });
 
+test('inspect accepts and forwards semantic depth limits', async () => {
+  const { manager, provider, connected } = await connectedManager({ mode: 'semantic' });
+  const snapshot = await manager.handle('call', {
+    session_id: connected.session_id, capability: 'snapshot', parameters: {},
+  });
+  const body = snapshot.nodes.find((node) => node.name === 'Body');
+  const inspected = await manager.handle('call', {
+    session_id: connected.session_id,
+    capability: 'inspect',
+    parameters: { ref: body.ref, max_nodes: 73, max_depth: 7 },
+  });
+  assert.equal(inspected.status, 'success');
+  assert.deepEqual(provider.lastInspect.options, { maxNodes: 73, maxDepth: 7 });
+});
+
 test('find filters semantic nodes', async () => {
-  const { manager, connected } = await connectedManager();
+  const { manager, connected } = await connectedManager({ mode: 'semantic' });
   const result = await manager.handle('call', {
     session_id: connected.session_id,
     capability: 'find',
@@ -420,7 +546,7 @@ test('find filters semantic nodes', async () => {
 });
 
 test('find filters subroles and actions', async () => {
-  const { manager, connected } = await connectedManager();
+  const { manager, connected } = await connectedManager({ mode: 'semantic' });
   const result = await manager.handle('call', {
     session_id: connected.session_id,
     capability: 'find',
@@ -429,160 +555,6 @@ test('find filters subroles and actions', async () => {
   assert.equal(result.status, 'success');
   assert.equal(result.matched, 1);
   assert.equal(result.nodes[0].name, 'Save');
-});
-
-test('virtual coordinate click activates a background accessible control without focusing or moving the real pointer', async () => {
-  const provider = new FakeProvider();
-  const displayed = [];
-  const manager = new AppUseManager({
-    provider,
-    ownPid: 999,
-    showVirtualPointer: async (point) => { displayed.push(point); },
-  });
-  const listed = await manager.handle('list_targets', {});
-  const connected = await manager.handle('connect', {
-    target_id: listed.targets.find((target) => target.app_name === 'TextEdit').target_id,
-    parameters: { focus_policy: 'when_required' },
-  });
-  const snapshotsAfterConnectProbe = provider.snapshotCount;
-  const result = await manager.handle('call', {
-    session_id: connected.session_id,
-    capability: 'virtual_click_at',
-    parameters: { x: 80, y: 45, coordinate_space: 'window' },
-  });
-  assert.equal(result.status, 'success');
-  assert.equal(result.foreground_affected, undefined);
-  assert.equal(result.virtual_target.name, 'Save');
-  assert.equal(result.virtual_target.action, 'press');
-  assert.equal(result.input_mode, 'background_accessibility');
-  assert.equal(result.real_cursor_moved, false);
-  assert.equal(result.focus_requested, false);
-  assert.deepEqual(provider.focused, []);
-  assert.equal(provider.performed.at(-1).capability, 'press');
-  assert.equal(provider.snapshotCount, snapshotsAfterConnectProbe);
-  assert.equal(provider.hitTests.length, 2);
-  assert.deepEqual(displayed[0].x, 180);
-  assert.deepEqual(displayed[0].y, 145);
-  assert.equal(displayed[0].press, false);
-  assert.equal(displayed[1].press, true);
-});
-
-test('virtual coordinate click sends no input when the point has no accessible action', async () => {
-  const provider = new FakeProvider();
-  const displayed = [];
-  const manager = new AppUseManager({
-    provider,
-    ownPid: 999,
-    showVirtualPointer: async (point) => { displayed.push(point); },
-  });
-  const listed = await manager.handle('list_targets', {});
-  const connected = await manager.handle('connect', {
-    target_id: listed.targets.find((target) => target.app_name === 'TextEdit').target_id,
-    parameters: { focus_policy: 'when_required' },
-  });
-  const snapshotsAfterConnectProbe = provider.snapshotCount;
-  const result = await manager.handle('call', {
-    session_id: connected.session_id,
-    capability: 'virtual_click_at',
-    parameters: { x: 700, y: 500, coordinate_space: 'window' },
-  });
-  assert.equal(result.status, 'error');
-  assert.equal(result.type, 'unsupported_background_interaction');
-  assert.equal(result.real_cursor_moved, false);
-  assert.equal(result.focus_requested, false);
-  assert.deepEqual(provider.focused, []);
-  assert.deepEqual(provider.performed, []);
-  assert.deepEqual(displayed, []);
-  assert.equal(provider.snapshotCount, snapshotsAfterConnectProbe);
-  assert.equal(provider.hitTests.length, 1);
-});
-
-test('Windows virtual click never enters the macOS PID event fallback', async () => {
-  const provider = new FakeProvider();
-  provider.targets = provider.targets.map((target) => ({
-    ...target,
-    platform: 'win32',
-    applicationId: `C:\\Apps\\${target.appName}.exe`,
-  }));
-  let pidFallbackCalled = false;
-  provider.pidEvent = async () => {
-    pidFallbackCalled = true;
-    throw new Error('macOS-only PID fallback must not run on Windows');
-  };
-  const manager = new AppUseManager({ provider, ownPid: 999 });
-  const listed = await manager.handle('list_targets', {});
-  const connected = await manager.handle('connect', {
-    target_id: listed.targets.find((target) => target.app_name === 'TextEdit').target_id,
-    parameters: {},
-  });
-  const result = await manager.handle('call', {
-    session_id: connected.session_id,
-    capability: 'virtual_click_at',
-    parameters: { x: 700, y: 500, coordinate_space: 'window', pid_event_fallback: true },
-  });
-  assert.equal(result.status, 'error');
-  assert.equal(result.type, 'unsupported_background_interaction');
-  assert.equal(pidFallbackCalled, false);
-});
-
-test('virtual coordinate click remains independent of a timing-out full accessibility snapshot', async () => {
-  const provider = new FakeProvider();
-  provider.snapshot = async () => { throw new Error('full tree timed out'); };
-  const manager = new AppUseManager({ provider, ownPid: 999 });
-  const listed = await manager.handle('list_targets', {});
-  const connected = await manager.handle('connect', {
-    target_id: listed.targets.find((target) => target.app_name === 'TextEdit').target_id,
-    parameters: {},
-  });
-  const result = await manager.handle('call', {
-    session_id: connected.session_id,
-    capability: 'virtual_click_at',
-    parameters: { x: 80, y: 45, coordinate_space: 'window' },
-  });
-  assert.equal(result.status, 'success');
-  assert.equal(result.diagnostics.treeScanUsed, false);
-  assert.equal(provider.hitTests.length, 2);
-});
-
-test('virtual coordinate click preserves negative secondary-display coordinates', async () => {
-  const provider = new FakeProvider();
-  provider.targets[1] = {
-    ...provider.targets[1], bounds: { x: -1756, y: -1014, width: 1512, height: 949 },
-  };
-  provider.hitTest = async (target, point, preferredActions, perform) => {
-    provider.hitTests = provider.hitTests || [];
-    provider.hitTests.push({ target, point, preferredActions, perform });
-    return {
-      ok: true, found: true, performed: perform, verified: perform,
-      action: 'press', nativeAction: 'AXPress', diagnostics: { method: 'fake', treeScanUsed: false },
-    };
-  };
-  const manager = new AppUseManager({ provider, ownPid: 999 });
-  const listed = await manager.handle('list_targets', {});
-  const connected = await manager.handle('connect', {
-    target_id: listed.targets.find((target) => target.app_name === 'TextEdit').target_id,
-    parameters: {},
-  });
-  const result = await manager.handle('call', {
-    session_id: connected.session_id,
-    capability: 'virtual_click_at',
-    parameters: { x: 756, y: 475, coordinate_space: 'window' },
-  });
-  assert.equal(result.status, 'success');
-  assert.deepEqual(provider.hitTests[0].point, { x: -1000, y: -539 });
-});
-
-test('rejects unknown capability parameters before any desktop action', async () => {
-  const { manager, provider, connected } = await connectedManager();
-  const result = await manager.handle('call', {
-    session_id: connected.session_id,
-    capability: 'virtual_click_at',
-    parameters: { x: 80, y: 45, keyboard_shortcut: ['command', 't'] },
-  });
-  assert.equal(result.status, 'error');
-  assert.equal(result.type, 'invalid_arguments');
-  assert.match(result.message, /keyboard_shortcut/);
-  assert.deepEqual(provider.performed, []);
 });
 
 test('coordinate scroll accepts large distances and rejects invalid amounts before input', async () => {
@@ -609,49 +581,6 @@ test('coordinate scroll accepts large distances and rejects invalid amounts befo
     assert.match(rejected.message, /integer from 1 to 50000/);
   }
   assert.equal(provider.performed.length, performedCount);
-});
-
-test('background menu command reports the exact AX action without foreground input', async () => {
-  const { manager, provider, connected } = await connectedManager();
-  const result = await manager.handle('call', {
-    session_id: connected.session_id,
-    capability: 'menu_command',
-    parameters: { name: 'New Tab', shortcut: ['command', 't'], verify_effect: false },
-  });
-  assert.equal(result.status, 'success');
-  assert.equal(result.executed_action.capability, 'menu_command');
-  assert.equal(result.executed_action.native_action, 'AXPress');
-  assert.equal(result.foreground_input_used, false);
-  assert.equal(result.real_cursor_moved, false);
-  assert.equal(result.focus_requested, false);
-  assert.deepEqual(provider.focused, []);
-  assert.equal(provider.menuCommands.length, 2);
-});
-
-test('virtual coordinate activation verifies its UI effect with a capture diff', async () => {
-  const provider = new FakeProvider();
-  const manager = new AppUseManager({
-    provider,
-    ownPid: 999,
-    captureTarget: async () => ({
-      imageBase64: Buffer.from(provider.performed.length ? 'after' : 'before').toString('base64'),
-      mimeType: 'image/png', width: 800, height: 600,
-    }),
-  });
-  const listed = await manager.handle('list_targets', {});
-  const connected = await manager.handle('connect', {
-    target_id: listed.targets.find((target) => target.app_name === 'TextEdit').target_id,
-    parameters: {},
-  });
-  const result = await manager.handle('call', {
-    session_id: connected.session_id,
-    capability: 'virtual_click_at',
-    parameters: { x: 80, y: 45 },
-  });
-  assert.equal(result.status, 'success');
-  assert.equal(result.verification.action_accepted, true);
-  assert.equal(result.verification.effect_verified, true);
-  assert.equal(result.verification.effect_verification.method, 'window_capture_diff');
 });
 
 test('virtual type routes text only to the target pid and preserves cursor and foreground', async () => {
@@ -716,46 +645,6 @@ test('virtual type never treats an unrelated full-window repaint as verified tex
   assert.equal(result.verification.visual_changed, true);
 });
 
-test('whole-window AX group is rejected so coordinate click reaches the target pid fallback', async () => {
-  const provider = new FakeProvider();
-  provider.hitTest = async (target, point, preferredActions, perform) => {
-    provider.hitTests = provider.hitTests || [];
-    provider.hitTests.push({ target, point, preferredActions, perform });
-    return {
-      ok: true, found: true, performed: perform, verified: perform,
-      action: 'press', nativeAction: 'AXPress', role: 'Group', name: '',
-      bounds: { ...target.bounds }, diagnostics: { method: 'fake whole-window AXGroup' },
-    };
-  };
-  provider.pidEvent = async (target, operation, point, parameters, perform) => {
-    provider.pidEvents = provider.pidEvents || [];
-    provider.pidEvents.push({ target, operation, point, parameters, perform });
-    return {
-      ok: true, found: true, performed: perform, verified: perform,
-      realCursorMoved: false, foregroundAffected: false,
-      diagnostics: { method: 'CGEventPostToPid' },
-    };
-  };
-  const manager = new AppUseManager({ provider, ownPid: 999 });
-  const listed = await manager.handle('list_targets', {});
-  const connected = await manager.handle('connect', {
-    target_id: listed.targets.find((target) => target.app_name === 'TextEdit').target_id,
-    parameters: {},
-  });
-  const result = await manager.handle('call', {
-    session_id: connected.session_id,
-    capability: 'virtual_click_at',
-    parameters: { x: 400, y: 300 },
-  });
-  assert.equal(result.status, 'uncertain');
-  assert.equal(result.executed_action.input_mode, 'background_pid_event');
-  assert.equal(result.diagnostics.ax_candidate_rejected.reason, 'degenerate_window_container');
-  assert.equal(provider.hitTests.length, 1);
-  assert.equal(provider.hitTests[0].perform, false);
-  assert.equal(provider.pidEvents.length, 1);
-  assert.equal(provider.pidEvents[0].operation, 'pid_click_at');
-});
-
 test('real pointer and focus-dependent input require explicit foreground authorization', async () => {
   const { manager, provider, connected } = await connectedManager();
   const result = await manager.handle('call', {
@@ -796,7 +685,7 @@ test('focus failure preserves Windows diagnostics and remediation', async () => 
 });
 
 test('focus policy never allows verified background text value writes', async () => {
-  const { manager, connected } = await connectedManager({ focusPolicy: 'never' });
+  const { manager, connected } = await connectedManager({ focusPolicy: 'never', mode: 'semantic' });
   const snapshot = await manager.handle('call', {
     session_id: connected.session_id, capability: 'snapshot', parameters: {},
   });
@@ -812,7 +701,7 @@ test('focus policy never allows verified background text value writes', async ()
 });
 
 test('when_required does not focus for semantic text writes', async () => {
-  const { manager, provider, connected } = await connectedManager();
+  const { manager, provider, connected } = await connectedManager({ mode: 'semantic' });
   const snapshot = await manager.handle('call', {
     session_id: connected.session_id, capability: 'snapshot', parameters: {},
   });
@@ -878,7 +767,7 @@ test('excludes every Cyrene instance by application identity and name', async ()
 });
 
 test('provider unverifiable actions are never reported as success', async () => {
-  const { manager, provider, connected } = await connectedManager();
+  const { manager, provider, connected } = await connectedManager({ mode: 'semantic' });
   const snapshot = await manager.handle('call', {
     session_id: connected.session_id, capability: 'snapshot', parameters: {},
   });
@@ -1004,20 +893,8 @@ test('coordinate action with no visual change is uncertain', async () => {
   assert.equal(result.visual_verification.changed, false);
 });
 
-test('selection and atomic key sequence each use one temporary focus interval', async () => {
+test('atomic key sequence uses one temporary focus interval', async () => {
   const { manager, provider, connected } = await connectedManager();
-  const snapshot = await manager.handle('call', {
-    session_id: connected.session_id, capability: 'snapshot', parameters: {},
-  });
-  const body = snapshot.nodes.find((node) => node.name === 'Body');
-  const selection = await manager.handle('call', {
-    session_id: connected.session_id,
-    capability: 'set_selection_range',
-    parameters: { ref: body.ref, start: 0, end: 2, allow_foreground_input: true },
-  });
-  assert.equal(selection.status, 'success');
-  assert.deepEqual(provider.focused, ['200', '100']);
-  provider.focused.length = 0;
   const sequence = await manager.handle('call', {
     session_id: connected.session_id,
     capability: 'key_sequence',
@@ -1028,7 +905,7 @@ test('selection and atomic key sequence each use one temporary focus interval', 
 });
 
 test('wait observes a later semantic value', async () => {
-  const { manager, provider, connected } = await connectedManager();
+  const { manager, provider, connected } = await connectedManager({ mode: 'semantic' });
   const snapshot = await manager.handle('call', {
     session_id: connected.session_id, capability: 'snapshot', parameters: {},
   });
@@ -1049,6 +926,21 @@ test('closed target invalidates the session', async () => {
   const result = await manager.handle('status', { session_id: connected.session_id });
   assert.equal(result.status, 'error');
   assert.equal(result.type, 'stale_session');
+});
+
+test('one transient target enumeration miss does not invalidate the session', async () => {
+  const { manager, provider, connected } = await connectedManager();
+  manager.targetRetryDelaysMs = [0, 0];
+  const originalListTargets = provider.listTargets.bind(provider);
+  let calls = 0;
+  provider.listTargets = async (exclusions) => {
+    calls += 1;
+    if (calls === 1) return [];
+    return originalListTargets(exclusions);
+  };
+  const result = await manager.handle('status', { session_id: connected.session_id });
+  assert.equal(result.status, 'success');
+  assert.ok(calls >= 2);
 });
 
 test('quick chat origin captures the external foreground target', async () => {

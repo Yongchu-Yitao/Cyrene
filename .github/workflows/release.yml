@@ -333,6 +333,17 @@ jobs:
           pip install mcp httpx-sse pydantic pydantic-settings jsonschema referencing rpds-py attrs sse-starlette pyjwt
           python build/check_windows_dependencies.py
 
+      - name: Install native ARM64 VC runtime
+        shell: powershell
+        run: |
+          $installer = Join-Path $env:RUNNER_TEMP "vc_redist.arm64.exe"
+          Invoke-WebRequest -Uri "https://aka.ms/vs/17/release/vc_redist.arm64.exe" -OutFile $installer
+          $process = Start-Process -FilePath $installer -ArgumentList @("/install", "/quiet", "/norestart") -Wait -PassThru
+          if ($process.ExitCode -notin @(0, 1638, 3010)) {
+            throw "ARM64 VC runtime installer exited with code $($process.ExitCode)"
+          }
+          python -c "from pathlib import Path; import os, struct; p=Path(os.environ['SystemRoot'])/'System32'/'vcruntime140_1.dll'; f=p.open('rb'); f.seek(0x3c); o=struct.unpack('<I',f.read(4))[0]; f.seek(o+4); m=struct.unpack('<H',f.read(2))[0]; f.close(); assert m in {0xaa64,0xa641}, hex(m); print(f'arm64-vc-runtime-ok: {p}')"
+
       - name: Install Electron deps
         run: cd electron && npm ci --prefer-offline --no-audit --no-fund
 

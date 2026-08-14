@@ -1393,11 +1393,18 @@ async def run_steward_agent(conversation_text: str, soulmd_content: str, bot: An
 Supported entity types: task, project, decision, knowledge, relationship, event, resource, idea, problem, habit.
 
 ### Part 1: SOUL.md updates
-Read the recent conversation and current SOUL.md, then output:
-- APPEND: what new information to add to SOUL.md
-- ERASE: what old information to remove
-- MERGE: what to consolidate
-- Or SKIP if nothing important
+Read the recent conversation and current SOUL.md. Every SOUL.md modification
+MUST use exactly one of these line formats (the literal `` :: `` separator is
+required):
+- APPEND SECTION_NAME :: content to append
+- ERASE SECTION_NAME :: exact substring to remove
+- MERGE SECTION_NAME :: old_text|||new_text
+- SKIP
+
+SECTION_NAME must be an existing SOUL.md heading name such as
+MEMORY:HIGH_IMPACT, PATTERN:USER, RELATIONSHIP:USER, or SELF:BELIEFS. Never use
+``APPEND: ...``, ``APPEND SECTION: content``, parentheses, or an em dash as a
+separator.
 
 ### Part 2: Entity extraction
 From the conversation, extract entities the user mentioned. Only extract when you are confident the user is talking about something real — not hypotheticals, jokes, or casual remarks.
@@ -1433,5 +1440,7 @@ SOUL.md:
 Recent conversation:
 {conversation_text}
 
-Output only the modifications needed, one per line, prefixed with APPEND/ERASE/MERGE/SKIP/ENTITY."""
+Output only the modifications needed, one per line. SOUL.md lines must follow
+the exact ``COMMAND SECTION_NAME :: content`` grammar above; entity lines must
+follow the exact ENTITY grammar."""
     return await _run_execution_agent(steward_prompt, bot, chat_id, db_path)

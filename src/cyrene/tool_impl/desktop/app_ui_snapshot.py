@@ -4,12 +4,13 @@ from typing import Any
 TOOL_NAME = "AppUISnapshot"
 TOOL_DEF = {"type": "function", "function": {
     "name": TOOL_NAME,
-    "description": "Discover targets, connect a semantic-only application session, read or reprobe its paginated accessibility tree, report status, or disconnect. Never captures pixels or changes focus.",
+    "description": "Discover targets, connect a semantic-only application session, read or reprobe the paginated current accessibility layer, report status, or disconnect. Use AppUIInspect to descend from a returned node. Never captures pixels or changes focus.",
     "parameters": {"type": "object", "properties": {
         "operation": {"type": "string", "enum": ["list_targets", "connect", "snapshot", "reprobe", "status", "disconnect"]},
         "target_id": {"type": "string"}, "selection": {"type": "string", "enum": ["", "foreground", "quick_chat_origin"]},
-        "session_id": {"type": "string"}, "max_nodes": {"type": "integer", "minimum": 1, "maximum": 200},
-        "max_depth": {"type": "integer", "minimum": 1, "maximum": 16},
+        "session_id": {"type": "string", "description": "Required for snapshot, reprobe, status, and disconnect. Reuse the exact session_id returned by connect."},
+        "max_nodes": {"type": "integer", "minimum": 1, "maximum": 500},
+        "max_depth": {"type": "integer", "minimum": 1, "maximum": 24},
         "page_size": {"type": "integer", "minimum": 1, "maximum": 200}, "cursor": {"type": "string"},
     }, "required": ["operation"], "additionalProperties": False},
 }}
@@ -20,4 +21,3 @@ async def handler(args: dict[str, Any], _bot: Any, _chat_id: int, _db_path: str,
     return format_result(await execute_snapshot(dict(args or {})))
 
 __all__ = ["TOOL_NAME", "TOOL_DEF", "TOOL_METADATA", "handler"]
-

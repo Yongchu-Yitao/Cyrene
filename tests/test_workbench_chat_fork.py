@@ -657,6 +657,78 @@ def test_non_streaming_send_is_owned_by_chat_run_manager(
     assert calls == [{"chat_id": "chat_owned", "stream": False}]
 
 
+def test_root_chat_runs_structured_and_holistic_memory_learning(
+    client, fork_env, monkeypatch
+):
+    from cyrene import agent
+    from cyrene.workbench import memory as structured_memory
+    from cyrene.workbench import project_memory_prompt as memory_prompt
+
+    _write_chat(fork_env, "chat_memory", [])
+    structured_calls = []
+    holistic_calls = []
+
+    async def successful_run_agent(**_kwargs):
+        return "I will remember this preference."
+
+    monkeypatch.setattr(agent, "run_agent", successful_run_agent)
+    monkeypatch.setattr(
+        structured_memory,
+        "build_verified_tool_evidence",
+        lambda _messages, _prior_ids: "verified evidence",
+    )
+    monkeypatch.setattr(
+        fork_env["routes_mod"],
+        "schedule_capture",
+        lambda *args, **kwargs: structured_calls.append((args, kwargs)),
+    )
+    monkeypatch.setattr(
+        memory_prompt,
+        "completed_context_snapshot",
+        lambda chat_id, project_id, **kwargs: {
+            "chatId": chat_id,
+            "projectId": project_id,
+            "messages": [{"role": "user", "content": "Remember my preference"}],
+            **kwargs,
+        },
+    )
+    monkeypatch.setattr(
+        memory_prompt,
+        "context_auto_trigger_threshold",
+        lambda *_args, **_kwargs: 20,
+    )
+    monkeypatch.setattr(
+        memory_prompt,
+        "schedule_learning",
+        lambda *args, **kwargs: holistic_calls.append((args, kwargs)),
+    )
+
+    response = client.post(
+        "/api/workbench/chats/chat_memory/messages",
+        json={"message": "Remember my preference"},
+    )
+
+    assert response.status_code == 200
+    assert structured_calls == [(
+        (
+            "project_1",
+            "Remember my preference",
+            "I will remember this preference.",
+        ),
+        {
+            "verified_evidence": "verified evidence",
+            "session_id": "chat_memory",
+            "round_id": "",
+        },
+    )]
+    assert len(holistic_calls) == 1
+    assert holistic_calls[0][0][0] == "project_1"
+    assert holistic_calls[0][1] == {
+        "source": "conversation_auto",
+        "reason": "context_20_percent",
+    }
+
+
 def test_existing_run_rejects_new_send_and_has_explicit_reconnect_endpoint(
     client, fork_env, monkeypatch
 ):

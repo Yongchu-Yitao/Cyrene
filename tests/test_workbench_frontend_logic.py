@@ -6285,6 +6285,7 @@ def test_tool_i18n_fallbacks_do_not_leak_internal_keys_after_classic_removal():
   planProgress: window.WorkbenchI18n.toolName("update_plan_progress", "zh"),
   browserSubmit: window.WorkbenchI18n.toolName("browser.user.submit", "zh"),
   browserNavigateEn: window.WorkbenchI18n.toolName("browser.navigate", "en"),
+  appSnapshot: window.WorkbenchI18n.toolName("AppUISnapshot", "zh"),
   showSidebar: window.WorkbenchI18n.t("workbenchChat.showSidebar"),
   hideSidebar: window.WorkbenchI18n.t("workbenchChat.hideSidebar"),
   download: window.WorkbenchI18n.t("workbenchChat.download")
@@ -6298,6 +6299,7 @@ def test_tool_i18n_fallbacks_do_not_leak_internal_keys_after_classic_removal():
         "planProgress": "更新计划进度",
         "browserSubmit": "用户提交表单",
         "browserNavigateEn": "Navigate",
+        "appSnapshot": "快照应用界面",
         "showSidebar": "显示侧边栏",
         "hideSidebar": "隐藏侧边栏",
         "download": "下载",
@@ -6316,6 +6318,8 @@ def test_workbench_tool_trace_preview_localizes_protocol_values_only():
 [
   wbcToolPreviewText("discover"),
   wbcToolPreviewText("invoke, memory.project.search"),
+  wbcToolPreviewText("list_targets"),
+  wbcToolPreviewText("call, visual_describe"),
   wbcToolPreviewText("待办 任务 task pending")
 ]
 """
@@ -6324,6 +6328,8 @@ def test_workbench_tool_trace_preview_localizes_protocol_values_only():
     assert result == [
         "发现能力",
         "调用能力, 搜索项目记忆",
+        "发现应用",
+        "执行应用操作, 查看应用截图",
         "待办 任务 task pending",
     ]
 

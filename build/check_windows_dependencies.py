@@ -33,7 +33,7 @@ def main() -> int:
         if line != "No broken requirements found."
         and not any(pattern.fullmatch(line) for pattern in _ALLOWED_WINDOWS_CONFLICTS)
         and not any(
-            line.startswith(f"cyrene ") and f" requires {package}, which is not installed." in line
+            line.startswith("cyrene ") and f" requires {package}, which is not installed." in line
             for package in expected_missing_for_native_woa
         )
     ]

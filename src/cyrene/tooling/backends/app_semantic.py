@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import json
 import secrets
+import sys
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -59,6 +60,17 @@ def _error(kind: str, message: str, **extra: Any) -> dict[str, Any]:
     return {"status": "error", "type": kind, "message": message, **extra}
 
 
+def _visual_handoff(result: dict[str, Any], target: dict[str, Any] | None = None) -> dict[str, Any]:
+    platform = str((target or result.get("target") or {}).get("platform") or sys.platform)
+    if platform.startswith("linux"):
+        return {**result, "next_valid_actions": ["disconnect"]}
+    return {
+        **result,
+        "alternate_scheme": {"tool": "app_use", "operation": "list_targets", "mode": "visual"},
+        "next_valid_actions": ["disconnect", "switch:visual"],
+    }
+
+
 def _expire_sessions() -> None:
     now = time.monotonic()
     for session_id, session in list(_SESSIONS.items()):
@@ -111,9 +123,12 @@ def _page_snapshot(session: SemanticSession, snapshot_id: str, start: int, page_
     next_cursor = ""
     if start + page_size < len(nodes):
         next_cursor = json.dumps({"snapshot_id": snapshot_id, "offset": start + page_size}).encode().hex()
+    coverage = dict(record["raw"].get("semantic_coverage") or {})
     return {
         "status": "success", "session_id": session.session_id, "snapshot_id": snapshot_id,
         "revision": record["revision"], "semantic_profile": session.profile, "target": session.target,
+        "semantic_coverage": coverage,
+        "visual_recommended": coverage.get("visual_recommended") is True,
         "nodes": page, "total_nodes": len(nodes), "cursor": next_cursor or None,
         "truncated": bool(next_cursor) or record["raw"].get("truncated") is True,
     }
@@ -144,6 +159,8 @@ def _public_snapshot(session: SemanticSession, raw: dict[str, Any], *, page_size
             "description": str(raw_node.get("description") or ""),
             "value": raw_node.get("value"),
             "enabled": raw_node.get("enabled", True),
+            "child_count": max(0, int(raw_node.get("childCount") or 0)),
+            "expandable": int(raw_node.get("childCount") or 0) > 0,
             "actions": [],
         }
         native_actions = list(raw_node.get("actions") or [])
@@ -187,17 +204,30 @@ async def _take_snapshot(session: SemanticSession, args: dict[str, Any]) -> dict
         "session_id": session.session_id,
         "capability": "snapshot",
         "parameters": {
-            "max_nodes": max(1, min(int(args.get("max_nodes") or 200), 200)),
-            "max_depth": max(1, min(int(args.get("max_depth") or 12), 16)),
+            "max_nodes": max(1, min(int(args.get("max_nodes") or 200), 500)),
+            "max_depth": max(1, min(int(args.get("max_depth") or 12), 24)),
         },
     })
     if raw.get("status") != "success":
+        if raw.get("type") in {"provider_error", "unsupported_capability", "permission_required"}:
+            return _visual_handoff(raw, session.target)
         return raw
-    return _public_snapshot(session, raw, page_size=int(args.get("page_size") or 120))
+    result = _public_snapshot(session, raw, page_size=int(args.get("page_size") or 120))
+    if result.get("semantic_profile", {}).get("status") in {"unavailable", "provider_error", "permission_required"}:
+        return _visual_handoff(result, session.target)
+    if result.get("visual_recommended") is True:
+        return _visual_handoff(result, session.target)
+    return result
 
 
 async def execute_snapshot(args: dict[str, Any]) -> dict[str, Any]:
     operation = str(args.get("operation") or "snapshot")
+    valid_operations = {"list_targets", "connect", "snapshot", "reprobe", "status", "disconnect"}
+    if operation not in valid_operations:
+        return _error(
+            "invalid_arguments",
+            "operation must be list_targets, connect, snapshot, reprobe, status, or disconnect",
+        )
     if operation == "list_targets":
         result = await electron_app_rpc("list_targets", {})
         if isinstance(result.get("targets"), list):
@@ -216,8 +246,20 @@ async def execute_snapshot(args: dict[str, Any]) -> dict[str, Any]:
                 profile=dict(result.get("semantic_profile") or {}),
             )
             result = {**result, "target": _SESSIONS[session_id].target}
+            if _SESSIONS[session_id].profile.get("status") in {"unavailable", "provider_error", "permission_required"}:
+                result = _visual_handoff(result, _SESSIONS[session_id].target)
+        elif result.get("type") in {"provider_error", "unsupported_mode", "permission_required"}:
+            result = _visual_handoff(result)
         return result
-    session = _session(args.get("session_id"))
+    session_id = str(args.get("session_id") or "").strip()
+    if not session_id:
+        return _error(
+            "invalid_arguments",
+            f"session_id is required for AppUISnapshot operation={operation}.",
+            missing_arguments=["session_id"],
+            next_valid_actions=["retry_with_session_id"],
+        )
+    session = _session(session_id)
     if not session:
         return _error("stale_session", "The semantic App Use session expired; reconnect before continuing.")
     if operation in {"snapshot", "reprobe"}:
@@ -228,7 +270,7 @@ async def execute_snapshot(args: dict[str, Any]) -> dict[str, Any]:
     if operation == "disconnect":
         _SESSIONS.pop(session.session_id, None)
         return await electron_app_rpc("disconnect", {"session_id": session.session_id})
-    return _error("invalid_arguments", "operation must be list_targets, connect, snapshot, reprobe, status, or disconnect")
+    raise AssertionError(f"Unhandled AppUISnapshot operation: {operation}")
 
 
 def _lease(args: dict[str, Any], family: str) -> tuple[SemanticSession | None, dict[str, Any] | None, dict[str, Any] | None]:
@@ -345,6 +387,10 @@ async def execute_action(family: str, args: dict[str, Any]) -> dict[str, Any]:
     }
     if result.get("status") == "success" and not normalized["effect_verified"]:
         normalized["status"] = "uncertain"
+    if normalized.get("status") == "error" and normalized.get("type") in {
+        "provider_error", "unsupported_capability", "unsupported_action", "permission_required",
+    } and not normalized.get("action_may_have_run"):
+        normalized = _visual_handoff(normalized, session.target)
     session.idempotency[key] = {"fingerprint": fingerprint, "result": normalized}
     _persist_idempotency(key, fingerprint, normalized)
     _audit({
@@ -367,11 +413,20 @@ async def execute_inspect(args: dict[str, Any]) -> dict[str, Any]:
         return _error("stale_node", "The node is not leased by this snapshot.")
     result = await electron_app_rpc("call", {
         "session_id": session.session_id, "capability": "inspect",
-        "parameters": {"ref": ref, "max_nodes": int(args.get("max_nodes") or 80), "max_depth": int(args.get("max_depth") or 5)},
+        "parameters": {
+            "ref": ref,
+            "max_nodes": max(1, min(int(args.get("max_nodes") or 200), 500)),
+            "max_depth": max(1, min(int(args.get("max_depth") or 12), 24)),
+        },
     })
     if result.get("status") != "success":
+        if result.get("type") in {"provider_error", "unsupported_capability", "permission_required"}:
+            return _visual_handoff(result, session.target)
         return result
-    return _public_snapshot(session, result, page_size=int(args.get("page_size") or 80))
+    public = _public_snapshot(session, result, page_size=int(args.get("page_size") or 80))
+    if public.get("visual_recommended") is True:
+        return _visual_handoff(public, session.target)
+    return public
 
 
 def format_result(result: dict[str, Any]) -> str:

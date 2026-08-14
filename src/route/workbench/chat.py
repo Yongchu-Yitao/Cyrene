@@ -58,6 +58,46 @@ def _track_session_title_task(task: asyncio.Task[Any]) -> None:
     task.add_done_callback(done)
 
 
+def _schedule_structured_memory_capture(
+    runtime: Any,
+    *,
+    project_id: str,
+    user_text: str,
+    agent_text: str,
+    state_messages: list[dict[str, Any]],
+    prior_message_ids: set[str],
+    session_id: str,
+) -> None:
+    """Capture one completed root-chat exchange into editable project memory.
+
+    Project-memory prompt learning is a separate, lower-frequency holistic pass.
+    This per-turn capture preserves the structured Memory page and its immediate
+    same-session injection behavior from the 0.6.x Workbench.
+    """
+    from cyrene.workbench.memory import build_verified_tool_evidence
+
+    round_id = next(
+        (
+            str(item.get("round_id") or item.get("roundId") or "").strip()
+            for item in reversed(state_messages)
+            if isinstance(item, dict)
+            and str(item.get("round_id") or item.get("roundId") or "").strip()
+        ),
+        "",
+    )
+    runtime.schedule_capture(
+        project_id,
+        user_text,
+        agent_text,
+        verified_evidence=build_verified_tool_evidence(
+            state_messages,
+            prior_message_ids,
+        ),
+        session_id=session_id,
+        round_id=round_id,
+    )
+
+
 def register_workbench_chat_routes(
     router: APIRouter, bot: Any, db_path: str
 ) -> dict[str, Any]:
@@ -2366,6 +2406,20 @@ def register_workbench_chat_routes(
         async def _finalize_async(reply_text: str) -> dict[str, Any]:
             finalized = await asyncio.to_thread(_finalize, reply_text)
             if finalized and not is_side_agent:
+                if not command and not retry:
+                    state_messages = await asyncio.to_thread(
+                        _session_state_messages, chat_id
+                    )
+                    _schedule_structured_memory_capture(
+                        R,
+                        project_id=project_id,
+                        user_text=message,
+                        agent_text=str(reply_text or ""),
+                        state_messages=state_messages,
+                        prior_message_ids=state_ids_before,
+                        session_id=chat_id,
+                    )
+
                 from cyrene.workbench.project_memory_prompt import (
                     completed_context_snapshot,
                     context_auto_trigger_threshold,
@@ -3514,6 +3568,16 @@ def register_workbench_chat_routes(
         except Exception:
             logger.exception("Failed to archive workbench conversation %s", chat_id)
         if project_id and not is_side_agent:
+            _schedule_structured_memory_capture(
+                R,
+                project_id=project_id,
+                user_text=answer_text,
+                agent_text=str(reply or ""),
+                state_messages=answer_state_messages,
+                prior_message_ids=state_ids_before_resume,
+                session_id=chat_id,
+            )
+
             from cyrene.workbench.project_memory_prompt import (
                 completed_context_snapshot,
                 context_auto_trigger_threshold,

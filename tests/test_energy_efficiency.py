@@ -109,6 +109,25 @@ def test_steward_reads_recent_workbench_session_archives(tmp_path, monkeypatch):
     assert "wbchat_old.md" not in text
 
 
+def test_steward_normalizes_soul_commands_and_excludes_entities():
+    from cyrene.runtime import scheduler
+
+    result = scheduler._steward_soul_commands(
+        "APPEND MEMORY:HIGH_IMPACT :: exact fact\n"
+        "APPEND: PATTERN:USER — legacy preference\n"
+        "MERGE RELATIONSHIP:USER: old|||new\n"
+        'ENTITY project_id="project_1" type="task" title="Ship" '
+        'confidence="0.9" content="Release it"\n'
+        "ERASE: 无\n"
+    )
+
+    assert result.splitlines() == [
+        "APPEND MEMORY:HIGH_IMPACT :: exact fact",
+        "APPEND PATTERN:USER :: legacy preference",
+        "MERGE RELATIONSHIP:USER :: old|||new",
+    ]
+
+
 async def test_steward_processes_workbench_archive_without_owner_id(
     tmp_path, monkeypatch
 ):

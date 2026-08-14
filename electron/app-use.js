@@ -3,24 +3,24 @@ const fs = require('fs');
 const path = require('path');
 const { execFile } = require('child_process');
 
-const MANIFEST_VERSION = 'app-use-semantic-v2';
+const MANIFEST_VERSION = 'app-use-schemes-v3';
 const DEFAULT_SESSION_TTL_MS = 5 * 60 * 1000;
 const MAX_SCROLL_AT_AMOUNT = 50_000;
 const AGENT_CURSOR_FADE_IN_MS = 150;
 const AGENT_CURSOR_MOVE_MS = 180;
 const AGENT_CURSOR_PRESS_MS = 100;
-const SEMANTIC_TREE_CAPABILITIES = new Set([
-  'snapshot', 'inspect', 'find', 'press', 'set_value', 'select', 'toggle', 'scroll',
-  'type_text', 'select_text', 'set_selection_range', 'wait',
-]);
 const SEMANTIC_MODE_CAPABILITIES = new Set([
   'snapshot', 'inspect', 'find', 'press', 'set_value', 'select', 'toggle', 'scroll', 'type_text',
   'semantic_double_click', 'semantic_drag', 'wait',
 ]);
+const VISUAL_MODE_CAPABILITIES = new Set([
+  'click_at', 'double_click', 'right_click', 'hover_at', 'drag', 'swipe', 'scroll_at',
+  'key_chord', 'key_sequence', 'visual_describe', 'focus_window', 'restore_previous_focus',
+]);
 
 const CAPABILITIES = Object.freeze([
   { name: 'snapshot', description: 'Read a compact semantic accessibility snapshot of the target window.', arguments: { scope_ref: 'string?', max_nodes: 'integer?', max_depth: 'integer?' }, background: 'safe' },
-  { name: 'inspect', description: 'Read detailed properties and nearby descendants for one element ref.', arguments: { ref: 'string' }, background: 'safe' },
+  { name: 'inspect', description: 'Read the next semantic layer below one element ref, traversing transparent structural wrappers. Deep Electron/Chromium trees may require max_depth 12 or more.', arguments: { ref: 'string', max_nodes: 'integer?', max_depth: 'integer?' }, background: 'safe' },
   { name: 'find', description: 'Find elements in the semantic tree by role, subrole, name, value, action, native action, automation id, class name, or state.', arguments: { role: 'string?', subrole: 'string?', name: 'string?', contains: 'string?', action: 'string?', native_action: 'string?', automation_id: 'string?', class_name: 'string?', enabled: 'boolean?', max_results: 'integer?' }, background: 'safe' },
   { name: 'press', description: 'Invoke the native default action of a button, menu item, link, or similar control.', arguments: { ref: 'string' }, background: 'safe_when_supported' },
   { name: 'set_value', description: 'Set the value of an editable control through the accessibility API.', arguments: { ref: 'string', value: 'string' }, background: 'safe_when_supported' },
@@ -30,10 +30,7 @@ const CAPABILITIES = Object.freeze([
   { name: 'type_text', description: 'Write text to a semantically editable element and verify its value. This works in the background only when the accessibility provider exposes a writable value.', arguments: { ref: 'string', text: 'string', replace: 'boolean?' }, background: 'safe_when_supported' },
   { name: 'semantic_double_click', description: 'Invoke a provider-declared semantic double-click action without coordinates or focus.', arguments: { ref: 'string' }, background: 'safe_when_supported' },
   { name: 'semantic_drag', description: 'Invoke a provider-declared semantic move, reorder, resize, or drag action without coordinates or focus.', arguments: { ref: 'string' }, background: 'safe_when_supported' },
-  { name: 'select_text', description: 'Select an exact text occurrence using focus-dependent input; allow_foreground_input=true is required.', arguments: { ref: 'string', text: 'string', occurrence: 'integer?', case_sensitive: 'boolean?', allow_foreground_input: 'boolean' }, background: 'requires_focus' },
-  { name: 'set_selection_range', description: 'Set a selected character range using focus-dependent input; allow_foreground_input=true is required.', arguments: { ref: 'string', start: 'integer', end: 'integer', allow_foreground_input: 'boolean' }, background: 'requires_focus' },
   { name: 'click_at', description: 'Primary App Use click tool. Click the latest calibrated point with the real OS pointer. Coordinates are window-relative by default and allow_foreground_input=true is required.', arguments: { x: 'number', y: 'number', coordinate_space: 'window|screen?', allow_foreground_input: 'boolean' }, background: 'requires_focus' },
-  { name: 'virtual_click_at', description: 'Use a coordinate to activate a background control while showing Cyrene\'s virtual pointer. It tries AX/UIA first; on macOS it can fall back to CGEventPostToPid, which routes the click only to the target process without moving the real cursor or changing foreground.', arguments: { x: 'number', y: 'number', coordinate_space: 'window|screen?', preferred_actions: 'string[]?', pointer_duration_ms: 'integer?', verify_effect: 'boolean?', pid_event_fallback: 'boolean?' }, background: 'safe_when_supported' },
   { name: 'double_click', description: 'Double-click with the real OS pointer; allow_foreground_input=true is required.', arguments: { x: 'number', y: 'number', coordinate_space: 'window|screen?', interval_ms: 'integer?', allow_foreground_input: 'boolean' }, background: 'requires_focus' },
   { name: 'right_click', description: 'Right-click with the real OS pointer; allow_foreground_input=true is required.', arguments: { x: 'number', y: 'number', coordinate_space: 'window|screen?', allow_foreground_input: 'boolean' }, background: 'requires_focus' },
   { name: 'hover_at', description: 'Move the real OS pointer; allow_foreground_input=true is required. This is unavailable in a background-only session.', arguments: { x: 'number', y: 'number', coordinate_space: 'window|screen?', duration_ms: 'integer?', allow_foreground_input: 'boolean' }, background: 'requires_focus' },
@@ -48,13 +45,6 @@ const CAPABILITIES = Object.freeze([
   { name: 'restore_previous_focus', description: 'Restore the window that was foreground before this App Use session focused its target.', arguments: {}, background: 'changes_focus' },
 ]);
 
-const DARWIN_MENU_CAPABILITY = Object.freeze({
-  name: 'menu_command',
-  description: 'Invoke a macOS application menu item through AXPress without sending a keyboard event or moving the real cursor. Match by menu item name, shortcut, or both.',
-  arguments: { name: 'string?', shortcut: 'string[]?', verify_effect: 'boolean?' },
-  background: 'safe_when_supported',
-});
-
 const DARWIN_PID_TYPE_CAPABILITY = Object.freeze({
   name: 'virtual_type_at',
   description: 'Best-effort delivery of a coordinate click and Unicode text directly to a target macOS process with CGEventPostToPid. It does not move the real cursor, use the foreground keyboard, or focus the application. Event delivery never proves text insertion; use visual_type for exact verification.',
@@ -62,25 +52,14 @@ const DARWIN_PID_TYPE_CAPABILITY = Object.freeze({
   background: 'best_effort_without_foreground',
 });
 
-const SAFARI_CAPABILITIES = Object.freeze([
-  { name: 'browser_state', description: 'Read the current Safari tab URL and title without focusing its window.', arguments: {}, background: 'safe' },
-  { name: 'navigate', description: 'Navigate the current Safari tab to a URL and verify the requested URL without focusing Safari.', arguments: { url: 'string' }, background: 'safe' },
-  { name: 'reload', description: 'Reload the current Safari tab without focusing Safari.', arguments: {}, background: 'safe' },
-]);
-
-function capabilitiesForTarget(target, { mode = 'hybrid' } = {}) {
+function capabilitiesForTarget(target, { mode = 'visual' } = {}) {
   const platform = String(target.platform || process.platform);
-  if (platform === 'linux' || mode === 'semantic') {
+  if (mode === 'semantic') {
     return CAPABILITIES.filter((item) => SEMANTIC_MODE_CAPABILITIES.has(item.name));
   }
-  if (mode === 'visual') {
-    return CAPABILITIES.filter((item) => !SEMANTIC_TREE_CAPABILITIES.has(item.name));
-  }
-  const platformCapabilities = platform === 'darwin'
-    ? [DARWIN_MENU_CAPABILITY, DARWIN_PID_TYPE_CAPABILITY] : [];
-  return String(target.applicationId || '') === 'com.apple.Safari'
-    ? [...SAFARI_CAPABILITIES, ...platformCapabilities, ...CAPABILITIES]
-    : [...platformCapabilities, ...CAPABILITIES];
+  if (mode !== 'visual' || platform === 'linux') return [];
+  const visual = CAPABILITIES.filter((item) => VISUAL_MODE_CAPABILITIES.has(item.name));
+  return platform === 'darwin' ? [DARWIN_PID_TYPE_CAPABILITY, ...visual] : visual;
 }
 
 class AppUseError extends Error {
@@ -113,11 +92,33 @@ function clampInteger(value, fallback, min, max) {
   return Math.max(min, Math.min(max, parsed));
 }
 
+const GENERIC_SEMANTIC_LABELS = new Set([
+  'application', 'app', 'window', 'group', 'pane', 'panel', 'container', 'unknown',
+  'button', 'text', 'image', 'list', 'row', 'cell', 'menu', 'toolbar', 'web area',
+  '应用', '窗口', '组', '窗格', '面板', '容器', '未知', '按钮', '文本', '图像', '列表', '行', '单元格', '菜单', '工具栏',
+]);
+
+function normalizedSemanticText(value) {
+  return String(value || '').trim().toLocaleLowerCase().replace(/[\s_\-:]+/g, ' ');
+}
+
+function hasMeaningfulSemanticLabel(node) {
+  const role = normalizedSemanticText(node.role).replace(/^ax/, '');
+  const candidates = [node.name, node.description, node.help]
+    .map(normalizedSemanticText)
+    .filter(Boolean);
+  return candidates.some((label) => (
+    label !== role
+    && label !== `ax${role}`
+    && !GENERIC_SEMANTIC_LABELS.has(label)
+  ));
+}
+
 function validateCapabilityParameters(capability, parameters) {
   if (!parameters || typeof parameters !== 'object' || Array.isArray(parameters)) {
     throw new AppUseError('invalid_arguments', `${capability} parameters must be an object.`);
   }
-  const descriptor = CAPABILITIES.concat(SAFARI_CAPABILITIES, [DARWIN_MENU_CAPABILITY, DARWIN_PID_TYPE_CAPABILITY]).find((item) => item.name === capability);
+  const descriptor = CAPABILITIES.concat([DARWIN_PID_TYPE_CAPABILITY]).find((item) => item.name === capability);
   if (!descriptor) return;
   const accepted = new Set(Object.keys(descriptor.arguments || {}));
   if (descriptor.background === 'requires_focus') accepted.add('restore_focus');
@@ -260,10 +261,10 @@ function resolveDarwinHitTestHelperPath({
   if (helperPath) return helperPath;
   throw new AppUseError(
     'provider_unavailable',
-    'The macOS background coordinate hit-test helper is missing from this Cyrene installation.',
+    'The native macOS AX App Use helper is missing from this Cyrene installation.',
     {
       retryable: false,
-      remediation: 'Rebuild or reinstall Cyrene with the native App Use hit-test helper. Do not substitute a real OS pointer event.',
+      remediation: 'Rebuild or reinstall Cyrene with the native AX App Use helper. Do not substitute shell automation or a real OS pointer event.',
       expected_paths: candidates,
     },
   );
@@ -295,10 +296,17 @@ class CommandPlatformProvider {
     let result;
     try {
       if (this.platform === 'darwin') {
-        const scriptPath = resolveProviderScriptPath(this);
-        result = await runCommand('osascript', [
-          '-l', 'JavaScript', scriptPath, JSON.stringify(request),
-        ], { timeout });
+        const nativeSemanticOperation = ['snapshot', 'inspect'].includes(operation)
+          || (operation === 'perform' && SEMANTIC_MODE_CAPABILITIES.has(String(payload.capability || '')));
+        if (nativeSemanticOperation) {
+          const helperPath = resolveDarwinHitTestHelperPath(this);
+          result = await runCommand(helperPath, [JSON.stringify(request)], { timeout });
+        } else {
+          const scriptPath = resolveProviderScriptPath(this);
+          result = await runCommand('osascript', [
+            '-l', 'JavaScript', scriptPath, JSON.stringify(request),
+          ], { timeout });
+        }
       } else if (this.platform === 'win32') {
         const scriptPath = resolveProviderScriptPath(this);
         const encoded = Buffer.from(JSON.stringify(request), 'utf8').toString('base64');
@@ -317,7 +325,7 @@ class CommandPlatformProvider {
           `The target application's accessibility tree exceeded the ${timeout} ms snapshot budget. This does not imply that the window must be foreground or that all accessibility actions are unavailable.`,
           {
             retryable: true,
-            remediation: 'Use direct coordinate virtual_click_at or retry with a smaller max_nodes/max_depth scope. Do not focus the window or substitute a real OS pointer event.',
+            remediation: 'Retry once with a smaller max_nodes/max_depth scope, then switch explicitly to the visual scheme if the semantic provider remains unavailable.',
           },
         );
       }
@@ -351,54 +359,6 @@ class CommandPlatformProvider {
     const providerOptions = { ...options };
     delete providerOptions.timeoutMs;
     return this.request('snapshot', { target, options: providerOptions }, timeout);
-  }
-
-  async hitTest(target, point, preferredActions = [], perform = false) {
-    try {
-      const payload = { target, point, preferredActions, perform: perform === true };
-      if (this.platform === 'darwin') {
-        const helperPath = resolveDarwinHitTestHelperPath(this);
-        const result = await runCommand(helperPath, [JSON.stringify(payload)], { timeout: 5000 });
-        if (!result || result.ok === false) {
-          throw new AppUseError(
-            String((result && result.errorType) || 'provider_error'),
-            String((result && result.error) || 'macOS coordinate hit-test failed.'),
-          );
-        }
-        return result;
-      }
-      return await this.request('hit_test', payload, 5000);
-    } catch (error) {
-      if (error instanceof AppUseError && error.code === 'timeout') {
-        throw new AppUseError(
-          'accessibility_hit_test_timeout',
-          'The target application did not answer the coordinate accessibility hit-test within 5000 ms.',
-          {
-            retryable: true,
-            remediation: 'Retry once with a fresh target connection. Do not focus the window or substitute a real OS pointer event.',
-          },
-        );
-      }
-      throw error;
-    }
-  }
-
-  async menuCommand(target, parameters = {}, perform = false) {
-    if (this.platform !== 'darwin') {
-      throw new AppUseError('unsupported_platform', 'Background menu commands are currently available only on macOS.');
-    }
-    const helperPath = resolveDarwinHitTestHelperPath(this);
-    const result = await runCommand(helperPath, [JSON.stringify({
-      operation: 'menu_command', target, name: parameters.name || '',
-      shortcut: Array.isArray(parameters.shortcut) ? parameters.shortcut : [], perform: perform === true,
-    })], { timeout: 5000 });
-    if (!result || result.ok === false) {
-      throw new AppUseError(
-        String((result && result.errorType) || 'provider_error'),
-        String((result && result.error) || 'macOS background menu command failed.'),
-      );
-    }
-    return result;
   }
 
   async enableAccessibility(target) {
@@ -454,6 +414,7 @@ class AppUseManager {
     focusHost = null,
     sessionTtlMs = DEFAULT_SESSION_TTL_MS,
     pollIntervalMs = 1500,
+    targetRetryDelaysMs = [75, 150],
   } = {}) {
     this.provider = provider;
     this.ownPid = ownPid;
@@ -466,6 +427,9 @@ class AppUseManager {
     this.focusHost = focusHost;
     this.sessionTtlMs = sessionTtlMs;
     this.pollIntervalMs = pollIntervalMs;
+    this.targetRetryDelaysMs = Array.isArray(targetRetryDelaysMs)
+      ? targetRetryDelaysMs.map((value) => Math.max(0, Number(value) || 0))
+      : [75, 150];
     this.targets = new Map();
     this.sessions = new Map();
     this.lastExternalTargetId = '';
@@ -579,12 +543,28 @@ class AppUseManager {
     return target;
   }
 
+  async _selectTargetWithRetry(targetId, parameters = {}) {
+    let lastError = null;
+    for (let attempt = 0; attempt <= this.targetRetryDelaysMs.length; attempt += 1) {
+      await this.refreshTargets();
+      try {
+        return this._selectTarget(targetId, parameters);
+      } catch (error) {
+        if (!(error instanceof AppUseError) || error.code !== 'target_not_found') throw error;
+        lastError = error;
+      }
+      if (attempt < this.targetRetryDelaysMs.length) {
+        await new Promise((resolve) => setTimeout(resolve, this.targetRetryDelaysMs[attempt]));
+      }
+    }
+    throw lastError;
+  }
+
   async connect(targetId, parameters = {}) {
-    await this.refreshTargets();
-    const target = this._selectTarget(targetId, parameters);
-    const requestedMode = String(parameters.mode || 'hybrid').toLowerCase();
-    if (!['hybrid', 'visual', 'semantic'].includes(requestedMode)) {
-      throw new AppUseError('invalid_arguments', 'mode must be hybrid, visual, or semantic.');
+    const target = await this._selectTargetWithRetry(targetId, parameters);
+    const requestedMode = String(parameters.mode || 'visual').toLowerCase();
+    if (!['visual', 'semantic'].includes(requestedMode)) {
+      throw new AppUseError('invalid_arguments', 'mode must be visual or semantic.');
     }
     const platform = String(target.platform || process.platform);
     if (platform === 'linux' && requestedMode === 'visual') {
@@ -627,31 +607,29 @@ class AppUseManager {
       semanticProbeStartedAt: Date.now(),
     };
     this.sessions.set(sessionId, session);
-    let semanticProfile = {
-      status: mode === 'visual' ? 'unavailable' : 'initializing',
-      reason: 'semantic_probe_not_completed',
-      probe_timeout_ms: 5000,
-    };
-    try {
-      if (mode === 'visual') throw new AppUseError('semantic_disabled', 'Semantic probing is disabled for visual mode.');
-      if (accessibilityActivation && accessibilityActivation.ok === false && accessibilityActivation.errorType === 'permission_required') {
-        throw new AppUseError('permission_required', accessibilityActivation.error || 'Accessibility permission is required.');
-      }
-      const probe = await this._snapshot(session, {
-        max_nodes: 80,
-        max_depth: 10,
-        _probe_timeout_ms: 5000,
-      });
-      semanticProfile = probe.semantic_profile;
-    } catch (error) {
-      const reason = error && error.code ? String(error.code) : 'semantic_probe_failed';
-      semanticProfile = reason === 'accessibility_tree_timeout' || reason === 'timeout'
-        ? { status: 'initializing', reason: 'semantic_probe_timeout', probe_timeout_ms: 5000, retryable: true }
-        : reason === 'semantic_disabled'
-          ? { status: 'unavailable', reason: 'semantic_mode_disabled', retryable: false }
+    let semanticProfile = null;
+    if (mode === 'semantic') {
+      semanticProfile = {
+        status: 'initializing', reason: 'semantic_probe_not_completed', probe_timeout_ms: 5000,
+      };
+      try {
+        if (accessibilityActivation && accessibilityActivation.ok === false && accessibilityActivation.errorType === 'permission_required') {
+          throw new AppUseError('permission_required', accessibilityActivation.error || 'Accessibility permission is required.');
+        }
+        const probe = await this._snapshot(session, {
+          max_nodes: 80,
+          max_depth: 10,
+          _probe_timeout_ms: 5000,
+        });
+        semanticProfile = probe.semantic_profile;
+      } catch (error) {
+        const reason = error && error.code ? String(error.code) : 'semantic_probe_failed';
+        semanticProfile = reason === 'accessibility_tree_timeout' || reason === 'timeout'
+          ? { status: 'initializing', reason: 'semantic_probe_timeout', probe_timeout_ms: 5000, retryable: true }
           : reason === 'permission_required'
-            ? { status: 'permission_required', reason, probe_timeout_ms: 5000, retryable: true }
-            : { status: 'provider_error', reason, probe_timeout_ms: 5000, retryable: true };
+              ? { status: 'permission_required', reason, probe_timeout_ms: 5000, retryable: true }
+              : { status: 'provider_error', reason, probe_timeout_ms: 5000, retryable: true };
+      }
     }
     session.semanticProfile = semanticProfile;
     if (focusPolicy === 'always') await this._focusSessionTarget(session);
@@ -663,8 +641,8 @@ class AppUseManager {
       focus_policy: focusPolicy,
       manifest_version: MANIFEST_VERSION,
       capabilities: session.capabilities,
-      accessibility_activation: accessibilityActivation,
-      semantic_profile: semanticProfile,
+      ...(accessibilityActivation ? { accessibility_activation: accessibilityActivation } : {}),
+      ...(semanticProfile ? { semantic_profile: semanticProfile } : {}),
       next_valid_actions: mode === 'visual'
         ? ['call:visual_describe', 'status', 'disconnect']
         : ['call:snapshot', 'call:find', 'status', 'disconnect'],
@@ -675,8 +653,18 @@ class AppUseManager {
     this._expireSessions();
     const session = this.sessions.get(String(sessionId || ''));
     if (!session) throw new AppUseError('stale_session', 'The App Use session has expired or does not exist.');
-    await this.refreshTargets();
-    const current = this.targets.get(session.target.targetId);
+    let current = null;
+    for (let attempt = 0; attempt <= this.targetRetryDelaysMs.length; attempt += 1) {
+      await this.refreshTargets();
+      const candidate = this.targets.get(session.target.targetId);
+      if (candidate && candidate.identity === session.targetIdentity) {
+        current = candidate;
+        break;
+      }
+      if (attempt < this.targetRetryDelaysMs.length) {
+        await new Promise((resolve) => setTimeout(resolve, this.targetRetryDelaysMs[attempt]));
+      }
+    }
     if (!current || current.identity !== session.targetIdentity) {
       if (typeof this.hideVirtualPointer === 'function') {
         await this.hideVirtualPointer({
@@ -740,8 +728,11 @@ class AppUseManager {
     }
     session.revision += 1;
     const actionable = nodes.filter((node) => Array.isArray(node.actions) && node.actions.length > 0);
-    const labeled = actionable.filter((node) => String(node.name || node.description || '').trim());
+    const labeled = actionable.filter(hasMeaningfulSemanticLabel);
+    const genericActionable = actionable.filter((node) => !hasMeaningfulSemanticLabel(node));
+    const meaningfulTaskActionable = labeled.filter((node) => !/closebutton|minimizebutton|fullscreenbutton|zoombutton/i.test(String(node.subrole || '')));
     const ratio = actionable.length ? labeled.length / actionable.length : 1;
+    const lowUsableCoverage = ratio < 0.8 && meaningfulTaskActionable.length < 3;
     const canvasCount = nodes.filter((node) => /canvas|image|unknown/i.test(String(node.role || '')) && !(node.name || node.description)).length;
     const windowBounds = session.target.bounds || {};
     const windowArea = Number(windowBounds.width) * Number(windowBounds.height);
@@ -764,13 +755,18 @@ class AppUseManager {
         probe_attempts: session.semanticProbeAttempts,
       }
       : {
-        status: ratio < 0.6 || providerResult.truncated === true ? 'partial' : 'available',
-        reason: providerResult.truncated === true ? 'snapshot_truncated' : 'meaningful_nodes_exposed',
+        status: lowUsableCoverage || providerResult.truncated === true ? 'partial' : 'available',
+        reason: providerResult.truncated === true
+          ? 'snapshot_truncated'
+          : lowUsableCoverage ? 'generic_or_unlabeled_actions' : 'meaningful_nodes_exposed',
         retryable: true,
         probe_attempts: session.semanticProbeAttempts,
       };
     const grade = containerOnly || (canvasCount > 0 && actionable.length === 0)
-      ? 'insufficient' : ratio < 0.6 ? 'partial' : 'full';
+      ? 'insufficient' : lowUsableCoverage ? 'partial' : 'full';
+    const visualRecommended = providerResult.truncated !== true
+      && !String(session.target.platform || this.provider.platform || process.platform).startsWith('linux')
+      && (grade === 'insufficient' || (meaningfulTaskActionable.length === 0 && genericActionable.length > 0));
     return {
       status: 'success',
       session_id: session.sessionId,
@@ -780,8 +776,12 @@ class AppUseManager {
         grade,
         total_nodes: nodes.length,
         actionable_nodes: actionable.length,
+        meaningful_actionable_nodes: labeled.length,
+        meaningful_task_actionable_nodes: meaningfulTaskActionable.length,
+        generic_or_unlabeled_actionable_nodes: genericActionable.length,
         labeled_actionable_ratio: Number(ratio.toFixed(2)),
         unlabeled_visual_regions: canvasCount,
+        visual_recommended: visualRecommended,
       },
       semantic_profile: semanticProfile,
       nodes,
@@ -791,8 +791,8 @@ class AppUseManager {
 
   async _snapshot(session, parameters = {}) {
     const options = {
-      maxNodes: clampInteger(parameters.max_nodes, 80, 1, 200),
-      maxDepth: clampInteger(parameters.max_depth, 8, 1, 16),
+      maxNodes: clampInteger(parameters.max_nodes, 80, 1, 500),
+      maxDepth: clampInteger(parameters.max_depth, 8, 1, 24),
     };
     if (parameters._probe_timeout_ms) {
       options.timeoutMs = clampInteger(parameters._probe_timeout_ms, 2000, 250, 5000);
@@ -807,8 +807,8 @@ class AppUseManager {
   async _inspect(session, parameters = {}) {
     const nativeRef = this._nativeRef(session, parameters.ref);
     const result = await this.provider.inspect(session.target, nativeRef, {
-      maxNodes: clampInteger(parameters.max_nodes, 40, 1, 100),
-      maxDepth: clampInteger(parameters.max_depth, 3, 1, 8),
+      maxNodes: clampInteger(parameters.max_nodes, 200, 1, 500),
+      maxDepth: clampInteger(parameters.max_depth, 12, 1, 24),
     });
     return this._mapNodes(session, result, { prune: false });
   }
@@ -946,149 +946,6 @@ class AppUseManager {
     await delay(AGENT_CURSOR_PRESS_MS);
   }
 
-  async _virtualClickAt(session, parameters = {}) {
-    const point = this._coordinatePoint(session, parameters);
-    const requestedActions = Array.isArray(parameters.preferred_actions)
-      ? parameters.preferred_actions.map((value) => String(value || '').toLowerCase())
-      : ['press', 'select', 'toggle'];
-    const allowedActions = requestedActions.filter((value) => ['press', 'select', 'toggle'].includes(value));
-    if (!allowedActions.length) {
-      throw new AppUseError('invalid_arguments', 'preferred_actions must contain press, select, or toggle.');
-    }
-    if (typeof this.provider.hitTest !== 'function') {
-      throw new AppUseError(
-        'provider_unavailable',
-        'The desktop accessibility provider does not support direct coordinate hit-testing.',
-        { retryable: false, next_valid_actions: ['call:find', 'disconnect'] },
-      );
-    }
-    const verifyEffect = parameters.verify_effect !== false;
-    const beforeVisual = verifyEffect && typeof this.captureTarget === 'function'
-      ? captureFingerprint(await this.captureTarget(session.target).catch(() => null))
-      : null;
-    const probe = await this.provider.hitTest(session.target, point.screen, allowedActions, false);
-    const bounds = (probe && probe.bounds) || {};
-    const windowBounds = session.target.bounds || {};
-    const targetArea = Number(bounds.width) * Number(bounds.height);
-    const windowArea = Number(windowBounds.width) * Number(windowBounds.height);
-    const coverage = windowArea > 0 && Number.isFinite(targetArea) ? targetArea / windowArea : 0;
-    const broadContainer = /^(?:ax)?(?:group|webarea|window|scrollarea|application)$/i.test(String((probe && probe.role) || ''));
-    const degenerateAxTarget = Boolean(
-      probe && probe.found === true && broadContainer && coverage >= 0.65,
-    );
-    if (!probe || probe.found !== true || !probe.action || degenerateAxTarget) {
-      const supportsPidEventFallback = String(session.target.platform || process.platform) === 'darwin'
-        && parameters.pid_event_fallback !== false
-        && typeof this.provider.pidEvent === 'function';
-      if (supportsPidEventFallback) {
-        const fallbackResult = await this._pidEventAt(session, 'pid_click_at', point, parameters);
-        if (degenerateAxTarget) {
-          fallbackResult.diagnostics = {
-            ...(fallbackResult.diagnostics || {}),
-            ax_candidate_rejected: {
-              reason: 'degenerate_window_container',
-              role: String(probe.role || ''),
-              name: String(probe.name || ''),
-              bounds: probe.bounds || null,
-              window_coverage: coverage,
-            },
-          };
-        }
-        return fallbackResult;
-      }
-      throw new AppUseError(
-        'unsupported_background_interaction',
-        'No background-accessible press, select, or toggle action exists at this coordinate; no OS mouse event was sent.',
-        {
-          session_id: session.sessionId,
-          virtual_pointer: { ...point, displayed: false },
-          input_mode: 'background_accessibility',
-          real_cursor_moved: false,
-          focus_requested: false,
-          diagnostics: (probe && probe.diagnostics) || null,
-          next_valid_actions: ['call:find', 'disconnect'],
-        },
-      );
-    }
-    if (typeof this.showVirtualPointer === 'function') {
-      await this._showPointerClickFeedback(
-        point,
-        publicTarget(session.target, session.target.targetId),
-      ).catch(() => {});
-    }
-    const result = await this.provider.hitTest(session.target, point.screen, [probe.action], true);
-    if (!result || result.found !== true || result.performed !== true) {
-      throw new AppUseError(
-        'background_activation_failed',
-        'The accessible element changed or rejected its action before background activation completed; no OS mouse event was sent.',
-        {
-          session_id: session.sessionId,
-          virtual_pointer: { ...point, displayed: typeof this.showVirtualPointer === 'function' },
-          input_mode: 'background_accessibility',
-          real_cursor_moved: false,
-          focus_requested: false,
-          diagnostics: (result && result.diagnostics) || null,
-          next_valid_actions: ['call:virtual_click_at', 'call:find', 'disconnect'],
-        },
-      );
-    }
-    let afterVisual = null;
-    if (beforeVisual && typeof this.captureTarget === 'function') {
-      for (let attempt = 0; attempt < 3; attempt += 1) {
-        await delay(120);
-        afterVisual = captureFingerprint(await this.captureTarget(session.target).catch(() => null));
-        if (afterVisual && beforeVisual.sha256 !== afterVisual.sha256) break;
-      }
-    }
-    const effectVerification = beforeVisual && afterVisual ? {
-      available: true,
-      changed: beforeVisual.sha256 !== afterVisual.sha256,
-      before_sha256: beforeVisual.sha256,
-      after_sha256: afterVisual.sha256,
-      method: 'window_capture_diff',
-    } : { available: false, changed: null, method: null };
-    const effectUnverified = effectVerification.available && effectVerification.changed !== true;
-    const executedAction = {
-      capability: 'virtual_click_at',
-      input_mode: 'background_accessibility',
-      semantic_action: String(result.action || probe.action || ''),
-      native_action: String(result.nativeAction || probe.nativeAction || ''),
-      point,
-    };
-    return {
-      status: effectUnverified || result.verified === false ? 'uncertain' : 'success',
-      summary: `Virtual pointer activated the background control with ${result.action}.`,
-      session_id: session.sessionId,
-      virtual_pointer: { ...point, displayed: typeof this.showVirtualPointer === 'function' },
-      input_mode: 'background_accessibility',
-      real_cursor_moved: false,
-      focus_requested: false,
-      diagnostics: result.diagnostics || null,
-      verification: {
-        status: effectUnverified || result.verified === false ? 'uncertain' : 'success',
-        method: String((result.diagnostics && result.diagnostics.method) || 'direct_accessibility_hit_test'),
-        native_action: String(result.nativeAction || ''),
-        action_accepted: result.performed === true,
-        effect_verified: effectVerification.changed,
-        effect_verification: effectVerification,
-      },
-      requested_action: {
-        capability: 'virtual_click_at',
-        preferred_actions: allowedActions,
-        point,
-      },
-      executed_action: executedAction,
-      next_valid_actions: result.nextValidActions || ['call:wait', 'call:snapshot', 'disconnect'],
-      virtual_target: {
-        role: String(result.role || probe.role || ''),
-        name: String(result.name || probe.name || ''),
-        bounds: result.bounds || probe.bounds || null,
-        action: String(result.action || probe.action || ''),
-        native_action: String(result.nativeAction || probe.nativeAction || ''),
-      },
-    };
-  }
-
   async _pidEventAt(session, operation, pointOrParameters = {}, parameters = {}) {
     const point = pointOrParameters.screen ? pointOrParameters : this._coordinatePoint(session, pointOrParameters);
     const effectiveParameters = pointOrParameters.screen ? parameters : pointOrParameters;
@@ -1120,7 +977,7 @@ class AppUseManager {
         if (afterVisual && beforeVisual.sha256 !== afterVisual.sha256) break;
       }
     }
-    const capability = operation === 'pid_type_at' ? 'virtual_type_at' : 'virtual_click_at';
+    const capability = 'virtual_type_at';
     const visualChanged = beforeVisual && afterVisual ? beforeVisual.sha256 !== afterVisual.sha256 : null;
     // A full-window diff is not proof that a PID-directed event affected the
     // intended control: Electron apps often repaint timers, banners, and
@@ -1129,17 +986,15 @@ class AppUseManager {
     const effectVerified = null;
     return {
       status: 'uncertain',
-      summary: operation === 'pid_type_at'
-        ? 'Delivered a targeted background click and Unicode text event to the application process.'
-        : 'Delivered a targeted background click event to the application process.',
+      summary: 'Delivered a targeted background click and Unicode text event to the application process.',
       session_id: session.sessionId,
       virtual_pointer: { ...point, displayed: typeof this.showVirtualPointer === 'function' },
       input_mode: 'background_pid_event', real_cursor_moved: false, focus_requested: false,
       foreground_input_used: false, foreground_affected: false,
-      requested_action: { capability, point, text: operation === 'pid_type_at' ? String(effectiveParameters.text || '') : undefined },
+      requested_action: { capability, point, text: String(effectiveParameters.text || '') },
       executed_action: {
         capability, input_mode: 'background_pid_event', native_action: 'CGEventPostToPid', point,
-        text_length: operation === 'pid_type_at' ? String(effectiveParameters.text || '').length : undefined,
+        text_length: String(effectiveParameters.text || '').length,
       },
       verification: {
         status: 'uncertain', event_delivered: result.verified === true,
@@ -1151,70 +1006,8 @@ class AppUseManager {
       next_valid_actions: [
         'call:measure_coordinates',
         'call:visual_describe',
-        ...(session.semanticProfile && session.semanticProfile.status === 'unavailable' ? [] : ['call:snapshot']),
         'disconnect',
       ],
-    };
-  }
-
-  async _menuCommand(session, parameters = {}) {
-    const name = String(parameters.name || '').trim();
-    const shortcut = Array.isArray(parameters.shortcut) ? parameters.shortcut.map((item) => String(item)) : [];
-    if (!name && !shortcut.length) {
-      throw new AppUseError('invalid_arguments', 'menu_command requires a menu item name or shortcut.');
-    }
-    if (typeof this.provider.menuCommand !== 'function') {
-      throw new AppUseError('provider_unavailable', 'The desktop accessibility provider does not support background menu commands.');
-    }
-    const verifyEffect = parameters.verify_effect !== false;
-    const beforeVisual = verifyEffect && typeof this.captureTarget === 'function'
-      ? captureFingerprint(await this.captureTarget(session.target).catch(() => null)) : null;
-    const probe = await this.provider.menuCommand(session.target, { name, shortcut }, false);
-    if (!probe || probe.found !== true) {
-      throw new AppUseError('unsupported_background_interaction', 'No matching background-accessible application menu item was found.', {
-        diagnostics: (probe && probe.diagnostics) || null,
-        real_cursor_moved: false, focus_requested: false,
-        next_valid_actions: ['call:find', 'disconnect'],
-      });
-    }
-    const result = await this.provider.menuCommand(session.target, { name, shortcut }, true);
-    if (!result || result.performed !== true) {
-      throw new AppUseError('background_activation_failed', 'The application menu item rejected its AXPress action.', {
-        diagnostics: (result && result.diagnostics) || null,
-      });
-    }
-    if (result.foregroundAffected === true) {
-      throw new AppUseError('foreground_interference_detected', 'The menu action changed the foreground application and was not background-safe.', {
-        action_may_have_run: true, diagnostics: result.diagnostics || null,
-      });
-    }
-    let afterVisual = null;
-    if (beforeVisual && typeof this.captureTarget === 'function') {
-      for (let attempt = 0; attempt < 3; attempt += 1) {
-        await delay(120);
-        afterVisual = captureFingerprint(await this.captureTarget(session.target).catch(() => null));
-        if (afterVisual && beforeVisual.sha256 !== afterVisual.sha256) break;
-      }
-    }
-    const effectVerified = beforeVisual && afterVisual ? beforeVisual.sha256 !== afterVisual.sha256 : null;
-    const executedAction = {
-      capability: 'menu_command', input_mode: 'background_accessibility', semantic_action: 'press',
-      native_action: String(result.nativeAction || 'AXPress'), target: { role: result.role || 'MenuItem', name: result.name || '' },
-    };
-    return {
-      status: effectVerified === false ? 'uncertain' : 'success',
-      summary: `Executed background menu AXPress on ${result.name || name || shortcut.join('+')}.`,
-      session_id: session.sessionId,
-      input_mode: 'background_accessibility', real_cursor_moved: false, focus_requested: false,
-      foreground_input_used: false, foreground_affected: false,
-      requested_action: { capability: 'menu_command', name, shortcut },
-      executed_action: executedAction,
-      verification: {
-        status: effectVerified === false ? 'uncertain' : 'success', action_accepted: true,
-        effect_verified: effectVerified, method: effectVerified === null ? 'AXPress acceptance' : 'window_capture_diff',
-      },
-      diagnostics: result.diagnostics || null,
-      next_valid_actions: ['call:wait', 'call:snapshot', 'disconnect'],
     };
   }
 
@@ -1263,7 +1056,7 @@ class AppUseManager {
     if (capability === 'restore_previous_focus') return this._restoreFocus(session);
 
     const focusCapabilities = new Set([
-      'select_text', 'set_selection_range', 'click_at', 'double_click', 'right_click',
+      'click_at', 'double_click', 'right_click',
       'hover_at', 'drag', 'swipe', 'scroll_at', 'key_chord', 'key_sequence',
     ]);
     const visualCapabilities = new Set([
@@ -1275,7 +1068,7 @@ class AppUseManager {
       throw new AppUseError(
         'foreground_input_not_allowed',
         `${capability} uses the real OS pointer or focus-dependent input. Pass allow_foreground_input=true only when the user explicitly permits foreground interference.`,
-        { next_valid_actions: ['call:virtual_click_at', 'call:find', 'call:snapshot', 'disconnect'] },
+        { next_valid_actions: ['disconnect'] },
       );
     }
     if (needsFocus && session.focusPolicy === 'never') {
@@ -1291,7 +1084,7 @@ class AppUseManager {
     }
     const refFree = [
       'click_at', 'double_click', 'right_click', 'hover_at', 'drag', 'swipe', 'scroll_at',
-      'key_chord', 'key_sequence', 'browser_state', 'navigate', 'reload',
+      'key_chord', 'key_sequence',
     ];
     const needsRef = !refFree.includes(capability) && capability !== 'scroll';
     const nativeRef = this._nativeRef(session, parameters.ref, needsRef);
@@ -1335,7 +1128,7 @@ class AppUseManager {
       }
     }
     let verification = result.verification || null;
-    if (!verification && result.skipSnapshot !== true) {
+    if (session.mode === 'semantic' && !verification && result.skipSnapshot !== true) {
       try {
         verification = await this._snapshot(session, { max_nodes: 80, max_depth: 8 });
       } catch (_) {}
@@ -1349,7 +1142,9 @@ class AppUseManager {
       visual_verification: visualCapabilities.has(capability) ? visualVerification : null,
       focus_restore: restoreResult,
       verification,
-      next_valid_actions: result.nextValidActions || ['call:wait', 'call:snapshot', 'disconnect'],
+      next_valid_actions: result.nextValidActions || (
+        session.mode === 'semantic' ? ['call:wait', 'call:snapshot', 'disconnect'] : ['call:visual_describe', 'disconnect']
+      ),
     };
   }
 
@@ -1397,9 +1192,7 @@ class AppUseManager {
     if (name === 'inspect') return this._inspect(session, parameters);
     if (name === 'find') return this._find(session, parameters);
     if (name === 'wait') return this._wait(session, parameters);
-    if (name === 'virtual_click_at') return this._virtualClickAt(session, parameters);
     if (name === 'virtual_type_at') return this._pidEventAt(session, 'pid_type_at', parameters);
-    if (name === 'menu_command') return this._menuCommand(session, parameters);
     if (name === 'visual_describe') {
       if (typeof this.captureTarget !== 'function') {
         throw new AppUseError('unsupported_capability', 'Window capture is unavailable in this desktop host.');
@@ -1437,7 +1230,7 @@ class AppUseManager {
       mode: session.mode,
       snapshot_revision: session.revision,
       manifest_version: MANIFEST_VERSION,
-      semantic_profile: session.semanticProfile || null,
+      ...(session.mode === 'semantic' ? { semantic_profile: session.semanticProfile || null } : {}),
     };
   }
 
@@ -1473,9 +1266,7 @@ module.exports = {
   AppUseError,
   AppUseManager,
   CAPABILITIES,
-  DARWIN_MENU_CAPABILITY,
   DARWIN_PID_TYPE_CAPABILITY,
-  SAFARI_CAPABILITIES,
   capabilitiesForTarget,
   CommandPlatformProvider,
   MANIFEST_VERSION,

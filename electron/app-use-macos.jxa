@@ -20,13 +20,6 @@ function fail(type, message) {
   throw error;
 }
 
-function cleanValue(value) {
-  if (value === undefined || value === null) return '';
-  if (typeof value === 'string' || typeof value === 'number' || typeof value === 'boolean') return value;
-  if (Array.isArray(value)) return value.slice(0, 20).map(cleanValue);
-  return safe(() => String(value), '');
-}
-
 function systemEvents() {
   const app = Application('System Events');
   app.includeStandardAdditions = true;
@@ -159,78 +152,6 @@ function resolveTarget(target) {
   return { se, proc, win, windowIndex };
 }
 
-function directChildren(element) {
-  return safe(() => element.uiElements(), []);
-}
-
-function resolveElement(win, nativeRef) {
-  const parts = String(nativeRef || '').split('/').filter(Boolean);
-  let element = win;
-  for (const part of parts.slice(1)) {
-    const match = /^e(\d+)$/.exec(part);
-    if (!match) throw new Error(`Invalid native element path: ${nativeRef}`);
-    const children = directChildren(element);
-    const index = Number(match[1]);
-    if (index < 0 || index >= children.length) throw new Error(`Element path is stale: ${nativeRef}`);
-    element = children[index];
-  }
-  return element;
-}
-
-function actionNames(element) {
-  return safe(
-    () => element.actions().map((action) => String(safe(() => action.name(), ''))).filter(Boolean),
-    [],
-  );
-}
-
-function semanticActions(nativeActions, role, settable) {
-  const actions = [];
-  if (nativeActions.some((name) => ['AXPress', 'AXConfirm', 'AXPick'].includes(name))) actions.push('press');
-  if (
-    /ScrollArea|ScrollBar|Slider|Stepper/i.test(role)
-    && (nativeActions.includes('AXIncrement') || nativeActions.includes('AXDecrement'))
-  ) actions.push('scroll');
-  if (/CheckBox|Switch|DisclosureTriangle/i.test(role) && actions.includes('press')) actions.push('toggle');
-  if (/RadioButton|Row|MenuItem|Tab|ListItem/i.test(role) && actions.includes('press')) actions.push('select');
-  if (settable && /TextField|TextArea|ComboBox|SearchField/i.test(role)) actions.push('set_value');
-  return [...new Set(actions)];
-}
-
-function nodeFor(element, nativeRef) {
-  // A single properties() Apple Event is dramatically faster for Safari than
-  // requesting every accessibility property independently.
-  const properties = safe(() => element.properties(), {});
-  const role = String(properties.role || '');
-  const nativeActions = actionNames(element);
-  const settable = /TextField|TextArea|ComboBox|SearchField/i.test(role)
-    && Boolean(safe(() => element.attributes.byName('AXValue').settable(), false));
-  const position = properties.position || null;
-  const size = properties.size || null;
-  let bounds = null;
-  if (Array.isArray(position) && Array.isArray(size)) {
-    bounds = {
-      x: Number(position[0] || 0), y: Number(position[1] || 0),
-      width: Number(size[0] || 0), height: Number(size[1] || 0),
-    };
-  }
-  return {
-    nativeRef,
-    role: role.replace(/^AX/, ''),
-    subrole: String(properties.subrole || '').replace(/^AX/, ''),
-    name: String(properties.name || properties.title || ''),
-    description: String(properties.accessibilityDescription || properties.description || properties.roleDescription || ''),
-    help: String(properties.help || ''),
-    value: cleanValue(properties.value),
-    enabled: properties.enabled === null || properties.enabled === undefined ? true : Boolean(properties.enabled),
-    focused: Boolean(properties.focused),
-    selected: Boolean(properties.selected),
-    bounds,
-    actions: semanticActions(nativeActions, role, settable),
-    nativeActions,
-  };
-}
-
 function safariTab(target) {
   if (String(target.applicationId || '') !== 'com.apple.Safari') fail('unsupported_action', 'This browser capability is only available for Safari.');
   const safari = Application('Safari');
@@ -348,31 +269,6 @@ function mouseClick(point, button, count, intervalMs) {
   }
 }
 
-function selectedText(element) {
-  return String(cleanValue(safe(() => element.attributes.byName('AXSelectedText').value(), '')));
-}
-
-function selectionRangeFromParameters(element, parameters) {
-  const info = editableInfo(element);
-  if (!info.editable) fail('unsupported_action', `Element role ${info.role || '(unknown)'} does not support text selection.`);
-  const value = String(cleanValue(safe(() => element.value(), '')));
-  const start = Math.trunc(finiteNumber(parameters.start, 'start'));
-  const end = Math.trunc(finiteNumber(parameters.end, 'end'));
-  if (start < 0 || end < start || end > value.length) fail('invalid_arguments', `Selection range must satisfy 0 <= start <= end <= ${value.length}.`);
-  return { value, start, end, expected: value.slice(start, end), info };
-}
-
-function setSelectionWithKeyboard(resolved, element, range) {
-  element.focused = true;
-  if (!Boolean(safe(() => element.focused(), false))) fail('focus_required', 'The editable element did not receive focus.');
-  resolved.se.keystroke('a', { using: ['command down'] });
-  resolved.se.keyCode(123);
-  for (let index = 0; index < range.start; index += 1) resolved.se.keyCode(124);
-  for (let index = range.start; index < range.end; index += 1) resolved.se.keyCode(124, { using: ['shift down'] });
-  const observed = selectedText(element);
-  return { observed, verified: observed === range.expected };
-}
-
 function performCoordinateAction(target, capability, parameters) {
   let scrollEventCount = null;
   if (capability === 'click_at' || capability === 'double_click' || capability === 'right_click' || capability === 'hover_at' || capability === 'scroll_at') {
@@ -444,46 +340,6 @@ function performKeySequence(resolved, parameters) {
   return { ok: true, verified: false, uncertain: true, skipSnapshot: true, visualChangeExpected: true, summary: 'Executed the atomic keyboard sequence.', diagnostics: { method: 'System Events', stepCount: steps.length, foregroundRequired: true } };
 }
 
-function snapshotFrom(root, rootPath, options) {
-  const maxNodes = Math.max(1, Math.min(200, Number(options.maxNodes || 80)));
-  const maxDepth = Math.max(1, Math.min(16, Number(options.maxDepth || 8)));
-  const nodes = [];
-  const maxVisited = Math.max(200, maxNodes * 4);
-  const queue = [{ element: root, nativeRef: rootPath, parentNativeRef: '', depth: 0 }];
-  let visited = 0;
-  let truncated = false;
-  while (queue.length && nodes.length < maxNodes && visited < maxVisited) {
-    const current = queue.shift();
-    visited += 1;
-    const node = nodeFor(current.element, current.nativeRef);
-    if (current.parentNativeRef) node.parentNativeRef = current.parentNativeRef;
-    nodes.push(node);
-    if (current.depth < maxDepth) {
-      const children = directChildren(current.element);
-      for (let index = 0; index < children.length; index += 1) {
-        queue.push({
-          element: children[index], nativeRef: `${current.nativeRef}/e${index}`,
-          parentNativeRef: current.nativeRef, depth: current.depth + 1,
-        });
-      }
-    }
-  }
-  truncated = queue.length > 0;
-  return { ok: true, nodes, truncated, visited, traversal: 'breadth_first' };
-}
-
-function snapshot(payload, inspectOnly) {
-  const resolved = resolveTarget(payload.target || {});
-  const options = payload.options || {};
-  const rootPath = String(payload.nativeRef || options.nativeRef || `w${resolved.windowIndex}`);
-  const root = rootPath === `w${resolved.windowIndex}` ? resolved.win : resolveElement(resolved.win, rootPath);
-  if (inspectOnly) {
-    options.maxNodes = Number(options.maxNodes || 40);
-    options.maxDepth = Number(options.maxDepth || 3);
-  }
-  return snapshotFrom(root, rootPath, options);
-}
-
 function performNativeAction(element, preferred) {
   const actions = safe(() => element.actions(), []);
   for (const actionName of preferred) {
@@ -494,16 +350,6 @@ function performNativeAction(element, preferred) {
     }
   }
   fail('unsupported_action', `Element does not support any of: ${preferred.join(', ')}.`);
-}
-
-function editableInfo(element) {
-  const role = String(safe(() => element.role(), ''));
-  const settable = Boolean(safe(() => element.attributes.byName('AXValue').settable(), false));
-  return { role, settable, editable: settable && /TextField|TextArea|ComboBox|SearchField/i.test(role) };
-}
-
-function valuesEqual(left, right) {
-  return String(cleanValue(left)) === String(cleanValue(right));
 }
 
 function focusTarget(target) {
@@ -555,83 +401,9 @@ function perform(payload) {
     return performCoordinateAction(payload.target || {}, capability, parameters);
   }
   if (capability === 'key_sequence') return performKeySequence(resolved, parameters);
-  const element = payload.nativeRef ? resolveElement(resolved.win, payload.nativeRef) : resolved.win;
-  if (capability === 'semantic_double_click') {
-    const action = performNativeAction(element, ['AXDoublePress']);
-    return { ok: true, verified: true, summary: `Performed ${action}.`, diagnostics: { nativeAction: action } };
-  }
-  if (capability === 'semantic_drag') {
-    const action = performNativeAction(element, ['AXDrag', 'AXMove', 'AXReorder', 'AXResize']);
-    return { ok: true, verified: true, summary: `Performed ${action}.`, diagnostics: { nativeAction: action } };
-  }
-  if (capability === 'press' || capability === 'select') {
-    const action = performNativeAction(element, ['AXPress', 'AXConfirm', 'AXPick']);
-    return { ok: true, verified: true, summary: `Performed ${action}.`, diagnostics: { nativeAction: action } };
-  }
-  if (capability === 'toggle') {
-    const action = performNativeAction(element, ['AXPress', 'AXToggle']);
-    return { ok: true, verified: true, summary: `Performed ${action}.`, diagnostics: { nativeAction: action } };
-  }
-  if (capability === 'set_value') {
-    const info = editableInfo(element);
-    if (!info.editable) fail('unsupported_action', `Element role ${info.role || '(unknown)'} is not a writable text control.`);
-    const before = cleanValue(safe(() => element.value(), ''));
-    const expected = parameters.value === undefined ? '' : parameters.value;
-    element.value = expected;
-    const after = cleanValue(safe(() => element.value(), ''));
-    if (!valuesEqual(after, expected)) fail('verification_failed', 'The accessibility value did not change to the requested value.');
-    return { ok: true, verified: true, summary: 'Set and verified the element value.', diagnostics: { method: 'AXValue', role: info.role, before, after } };
-  }
-  if (capability === 'type_text') {
-    const info = editableInfo(element);
-    if (!info.editable) fail('unsupported_action', `Element role ${info.role || '(unknown)'} is not a writable text control; keyboard injection into a WebArea or Group is unsupported.`);
-    const before = String(cleanValue(safe(() => element.value(), '')));
-    const text = String(parameters.text || '');
-    const expected = parameters.replace === true ? text : `${before}${text}`;
-    element.value = expected;
-    const after = String(cleanValue(safe(() => element.value(), '')));
-    if (after !== expected) fail('verification_failed', 'Text input could not be verified through the accessibility value.');
-    return { ok: true, verified: true, summary: 'Wrote and verified text through the accessibility value.', diagnostics: { method: 'AXValue', role: info.role, before, after, backgroundSafe: true } };
-  }
-  if (capability === 'set_selection_range') {
-    const range = selectionRangeFromParameters(element, parameters);
-    const result = setSelectionWithKeyboard(resolved, element, range);
-    return { ok: true, verified: result.verified, uncertain: !result.verified, skipSnapshot: true, summary: result.verified ? 'Selected and verified the requested text range.' : 'Selected the requested text range, but the accessibility API did not expose verification.', diagnostics: { method: 'AX focus and keyboard range', start: range.start, end: range.end, expected: range.expected, observed: result.observed, foregroundRequired: true } };
-  }
-  if (capability === 'select_text') {
-    const value = String(cleanValue(safe(() => element.value(), '')));
-    const needle = String(parameters.text || '');
-    if (!needle) fail('invalid_arguments', 'select_text requires non-empty text.');
-    const source = parameters.case_sensitive === true ? value : value.toLowerCase();
-    const wanted = parameters.case_sensitive === true ? needle : needle.toLowerCase();
-    const occurrence = Math.max(1, Math.trunc(Number(parameters.occurrence || 1)));
-    let start = -1;
-    let cursor = 0;
-    for (let index = 0; index < occurrence; index += 1) {
-      start = source.indexOf(wanted, cursor);
-      if (start < 0) fail('text_not_found', `Could not find occurrence ${occurrence} of the requested text.`);
-      cursor = start + wanted.length;
-    }
-    const range = selectionRangeFromParameters(element, { start, end: start + needle.length });
-    const result = setSelectionWithKeyboard(resolved, element, range);
-    return { ok: true, verified: result.verified, uncertain: !result.verified, skipSnapshot: true, summary: result.verified ? 'Selected and verified the requested text.' : 'Selected the requested text, but the accessibility API did not expose verification.', diagnostics: { method: 'AX focus and keyboard range', start: range.start, end: range.end, expected: range.expected, observed: result.observed, foregroundRequired: true } };
-  }
   if (capability === 'key_chord') {
     sendKeyChord(resolved.se, parameters.keys || []);
     return { ok: true, verified: false, uncertain: true, summary: 'Sent the keyboard shortcut, but its application effect could not be verified.', diagnostics: { method: 'System Events', foregroundRequired: true } };
-  }
-  if (capability === 'scroll') {
-    const direction = String(parameters.direction || 'down').toLowerCase();
-    const amount = Math.max(1, Math.min(20, Number(parameters.amount || 3)));
-    const actionName = direction === 'up' || direction === 'left' ? 'AXDecrement' : 'AXIncrement';
-    const actions = safe(() => element.actions(), []);
-    const action = actions.find((candidate) => String(safe(() => candidate.name(), '')) === actionName);
-    if (action) {
-      for (let index = 0; index < amount; index += 1) action.perform();
-    } else {
-      fail('unsupported_action', 'This element does not expose semantic scrolling. Use scroll_at for a focused coordinate wheel action.');
-    }
-    return { ok: true, summary: `Scrolled ${direction}.` };
   }
   throw new Error(`Unsupported macOS capability: ${capability}`);
 }
@@ -639,8 +411,6 @@ function perform(payload) {
 function dispatch(payload) {
   switch (String(payload.operation || '')) {
     case 'list_targets': return listTargets(payload);
-    case 'snapshot': return snapshot(payload, false);
-    case 'inspect': return snapshot(payload, true);
     case 'perform': return perform(payload);
     case 'focus': return focusTarget(payload.target || {});
     default: return { ok: false, errorType: 'invalid_arguments', error: `Unknown operation: ${payload.operation}` };

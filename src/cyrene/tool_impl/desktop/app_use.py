@@ -10,17 +10,18 @@ TOOL_DEF = {
     "function": {
         "name": TOOL_NAME,
         "description": (
-            "Discover and control macOS or Windows desktop application windows through one cache-stable gateway. "
-            "Start with operation='list_targets', then operation='connect'. Connect returns the runtime capabilities "
-            "for that window. Invoke a disclosed capability with operation='call'. The target may be foreground or background. "
-            "When the user names a visible target to activate, first call visual_describe so you can inspect a fresh screenshot. Choose a candidate center in captured-image pixels, then call measure_coordinates with that same target description, x/y, and a surrounding width/height. The target is binding metadata; x/y and width/height remain the point and calibration crop range. Inspect the returned marked calibration crop; retry measurement if the crosshair is not centered on the intended control. Swipe and other coordinate gestures also require this measurement first, and swipe must reuse the latest measured window_point unchanged as its start point. Non-coordinate focus, menu, and keyboard capabilities do not require coordinate measurement. Once calibrated, use click_at as the primary click tool: call focus_window, then pass window_point unchanged with allow_foreground_input=true. visual_click and virtual_click_at are fallback click tools and must not run before primary click_at explicitly fails. visual_click and visual_type must use the same target description bound by the latest measurement. Connect may report semantic_profile.status='unavailable'; in that case semantic tree capabilities are removed and snapshot/find/press/select/toggle must not be attempted. Only after coordinate localization or activation fails may an available semantic tree or menu command be used. Use visual_click for a described "
-            "target: it captures and visually re-localizes the target, focuses the connected window, and uses click_at to send a real "
-            "OS pointer click at the measured coordinate before restoring Cyrene focus. This visibly moves the real cursor and temporarily "
-            "changes foreground focus. Semantic actions are "
-            "the first fallback, followed on macOS by background menu AXPress; foreground pointer or keyboard fallback must be explicitly allowed. "
-            "Fallback configuration is not evidence that a fallback ran: describe only executed_action from the result. "
-            "For a visible text input that is absent from the AX tree on macOS, use visual_type so capture-coordinate mapping, PID-targeted input, and exact-text verification stay in one operation. Use low-level virtual_type_at only when coordinates already come directly from current tool evidence. If visual_type returns unsupported_background_text_input with isolation_required=true, do not retry or ask to take over the user's foreground; report that a separate desktop/VM worker must be configured. "
-            "Reconnect when a session or ref becomes stale."
+            "Purely visual desktop control for macOS or Windows. This scheme uses window captures, calibrated coordinates, "
+            "OS pointer/keyboard input, and visual effect checks; it never reads or invokes an accessibility tree. "
+            "Start with operation='list_targets', then operation='connect'. Connect is always mode='visual' and returns the "
+            "runtime visual capabilities for that window. Invoke a disclosed capability with operation='call'. "
+            "For a named target, call visual_describe, inspect the fresh screenshot, and call measure_coordinates with the selected "
+            "captured-image point. Inspect the marked crop, then pass the returned window_point unchanged. Use focus_window followed by "
+            "click_at as the primary activation path; visual_click may re-localize visually after a definite pre-action failure. "
+            "Coordinate input may visibly move the real cursor or temporarily change focus, and every dispatched action must be verified. "
+            "This tool never invokes semantic refs, AX/UIA actions, or accessibility-tree fallbacks. If the visual scheme produces a hard failure "
+            "before dispatching input, disconnect it and explicitly start AppUISnapshot as a separate semantic session. "
+            "For a visible macOS text input, visual_type keeps capture localization, PID-targeted coordinate input, and exact-text verification in one visual operation. Use low-level virtual_type_at only when current visual evidence already supplies coordinates. If visual_type returns unsupported_background_text_input with isolation_required=true, do not retry or ask to take over the user's foreground; report that a separate desktop/VM worker must be configured. "
+            "Reconnect when a visual session becomes stale."
         ),
         "parameters": {
             "type": "object",

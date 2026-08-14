@@ -41,8 +41,8 @@ def _prepare_settings() -> int:
 
 if __name__ == "__main__":
     if "--smoke-test" in sys.argv:
-        import brotli
-        import fasttext
+        import brotli  # noqa: F401 - smoke test verifies the bundled dependency
+        import fasttext  # noqa: F401 - smoke test verifies the bundled dependency
         import simplexng
 
         print(json.dumps({

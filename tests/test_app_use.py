@@ -32,14 +32,12 @@ def clear_app_use_runtime_session_state():
     sys.modules["PIL.ImageDraw"] = _REAL_PIL_IMAGE_DRAW
     _REAL_PIL.Image = _REAL_PIL_IMAGE
     _REAL_PIL.ImageDraw = _REAL_PIL_IMAGE_DRAW
-    app_use._SESSION_SEMANTIC_STATUS.clear()
     app_use._SESSION_MEASUREMENTS.clear()
     app_use._SESSION_FOCUS_READY.clear()
     app_use._SESSION_VISUAL_READY.clear()
     app_use._SESSION_PRIMARY_CLICK_RESULTS.clear()
     app_use._SESSION_CAPABILITIES.clear()
     yield
-    app_use._SESSION_SEMANTIC_STATUS.clear()
     app_use._SESSION_MEASUREMENTS.clear()
     app_use._SESSION_FOCUS_READY.clear()
     app_use._SESSION_VISUAL_READY.clear()
@@ -73,9 +71,9 @@ def test_app_use_schema_keeps_runtime_capabilities_out_of_function_enum():
     properties = function["parameters"]["properties"]
     assert function["name"] == "app_use"
     assert "visual_click" in description
-    assert "real OS pointer click" in description
-    assert "visibly moves the real cursor" in description
-    assert "temporarily changes foreground focus" in description
+    assert "Purely visual desktop control" in description
+    assert "never invokes semantic refs" in description
+    assert "AppUISnapshot" in description
     assert "It is not an OS mouse event" not in description
     assert properties["operation"]["enum"] == [
         "list_targets", "connect", "call", "status", "disconnect"
@@ -167,12 +165,33 @@ async def test_execute_app_use_validates_gateway_arguments(monkeypatch):
         "capability": "snapshot",
         "parameters": {"max_nodes": 40},
     })
-    assert result == {"status": "success"}
-    assert calls == [("call", {
-        "parameters": {"max_nodes": 40},
-        "session_id": "session-1",
-        "capability": "snapshot",
-    })]
+    assert result["status"] == "error"
+    assert result["type"] == "unsupported_visual_capability"
+    assert result["alternate_scheme"]["tool"] == "AppUISnapshot"
+    assert calls == []
+
+
+@pytest.mark.asyncio
+async def test_app_use_forces_visual_mode_and_rejects_cross_scheme_connect(monkeypatch):
+    from cyrene.tooling.backends import app_use
+
+    calls = []
+
+    async def fake_rpc(operation, arguments, **_kwargs):
+        calls.append((operation, arguments))
+        return {"status": "success", "session_id": "visual-1", "capabilities": [{"name": "visual_describe"}]}
+
+    monkeypatch.setattr(app_use, "_electron_app_rpc", fake_rpc)
+    connected = await app_use.execute_app_use({"operation": "connect", "target_id": "target-1"})
+    assert connected["mode"] == "visual"
+    assert calls[0][1]["parameters"]["mode"] == "visual"
+
+    rejected = await app_use.execute_app_use({
+        "operation": "connect", "target_id": "target-1", "parameters": {"mode": "semantic"},
+    })
+    assert rejected["type"] == "wrong_scheme"
+    assert rejected["alternate_scheme"]["tool"] == "AppUISnapshot"
+    assert len(calls) == 1
 
 
 @pytest.mark.asyncio
@@ -297,12 +316,12 @@ async def test_connect_discloses_python_visual_click_workflow(monkeypatch):
     names = [item["name"] for item in result["capabilities"]]
     assert names == [
         "visual_describe", "measure_coordinates", "focus_window", "click_at",
-        "visual_click", "virtual_click_at", "visual_type", "virtual_type_at", "snapshot",
+        "visual_click", "visual_type", "virtual_type_at",
     ]
     assert "target" in result["capabilities"][1]["arguments"]
     visual_click = result["capabilities"][4]
     assert visual_click["background"] == "requires_focus"
-    assert "allow_foreground_fallback" in visual_click["arguments"]
+    assert "fallback" not in visual_click["arguments"]
     visual_type = next(item for item in result["capabilities"] if item["name"] == "visual_type")
     assert visual_type["background"] == "safe_when_supported"
     assert result["interaction_priority"][:2] == [
@@ -316,7 +335,8 @@ async def test_connect_discloses_python_visual_click_workflow(monkeypatch):
         "required_parameters": {"allow_foreground_input": True},
         "point_source": "latest measure_coordinates.window_point",
     }
-    assert result["fallback_click_capabilities"] == ["visual_click", "virtual_click_at"]
+    assert result["fallback_click_capabilities"] == ["visual_click"]
+    assert result["mode"] == "visual"
     assert result["next_valid_actions"][:2] == ["call:visual_describe", "call:measure_coordinates"]
 
 
@@ -360,7 +380,7 @@ async def test_connect_does_not_disclose_mac_only_or_focus_dependent_python_capa
     no_focus_names = [item["name"] for item in no_focus["capabilities"]]
     assert "visual_click" not in no_focus_names
     assert "visual_type" not in no_focus_names
-    assert no_focus["fallback_click_capabilities"] == ["virtual_click_at"]
+    assert no_focus["fallback_click_capabilities"] == []
     app_use._SESSION_MEASUREMENTS["session-no-focus"] = {
         "target": "Save button",
         "window_point": {"x": 120, "y": 88},
@@ -370,8 +390,9 @@ async def test_connect_does_not_disclose_mac_only_or_focus_dependent_python_capa
         "operation": "call", "session_id": "session-no-focus", "capability": "virtual_click_at",
         "parameters": {"x": 120, "y": 88, "coordinate_space": "window"},
     })
-    assert background_click["status"] == "uncertain"
-    assert background_click.get("type") != "primary_click_required"
+    assert background_click["status"] == "error"
+    assert background_click["type"] == "unsupported_visual_capability"
+    assert background_click["alternate_scheme"]["tool"] == "AppUISnapshot"
 
 
 def test_app_use_timeout_covers_two_vision_passes():
@@ -382,7 +403,7 @@ def test_app_use_timeout_covers_two_vision_passes():
 
 
 @pytest.mark.asyncio
-async def test_connect_hides_semantic_fallback_actions_when_tree_is_unavailable(monkeypatch):
+async def test_connect_filters_every_semantic_or_ax_fallback_from_visual_scheme(monkeypatch):
     from cyrene.tooling.backends import app_use
 
     async def fake_rpc(_operation, _arguments, **_kwargs):
@@ -403,9 +424,8 @@ async def test_connect_hides_semantic_fallback_actions_when_tree_is_unavailable(
 
     monkeypatch.setattr(app_use, "_electron_app_rpc", fake_rpc)
     result = await app_use.execute_app_use({"operation": "connect", "target_id": "target-1"})
-    assert result["semantic_profile"]["status"] == "unavailable"
-    assert "call:snapshot" not in result["next_valid_actions"]
-    assert "call:find" not in result["next_valid_actions"]
+    assert "semantic_profile" not in result
+    assert "virtual_click_at" not in {item["name"] for item in result["capabilities"]}
     assert result["next_valid_actions"][:2] == ["call:visual_describe", "call:measure_coordinates"]
 
 
@@ -447,7 +467,9 @@ async def test_only_coordinate_actions_require_visual_inspection_then_measuremen
         "operation": "call", "session_id": "session-gated", "capability": "menu_command",
         "parameters": {"name": "Home"},
     })
-    assert menu["status"] == "success"
+    assert menu["status"] == "error"
+    assert menu["type"] == "unsupported_visual_capability"
+    assert menu["alternate_scheme"]["tool"] == "AppUISnapshot"
     shortcut = await app_use.execute_app_use({
         "operation": "call", "session_id": "session-gated", "capability": "key_chord",
         "parameters": {"keys": ["command", "h"], "allow_foreground_input": True},
@@ -462,7 +484,7 @@ async def test_only_coordinate_actions_require_visual_inspection_then_measuremen
     assert blocked["required_action"] == "call:visual_describe"
     assert blocked["next_valid_actions"] == ["call:visual_describe", "call:measure_coordinates", "disconnect"]
     assert [arguments.get("capability") for operation, arguments in calls if operation == "call"] == [
-        "focus_window", "menu_command", "key_chord",
+        "focus_window", "key_chord",
     ]
     monkeypatch.setattr(app_use, "_analyze_capture", AsyncMock(return_value=("A window.", "vision-test")))
     inspected = await app_use.execute_app_use({
@@ -509,7 +531,7 @@ async def test_measure_coordinates_rejects_empty_target_binding():
 
 
 @pytest.mark.asyncio
-async def test_virtual_click_must_reuse_latest_measured_point(monkeypatch):
+async def test_visual_session_rejects_accessibility_backed_virtual_click(monkeypatch):
     from cyrene.tooling.backends import app_use
 
     calls = []
@@ -519,31 +541,15 @@ async def test_virtual_click_must_reuse_latest_measured_point(monkeypatch):
         return {"status": "uncertain", "session_id": "session-measured"}
 
     monkeypatch.setattr(app_use, "_electron_app_rpc", fake_rpc)
-    app_use._SESSION_MEASUREMENTS["session-measured"] = {
-        "window_point": {"x": 120.25, "y": 88.5},
-        "screen_point": {"x": 420.25, "y": 288.5},
-    }
-    blocked = await app_use.execute_app_use({
-        "operation": "call", "session_id": "session-measured", "capability": "virtual_click_at",
-        "parameters": {"x": 140, "y": 90},
-    })
-    assert blocked["type"] == "measured_coordinate_mismatch"
-    assert calls == []
-    primary_required = await app_use.execute_app_use({
+    app_use._SESSION_CAPABILITIES["session-measured"] = {"click_at", "visual_describe"}
+    result = await app_use.execute_app_use({
         "operation": "call", "session_id": "session-measured", "capability": "virtual_click_at",
         "parameters": {"x": 120.25, "y": 88.5},
     })
-    assert primary_required["type"] == "primary_click_required"
+    assert result["status"] == "error"
+    assert result["type"] == "unsupported_visual_capability"
+    assert result["alternate_scheme"]["tool"] == "AppUISnapshot"
     assert calls == []
-    app_use._SESSION_PRIMARY_CLICK_RESULTS["session-measured"] = {
-        "status": "error", "type": "pointer_dispatch_failed", "executed_action": None,
-    }
-    allowed = await app_use.execute_app_use({
-        "operation": "call", "session_id": "session-measured", "capability": "virtual_click_at",
-        "parameters": {"x": 120.25, "y": 88.5},
-    })
-    assert allowed["status"] == "uncertain"
-    assert calls[-1][1]["capability"] == "virtual_click_at"
 
 
 @pytest.mark.asyncio
@@ -625,7 +631,8 @@ async def test_real_coordinate_click_requires_focus_and_reuses_measured_point(mo
         "operation": "call", "session_id": "session-real", "capability": "virtual_click_at",
         "parameters": {"x": 204.5, "y": 295.25},
     })
-    assert duplicate["type"] == "primary_click_already_succeeded"
+    assert duplicate["type"] == "unsupported_visual_capability"
+    assert duplicate["alternate_scheme"]["tool"] == "AppUISnapshot"
     assert [arguments["capability"] for _, arguments in calls] == ["focus_window", "click_at"]
 
 
@@ -734,7 +741,7 @@ async def test_measure_coordinates_crops_marks_and_returns_all_coordinate_spaces
 
 
 @pytest.mark.asyncio
-async def test_visual_click_never_attempts_semantic_fallback_for_unavailable_tree(monkeypatch):
+async def test_visual_click_failure_hands_off_without_calling_semantic_actions(monkeypatch):
     from cyrene.tooling.backends import app_use
 
     calls = []
@@ -753,14 +760,14 @@ async def test_visual_click_never_attempts_semantic_fallback_for_unavailable_tre
 
     monkeypatch.setattr(app_use, "_electron_app_rpc", fake_rpc)
     monkeypatch.setattr(app_use, "_analyze_capture", fake_analysis)
-    monkeypatch.setitem(app_use._SESSION_SEMANTIC_STATUS, "session-no-tree", "unavailable")
     result = await app_use.execute_app_use({
         "operation": "call", "session_id": "session-no-tree", "capability": "visual_click",
-        "parameters": {"target": "Messages", "max_attempts": 1, "fallback": ["semantic_press"]},
+        "parameters": {"target": "Messages", "max_attempts": 1},
     })
     assert result["status"] == "uncertain"
-    assert result["requested_action"]["fallback_order"] == []
-    assert result["next_valid_actions"] == ["disconnect"]
+    assert result["requested_action"]["scheme"] == "visual"
+    assert result["alternate_scheme"]["tool"] == "AppUISnapshot"
+    assert result["next_valid_actions"] == ["call:visual_describe", "disconnect", "switch:semantic"]
     assert [arguments["capability"] for _, arguments in calls] == ["visual_describe"]
 
 
@@ -918,12 +925,15 @@ async def test_visual_click_scales_capture_coordinates_and_uses_foreground_quart
 
 
 @pytest.mark.asyncio
-async def test_visual_click_semantic_fallback_stays_in_background(monkeypatch):
+async def test_visual_click_never_calls_semantic_find_or_press(monkeypatch):
     from cyrene.tooling.backends import app_use
     from cyrene.runtime import attachments
 
+    calls = []
+
     async def fake_rpc(_operation, arguments, **_kwargs):
         capability = arguments.get("capability")
+        calls.append(capability)
         if capability == "visual_describe":
             return {
                 "status": "success",
@@ -935,10 +945,6 @@ async def test_visual_click_semantic_fallback_stays_in_background(monkeypatch):
                 "height": 300,
                 "coordinate_mapping": {"logical_width": 400, "logical_height": 300},
             }
-        if capability == "find":
-            return {"status": "success", "nodes": [{"ref": "e9", "name": "Close", "actions": ["press"]}]}
-        if capability == "press":
-            return {"status": "success", "session_id": "session-1", "summary": "pressed"}
         raise AssertionError(f"unexpected capability: {capability}")
 
     async def fake_vision(_content, content_prompt="", **_kwargs):
@@ -952,14 +958,13 @@ async def test_visual_click_semantic_fallback_stays_in_background(monkeypatch):
         "capability": "visual_click",
         "parameters": {"target": "close button", "max_attempts": 1},
     })
-    assert result["status"] == "success"
-    assert result["method"] == "semantic_press_fallback"
-    assert result["foreground_input_used"] is False
-    assert result["fallback_used"] is True
+    assert result["status"] == "uncertain"
+    assert result["alternate_scheme"]["tool"] == "AppUISnapshot"
+    assert calls == ["visual_describe"]
 
 
 @pytest.mark.asyncio
-async def test_visual_click_rejects_keyboard_configuration_when_no_matching_fallback():
+async def test_visual_click_rejects_removed_cross_scheme_fallback_arguments():
     from cyrene.tooling.backends import app_use
 
     result = await app_use.execute_app_use({
@@ -974,11 +979,12 @@ async def test_visual_click_rejects_keyboard_configuration_when_no_matching_fall
     })
     assert result["status"] == "error"
     assert result["type"] == "invalid_arguments"
-    assert "menu_command or keyboard" in result["message"]
+    assert "does not accept" in result["message"]
+    assert "fallback" in result["message"]
 
 
 @pytest.mark.asyncio
-async def test_visual_click_attributes_background_axpress_not_configured_keyboard(monkeypatch):
+async def test_visual_click_attributes_only_the_visual_pointer_action(monkeypatch):
     from cyrene.tooling.backends import app_use
     from cyrene.runtime import attachments
 
@@ -1007,17 +1013,14 @@ async def test_visual_click_attributes_background_axpress_not_configured_keyboar
     monkeypatch.setattr(attachments, "run_vision_chat", fake_vision)
     result = await app_use.execute_app_use({
         "operation": "call", "session_id": "session-1", "capability": "visual_click",
-        "parameters": {
-            "target": "new tab", "fallback": ["menu_command", "keyboard"],
-            "allow_foreground_fallback": True, "keyboard_shortcut": ["command", "t"],
-        },
+        "parameters": {"target": "new tab"},
     })
     assert result["status"] == "success"
     assert result["executed_action"]["capability"] == "click_at"
     assert result["executed_action"]["native_action"] == "Quartz CGEvent"
     assert result["foreground_input_used"] is True
     assert result["fallback_used"] is False
-    assert result["unused_fallback_configuration"]["keyboard_shortcut"] == ["command", "t"]
+    assert "unused_fallback_configuration" not in result
 
 
 @pytest.mark.asyncio
@@ -1146,15 +1149,9 @@ def test_agent_never_bypasses_an_unavailable_app_use_provider():
     prompts = (Path(__file__).resolve().parents[1] / "src" / "cyrene" / "agent" / "prompts.py").read_text(
         encoding="utf-8"
     )
-    rule = (
-        "never bypass it with Bash, osascript, PowerShell, direct file edits, "
-        "or another tool that imitates the requested App Use action"
-    )
-    assert prompts.count(rule) == 2
-    # Coordinate calibration belongs only to the visual scheme; the semantic
-    # scheme must never receive screenshot coordinates.
-    assert prompts.count("Choose a candidate center in captured-image pixels") == 1
-    assert prompts.count("marked calibration crop") == 1
-    assert "seven `desktop.semantic.*` capabilities" in prompts
-    assert "Never fall back implicitly between them" in prompts
-    assert "Linux is semantic-only" in prompts
+    assert prompts.count("exactly two independent schemes") == 2
+    assert "No tool may invoke the other scheme internally" in prompts
+    assert "disconnect that session and immediately try the other scheme once" in prompts
+    assert "Never switch after an uncertain result" in prompts
+    assert "Linux supports only semantic" in prompts
+    assert "never imitate it with Bash, osascript, PowerShell, or direct file edits" in prompts

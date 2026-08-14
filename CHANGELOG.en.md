@@ -11,6 +11,8 @@ The Chinese edition remains the most detailed record for older releases.
 
 - Windows x64 and Linux now automatically use GPU acceleration when a compatible NVIDIA CUDA environment is detected, while falling back to CPU on other devices; the Windows on ARM QNN/NPU path is unchanged.
 - Linux adds accessibility-based App Use for reading and operating compatible applications without taking focus, with clear capability status when the service is unavailable or still initializing.
+- Desktop App Use is now split into disjoint visual and semantic schemes. Visual mode uses only captures and coordinates, while semantic mode uses only the system accessibility tree. Agents can switch after a definite failure, while uncertain results require verification to prevent duplicate actions.
+- Semantic control on macOS and Windows now traverses the complete native accessibility tree and presents layered snapshots with on-demand inspection. Generic labels or incomplete coverage produce an explicit recommendation to switch to visual mode.
 - Added external Agent support, allowing Cyrene to act as a unified conversation frontend for compatible ACP Agents. The initial recommended catalog includes OpenCode, Codex ACP, and Pi ACP, while a public installation endpoint supports other compatible Agents.
 - External Agents use a universal capability protocol instead of Agent-specific screens. Compatible Agents can declare session, input, output, permission, model, and interaction capabilities without requiring a new frontend integration each time.
 - External Agents can share Cyrene's model configuration or use their own login, API key, or environment configuration. Cyrene-managed access follows the exact model selected for the conversation.
@@ -29,6 +31,7 @@ The Chinese edition remains the most detailed record for older releases.
 - The Windows on ARM backend now runs natively on ARM64 instead of relying on a full x64 backend compatibility layer. Local models prefer available Qualcomm NPU acceleration and fall back safely when a model is not supported.
 - Windows on ARM retains OCR and local search through bundled compatibility components in both installer and portable packages.
 - Knowledge Library PDF details retain accurate page counts, with improved status and failure reporting for local models, OCR, and extension installation.
+- Every completed root-conversation turn again feeds editable structured project memory for immediate same-session recall. Soul learning output is normalized before application so extracted entities cannot be written into Soul accidentally.
 
 ### Interface changes
 
@@ -47,6 +50,7 @@ The Chinese edition remains the most detailed record for older releases.
 - Extension installation failures now show user-facing causes and recovery guidance with expandable technical details. MCP details show discovered tools or explain why tools cannot currently be read.
 - Browser tabs, fullscreen playback, takeover, separate-window verification, sign-in, and retry states are localized, alongside task-step fields, statuses, actions, and empty states.
 - Browser controls, task-step states, Agent permission semantics, and extension failure messages receive more complete English and Chinese localization.
+- Desktop App Use progress cards now localize target discovery, connection, snapshots, visual location, clicks, typing, scrolling, dragging, key input, and disconnection instead of exposing internal operation codes.
 - External Agent context-source notes now live behind an information button beside the token count, while the Cyrene-only inbox and tool-package summary are hidden for external Agents.
 
 ## [0.7.5] - 2026-08-13

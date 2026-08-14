@@ -87,6 +87,368 @@ func children(_ element: AXUIElement) -> [AXUIElement] {
     return items
 }
 
+let semanticAttributeNames = [
+    kAXRoleAttribute as String,
+    kAXSubroleAttribute as String,
+    kAXTitleAttribute as String,
+    kAXDescriptionAttribute as String,
+    kAXHelpAttribute as String,
+    kAXValueAttribute as String,
+    kAXEnabledAttribute as String,
+    kAXFocusedAttribute as String,
+    kAXSelectedAttribute as String,
+    kAXPositionAttribute as String,
+    kAXSizeAttribute as String,
+    "AXIdentifier",
+    "AXRoleDescription",
+    "AXPlaceholderValue",
+    "AXChildrenInNavigationOrder",
+    kAXChildrenAttribute as String,
+    "AXVisibleChildren",
+    "AXRows",
+    "AXContents",
+]
+
+func multipleAttributes(_ element: AXUIElement, _ names: [String] = semanticAttributeNames) -> [String: Any] {
+    var copied: CFArray?
+    let attributes = names.map { $0 as CFString } as CFArray
+    let error = AXUIElementCopyMultipleAttributeValues(
+        element,
+        attributes,
+        AXCopyMultipleAttributeOptions(rawValue: 0),
+        &copied
+    )
+    guard error == .success, let values = copied as? [Any] else { return [:] }
+    var result: [String: Any] = [:]
+    for (index, name) in names.enumerated() where index < values.count {
+        result[name] = values[index]
+    }
+    return result
+}
+
+func textValue(_ value: Any?) -> String {
+    if let text = value as? String { return text }
+    if let attributed = value as? NSAttributedString { return attributed.string }
+    return ""
+}
+
+func booleanValue(_ value: Any?, default fallback: Bool = false) -> Bool {
+    return (value as? NSNumber)?.boolValue ?? fallback
+}
+
+func jsonValue(_ value: Any?) -> Any? {
+    if let text = value as? String { return text }
+    if let attributed = value as? NSAttributedString { return attributed.string }
+    if let number = value as? NSNumber { return number }
+    return nil
+}
+
+func boundsFromAttributes(_ values: [String: Any]) -> [String: Double]? {
+    guard let positionValue = values[kAXPositionAttribute as String],
+          let sizeValue = values[kAXSizeAttribute as String],
+          CFGetTypeID(positionValue as CFTypeRef) == AXValueGetTypeID(),
+          CFGetTypeID(sizeValue as CFTypeRef) == AXValueGetTypeID()
+    else { return nil }
+    var point = CGPoint.zero
+    var size = CGSize.zero
+    guard AXValueGetValue(positionValue as! AXValue, .cgPoint, &point),
+          AXValueGetValue(sizeValue as! AXValue, .cgSize, &size)
+    else { return nil }
+    return ["x": point.x, "y": point.y, "width": size.width, "height": size.height]
+}
+
+func elementArray(_ value: Any?) -> [AXUIElement] {
+    guard let value, CFGetTypeID(value as CFTypeRef) == CFArrayGetTypeID() else { return [] }
+    let array = unsafeBitCast(value as CFTypeRef, to: CFArray.self)
+    var result: [AXUIElement] = []
+    for index in 0..<CFArrayGetCount(array) {
+        guard let pointer = CFArrayGetValueAtIndex(array, index) else { continue }
+        let element = Unmanaged<AXUIElement>.fromOpaque(pointer).takeUnretainedValue()
+        if CFGetTypeID(element) == AXUIElementGetTypeID() { result.append(element) }
+    }
+    return result
+}
+
+func appendUniqueElements(_ source: [AXUIElement], to destination: inout [AXUIElement]) {
+    for candidate in source where !destination.contains(where: { CFEqual($0, candidate) }) {
+        destination.append(candidate)
+    }
+}
+
+func nativeChildren(_ element: AXUIElement, attributes: [String: Any]? = nil) -> [AXUIElement] {
+    let values = attributes ?? multipleAttributes(
+        element,
+        ["AXChildrenInNavigationOrder", kAXChildrenAttribute as String, "AXVisibleChildren", "AXRows", "AXContents"]
+    )
+    var result: [AXUIElement] = []
+    let childAttributes = ["AXChildrenInNavigationOrder", kAXChildrenAttribute as String, "AXVisibleChildren", "AXRows", "AXContents"]
+    for name in childAttributes {
+        appendUniqueElements(elementArray(values[name]), to: &result)
+    }
+    if result.isEmpty {
+        for name in childAttributes {
+            var copied: CFTypeRef?
+            if AXUIElementCopyAttributeValue(element, name as CFString, &copied) == .success {
+                appendUniqueElements(elementArray(copied), to: &result)
+            }
+        }
+    }
+    return result
+}
+
+func nativeActionNames(_ element: AXUIElement) -> [String] {
+    var copied: CFArray?
+    guard AXUIElementCopyActionNames(element, &copied) == .success else { return [] }
+    return copied as? [String] ?? []
+}
+
+func semanticActions(_ nativeActions: [String], role: String, valueSettable: Bool) -> [String] {
+    var actions: [String] = []
+    if nativeActions.contains(where: { [kAXPressAction as String, kAXConfirmAction as String, kAXPickAction as String, "AXOpen"].contains($0) }) {
+        actions.append("press")
+    }
+    if nativeActions.contains("AXDoublePress") { actions.append("semantic_double_click") }
+    if nativeActions.contains(where: { ["AXDrag", "AXMove", "AXReorder", "AXResize"].contains($0) }) {
+        actions.append("semantic_drag")
+    }
+    if role.range(of: "ScrollArea|ScrollBar|Slider|Stepper", options: .regularExpression) != nil,
+       nativeActions.contains(where: { $0 == kAXIncrementAction as String || $0 == kAXDecrementAction as String }) {
+        actions.append("scroll")
+    }
+    if role.range(of: "CheckBox|Switch|DisclosureTriangle", options: .regularExpression) != nil,
+       actions.contains("press") {
+        actions.append("toggle")
+    }
+    if role.range(of: "RadioButton|Row|MenuItem|Tab|ListItem", options: .regularExpression) != nil,
+       actions.contains("press") {
+        actions.append("select")
+    }
+    if valueSettable,
+       role.range(of: "TextField|TextArea|ComboBox|SearchField", options: .regularExpression) != nil {
+        actions.append("set_value")
+    }
+    return Array(NSOrderedSet(array: actions)) as? [String] ?? actions
+}
+
+struct NativeNodeRead {
+    let node: [String: Any]
+    let children: [AXUIElement]
+}
+
+func readNativeNode(_ element: AXUIElement, nativeRef: String, parentNativeRef: String) -> NativeNodeRead {
+    let values = multipleAttributes(element)
+    let nodeChildren = nativeChildren(element, attributes: values)
+    let role = textValue(values[kAXRoleAttribute as String])
+    let title = textValue(values[kAXTitleAttribute as String])
+    let description = textValue(values[kAXDescriptionAttribute as String])
+    let help = textValue(values[kAXHelpAttribute as String])
+    let roleDescription = textValue(values["AXRoleDescription"])
+    let placeholder = textValue(values["AXPlaceholderValue"])
+    let nativeActions = nativeActionNames(element)
+    var valueSettable = DarwinBoolean(false)
+    _ = AXUIElementIsAttributeSettable(element, kAXValueAttribute as CFString, &valueSettable)
+    let semantic = semanticActions(nativeActions, role: role, valueSettable: valueSettable.boolValue)
+    var node: [String: Any] = [
+        "nativeRef": nativeRef,
+        "role": role.replacingOccurrences(of: "AX", with: "", options: .anchored),
+        "subrole": textValue(values[kAXSubroleAttribute as String]).replacingOccurrences(of: "AX", with: "", options: .anchored),
+        "name": title.isEmpty ? (description.isEmpty ? placeholder : description) : title,
+        "description": description.isEmpty ? roleDescription : description,
+        "help": help,
+        "automationId": textValue(values["AXIdentifier"]),
+        "enabled": booleanValue(values[kAXEnabledAttribute as String], default: true),
+        "focused": booleanValue(values[kAXFocusedAttribute as String]),
+        "selected": booleanValue(values[kAXSelectedAttribute as String]),
+        "actions": semantic,
+        "nativeActions": nativeActions,
+        "childCount": nodeChildren.count,
+    ]
+    if !parentNativeRef.isEmpty { node["parentNativeRef"] = parentNativeRef }
+    if let value = jsonValue(values[kAXValueAttribute as String]) { node["value"] = value }
+    if let bounds = boundsFromAttributes(values) { node["bounds"] = bounds }
+    return NativeNodeRead(node: node, children: nodeChildren)
+}
+
+func targetWindow(_ target: [String: Any]) throws -> (AXUIElement, AXUIElement, String) {
+    let pid = pid_t(try number(target["pid"], "target.pid"))
+    guard AXIsProcessTrusted() else { try fail("permission_required", "Accessibility permission is required.") }
+    let application = AXUIElementCreateApplication(pid)
+    _ = AXUIElementSetMessagingTimeout(application, 0.75)
+    var navigationValue: CFTypeRef?
+    _ = AXUIElementCopyAttributeValue(application, "AXChildrenInNavigationOrder" as CFString, &navigationValue)
+    let navigationChildren = elementArray(navigationValue)
+    var windows = navigationChildren.filter {
+        stringAttribute($0, kAXRoleAttribute as CFString) == kAXWindowRole as String
+    }
+    var windowsValue: CFTypeRef?
+    let windowError = AXUIElementCopyAttributeValue(application, kAXWindowsAttribute as CFString, &windowsValue)
+    if windows.isEmpty {
+        windows = elementArray(windowsValue).filter {
+            stringAttribute($0, kAXRoleAttribute as CFString) == kAXWindowRole as String
+        }
+    }
+    if windows.isEmpty {
+        windows = nativeChildren(application).filter {
+            stringAttribute($0, kAXRoleAttribute as CFString) == kAXWindowRole as String
+        }
+    }
+    guard !windows.isEmpty else {
+        let roles = navigationChildren.map { stringAttribute($0, kAXRoleAttribute as CFString) }
+        try fail(errorType(windowError), "The target application does not currently expose an accessibility window (navigation roles: \(roles)).")
+    }
+    let requestedTitle = String(describing: target["windowTitle"] ?? "")
+    let requestedIndex = (target["windowIndex"] as? NSNumber)?.intValue ?? 0
+    let requestedBounds = target["bounds"] as? [String: Any]
+    var bestIndex = max(0, min(requestedIndex, windows.count - 1))
+    var bestScore = Double.greatestFiniteMagnitude
+    for (index, candidate) in windows.enumerated() {
+        let title = stringAttribute(candidate, kAXTitleAttribute as CFString)
+        var score = requestedTitle.isEmpty || title == requestedTitle ? 0.0 : 100_000.0
+        if let expected = requestedBounds, let observed = elementBounds(candidate) {
+            for key in ["x", "y", "width", "height"] {
+                score += abs(((expected[key] as? NSNumber)?.doubleValue ?? observed[key]!) - observed[key]!)
+            }
+        } else if index != requestedIndex {
+            score += 1000
+        }
+        if score < bestScore { bestScore = score; bestIndex = index }
+    }
+    return (application, windows[bestIndex], "w\(requestedIndex)")
+}
+
+func resolveNativeElement(_ root: AXUIElement, nativeRef: String) throws -> AXUIElement {
+    let parts = nativeRef.split(separator: "/").map(String.init)
+    if parts.isEmpty { return root }
+    guard parts[0].range(of: "^w\\d+$", options: .regularExpression) != nil else {
+        try fail("invalid_arguments", "Invalid native element path: \(nativeRef)")
+    }
+    var current = root
+    for part in parts.dropFirst() {
+        guard part.first == "e", let index = Int(part.dropFirst()) else {
+            try fail("invalid_arguments", "Invalid native element path: \(nativeRef)")
+        }
+        let descendants = nativeChildren(current)
+        guard index >= 0 && index < descendants.count else {
+            try fail("stale_element", "Element path is stale: \(nativeRef)")
+        }
+        current = descendants[index]
+    }
+    return current
+}
+
+func nativeSnapshot(_ payload: [String: Any], inspectOnly: Bool) throws -> [String: Any] {
+    guard let target = payload["target"] as? [String: Any] else { try fail("invalid_arguments", "target is required.") }
+    let (_, window, defaultRootRef) = try targetWindow(target)
+    let options = payload["options"] as? [String: Any] ?? [:]
+    let requestedRef = String(describing: payload["nativeRef"] ?? options["nativeRef"] ?? defaultRootRef)
+    let start = try resolveNativeElement(window, nativeRef: requestedRef)
+    let defaultNodes = inspectOnly ? 40 : 80
+    let defaultDepth = inspectOnly ? 3 : 8
+    let maxNodes = max(1, min(500, (options["maxNodes"] as? NSNumber)?.intValue ?? defaultNodes))
+    let maxDepth = max(1, min(24, (options["maxDepth"] as? NSNumber)?.intValue ?? defaultDepth))
+    let maxVisited = max(500, maxNodes * 4)
+    let rootRead = readNativeNode(start, nativeRef: requestedRef, parentNativeRef: "")
+    var nodes: [[String: Any]] = [rootRead.node]
+    var queue: [(AXUIElement, String, Int)] = rootRead.children.enumerated().map {
+        ($0.element, "\(requestedRef)/e\($0.offset)", 1)
+    }
+    var seen: [AXUIElement] = [start]
+    var visited = 1
+    var depthLimited = false
+    while !queue.isEmpty && nodes.count < maxNodes && visited < maxVisited {
+        let (element, nativeRef, depth) = queue.removeFirst()
+        if seen.contains(where: { CFEqual($0, element) }) { continue }
+        seen.append(element)
+        visited += 1
+        let read = readNativeNode(element, nativeRef: nativeRef, parentNativeRef: requestedRef)
+        let role = String(describing: read.node["role"] ?? "").lowercased()
+        let name = String(describing: read.node["name"] ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        let description = String(describing: read.node["description"] ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        let genericDescription = ["", "group", "application", "pane", "container", "unknown", "组", "应用", "窗格", "容器", "未知"].contains(description.lowercased())
+        let transparent = !read.children.isEmpty && name.isEmpty && genericDescription
+            && role.range(of: "application|group|pane|container|unknown|hostingview", options: .regularExpression) != nil
+        if transparent {
+            if depth < maxDepth {
+                for (index, child) in read.children.enumerated() {
+                    queue.append((child, "\(nativeRef)/e\(index)", depth + 1))
+                }
+            } else {
+                depthLimited = true
+                nodes.append(read.node)
+            }
+        } else {
+            nodes.append(read.node)
+        }
+    }
+    return [
+        "ok": true,
+        "nodes": nodes,
+        "truncated": !queue.isEmpty || depthLimited || visited >= maxVisited,
+        "depthLimited": depthLimited,
+        "visited": visited,
+        "traversal": "native_ax_current_semantic_layer",
+        "provider": "AXUIElement",
+    ]
+}
+
+func performPreferredAction(_ element: AXUIElement, preferred: [String]) throws -> String {
+    let available = Set(nativeActionNames(element))
+    guard let action = preferred.first(where: { available.contains($0) }) else {
+        try fail("unsupported_action", "Element does not support any of: \(preferred.joined(separator: ", ")).")
+    }
+    let result = AXUIElementPerformAction(element, action as CFString)
+    guard result == .success else { try fail(errorType(result), "Accessibility action \(action) failed with AX error \(result.rawValue).") }
+    return action
+}
+
+func nativePerform(_ payload: [String: Any]) throws -> [String: Any] {
+    guard let target = payload["target"] as? [String: Any] else { try fail("invalid_arguments", "target is required.") }
+    let (_, window, defaultRootRef) = try targetWindow(target)
+    let nativeRef = String(describing: payload["nativeRef"] ?? defaultRootRef)
+    let element = try resolveNativeElement(window, nativeRef: nativeRef)
+    let capability = String(describing: payload["capability"] ?? "")
+    let parameters = payload["parameters"] as? [String: Any] ?? [:]
+    var diagnostics: [String: Any] = ["provider": "AXUIElement", "nativeRef": nativeRef, "backgroundSafe": true]
+    if capability == "set_value" || capability == "type_text" {
+        var settable = DarwinBoolean(false)
+        guard AXUIElementIsAttributeSettable(element, kAXValueAttribute as CFString, &settable) == .success,
+              settable.boolValue
+        else { try fail("unsupported_action", "The element does not expose a writable accessibility value.") }
+        let before = stringAttribute(element, kAXValueAttribute as CFString)
+        let requested = capability == "set_value"
+            ? String(describing: parameters["value"] ?? "")
+            : String(describing: parameters["text"] ?? "")
+        let expected = capability == "type_text" && parameters["replace"] as? Bool != true ? before + requested : requested
+        let setError = AXUIElementSetAttributeValue(element, kAXValueAttribute as CFString, expected as CFTypeRef)
+        guard setError == .success else { try fail(errorType(setError), "The element rejected AXValue.") }
+        let after = stringAttribute(element, kAXValueAttribute as CFString)
+        guard after == expected else { try fail("verification_failed", "The accessibility value did not match the requested text.") }
+        diagnostics["method"] = "AXValue"
+        diagnostics["before"] = before
+        diagnostics["after"] = after
+        return ["ok": true, "verified": true, "summary": "Wrote and verified text through AXValue.", "diagnostics": diagnostics]
+    }
+    if capability == "scroll" {
+        let direction = String(describing: parameters["direction"] ?? "down").lowercased()
+        let amount = max(1, min(20, (parameters["amount"] as? NSNumber)?.intValue ?? 3))
+        let action = direction == "up" || direction == "left" ? kAXDecrementAction as String : kAXIncrementAction as String
+        for _ in 0..<amount { _ = try performPreferredAction(element, preferred: [action]) }
+        diagnostics["nativeAction"] = action
+        return ["ok": true, "verified": true, "summary": "Scrolled through native accessibility actions.", "diagnostics": diagnostics]
+    }
+    let preferred: [String]
+    switch capability {
+    case "semantic_double_click": preferred = ["AXDoublePress"]
+    case "semantic_drag": preferred = ["AXDrag", "AXMove", "AXReorder", "AXResize"]
+    case "toggle": preferred = [kAXPressAction as String, "AXToggle"]
+    case "press", "select": preferred = [kAXPressAction as String, kAXConfirmAction as String, kAXPickAction as String, "AXOpen"]
+    default: try fail("unsupported_action", "Unsupported native semantic capability: \(capability).")
+    }
+    let action = try performPreferredAction(element, preferred: preferred)
+    diagnostics["nativeAction"] = action
+    return ["ok": true, "verified": true, "summary": "Performed \(action) through AXUIElement.", "diagnostics": diagnostics]
+}
+
 func menuCommand(_ payload: [String: Any]) throws -> [String: Any] {
     guard let target = payload["target"] as? [String: Any] else {
         try fail("invalid_arguments", "target is required.")
@@ -478,7 +840,13 @@ do {
           let payload = try JSONSerialization.jsonObject(with: data) as? [String: Any]
     else { try fail("invalid_arguments", "Expected one JSON payload argument.") }
     let operation = String(describing: payload["operation"] ?? "hit_test")
-    if operation == "menu_command" {
+    if operation == "snapshot" {
+        jsonOutput(try nativeSnapshot(payload, inspectOnly: false))
+    } else if operation == "inspect" {
+        jsonOutput(try nativeSnapshot(payload, inspectOnly: true))
+    } else if operation == "perform" {
+        jsonOutput(try nativePerform(payload))
+    } else if operation == "menu_command" {
         jsonOutput(try menuCommand(payload))
     } else if operation == "enable_accessibility" {
         jsonOutput(try enableAccessibility(payload))

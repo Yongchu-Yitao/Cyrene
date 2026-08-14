@@ -16,33 +16,39 @@ import httpx
 
 
 VISION_ANALYSIS_TIMEOUT_SECONDS = 60.0
-_SESSION_SEMANTIC_STATUS: dict[str, str] = {}
 _SESSION_MEASUREMENTS: dict[str, dict[str, Any] | None] = {}
 _SESSION_FOCUS_READY: set[str] = set()
 _SESSION_VISUAL_READY: set[str] = set()
 _SESSION_PRIMARY_CLICK_RESULTS: dict[str, dict[str, Any] | None] = {}
 _SESSION_CAPABILITIES: dict[str, set[str]] = {}
+_VISUAL_HOST_CAPABILITIES = frozenset({
+    "visual_describe", "focus_window", "restore_previous_focus", "click_at", "double_click",
+    "right_click", "hover_at", "drag", "swipe", "scroll_at", "key_chord", "key_sequence",
+    "virtual_type_at",
+})
+
+
+def _semantic_handoff(result: dict[str, Any]) -> dict[str, Any]:
+    return {
+        **result,
+        "alternate_scheme": {"tool": "AppUISnapshot", "operation": "list_targets"},
+        "next_valid_actions": ["disconnect", "switch:semantic"],
+    }
 
 
 VISUAL_CLICK_CAPABILITY = {
     "name": "visual_click",
     "description": (
         "Locate a described target in a fresh window capture, focus the target window, and click the measured coordinate "
-        "with the real OS pointer before restoring Cyrene focus. It re-localizes once by default, then can fall back to "
-        "semantic press or a macOS menu command. The result separates requested_action from executed_action; only the "
-        "latter proves what ran. This foreground coordinate path visibly moves the real pointer."
+        "with the real OS pointer before restoring Cyrene focus. It may re-localize once, but never invokes an accessibility "
+        "action or changes control schemes internally. The result separates requested_action from executed_action; only the "
+        "latter proves what ran."
     ),
     "arguments": {
         "target": "string",
         "max_attempts": "integer?",
         "min_confidence": "number?",
-        "semantic_query": "object?",
-        "fallback": "string[]?",
-        "allow_foreground_fallback": "boolean?",
-        "keyboard_shortcut": "string[]?",
-        "menu_item": "string?",
         "pointer_duration_ms": "integer?",
-        "preferred_actions": "string[]?",
     },
     "background": "requires_focus",
 }
@@ -93,18 +99,16 @@ _COORDINATE_CAPABILITY_PRIORITY = {
     "focus_window": 2,
     "click_at": 3,
     "visual_click": 4,
-    "virtual_click_at": 5,
-    "visual_type": 6,
-    "virtual_type_at": 7,
+    "visual_type": 5,
+    "virtual_type_at": 6,
 }
 
 # These capabilities either consume explicit coordinates or orchestrate a
-# coordinate-based fallback. Non-coordinate actions such as focus_window,
-# menu_command, and key_chord must not be trapped behind coordinate
+# coordinate-based fallback. Non-coordinate actions such as focus_window and
+# key_chord must not be trapped behind coordinate
 # calibration.
 _MEASUREMENT_REQUIRED_CAPABILITIES = frozenset({
     "click_at",
-    "virtual_click_at",
     "double_click",
     "right_click",
     "hover_at",
@@ -120,7 +124,15 @@ _MEASUREMENT_REQUIRED_CAPABILITIES = frozenset({
 def _with_python_capabilities(result: dict[str, Any]) -> dict[str, Any]:
     if result.get("status") != "success" or not isinstance(result.get("capabilities"), list):
         return result
-    names = {item.get("name") for item in result["capabilities"] if isinstance(item, dict)}
+    result = dict(result)
+    result.pop("semantic_profile", None)
+    result.pop("accessibility_activation", None)
+    result["mode"] = "visual"
+    result["capabilities"] = [
+        item for item in result["capabilities"]
+        if isinstance(item, dict) and item.get("name") in _VISUAL_HOST_CAPABILITIES
+    ]
+    names = {item.get("name") for item in result["capabilities"]}
     additions: list[dict[str, Any]] = []
     if "visual_describe" in names and "measure_coordinates" not in names:
         additions.append(MEASURE_COORDINATES_CAPABILITY)
@@ -130,7 +142,6 @@ def _with_python_capabilities(result: dict[str, Any]) -> dict[str, Any]:
     # virtual_type_at primitive. Never disclose it when that primitive is absent.
     if {"visual_describe", "virtual_type_at"}.issubset(names) and "visual_type" not in names:
         additions.append(VISUAL_TYPE_CAPABILITY)
-    result = dict(result)
     capabilities = [*result["capabilities"], *additions]
     indexed = list(enumerate(capabilities))
     indexed.sort(key=lambda item: (
@@ -150,7 +161,6 @@ def _with_python_capabilities(result: dict[str, Any]) -> dict[str, Any]:
                 if {"focus_window", "click_at"}.issubset(final_names) else []
             ),
             "visual_effect_verification",
-            "semantic_or_menu_fallback",
         ]
     if "click_at" in final_names:
         result["primary_click"] = {
@@ -159,9 +169,7 @@ def _with_python_capabilities(result: dict[str, Any]) -> dict[str, Any]:
             "required_parameters": {"allow_foreground_input": True},
             "point_source": "latest measure_coordinates.window_point",
         }
-    result["fallback_click_capabilities"] = [
-        name for name in ("visual_click", "virtual_click_at") if name in final_names
-    ]
+    result["fallback_click_capabilities"] = [name for name in ("visual_click",) if name in final_names]
     next_valid_actions = []
     if "visual_describe" in final_names:
         next_valid_actions.append("call:visual_describe")
@@ -445,32 +453,6 @@ def _visual_location(payload: dict[str, Any] | None, width: float, height: float
     }
 
 
-def _semantic_queries(target: str, configured: Any) -> list[dict[str, Any]]:
-    if isinstance(configured, dict) and configured:
-        return [{**configured, "action": configured.get("action") or "press", "max_results": configured.get("max_results") or 10}]
-    lowered = target.lower()
-    if "close" in lowered or "关闭" in target:
-        return [
-            {"subrole": "closebutton", "action": "press", "max_results": 10},
-            {"role": "button", "contains": "close", "action": "press", "max_results": 10},
-            {"role": "button", "contains": "关闭", "action": "press", "max_results": 10},
-        ]
-    return [{"contains": target, "action": "press", "max_results": 10}]
-
-
-def _default_keyboard_shortcut(target: str, platform: str) -> list[str]:
-    lowered = target.lower()
-    wants_quit = "quit" in lowered or "exit" in lowered or "退出" in target
-    wants_close = "close" in lowered or "关闭" in target
-    if platform == "darwin" and wants_quit:
-        return ["command", "q"]
-    if platform == "darwin" and wants_close:
-        return ["command", "w"]
-    if platform == "win32" and (wants_quit or wants_close):
-        return ["alt", "f4"]
-    return []
-
-
 async def _execute_visual_click(session_id: str, parameters: dict[str, Any]) -> dict[str, Any]:
     unknown = sorted(set(parameters) - _VISUAL_CLICK_ARGUMENTS)
     if unknown:
@@ -489,41 +471,13 @@ async def _execute_visual_click(session_id: str, parameters: dict[str, Any]) -> 
         _pointer_duration_ms = max(100, min(10000, int(parameters.get("pointer_duration_ms", 1200))))
     except (TypeError, ValueError):
         return {"status": "error", "type": "invalid_arguments", "message": "visual_click attempt, confidence, and pointer duration values are invalid."}
-    fallback = parameters.get("fallback", ["semantic_press", "menu_command"])
-    if not isinstance(fallback, list) or any(item not in {"semantic_press", "menu_command", "real_click", "keyboard"} for item in fallback):
-        return {"status": "error", "type": "invalid_arguments", "message": "fallback must contain semantic_press, menu_command, real_click, or keyboard."}
-    allow_foreground = parameters.get("allow_foreground_fallback") is True
-    if parameters.get("keyboard_shortcut") is not None and not {"menu_command", "keyboard"}.intersection(fallback):
-        return {
-            "status": "error",
-            "type": "invalid_arguments",
-            "message": "keyboard_shortcut requires menu_command or keyboard in fallback.",
-        }
-    foreground_fallbacks = {"real_click", "keyboard"}.intersection(fallback)
-    if allow_foreground and not foreground_fallbacks:
-        return {
-            "status": "error",
-            "type": "invalid_arguments",
-            "message": "allow_foreground_fallback=true has no effect unless fallback includes real_click or keyboard.",
-        }
-    if foreground_fallbacks and not allow_foreground:
-        return {
-            "status": "error",
-            "type": "foreground_input_not_allowed",
-            "message": "real_click and keyboard fallbacks require allow_foreground_fallback=true and explicit user authorization.",
-        }
-    semantic_unavailable = _SESSION_SEMANTIC_STATUS.get(session_id) == "unavailable"
-    if semantic_unavailable:
-        fallback = [item for item in fallback if item != "semantic_press"]
     requested_action = {
         "capability": "visual_click",
         "target": target,
-        "fallback_order": list(fallback),
-        "foreground_fallback_allowed": allow_foreground,
+        "scheme": "visual",
     }
     attempts: list[dict[str, Any]] = []
     last_point: dict[str, float] | None = None
-    platform = ""
     vision_model = ""
 
     for attempt_number in range(1, max_attempts + 1):
@@ -537,7 +491,6 @@ async def _execute_visual_click(session_id: str, parameters: dict[str, Any]) -> 
             if capture.get("type") == "stale_session":
                 break
             continue
-        platform = str((capture.get("target") or {}).get("platform") or platform)
         captured_width = float(capture.get("width") or 0)
         captured_height = float(capture.get("height") or 0)
         mapping = capture.get("coordinate_mapping") or {}
@@ -631,9 +584,6 @@ async def _execute_visual_click(session_id: str, parameters: dict[str, Any]) -> 
                     "native_action": "Quartz CGEvent",
                     "point": last_point,
                 },
-                "unused_fallback_configuration": {
-                    "keyboard_shortcut": parameters.get("keyboard_shortcut"),
-                } if parameters.get("keyboard_shortcut") else None,
             }
         if activation.get("diagnostics"):
             return {
@@ -657,127 +607,18 @@ async def _execute_visual_click(session_id: str, parameters: dict[str, Any]) -> 
                 },
             }
 
-    for fallback_name in fallback:
-        if fallback_name == "semantic_press":
-            for query in _semantic_queries(target, parameters.get("semantic_query")):
-                found = await _electron_app_rpc("call", {
-                    "session_id": session_id,
-                    "capability": "find",
-                    "parameters": query,
-                })
-                nodes = found.get("nodes") if found.get("status") == "success" else []
-                candidate = next((node for node in (nodes or []) if "press" in (node.get("actions") or [])), None)
-                if not candidate:
-                    continue
-                pressed = await _electron_app_rpc("call", {
-                    "session_id": session_id,
-                    "capability": "press",
-                    "parameters": {"ref": candidate.get("ref")},
-                })
-                if pressed.get("status") == "success":
-                    return {
-                        **pressed,
-                        "summary": f"Coordinate targeting could not be verified; semantic press activated {target} in the background.",
-                        "method": "semantic_press_fallback",
-                        "attempts": attempts,
-                        "vision_model": vision_model,
-                        "foreground_input_used": False,
-                        "fallback_used": True,
-                        "requested_action": requested_action,
-                        "executed_action": {
-                            "capability": "press",
-                            "input_mode": "background_accessibility",
-                            "semantic_action": "press",
-                            "target": candidate,
-                        },
-                    }
-        elif fallback_name == "menu_command":
-            configured_keys = parameters.get("keyboard_shortcut")
-            keys = [str(item) for item in configured_keys] if isinstance(configured_keys, list) else []
-            menu_name = str(parameters.get("menu_item") or target).strip()
-            menu_result = await _electron_app_rpc("call", {
-                "session_id": session_id,
-                "capability": "menu_command",
-                "parameters": {"name": menu_name, "shortcut": keys},
-            })
-            if menu_result.get("status") in {"success", "uncertain"} and menu_result.get("executed_action"):
-                return {
-                    **menu_result,
-                    "summary": f"Coordinate and semantic targeting were unavailable; {menu_result.get('summary', 'a background menu command ran')}",
-                    "method": "background_menu_command_fallback",
-                    "attempts": attempts,
-                    "vision_model": vision_model,
-                    "foreground_input_used": False,
-                    "fallback_used": True,
-                    "requested_action": requested_action,
-                }
-        elif fallback_name == "real_click":
-            if not allow_foreground or not last_point:
-                continue
-            clicked = await _electron_app_rpc("call", {
-                "session_id": session_id,
-                "capability": "click_at",
-                "parameters": {**last_point, "coordinate_space": "window", "allow_foreground_input": True},
-            })
-            if clicked.get("status") == "success":
-                return {
-                    **clicked,
-                    "summary": f"Background virtual click was unavailable; foreground coordinate click activated {target}.",
-                    "method": "foreground_coordinate_fallback",
-                    "attempts": attempts,
-                    "vision_model": vision_model,
-                    "foreground_input_used": True,
-                    "fallback_used": True,
-                    "requested_action": requested_action,
-                    "executed_action": {
-                        "capability": "click_at",
-                        "input_mode": "foreground_os_pointer",
-                        "point": last_point,
-                    },
-                }
-        elif fallback_name == "keyboard":
-            if not allow_foreground:
-                continue
-            configured_keys = parameters.get("keyboard_shortcut")
-            keys = [str(item) for item in configured_keys] if isinstance(configured_keys, list) else _default_keyboard_shortcut(target, platform)
-            if not keys:
-                continue
-            keyed = await _electron_app_rpc("call", {
-                "session_id": session_id,
-                "capability": "key_sequence",
-                "parameters": {"steps": [{"type": "shortcut", "keys": keys}], "allow_foreground_input": True},
-            })
-            if keyed.get("status") == "success":
-                return {
-                    **keyed,
-                    "summary": f"Coordinate and semantic activation were unavailable; keyboard fallback activated {target}.",
-                    "method": "keyboard_fallback",
-                    "attempts": attempts,
-                    "vision_model": vision_model,
-                    "foreground_input_used": True,
-                    "fallback_used": True,
-                    "requested_action": requested_action,
-                    "executed_action": {
-                        "capability": "key_sequence",
-                        "input_mode": "foreground_keyboard",
-                        "keys": keys,
-                    },
-                }
-
     return {
         "status": "uncertain",
-        "summary": f"Could not activate {target} without using foreground input.",
+        "summary": f"The visual scheme could not verify activation of {target}.",
         "session_id": session_id,
         "method": "visual_click_exhausted",
         "attempts": attempts,
         "vision_model": vision_model,
         "foreground_input_used": False,
-        "foreground_fallback_allowed": allow_foreground,
         "requested_action": requested_action,
         "executed_action": None,
-        "next_valid_actions": (
-            ["disconnect"] if semantic_unavailable else ["call:snapshot", "call:find", "disconnect"]
-        ),
+        "alternate_scheme": {"tool": "AppUISnapshot", "operation": "list_targets"},
+        "next_valid_actions": ["call:visual_describe", "disconnect", "switch:semantic"],
     }
 
 
@@ -1018,6 +859,32 @@ async def execute_app_use(arguments: dict[str, Any]) -> dict[str, Any]:
         return {"status": "error", "type": "invalid_arguments", "message": str(exc)}
     session_id = str(request.get("session_id") or "")
     capability = str(request.get("capability") or "")
+    if operation == "connect":
+        requested_mode = str((request.get("parameters") or {}).get("mode") or "visual").lower()
+        if requested_mode != "visual":
+            return {
+                "status": "error", "type": "wrong_scheme",
+                "message": "app_use is the visual scheme. Use AppUISnapshot to start the semantic scheme.",
+                "alternate_scheme": {"tool": "AppUISnapshot", "operation": "list_targets"},
+                "next_valid_actions": ["switch:semantic"],
+            }
+        request["parameters"] = {**(request.get("parameters") or {}), "mode": "visual"}
+    if (
+        operation == "call"
+        and (
+            capability not in (_VISUAL_HOST_CAPABILITIES | {"measure_coordinates", "visual_click", "visual_type"})
+            or (
+                session_id in _SESSION_CAPABILITIES
+                and capability not in _SESSION_CAPABILITIES[session_id]
+            )
+        )
+    ):
+        return {
+            "status": "error", "type": "unsupported_visual_capability",
+            "message": f"{capability or '(empty)'} is not part of this visual session.",
+            "alternate_scheme": {"tool": "AppUISnapshot", "operation": "list_targets"},
+            "next_valid_actions": ["disconnect", "switch:semantic"],
+        }
     if (
         operation == "call"
         and session_id in _SESSION_MEASUREMENTS
@@ -1059,7 +926,7 @@ async def execute_app_use(arguments: dict[str, Any]) -> dict[str, Any]:
             "required_action": "call:visual_describe",
             "next_valid_actions": ["call:visual_describe", "disconnect"],
         }
-    if operation == "call" and capability in {"click_at", "virtual_click_at", "swipe"} and session_id in _SESSION_MEASUREMENTS:
+    if operation == "call" and capability in {"click_at", "swipe"} and session_id in _SESSION_MEASUREMENTS:
         measurement = _SESSION_MEASUREMENTS.get(session_id)
         parameters = request.get("parameters") or {}
         coordinate_space = str(parameters.get("coordinate_space") or "window")
@@ -1133,7 +1000,7 @@ async def execute_app_use(arguments: dict[str, Any]) -> dict[str, Any]:
             }
     if (
         operation == "call"
-        and capability in {"visual_click", "virtual_click_at"}
+        and capability == "visual_click"
         and isinstance(_SESSION_MEASUREMENTS.get(session_id), dict)
         and (
             session_id not in _SESSION_CAPABILITIES
@@ -1194,6 +1061,10 @@ async def execute_app_use(arguments: dict[str, Any]) -> dict[str, Any]:
             dict(request.get("parameters") or {}),
         )
     result = await _electron_app_rpc(operation, request)
+    if result.get("status") == "error" and result.get("type") in {
+        "provider_error", "unsupported_mode", "unsupported_capability", "vision_unavailable", "permission_required",
+    } and not result.get("action_may_have_run"):
+        result = _semantic_handoff(result)
     if operation == "call" and capability == "focus_window":
         if result.get("status") == "success":
             _SESSION_FOCUS_READY.add(session_id)
@@ -1210,9 +1081,6 @@ async def execute_app_use(arguments: dict[str, Any]) -> dict[str, Any]:
     if operation == "connect":
         result = _with_python_capabilities(result)
         session_id = str(result.get("session_id") or "")
-        semantic_profile = result.get("semantic_profile")
-        if session_id and isinstance(semantic_profile, dict):
-            _SESSION_SEMANTIC_STATUS[session_id] = str(semantic_profile.get("status") or "unknown")
         if session_id:
             _SESSION_CAPABILITIES[session_id] = {
                 str(item.get("name") or "")
@@ -1224,7 +1092,6 @@ async def execute_app_use(arguments: dict[str, Any]) -> dict[str, Any]:
             _SESSION_VISUAL_READY.discard(session_id)
             _SESSION_PRIMARY_CLICK_RESULTS[session_id] = None
     elif operation == "disconnect":
-        _SESSION_SEMANTIC_STATUS.pop(str(request.get("session_id") or ""), None)
         _SESSION_MEASUREMENTS.pop(str(request.get("session_id") or ""), None)
         _SESSION_FOCUS_READY.discard(str(request.get("session_id") or ""))
         _SESSION_VISUAL_READY.discard(str(request.get("session_id") or ""))
@@ -1259,7 +1126,7 @@ async def execute_app_use(arguments: dict[str, Any]) -> dict[str, Any]:
             if session_id in _SESSION_MEASUREMENTS and _SESSION_MEASUREMENTS[session_id] is None:
                 result["next_valid_actions"] = ["call:measure_coordinates", "call:visual_describe", "disconnect"]
         except asyncio.TimeoutError:
-            return {
+            return _semantic_handoff({
                 "status": "error",
                 "type": "vision_timeout",
                 "message": "The application window was captured, but visual analysis exceeded the 60 second budget.",
@@ -1267,15 +1134,15 @@ async def execute_app_use(arguments: dict[str, Any]) -> dict[str, Any]:
                 "retryable": True,
                 "session_id": result.get("session_id", ""),
                 "capture_image": result.get("capture_image"),
-            }
+            })
         except Exception as exc:
-            return {
+            return _semantic_handoff({
                 "status": "error",
                 "type": "vision_unavailable",
                 "message": f"The application window was captured, but visual analysis failed: {type(exc).__name__}: {exc}",
                 "session_id": result.get("session_id", ""),
                 "capture_image": result.get("capture_image"),
-            }
+            })
     return result
 
 
