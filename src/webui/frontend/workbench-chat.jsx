@@ -311,14 +311,128 @@ function wbcChatSideDropZone(event) {
 }
 
 var WBC_SPLIT_DRAG_MIME = "application/x-cyrene-split+json";
+var WBC_PANE_CARD_SEQUENCE = 0;
 
-function wbcSetSplitDrag(event) {
+function wbcPaneCard(kind, payload, options) {
+  var normalizedKind = String(kind || "");
+  var opts = options || {};
+  var stableId = opts.freshInstance
+    ? "pane:" + (++WBC_PANE_CARD_SEQUENCE)
+    : normalizedKind === "chat" && payload
+    ? "chat:" + String(payload)
+    : "pane:" + (++WBC_PANE_CARD_SEQUENCE);
+  return {
+    id: opts.id || stableId,
+    kind: normalizedKind,
+    payload: payload,
+    ownerChatId: String(opts.ownerChatId || ""),
+  };
+}
+
+function wbcDefaultPaneLayout(chatId) {
+  var id = String(chatId || "");
+  var leftRatio = 0.5;
+  var rightRatio = 0.5;
+  try {
+    leftRatio = Number(localStorage.getItem("wbc-pane-left-height")) || 0.5;
+    rightRatio = Number(localStorage.getItem("wbc-pane-right-height")) || 0.5;
+  } catch (e) {}
+  return {
+    left: id ? [wbcPaneCard("chat", id, { id: "chat:" + id, ownerChatId: id })] : [],
+    right: [],
+    leftRatio: Math.max(0.2, Math.min(0.8, leftRatio)),
+    rightRatio: Math.max(0.2, Math.min(0.8, rightRatio)),
+  };
+}
+
+function wbcNormalizePaneLayout(layout, chatId) {
+  var base = layout && typeof layout === "object" ? layout : wbcDefaultPaneLayout(chatId);
+  var left = Array.isArray(base.left) ? base.left.filter(Boolean).slice(0, 2) : [];
+  var right = Array.isArray(base.right) ? base.right.filter(Boolean).slice(0, 2) : [];
+  if (!left.length && !right.length && chatId) return wbcDefaultPaneLayout(chatId);
+  return {
+    left: left,
+    right: right,
+    leftRatio: Math.max(0.2, Math.min(0.8, Number(base.leftRatio) || 0.5)),
+    rightRatio: Math.max(0.2, Math.min(0.8, Number(base.rightRatio) || 0.5)),
+  };
+}
+
+function wbcPaneCardLocation(layout, cardId) {
+  var sides = ["left", "right"];
+  for (var s = 0; s < sides.length; s++) {
+    var side = sides[s];
+    var cards = layout[side] || [];
+    for (var i = 0; i < cards.length; i++) {
+      if (String(cards[i] && cards[i].id || "") === String(cardId || "")) {
+        return { side: side, index: i, card: cards[i] };
+      }
+    }
+  }
+  return null;
+}
+
+function wbcPlacePaneCard(layout, card, side, edge, sourceCardId, targetCardId) {
+  var next = wbcNormalizePaneLayout(layout, "");
+  next = {
+    left: next.left.slice(),
+    right: next.right.slice(),
+    leftRatio: next.leftRatio,
+    rightRatio: next.rightRatio,
+  };
+  var targetSide = side === "left" ? "left" : "right";
+  var source = sourceCardId ? wbcPaneCardLocation(next, sourceCardId) : null;
+  if (edge === "replace" && source && String(sourceCardId) === String(targetCardId || "")) return next;
+  if (edge === "replace" && source && source.side !== targetSide) {
+    var crossTarget = wbcPaneCardLocation(next, targetCardId);
+    if (crossTarget) {
+      next[source.side][source.index] = crossTarget.card;
+      next[crossTarget.side][crossTarget.index] = card;
+      return next;
+    }
+  }
+  if (edge !== "replace" && source && source.side === targetSide && next[targetSide].length === 2) {
+    var desiredIndex = edge === "top" ? 0 : 1;
+    if (source.index !== desiredIndex) next[targetSide].reverse();
+    return next;
+  }
+  if (source) next[source.side].splice(source.index, 1);
+  var target = next[targetSide];
+  if (edge === "replace") {
+    var targetIndex = target.findIndex(function (item) {
+      return String(item && item.id || "") === String(targetCardId || "");
+    });
+    if (targetIndex < 0) targetIndex = 0;
+    if (target.length) target[targetIndex] = card;
+    else target.push(card);
+  } else if (!target.length) {
+    target.push(card);
+  } else if (target.length === 1) {
+    if (edge === "top") target.unshift(card);
+    else target.push(card);
+  } else {
+    target[edge === "top" ? 0 : 1] = card;
+  }
+  return next;
+}
+
+function wbcSetSplitDrag(event, payload) {
   var transfer = event && (event.dataTransfer || (event.nativeEvent && event.nativeEvent.dataTransfer));
   if (!transfer) return;
   try {
     transfer.effectAllowed = "move";
-    transfer.setData(WBC_SPLIT_DRAG_MIME, "1");
+    transfer.setData(WBC_SPLIT_DRAG_MIME, JSON.stringify(payload || { kind: "legacy" }));
   } catch (e) {}
+}
+
+function wbcReadSplitDrag(event) {
+  var transfer = event && (event.dataTransfer || (event.nativeEvent && event.nativeEvent.dataTransfer));
+  if (!transfer) return null;
+  try {
+    return JSON.parse(transfer.getData(WBC_SPLIT_DRAG_MIME) || "null");
+  } catch (e) {
+    return null;
+  }
 }
 
 function wbcHasSplitDrag(event) {
@@ -2273,7 +2387,7 @@ var WBC_ICONS = {
   dots: <svg viewBox="0 0 24 24" width="17" height="17" fill="currentColor"><circle cx="5.5" cy="12" r="1.6"/><circle cx="12" cy="12" r="1.6"/><circle cx="18.5" cy="12" r="1.6"/></svg>,
   running: <span className="wb-spinner wbc-chat-running-spinner" aria-hidden="true" />,
   play: <svg viewBox="0 0 24 24" width="15" height="15" fill="currentColor"><path d="M7 4.8c0-1 1.1-1.6 2-1.1l11 6.3c.9.5.9 1.8 0 2.3L9 18.6c-.9.5-2-.1-2-1.1Z"/></svg>,
-  send: <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M22 2 11 13M22 2l-7 20-4-9-9-4Z"/></svg>,
+  send: <svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" strokeWidth="2.25" strokeLinecap="round" strokeLinejoin="round"><path d="M12 19V5"/><path d="m5 12 7-7 7 7"/></svg>,
   stop: <svg viewBox="0 0 24 24" width="14" height="14" fill="currentColor"><rect x="5" y="5" width="14" height="14" rx="2.5"/></svg>,
   attach: <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d="m21.44 11.05-9.19 9.19a5 5 0 0 1-7.07-7.07l9.19-9.19a3.5 3.5 0 0 1 4.95 4.95l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48"/></svg>,
   slash: <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><rect x="3" y="4" width="18" height="16" rx="2.5"/><path d="m7.5 9.5 2.5 2.5-2.5 2.5"/><path d="M12.5 15h4"/></svg>,
@@ -2305,7 +2419,6 @@ var WBC_ICONS = {
   download: <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d="M12 3v12M8 11l4 4 4-4"/><path d="M4 17v2a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-2"/></svg>,
   sidebar: <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M15 3v18"/><path d="m9 10-2 2 2 2"/></svg>,
   windowMaximize: <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M8 3H3v5M16 3h5v5M8 21H3v-5M21 16v5h-5"/></svg>,
-  windowMinimize: <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" aria-hidden="true"><path d="M5 12h14"/></svg>,
   windowRestore: <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><rect x="7" y="7" width="13" height="13" rx="2"/><path d="M4 16V6a2 2 0 0 1 2-2h10"/></svg>,
 };
 
@@ -3759,7 +3872,7 @@ function wbcOpenAgentDetail(agent) {
 
 // ---- file classification for the side viewer -------------------------------
 
-var WBC_CODE_EXTS = ["py","js","ts","jsx","tsx","css","json","yaml","yml","toml","xml","sql","sh","bash","rs","go","java","c","cpp","h","rb","php","swift","kt","txt","csv","ini","cfg","env","log"];
+var WBC_CODE_EXTS = ["py","js","ts","jsx","tsx","css","scss","json","yaml","yml","toml","xml","sql","sh","bash","rs","go","java","c","cc","cpp","h","hpp","rb","php","swift","kt","txt","csv","ini","cfg","conf","env","log","rst","properties","vue","svelte"];
 var WBC_OFFICE_MAX_FILE_BYTES = 100 * 1024 * 1024;
 var WBC_OFFICE_MAX_ZIP_ENTRIES = 4000;
 var WBC_OFFICE_MAX_ZIP_ENTRY_BYTES = 32 * 1024 * 1024;
@@ -3869,7 +3982,7 @@ function wbcFileViewKind(file) {
   if (ext === "docx" || ct === "application/vnd.openxmlformats-officedocument.wordprocessingml.document") return "docx";
   if (ext === "pptx" || ct === "application/vnd.openxmlformats-officedocument.presentationml.presentation") return "pptx";
   if (ct === "text/html" || ct === "application/xhtml+xml" || ext === "html" || ext === "htm") return "html";
-  if (file.kind === "markdown" || ext === "md" || ext === "markdown") return "markdown";
+  if (file.kind === "markdown" || ext === "md" || ext === "mdx" || ext === "markdown") return "markdown";
   if (file.kind === "code" || WBC_CODE_EXTS.indexOf(ext) !== -1 || ct.indexOf("text/") === 0) return "code";
   return "download";
 }
@@ -5298,6 +5411,196 @@ function WorkbenchChatPage({ active, project, newChatRequestId, onOpenTask, onAc
       return next;
     });
   }
+  var [paneLayoutsByChat, setPaneLayoutsByChat] = useWbcState({});
+  var paneLayoutRestoreRef = useWbcRef({});
+  var [paneDropTarget, setPaneDropTarget] = useWbcState(null);
+  var [paneCardDragId, setPaneCardDragId] = useWbcState("");
+  var [resourceDragSession, setResourceDragSession] = useWbcState(false);
+
+  function projectPaneOwnerKey() {
+    return projectId ? "project:" + String(projectId) : "";
+  }
+
+  function paneOwnerKey(chatId) {
+    return String(chatId || activeChatIdRef.current || projectPaneOwnerKey());
+  }
+
+  function paneLayoutFor(chatId) {
+    var ownerChatId = String(chatId || activeChatIdRef.current || "");
+    var ownerId = paneOwnerKey(ownerChatId);
+    return wbcNormalizePaneLayout(paneLayoutsByChat[ownerId], ownerChatId);
+  }
+
+  function updatePaneLayout(updater, ownerChatId) {
+    var normalizedChatId = String(ownerChatId || activeChatIdRef.current || "");
+    var ownerId = paneOwnerKey(normalizedChatId);
+    if (!ownerId) return;
+    setPaneLayoutsByChat(function (current) {
+      var previous = wbcNormalizePaneLayout(current[ownerId], normalizedChatId);
+      var updated = typeof updater === "function" ? updater(previous) : updater;
+      return Object.assign({}, current, { [ownerId]: wbcNormalizePaneLayout(updated, normalizedChatId) });
+    });
+  }
+
+  function paneContentCard(type, payload, ownerChatId) {
+    var normalizedType = type === "artifact" ? "file" : String(type || "");
+    return wbcPaneCard(normalizedType, payload, {
+      ownerChatId: ownerChatId || activeChatIdRef.current || projectPaneOwnerKey(),
+    });
+  }
+
+  function openPaneContent(type, payload, options) {
+    var opts = options || {};
+    var ownerChatId = String(opts.ownerChatId || activeChatIdRef.current || "");
+    var ownerId = paneOwnerKey(ownerChatId);
+    if (!ownerId || !type) return null;
+    var card = paneContentCard(type, payload, ownerId);
+    updatePaneLayout(function (layout) {
+      var source = opts.sourceCardId ? wbcPaneCardLocation(layout, opts.sourceCardId) : null;
+      var targetSide = opts.side === "left" || opts.side === "right"
+        ? opts.side
+        : (source && source.side === "right" ? "left" : "right");
+      if (opts.restore) paneLayoutRestoreRef.current[card.id] = layout;
+      var next = {
+        left: layout.left.slice(),
+        right: layout.right.slice(),
+        leftRatio: layout.leftRatio,
+        rightRatio: layout.rightRatio,
+      };
+      if (opts.promoteSourceLeft && source) {
+        next.left = [source.card];
+        next.right = [card];
+        return next;
+      }
+      // Opening from the conversation panel follows the established detail
+      // split contract: the selected content replaces the opposite column.
+      next[targetSide] = [card];
+      return next;
+    }, ownerChatId);
+    return card;
+  }
+
+  function updatePaneCard(cardId, updater) {
+    updatePaneLayout(function (layout) {
+      var next = {
+        left: layout.left.slice(),
+        right: layout.right.slice(),
+        leftRatio: layout.leftRatio,
+        rightRatio: layout.rightRatio,
+      };
+      var location = wbcPaneCardLocation(next, cardId);
+      if (!location) return next;
+      next[location.side][location.index] = typeof updater === "function"
+        ? updater(location.card)
+        : updater;
+      return next;
+    });
+  }
+
+  function closePaneCard(cardId) {
+    var ownerChatId = String(activeChatIdRef.current || "");
+    var ownerId = paneOwnerKey(ownerChatId);
+    var restore = paneLayoutRestoreRef.current[cardId];
+    if (restore) {
+      delete paneLayoutRestoreRef.current[cardId];
+      updatePaneLayout(restore, ownerChatId);
+      return;
+    }
+    var layout = paneLayoutFor(ownerChatId);
+    var location = wbcPaneCardLocation(layout, cardId);
+    if (!location) return;
+    var closingCard = location.card;
+    var remaining = layout.left.concat(layout.right).filter(function (card) {
+      return String(card.id) !== String(cardId);
+    });
+    var nextChat = closingCard.kind === "chat" && String(closingCard.payload || "") === ownerChatId
+      ? remaining.find(function (card) { return card.kind === "chat"; })
+      : null;
+    var next = {
+      left: layout.left.filter(function (card) { return String(card.id) !== String(cardId); }),
+      right: layout.right.filter(function (card) { return String(card.id) !== String(cardId); }),
+      leftRatio: layout.leftRatio,
+      rightRatio: layout.rightRatio,
+    };
+    if (!next.left.length && next.right.length) {
+      next.left = next.right;
+      next.right = [];
+    }
+    if (!next.left.length && !next.right.length) next = wbcDefaultPaneLayout(ownerChatId);
+    if (nextChat && nextChat.payload) {
+      setPaneLayoutsByChat(function (current) {
+        var updated = Object.assign({}, current);
+        updated[String(nextChat.payload)] = next;
+        delete updated[ownerId];
+        return updated;
+      });
+      selectChat(String(nextChat.payload));
+      return;
+    }
+    updatePaneLayout(next, ownerChatId);
+  }
+
+  function movePaneCardOtherSide(cardId) {
+    updatePaneLayout(function (layout) {
+      var location = wbcPaneCardLocation(layout, cardId);
+      if (!location) return layout;
+      var next = {
+        left: layout.left.slice(),
+        right: layout.right.slice(),
+        leftRatio: layout.leftRatio,
+        rightRatio: layout.rightRatio,
+      };
+      if (next[location.side].length === 2) {
+        next[location.side].reverse();
+      } else {
+        var left = next.left;
+        next.left = next.right;
+        next.right = left;
+      }
+      return next;
+    });
+  }
+
+  function createPaneConversation(cardId) {
+    var layout = paneLayoutFor();
+    var location = wbcPaneCardLocation(layout, cardId);
+    if (!location || layout[location.side].length > 1 || !projectId) return Promise.resolve(null);
+    return model.createChat(projectId).then(function (chat) {
+      chatCache.details[chat.id] = chat;
+      setChats(function (previous) { return [chat].concat(previous); });
+      updatePaneLayout(function (current) {
+        var liveLocation = wbcPaneCardLocation(current, cardId);
+        if (!liveLocation || current[liveLocation.side].length > 1) return current;
+        var next = {
+          left: current.left.slice(),
+          right: current.right.slice(),
+          leftRatio: current.leftRatio,
+          rightRatio: current.rightRatio,
+        };
+        next[liveLocation.side] = [
+          liveLocation.card,
+          wbcPaneCard("chat", chat.id, { id: "chat:" + chat.id, ownerChatId: chat.id }),
+        ];
+        return next;
+      });
+      return chat;
+    }).catch(function (err) {
+      setErrorKind("message");
+      setError(wbcErrorText(err));
+      return null;
+    });
+  }
+
+  function resizePaneRow(side, ratio) {
+    var normalizedSide = side === "left" ? "left" : "right";
+    var nextRatio = Math.max(0.2, Math.min(0.8, Number(ratio) || 0.5));
+    try { localStorage.setItem("wbc-pane-" + normalizedSide + "-height", String(nextRatio)); } catch (e) {}
+    updatePaneLayout(function (layout) {
+      return Object.assign({}, layout, {
+        [normalizedSide + "Ratio"]: nextRatio,
+      });
+    });
+  }
   // The split panel is lifted with a native drag, same as images/documents:
   // the panel stays in place, a drag ghost follows the pointer (shrinking to
   // a chat card over the rail), and the drop zones (rail = close, main
@@ -5618,6 +5921,18 @@ function WorkbenchChatPage({ active, project, newChatRequestId, onOpenTask, onAc
     } catch (e) {}
     return wbcClampSideSplitWidth(initial, window.innerWidth);
   });
+  // Card-workspace columns resize independently from the docked conversation
+  // panel. Sharing the old side-panel width made the hidden panel visibly
+  // breathe underneath the cards and gave the two card columns different
+  // constraints.
+  var [paneColumnWidth, setPaneColumnWidth] = useWbcState(function () {
+    var initial = 520;
+    try {
+      var saved = Number(localStorage.getItem("wbc-pane-column-width"));
+      if (Number.isFinite(saved) && saved > 0) initial = saved;
+    } catch (e) {}
+    return initial;
+  });
   var [browserActiveByChat, setBrowserActiveByChat] = useWbcState({});
   // The side-panel Browser tab and the floating browser are two presentations
   // of the same session. Keep only the floating presentation state here so the
@@ -5745,7 +6060,7 @@ function WorkbenchChatPage({ active, project, newChatRequestId, onOpenTask, onAc
     } catch (e) {}
   }, !!(isActive && project));
 
-  function openViewer(file) {
+  function openViewer(file, preferredSide) {
     if (!file) return;
     setViewerFile(file);
     // Message file actions are direct navigation: open the shared preview
@@ -5753,7 +6068,8 @@ function WorkbenchChatPage({ active, project, newChatRequestId, onOpenTask, onAc
     // conversation panel first.
     setSideTab("");
     setSideVisible(true);
-    selectResourceSplit("viewer", wbcArtifactFileKey(file));
+    selectResourceSplit("viewer", wbcArtifactFileKey(file), true);
+    openPaneContent("file", file, { side: preferredSide === "left" ? "left" : "right" });
   }
 
   function openProjectFile(entry) {
@@ -5782,6 +6098,13 @@ function WorkbenchChatPage({ active, project, newChatRequestId, onOpenTask, onAc
       if (resourceSplitDropSide) setResourceSplitDropSide("");
       return;
     }
+    // A card owns its top / replace / bottom targets. Keep the page-level
+    // left/right preview out of that stacking context so its hint cannot sit
+    // behind (or visually compete with) the card drop feedback.
+    if (event.target && event.target.closest && event.target.closest(".wbc-pane-card")) {
+      if (resourceSplitDropSide) setResourceSplitDropSide("");
+      return;
+    }
     var side = resourceSplitSideAt(event);
     if (!side) {
       if (resourceSplitDropSide) setResourceSplitDropSide("");
@@ -5801,7 +6124,7 @@ function WorkbenchChatPage({ active, project, newChatRequestId, onOpenTask, onAc
     event.preventDefault();
     event.stopPropagation();
     setSplitSideDirect(side);
-    openViewer(resource.file && Object.keys(resource.file).length ? resource.file : resource);
+    openViewer(resource.file && Object.keys(resource.file).length ? resource.file : resource, side);
   }
 
   function revealTopbarResource(chatId, resource) {
@@ -6714,6 +7037,7 @@ function WorkbenchChatPage({ active, project, newChatRequestId, onOpenTask, onAc
       delete updated[chatId];
       return updated;
     });
+    openPaneContent("side-agent", id, { side: "right" });
   }
 
   function selectArtifact(file) {
@@ -6741,6 +7065,7 @@ function WorkbenchChatPage({ active, project, newChatRequestId, onOpenTask, onAc
       delete updated[chatId];
       return updated;
     });
+    openPaneContent("file", file, { side: "right" });
   }
 
   function selectChange(change) {
@@ -6767,9 +7092,10 @@ function WorkbenchChatPage({ active, project, newChatRequestId, onOpenTask, onAc
       delete updated[chatId];
       return updated;
     });
+    openPaneContent("change", change, { side: "right" });
   }
 
-  function selectResourceSplit(type, payload) {
+  function selectResourceSplit(type, payload, skipPane) {
     var chatId = String(activeChatIdRef.current || "");
     if (!chatId || !type) return;
     setResourceSplitByChat(function (current) {
@@ -6793,6 +7119,7 @@ function WorkbenchChatPage({ active, project, newChatRequestId, onOpenTask, onAc
       delete updated[chatId];
       return updated;
     });
+    if (!skipPane) openPaneContent(type, payload, { side: "right" });
   }
 
   function splitStateSnapshot(chatId) {
@@ -7177,8 +7504,8 @@ function WorkbenchChatPage({ active, project, newChatRequestId, onOpenTask, onAc
     function onDocumentDragStart(event) {
       // Bubbles after the rail's React onDragStart has populated the
       // dataTransfer, so the chat MIME is already visible here.
-      if (!wbcHasChatDrag(event)) return;
-      setChatDragSession(true);
+      if (wbcHasChatDrag(event)) setChatDragSession(true);
+      if (wbcHasResourceDrag(event)) setResourceDragSession(true);
     }
     // Derive the preview from the pointer's page-level position. The right
     // target and main grid both move when the preview reserves its split
@@ -7193,6 +7520,9 @@ function WorkbenchChatPage({ active, project, newChatRequestId, onOpenTask, onAc
     }
     function onDocumentDragEnd() {
       setChatDragSession(false);
+      setResourceDragSession(false);
+      setPaneCardDragId("");
+      setPaneDropTarget(null);
       setChatSideDropActive(false);
     }
     document.addEventListener("dragstart", onDocumentDragStart);
@@ -7206,6 +7536,99 @@ function WorkbenchChatPage({ active, project, newChatRequestId, onOpenTask, onAc
       document.removeEventListener("drop", onDocumentDragEnd);
     };
   }, []);
+
+  function handlePaneCardDragStart(event, cardId) {
+    if (!cardId) return;
+    wbcSetSplitDrag(event, { kind: "pane-card", cardId: String(cardId) });
+    setPaneCardDragId(String(cardId));
+    var card = event.currentTarget && event.currentTarget.closest
+      ? event.currentTarget.closest(".wbc-pane-card")
+      : null;
+    if (card && event.dataTransfer && event.dataTransfer.setDragImage) {
+      var rect = card.getBoundingClientRect();
+      try {
+        event.dataTransfer.setDragImage(
+          card,
+          Math.max(0, Math.min(rect.width, event.clientX - rect.left)),
+          Math.max(0, Math.min(36, event.clientY - rect.top))
+        );
+      } catch (e) {}
+    }
+  }
+
+  function handlePaneCardDragEnd() {
+    setPaneCardDragId("");
+    setPaneDropTarget(null);
+  }
+
+  function handlePaneDropOver(event, cardId, edge) {
+    if (!wbcHasSplitDrag(event) && !wbcHasChatDrag(event) && !wbcHasResourceDrag(event)) return;
+    event.preventDefault();
+    event.stopPropagation();
+    if (event.dataTransfer) {
+      event.dataTransfer.dropEffect = wbcHasSplitDrag(event) ? "move" : "copy";
+    }
+    var nextEdge = edge === "top" ? "top" : (edge === "replace" ? "replace" : "bottom");
+    var next = { cardId: String(cardId), edge: nextEdge };
+    if (!paneDropTarget || paneDropTarget.cardId !== next.cardId || paneDropTarget.edge !== next.edge) {
+      setPaneDropTarget(next);
+    }
+  }
+
+  function handlePaneDrop(event, targetCardId, edge) {
+    if (!wbcHasSplitDrag(event) && !wbcHasChatDrag(event) && !wbcHasResourceDrag(event)) return;
+    event.preventDefault();
+    event.stopPropagation();
+    var layout = paneLayoutFor();
+    var target = wbcPaneCardLocation(layout, targetCardId);
+    if (!target) return;
+    // A vertical pair has reached the two-level limit. Even if a stale drag
+    // event still carries a top/bottom edge, the only valid operation is to
+    // replace the card currently under the pointer.
+    var effectiveEdge = (layout[target.side] || []).length >= 2 ? "replace" : edge;
+    var sourceCardId = "";
+    var card = null;
+    var splitPayload = wbcReadSplitDrag(event);
+    if (splitPayload && splitPayload.kind === "pane-card") {
+      sourceCardId = String(splitPayload.cardId || "");
+      var source = wbcPaneCardLocation(layout, sourceCardId);
+      card = source && source.card;
+    } else if (wbcHasChatDrag(event)) {
+      var chatPayload = wbcReadChatDrag(event);
+      if (chatPayload && chatPayload.id) {
+        var draggedChatId = String(chatPayload.id);
+        var canonicalChatCardId = "chat:" + draggedChatId;
+        var existingChat = wbcPaneCardLocation(layout, canonicalChatCardId);
+        var replacingSameChatCard = existingChat
+          && String(existingChat.card && existingChat.card.id || "") === String(targetCardId || "")
+          && effectiveEdge === "replace";
+        // A rail drag opens another view; only a pane-grip drag moves an
+        // existing card. Keep replacing the exact same card as a no-op.
+        sourceCardId = replacingSameChatCard ? canonicalChatCardId : "";
+        card = replacingSameChatCard
+          ? existingChat.card
+          : wbcPaneCard("chat", draggedChatId, {
+              id: existingChat ? undefined : canonicalChatCardId,
+              ownerChatId: draggedChatId,
+              freshInstance: !!existingChat,
+            });
+      }
+    } else if (wbcHasResourceDrag(event)) {
+      var resource = wbcReadResourceDrag(event);
+      if (resource && resource.kind === "file") {
+        var file = resource.file && Object.keys(resource.file).length ? resource.file : resource;
+        card = paneContentCard("file", file, activeChatIdRef.current);
+      }
+    }
+    if (!card) return;
+    updatePaneLayout(function (current) {
+      return wbcPlacePaneCard(current, card, target.side, effectiveEdge, sourceCardId, targetCardId);
+    });
+    setPaneCardDragId("");
+    setResourceDragSession(false);
+    setChatDragSession(false);
+    setPaneDropTarget(null);
+  }
 
   function handleSideLayerDragOver(event) {
     if (!wbcHasChatDrag(event)) return;
@@ -7241,6 +7664,13 @@ function WorkbenchChatPage({ active, project, newChatRequestId, onOpenTask, onAc
     if (!next) return;
     setSideAgentSplitWidth(next);
     try { localStorage.setItem("wbc-side-agent-split-width", String(next)); } catch (e) {}
+  }
+
+  function resizePaneColumn(width) {
+    var next = Math.round(Number(width) || 520);
+    if (!next) return;
+    setPaneColumnWidth(next);
+    try { localStorage.setItem("wbc-pane-column-width", String(next)); } catch (e) {}
   }
 
   function handleInterrupt() {
@@ -7795,7 +8225,20 @@ function WorkbenchChatPage({ active, project, newChatRequestId, onOpenTask, onAc
   var splitSubagents = !!(splitResource && splitResource.type === "subagents");
   // Dragging a rail chat onto the right panel opens that conversation here.
   var splitChatId = splitResource && splitResource.type === "chat" ? String(splitResource.payload || "") : "";
-  var splitDetailOpen = !!(splitSideAgent || splitArtifact || splitChange || splitViewer || splitMap || splitBrowserTabId || splitSubagents || splitChatId);
+  var paneLayout = paneLayoutFor(activeChatId);
+  var paneCardCount = paneLayout.left.length + paneLayout.right.length;
+  var paneHasTwoColumns = !!(paneLayout.left.length && paneLayout.right.length);
+  var paneOnlyCard = paneLayout.left[0] || paneLayout.right[0] || null;
+  var paneUsesWorkspace = paneCardCount > 1 || !!(
+    paneOnlyCard
+    && (paneOnlyCard.kind !== "chat" || String(paneOnlyCard.payload || "") !== String(activeChatId || ""))
+  );
+  var splitDetailOpen = paneUsesWorkspace;
+  // A project file can be opened before any conversation exists. In that
+  // state the file workspace owns every track to the right of the rail; there
+  // is no conversation context panel to reserve space for.
+  var projectPaneOnly = !activeChatId && paneCardCount > 0;
+  var showNewConversationWorkspace = !activeChatId && paneCardCount === 0;
 
   useWbcEffect(function () {
     if (!splitDetailOpen) setFloatingConversationPanelOpen(false);
@@ -7825,11 +8268,11 @@ function WorkbenchChatPage({ active, project, newChatRequestId, onOpenTask, onAc
     if (!splitDetailOpen) return undefined;
     var frame = requestAnimationFrame(function () {
       window.dispatchEvent(new CustomEvent("workbench:browser-layout", {
-        detail: { source: "side-split-resize", width: sideAgentSplitWidth },
+        detail: { source: "pane-column-resize", width: paneColumnWidth },
       }));
     });
     return function () { cancelAnimationFrame(frame); };
-  }, [splitDetailOpen, sideAgentSplitWidth, activeChatId]);
+  }, [splitDetailOpen, paneColumnWidth, activeChatId]);
 
   function setBrowserWindowModeForChat(chatId, mode) {
     chatId = String(chatId || "");
@@ -7864,9 +8307,15 @@ function WorkbenchChatPage({ active, project, newChatRequestId, onOpenTask, onAc
   }
 
   function renderConversationPanel(floating) {
-    function openPanelSplit(openSplit) {
-      if (floating) beginFloatingPanelSplit(openSplit);
-      else openSplit();
+    function openPanelContent(type, payload) {
+      if (type === "viewer" && payload) setViewerFile(payload);
+      if (type === "browser") setActiveBrowserWindowMode("pip");
+      openPaneContent(type === "artifact" ? "file" : type, payload, {
+        sourceCardId: "chat:" + String(activeChatId || ""),
+        restore: !!floating,
+        promoteSourceLeft: true,
+      });
+      if (floating) setFloatingConversationPanelOpen(false);
     }
     return (
       <WbcSide
@@ -7884,18 +8333,15 @@ function WorkbenchChatPage({ active, project, newChatRequestId, onOpenTask, onAc
         tab={sideTab}
         onTabChange={setSideTab}
         viewerFile={viewerFile}
-        onOpenFile={function (file) { openPanelSplit(function () { openViewer(file); }); }}
-        onSelectArtifact={function (file) { openPanelSplit(function () { selectArtifact(file); }); }}
-        onSelectChange={function (change) { openPanelSplit(function () { selectChange(change); }); }}
-        onSelectViewer={function (file) { openPanelSplit(function () { selectResourceSplit("viewer", wbcArtifactFileKey(file)); }); }}
-        onSelectMap={function (item) { openPanelSplit(function () { selectResourceSplit("map", item); }); }}
+        onOpenFile={function (file) { openPanelContent("file", file); }}
+        onSelectArtifact={function (file) { openPanelContent("file", file); }}
+        onSelectChange={function (change) { openPanelContent("change", change); }}
+        onSelectViewer={function (file) { openPanelContent("viewer", file); }}
+        onSelectMap={function (item) { openPanelContent("map", item); }}
         onSelectBrowser={function (tabId) {
-          openPanelSplit(function () {
-            setActiveBrowserWindowMode("pip");
-            selectResourceSplit("browser", tabId);
-          });
+          openPanelContent("browser", tabId);
         }}
-        onOpenSubagents={function () { openPanelSplit(function () { selectResourceSplit("subagents", true); }); }}
+        onOpenSubagents={function () { openPanelContent("subagents", true); }}
         onViewerViewed={markViewerFileRead}
         onRename={openQuickRename}
         onDelete={handleDelete}
@@ -7906,7 +8352,7 @@ function WorkbenchChatPage({ active, project, newChatRequestId, onOpenTask, onAc
         sideAgents={sideAgents}
         sideAgentsLoading={sideAgentsLoading}
         activeSideAgentId={splitSideAgentId}
-        onSelectSideAgent={function (agentId) { openPanelSplit(function () { selectSideAgent(agentId); }); }}
+        onSelectSideAgent={function (agentId) { openPanelContent("side-agent", agentId); }}
         onUpdateSideAgent={updateSideAgent}
         onDeleteSideAgent={deleteSideAgent}
         onToggleSide={onToggleSide}
@@ -7928,104 +8374,18 @@ function WorkbenchChatPage({ active, project, newChatRequestId, onOpenTask, onAc
     );
   }
 
-  return (
-    <div
-      ref={pageRef}
-      className={"wbc-page"
-        + (sideVisible ? "" : " wbc-side-hidden")
-        + (navCollapsed ? " wbc-nav-collapsed" : "")
-        + (splitDetailOpen ? " side-agent-split-open" : "")
-        + (splitDetailOpen && splitSide === "left" ? " wbc-split-left" : "")
-        + (chatSideDropActive ? " wbc-chat-side-drop-active" : "")}
-      style={{
-        "--wbc-chat-side-preview-width": sideAgentSplitWidth + "px",
-        ...(splitDetailOpen ? { "--wbc-side-track-width": sideAgentSplitWidth + "px" } : {}),
-      }}
-      data-active-chat-id={activeChatId || ""}
-      data-project-id={projectId || ""}
-      onDragOver={handleResourceSplitDragOver}
-      onDragLeave={function (event) {
-        var rect = event.currentTarget.getBoundingClientRect();
-        if (
-          event.clientX <= rect.left || event.clientX >= rect.right
-          || event.clientY <= rect.top || event.clientY >= rect.bottom
-        ) setResourceSplitDropSide("");
-      }}
-      onDragEnd={function () { setResourceSplitDropSide(""); }}
-      onDrop={handleResourceSplitDrop}
-    >
-      {chatFileDropActive && <WorkbenchFileDropOverlay key="file-drop-overlay" label={wbcT("workbenchChat.dropToAttach", "Release to add files to the message input")} />}
-      <div className="wbc-glass-junction" aria-hidden="true" />
-      {resourceSplitDropSide && (
-        <div className="wbc-resource-file-drop-zones" aria-hidden="true">
-          <div className={"wbc-resource-file-drop-zone left" + (resourceSplitDropSide === "left" ? " active" : "")}>
-            <span>{wbcT("workbenchChat.dropFileSplitLeft", "Release to open the file on the left")}</span>
-          </div>
-          <div className={"wbc-resource-file-drop-zone right" + (resourceSplitDropSide === "right" ? " active" : "")}>
-            <span>{wbcT("workbenchChat.dropFileSplitRight", "Release to open the file on the right")}</span>
-          </div>
-        </div>
-      )}
-      {chatDragSession && (function () {
-        var zone = wbcChatSideZoneRect();
-        if (!zone) return null;
-        var pageRect = pageRef.current ? pageRef.current.getBoundingClientRect() : null;
-        var left = pageRect ? zone.left - pageRect.left : 0;
-        return (
-          <div
-            key="chat-side-drop-layer"
-            className={"wbc-chat-side-drop-layer" + (chatSideDropActive ? " active" : "")}
-            style={{ left: left + "px", width: (zone.right - zone.left) + "px" }}
-            onDragOver={handleSideLayerDragOver}
-            onDrop={handleSideLayerDrop}
-          >
-            <span className="wbc-chat-side-drop-hint" role="status">
-              {wbcT("workbenchChat.dropToOpenSide", "Release to open in the side panel")}
-            </span>
-          </div>
-        );
-      })()}
-      {splitDetailOpen && (
-        <div key="split-main-grip" className="wbc-split-main-grip">
-          <WbcSplitGripBar
-            dragSource="main"
-            side={splitSide}
-            onToggleSide={toggleSplitSide}
-            onClose={splitChatId ? closeMainConversationSplit : closeActiveSplit}
-            onOpenConversationPanel={function () { setFloatingConversationPanelOpen(true); }}
-            onSplitDragStart={handleSplitDragStart}
-            onSplitDragEnd={handleSplitDragEnd}
-          />
-          {floatingConversationPanelOpen ? renderConversationPanel(true) : null}
-        </div>
-      )}
-      <WbcRail
-        projectId={projectId}
-        projectName={project && project.name || ""}
-        chats={chats}
-        pinnedChatIds={pinnedChatIds}
-        activeChatId={activeChatId}
-        loading={loading}
-        runningChatIds={runningChatIds}
-        runtimeEngine={runtimeEngine}
-        onSelect={selectChat}
-        onAnswer={handleRailAnswer}
-        onCreate={handleCreateChat}
-        onRename={handleRenameChat}
-        onDelete={handleDeleteChat}
-        onToTask={handleToTask}
-        toTaskBusy={toTaskBusy}
-        onTogglePinned={onTogglePinnedChat}
-        onOpenFile={openProjectFile}
-        collapsed={navCollapsed}
-        onToggleCollapsed={onToggleNavCollapsed}
-        collapseControl={collapseControl}
-        moduleDock={moduleDock}
-      />
-      {/* A native browser surface does not participate in the split grid and
-          would otherwise cover the newly opened conversation/detail pane.
-          Hide only its presentation while a split is open; browser state,
-          tabs and the remembered window mode remain intact for restoration. */}
+  function openContentFromPaneCard(card, type, payload) {
+    if (type === "viewer" && payload) setViewerFile(payload);
+    if (type === "browser") setBrowserWindowModeForChat(card.ownerChatId || activeChatId, "pip");
+    openPaneContent(type === "artifact" ? "file" : type, payload, {
+      sourceCardId: card.id,
+      restore: true,
+      promoteSourceLeft: true,
+    });
+  }
+
+  function renderActiveConversationCard(card) {
+    return (
       <WbcMain
         project={project}
         chat={visibleChat}
@@ -8049,7 +8409,7 @@ function WorkbenchChatPage({ active, project, newChatRequestId, onOpenTask, onAc
         onDelete={handleDelete}
         onToTask={handleToTask}
         toTaskBusy={toTaskBusy}
-        onOpenFile={openViewer}
+        onOpenFile={function (file) { openPaneContent("file", file, { sourceCardId: card.id }); }}
         onOpenDroppedChat={function (chatId) {
           if ((chatsRef.current || []).some(function (item) {
             return String(item && item.id || "") === String(chatId || "");
@@ -8058,12 +8418,11 @@ function WorkbenchChatPage({ active, project, newChatRequestId, onOpenTask, onAc
         sideVisible={sideVisible}
         sidePanelTabExpanded={sideVisible && !!sideTab}
         onToggleSide={onToggleSide}
-        splitOpen={splitDetailOpen}
+        splitOpen={paneCardCount > 1}
         browserState={activeBrowserState}
         browserSessionId={activeChatId || ""}
-        browserVisible={hasActiveBrowser && !browserTabOpen && !splitDetailOpen}
+        browserVisible={hasActiveBrowser && !browserTabOpen && paneCardCount === 1}
         browserWindowMode={browserWindowMode}
-        onBrowserMinimize={function () { setActiveBrowserWindowMode("minimized"); }}
         onBrowserMaximize={function () { setActiveBrowserWindowMode("maximized"); }}
         onBrowserRestore={function () { setActiveBrowserWindowMode("pip"); }}
         draftAgent={draftAgentBinding}
@@ -8081,6 +8440,273 @@ function WorkbenchChatPage({ active, project, newChatRequestId, onOpenTask, onAc
           return Promise.resolve();
         }}
       />
+    );
+  }
+
+  function renderPaneCard(card, side, columnLength) {
+    var isActiveConversation = card.kind === "chat"
+      && String(card.payload || "") === String(activeChatId || "")
+      && String(card.id || "") === "chat:" + String(activeChatId || "");
+    var content = null;
+    var grip = null;
+    var close = function () {
+      var draftKey = (card.kind === "file" || card.kind === "viewer")
+        ? wbcProjectFileDraftKey(card.payload)
+        : "";
+      if (!draftKey || !WBC_PROJECT_FILE_DRAFTS[draftKey]) {
+        closePaneCard(card.id);
+        return;
+      }
+      var feedback = window.CyreneUI.require("feedback");
+      var request = feedback.confirmModal ? feedback.confirmModal({
+        title: wbcT("workbenchChat.editorUnsavedTitle", "Unsaved changes"),
+        body: wbcT("workbenchChat.editorUnsavedBody", "Discard the changes made to this file?"),
+        confirmLabel: wbcT("workbenchChat.editorDiscard", "Discard changes"),
+        danger: true,
+      }) : Promise.resolve(window.confirm(wbcT("workbenchChat.editorUnsavedBody", "Discard the changes made to this file?")));
+      Promise.resolve(request).then(function (confirmed) {
+        if (!confirmed) return;
+        wbcDiscardProjectFileDraft(card.payload);
+        closePaneCard(card.id);
+      });
+    };
+    var move = function () { movePaneCardOtherSide(card.id); };
+    var dragStart = function (event) { handlePaneCardDragStart(event, card.id); };
+    if (isActiveConversation) {
+      content = renderActiveConversationCard(card);
+      grip = <WbcSplitGripBar
+        dragSource={card.id}
+        onToggleSide={move}
+        onClose={close}
+        onOpenConversationPanel={function () { setFloatingConversationPanelOpen(true); }}
+        onSplitDragStart={dragStart}
+        onSplitDragEnd={handlePaneCardDragEnd}
+      />;
+    } else if (card.kind === "chat") {
+      content = <WbcChatSplit
+        chatId={String(card.payload || "")}
+        project={project}
+        onOpenContent={function (type, payload) { openContentFromPaneCard(card, type, payload); }}
+        browserActiveByChat={browserActiveByChat}
+        onClose={close}
+        onOpenInMain={selectChat}
+        splitSide={side}
+        onToggleSide={move}
+        onSplitDragStart={dragStart}
+        onSplitDragEnd={handlePaneCardDragEnd}
+      />;
+    } else if (card.kind === "side-agent") {
+      var paneAgent = sideAgents.find(function (agent) {
+        return String(agent && agent.id || "") === String(card.payload || "");
+      }) || null;
+      grip = <WbcSplitGripBar
+        dragSource={card.id}
+        onToggleSide={move}
+        onClose={close}
+        onOpenConversationPanel={function () {
+          setSideTab("side-agents");
+          setFloatingConversationPanelOpen(true);
+        }}
+        onSplitDragStart={dragStart}
+        onSplitDragEnd={handlePaneCardDragEnd}
+      />;
+      content = paneAgent ? <WbcSideAgentSplit
+        agent={paneAgent}
+        agents={sideAgents}
+        project={project}
+        onOpenFile={function (file) { openContentFromPaneCard(card, "file", file); }}
+        onUpdate={updateSideAgent}
+        onSelect={function (agentId) {
+          updatePaneCard(card.id, function (current) {
+            return Object.assign({}, current, { payload: agentId });
+          });
+        }}
+        onClose={close}
+      /> : null;
+    } else {
+      grip = <WbcSplitGripBar
+        dragSource={card.id}
+        menuType="content"
+        onToggleSide={move}
+        onClose={close}
+        onNewConversation={columnLength === 1 ? function () { createPaneConversation(card.id); } : null}
+        onSplitDragStart={dragStart}
+        onSplitDragEnd={handlePaneCardDragEnd}
+      />;
+      if (card.kind === "file" || card.kind === "viewer") {
+        var file = card.payload;
+        var fileItems = file && file.source === "project"
+          ? [{ file: file, role: "project" }].concat(artifactItems.filter(function (item) {
+              return wbcArtifactFileKey(item && item.file) !== wbcArtifactFileKey(file);
+            }))
+          : artifactItems;
+        content = <WbcArtifactSplit
+          file={file}
+          items={fileItems}
+          label={wbcT("workbenchChat.viewer", "Viewer")}
+          onSelect={function (nextFile) { updatePaneCard(card.id, function (current) { return Object.assign({}, current, { payload: nextFile }); }); }}
+          onClose={close}
+          onViewed={markViewerFileRead}
+        />;
+      } else if (card.kind === "change") {
+        content = <WbcChangeSplit
+          change={card.payload}
+          onSelect={function (nextChange) { updatePaneCard(card.id, function (current) { return Object.assign({}, current, { payload: nextChange }); }); }}
+          onClose={close}
+        />;
+      } else if (card.kind === "map") {
+        content = <WbcMapPaneContent
+          chatId={card.ownerChatId || activeChatId}
+          item={card.payload}
+          onSelect={function (nextItem) { updatePaneCard(card.id, function (current) { return Object.assign({}, current, { payload: nextItem }); }); }}
+          onClose={close}
+        />;
+      } else if (card.kind === "browser") {
+        var cardBrowserState = wbcBrowserStateForChat(card.ownerChatId || activeChatId);
+        content = <WbcBrowserSplit
+          active={true}
+          tabId={String(card.payload || "")}
+          tabs={cardBrowserState && cardBrowserState.tabs || []}
+          browserState={cardBrowserState}
+          browserSessionId={card.ownerChatId || activeChatId}
+          onSelect={function (tabId) { updatePaneCard(card.id, function (current) { return Object.assign({}, current, { payload: tabId }); }); }}
+          onClose={close}
+          onTakeoverComplete={function () { return Promise.resolve(); }}
+        />;
+      } else if (card.kind === "subagents") {
+        content = <aside className="wbc-side-agent-split wbc-subagents-split" aria-label={wbcT("workbenchChat.subagents", "Subagents")}>
+          <header className="wbc-side-agent-split-head wbc-static-split-head"><span className="wbc-side-agent-split-title"><span>{wbcT("workbenchChat.subagents", "Subagents")}</span></span><button type="button" className="wbc-side-agent-split-close" onClick={close} aria-label={wbcT("workbenchChat.closeSubagents", "Close subagents")}>{WBC_ICONS.x}</button></header>
+          <div className="wbc-resource-split-body wbc-subagents-split-body"><WbcSubagentsTab data={subagentData} loading={subagentLoading} onSelectRound={function (roundId) { loadSubagents(card.ownerChatId || activeChatId, roundId); }} /></div>
+        </aside>;
+      }
+    }
+    if (!content) return null;
+    return <WbcPaneCardFrame
+      key={card.id}
+      card={card}
+      grip={grip}
+      dropEnabled={!!(paneCardDragId || chatDragSession || resourceDragSession)
+        && String(paneCardDragId || "") !== String(card.id || "")}
+      replaceOnly={columnLength === 2}
+      dropTarget={paneDropTarget}
+      onDropOver={handlePaneDropOver}
+      onDrop={handlePaneDrop}
+      onDropLeave={function (event) {
+        if (!event.currentTarget.contains(event.relatedTarget)) setPaneDropTarget(null);
+      }}
+    >{content}</WbcPaneCardFrame>;
+  }
+
+  function renderPaneColumn(side, cards) {
+    if (!cards.length) return null;
+    var ratio = side === "left" ? paneLayout.leftRatio : paneLayout.rightRatio;
+    return (
+      <section
+        key={side}
+        className={"wbc-pane-column " + side + (cards.length === 2 ? " vertical" : "")}
+        style={cards.length === 2 ? { gridTemplateRows: ratio + "fr " + (1 - ratio) + "fr" } : undefined}
+      >
+        {cards.map(function (card) { return renderPaneCard(card, side, cards.length); })}
+        {cards.length === 2 ? <WbcPaneRowResizer ratio={ratio} onResize={function (next) { resizePaneRow(side, next); }} /> : null}
+      </section>
+    );
+  }
+
+  return (
+    <div
+      ref={pageRef}
+      className={"wbc-page"
+        + (sideVisible ? "" : " wbc-side-hidden")
+        + (navCollapsed ? " wbc-nav-collapsed" : "")
+        + (projectPaneOnly ? " wbc-project-pane-only" : "")
+        + (splitDetailOpen && !projectPaneOnly ? " side-agent-split-open" : "")
+        + (splitDetailOpen && !projectPaneOnly && splitSide === "left" ? " wbc-split-left" : "")
+        + (chatSideDropActive ? " wbc-chat-side-drop-active" : "")}
+      style={{
+        "--wbc-chat-side-preview-width": sideAgentSplitWidth + "px",
+        ...(splitDetailOpen && !projectPaneOnly ? { "--wbc-side-track-width": sideAgentSplitWidth + "px" } : {}),
+      }}
+      data-active-chat-id={activeChatId || ""}
+      data-project-id={projectId || ""}
+      onDragOver={handleResourceSplitDragOver}
+      onDragLeave={function (event) {
+        var rect = event.currentTarget.getBoundingClientRect();
+        if (
+          event.clientX <= rect.left || event.clientX >= rect.right
+          || event.clientY <= rect.top || event.clientY >= rect.bottom
+        ) setResourceSplitDropSide("");
+      }}
+      onDragEnd={function () { setResourceSplitDropSide(""); }}
+      onDrop={handleResourceSplitDrop}
+    >
+      {chatFileDropActive && <WorkbenchFileDropOverlay key="file-drop-overlay" label={wbcT("workbenchChat.dropToAttach", "Release to add files to the message input")} />}
+      {resourceSplitDropSide && (
+        <div className="wbc-resource-file-drop-zones">
+          <div className={"wbc-resource-file-drop-zone left" + (resourceSplitDropSide === "left" ? " active" : "")}>
+            <span className="wbc-chat-side-drop-hint" role="status">{wbcT("workbenchChat.dropFileSplitLeft", "Release to open the file on the left")}</span>
+          </div>
+          <div className={"wbc-resource-file-drop-zone right" + (resourceSplitDropSide === "right" ? " active" : "")}>
+            <span className="wbc-chat-side-drop-hint" role="status">{wbcT("workbenchChat.dropFileSplitRight", "Release to open the file on the right")}</span>
+          </div>
+        </div>
+      )}
+      {chatDragSession && !paneHasTwoColumns && (function () {
+        var zone = wbcChatSideZoneRect();
+        if (!zone) return null;
+        var pageRect = pageRef.current ? pageRef.current.getBoundingClientRect() : null;
+        var left = pageRect ? zone.left - pageRect.left : 0;
+        return (
+          <div
+            key="chat-side-drop-layer"
+            className={"wbc-chat-side-drop-layer" + (chatSideDropActive ? " active" : "")}
+            style={{ left: left + "px", width: (zone.right - zone.left) + "px" }}
+            onDragOver={handleSideLayerDragOver}
+            onDrop={handleSideLayerDrop}
+          >
+            <span className="wbc-chat-side-drop-hint" role="status">
+              {wbcT("workbenchChat.dropToOpenSide", "Release to open in the side panel")}
+            </span>
+          </div>
+        );
+      })()}
+      <WbcRail
+        projectId={projectId}
+        projectName={project && project.name || ""}
+        chats={chats}
+        pinnedChatIds={pinnedChatIds}
+        activeChatId={activeChatId}
+        loading={loading}
+        runningChatIds={runningChatIds}
+        runtimeEngine={runtimeEngine}
+        onSelect={selectChat}
+        onAnswer={handleRailAnswer}
+        onCreate={handleCreateChat}
+        onRename={handleRenameChat}
+        onDelete={handleDeleteChat}
+        onToTask={handleToTask}
+        toTaskBusy={toTaskBusy}
+        onTogglePinned={onTogglePinnedChat}
+        onOpenFile={openProjectFile}
+        collapsed={navCollapsed}
+        onToggleCollapsed={onToggleNavCollapsed}
+        collapseControl={collapseControl}
+        moduleDock={moduleDock}
+      />
+      <div
+        className={"wbc-pane-layout" + (paneHasTwoColumns ? " split" : " single")}
+        style={paneHasTwoColumns ? { "--wbc-pane-right-width": paneColumnWidth + "px" } : undefined}
+      >
+        {showNewConversationWorkspace
+          ? <section className="wbc-pane-column left wbc-new-conversation-column">
+              {renderPaneCard({ id: "new-conversation", kind: "chat", payload: "", ownerChatId: "" }, "left", 1)}
+            </section>
+          : <React.Fragment>
+              {renderPaneColumn("left", paneLayout.left)}
+              {renderPaneColumn("right", paneLayout.right)}
+              {paneHasTwoColumns ? <WbcPaneColumnResizer width={paneColumnWidth} onResize={resizePaneColumn} /> : null}
+            </React.Fragment>}
+        {floatingConversationPanelOpen ? <div className="wbc-pane-floating-conversation-panel">{renderConversationPanel(true)}</div> : null}
+      </div>
       {pageContextMenu && visibleChat && (
         <div className="wb-item-context-layer wbc-page-context-layer">
           <div className="wb-item-context-scrim" onPointerDown={closePageContextMenu} />
@@ -8112,8 +8738,8 @@ function WorkbenchChatPage({ active, project, newChatRequestId, onOpenTask, onAc
         onClose={function () { setQuickRenameChat(null); }}
         onRename={handleRenameChat}
       />
-      {!floatingConversationPanelOpen ? renderConversationPanel(false) : null}
-      <WbcSideAgentSplitHost
+      {!projectPaneOnly && !floatingConversationPanelOpen && !splitDetailOpen ? renderConversationPanel(false) : null}
+      {false ? <><WbcSideAgentSplitHost
         agent={splitSideAgent}
         agents={sideAgents}
         width={sideAgentSplitWidth}
@@ -8223,7 +8849,7 @@ function WorkbenchChatPage({ active, project, newChatRequestId, onOpenTask, onAc
         onToggleSide={toggleSplitSide}
         onSplitDragStart={handleSplitDragStart}
         onSplitDragEnd={handleSplitDragEnd}
-      />
+      /></> : null}
     </div>
   );
 }
@@ -8847,6 +9473,7 @@ function wbcProjectFileResource(projectId, entry) {
     name: String(entry.name || "file"),
     path: path,
     size: Number(entry.size || 0),
+    modifiedNs: Number(entry.modifiedNs || 0),
     content_type: String(entry.content_type || entry.contentType || ""),
     kind: wbcFileViewKind(entry) === "image" ? "image" : "file",
     source: "project",
@@ -8858,7 +9485,19 @@ function wbcProjectFileResource(projectId, entry) {
 function WbcRail({ projectId, projectName, chats, pinnedChatIds, activeChatId, loading, runningChatIds, runtimeEngine, onSelect, onAnswer, onCreate, onRename, onDelete, onToTask, toTaskBusy, onTogglePinned, onOpenFile, collapsed, onToggleCollapsed, collapseControl, moduleDock }) {
   var [query, setQuery] = useWbcState("");
   var [railMode, setRailMode] = useWbcState("chat");
-  var [filePath, setFilePath] = useWbcState(".");
+  var [fileLocation, setFileLocation] = useWbcState(function () {
+    return { projectId: String(projectId || ""), path: "." };
+  });
+  var currentFileProjectId = String(projectId || "");
+  var filePath = fileLocation.projectId === currentFileProjectId
+    ? String(fileLocation.path || ".")
+    : ".";
+  function setFilePath(nextPath) {
+    setFileLocation({
+      projectId: currentFileProjectId,
+      path: String(nextPath || "."),
+    });
+  }
   var [fileEntries, setFileEntries] = useWbcState([]);
   var [filesLoading, setFilesLoading] = useWbcState(false);
   var [filesError, setFilesError] = useWbcState("");
@@ -8897,6 +9536,14 @@ function WbcRail({ projectId, projectName, chats, pinnedChatIds, activeChatId, l
   var visibleFiles = normalizedFileQuery ? fileEntries.filter(function (entry) {
     return String(entry && entry.name || "").toLowerCase().indexOf(normalizedFileQuery) !== -1;
   }) : fileEntries;
+  useWbcEffect(function () {
+    setQuery("");
+    setFileEntries([]);
+    setFilesError("");
+    setHasLoadedFiles(false);
+    setFileDirection("forward");
+    fileDirectionRef.current = "forward";
+  }, [projectId]);
   useWbcEffect(function () {
     if (railMode !== "files" || !projectId) return undefined;
     var cancelled = false;
@@ -10790,7 +11437,7 @@ function WbcRail({ projectId, projectName, chats, pinnedChatIds, activeChatId, l
 // Conversation main (column 3)
 // ---------------------------------------------------------------------------
 
-function WbcBrowserFloatingSurface({ browserState, browserSessionId, visible, mode, composerDocked, runtime, running, latestAssistantReplyId, latestAssistantReplyText, onSend, onGuidance, onInterrupt, onMinimize, onMaximize, onRestore, onTakeoverComplete }) {
+function WbcBrowserFloatingSurface({ browserState, browserSessionId, visible, mode, composerDocked, runtime, running, latestAssistantReplyId, latestAssistantReplyText, onSend, onGuidance, onInterrupt, onMaximize, onRestore, onTakeoverComplete }) {
   var shellRef = useWbcRef(null);
   var maximizedPickerRef = useWbcRef(null);
   var minimizedRef = useWbcRef(null);
@@ -10821,7 +11468,9 @@ function WbcBrowserFloatingSurface({ browserState, browserSessionId, visible, mo
   var [chatOverlayThemeRevision, setChatOverlayThemeRevision] = useWbcState(0);
   var fullscreenFinalReplyTimerRef = useWbcRef(null);
   var fullscreenReplyBaselineRef = useWbcRef("");
-  var effectiveMode = mode || "pip";
+  // Minimized browser mode is temporarily retired. Normalize any stale
+  // in-memory value back to the fixed PiP surface.
+  var effectiveMode = mode === "minimized" ? "pip" : (mode || "pip");
   // Enter avoidance synchronously with the collapsed render. On reopening,
   // keep avoidance active through the panel's 500ms grid transition; the
   // effect below releases it only after the composer has finished shrinking.
@@ -10995,15 +11644,6 @@ function WbcBrowserFloatingSurface({ browserState, browserSessionId, visible, mo
     clone.style.visibility = "hidden";
     clone.style.pointerEvents = "none";
     clone.style.transition = "none";
-    if (targetMode === "pip" && frameRef.current) {
-      var saved = frameRef.current;
-      clone.style.left = saved.x + "px";
-      clone.style.top = saved.y + "px";
-      clone.style.width = saved.width + "px";
-      clone.style.height = saved.height + "px";
-      clone.style.right = "auto";
-      clone.style.bottom = "auto";
-    }
     measurementHost.appendChild(clone);
     var surface = clone.querySelector(".browser-native-surface");
     var rect = surface && surface.getBoundingClientRect();
@@ -11714,18 +12354,11 @@ function WbcBrowserFloatingSurface({ browserState, browserSessionId, visible, mo
     var wasVisible = previousVisibleRef.current;
     previousVisibleRef.current = visible;
     if (!wasVisible && visible && effectiveMode === "pip") {
-      // The grid is still returning from its wider split column. Keep the
-      // stored PiP frame immutable until that layout animation settles;
-      // otherwise ResizeObserver progressively clamps and persists a new
-      // position while the available area is changing.
-      pipRestoreGuardUntilRef.current = performance.now() + 560;
+      // The fixed PiP follows the conversation-panel track. Notify the native
+      // browser again after the elastic grid transition has settled.
       if (pipRestoreTimerRef.current) clearTimeout(pipRestoreTimerRef.current);
       pipRestoreTimerRef.current = setTimeout(function () {
         pipRestoreTimerRef.current = null;
-        var node = shellRef.current;
-        var area = node && node.parentElement;
-        var saved = frameRef.current;
-        if (area && saved) commitFrame(saved, area);
         wbcNotifyBrowserLayoutChanged();
       }, 570);
     }
@@ -11738,29 +12371,12 @@ function WbcBrowserFloatingSurface({ browserState, browserSessionId, visible, mo
   }, [visible, effectiveMode]);
 
   useWbcEffect(function () {
-    if (!visible || (effectiveMode !== "pip" && effectiveMode !== "minimized")) return undefined;
-    var node = effectiveMode === "pip" ? shellRef.current : minimizedRef.current;
+    if (!visible || effectiveMode !== "pip") return undefined;
+    var node = shellRef.current;
     var area = node && node.parentElement;
     if (!area) return undefined;
-    if (effectiveMode === "minimized" && !minimizedFrameRef.current) {
-      var initialMinimizedFrame = measuredFloatingFrame(node);
-      if (initialMinimizedFrame) commitMinimizedFrame(initialMinimizedFrame, area);
-    }
     if (typeof ResizeObserver === "undefined") return undefined;
     var observer = new ResizeObserver(function () {
-      if (effectiveMode === "pip") {
-        if (performance.now() < pipRestoreGuardUntilRef.current) {
-          wbcNotifyBrowserLayoutChanged();
-          return;
-        }
-        var current = composerDockedRef.current && preComposerDockFrameRef.current
-          ? preComposerDockFrameRef.current
-          : frameRef.current;
-        if (current) commitFrame(current, area);
-      } else {
-        var minimizedCurrent = minimizedFrameRef.current;
-        if (minimizedCurrent) commitMinimizedFrame(minimizedCurrent, area);
-      }
       wbcNotifyBrowserLayoutChanged();
     });
     observer.observe(area);
@@ -11768,7 +12384,7 @@ function WbcBrowserFloatingSurface({ browserState, browserSessionId, visible, mo
     var composer = main && main.querySelector(":scope > .wbc-composer");
     if (composer) observer.observe(composer);
     return function () { observer.disconnect(); };
-  }, [visible, effectiveMode, composerDocked]);
+  }, [visible, effectiveMode]);
 
   useWbcEffect(function () {
     var raf = requestAnimationFrame(wbcNotifyBrowserLayoutChanged);
@@ -11808,24 +12424,12 @@ function WbcBrowserFloatingSurface({ browserState, browserSessionId, visible, mo
     if (!window.CyreneUI.has("uiSurface")) return undefined;
     var uiSurface = window.CyreneUI.require("uiSurface");
     var isPresent = visible && !hasNoBrowserTabs && (effectiveMode === "pip" || effectiveMode === "maximized");
-    var actions = effectiveMode === "pip" ? [
-      {
-        action_id: "maximize",
-        kind: "invoke",
-        gesture_aliases: ["double_press", "maximize_button"],
-        risk: "R1",
-      },
-      {
-        action_id: "set_frame",
-        kind: "set_frame",
-        gesture_aliases: ["pointer_move_resize"],
-        risk: "R1",
-        input_schema: {
-          x_ratio: "0..1", y_ratio: "0..1",
-          width_ratio: "0.2..1", height_ratio: "0.2..1",
-        },
-      },
-    ] : [{
+    var actions = effectiveMode === "pip" ? [{
+      action_id: "maximize",
+      kind: "invoke",
+      gesture_aliases: ["double_press", "maximize_button"],
+      risk: "R1",
+    }] : [{
       action_id: "restore",
       kind: "invoke",
       gesture_aliases: ["double_press", "restore_button", "escape_key"],
@@ -11845,93 +12449,21 @@ function WbcBrowserFloatingSurface({ browserState, browserSessionId, visible, mo
       handlers: {
         maximize: maximizeBrowserWindow,
         restore: restoreBrowserWindow,
-        set_frame: function (input) {
-          var area = shellRef.current && shellRef.current.parentElement;
-          if (!area || effectiveMode !== "pip") throw new Error("browser PiP is not available");
-          var xRatio = Number(input.x_ratio);
-          var yRatio = Number(input.y_ratio);
-          var widthRatio = Number(input.width_ratio);
-          var heightRatio = Number(input.height_ratio);
-          var values = [xRatio, yRatio, widthRatio, heightRatio];
-          if (values.some(function (value) { return !Number.isFinite(value) || value < 0 || value > 1; })
-              || widthRatio < 0.2 || heightRatio < 0.2) {
-            throw new Error("normalized browser frame is outside allowed bounds");
-          }
-          var width = area.clientWidth * widthRatio;
-          var height = area.clientHeight * heightRatio;
-          var next = {
-            x: (area.clientWidth - width) * xRatio,
-            y: (area.clientHeight - height) * yRatio,
-            width: width,
-            height: height,
-          };
-          commitFrame(next, area);
-          return { frame: frameRef.current };
-        },
       },
     });
   }, [visible, hasNoBrowserTabs, effectiveMode, browserSessionId, onMaximize, onRestore]);
 
   if (!visible) return null;
-  if (hasNoBrowserTabs && (effectiveMode === "pip" || effectiveMode === "minimized")) return null;
-  if (effectiveMode === "minimized") {
-    var minimizedInlineStyle = minimizedFrame ? {
-      left: minimizedFrame.x + "px",
-      top: minimizedFrame.y + "px",
-      width: minimizedFrame.width + "px",
-      height: minimizedFrame.height + "px",
-      right: "auto",
-      bottom: "auto",
-    } : undefined;
-    return (
-      <button
-        ref={minimizedRef}
-        type="button"
-        className="wbc-browser-restore-float"
-        style={minimizedInlineStyle}
-        onPointerDown={beginMinimizedDrag}
-        onClick={function () {
-          if (!suppressMinimizedClickRef.current && onRestore) onRestore();
-        }}
-        aria-label={wbcBrowserWindowTitle(displayBrowserState)}
-        title={wbcBrowserWindowTitle(displayBrowserState) + " · " + wbcT("workbenchChat.dragBrowserToTopbar", "Drag to the topbar to pin")}
-      >
-        <span className="wbc-browser-restore-favicon" aria-hidden="true">
-          <svg className="fallback" viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M3 8h18M6 6h.01M9 6h.01"/></svg>
-          {displayBrowserFavicon ? (
-            <img
-              key={displayBrowserFavicon}
-              src={displayBrowserFavicon}
-              alt=""
-              draggable="false"
-              onError={function (event) { event.currentTarget.hidden = true; }}
-            />
-          ) : null}
-        </span>
-      </button>
-    );
-  }
-
-  var inlineStyle = effectiveMode === "pip" && frame && frameSessionRef.current === String(browserSessionId || "") ? {
-    left: frame.x + "px",
-    top: frame.y + "px",
-    width: frame.width + "px",
-    height: frame.height + "px",
-    right: "auto",
-    bottom: "auto",
-  } : undefined;
-  var resizeDirections = ["n", "e", "s", "w", "ne", "nw", "se", "sw"];
+  if (hasNoBrowserTabs && effectiveMode === "pip") return null;
   var browserWindow = (
     <section
       ref={shellRef}
       className={"wbc-browser-window " + effectiveMode}
-      style={inlineStyle}
       aria-label={wbcT("workbenchChat.browserWindowRegion", "Live browser window")}
     >
       <div ref={effectiveMode === "maximized" ? maximizedPickerRef : undefined} className={effectiveMode === "maximized" ? "wbc-resource-split-picker-wrap wbc-browser-maximized-picker-wrap" : "wbc-browser-pip-head-wrap"}>
         <div
           className={"wbc-browser-window-bar" + (effectiveMode === "maximized" ? " wbc-browser-maximized-head" : "")}
-          onPointerDown={effectiveMode === "pip" ? function (event) { beginInteraction(event, "drag", ""); } : undefined}
           onDoubleClick={effectiveMode === "pip" ? maximizeBrowserWindow : undefined}
         >
           {effectiveMode === "maximized" ? (
@@ -11947,7 +12479,7 @@ function WbcBrowserFloatingSurface({ browserState, browserSessionId, visible, mo
             </button>
           ) : (
             <span className="wbc-browser-window-title">
-              <span className="wbc-browser-title-pill" title={wbcT("workbenchChat.dragBrowserToTopbar", "Drag to the topbar to pin")}>{wbcT("workbenchChat.browserWindowTitle", "Browser")}</span>
+              <span className="wbc-browser-title-pill">{wbcT("workbenchChat.browserWindowTitle", "Browser")}</span>
               {wbcBrowserPageTitle(displayBrowserState) && <strong title={wbcBrowserWindowTitle(displayBrowserState)}>{wbcBrowserPageTitle(displayBrowserState)}</strong>}
             </span>
           )}
@@ -11961,7 +12493,6 @@ function WbcBrowserFloatingSurface({ browserState, browserSessionId, visible, mo
                 <button type="button" onClick={restoreBrowserWindow} title={wbcT("workbenchChat.browserRestoreSize", "Restore")} aria-label={wbcT("workbenchChat.browserRestoreSize", "Restore")}>{WBC_ICONS.x}</button>
               </React.Fragment>
             )}
-            {effectiveMode === "pip" && <button type="button" onClick={onMinimize} title={wbcT("workbenchChat.browserMinimize", "Minimize")} aria-label={wbcT("workbenchChat.browserMinimize", "Minimize")}>{WBC_ICONS.windowMinimize}</button>}
           </div>
         </div>
         {effectiveMode === "maximized" && !hasNativeTabPicker && maximizedPickerOpen && (
@@ -12019,16 +12550,6 @@ function WbcBrowserFloatingSurface({ browserState, browserSessionId, visible, mo
           </div>
         )}
       </div>
-      {effectiveMode === "pip" && resizeDirections.map(function (direction) {
-        return (
-          <span
-            key={direction}
-            className={"wbc-browser-resize-handle " + direction}
-            onPointerDown={function (event) { beginInteraction(event, "resize", direction); }}
-            aria-hidden="true"
-          />
-        );
-      })}
     </section>
   );
   if (effectiveMode === "maximized" && window.ReactDOM && typeof window.ReactDOM.createPortal === "function") {
@@ -12241,7 +12762,7 @@ function WbcConversationNavigator({ threadRef, chatId }) {
   );
 }
 
-function WbcMain({ project, chat, chatSummary, loading, runtime, error, errorKind, onRetry, running, onSend, onGuidance, onInterrupt, onAnswer, onRetryMessage, onEditMessage, onAskSelection, sideAgentCreating, onConversationContextMenu, onRename, onDelete, onToTask, toTaskBusy, onOpenFile, onOpenDroppedChat, sideVisible, sidePanelTabExpanded, onToggleSide, browserState, browserSessionId, browserVisible, browserWindowMode, onBrowserMinimize, onBrowserMaximize, onBrowserRestore, onBrowserTakeoverComplete, splitOpen, draftAgent, onDraftAgentChange, onSwitchAgent, onOpenAgentDetail }) {
+function WbcMain({ project, chat, chatSummary, loading, runtime, error, errorKind, onRetry, running, onSend, onGuidance, onInterrupt, onAnswer, onRetryMessage, onEditMessage, onAskSelection, sideAgentCreating, onConversationContextMenu, onRename, onDelete, onToTask, toTaskBusy, onOpenFile, onOpenDroppedChat, sideVisible, sidePanelTabExpanded, onToggleSide, browserState, browserSessionId, browserVisible, browserWindowMode, onBrowserMaximize, onBrowserRestore, onBrowserTakeoverComplete, splitOpen, draftAgent, onDraftAgentChange, onSwitchAgent, onOpenAgentDetail }) {
   var mainRef = useWbcRef(null);
   var stageRef = useWbcRef(null);
   var scrollRef = useWbcRef(null);
@@ -12331,29 +12852,28 @@ function WbcMain({ project, chat, chatSummary, loading, runtime, error, errorKin
     if (lastUserId && lastAssistantId) break;
   }
 
-  // The bottom arm of the shared L-shaped glass follows the composer's real
-  // rendered height. This keeps its upper edge aligned when runtime controls,
-  // attachments or wrapped content change the composer size.
+  // Keep the transcript's bottom reserve synchronized with the composer's
+  // rendered height when controls, attachments or wrapped content change it.
   useWbcEffect(function () {
     var main = mainRef.current;
     if (!main) return undefined;
     var page = main.closest(".wbc-page");
     var composer = main.querySelector(":scope > .wbc-composer");
     if (!page || !composer) return undefined;
-    function syncSharedGlassHeight() {
+    function syncComposerReserveHeight() {
       var height = Math.ceil(composer.getBoundingClientRect().height);
-      if (height > 0) page.style.setProperty("--wbc-shared-glass-height", height + "px");
+      if (height > 0) page.style.setProperty("--wbc-composer-reserve-height", height + "px");
     }
-    syncSharedGlassHeight();
+    syncComposerReserveHeight();
     var observer = typeof ResizeObserver === "function"
-      ? new ResizeObserver(syncSharedGlassHeight)
+      ? new ResizeObserver(syncComposerReserveHeight)
       : null;
     if (observer) observer.observe(composer);
-    window.addEventListener("resize", syncSharedGlassHeight);
+    window.addEventListener("resize", syncComposerReserveHeight);
     return function () {
       if (observer) observer.disconnect();
-      window.removeEventListener("resize", syncSharedGlassHeight);
-      page.style.removeProperty("--wbc-shared-glass-height");
+      window.removeEventListener("resize", syncComposerReserveHeight);
+      page.style.removeProperty("--wbc-composer-reserve-height");
     };
   }, [chat && chat.id]);
 
@@ -12914,7 +13434,6 @@ function WbcMain({ project, chat, chatSummary, loading, runtime, error, errorKin
           onSend={onSend}
           onGuidance={onGuidance}
           onInterrupt={onInterrupt}
-          onMinimize={onBrowserMinimize}
           onMaximize={onBrowserMaximize}
           onRestore={onBrowserRestore}
           onTakeoverComplete={onBrowserTakeoverComplete}
@@ -16062,6 +16581,30 @@ function wbcArtifactFileKey(file) {
   return String(file.id || file.url || file.path || file.name || "");
 }
 
+var WBC_PROJECT_FILE_DRAFTS = Object.create(null);
+
+function wbcProjectFileDraftKey(file) {
+  if (!file || file.source !== "project") return "";
+  return String(file.projectId || "") + ":" + String(file.path || "");
+}
+
+function wbcProjectFileEditUrl(file) {
+  if (!file || file.source !== "project" || !file.projectId || !file.path) return "";
+  var encodedPath = String(file.path).replace(/\\/g, "/").split("/").filter(Boolean).map(encodeURIComponent).join("/");
+  if (!encodedPath) return "";
+  return "/api/projects/" + encodeURIComponent(file.projectId) + "/files/edit/" + encodedPath;
+}
+
+function wbcCanEditProjectTextFile(file) {
+  var kind = wbcFileViewKind(file);
+  return !!(wbcProjectFileEditUrl(file) && (kind === "markdown" || kind === "code" || kind === "html"));
+}
+
+function wbcDiscardProjectFileDraft(file) {
+  var key = wbcProjectFileDraftKey(file);
+  if (key) delete WBC_PROJECT_FILE_DRAFTS[key];
+}
+
 function WbcArtifactSplitHost({ file, items, width, label, onSelect, onResize, onClose, onViewed, splitSide, onToggleSide, onSplitDragStart, onSplitDragEnd }) {
   return (
        <WbcResourceSplitHost openKey={wbcArtifactFileKey(file)} width={width} onResize={onResize} splitSide={splitSide} onToggleSide={onToggleSide} onClose={onClose} onSplitDragStart={onSplitDragStart} onSplitDragEnd={onSplitDragEnd}>
@@ -16082,6 +16625,8 @@ function WbcArtifactSplitHost({ file, items, width, label, onSelect, onResize, o
 function WbcArtifactSplit({ file, items, label, onSelect, onClose, onViewed }) {
   var [pickerOpen, setPickerOpen] = useWbcState(false);
   var [htmlMode, setHtmlMode] = useWbcState("rendered");
+  var [markdownMode, setMarkdownMode] = useWbcState("rendered");
+  var [editorDirty, setEditorDirty] = useWbcState(false);
   var headerRef = useWbcRef(null);
   var files = Array.isArray(items) ? items : [];
   var currentKey = wbcArtifactFileKey(file);
@@ -16090,7 +16635,29 @@ function WbcArtifactSplit({ file, items, label, onSelect, onClose, onViewed }) {
 
   useWbcEffect(function () {
     setHtmlMode("rendered");
+    setMarkdownMode("rendered");
+    setEditorDirty(false);
   }, [currentKey]);
+
+  function afterDiscard(callback) {
+    if (!editorDirty) {
+      callback();
+      return;
+    }
+    var feedback = window.CyreneUI.require("feedback");
+    var request = feedback.confirmModal ? feedback.confirmModal({
+      title: wbcT("workbenchChat.editorUnsavedTitle", "Unsaved changes"),
+      body: wbcT("workbenchChat.editorUnsavedBody", "Discard the changes made to this file?"),
+      confirmLabel: wbcT("workbenchChat.editorDiscard", "Discard changes"),
+      danger: true,
+    }) : Promise.resolve(window.confirm(wbcT("workbenchChat.editorUnsavedBody", "Discard the changes made to this file?")));
+    Promise.resolve(request).then(function (confirmed) {
+      if (!confirmed) return;
+      wbcDiscardProjectFileDraft(file);
+      setEditorDirty(false);
+      callback();
+    });
+  }
 
   useWbcEffect(function () {
     if (!pickerOpen) return undefined;
@@ -16124,6 +16691,12 @@ function WbcArtifactSplit({ file, items, label, onSelect, onClose, onViewed }) {
               <button type="button" className={htmlMode === "source" ? "active" : ""} onClick={function () { setHtmlMode("source"); }}>{wbcT("workbenchChat.viewerSource", "Source")}</button>
             </span>
           )}
+          {kind === "markdown" && wbcCanEditProjectTextFile(file) && (
+            <span className="wbc-artifact-mode-switch">
+              <button type="button" className={markdownMode === "rendered" ? "active" : ""} onClick={function () { setMarkdownMode("rendered"); }}>{wbcT("workbenchChat.viewerRendered", "Rendered")}</button>
+              <button type="button" className={markdownMode === "source" ? "active" : ""} onClick={function () { setMarkdownMode("source"); }}>{wbcT("workbenchChat.viewerSource", "Source")}</button>
+            </span>
+          )}
           {wbcCanOpenExternally(file) ? (
             <a className="wbc-side-agent-split-action" href={file.url} target="_blank" rel="noreferrer" title={wbcT("workbenchChat.viewerOpenExternal", "Open in a new window")} aria-label={wbcT("workbenchChat.viewerOpenExternal", "Open in a new window")}>{WBC_ICONS.openExternal}</a>
           ) : null}
@@ -16131,7 +16704,7 @@ function WbcArtifactSplit({ file, items, label, onSelect, onClose, onViewed }) {
           <button
             type="button"
             className="wbc-side-agent-split-close"
-            onClick={onClose}
+            onClick={function () { afterDiscard(onClose); }}
             title={wbcT("workbenchChat.closeFilePreview", "Close file preview")}
             aria-label={wbcT("workbenchChat.closeFilePreview", "Close file preview")}
           >{WBC_ICONS.x}</button>
@@ -16147,9 +16720,17 @@ function WbcArtifactSplit({ file, items, label, onSelect, onClose, onViewed }) {
                   className={selected ? "active" : ""}
                   role="option"
                   aria-selected={selected}
+                  draggable="true"
+                  onDragStart={function (event) { wbcStartFileDrag(event, itemFile); }}
                   onClick={function () {
-                    setPickerOpen(false);
-                    if (onSelect) onSelect(itemFile);
+                    if (selected) {
+                      setPickerOpen(false);
+                      return;
+                    }
+                    afterDiscard(function () {
+                      setPickerOpen(false);
+                      if (onSelect) onSelect(itemFile);
+                    });
                   }}
                 >
                   <span className="wbc-artifact-picker-icon" aria-hidden="true">{WBC_ICONS.file}</span>
@@ -16160,7 +16741,16 @@ function WbcArtifactSplit({ file, items, label, onSelect, onClose, onViewed }) {
         </WbcSplitPickerMenu>
       </header>
       <div className="wbc-artifact-split-viewer">
-        <WbcViewerTab file={file} onViewed={onViewed} hideHeader={true} htmlMode={htmlMode} onHtmlModeChange={setHtmlMode} />
+        <WbcViewerTab
+          file={file}
+          onViewed={onViewed}
+          hideHeader={true}
+          htmlMode={htmlMode}
+          onHtmlModeChange={setHtmlMode}
+          markdownMode={markdownMode}
+          onMarkdownModeChange={setMarkdownMode}
+          onDirtyChange={setEditorDirty}
+        />
       </div>
     </aside>
   );
@@ -16269,7 +16859,7 @@ function WbcViewerList({ files, selectedFile, onSelect }) {
         var file = item && item.file;
         var active = wbcArtifactFileKey(file) === selectedKey;
         return (
-          <button type="button" className={"wbc-resource-list-row" + (active ? " current" : "")} key={wbcArtifactFileKey(file) + ":" + index} onClick={function () { if (onSelect) onSelect(file); }}>
+          <button type="button" className={"wbc-resource-list-row" + (active ? " current" : "")} key={wbcArtifactFileKey(file) + ":" + index} draggable="true" onDragStart={function (event) { wbcStartFileDrag(event, file); }} onClick={function () { if (onSelect) onSelect(file); }}>
             <span className="wbc-resource-list-icon" aria-hidden="true">{WBC_SIDE_TAB_ICONS.viewer}</span>
             <span className="wbc-resource-list-copy"><b>{file && file.name || "file"}</b><small>{wbcAttachmentTypeLabel(file)}</small></span>
             <span className="wbc-resource-list-chevron" aria-hidden="true">{WBC_ICONS.chevronRight}</span>
@@ -16416,6 +17006,11 @@ function WbcMapSplit({ chatId, item, items, onSelect, onClose }) {
       <div className="wbc-resource-split-body"><WbcMapTab chatId={chatId} focusItem={item} /></div>
     </aside>
   );
+}
+
+function WbcMapPaneContent({ chatId, item, onSelect, onClose }) {
+  var data = useWbcMapData(chatId);
+  return <WbcMapSplit chatId={chatId} item={item} items={wbcMapItems(data)} onSelect={onSelect} onClose={onClose} />;
 }
 
 function WbcBrowserSplitHost({ tabId, browserState, browserSessionId, width, onSelect, onResize, onClose, onTakeoverComplete, splitSide, onToggleSide, onSplitDragStart, onSplitDragEnd }) {
@@ -17085,6 +17680,168 @@ function WbcChatSplit({ chatId, project, onOpenContent, browserActiveByChat, onC
   );
 }
 
+function WbcPaneCardFrame({ card, children, grip, dropEnabled, replaceOnly, dropTarget, onDropOver, onDrop, onDropLeave }) {
+  var activeEdge = dropTarget && String(dropTarget.cardId || "") === String(card && card.id || "")
+    ? dropTarget.edge
+    : "";
+  return (
+    <article
+      className={"wbc-pane-card wbc-pane-card-" + String(card && card.kind || "content")}
+      data-pane-card-id={card && card.id || ""}
+    >
+      {grip ? <div className="wbc-pane-card-grip">{grip}</div> : null}
+      {children}
+      {dropEnabled ? (
+        <div className={"wbc-pane-card-drop-layer" + (replaceOnly ? " replace-only" : "")} onDragLeave={onDropLeave}>
+          {replaceOnly ? (
+            <div
+              className={"wbc-pane-card-drop-zone replace" + (activeEdge === "replace" ? " active" : "")}
+              onDragEnter={function (event) { onDropOver(event, card.id, "replace"); }}
+              onDragOver={function (event) { onDropOver(event, card.id, "replace"); }}
+              onDrop={function (event) { onDrop(event, card.id, "replace"); }}
+            ><span>{wbcT("workbenchChat.dropPaneReplace", "Release to replace this split")}</span></div>
+          ) : (
+            <React.Fragment>
+              <div
+                className={"wbc-pane-card-drop-zone top" + (activeEdge === "top" ? " active" : "")}
+                onDragEnter={function (event) { onDropOver(event, card.id, "top"); }}
+                onDragOver={function (event) { onDropOver(event, card.id, "top"); }}
+                onDrop={function (event) { onDrop(event, card.id, "top"); }}
+              ><span>{wbcT("workbenchChat.dropPaneTop", "Release to open above")}</span></div>
+              <div
+                className={"wbc-pane-card-drop-zone replace" + (activeEdge === "replace" ? " active" : "")}
+                onDragEnter={function (event) { onDropOver(event, card.id, "replace"); }}
+                onDragOver={function (event) { onDropOver(event, card.id, "replace"); }}
+                onDrop={function (event) { onDrop(event, card.id, "replace"); }}
+              ><span>{wbcT("workbenchChat.dropPaneReplace", "Release to replace this split")}</span></div>
+              <div
+                className={"wbc-pane-card-drop-zone bottom" + (activeEdge === "bottom" ? " active" : "")}
+                onDragEnter={function (event) { onDropOver(event, card.id, "bottom"); }}
+                onDragOver={function (event) { onDropOver(event, card.id, "bottom"); }}
+                onDrop={function (event) { onDrop(event, card.id, "bottom"); }}
+              ><span>{wbcT("workbenchChat.dropPaneBottom", "Release to open below")}</span></div>
+            </React.Fragment>
+          )}
+        </div>
+      ) : null}
+    </article>
+  );
+}
+
+function WbcPaneRowResizer({ ratio, onResize }) {
+  var safeRatio = Math.max(0.2, Math.min(0.8, Number(ratio) || 0.5));
+  // Grid gaps do not participate in fr sizing. Position the separator at the
+  // exact centre of the 12px gap instead of at a percentage of the full
+  // column, which drifts into one of the cards as the ratio changes.
+  var seamOffset = 6 - (safeRatio * 12);
+  var seamTop = "calc(" + (safeRatio * 100) + "% "
+    + (seamOffset < 0 ? "- " : "+ ") + Math.abs(seamOffset) + "px)";
+  function startResize(event) {
+    if (event.button !== 0 || !onResize) return;
+    event.preventDefault();
+    var column = event.currentTarget && event.currentTarget.closest
+      ? event.currentTarget.closest(".wbc-pane-column")
+      : null;
+    if (!column) return;
+    var rect = column.getBoundingClientRect();
+    function move(moveEvent) {
+      var trackHeight = Math.max(1, rect.height - 12);
+      onResize(Math.max(0.2, Math.min(0.8, (moveEvent.clientY - rect.top - 6) / trackHeight)));
+    }
+    function stop() {
+      window.removeEventListener("pointermove", move);
+      window.removeEventListener("pointerup", stop);
+      window.removeEventListener("pointercancel", stop);
+      document.body.classList.remove("wbc-resizing-pane-row");
+    }
+    document.body.classList.add("wbc-resizing-pane-row");
+    window.addEventListener("pointermove", move);
+    window.addEventListener("pointerup", stop, { once: true });
+    window.addEventListener("pointercancel", stop, { once: true });
+  }
+  function keyboardResize(event) {
+    if (event.key !== "ArrowUp" && event.key !== "ArrowDown") return;
+    event.preventDefault();
+    onResize((Number(ratio) || 0.5) + (event.key === "ArrowUp" ? -0.04 : 0.04));
+  }
+  return (
+    <div
+      className="wbc-pane-row-resizer"
+      role="separator"
+      aria-orientation="horizontal"
+      aria-label={wbcT("workbenchChat.resizePaneHeight", "Resize split height")}
+      aria-valuenow={Math.round(safeRatio * 100)}
+      tabIndex={0}
+      style={{ top: seamTop }}
+      onPointerDown={startResize}
+      onKeyDown={keyboardResize}
+    />
+  );
+}
+
+function WbcPaneColumnResizer({ width, onResize }) {
+  function boundsFor(layout) {
+    var rect = layout.getBoundingClientRect();
+    // 24px outer padding + 12px card gap. Both tracks receive the exact same
+    // 380px floor; on compact windows that floor shrinks symmetrically.
+    var trackWidth = Math.max(0, rect.width - 36);
+    var minimum = Math.min(380, trackWidth / 2);
+    return {
+      minimum: minimum,
+      maximum: Math.max(minimum, trackWidth - minimum),
+    };
+  }
+  function clampFor(layout, value) {
+    var bounds = boundsFor(layout);
+    return Math.max(bounds.minimum, Math.min(bounds.maximum, Number(value) || 520));
+  }
+  function startResize(event) {
+    if (event.button !== 0 || !onResize) return;
+    event.preventDefault();
+    var layout = event.currentTarget && event.currentTarget.closest
+      ? event.currentTarget.closest(".wbc-pane-layout")
+      : null;
+    if (!layout) return;
+    var startX = event.clientX;
+    var startWidth = clampFor(layout, width);
+    function move(moveEvent) {
+      var next = startWidth + (startX - moveEvent.clientX);
+      onResize(clampFor(layout, next));
+    }
+    function stop() {
+      window.removeEventListener("pointermove", move);
+      window.removeEventListener("pointerup", stop);
+      window.removeEventListener("pointercancel", stop);
+      document.body.classList.remove("wbc-resizing-pane-column");
+    }
+    document.body.classList.add("wbc-resizing-pane-column");
+    window.addEventListener("pointermove", move);
+    window.addEventListener("pointerup", stop, { once: true });
+    window.addEventListener("pointercancel", stop, { once: true });
+  }
+  function keyboardResize(event) {
+    if (event.key !== "ArrowLeft" && event.key !== "ArrowRight") return;
+    event.preventDefault();
+    var layout = event.currentTarget && event.currentTarget.closest
+      ? event.currentTarget.closest(".wbc-pane-layout")
+      : null;
+    var next = (Number(width) || 520) + (event.key === "ArrowLeft" ? 16 : -16);
+    onResize(layout ? clampFor(layout, next) : next);
+  }
+  return (
+    <div
+      className="wbc-pane-column-resizer"
+      role="separator"
+      aria-orientation="vertical"
+      aria-label={wbcT("workbenchChat.detailPanel.resize", "Resize detail panel")}
+      aria-valuenow={Math.round(Number(width) || 520)}
+      tabIndex={0}
+      onPointerDown={startResize}
+      onKeyDown={keyboardResize}
+    />
+  );
+}
+
 function WbcSideAgentSplitResizer({ width, onResize, splitSide }) {
   function clampWidth(next, page) {
     return wbcClampSideSplitWidthForPage(next, page);
@@ -17175,10 +17932,10 @@ function WbcSideAgentSplitResizer({ width, onResize, splitSide }) {
 // Horizontal grip for a detail split: drag to lift the split (native drag,
 // like an image/document) — dropping it on the rail closes it, dropping it on
 // either side moves it there — and click to open a menu (open the floating
-// conversation panel, swap the side, or close). Conversation splits (split
-// chats) carry their own grip on the panel's top edge; content splits
-// intentionally carry no grip of their own.
-function WbcSplitGripBar({ dragSource, side, onToggleSide, onClose, onOpenConversationPanel, onSplitDragStart, onSplitDragEnd }) {
+// conversation panel or a new conversation, swap the side/vertical order, or
+// close). Every card exposes one grip; detached chat cards keep their existing
+// internal grip while the shared card frame supplies it for all other kinds.
+function WbcSplitGripBar({ dragSource, side, onToggleSide, onClose, onOpenConversationPanel, onNewConversation, menuType, onSplitDragStart, onSplitDragEnd }) {
   var [menuOpen, setMenuOpen] = useWbcState(false);
   var rootRef = useWbcRef(null);
 
@@ -17224,14 +17981,25 @@ function WbcSplitGripBar({ dragSource, side, onToggleSide, onClose, onOpenConver
       </div>
       {menuOpen && (
         <div className="wbc-side-split-grip-menu" role="menu">
-          <button
-            type="button"
-            role="menuitem"
-            onClick={openConversationPanel}
-          >
-            <span aria-hidden="true">{WBC_ICONS.sidebar}</span>
-            <span>{wbcT("workbenchChat.detailPanel.openConversationPanel", "Open conversation panel")}</span>
-          </button>
+          {menuType === "content" ? (
+            onNewConversation ? <button
+              type="button"
+              role="menuitem"
+              onClick={function () { setMenuOpen(false); onNewConversation(); }}
+            >
+              <span aria-hidden="true">{WBC_ICONS.plus}</span>
+              <span>{wbcT("workbenchChat.newConversation", "New conversation")}</span>
+            </button> : null
+          ) : (
+            <button
+              type="button"
+              role="menuitem"
+              onClick={openConversationPanel}
+            >
+              <span aria-hidden="true">{WBC_ICONS.sidebar}</span>
+              <span>{wbcT("workbenchChat.detailPanel.openConversationPanel", "Open conversation panel")}</span>
+            </button>
+          )}
           <button
             type="button"
             role="menuitem"
@@ -19017,7 +19785,89 @@ function WbcOfficeViewer({ file, url, kind, onViewed }) {
 
 // ---- side viewer (PDF / Office / HTML / Markdown / 代码 / 图片) -------------
 
-function WbcViewerTab({ file, onViewed, hideHeader, htmlMode: controlledHtmlMode, onHtmlModeChange }) {
+function WbcMarkdownRenderedEditor({ value, onChange, onSave, onLinkClick, containerRef }) {
+  var localRef = useWbcRef(null);
+  var lastEmittedRef = useWbcRef(null);
+
+  function editorNode() {
+    return localRef.current;
+  }
+
+  function applyRenderedValue(node, markdown) {
+    if (!node) return;
+    node.innerHTML = wbcRenderMarkdown(markdown);
+    Array.prototype.forEach.call(node.querySelectorAll("[data-wbc-source]"), function (block) {
+      block.setAttribute("contenteditable", "false");
+      block.setAttribute("title", wbcT("workbenchChat.editorProtectedBlock", "Edit this block in source mode"));
+    });
+  }
+
+  useWbcLayoutEffect(function () {
+    var node = editorNode();
+    if (!node) return;
+    if (lastEmittedRef.current === value) return;
+    if (node.contains(document.activeElement)) return;
+    applyRenderedValue(node, value);
+  }, [value]);
+
+  useWbcEffect(function () {
+    if (containerRef) containerRef.current = editorNode();
+    return function () { if (containerRef) containerRef.current = null; };
+  }, []);
+
+  function emitMarkdown() {
+    var node = editorNode();
+    var converter = window.CyreneCodeMirror && window.CyreneCodeMirror.markdownFromElement;
+    if (!node || !converter) return;
+    var markdown = converter(node);
+    lastEmittedRef.current = markdown;
+    if (onChange) onChange(markdown);
+  }
+
+  function insertPlainText(text) {
+    if (document.execCommand && document.execCommand("insertText", false, text)) return;
+    var selection = window.getSelection && window.getSelection();
+    if (!selection || !selection.rangeCount) return;
+    var range = selection.getRangeAt(0);
+    range.deleteContents();
+    var node = document.createTextNode(text);
+    range.insertNode(node);
+    range.setStartAfter(node);
+    range.collapse(true);
+    selection.removeAllRanges();
+    selection.addRange(range);
+    emitMarkdown();
+  }
+
+  return (
+    <div
+      ref={localRef}
+      className="wbc-markdown-rendered-editor wbc-viewer-md wbc-msg-body markdown"
+      contentEditable="true"
+      suppressContentEditableWarning={true}
+      spellCheck="true"
+      role="textbox"
+      aria-multiline="true"
+      aria-label={wbcT("workbenchChat.editorRenderedLabel", "Rendered Markdown editor")}
+      data-placeholder={wbcT("workbenchChat.editorRenderedPlaceholder", "Start writing…")}
+      onClick={onLinkClick}
+      onInput={emitMarkdown}
+      onBlur={emitMarkdown}
+      onPaste={function (event) {
+        event.preventDefault();
+        insertPlainText(String(event.clipboardData && event.clipboardData.getData("text/plain") || ""));
+      }}
+      onKeyDown={function (event) {
+        if ((event.metaKey || event.ctrlKey) && String(event.key).toLowerCase() === "s") {
+          event.preventDefault();
+          if (onSave) onSave();
+        }
+      }}
+    />
+  );
+}
+
+function WbcViewerTab({ file, onViewed, hideHeader, htmlMode: controlledHtmlMode, onHtmlModeChange, markdownMode: controlledMarkdownMode, onMarkdownModeChange, onDirtyChange }) {
   var kind = wbcFileViewKind(file);
   var [text, setText] = useWbcState("");
   var [localHtmlMode, setLocalHtmlMode] = useWbcState("rendered");
@@ -19026,7 +19876,23 @@ function WbcViewerTab({ file, onViewed, hideHeader, htmlMode: controlledHtmlMode
     setLocalHtmlMode(next);
     if (onHtmlModeChange) onHtmlModeChange(next);
   }
+  var [localMarkdownMode, setLocalMarkdownMode] = useWbcState("rendered");
+  var markdownMode = controlledMarkdownMode || localMarkdownMode;
+  function setMarkdownMode(next) {
+    setLocalMarkdownMode(next);
+    if (onMarkdownModeChange) onMarkdownModeChange(next);
+  }
   var [failed, setFailed] = useWbcState(false);
+  var [textLoading, setTextLoading] = useWbcState(false);
+  var [editorDirty, setEditorDirty] = useWbcState(false);
+  var [editorSaving, setEditorSaving] = useWbcState(false);
+  var [editorConflict, setEditorConflict] = useWbcState(null);
+  var [editorAutoSavePaused, setEditorAutoSavePaused] = useWbcState(false);
+  var editorBaseTextRef = useWbcRef("");
+  var editorVersionRef = useWbcRef("");
+  var editorTextRef = useWbcRef("");
+  var editorDirtyRef = useWbcRef(false);
+  var editorSavingRef = useWbcRef(false);
   var [imageZoom, setImageZoom] = useWbcState(100);
   var imageZoomRef = useWbcRef(100);
   var imagePinchRef = useWbcRef({ distance: 0, zoom: 100 });
@@ -19035,6 +19901,8 @@ function WbcViewerTab({ file, onViewed, hideHeader, htmlMode: controlledHtmlMode
   var markdownRef = useWbcRef(null);
   var viewedRef = useWbcRef("");
   var url = file && file.url;
+  var editUrl = wbcCanEditProjectTextFile(file) ? wbcProjectFileEditUrl(file) : "";
+  var draftKey = wbcProjectFileDraftKey(file);
   function confirmViewed() {
     var key = String(url || "") + "::" + String(file && file.name || "");
     if (!key || viewedRef.current === key) return;
@@ -19045,28 +19913,98 @@ function WbcViewerTab({ file, onViewed, hideHeader, htmlMode: controlledHtmlMode
     return kind === "html" ? wbcHtmlPreviewDocument(text, url) : "";
   }, [text, url, kind]);
 
+  function publishEditorDirty(next) {
+    editorDirtyRef.current = next;
+    setEditorDirty(next);
+    if (onDirtyChange) onDirtyChange(next);
+  }
+
+  function applyLoadedEditor(payload, preserveDraft) {
+    var savedContent = String(payload && payload.content || "");
+    var nextVersion = String(payload && payload.version || "");
+    var draft = preserveDraft && draftKey ? WBC_PROJECT_FILE_DRAFTS[draftKey] : null;
+    editorVersionRef.current = draft && draft.version ? draft.version : nextVersion;
+    editorBaseTextRef.current = draft ? String(draft.baseContent || "") : savedContent;
+    var nextText = draft ? String(draft.content || "") : savedContent;
+    editorTextRef.current = nextText;
+    setText(nextText);
+    publishEditorDirty(nextText !== editorBaseTextRef.current);
+    setEditorConflict(null);
+    setEditorAutoSavePaused(false);
+  }
+
+  function readEditorResponse(response) {
+    return response.json().catch(function () { return {}; }).then(function (payload) {
+      if (!response.ok) {
+        var error = new Error(payload.error || ("HTTP " + response.status));
+        error.status = response.status;
+        error.payload = payload;
+        throw error;
+      }
+      return payload;
+    });
+  }
+
   // text-ish contents are fetched (PDF is handled by WbcPdfJsViewer)
   useWbcEffect(function () {
     setText("");
     setFailed(false);
+    setTextLoading(false);
+    setEditorSaving(false);
+    editorSavingRef.current = false;
+    setEditorConflict(null);
+    setEditorAutoSavePaused(false);
+    editorBaseTextRef.current = "";
+    editorVersionRef.current = "";
+    editorTextRef.current = "";
+    publishEditorDirty(false);
     imageZoomRef.current = 100;
     setImageZoom(100);
     setHtmlMode("rendered");
+    setMarkdownMode("rendered");
     if (!url) return;
     var cancelled = false;
     if (kind === "html" || kind === "markdown" || kind === "code") {
-      fetch(url).then(function (r) {
-        if (!r.ok) throw new Error("HTTP " + r.status);
-        return r.text();
-      }).then(function (body) {
+      setTextLoading(true);
+      var request = editUrl
+        ? fetch(editUrl, { cache: "no-store" }).then(readEditorResponse)
+        : fetch(url, { cache: "no-store" }).then(function (r) {
+            if (!r.ok) throw new Error("HTTP " + r.status);
+            return r.text();
+          });
+      request.then(function (body) {
         if (!cancelled) {
-          setText(body);
+          if (editUrl) applyLoadedEditor(body, true);
+          else {
+            editorTextRef.current = body;
+            setText(body);
+          }
           confirmViewed();
         }
-      }).catch(function () { if (!cancelled) setFailed(true); });
+      }).catch(function (error) {
+        if (!cancelled) {
+          setFailed(true);
+        }
+      }).finally(function () { if (!cancelled) setTextLoading(false); });
     }
     return function () { cancelled = true; };
-  }, [url, kind]);
+  }, [url, kind, editUrl]);
+
+  useWbcEffect(function () {
+    if (!editorDirty) return undefined;
+    function warnBeforeUnload(event) {
+      event.preventDefault();
+      event.returnValue = "";
+    }
+    window.addEventListener("beforeunload", warnBeforeUnload);
+    return function () { window.removeEventListener("beforeunload", warnBeforeUnload); };
+  }, [editorDirty]);
+
+  useWbcEffect(function () {
+    if (!editUrl || textLoading || !editorDirty || editorSaving || editorConflict || editorAutoSavePaused) return undefined;
+    var timer = window.setTimeout(function () { saveEditor(false); }, 650);
+    return function () { window.clearTimeout(timer); };
+  }, [text, editUrl, textLoading, editorDirty, editorSaving, editorConflict, editorAutoSavePaused]);
 
   // syntax highlight code once loaded
   useWbcEffect(function () {
@@ -19099,7 +20037,7 @@ function WbcViewerTab({ file, onViewed, hideHeader, htmlMode: controlledHtmlMode
         anchor.setAttribute("rel", "noopener noreferrer");
       }
     });
-  }, [text, kind]);
+  }, [text, kind, markdownMode]);
 
   function handleMarkdownLink(event) {
     var anchor = event.target && event.target.closest ? event.target.closest("a[href]") : null;
@@ -19114,6 +20052,107 @@ function WbcViewerTab({ file, onViewed, hideHeader, htmlMode: controlledHtmlMode
       return node.id === id;
     });
     if (target) target.scrollIntoView({ behavior: "smooth", block: "start" });
+  }
+
+  function handleEditorChange(nextText) {
+    var next = String(nextText == null ? "" : nextText);
+    var dirty = next !== editorBaseTextRef.current;
+    editorTextRef.current = next;
+    setText(next);
+    publishEditorDirty(dirty);
+    setEditorAutoSavePaused(false);
+    if (draftKey) {
+      if (dirty) {
+        WBC_PROJECT_FILE_DRAFTS[draftKey] = {
+          content: next,
+          baseContent: editorBaseTextRef.current,
+          version: editorVersionRef.current,
+        };
+      } else {
+        delete WBC_PROJECT_FILE_DRAFTS[draftKey];
+      }
+    }
+  }
+
+  function saveEditor(force) {
+    if (!editUrl || editorSavingRef.current) return Promise.resolve(false);
+    if (!editorDirtyRef.current && !force) return Promise.resolve(true);
+    var contentToSave = editorTextRef.current;
+    editorSavingRef.current = true;
+    setEditorSaving(true);
+    return fetch(editUrl, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        content: contentToSave,
+        expectedVersion: editorVersionRef.current,
+        force: !!force,
+      }),
+    }).then(readEditorResponse).then(function (payload) {
+      editorBaseTextRef.current = contentToSave;
+      editorVersionRef.current = String(payload.version || "");
+      var latestText = editorTextRef.current;
+      var stillDirty = latestText !== contentToSave;
+      publishEditorDirty(stillDirty);
+      setEditorConflict(null);
+      setEditorAutoSavePaused(false);
+      if (draftKey) {
+        if (stillDirty) {
+          WBC_PROJECT_FILE_DRAFTS[draftKey] = {
+            content: latestText,
+            baseContent: contentToSave,
+            version: editorVersionRef.current,
+          };
+        } else {
+          delete WBC_PROJECT_FILE_DRAFTS[draftKey];
+        }
+      }
+      return true;
+    }).catch(function (error) {
+      setEditorAutoSavePaused(true);
+      if (error.status === 409 && error.payload) {
+        setEditorConflict(error.payload);
+        var feedback = window.CyreneUI.require("feedback");
+        var request = feedback.confirmModal({
+          title: wbcT("workbenchChat.editorConflictShort", "Conflict"),
+          body: wbcT("workbenchChat.editorAutoSaveConflict", "The file changed outside the editor. Overwrite it with your version, or reload the external version?"),
+          confirmLabel: wbcT("workbenchChat.editorOverwrite", "Overwrite"),
+          cancelLabel: wbcT("workbenchChat.editorReload", "Reload latest"),
+          danger: true,
+        });
+        Promise.resolve(request).then(function (overwrite) {
+          if (overwrite) saveEditor(true);
+          else reloadEditor();
+        });
+      } else {
+        window.CyreneUI.require("feedback").showToast(
+          error.message || wbcT("workbenchChat.editorSaveFailed", "Save failed"),
+          "error"
+        );
+      }
+      return false;
+    }).finally(function () {
+      editorSavingRef.current = false;
+      setEditorSaving(false);
+    });
+  }
+
+  function reloadEditor() {
+    if (!editUrl || editorSavingRef.current) return;
+    editorSavingRef.current = true;
+    setEditorSaving(true);
+    fetch(editUrl, { cache: "no-store" }).then(readEditorResponse).then(function (payload) {
+      if (draftKey) delete WBC_PROJECT_FILE_DRAFTS[draftKey];
+      applyLoadedEditor(payload, false);
+    }).catch(function (error) {
+      window.CyreneUI.require("feedback").showToast(
+        error.message || wbcT("workbenchChat.viewerLoadFailed", "File failed to load."),
+        "error"
+      );
+    }).finally(function () {
+      editorSavingRef.current = false;
+      setEditorSaving(false);
+    });
   }
 
   function applyImageZoom(nextZoom, clientX, clientY) {
@@ -19178,6 +20217,12 @@ function WbcViewerTab({ file, onViewed, hideHeader, htmlMode: controlledHtmlMode
           <button type="button" className={htmlMode === "source" ? "active" : ""} onClick={function () { setHtmlMode("source"); }}>{wbcT("workbenchChat.viewerSource", "Source")}</button>
         </span>
       )}
+      {kind === "markdown" && editUrl && (
+        <span className="wbc-viewer-switch">
+          <button type="button" className={markdownMode === "rendered" ? "active" : ""} onClick={function () { setMarkdownMode("rendered"); }}>{wbcT("workbenchChat.viewerRendered", "Rendered")}</button>
+          <button type="button" className={markdownMode === "source" ? "active" : ""} onClick={function () { setMarkdownMode("source"); }}>{wbcT("workbenchChat.viewerSource", "Source")}</button>
+        </span>
+      )}
       {kind === "image" && (
         <span className="wbc-viewer-switch wbc-viewer-zoom">
           <button type="button" disabled={imageZoom <= 100} onClick={function () { applyImageZoom(imageZoomRef.current - 25); }} aria-label={wbcT("workbenchChat.zoomOut", "Zoom out")}>−</button>
@@ -19190,8 +20235,30 @@ function WbcViewerTab({ file, onViewed, hideHeader, htmlMode: controlledHtmlMode
     </div>
   );
 
+  var editorBody = null;
+  if (editUrl && (kind === "markdown" || kind === "code" || kind === "html") && !failed && !textLoading) {
+    var CodeMirrorEditor = window.CyreneCodeMirror && window.CyreneCodeMirror.Editor;
+    var editorControl = CodeMirrorEditor
+      ? <CodeMirrorEditor
+          file={file}
+          value={text}
+          onChange={handleEditorChange}
+          onSave={function () { saveEditor(false); }}
+          ariaLabel={wbcT("workbenchChat.editorLabel", "Project file editor")}
+        />
+      : <textarea className="wbc-text-editor-fallback" value={text} onChange={function (event) { handleEditorChange(event.target.value); }} spellCheck="false" />;
+    editorBody = kind === "markdown"
+      ? (markdownMode === "rendered"
+          ? <WbcMarkdownRenderedEditor value={text} onChange={handleEditorChange} onSave={function () { saveEditor(false); }} onLinkClick={handleMarkdownLink} containerRef={markdownRef} />
+          : <div className="wbc-text-editor-surface">{editorControl}</div>)
+      : <div className="wbc-text-editor-surface">{editorControl}</div>;
+    editorBody = <div className="wbc-text-editor">{editorBody}</div>;
+  }
+
   var body = null;
-  if (failed) {
+  if (textLoading) {
+    body = <div className="wbc-text-editor-loading" role="status"><span className="wbc-spinner" aria-hidden="true" />{wbcT("workbenchChat.editorLoading", "Loading editor…")}</div>;
+  } else if (failed) {
     body = <p className="workbench-muted wbc-viewer-pad">{wbcT("workbenchChat.viewerLoadFailed", "File failed to load.")}{url ? " " + wbcT("workbenchChat.viewerOpenFallback", "Try opening it in a new window.") : ""}</p>;
   } else if (kind === "image") {
     body = <div ref={imageSurfaceRef} className="wbc-viewer-scroll is-image wbc-gesture-zoom"><div className="wbc-viewer-image-stage" style={{ width: imageZoom + "%", height: imageZoom + "%" }}><img className="wbc-viewer-img" src={url} alt={file.name || "image"} decoding="async" onLoad={confirmViewed} onError={function () { setFailed(true); }} /></div></div>;
@@ -19200,9 +20267,13 @@ function WbcViewerTab({ file, onViewed, hideHeader, htmlMode: controlledHtmlMode
   } else if (kind === "video") {
     body = <div className="wbc-viewer-media-wrap"><video className="wbc-viewer-media" src={url} controls onCanPlay={confirmViewed} /></div>;
   } else if (kind === "html") {
-    body = htmlMode === "rendered"
+    body = editUrl && htmlMode === "source"
+      ? editorBody
+      : htmlMode === "rendered"
       ? <iframe key={url + "::" + (text ? "1" : "0")} className="wbc-viewer-iframe" sandbox="allow-scripts" srcDoc={htmlPreview} title={file.name || "HTML"} />
       : <pre className="wbc-viewer-pre">{text}</pre>;
+  } else if (editorBody) {
+    body = editorBody;
   } else if (kind === "markdown") {
     body = <div ref={markdownRef} className="wbc-viewer-md wbc-msg-body markdown" onClick={handleMarkdownLink} dangerouslySetInnerHTML={{ __html: wbcRenderMarkdown(text) }} />;
   } else if (kind === "code") {
@@ -20541,6 +21612,8 @@ function WbcArtifactsTab({ chat, files: providedFiles, emptyKey, emptyFallback, 
               type="button"
               className="wbc-artifact-list-row"
               key={(file.id || file.url || i) + "_" + i}
+              draggable="true"
+              onDragStart={function (event) { wbcStartFileDrag(event, file); }}
               onClick={function () { if (onSelectArtifact) onSelectArtifact(file); }}
               title={wbcT("workbenchChat.openFilePreview", "Open file preview")}
             >

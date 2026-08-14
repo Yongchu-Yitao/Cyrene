@@ -159,8 +159,9 @@
             ? this.parser.parseInline(token.titleTokens)
             : "Details";
           var bodyHtml = this.parser.parse(token.tokens);
+          var sourceAttr = ' data-wbc-source="' + escapeHtml(encodeURIComponent(String(token.raw || ""))) + '"';
           if (token.blockType === "details") {
-            return '<details class="wbc-fold"><summary>' + titleHtml
+            return '<details class="wbc-fold"' + sourceAttr + '><summary>' + titleHtml
               + '</summary><div class="wbc-fold-body">' + bodyHtml
               + '</div></details>\n';
           }
@@ -174,15 +175,15 @@
             if (chartSpec && typeof chartSpec.buildPayload === "function") {
               try {
                 var payload = chartSpec.buildPayload(specBody, token.chartType);
-                return '<div class="wbc-chart" data-wbc-chart="' + escapeHtml(payload.json)
+                return '<div class="wbc-chart"' + sourceAttr + ' data-wbc-chart="' + escapeHtml(payload.json)
                   + '">' + specHtml + "</div>\n";
               } catch (error) {
-                return '<div class="wbc-chart wbc-chart-error" data-wbc-chart-error="'
+                return '<div class="wbc-chart wbc-chart-error"' + sourceAttr + ' data-wbc-chart-error="'
                   + escapeHtml((error && error.message) || "invalid chart spec")
                   + '">' + specHtml + "</div>\n";
               }
             }
-            return '<div class="wbc-chart wbc-chart-error" data-wbc-chart-error="chart rendering is unavailable">'
+            return '<div class="wbc-chart wbc-chart-error"' + sourceAttr + ' data-wbc-chart-error="chart rendering is unavailable">'
               + specHtml + "</div>\n";
           }
           if (token.blockType === "button") {
@@ -193,16 +194,16 @@
             if (buttonSpec && typeof buttonSpec.buildButtonPayload === "function") {
               try {
                 var buttonPayload = buttonSpec.buildButtonPayload(buttonBody);
-                return '<div class="wbc-button" data-wbc-button="' + escapeHtml(buttonPayload.json)
+                return '<div class="wbc-button"' + sourceAttr + ' data-wbc-button="' + escapeHtml(buttonPayload.json)
                   + '"><pre class="wbc-button-spec">['
                   + escapeHtml("按钮: " + buttonPayload.spec.label) + "]</pre></div>\n";
               } catch (error) {
-                return '<div class="wbc-button wbc-button-error" data-wbc-button-error="'
+                return '<div class="wbc-button wbc-button-error"' + sourceAttr + ' data-wbc-button-error="'
                   + escapeHtml((error && error.message) || "invalid button spec")
                   + '"><pre class="wbc-button-spec">' + escapeHtml(buttonBody) + "</pre></div>\n";
               }
             }
-            return '<div class="wbc-button wbc-button-error" data-wbc-button-error="button rendering is unavailable">'
+            return '<div class="wbc-button wbc-button-error"' + sourceAttr + ' data-wbc-button-error="button rendering is unavailable">'
               + '<pre class="wbc-button-spec">' + escapeHtml(buttonBody) + "</pre></div>\n";
           }
           if (token.blockType === "actions") {
@@ -212,10 +213,10 @@
               && token.childTypes.length > 0
               && token.childTypes.every(function (type) { return type === "button"; });
             if (!actionsValid) {
-              return '<div class="wbc-actions wbc-actions-error"><pre class="wbc-actions-spec">'
+              return '<div class="wbc-actions wbc-actions-error"' + sourceAttr + '><pre class="wbc-actions-spec">'
                 + escapeHtml(token.specBody) + "</pre></div>\n";
             }
-            return '<div class="wbc-actions">' + bodyHtml + "</div>\n";
+            return '<div class="wbc-actions"' + sourceAttr + '>' + bodyHtml + "</div>\n";
           }
           if (token.blockType === "grid") {
             var gridValid = Array.isArray(token.childTypes)
@@ -224,16 +225,16 @@
                 return type === "card" || type === "chart";
               });
             if (!gridValid) {
-              return '<div class="wbc-grid wbc-grid-error"><pre class="wbc-grid-spec">'
+              return '<div class="wbc-grid wbc-grid-error"' + sourceAttr + '><pre class="wbc-grid-spec">'
                 + escapeHtml(token.specBody) + "</pre></div>\n";
             }
-            return '<div class="wbc-grid" style="grid-template-columns: repeat('
+            return '<div class="wbc-grid"' + sourceAttr + ' style="grid-template-columns: repeat('
               + token.cols + ', minmax(0, 1fr))">' + bodyHtml + "</div>\n";
           }
           var cardTitle = token.title
             ? '<div class="wbc-card-title">' + titleHtml + '</div>'
             : "";
-          return '<div class="wbc-card">' + cardTitle
+          return '<div class="wbc-card"' + sourceAttr + '>' + cardTitle
             + '<div class="wbc-card-body">' + bodyHtml + '</div></div>\n';
         },
       }],

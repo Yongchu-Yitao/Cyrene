@@ -181,6 +181,7 @@ def test_workbench_runtime_dependencies_keep_their_relative_script_order():
         "compiled/shared/search/overlay.js?v=0.7.7",
         "compiled/shared/markdown/actions.js?v=0.7.7",
         "compiled/shared/diff/viewer.js?v=0.7.7",
+        "compiled/code/editor.js?v=0.7.7",
         "compiled/platform/api.js?v=0.7.7",
         "compiled/workbench-chat.js?v=0.7.7",
         "compiled/workbench-quick-chat.js?v=0.7.7",
@@ -211,6 +212,18 @@ def test_single_webui_source_build_and_entrypoint_shape():
 
     package = json.loads((WEBUI_ROOT / "package.json").read_text(encoding="utf-8"))
     assert set(package["dependencies"]) == {
+        "@codemirror/autocomplete",
+        "@codemirror/commands",
+        "@codemirror/lang-css",
+        "@codemirror/lang-html",
+        "@codemirror/lang-javascript",
+        "@codemirror/lang-json",
+        "@codemirror/lang-markdown",
+        "@codemirror/lang-python",
+        "@codemirror/language",
+        "@codemirror/search",
+        "@codemirror/state",
+        "@codemirror/view",
         "@aiden0z/pptx-renderer",
         "docx-preview",
         "esbuild",
@@ -219,6 +232,8 @@ def test_single_webui_source_build_and_entrypoint_shape():
         "pdfjs-dist",
         "react",
         "react-dom",
+        "turndown",
+        "turndown-plugin-gfm",
     }
 
     server_source = (WEBUI_ROOT / "server.py").read_text(encoding="utf-8")

@@ -334,6 +334,12 @@ class ProjectMemoryPromptRestoreBody(APIBody):
     baseModifiedAt: str = Field(default="", max_length=100)
 
 
+class ProjectTextFileUpdateBody(APIBody):
+    content: str = Field(max_length=2_000_000)
+    expectedVersion: str = Field(default="", max_length=128)
+    force: bool = False
+
+
 class ScheduleCreateBody(APIBody):
     prompt: str = Field(min_length=1, max_length=200_000)
     schedule_type: Literal["once", "cron", "interval"]

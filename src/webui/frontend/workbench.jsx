@@ -1091,13 +1091,28 @@ function wbRightDynamicMax(panel) {
   if (!layout) return wbRightMaxWidth();
   var avail = layout.getBoundingClientRect().width;
   var leftFixed = 0;
+  var mainMin = WB_MAIN_MIN;
+  // Chat now renders its main conversation inside .wbc-pane-layout. Counting
+  // every page child as fixed therefore deducted the entire main card and
+  // collapsed the right panel's maximum to its 280px minimum. In the chat
+  // grid only the direct rail is fixed; the pane layout is the flexible lane.
+  if (layout.classList.contains("wbc-page")) {
+    var rail = Array.prototype.find.call(layout.children, function (child) {
+      return child.classList && child.classList.contains("wbc-rail");
+    });
+    leftFixed = rail ? rail.getBoundingClientRect().width : 0;
+    try {
+      mainMin = parseFloat(window.getComputedStyle(layout).getPropertyValue("--wbc-main-min-width")) || WB_MAIN_MIN;
+    } catch (err) {}
+    return Math.max(WB_RIGHT_MIN, Math.round(avail - leftFixed - mainMin));
+  }
   Array.prototype.forEach.call(layout.children, function (child) {
     if (child === panel) return;
     // the flexible main/thread column gets WB_MAIN_MIN reserved, not its current width
     if (child.classList.contains("workbench-main") || child.classList.contains("wbc-main")) return;
     leftFixed += child.getBoundingClientRect().width;
   });
-  return Math.max(WB_RIGHT_MIN, Math.round(avail - leftFixed - WB_MAIN_MIN));
+  return Math.max(WB_RIGHT_MIN, Math.round(avail - leftFixed - mainMin));
 }
 
 // Stable ref callback (module scope = identity never changes, so React only
@@ -6189,7 +6204,7 @@ var ICONS = {
   attach: <svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d="m21.44 11.05-9.19 9.19a5 5 0 0 1-7.07-7.07l9.19-9.19a3.5 3.5 0 0 1 4.95 4.95l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48"/></svg>,
   slash: <svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><rect x="3" y="4" width="18" height="16" rx="2.5"/><path d="m7.5 9.5 2.5 2.5-2.5 2.5"/><path d="M12.5 15h4"/></svg>,
   model: <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><rect x="6" y="6" width="12" height="12" rx="3"/><circle cx="12" cy="12" r="2.5"/><path d="M9 2v4M15 2v4M9 18v4M15 18v4M2 9h4M2 15h4M18 9h4M18 15h4"/></svg>,
-  send: <svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M22 2 11 13M22 2l-7 20-4-9-9-4Z"/></svg>,
+  send: <svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" strokeWidth="2.25" strokeLinecap="round" strokeLinejoin="round"><path d="M12 19V5"/><path d="m5 12 7-7 7 7"/></svg>,
   stop: <svg viewBox="0 0 24 24" width="15" height="15" fill="currentColor" stroke="none"><rect x="5" y="5" width="14" height="14" rx="2.5"/></svg>,
   modeDefault: <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d="M12 3 5 6v5c0 4.2 2.8 7.7 7 9 4.2-1.3 7-4.8 7-9V6Z"/></svg>,
   modeAuto: <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d="M13 2 4 14h7l-1 8 9-12h-7l1-8Z"/></svg>,
@@ -9231,7 +9246,7 @@ function TaskComposer({
   }, [session.id, status, disabled, awaitingAnswer, running, sendDisabled]);
 
   return (
-    <div className="workbench-composer compact">
+    <div className="workbench-composer wbc-composer">
       {scopePrompt && (
         <div className="wb-scope-prompt">
           <p>{wbT("task.scopePrompt", "This is outside the current task. Create it as a new follow-up task?")}</p>
@@ -9254,7 +9269,7 @@ function TaskComposer({
           })}
         </div>
       )}
-      <div className="workbench-composer-box">
+      <div className="workbench-composer-box wbc-composer-box">
         {attachments.length > 0 && (
           <div className="wb-attach-row">
             {attachments.map(function (file, i) {
@@ -9280,13 +9295,13 @@ function TaskComposer({
           rows={2}
           disabled={disabled}
         />
-        <div className="workbench-composer-actions">
+        <div className="workbench-composer-actions wbc-composer-actions">
           <input ref={fileRef} type="file" multiple style={{ display: "none" }} onChange={onFilePick} />
-          <button type="button" className="wb-composer-icon" title={uploading ? wbT("workbenchChat.uploading", "Uploading...") : wbT("workbenchChat.addAttachment", "Add attachment")} disabled={uploading || running} onClick={pickFiles}>
+          <button type="button" className="wb-composer-icon wbc-composer-icon" title={uploading ? wbT("workbenchChat.uploading", "Uploading...") : wbT("workbenchChat.addAttachment", "Add attachment")} disabled={uploading || running} onClick={pickFiles}>
             {uploading ? <span className="wb-spinner" /> : ICONS.attach}
           </button>
           <span className="wb-popover-anchor">
-            <button type="button" className={"wb-composer-icon mode" + (modeOpen ? " active" : "")} title={wbT("workbenchChat.permissionMode", "Permission mode")} onClick={function () {
+            <button type="button" className={"wb-composer-icon wbc-composer-icon mode" + (modeOpen ? " active" : "")} title={wbT("workbenchChat.permissionMode", "Permission mode")} onClick={function () {
               setModeOpen(!modeOpen);
               setModelOpen(false);
               setModelPanel("root");
@@ -9403,7 +9418,7 @@ function TaskComposer({
           {voiceSnapshot.status.asr_ready ? (
             <button
               type="button"
-              className={"wb-composer-icon wbc-voice-input" + (voicePhase ? " " + voicePhase : "")}
+              className={"wb-composer-icon wbc-composer-icon wbc-voice-input" + (voicePhase ? " " + voicePhase : "")}
               onClick={toggleVoiceInput}
               disabled={disabled || voicePhase === "starting" || voicePhase === "transcribing"}
               title={voicePhase === "recording"
@@ -9429,13 +9444,12 @@ function TaskComposer({
           <button
             ref={sendButtonRef}
             type="button"
-            className={"wb-composer-send" + (running ? " stop" : "")}
+            className={"wb-composer-send wbc-send" + (running ? " stop" : "")}
             onClick={submit}
             disabled={sendDisabled}
             title={running ? wbT("workbenchChat.stop", "Stop") : wbT("workbenchChat.send", "Send")}
           >
             {running ? ICONS.stop : (controller.busy ? <span className="wb-spinner" /> : ICONS.send)}
-            <span className="wb-composer-send-label">{running ? wbT("workbenchChat.stop", "Stop") : wbT("workbenchChat.send", "Send")}</span>
           </button>
         </div>
       </div>

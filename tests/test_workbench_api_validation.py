@@ -132,6 +132,60 @@ def test_project_file_content_streams_inline_and_rejects_symlinks(monkeypatch, t
     assert blocked.json()["code"] == "symlink_not_allowed"
 
 
+def test_project_text_file_editor_saves_atomically_and_detects_conflicts(monkeypatch, tmp_path):
+    client = _client(monkeypatch, tmp_path)
+    workspace = tmp_path / "workspace"
+    nested = workspace / "docs"
+    nested.mkdir()
+    target = nested / "notes.md"
+    target.write_text("# Original\n", encoding="utf-8")
+
+    opened = client.get("/api/projects/project_1/files/edit/docs/notes.md")
+    assert opened.status_code == 200
+    initial = opened.json()
+    assert initial["content"] == "# Original\n"
+    assert len(initial["version"]) == 64
+
+    saved = client.put(
+        "/api/projects/project_1/files/edit/docs/notes.md",
+        json={"content": "# Edited\n", "expectedVersion": initial["version"]},
+    )
+    assert saved.status_code == 200
+    assert target.read_text(encoding="utf-8") == "# Edited\n"
+    assert saved.json()["version"] != initial["version"]
+    assert not list(nested.glob(".cyrene-edit-*"))
+
+    target.write_text("# External\n", encoding="utf-8")
+    conflict = client.put(
+        "/api/projects/project_1/files/edit/docs/notes.md",
+        json={"content": "# Stale editor\n", "expectedVersion": saved.json()["version"]},
+    )
+    assert conflict.status_code == 409
+    assert conflict.json()["code"] == "text_file_conflict"
+    assert target.read_text(encoding="utf-8") == "# External\n"
+
+    forced = client.put(
+        "/api/projects/project_1/files/edit/docs/notes.md",
+        json={
+            "content": "# Forced\n",
+            "expectedVersion": saved.json()["version"],
+            "force": True,
+        },
+    )
+    assert forced.status_code == 200
+    assert target.read_text(encoding="utf-8") == "# Forced\n"
+
+    outside = tmp_path / "outside.txt"
+    outside.write_text("private", encoding="utf-8")
+    (workspace / "edit-link.txt").symlink_to(outside)
+    blocked = client.put(
+        "/api/projects/project_1/files/edit/edit-link.txt",
+        json={"content": "overwrite", "force": True},
+    )
+    assert blocked.status_code == 403
+    assert outside.read_text(encoding="utf-8") == "private"
+
+
 def test_context_state_uses_lightweight_store_read_off_event_loop(
     monkeypatch, tmp_path,
 ):

@@ -2,6 +2,10 @@
 
 # ruff: noqa: F403,F405
 
+import hashlib
+import os
+import tempfile
+
 from cyrene.workbench.runtime import *
 from route import schemas as api_models
 from route.errors import error_response
@@ -16,6 +20,88 @@ def register_project_routes(
     global _bot, _db_path
     _bot = bot
     _db_path = db_path
+
+    editable_text_extensions = {
+        ".bash", ".c", ".cc", ".cfg", ".conf", ".cpp", ".css", ".csv",
+        ".env", ".go", ".h", ".hpp", ".htm", ".html", ".ini", ".java",
+        ".js", ".json", ".jsx", ".kt", ".log", ".md", ".mdx", ".php",
+        ".properties", ".py", ".rb", ".rs", ".rst", ".scss", ".sh",
+        ".sql", ".svelte", ".swift", ".toml", ".ts", ".tsx", ".txt",
+        ".vue", ".xml", ".yaml", ".yml",
+    }
+    editable_text_names = {
+        ".editorconfig", ".env", ".gitattributes", ".gitignore", ".npmrc",
+        "dockerfile", "license", "makefile", "readme",
+    }
+    max_editable_text_bytes = 4 * 1024 * 1024
+
+    def resolve_project_file(project_id: str, file_path: str):
+        project = _workbench_find_project_lightweight(project_id)
+        if project is None:
+            return None, error_response("Project not found", 404, "project_not_found")
+        raw_root = _workbench_resolve_workspace_dir(project)
+        if not raw_root:
+            return None, error_response("Project has no workspace", 404, "workspace_unavailable")
+        root = Path(raw_root).expanduser().resolve()
+        requested = str(file_path or "").replace("\\", "/").strip()
+        if not requested:
+            return None, error_response("File path is required", 400, "invalid_workspace_path")
+
+        cursor = root
+        for part in Path(requested).parts:
+            if part in {"", "."}:
+                continue
+            cursor = cursor / part
+            if cursor.is_symlink():
+                return None, error_response(
+                    "Symbolic links cannot be accessed", 403, "symlink_not_allowed"
+                )
+        try:
+            target = (root / requested).resolve(strict=False)
+        except (OSError, RuntimeError):
+            return None, error_response("Invalid project file path", 400, "invalid_workspace_path")
+        if target != root and root not in target.parents:
+            return None, error_response(
+                "Path escapes the project workspace", 400, "invalid_workspace_path"
+            )
+        if not target.is_file():
+            return None, error_response("File not found", 404, "file_not_found")
+        return target, None
+
+    def editable_text_payload(target: Path):
+        stat = target.stat()
+        if stat.st_size > max_editable_text_bytes:
+            return None, error_response(
+                "Text file is too large to edit", 413, "text_file_too_large",
+                maxBytes=max_editable_text_bytes,
+            )
+        media_type = mimetypes.guess_type(target.name)[0] or ""
+        extension = target.suffix.lower()
+        normalized_name = target.name.lower()
+        if not (
+            media_type.startswith("text/")
+            or extension in editable_text_extensions
+            or normalized_name in editable_text_names
+        ):
+            return None, error_response(
+                "This file type is not editable as text", 415, "text_file_type_unsupported"
+            )
+        try:
+            raw = target.read_bytes()
+            has_bom = raw.startswith(b"\xef\xbb\xbf")
+            content = raw.decode("utf-8-sig" if has_bom else "utf-8")
+        except UnicodeDecodeError:
+            return None, error_response(
+                "Only UTF-8 text files can be edited", 415, "text_file_encoding_unsupported"
+            )
+        return {
+            "content": content,
+            "version": hashlib.sha256(raw).hexdigest(),
+            "modifiedNs": int(stat.st_mtime_ns),
+            "size": len(raw),
+            "bom": has_bom,
+            "contentType": media_type or "text/plain",
+        }, None
 
     # ---- Workbench projects / task sessions ----
 
@@ -104,6 +190,92 @@ def register_project_routes(
             media_type=media_type,
             content_disposition_type="inline",
         )
+
+    @router.get("/api/projects/{project_id}/files/edit/{file_path:path}")
+    async def api_workbench_project_text_file(project_id: str, file_path: str):
+        """Read an editable UTF-8 project file with an optimistic-lock version."""
+        target, failure = resolve_project_file(project_id, file_path)
+        if failure is not None:
+            return failure
+        payload, failure = await asyncio.to_thread(editable_text_payload, target)
+        if failure is not None:
+            return failure
+        return {"ok": True, "path": str(file_path).replace("\\", "/"), **payload}
+
+    @router.put("/api/projects/{project_id}/files/edit/{file_path:path}")
+    async def api_workbench_update_project_text_file(
+        project_id: str,
+        file_path: str,
+        body: api_models.ProjectTextFileUpdateBody,
+    ):
+        """Atomically save an existing UTF-8 project file with conflict detection."""
+        target, failure = resolve_project_file(project_id, file_path)
+        if failure is not None:
+            return failure
+        current, failure = await asyncio.to_thread(editable_text_payload, target)
+        if failure is not None:
+            return failure
+        expected_version = str(body.expectedVersion or "").strip()
+        if expected_version and expected_version != current["version"] and not body.force:
+            return error_response(
+                "The file changed after it was opened", 409, "text_file_conflict",
+                version=current["version"], modifiedNs=current["modifiedNs"],
+            )
+
+        encoded = body.content.encode("utf-8")
+        if current["bom"]:
+            encoded = b"\xef\xbb\xbf" + encoded
+        if len(encoded) > max_editable_text_bytes:
+            return error_response(
+                "Text file is too large to save", 413, "text_file_too_large",
+                maxBytes=max_editable_text_bytes,
+            )
+
+        def atomic_write() -> dict[str, Any]:
+            temp_path: Path | None = None
+            try:
+                with tempfile.NamedTemporaryFile(
+                    mode="wb", prefix=".cyrene-edit-", dir=target.parent, delete=False
+                ) as handle:
+                    temp_path = Path(handle.name)
+                    handle.write(encoded)
+                    handle.flush()
+                    os.fsync(handle.fileno())
+                if expected_version and not body.force:
+                    latest = target.read_bytes()
+                    latest_version = hashlib.sha256(latest).hexdigest()
+                    if latest_version != expected_version:
+                        latest_stat = target.stat()
+                        return {
+                            "conflict": True,
+                            "version": latest_version,
+                            "modifiedNs": int(latest_stat.st_mtime_ns),
+                        }
+                os.chmod(temp_path, target.stat().st_mode)
+                os.replace(temp_path, target)
+                temp_path = None
+                stat = target.stat()
+                return {
+                    "ok": True,
+                    "path": str(file_path).replace("\\", "/"),
+                    "version": hashlib.sha256(encoded).hexdigest(),
+                    "modifiedNs": int(stat.st_mtime_ns),
+                    "size": len(encoded),
+                }
+            finally:
+                if temp_path is not None:
+                    temp_path.unlink(missing_ok=True)
+
+        try:
+            result = await asyncio.to_thread(atomic_write)
+            if result.get("conflict"):
+                return error_response(
+                    "The file changed while it was being saved", 409, "text_file_conflict",
+                    version=result["version"], modifiedNs=result["modifiedNs"],
+                )
+            return result
+        except OSError:
+            return error_response("The project file could not be saved", 403, "text_file_not_writable")
 
     @router.get("/api/workbench/notifications")
     async def api_workbench_notifications(
