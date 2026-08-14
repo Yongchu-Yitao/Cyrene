@@ -17,8 +17,8 @@ _MAX_CANDIDATES = 50_000
 
 
 async def _tool_glob(args: dict[str, Any], _bot: Any, _chat_id: int, _db_path: str, _notify_state: dict[str, bool] | None) -> str:
-    from cyrene.runtime.settings_store import is_workspace_active
-    if not is_workspace_active():
+    from cyrene.agent.context import workspace_context_enabled
+    if not workspace_context_enabled():
         return "Workspace access is disabled. Ask the user to add workspace via '+ add context' in the chat input, or set a workspace directory in Settings."
     from cyrene.agent.context import active_workspace_dir
     pattern = str(args["pattern"])

@@ -2,6 +2,8 @@
 
 from cyrene.voice.engine import (
     ASR_MODEL_ID,
+    CUSTOM_TTS_MODEL_ID,
+    PRESET_TTS_MODEL_ID,
     TTS_MODEL_ID,
     delete_voice_profile,
     save_voice_profile,
@@ -13,6 +15,8 @@ from cyrene.voice.engine import (
 
 __all__ = [
     "ASR_MODEL_ID",
+    "CUSTOM_TTS_MODEL_ID",
+    "PRESET_TTS_MODEL_ID",
     "TTS_MODEL_ID",
     "delete_voice_profile",
     "save_voice_profile",

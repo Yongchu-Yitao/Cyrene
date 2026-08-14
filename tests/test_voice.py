@@ -20,18 +20,23 @@ def test_voice_status_uses_bundled_preset_without_custom_profile(monkeypatch):
         "voice_preset": engine.DEFAULT_PRESET_ID,
     })
     monkeypatch.setattr(engine, "_profile_ready", lambda _settings=None: False)
-    monkeypatch.setattr(engine, "_preset_ready", lambda: True)
-    monkeypatch.setattr(engine.local_models, "is_ready", lambda model_id: model_id == engine.TTS_MODEL_ID)
+    monkeypatch.setattr(engine.local_models, "is_ready", lambda model_id: model_id == engine.PRESET_TTS_MODEL_ID)
 
     payload = engine.status()
 
     assert payload["asr_ready"] is False
     assert payload["tts_ready"] is True
+    assert payload["tts_model"] == engine.PRESET_TTS_MODEL_ID
+    assert payload["voice_presets"][0]["id"] == "kokoro-af_maple"
+    assert len(payload["voice_presets"]) == 103
     assert payload["voice_mode"] == "preset"
     assert payload["voice_profile_ready"] is False
     assert payload["auto_read"] is True
     assert payload["auto_send_after_asr"] is False
     assert payload["auto_stop_on_silence"] is True
+
+    with __import__("pytest").raises(RuntimeError, match="ZipVoice model is not downloaded"):
+        engine.update_settings(voice_mode=engine.VOICE_MODE_CUSTOM)
 
 
 def test_tts_text_normalization_removes_display_only_tokens():
@@ -44,6 +49,12 @@ def test_tts_text_normalization_removes_display_only_tokens():
 
     assert normalized == "结果。Cyrene，请阅读文档，版本，测试。字段，值。完成"
     assert not any(token in normalized for token in ("不可见的流程图", "「", "」", "（", "）", "[", "]", "|", "**", "::", "https://", "✅", "🎉", "🔧", "1️⃣"))
+
+
+def test_tts_text_normalization_rejects_display_only_fragments():
+    assert engine.normalize_tts_text("❓") == ""
+    assert engine.normalize_tts_text("：——【】") == ""
+    assert engine.normalize_tts_text("✅ https://example.com") == ""
 
 
 def test_asr_silence_placeholder_is_removed_without_discarding_speech():
@@ -109,7 +120,7 @@ def test_custom_voice_profile_save_status_synthesis_and_delete(monkeypatch, tmp_
         def __init__(self):
             self.extra = {}
 
-    monkeypatch.setattr(engine, "_load_tts", lambda: FakeTts())
+    monkeypatch.setattr(engine, "_load_zipvoice_tts", lambda: FakeTts())
     monkeypatch.setitem(__import__("sys").modules, "sherpa_onnx", type("Sherpa", (), {"GenerationConfig": FakeGenerationConfig}))
     speech = engine.synthesize("你好", num_steps=4)
     assert speech.startswith(b"RIFF")
@@ -120,6 +131,95 @@ def test_custom_voice_profile_save_status_synthesis_and_delete(monkeypatch, tmp_
     assert not reference_audio.exists()
 
 
+def test_kokoro_preset_selection_is_saved_and_used_for_generation(monkeypatch):
+    settings = {
+        "auto_read": False,
+        "auto_send_after_asr": False,
+        "auto_stop_on_silence": True,
+        "reference_text": "",
+        "voice_mode": engine.VOICE_MODE_PRESET,
+        "voice_preset": engine.DEFAULT_PRESET_ID,
+    }
+    monkeypatch.setattr(engine.config_store, "get_setting", lambda key, default=None: dict(settings))
+    monkeypatch.setattr(engine.config_store, "set_setting", lambda key, value: settings.update(value))
+    monkeypatch.setattr(engine, "_runtime_available", lambda: True)
+    monkeypatch.setattr(engine.local_models, "is_ready", lambda model_id: model_id == engine.PRESET_TTS_MODEL_ID)
+
+    selected = "kokoro-zf_001"
+    payload = engine.update_settings(voice_mode="preset", voice_preset=selected)
+    assert payload["voice_preset"] == selected
+    assert payload["tts_ready"] is True
+
+    class FakeAudio:
+        samples = np.ones(240, dtype=np.float32) * 0.05
+        sample_rate = 24_000
+
+    class FakeTts:
+        def generate(self, content, generation):
+            assert content == "你好"
+            assert generation.sid == 3
+            assert generation.speed == 1.0
+            return FakeAudio()
+
+    class FakeGenerationConfig:
+        def __init__(self):
+            self.extra = {}
+
+    monkeypatch.setattr(engine, "_load_kokoro_tts", lambda: FakeTts())
+    monkeypatch.setitem(__import__("sys").modules, "sherpa_onnx", type("Sherpa", (), {"GenerationConfig": FakeGenerationConfig}))
+
+    speech = engine.synthesize("你好", num_steps=4)
+    assert speech.startswith(b"RIFF")
+
+
+def test_zipvoice_default_preset_is_available_and_uses_bundled_reference(monkeypatch, tmp_path):
+    model_root = tmp_path / "zipvoice"
+    model_root.mkdir()
+    preset_audio = np.sin(np.linspace(0, np.pi * 440, 24_000, dtype=np.float32)) * 0.1
+    import soundfile as sf
+    sf.write(model_root / "preset-default.wav", preset_audio, 24_000, format="WAV", subtype="PCM_16")
+    settings = {
+        "auto_read": False,
+        "auto_send_after_asr": False,
+        "auto_stop_on_silence": True,
+        "reference_text": "",
+        "voice_mode": engine.VOICE_MODE_PRESET,
+        "voice_preset": engine.ZIPVOICE_DEFAULT_PRESET_ID,
+    }
+    monkeypatch.setattr(engine.config_store, "get_setting", lambda key, default=None: dict(settings))
+    monkeypatch.setattr(engine.config_store, "set_setting", lambda key, value: settings.update(value))
+    monkeypatch.setattr(engine, "_runtime_available", lambda: True)
+    monkeypatch.setattr(engine.local_models, "is_ready", lambda model_id: model_id == engine.CUSTOM_TTS_MODEL_ID)
+    monkeypatch.setattr(engine.local_models, "model_dir", lambda _model_id: model_root)
+
+    payload = engine.status()
+    assert payload["tts_model"] == engine.CUSTOM_TTS_MODEL_ID
+    assert payload["tts_ready"] is True
+    assert payload["voice_presets"] == [dict(engine.ZIPVOICE_PRESETS[0])]
+
+    class FakeAudio:
+        samples = np.ones(240, dtype=np.float32) * 0.05
+        sample_rate = 24_000
+
+    class FakeTts:
+        def generate(self, content, generation):
+            assert content == "你好"
+            assert generation.reference_text == engine.DEFAULT_PRESET_TEXT
+            assert len(generation.reference_audio) == 24_000
+            assert generation.reference_sample_rate == 24_000
+            return FakeAudio()
+
+    class FakeGenerationConfig:
+        def __init__(self):
+            self.extra = {}
+
+    monkeypatch.setattr(engine, "_load_zipvoice_tts", lambda: FakeTts())
+    monkeypatch.setitem(__import__("sys").modules, "sherpa_onnx", type("Sherpa", (), {"GenerationConfig": FakeGenerationConfig}))
+
+    speech = engine.synthesize("你好", num_steps=4)
+    assert speech.startswith(b"RIFF")
+
+
 def test_custom_voice_profile_restores_previous_audio_when_settings_save_fails(monkeypatch, tmp_path):
     voice_root = tmp_path / "voice"
     voice_root.mkdir()
@@ -127,6 +227,7 @@ def test_custom_voice_profile_restores_previous_audio_when_settings_save_fails(m
     reference_audio.write_bytes(b"previous-reference")
     monkeypatch.setattr(engine, "VOICE_ROOT", voice_root)
     monkeypatch.setattr(engine, "REFERENCE_AUDIO", reference_audio)
+    monkeypatch.setattr(engine.local_models, "is_ready", lambda model_id: model_id == engine.CUSTOM_TTS_MODEL_ID)
     monkeypatch.setattr(engine, "_settings", lambda: {
         "auto_read": False,
         "auto_send_after_asr": False,
@@ -226,6 +327,9 @@ def test_voice_routes_reuse_engine_adapters(monkeypatch):
     assert speech.status_code == 200
     assert speech.headers["content-type"].startswith("audio/wav")
     assert speech.content.startswith(b"RIFF")
+    skipped_speech = client.post("/api/voice/tts", json={"text": "❓ ：——", "num_steps": 6})
+    assert skipped_speech.status_code == 204
+    assert skipped_speech.content == b""
     assert synthesized == [("你好", 4)]
 
 
@@ -252,6 +356,15 @@ def test_voice_controls_follow_existing_chat_layout():
     assert "settings.voiceAutoStop" in capabilities
     assert "settings.voicePresetMode" in capabilities
     assert "settings.voiceCustomMode" in capabilities
+    assert "saveVoicePreset(event.target.value)" in capabilities
+    assert "function voicePresetOptions()" in capabilities
+    assert 'React.createElement("optgroup"' in capabilities
+    assert '["zipvoice", "settings.voiceZipVoiceGroup"]' in capabilities
+    assert 'preset.group === "zipvoice"' in capabilities
+    assert 'nextMode === "custom" && !voiceStatus.custom_tts_model_ready' in settings
+    assert '!voiceStatus.custom_tts_model_ready,' in capabilities
+    assert 'settings.voiceCustomRequiresZipVoice' in capabilities
+    assert 'className: "wb-select wb-voice-preset-select"' in capabilities
     custom_voice = capabilities.split('customVoiceSelected\n            ?', 1)[1].split(': React.createElement("div", { className: "wb-voice-preset-row" }', 1)[0]
     assert 'type: "file"' not in custom_voice
     assert 'React.createElement("textarea"' not in custom_voice
@@ -270,6 +383,9 @@ def test_voice_controls_follow_existing_chat_layout():
     assert "if (elapsed >= 14) finishVoiceReferenceRecording(recorder);" in settings
     assert 'className: "wb-voice-reference-transcript"' in custom_voice
     assert "/api/voice/settings" in settings
+    assert 'window.addEventListener("cyrene:voice-status-changed", onVoiceStatusChanged)' in settings
+    assert 'window.removeEventListener("cyrene:voice-status-changed", onVoiceStatusChanged)' in settings
+    assert 'return settingsFetch("/api/voice/status")' in settings
     assert "auto_send_after_asr" in composer
     assert "auto_stop_on_silence" in composer
     assert "wbcTranscribeVoiceBlob(blob)" in composer
@@ -284,6 +400,10 @@ def test_voice_controls_follow_existing_chat_layout():
     assert "onSilence: finishVoiceInput" in composer
     assert "function voiceTextChunks" in chat
     assert "function voicePlainText" in chat
+    assert "function hasSpeakableText(chunk)" in chat
+    assert "/[\\p{L}\\p{N}]/u.test(chunk)" in chat
+    assert "chunk && hasSpeakableText(chunk)" in chat
+    assert "remaining && hasSpeakableText(remaining)" in chat
     assert ".replace(/```[\\s\\S]*?(?:```|$)/g, \" \")" in chat
     assert ".replace(/(?:[#*0-9]\\uFE0F?\\u20E3)/g, \" \")" in chat
     assert ".replace(/\\|/g, \"，\")" in chat
@@ -291,6 +411,8 @@ def test_voice_controls_follow_existing_chat_layout():
     assert "var plainSource = voicePlainText(source)" in chat
     assert "function playSpeechChunks" in chat
     assert "num_steps: numSteps === 4 ? 4 : 6" in chat
+    assert "if (response.status === 204) return null" in chat
+    assert "if (!result.blob) return true" in chat
     assert "index === 0 ? 4 : 6" in chat
     assert "state.streamSentenceCount === 0 ? 4 : 6" in chat
     assert "requestSpeechChunk(chunks[index + 1]" in chat

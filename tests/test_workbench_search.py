@@ -855,6 +855,59 @@ def test_workbench_chat_run_uses_and_persists_workspace_override(
     assert captured[-1]["workspace_dir"] == str(override.resolve())
 
 
+def test_workbench_chat_preferences_are_session_scoped_and_bound_to_run(
+    client, search_env, monkeypatch,
+):
+    from cyrene import agent
+    from cyrene.runtime import settings_store
+
+    monkeypatch.setattr(settings_store, "get_models", lambda: [{
+        "id": "session-model",
+        "name": "Session Model",
+        "model": "provider/session-model",
+    }])
+    captured = []
+
+    async def fake_run_agent(**kwargs):
+        captured.append(kwargs)
+        return "done"
+
+    monkeypatch.setattr(agent, "run_agent", fake_run_agent)
+
+    updated = client.patch(
+        "/api/workbench/chats/chat_1",
+        json={
+            "soulActive": False,
+            "workspaceActive": False,
+            "model": "session-model",
+            "reasoningEffort": "xhigh",
+        },
+    )
+
+    assert updated.status_code == 200
+    chat = updated.json()["chat"]
+    assert chat["soulActive"] is False
+    assert chat["workspaceActive"] is False
+    assert chat["modelSelectionId"] == "session-model"
+    assert chat["reasoningEffort"] == "xhigh"
+    assert chat["remoteDeviceIds"] == []
+
+    sent = client.post(
+        "/api/workbench/chats/chat_1/messages",
+        json={"message": "use this session's context"},
+    )
+
+    assert sent.status_code == 200
+    assert captured[-1]["soul_enabled"] is False
+    assert captured[-1]["workspace_enabled"] is False
+    stored = json.loads(
+        (search_env["data_dir"] / "workbench_chats.json").read_text(encoding="utf-8")
+    )["chats"][0]
+    assert stored["soulActive"] is False
+    assert stored["workspaceActive"] is False
+    assert stored["reasoningEffort"] == "xhigh"
+
+
 def test_workbench_chat_rejects_unavailable_workspace_override(
     client, search_env, monkeypatch,
 ):

@@ -95,8 +95,10 @@
   }
 
   // ── classification metadata (icon + tone per category) ───────────────
-  function svg(props, children) {
-    return h("svg", Object.assign({ viewBox: "0 0 24 24", fill: "none", stroke: "currentColor", strokeWidth: 1.7, strokeLinecap: "round", strokeLinejoin: "round" }, props), children);
+  function svg(props) {
+    var children = Array.prototype.slice.call(arguments, 1);
+    var svgProps = Object.assign({ viewBox: "0 0 24 24", fill: "none", stroke: "currentColor", strokeWidth: 1.7, strokeLinecap: "round", strokeLinejoin: "round" }, props);
+    return h.apply(null, ["svg", svgProps].concat(children));
   }
   var ICON = {
     all: function (s) { return svg({ width: s, height: s, fill: "currentColor", stroke: "none" }, h("path", { d: "M12 3.6 14 9.4 20 11l-6 1.6L12 18l-2-5.4L4 11l6-1.6Z" })); },

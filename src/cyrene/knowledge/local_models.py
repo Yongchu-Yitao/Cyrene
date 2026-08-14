@@ -152,10 +152,41 @@ MODEL_CATALOG: dict[str, dict[str, Any]] = {
             },
         ],
     },
+    "kokoro-zh-en": {
+        "name": "Kokoro 82M Chinese-English (FP32)",
+        "kind": "tts",
+        "description": "Natural Chinese-English preset speech with 103 bundled voices",
+        "runtime": "sherpa-onnx",
+        "download_bytes": 364_816_464,
+        "files": [
+            {
+                "path": ".downloads/kokoro-multi-lang-v1_1.tar.bz2",
+                "sources": [
+                    {"url": "https://ghfast.top/https://github.com/k2-fsa/sherpa-onnx/releases/download/tts-models/kokoro-multi-lang-v1_1.tar.bz2", "resume_key": "kokoro-multi-lang-v1_1"},
+                    {"url": "https://gh-proxy.com/https://github.com/k2-fsa/sherpa-onnx/releases/download/tts-models/kokoro-multi-lang-v1_1.tar.bz2", "resume_key": "kokoro-multi-lang-v1_1"},
+                    {"url": "https://github.com/k2-fsa/sherpa-onnx/releases/download/tts-models/kokoro-multi-lang-v1_1.tar.bz2", "resume_key": "kokoro-multi-lang-v1_1"},
+                ],
+                "min_bytes": 360_000_000,
+                "download_bytes": 364_816_464,
+                "sha256": "a3f4c73d043860e3fd2e5b06f36795eb81de0fc8e8de6df703245edddd87dbad",
+                "extract": {
+                    "root": "kokoro-multi-lang-v1_1",
+                    "outputs": [
+                        {"source": "model.onnx", "path": "model.onnx", "min_bytes": 300_000_000},
+                        {"source": "voices.bin", "path": "voices.bin", "min_bytes": 20_000_000},
+                        {"source": "tokens.txt", "path": "tokens.txt", "min_bytes": 500},
+                        {"source": "lexicon-us-en.txt", "path": "lexicon-us-en.txt", "min_bytes": 1_000_000},
+                        {"source": "lexicon-zh.txt", "path": "lexicon-zh.txt", "min_bytes": 1_000_000},
+                        {"source": "espeak-ng-data", "path": "espeak-ng-data", "type": "dir"},
+                    ],
+                },
+            },
+        ],
+    },
     "zipvoice-zh-en": {
         "name": "ZipVoice Distill Chinese-English (FP32)",
         "kind": "tts",
-        "description": "Higher-fidelity Chinese-English synthesis without INT8 quantization",
+        "description": "Local Chinese-English custom voice cloning without INT8 quantization",
         "runtime": "sherpa-onnx",
         "download_bytes": 531_957_872,
         "obsolete_paths": [

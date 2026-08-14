@@ -1253,3 +1253,39 @@ final result: passed
 final result: passed
 
 ---
+
+# Split Composer Single-row Layout Design QA — 2026-08-15
+
+- Source visual truth: `/var/folders/zm/qgh_rgw903j0b9t01yg2l0mc0000gn/T/codex-clipboard-324d3ee1-7854-4cca-8bb9-b2a6551fc0b2.png` (`786 × 352 px`) and `/var/folders/zm/qgh_rgw903j0b9t01yg2l0mc0000gn/T/codex-clipboard-590f1071-e135-40d5-9245-9a4c39d15ff6.png` (`1160 × 262 px`).
+- Implementation screenshot: unavailable. The Codex in-app browser blocked the running local Cyrene URL (`http://127.0.0.1:4242` and `http://localhost:4242`) before the page could render.
+- Intended viewport/state: desktop dark theme, conversation open in a narrow split pane, composer visible with content count, model picker, microphone, and send control.
+- Density normalization: the supplied captures appear to be high-density desktop crops; no implementation image was available to normalize against them.
+
+## Findings
+
+- Static implementation addresses the reported P1 wrapping: the `420px` composer container rule now keeps `.wbc-composer-actions` on one line, lets the spacer shrink to zero, and constrains the compact model control to a `44–52px` slot.
+- Static implementation addresses the reported P2 spacing mismatch: the split composer uses `14px` left, right, and bottom insets, widening the composer while lifting it from the card edge.
+- Static implementation addresses the follow-up P2 divider mismatch: the shared composer action row no longer renders a top border, so main chat, task chat, and split chat use the same divider-free treatment.
+- Fonts and typography: unchanged from the shared Workbench composer system.
+- Colors and visual tokens: unchanged except removal of the separator line.
+- Image and icon fidelity: unchanged; existing product icons are retained.
+- Copy and content: unchanged.
+
+## Verification
+
+- Frontend production build passed; generated asset version: `0.7.7-afd7ab071e`.
+- Focused frontend contract test passed (`1 passed`, `289 deselected`).
+- `git diff --check` passed.
+- Browser-rendered comparison, interaction check, and console-error inspection are blocked because the in-app browser cannot access the local server.
+
+## Implementation Checklist
+
+- [x] Keep all split composer actions on one line.
+- [x] Allow flexible space and model control to shrink safely.
+- [x] Use equal left/right/bottom split-composer insets.
+- [x] Remove the shared horizontal separator.
+- [ ] Capture and compare the live split state once local in-app browser access is available.
+
+final result: blocked
+
+---

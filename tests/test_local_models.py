@@ -181,6 +181,19 @@ def test_zipvoice_uses_fp32_distill_pack_within_one_gib_budget():
     assert any(item["path"] == "decoder.onnx" for item in outputs)
 
 
+def test_kokoro_uses_validated_fp32_multilingual_pack():
+    model = local_models.MODEL_CATALOG["kokoro-zh-en"]
+
+    assert model["kind"] == "tts"
+    assert model["download_bytes"] == 364_816_464
+    archive = model["files"][0]
+    assert archive["sha256"] == "a3f4c73d043860e3fd2e5b06f36795eb81de0fc8e8de6df703245edddd87dbad"
+    outputs = archive["extract"]["outputs"]
+    assert {item["path"] for item in outputs} >= {
+        "model.onnx", "voices.bin", "tokens.txt", "lexicon-us-en.txt", "lexicon-zh.txt", "espeak-ng-data",
+    }
+
+
 @pytest.mark.asyncio
 async def test_download_switches_mirror_after_failure(tmp_path, monkeypatch):
     payload = b"valid mirrored model"

@@ -277,8 +277,8 @@ function SettingsOverlay({
     voice_profile_ready: false,
     voice_preset_ready: false,
     voice_mode: "preset",
-    voice_preset: "zipvoice-default",
-    voice_presets: [{ id: "zipvoice-default" }],
+    voice_preset: "kokoro-zm_009",
+    voice_presets: [],
     tts_ready: false,
     auto_read: false,
     auto_send_after_asr: false,
@@ -587,10 +587,7 @@ function SettingsOverlay({
       setToolGroups(p.tool_groups || []);
     }).catch(function () {});
     settingsFetch("/api/settings/mcp").then(function (r) { return r.json(); }).then(function (p) { setMcpServers(p.servers || []); setMcpConfigs(p.configs || []); }).catch(function () {});
-    settingsFetch("/api/voice/status").then(readSettingsResponse).then(function (p) {
-      setVoiceStatus(p);
-      setVoiceReferenceText(p.reference_text || "");
-    }).catch(function () {});
+    refreshVoiceStatus();
     settingsFetch("/api/settings/keys").then(function (r) { return r.json(); }).then(function (p) {
       var tk = (p.keys || []).find(function (item) { return item.key === "TELEGRAM_BOT_TOKEN"; });
       if (tk) setTelegramToken(tk.value || "");
@@ -599,6 +596,22 @@ function SettingsOverlay({
     }).catch(function () {});
 
     settingsFetch("/api/backup/list").then(function (r) { return r.json(); }).then(function (d) { if (d.ok) setBackupList(d.backups || []); }).catch(function () {});
+  }, []);
+
+  useEffectSt(function () {
+    function onVoiceStatusChanged(event) {
+      var detail = event && event.detail;
+      if (detail && typeof detail === "object") {
+        setVoiceStatus(detail);
+        setVoiceReferenceText(detail.reference_text || "");
+        return;
+      }
+      refreshVoiceStatus();
+    }
+    window.addEventListener("cyrene:voice-status-changed", onVoiceStatusChanged);
+    return function () {
+      window.removeEventListener("cyrene:voice-status-changed", onVoiceStatusChanged);
+    };
   }, []);
 
   function saveSoul() {
@@ -729,6 +742,14 @@ function SettingsOverlay({
     window.dispatchEvent(new CustomEvent("cyrene:voice-status-changed", { detail: next }));
   }
 
+  function refreshVoiceStatus() {
+    return settingsFetch("/api/voice/status").then(readSettingsResponse).then(function (payload) {
+      setVoiceStatus(payload);
+      setVoiceReferenceText(payload.reference_text || "");
+      return payload;
+    }).catch(function () {});
+  }
+
   function saveVoiceBooleanSetting(settingKey, nextEnabled) {
     var previous = voiceStatus;
     publishVoiceStatus({ ...voiceStatus, [settingKey]: nextEnabled });
@@ -747,12 +768,27 @@ function SettingsOverlay({
   }
 
   function saveVoiceMode(nextMode) {
-    if (voiceBusy || nextMode === voiceStatus.voice_mode) return;
+    if (voiceBusy || nextMode === voiceStatus.voice_mode || (nextMode === "custom" && !voiceStatus.custom_tts_model_ready)) return;
     setVoiceBusy("settings");
     settingsFetch("/api/voice/settings", {
       method: "PUT",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ voice_mode: nextMode, voice_preset: "zipvoice-default" }),
+      body: JSON.stringify({ voice_mode: nextMode }),
+    }).then(readSettingsResponse).then(function (payload) {
+      publishVoiceStatus(payload);
+      setVoiceNotice("");
+    }).catch(function (error) {
+      setVoiceNotice(t("settings.error") + ": " + (error.message || ""));
+    }).finally(function () { setVoiceBusy(""); });
+  }
+
+  function saveVoicePreset(nextPreset) {
+    if (voiceBusy || !nextPreset || nextPreset === voiceStatus.voice_preset) return;
+    setVoiceBusy("settings");
+    settingsFetch("/api/voice/settings", {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ voice_mode: "preset", voice_preset: nextPreset }),
     }).then(readSettingsResponse).then(function (payload) {
       publishVoiceStatus(payload);
       setVoiceNotice("");
@@ -914,7 +950,7 @@ function SettingsOverlay({
             voiceReferenceFile, setVoiceReferenceFile, voiceReferencePhase, voiceReferenceElapsed,
             startVoiceReferenceRecording, finishVoiceReferenceRecording,
             voiceBusy, voiceNotice,
-            saveVoiceBooleanSetting, saveVoiceMode, saveVoiceProfile, deleteVoiceProfile,
+            saveVoiceBooleanSetting, saveVoiceMode, saveVoicePreset, saveVoiceProfile, deleteVoiceProfile,
           }),
           tab === "extensions" && React.createElement(ExtensionsPanel, { t }),
           tab === "shortcuts" && React.createElement(ShortcutsPanel, { t }),
@@ -2656,6 +2692,7 @@ function ModelsPanel(p) {
           "qwen3-embedding-0.6b": ["settings.localEmbeddingTitle", "settings.localQwenName", "settings.localQwenHint"],
           "pp-ocrv6-medium": ["settings.localOcrTitle", "settings.localOcrName", "settings.localOcrHint"],
           "fireredasr2-aed-int8": ["settings.localAsrTitle", "settings.localFireRedName", "settings.localFireRedHint"],
+          "kokoro-zh-en": ["settings.localTtsTitle", "settings.localKokoroName", "settings.localKokoroHint"],
           "zipvoice-zh-en": ["settings.localTtsTitle", "settings.localZipVoiceName", "settings.localZipVoiceHint"],
         }[item.id];
         var displayTitle = localCopy ? t(localCopy[0]) : item.kind;
@@ -3447,7 +3484,7 @@ function CapabilitiesPanel(p) {
     voiceReferenceFile, setVoiceReferenceFile, voiceReferencePhase, voiceReferenceElapsed,
     startVoiceReferenceRecording, finishVoiceReferenceRecording,
     voiceBusy, voiceNotice,
-    saveVoiceBooleanSetting, saveVoiceMode, saveVoiceProfile, deleteVoiceProfile,
+    saveVoiceBooleanSetting, saveVoiceMode, saveVoicePreset, saveVoiceProfile, deleteVoiceProfile,
   } = p;
 
   function addMcp() {
@@ -3469,6 +3506,30 @@ function CapabilitiesPanel(p) {
   var voiceReferenceActive = voiceReferencePhase === "starting"
     || voiceReferencePhase === "recording"
     || voiceReferencePhase === "transcribing";
+
+  function voicePresetLabel(preset) {
+    var number = Number(preset && preset.ordinal) || 1;
+    if (preset && preset.group === "zipvoice") return t("settings.voiceZipVoiceDefault");
+    if (preset && preset.group === "zh_female") return t("settings.voiceChineseFemale", { number: number });
+    if (preset && preset.group === "zh_male") return t("settings.voiceChineseMale", { number: number });
+    return t("settings.voiceEnglishFemale", { number: number });
+  }
+
+  function voicePresetOptions() {
+    var presets = Array.isArray(voiceStatus.voice_presets) ? voiceStatus.voice_presets : [];
+    return [
+      ["zipvoice", "settings.voiceZipVoiceGroup"],
+      ["zh_male", "settings.voiceChineseMaleGroup"],
+      ["zh_female", "settings.voiceChineseFemaleGroup"],
+      ["en_female", "settings.voiceEnglishFemaleGroup"],
+    ].map(function (group) {
+      var options = presets.filter(function (preset) { return preset.group === group[0]; });
+      if (!options.length) return null;
+      return React.createElement("optgroup", { key: group[0], label: t(group[1]) }, options.map(function (preset) {
+        return React.createElement("option", { key: preset.id, value: preset.id }, voicePresetLabel(preset));
+      }));
+    }).filter(Boolean);
+  }
 
   return React.createElement("div", { className: "settings-panel" },
     SectionTitle(t("settings.capabilities"), t("settings.capabilitiesSubtitle")),
@@ -3531,7 +3592,8 @@ function CapabilitiesPanel(p) {
               type: "button",
               className: "wb-seg-btn" + (customVoiceSelected ? " active" : ""),
               "aria-pressed": customVoiceSelected ? "true" : "false",
-              disabled: !!voiceBusy || voiceReferenceActive,
+              disabled: !!voiceBusy || voiceReferenceActive || !voiceStatus.custom_tts_model_ready,
+              title: voiceStatus.custom_tts_model_ready ? "" : t("settings.voiceCustomRequiresZipVoice"),
               onClick: function () { saveVoiceMode("custom"); },
             }, t("settings.voiceCustomMode")),
           ),
@@ -3602,9 +3664,15 @@ function CapabilitiesPanel(p) {
                   React.createElement("b", null, t("settings.voicePresetName")),
                   React.createElement("small", null, t("settings.voicePresetHint")),
                 ),
-                React.createElement("span", { className: voiceStatus.voice_preset_ready ? "ready" : "" },
-                  t("settings.voicePresetSelected")
-                ),
+                voiceStatus.voice_preset_ready && Array.isArray(voiceStatus.voice_presets) && voiceStatus.voice_presets.length
+                  ? React.createElement("select", {
+                      className: "wb-select wb-voice-preset-select",
+                      value: voiceStatus.voice_preset,
+                      disabled: !!voiceBusy,
+                      "aria-label": t("settings.voicePresetSelect"),
+                      onChange: function (event) { saveVoicePreset(event.target.value); },
+                    }, voicePresetOptions())
+                  : React.createElement("span", { className: "" }, t("settings.localModelNotDownloaded")),
               ),
           voiceNotice && React.createElement("span", { className: "wb-hint saved" }, voiceNotice),
         ),

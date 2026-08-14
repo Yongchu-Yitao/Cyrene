@@ -706,10 +706,11 @@ function ElectronBrowserViewportPanel({ roundId, browserSessionId, onClose, brow
   }, [electronSessionId]);
 
   React.useEffect(function () {
-    function onWorkbenchRightResize(ev) {
-      var phase = ev && ev.detail && ev.detail.phase;
-      if (phase === "start") sendBounds(false);
-      else scheduleBounds();
+    function onWorkbenchRightResize() {
+      // Keep the native WebContentsView live while the context rail changes.
+      // Hiding it at drag start made the shell resize first and the page catch
+      // up only after release, which looked like delayed/blank content.
+      scheduleBounds();
     }
     window.addEventListener("workbench:right-resize", onWorkbenchRightResize);
     return function () {

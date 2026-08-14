@@ -1,4 +1,4 @@
-"""FireRedASR2 and ZipVoice adapters backed by user-managed model packs."""
+"""FireRedASR2, Kokoro, and ZipVoice adapters backed by local model packs."""
 
 from __future__ import annotations
 
@@ -21,12 +21,36 @@ from cyrene.runtime import config_store
 
 
 ASR_MODEL_ID = "fireredasr2-aed-int8"
-TTS_MODEL_ID = "zipvoice-zh-en"
+PRESET_TTS_MODEL_ID = "kokoro-zh-en"
+CUSTOM_TTS_MODEL_ID = "zipvoice-zh-en"
+# Compatibility name for callers that treat the default speech model as the
+# single TTS model. Voice status exposes both concrete model ids below.
+TTS_MODEL_ID = PRESET_TTS_MODEL_ID
 VOICE_ROOT = Path(CACHE_DIR) / "voice"
 REFERENCE_AUDIO = VOICE_ROOT / "reference.wav"
 VOICE_MODE_PRESET = "preset"
 VOICE_MODE_CUSTOM = "custom"
-DEFAULT_PRESET_ID = "zipvoice-default"
+_KOKORO_ENGLISH_FEMALE = ("af_maple", "af_sol", "bf_vale")
+_KOKORO_CHINESE_FEMALE = (
+    "zf_001", "zf_002", "zf_003", "zf_004", "zf_005", "zf_006", "zf_007", "zf_008",
+    "zf_017", "zf_018", "zf_019", "zf_021", "zf_022", "zf_023", "zf_024", "zf_026",
+    "zf_027", "zf_028", "zf_032", "zf_036", "zf_038", "zf_039", "zf_040", "zf_042",
+    "zf_043", "zf_044", "zf_046", "zf_047", "zf_048", "zf_049", "zf_051", "zf_059",
+    "zf_060", "zf_067", "zf_070", "zf_071", "zf_072", "zf_073", "zf_074", "zf_075",
+    "zf_076", "zf_077", "zf_078", "zf_079", "zf_083", "zf_084", "zf_085", "zf_086",
+    "zf_087", "zf_088", "zf_090", "zf_092", "zf_093", "zf_094", "zf_099",
+)
+_KOKORO_CHINESE_MALE = (
+    "zm_009", "zm_010", "zm_011", "zm_012", "zm_013", "zm_014", "zm_015", "zm_016",
+    "zm_020", "zm_025", "zm_029", "zm_030", "zm_031", "zm_033", "zm_034", "zm_035",
+    "zm_037", "zm_041", "zm_045", "zm_050", "zm_052", "zm_053", "zm_054", "zm_055",
+    "zm_056", "zm_057", "zm_058", "zm_061", "zm_062", "zm_063", "zm_064", "zm_065",
+    "zm_066", "zm_068", "zm_069", "zm_080", "zm_081", "zm_082", "zm_089", "zm_091",
+    "zm_095", "zm_096", "zm_097", "zm_098", "zm_100",
+)
+_KOKORO_SPEAKERS = _KOKORO_ENGLISH_FEMALE + _KOKORO_CHINESE_FEMALE + _KOKORO_CHINESE_MALE
+DEFAULT_PRESET_ID = "kokoro-zm_009"
+ZIPVOICE_DEFAULT_PRESET_ID = "zipvoice-default"
 DEFAULT_PRESET_TEXT = "那还是三十六年前，一九八七年。我呢考上了武汉大学的计算机系。"
 MAX_AUDIO_BYTES = 25 * 1024 * 1024
 MAX_AUDIO_SECONDS = 10 * 60
@@ -46,7 +70,43 @@ _TTS_LOCK = threading.RLock()
 _VOICE_PROFILE_LOCK = threading.RLock()
 _RECOGNIZER: Any = None
 _PUNCTUATION: Any = None
-_TTS: Any = None
+_KOKORO_TTS: Any = None
+_ZIPVOICE_TTS: Any = None
+
+
+def _voice_presets() -> list[dict[str, Any]]:
+    presets: list[dict[str, Any]] = []
+    for sid, name in enumerate(_KOKORO_SPEAKERS):
+        if name.startswith("zf_"):
+            group, gender, language, ordinal = "zh_female", "female", "zh", sid - 2
+        elif name.startswith("zm_"):
+            group, gender, language, ordinal = "zh_male", "male", "zh", sid - 57
+        else:
+            group, gender, language, ordinal = "en_female", "female", "en", sid + 1
+        presets.append({
+            "id": f"kokoro-{name}",
+            "name": name,
+            "sid": sid,
+            "group": group,
+            "gender": gender,
+            "language": language,
+            "ordinal": ordinal,
+        })
+    return presets
+
+
+KOKORO_PRESETS = tuple(_voice_presets())
+ZIPVOICE_PRESETS = ({
+    "id": ZIPVOICE_DEFAULT_PRESET_ID,
+    "name": "default",
+    "group": "zipvoice",
+    "gender": "male",
+    "language": "zh",
+    "ordinal": 1,
+    "model": CUSTOM_TTS_MODEL_ID,
+},)
+VOICE_PRESETS = KOKORO_PRESETS + ZIPVOICE_PRESETS
+_VOICE_PRESET_BY_ID = {preset["id"]: preset for preset in VOICE_PRESETS}
 
 
 def _runtime_available() -> bool:
@@ -64,14 +124,29 @@ def _settings() -> dict[str, Any]:
     voice_mode = str(source.get("voice_mode") or VOICE_MODE_PRESET).strip().lower()
     if voice_mode not in {VOICE_MODE_PRESET, VOICE_MODE_CUSTOM}:
         voice_mode = VOICE_MODE_PRESET
-    return {
+    settings = {
         "auto_read": bool(source.get("auto_read", False)),
         "auto_send_after_asr": bool(source.get("auto_send_after_asr", False)),
         "auto_stop_on_silence": bool(source.get("auto_stop_on_silence", True)),
         "reference_text": str(source.get("reference_text") or "").strip(),
         "voice_mode": voice_mode,
-        "voice_preset": DEFAULT_PRESET_ID,
+        "voice_preset": str(source.get("voice_preset") or DEFAULT_PRESET_ID).strip(),
     }
+    if settings["voice_preset"] not in _VOICE_PRESET_BY_ID:
+        settings["voice_preset"] = DEFAULT_PRESET_ID
+    elif (
+        settings["voice_preset"] == ZIPVOICE_DEFAULT_PRESET_ID
+        and not local_models.is_ready(CUSTOM_TTS_MODEL_ID)
+        and local_models.is_ready(PRESET_TTS_MODEL_ID)
+    ):
+        settings["voice_preset"] = DEFAULT_PRESET_ID
+    elif (
+        settings["voice_preset"] != ZIPVOICE_DEFAULT_PRESET_ID
+        and not local_models.is_ready(PRESET_TTS_MODEL_ID)
+        and local_models.is_ready(CUSTOM_TTS_MODEL_ID)
+    ):
+        settings["voice_preset"] = ZIPVOICE_DEFAULT_PRESET_ID
+    return settings
 
 
 def _profile_ready(settings: dict[str, Any] | None = None) -> bool:
@@ -83,25 +158,14 @@ def _profile_ready(settings: dict[str, Any] | None = None) -> bool:
             return False
 
 
-def _preset_audio() -> Path:
-    return local_models.model_dir(TTS_MODEL_ID) / "preset-default.wav"
-
-
 def _preset_ready() -> bool:
-    try:
-        return _preset_audio().stat().st_size > 1_000
-    except OSError:
-        return False
+    return local_models.is_ready(PRESET_TTS_MODEL_ID)
 
 
 def _active_reference(settings: dict[str, Any]) -> tuple[Path, str]:
-    if settings.get("voice_mode") == VOICE_MODE_CUSTOM:
-        if not _profile_ready(settings):
-            raise RuntimeError("ZipVoice custom voice is not configured")
-        return REFERENCE_AUDIO, settings["reference_text"]
-    if not _preset_ready():
-        raise RuntimeError("ZipVoice preset voice is not available")
-    return _preset_audio(), DEFAULT_PRESET_TEXT
+    if not _profile_ready(settings):
+        raise RuntimeError("ZipVoice custom voice is not configured")
+    return REFERENCE_AUDIO, settings["reference_text"]
 
 
 def status() -> dict[str, Any]:
@@ -109,21 +173,44 @@ def status() -> dict[str, Any]:
         settings = _settings()
         profile_ready = _profile_ready(settings)
     asr_ready = local_models.is_ready(ASR_MODEL_ID)
-    tts_model_ready = local_models.is_ready(TTS_MODEL_ID)
-    preset_ready = tts_model_ready and _preset_ready()
-    selected_voice_ready = profile_ready if settings["voice_mode"] == VOICE_MODE_CUSTOM else preset_ready
+    preset_model_ready = local_models.is_ready(PRESET_TTS_MODEL_ID)
+    custom_model_ready = local_models.is_ready(CUSTOM_TTS_MODEL_ID)
+    custom_selected = settings["voice_mode"] == VOICE_MODE_CUSTOM and custom_model_ready
+    zipvoice_preset_selected = (
+        not custom_selected and settings["voice_preset"] == ZIPVOICE_DEFAULT_PRESET_ID
+    )
+    selected_model = CUSTOM_TTS_MODEL_ID if custom_selected or zipvoice_preset_selected else PRESET_TTS_MODEL_ID
+    selected_model_ready = custom_model_ready if custom_selected else preset_model_ready
+    if zipvoice_preset_selected:
+        selected_model_ready = custom_model_ready
+    selected_voice_ready = profile_ready if custom_selected else True
     runtime_available = _runtime_available()
+    available_presets = [
+        dict(preset)
+        for preset in VOICE_PRESETS
+        if (
+            preset["id"] == ZIPVOICE_DEFAULT_PRESET_ID
+            and custom_model_ready
+        ) or (
+            preset["id"] != ZIPVOICE_DEFAULT_PRESET_ID
+            and preset_model_ready
+        )
+    ]
     return {
         "asr_model": ASR_MODEL_ID,
-        "tts_model": TTS_MODEL_ID,
+        "tts_model": selected_model,
+        "preset_tts_model": PRESET_TTS_MODEL_ID,
+        "custom_tts_model": CUSTOM_TTS_MODEL_ID,
         "asr_ready": asr_ready and runtime_available,
-        "tts_model_ready": tts_model_ready and runtime_available,
+        "tts_model_ready": selected_model_ready and runtime_available,
+        "preset_tts_model_ready": preset_model_ready and runtime_available,
+        "custom_tts_model_ready": custom_model_ready and runtime_available,
         "voice_profile_ready": profile_ready,
-        "voice_preset_ready": preset_ready,
-        "voice_mode": settings["voice_mode"],
+        "voice_preset_ready": bool(available_presets) and runtime_available,
+        "voice_mode": VOICE_MODE_CUSTOM if custom_selected else VOICE_MODE_PRESET,
         "voice_preset": settings["voice_preset"],
-        "voice_presets": [{"id": DEFAULT_PRESET_ID}],
-        "tts_ready": tts_model_ready and selected_voice_ready and runtime_available,
+        "voice_presets": available_presets,
+        "tts_ready": selected_model_ready and selected_voice_ready and runtime_available,
         "runtime_available": runtime_available,
         "auto_read": settings["auto_read"],
         "auto_send_after_asr": settings["auto_send_after_asr"],
@@ -152,10 +239,21 @@ def update_settings(
             normalized_mode = str(voice_mode).strip().lower()
             if normalized_mode not in {VOICE_MODE_PRESET, VOICE_MODE_CUSTOM}:
                 raise ValueError("voice_mode must be preset or custom")
+            if normalized_mode == VOICE_MODE_CUSTOM and not local_models.is_ready(CUSTOM_TTS_MODEL_ID):
+                raise RuntimeError("ZipVoice model is not downloaded")
             current["voice_mode"] = normalized_mode
-        if voice_preset is not None and str(voice_preset).strip() != DEFAULT_PRESET_ID:
-            raise ValueError("unknown voice preset")
-        current["voice_preset"] = DEFAULT_PRESET_ID
+        if voice_preset is not None:
+            normalized_preset = str(voice_preset).strip()
+            if normalized_preset not in _VOICE_PRESET_BY_ID:
+                raise ValueError("unknown voice preset")
+            required_model = (
+                CUSTOM_TTS_MODEL_ID
+                if normalized_preset == ZIPVOICE_DEFAULT_PRESET_ID
+                else PRESET_TTS_MODEL_ID
+            )
+            if not local_models.is_ready(required_model):
+                raise RuntimeError("selected voice model is not downloaded")
+            current["voice_preset"] = normalized_preset
         if current["voice_mode"] == VOICE_MODE_CUSTOM and not _profile_ready(current):
             current["auto_read"] = False
         config_store.set_setting("voice", current)
@@ -323,6 +421,8 @@ def transcribe(payload: bytes) -> dict[str, Any]:
 
 
 def save_voice_profile(payload: bytes, reference_text: str) -> dict[str, Any]:
+    if not local_models.is_ready(CUSTOM_TTS_MODEL_ID):
+        raise RuntimeError("ZipVoice model is not downloaded")
     text = str(reference_text or "").strip()
     if not text:
         raise ValueError("reference text is required")
@@ -359,7 +459,7 @@ def save_voice_profile(payload: bytes, reference_text: str) -> dict[str, Any]:
         finally:
             temporary.unlink(missing_ok=True)
             backup.unlink(missing_ok=True)
-    reset_tts()
+    reset_zipvoice_tts()
     return status()
 
 
@@ -381,20 +481,20 @@ def delete_voice_profile() -> dict[str, Any]:
             raise
         finally:
             backup.unlink(missing_ok=True)
-    reset_tts()
+    reset_zipvoice_tts()
     return status()
 
 
-def _load_tts() -> Any:
-    global _TTS
-    if not local_models.is_ready(TTS_MODEL_ID):
+def _load_zipvoice_tts() -> Any:
+    global _ZIPVOICE_TTS
+    if not local_models.is_ready(CUSTOM_TTS_MODEL_ID):
         raise RuntimeError("ZipVoice model is not downloaded")
-    if _TTS is not None:
-        return _TTS
+    if _ZIPVOICE_TTS is not None:
+        return _ZIPVOICE_TTS
     import sherpa_onnx
 
-    root = local_models.model_dir(TTS_MODEL_ID)
-    provider = local_models.sherpa_provider(TTS_MODEL_ID)
+    root = local_models.model_dir(CUSTOM_TTS_MODEL_ID)
+    provider = local_models.sherpa_provider(CUSTOM_TTS_MODEL_ID)
     config = sherpa_onnx.OfflineTtsConfig(
         model=sherpa_onnx.OfflineTtsModelConfig(
             zipvoice=sherpa_onnx.OfflineTtsZipvoiceModelConfig(
@@ -412,8 +512,37 @@ def _load_tts() -> Any:
     )
     if not config.validate():
         raise RuntimeError("ZipVoice model configuration is invalid")
-    _TTS = sherpa_onnx.OfflineTts(config)
-    return _TTS
+    _ZIPVOICE_TTS = sherpa_onnx.OfflineTts(config)
+    return _ZIPVOICE_TTS
+
+
+def _load_kokoro_tts() -> Any:
+    global _KOKORO_TTS
+    if not local_models.is_ready(PRESET_TTS_MODEL_ID):
+        raise RuntimeError("Kokoro model is not downloaded")
+    if _KOKORO_TTS is not None:
+        return _KOKORO_TTS
+    import sherpa_onnx
+
+    root = local_models.model_dir(PRESET_TTS_MODEL_ID)
+    config = sherpa_onnx.OfflineTtsConfig(
+        model=sherpa_onnx.OfflineTtsModelConfig(
+            kokoro=sherpa_onnx.OfflineTtsKokoroModelConfig(
+                model=str(root / "model.onnx"),
+                voices=str(root / "voices.bin"),
+                tokens=str(root / "tokens.txt"),
+                data_dir=str(root / "espeak-ng-data"),
+                lexicon=f"{root / 'lexicon-us-en.txt'},{root / 'lexicon-zh.txt'}",
+            ),
+            debug=False,
+            num_threads=max(1, min(4, (os.cpu_count() or 2) // 2)),
+            provider=local_models.sherpa_provider(PRESET_TTS_MODEL_ID),
+        )
+    )
+    if not config.validate():
+        raise RuntimeError("Kokoro model configuration is invalid")
+    _KOKORO_TTS = sherpa_onnx.OfflineTts(config)
+    return _KOKORO_TTS
 
 
 _TTS_PUNCTUATION_TRANSLATION = str.maketrans({
@@ -514,37 +643,52 @@ def synthesize(text: str, *, num_steps: int | None = None) -> bytes:
         raise ValueError("text is required")
     if len(content) > MAX_TTS_CHARS:
         raise ValueError(f"text must be {MAX_TTS_CHARS} characters or shorter")
-    selected_num_steps = TTS_NUM_STEPS if num_steps is None else int(num_steps)
-    if selected_num_steps not in TTS_ALLOWED_NUM_STEPS:
-        raise ValueError("num_steps must be 4 or 6")
     with _VOICE_PROFILE_LOCK:
         settings = _settings()
-        reference_path, reference_text = _active_reference(settings)
-        reference_audio, reference_sample_rate = sf.read(
-            reference_path,
-            dtype="float32",
-            always_2d=True,
+        custom_selected = settings["voice_mode"] == VOICE_MODE_CUSTOM
+        zipvoice_preset_selected = (
+            not custom_selected and settings["voice_preset"] == ZIPVOICE_DEFAULT_PRESET_ID
         )
-        reference_audio = np.ascontiguousarray(reference_audio.mean(axis=1), dtype=np.float32)
+        uses_zipvoice = custom_selected or zipvoice_preset_selected
+        if uses_zipvoice:
+            if custom_selected:
+                reference_path, reference_text = _active_reference(settings)
+            else:
+                reference_path = local_models.model_dir(CUSTOM_TTS_MODEL_ID) / "preset-default.wav"
+                reference_text = DEFAULT_PRESET_TEXT
+            reference_audio, reference_sample_rate = sf.read(
+                reference_path,
+                dtype="float32",
+                always_2d=True,
+            )
+            reference_audio = np.ascontiguousarray(reference_audio.mean(axis=1), dtype=np.float32)
     with _TTS_LOCK:
         import sherpa_onnx
 
-        tts = _load_tts()
         generation = sherpa_onnx.GenerationConfig()
-        generation.reference_audio = reference_audio
-        generation.reference_sample_rate = int(reference_sample_rate)
-        generation.reference_text = reference_text
-        # The first queued sentence uses four distilled-flow steps for a faster
-        # first audible result; later sentences use six for better quality.
-        # Slowing the model itself (rather than post-processing playback)
-        # preserves pitch and voice identity.
-        generation.num_steps = selected_num_steps
-        generation.speed = TTS_SPEED
-        generation.silence_scale = TTS_SILENCE_SCALE
-        generation.extra["min_char_in_sentence"] = "10"
+        if uses_zipvoice:
+            selected_num_steps = TTS_NUM_STEPS if num_steps is None else int(num_steps)
+            if selected_num_steps not in TTS_ALLOWED_NUM_STEPS:
+                raise ValueError("num_steps must be 4 or 6")
+            tts = _load_zipvoice_tts()
+            generation.reference_audio = reference_audio
+            generation.reference_sample_rate = int(reference_sample_rate)
+            generation.reference_text = reference_text
+            # The first queued sentence uses four distilled-flow steps for a
+            # faster first audible result; later sentences use six for quality.
+            generation.num_steps = selected_num_steps
+            generation.speed = TTS_SPEED
+            generation.silence_scale = TTS_SILENCE_SCALE
+            generation.extra["min_char_in_sentence"] = "10"
+        else:
+            preset = _VOICE_PRESET_BY_ID[settings["voice_preset"]]
+            tts = _load_kokoro_tts()
+            generation.sid = int(preset["sid"])
+            generation.speed = 1.0
         audio = tts.generate(content, generation)
         if len(audio.samples) == 0:
-            raise RuntimeError("ZipVoice generated empty audio")
+            engine_name = "ZipVoice" if uses_zipvoice else "Kokoro"
+            raise RuntimeError(f"{engine_name} generated empty audio")
         smoothed_samples = _smooth_tts_audio_edges(audio.samples, int(audio.sample_rate))
         output = io.BytesIO()
         sf.write(output, smoothed_samples, int(audio.sample_rate), format="WAV", subtype="PCM_16")
@@ -558,11 +702,23 @@ def reset_asr() -> None:
         _PUNCTUATION = None
 
 
-def reset_tts() -> None:
-    global _TTS
+def reset_kokoro_tts() -> None:
+    global _KOKORO_TTS
     with _TTS_LOCK:
-        _TTS = None
+        _KOKORO_TTS = None
+
+
+def reset_zipvoice_tts() -> None:
+    global _ZIPVOICE_TTS
+    with _TTS_LOCK:
+        _ZIPVOICE_TTS = None
+
+
+def reset_tts() -> None:
+    reset_kokoro_tts()
+    reset_zipvoice_tts()
 
 
 local_models.register_resetter(ASR_MODEL_ID, reset_asr)
-local_models.register_resetter(TTS_MODEL_ID, reset_tts)
+local_models.register_resetter(PRESET_TTS_MODEL_ID, reset_kokoro_tts)
+local_models.register_resetter(CUSTOM_TTS_MODEL_ID, reset_zipvoice_tts)

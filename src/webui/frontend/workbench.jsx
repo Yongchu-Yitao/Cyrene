@@ -1132,36 +1132,50 @@ function wbApplyStoredRightWidth(node) {
 // Drag handle pinned to the left edge of the rightmost panel. Shared by the
 // task context panel and the chat side panel (exposed on window for the
 // separately-bundled workbench-chat.js).
-function WbColResizer({ cardEdge }) {
+function WbColResizer({ cardEdge, trackGutter, surfaceId }) {
   var handleRef = useWorkbenchRef(null);
-  function emitResizePhase(phase) {
+  function resolvePanel(handle) {
+    if (!handle) return null;
+    var panel = handle.closest(".workbench-right-panel, .wbc-side");
+    if (panel || !trackGutter) return panel;
+    var page = handle.closest(".wbc-page");
+    return page && page.querySelector(":scope > .wbc-side");
+  }
+  function emitResizePhase(phase, width) {
     try {
-      window.dispatchEvent(new CustomEvent("workbench:right-resize", { detail: { phase: phase } }));
+      window.dispatchEvent(new CustomEvent("workbench:right-resize", {
+        detail: { phase: phase, width: Number.isFinite(width) ? width : undefined },
+      }));
     } catch (err) {}
   }
   function onPointerDown(e) {
     if (e.button !== 0) return;
     e.preventDefault();
     var handle = e.currentTarget;
-    var panel = handle.closest(".workbench-right-panel, .wbc-side");
+    var panel = resolvePanel(handle);
     var grid = handle.closest(".workbench-grid");
     if (!panel || !grid) return;
     var rightEdge = panel.getBoundingClientRect().right;
     var maxW = wbRightDynamicMax(panel);
     try { handle.setPointerCapture(e.pointerId); } catch (err) {}
     document.body.classList.add("wb-col-resizing");
+    if (trackGutter) handle.classList.add("is-resizing");
     emitResizePhase("start");
     function onMove(ev) {
       var w = Math.round(rightEdge - ev.clientX);
       if (w < WB_RIGHT_MIN) w = WB_RIGHT_MIN;
       if (w > maxW) w = maxW;
       grid.style.setProperty("--wb-right-w", w + "px");
+      // Keep dependants such as the browser PiP on the same pointer frame as
+      // the context panel. ResizeObserver delivery alone trails fast drags.
+      emitResizePhase("move", w);
     }
     function onUp() {
       handle.removeEventListener("pointermove", onMove);
       handle.removeEventListener("pointerup", onUp);
       handle.removeEventListener("pointercancel", onUp);
       document.body.classList.remove("wb-col-resizing");
+      handle.classList.remove("is-resizing");
       emitResizePhase("end");
       try {
         var cur = parseInt(grid.style.getPropertyValue("--wb-right-w"), 10);
@@ -1179,7 +1193,7 @@ function WbColResizer({ cardEdge }) {
   }
   function setSemanticWidth(input) {
     var handle = handleRef.current;
-    var panel = handle && handle.closest(".workbench-right-panel, .wbc-side");
+    var panel = resolvePanel(handle);
     var grid = handle && handle.closest(".workbench-grid");
     if (!panel || !grid) throw new Error("right panel separator is not available");
     var maxW = wbRightDynamicMax(panel);
@@ -1196,6 +1210,7 @@ function WbColResizer({ cardEdge }) {
     }
     next = Math.max(minW, Math.min(maxW, Math.round(next)));
     grid.style.setProperty("--wb-right-w", next + "px");
+    emitResizePhase("move", next);
     try { localStorage.setItem(WB_RIGHT_STORE, String(next)); } catch (err) {}
     return { width: next, minimum: minW, maximum: maxW };
   }
@@ -1203,12 +1218,12 @@ function WbColResizer({ cardEdge }) {
     if (!window.CyreneUI.has("uiSurface")) return undefined;
     var uiSurface = window.CyreneUI.require("uiSurface");
     return uiSurface.register({
-      node_id: "right_panel_separator",
+      node_id: "right_panel_separator" + (surfaceId ? ":" + surfaceId : ""),
       parent_id: "root",
       scope: "main",
       get_node: function () {
         var handle = handleRef.current;
-        var panel = handle && handle.closest(".workbench-right-panel, .wbc-side");
+        var panel = resolvePanel(handle);
         return handle && handle.isConnected && panel ? {
           role: "separator",
           name: window.CyreneUI.require("i18n").t("rail.resizeHandle", null, "Right panel width"),
@@ -1227,11 +1242,11 @@ function WbColResizer({ cardEdge }) {
         reset_size: onDoubleClick,
       },
     });
-  }, [cardEdge]);
+  }, [cardEdge, trackGutter, surfaceId]);
   function emitResizeHint(active) {
     // The chat panel embeds the hit target in its floating card. Its own border
     // is the resize affordance, so do not draw the legacy full-height guide.
-    if (cardEdge) return;
+    if (cardEdge || trackGutter) return;
     document.body.classList.toggle("wb-col-resize-hover", active === true);
     try {
       window.dispatchEvent(new CustomEvent("workbench:right-resize-hint", {
@@ -1247,7 +1262,7 @@ function WbColResizer({ cardEdge }) {
   return (
     <div
       ref={handleRef}
-      className={"wb-col-resizer" + (cardEdge ? " card-edge" : "")}
+      className={"wb-col-resizer" + (cardEdge ? " card-edge" : "") + (trackGutter ? " track-gutter" : "")}
       role="separator"
       aria-orientation="vertical"
       title={title}

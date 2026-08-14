@@ -953,6 +953,9 @@ def _new_chat(
     agent: dict[str, Any] | None = None,
     model_access: dict[str, Any] | None = None,
     capabilities: dict[str, Any] | None = None,
+    soul_active: bool | None = None,
+    workspace_active: bool | None = None,
+    reasoning_effort: str = "",
 ) -> dict[str, Any]:
     now = _utc_now_iso()
     supplied_title = str(title or "").strip()
@@ -970,6 +973,17 @@ def _new_chat(
         "messages": [],
         "completedTurnCount": 0,
     }
+    if soul_active is None or workspace_active is None:
+        from cyrene.runtime.settings_store import is_soul_active, is_workspace_active
+
+        if soul_active is None:
+            soul_active = bool(is_soul_active())
+        if workspace_active is None:
+            workspace_active = bool(is_workspace_active())
+    chat["soulActive"] = bool(soul_active)
+    chat["workspaceActive"] = bool(workspace_active)
+    if reasoning_effort:
+        chat["reasoningEffort"] = str(reasoning_effort)
     if project_memory_snapshot is not None:
         chat["projectMemorySnapshot"] = {
             "prompt": str(project_memory_snapshot.get("prompt") or ""),
@@ -987,6 +1001,22 @@ def _new_chat(
         )
     )
     return chat
+
+
+def _chat_soul_active(chat: dict[str, Any]) -> bool:
+    if isinstance(chat.get("soulActive"), bool):
+        return bool(chat["soulActive"])
+    from cyrene.runtime.settings_store import is_soul_active
+
+    return bool(is_soul_active())
+
+
+def _chat_workspace_active(chat: dict[str, Any]) -> bool:
+    if isinstance(chat.get("workspaceActive"), bool):
+        return bool(chat["workspaceActive"])
+    from cyrene.runtime.settings_store import is_workspace_active
+
+    return bool(is_workspace_active())
 
 
 def _normalize_workspace_override(path: Any) -> str:
@@ -1379,6 +1409,13 @@ def _public_chat_light(chat: dict[str, Any]) -> dict[str, Any]:
         "projectMemoryHash": str((chat.get("projectMemorySnapshot") or {}).get("hash") or ""),
         "permissionMode": chat.get("permissionMode") or "default",
         "workspaceOverride": str(chat.get("workspaceOverride") or ""),
+        "soulActive": _chat_soul_active(chat),
+        "workspaceActive": _chat_workspace_active(chat),
+        "remoteDeviceIds": [
+            str(device_id)
+            for device_id in (chat.get("remoteDeviceIds") or [])
+            if str(device_id or "").strip()
+        ],
         "createdAt": chat.get("createdAt"),
         "updatedAt": chat.get("updatedAt"),
         "preview": _chat_preview(chat),

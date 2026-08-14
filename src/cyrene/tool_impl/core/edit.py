@@ -24,8 +24,8 @@ async def _tool_edit(args: dict[str, Any], _bot: Any, _chat_id: int, _db_path: s
             "Tool unavailable: proactive system-initiated rounds may only do "
             "incremental file work. Editing existing files is forbidden."
         )
-    from cyrene.runtime.settings_store import is_workspace_active
-    if not is_workspace_active():
+    from cyrene.agent.context import workspace_context_enabled
+    if not workspace_context_enabled():
         return "Workspace access is disabled. Ask the user to add workspace via '+ add context' in the chat input, or set a workspace directory in Settings."
     try:
         path = resolve_workspace_write_target(str(args["path"]))

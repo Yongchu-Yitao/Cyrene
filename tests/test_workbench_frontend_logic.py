@@ -1,4 +1,5 @@
 import json
+import re
 import subprocess
 from pathlib import Path
 
@@ -6,6 +7,7 @@ from pathlib import Path
 def test_external_agent_frontend_consumes_unified_dynamic_events_and_viewers():
     root = Path(__file__).resolve().parent.parent
     source = (root / "src" / "webui" / "frontend" / "workbench-chat.jsx").read_text(encoding="utf-8")
+    route_source = (root / "src" / "route" / "workbench" / "chat.py").read_text(encoding="utf-8")
     settings = (root / "src" / "webui" / "frontend" / "settings-overlay.jsx").read_text(encoding="utf-8")
     i18n = (root / "src" / "webui" / "frontend" / "workbench-i18n.jsx").read_text(encoding="utf-8")
 
@@ -24,6 +26,17 @@ def test_external_agent_frontend_consumes_unified_dynamic_events_and_viewers():
     assert "wbcStructuredEventDetail" in source
     assert "onUnknownAgentEvent" in source
     assert "wbcToolPresentationKind" in source
+    assert "progress.slice(-40)" in source
+    assert 'var failed = !!entry.failed || ["failed", "error", "failure", "expired", "cancelled"].indexOf(entryStatus) >= 0;' in source
+    assert 'tool_entry["preview"] = str(visible_summary)' in route_source
+    assert "matching_tool_indices = [" in route_source
+    assert "open_tool_indices = [" in route_source
+    assert 'tool_entry["preview"] = existing_preview' in route_source
+    assert 'tool_entry["reasoningOffset"] = len("".join(external_reasoning_parts))' in route_source
+    assert "if external_trace or external_reasoning_parts:" in route_source
+    assert 'del external_trace[:-40]' in route_source
+    assert '"trace": external_trace[-40:]' in route_source
+    assert 'tool_status in {"failed", "error", "failure", "expired", "cancelled"}' in route_source
     assert 'notifyAgentCatalogChanged("installed")' in settings
     assert '"workbenchChat.attachmentType.audio": "音频"' in i18n
 
@@ -845,10 +858,20 @@ def test_split_chat_composers_align_with_the_floating_workspace_rail():
     composer_css = styles.split(
         ".workbench-grid.integrated-sidebars.is-chat .wbc-composer {", 1
     )[1].split("}", 1)[0]
+    split_main_composer_css = styles.split(
+        ".workbench-shell .wbc-page.side-agent-split-open > .wbc-main > .wbc-composer {",
+        1,
+    )[1].split("}", 1)[0]
+    pane_split_main_composer_css = styles.split(
+        ".workbench-shell .wbc-pane-layout.split .wbc-pane-card .wbc-main > .wbc-composer {",
+        1,
+    )[1].split("}", 1)[0]
 
     assert "width: calc(100% - var(--wbc-card-gutter));" in rail_css
     assert "margin: var(--wbc-card-top-inset) 0 var(--wbc-card-gutter) var(--wbc-card-gutter);" in rail_css
     assert "padding-bottom: 12px;" in composer_css
+    assert "padding: 10px 14px 14px !important;" in split_main_composer_css
+    assert "padding: 10px 14px 14px !important;" in pane_split_main_composer_css
 
 
 def test_hidden_chat_sidebar_slightly_widens_and_centers_the_conversation_lane():
@@ -880,7 +903,7 @@ def test_hidden_chat_sidebar_slightly_widens_and_centers_the_conversation_lane()
 
     compact_css = styles.split("@media (max-width: 980px) {", 1)[1].split("}", 3)
     assert any("--wbc-reclaimed-side-width: 0px;" in block for block in compact_css)
-    hidden_side_css = styles.split(".wbc-page.wbc-side-hidden .wbc-side {", 1)[1].split("}", 1)[0]
+    hidden_side_css = styles.split(".wbc-page.wbc-side-hidden > .wbc-side {", 1)[1].split("}", 1)[0]
     assert "display: none;" not in hidden_side_css
     assert "opacity: 0;" in hidden_side_css
     assert "visibility: hidden;" in hidden_side_css
@@ -959,6 +982,13 @@ def test_workbench_chat_rail_uses_the_shared_physical_card_and_fixed_header():
     nav_head_css = styles.split(".wbc-nav-card-head {", 1)[1].split("}", 1)[0]
     new_chat_css = styles.split(".wbc-project-new-chat {", 1)[1].split("}", 1)[0]
     search_input_css = styles.split(".wbc-search input {", 1)[1].split("}", 1)[0]
+    shared_search_head_css = styles.split(
+        ".workbench-grid.integrated-sidebars .workbench-integrated-rail-search-head {", 1
+    )[1].split("}", 1)[0]
+    collapse_control_css = styles.split(
+        ".workbench-grid.integrated-sidebars .workbench-sidebar-collapse-control {", 1
+    )[1].split("}", 1)[0]
+    mode_toggle_css = styles.split(".workbench-rail-mode-toggle {", 1)[1].split("}", 1)[0]
     chat_list_css = styles.split(".wbc-chat-list {", 1)[1].split("}", 1)[0]
 
     assert 'className="wbc-rail-glass"' in source
@@ -1001,8 +1031,13 @@ def test_workbench_chat_rail_uses_the_shared_physical_card_and_fixed_header():
     assert "display: flex;" in nav_head_css
     assert "align-items: center;" in nav_head_css
     assert "gap: 6px;" in nav_head_css
-    assert "width: 32px;" in new_chat_css
-    assert "height: 32px;" in new_chat_css
+    assert "--wb-rail-toolbar-control-size: 32px;" in shared_search_head_css
+    assert "width: var(--wb-rail-toolbar-control-size, 32px);" in new_chat_css
+    assert "height: var(--wb-rail-toolbar-control-size, 32px);" in new_chat_css
+    assert "width: var(--wb-rail-toolbar-control-size, 32px);" in collapse_control_css
+    assert "height: var(--wb-rail-toolbar-control-size, 32px);" in collapse_control_css
+    assert "flex: 0 0 60px;" in mode_toggle_css
+    assert "width: 60px;" in mode_toggle_css
     assert 'className="wbc-project-new-chat"' in source
     assert 'className="wbc-chat-nav-title"' not in source
     assert 'className="wbc-rail-filter"' not in source
@@ -1014,7 +1049,7 @@ def test_workbench_chat_rail_uses_the_shared_physical_card_and_fixed_header():
     )[0]
     assert 'workbenchChat.railTitle' not in rail_markup
     assert '<span>{wbcT("workbenchChat.newChat"' not in rail_markup
-    assert "height: 38px;" in search_input_css
+    assert "height: var(--wb-rail-toolbar-control-size, 32px);" in search_input_css
     assert "border-right: 0;" in rail_css
     assert ".wbc-rail::after {" not in styles
     assert "position: relative;" in chat_list_css
@@ -1116,7 +1151,7 @@ def test_workbench_chat_sidebar_tabs_use_panel_specific_svg_icons():
     assert "WBC_SIDE_TAB_ICONS[item.id]" in source
 
 
-def test_workbench_chat_sidebar_resizes_from_the_card_edge_without_a_guide_line():
+def test_workbench_chat_single_card_uses_independent_hidden_gutter_resize_handles():
     root = Path(__file__).resolve().parent.parent
     chat = (root / "src" / "webui" / "frontend" / "workbench-chat.jsx").read_text(
         encoding="utf-8"
@@ -1129,11 +1164,18 @@ def test_workbench_chat_sidebar_resizes_from_the_card_edge_without_a_guide_line(
     )
 
     side = chat.split("function WbcSide(", 1)[1].split("function WbcChangesTab", 1)[0]
+    browser = chat.split("function WbcBrowserFloatingSurface", 1)[1].split("function WbcMain", 1)[0]
     card_start = side.index('<div className="wbc-side-card">')
-    resizer = 'React.createElement(window.CyreneUI.require("shell").ColResizer, { cardEdge: true })'
+    resizer = 'trackGutter: true'
     assert resizer in side
     assert card_start < side.index(resizer)
-    assert "function WbColResizer({ cardEdge })" in shell
+    assert resizer in browser
+    assert 'surfaceId: "conversation"' in side
+    assert 'surfaceId: "browser"' in browser
+    assert "cardEdge: true" not in side
+    assert "widthResizable={!floating && paneCardCount === 1}" in chat
+    assert "function WbColResizer({ cardEdge, trackGutter, surfaceId })" in shell
+    assert 'page.querySelector(":scope > .wbc-side")' in shell
     dynamic_max = shell.split("function wbRightDynamicMax(panel)", 1)[1].split(
         "function wbApplyStoredRightWidth", 1
     )[0]
@@ -1141,21 +1183,24 @@ def test_workbench_chat_sidebar_resizes_from_the_card_edge_without_a_guide_line(
     assert 'child.classList.contains("wbc-rail")' in dynamic_max
     assert 'getPropertyValue("--wbc-main-min-width")' in dynamic_max
     assert 'child.classList.contains("wbc-pane-layout")' not in dynamic_max
-    assert 'className={"wb-col-resizer" + (cardEdge ? " card-edge" : "")}' in shell
-    assert "if (cardEdge) return;" in shell
-    card_edge_css = styles.split(
-        ".wbc-side-card > .wb-col-resizer.card-edge,\n"
-        ".wb-floating-detail-card > .wb-col-resizer.card-edge {",
+    assert '(trackGutter ? " track-gutter" : "")' in shell
+    assert "if (cardEdge || trackGutter) return;" in shell
+    gutter_css = styles.split(
+        ".wbc-side-card > .wb-col-resizer.track-gutter,\n"
+        ".wbc-browser-window.pip > .wb-col-resizer.track-gutter {",
         1,
     )[1].split("}", 1)[0]
-    assert "top: 0;" in card_edge_css
-    assert "bottom: 0;" in card_edge_css
-    assert "left: 0;" in card_edge_css
-    assert "width: 10px;" in card_edge_css
-    assert ".wbc-side-card > .wb-col-resizer.card-edge::after" in styles
-    assert "content: none;" in styles.split(
-        ".wbc-side-card > .wb-col-resizer.card-edge::after", 1
+    assert "top: 0;" in gutter_css
+    assert "bottom: 0;" in gutter_css
+    assert "left: -12px;" in gutter_css
+    assert "width: 12px;" in gutter_css
+    handle_visual_css = styles.split(
+        ".wbc-side-card > .wb-col-resizer.track-gutter::after,", 1
     )[1].split("}", 1)[0]
+    assert "opacity: 0;" in handle_visual_css
+    assert "height: 72px;" in handle_visual_css
+    assert ".wb-col-resizer.track-gutter:hover::after" in styles
+    assert ".wb-col-resizer.track-gutter:not(.is-resizing)::after" in styles
     page_css = styles.split(".wbc-page {", 1)[1].split("}", 1)[0]
     rail_card_css = styles.split(".wbc-rail::before {", 1)[1].split("}", 1)[0]
     pane_layout_css = styles.split("\n.wbc-pane-layout {", 1)[1].split("}", 1)[0]
@@ -1292,6 +1337,8 @@ process.stdout.write(JSON.stringify({{
     }
 
     assert "function WbcPaneCardFrame" in source
+    assert "var showActiveConversationGrip = paneCardCount > 1 || !sideVisible;" in source
+    assert "grip = showActiveConversationGrip ? <WbcSplitGripBar" in source
     assert "function WbcPaneRowResizer" in source
     assert "function WbcPaneColumnResizer" in source
     assert 'edge === "replace"' in source
@@ -1301,7 +1348,13 @@ process.stdout.write(JSON.stringify({{
     assert "movePaneCardOtherSide(card.id)" in source
     assert 'String(paneCardDragId || "") !== String(card.id || "")' in source
     assert "replaceOnly={columnLength === 2}" in source
+    assert 'replaceConversation={paneCardCount === 1 && card.kind === "chat"}' in source
+    assert 'dropKey={dropKey || card.id}' in source
+    assert 'dropTarget.dropKey || ""' in source
+    assert 'side + ":" + index' in source
     assert "freshInstance: !!existingChat" in source
+    assert "var existingChatCard = canonicalCardId" in source
+    assert 'wbcPaneCard("chat", payload, { ownerChatId: ownerId, freshInstance: true })' in source
     assert 'sourceCardId = replacingSameChatCard ? canonicalChatCardId : ""' in source
     assert 'String(card.id || "") === "chat:" + String(activeChatId || "")' in source
     assert '(layout[target.side] || []).length >= 2 ? "replace" : edge' in source
@@ -1312,6 +1365,13 @@ process.stdout.write(JSON.stringify({{
     assert 'card.kind === "side-agent"' in source
     assert 'setSideTab("side-agents")' in source
     assert "wbcPlacePaneCard(current, card, target.side, effectiveEdge" in source
+    assert "function openConversationPanelFromMainGrip()" in source
+    assert "if (paneCardCount === 1)" in source
+    assert 'window.dispatchEvent(new CustomEvent("workbench:show-chat-side"));' in source.split(
+        "function openConversationPanelFromMainGrip()", 1
+    )[1].split("function renderPaneCard", 1)[0]
+    assert "onOpenConversationPanel={openConversationPanelFromMainGrip}" in source
+    assert ".wbc-page.wbc-side-hidden > .wbc-side" in styles
 
     pane_card_css = styles.split(".wbc-pane-card {", 1)[1].split("}", 1)[0]
     assert "border: var(--wb-floating-rail-border);" in pane_card_css
@@ -1356,6 +1416,7 @@ process.stdout.write(JSON.stringify({{
     assert '"workbenchChat.dropPaneTop"' in i18n
     assert '"workbenchChat.dropPaneBottom"' in i18n
     assert '"workbenchChat.dropPaneReplace"' in i18n
+    assert '"workbenchChat.dropConversationReplace": "松手替换当前对话"' in i18n
 
 
 def test_workbench_side_question_opens_the_existing_conversation_ui_in_a_split():
@@ -1561,6 +1622,7 @@ def _legacy_test_workbench_side_question_opens_the_existing_conversation_ui_in_a
     assert "position: absolute;" in foreground_composer_css
     assert "z-index: 24;" in foreground_composer_css
     assert "inset: auto 0 0;" in foreground_composer_css
+    assert "padding: 10px 14px 14px;" in foreground_composer_css
     split_thread_css = styles.split(
         ".wbc-chat-split-stage .wbc-thread {", 1
     )[1].split("}", 1)[0]
@@ -1585,9 +1647,10 @@ def _legacy_test_workbench_side_question_opens_the_existing_conversation_ui_in_a
     assert ".wbc-composer-icon.mode > span" not in compact_composer_css
     assert ".wbc-send > span" not in compact_composer_css
     assert ".wbc-composer-actions" in compact_composer_css
-    assert "flex-wrap: wrap;" in compact_composer_css
+    assert "flex-wrap: nowrap;" in compact_composer_css
     assert ".wbc-composer-spacer" in compact_composer_css
-    assert "flex: 0 0 100%;" in compact_composer_css
+    assert "flex: 1 1 0;" in compact_composer_css
+    assert "min-width: 44px;" in compact_composer_css
     main_clip_css = styles.split(
         ".wbc-page.side-agent-split-open > .wbc-main {", 1
     )[1].split("}", 1)[0]
@@ -1879,6 +1942,10 @@ def test_workbench_split_grip_opens_a_centered_floating_conversation_panel():
     grip_bar = source.split("function WbcSplitGripBar", 1)[1].split(
         "function WbcSideAgentSplit", 1
     )[0]
+    assert 'window.CyreneUI.require("browser-overlays")' in grip_bar
+    assert "overlays.adjust(1);" in grip_bar
+    assert "overlays.adjust(-1);" in grip_bar
+    assert "}, [menuOpen]);" in grip_bar
     assert "WBC_ICONS.sidebar" in grip_bar
     assert 'wbcT("workbenchChat.detailPanel.openConversationPanel"' in grip_bar
     assert "if (onOpenConversationPanel) onOpenConversationPanel();" in grip_bar
@@ -2162,6 +2229,30 @@ def test_workbench_artifacts_use_the_shared_resizable_split_preview():
     assert "splitViewer || splitMap || splitBrowserTabId || splitSubagents" in source
     assert ".wbc-artifact-list-row" in styles
     assert ".wbc-artifact-split-viewer" in styles
+
+
+def test_workbench_viewer_split_grip_has_symmetric_vertical_spacing():
+    root = Path(__file__).resolve().parent.parent
+    styles = (root / "src/webui/frontend/workbench.css").read_text(encoding="utf-8")
+
+    pane_split = styles.split(
+        "\n.wbc-pane-card > .wbc-side-agent-split {"
+    )[-1].split("}", 1)[0]
+    grip = styles.split(
+        ".wbc-pane-card-grip,", 1
+    )[1].split("}", 1)[0]
+    viewer_header_spacing = styles.split(
+        ".wbc-pane-card > .wbc-artifact-split > .wbc-side-agent-split-head {", 1
+    )[1].split("}", 1)[0]
+    browser_header_spacing = styles.split(
+        ".wbc-pane-card > .wbc-browser-split > .wbc-resource-split-picker-wrap > .wbc-side-agent-split-head {",
+        1,
+    )[1].split("}", 1)[0]
+
+    assert "padding-top: 34px;" in pane_split
+    assert "height: 34px;" in grip
+    assert "margin-top: 0;" in viewer_header_spacing
+    assert "margin-top: 0;" in browser_header_spacing
 
 
 def _legacy_test_workbench_message_viewer_action_opens_the_file_split_directly():
@@ -2565,6 +2656,42 @@ def test_memory_page_hides_all_scrollbars_without_disabling_scroll():
     assert "height: 0;" in scrollbar_scope
     assert ".wb-mem-scroll {" in styles
     assert "overflow-y: auto;" in styles
+
+
+def test_memory_first_card_clears_the_dark_glass_toolbar():
+    root = Path(__file__).resolve().parent.parent
+    styles = (root / "src/webui/frontend/workbench.css").read_text(encoding="utf-8")
+
+    memory_main = styles.split(".wb-mem-main {", 1)[1].split("}", 1)[0]
+    dark_memory_main = styles.split(
+        'html[data-theme="dark"] .wb-mem-main {', 1
+    )[1].split("}", 1)[0]
+    memory_scroll = styles.split(".wb-mem-scroll {", 1)[1].split("}", 1)[0]
+
+    assert "--wb-mem-toolbar-overlay-height: 66px;" in memory_main
+    assert "--wb-mem-toolbar-clearance: 4px;" in memory_main
+    assert "--wb-mem-toolbar-clearance: 12px;" in dark_memory_main
+    assert "var(--wb-mem-toolbar-clearance)" in memory_scroll
+
+
+def test_memory_category_svg_keeps_all_shapes_for_visual_centering():
+    root = Path(__file__).resolve().parent.parent
+    source = (root / "src/webui/frontend/workbench-memory.jsx").read_text(
+        encoding="utf-8"
+    )
+    icons = source.split("  function svg(", 1)[1].split("  var CATS =", 1)[0]
+    script = f"""
+const React = {{ createElement: (type, props, ...children) => ({{ type, props, children }}) }};
+var h = React.createElement;
+eval("function svg(" + {json.dumps(icons)});
+const fact = ICON.fact(17);
+process.stdout.write(JSON.stringify(fact.children.map(child => child.type)));
+"""
+    completed = subprocess.run(
+        ["node", "-e", script], check=True, capture_output=True, text=True
+    )
+
+    assert json.loads(completed.stdout) == ["circle", "path"]
 
 
 def test_library_workspace_tabs_are_integrated_into_the_floating_right_inspector():
@@ -2998,8 +3125,8 @@ def _run_workbench_runtime_js(expression: str):
     source = (root / "src" / "webui" / "frontend" / "workbench-chat.jsx").read_text(
         encoding="utf-8"
     )
-    args_preview_source = "function wbcToolArgsPreview(" + source.split(
-        "function wbcToolArgsPreview(", 1
+    args_preview_source = "function wbcFormatToolParameter(" + source.split(
+        "function wbcFormatToolParameter(", 1
     )[1].split("function wbcThinkingPhrases", 1)[0]
     timeline_source = "function wbcConfirmOptimisticMessage(" + source.split(
         "function wbcConfirmOptimisticMessage(", 1
@@ -3280,6 +3407,48 @@ wbcMergeToolLifecycleEntry(
     assert result["preview"] == "resolved query"
     assert result["status"] == "completed"
     assert result["failed"] is False
+
+
+def test_workbench_reused_tool_call_id_starts_a_distinct_occurrence():
+    result = _run_workbench_timeline_js(
+        """
+(() => {
+  const completed = [{
+    kind: "tool",
+    toolCallId: "search_1",
+    text: "web_search",
+    preview: "first query",
+    status: "completed"
+  }];
+  const secondStart = {
+    kind: "tool",
+    toolCallId: "search_1",
+    text: "web_search",
+    preview: "second query",
+    status: "running"
+  };
+  const startMerge = wbcMergeToolOccurrence(completed, secondStart, false);
+  const withSecond = startMerge.items.concat([secondStart]);
+  const secondDone = { ...secondStart, status: "completed" };
+  const completionMerge = wbcMergeToolOccurrence(withSecond, secondDone, true);
+  return {
+    startMatched: startMerge.matched,
+    completionMatched: completionMerge.matched,
+    count: completionMerge.items.length,
+    previews: completionMerge.items.map(item => item.preview),
+    statuses: completionMerge.items.map(item => item.status)
+  };
+})()
+"""
+    )
+
+    assert result == {
+        "startMatched": False,
+        "completionMatched": True,
+        "count": 2,
+        "previews": ["first query", "second query"],
+        "statuses": ["completed", "completed"],
+    }
 
 
 def test_workbench_plan_revision_guard_only_blocks_unresolved_started_steps():
@@ -3700,8 +3869,10 @@ def test_workbench_chat_opens_bounded_browser_window_from_live_browser_events():
     surface = source.split("function WbcBrowserFloatingSurface", 1)[1].split("function WbcMain", 1)[0]
     assert 'var effectiveMode = mode === "minimized" ? "pip" : (mode || "pip");' in surface
     assert "onMinimize" not in surface
-    assert 'beginInteraction(event, "drag", "")' not in surface
-    assert 'className={"wbc-browser-resize-handle "' not in surface
+    assert 'beginInteraction(event, "drag", "")' in surface
+    assert '["n", "s"].map(function (direction)' in surface
+    assert 'className={"wbc-browser-resize-handle " + direction}' in surface
+    assert 'next.x = start.x + dx;' not in surface
     assert "style={inlineStyle}" not in surface
     assert ".wbc-thread-stage" in styles
     assert '<div className="wbc-browser-movement-region">' in source
@@ -3719,6 +3890,31 @@ def test_workbench_chat_opens_bounded_browser_window_from_live_browser_events():
     pip_styles = styles.split(".wbc-browser-window.pip {", 1)[1].split("}", 1)[0]
     assert "max(240px, calc(var(--wbc-side-track-width) - (2 * var(--wbc-card-gutter))))" in pip_styles
     assert "height: min(240px" in pip_styles
+    assert ".wbc-pane-card-chat:has(.wbc-browser-window.pip)" in styles
+    assert ".wbc-pane-layout.single:has(.wbc-browser-window.pip)" in styles
+    assert "right: calc(var(--wbc-card-gutter) - var(--wbc-side-track-width));" in styles
+    assert "bottom: calc(-34px * var(--wb-ui-font-scale, 1));" in styles
+    assert "floatingRect.bottom > sideRect.top && floatingRect.top < sideRect.bottom" in source
+    assert 'querySelector(":scope > .wbc-side .wbc-side-card")' in source
+    assert 'function alignFloatingBrowser(forceNativeSync, immediateNativeSync)' in source
+    assert 'sideRect.left - floatingRect.left' in source
+    assert 'paneRect.bottom + userOffsetY - floatingRect.bottom' in source
+    assert 'source: "pip-context-panel-alignment"' in source
+    assert 'event.detail.source === "pip-context-panel-alignment"' in source
+    assert 'function publishNativeBounds(deferUntilMounted)' in source
+    assert 'alignFloatingBrowser(true);' in source
+    assert 'nativeBoundsCommitRaf = requestAnimationFrame' in source
+    assert '--wbc-browser-pip-aligned-width' in source
+    assert '--wbc-browser-pip-aligned-height' in source
+    assert 'var maximumHeight = Math.max(0, Math.floor(paneRect.bottom - sideRect.bottom - 12));' in source
+    assert 'var alignedHeight = Math.min(Math.round(alignedWidth * 3 / 4), maximumHeight);' in source
+    assert 'var boundedOffsetY = Math.min(0, Math.max(minimumOffsetY, userOffsetY));' in source
+    assert 'window.addEventListener("workbench:right-resize", onRightResize);' in source
+    assert "aspect-ratio: 4 / 3;" in styles
+    assert '--wbc-browser-pip-align-x' in styles
+    assert '--wbc-browser-pip-align-y' in styles
+    assert '--wbc-browser-pip-user-height' in styles
+    assert '--wbc-browser-pip-user-offset-y' in styles
     floating_native_styles = styles.split(".wbc-browser-window.pip .browser-view.native,", 1)[1].split("}", 1)[0]
     assert ".wbc-browser-window.maximized .browser-view.native" in floating_native_styles
     assert "--browser-resize-gutter: 0px;" in floating_native_styles
@@ -3782,7 +3978,9 @@ def test_electron_browser_bounds_follow_floating_window_with_frame_coalescing():
     assert "this.syncAttachedView();" in set_bounds_block
     assert "}, 32);" in set_bounds_block
     assert "}, 50);" not in set_bounds_block
-    commit_block = source.split("  function commitFrame(next, area) {", 1)[1].split("\n  function stopInteraction", 1)[0]
+    commit_block = source.split(
+        "  function commitFrame(next, area, anchorFrame, anchorOffset, customizeHeight) {", 1
+    )[1].split("\n  function stopInteraction", 1)[0]
     assert 'node.style.left = clamped.x + "px"' in commit_block
     assert "wbcNotifyBrowserLayoutChanged();" in commit_block
     move_block = source.split("  function onPointerMove(event) {", 1)[1].split("\n  function beginInteraction", 1)[0]
@@ -3944,8 +4142,13 @@ def test_electron_browser_bounds_follow_floating_window_with_frame_coalescing():
     assert "topCover" not in browser_view
     pip_bar_block = styles.split(".wbc-browser-window.pip .wbc-browser-window-bar {", 1)[1].split("\n}", 1)[0]
     assert "height: 46px" in pip_bar_block
+    assert "z-index: 31;" in pip_bar_block
+    assert "background: var(--wb-card-bg-strong);" in pip_bar_block
     assert "padding: 0 9px 0 14px" in pip_bar_block
     assert "border-bottom-color:" in pip_bar_block
+    pip_head_block = styles.split(".wbc-browser-pip-head-wrap {", 1)[1].split("\n}", 1)[0]
+    assert "min-height: 46px;" in pip_head_block
+    assert "visibility: visible;" in pip_head_block
     assert ".wbc-browser-window.pip .wbc-browser-window-bar > *" not in styles
     assert ".wbc-browser-window.pip .browser-native-surface" in styles
     assert "className=\"browser-native-surface\"" in browser_view
@@ -4477,6 +4680,12 @@ def test_workbench_chat_tool_preamble_splits_current_llm_reasoning_after_message
     args: { command: "ls photo.jpg" }
   });
   runReasoningCall(2, "send the existing file");
+  // The live state scanner may discover the visible preamble only after a
+  // tool from this LLM call has started. It still belongs below the preamble.
+  global.__wbcSseHandler({
+    type: "tool_call", session_id: "chat_preamble", tool: "search",
+    args: { query: "photo metadata" }
+  });
   global.__wbcStreamHandlers.onIntermediateMessage({
     message: {
       id: "mid_preamble",
@@ -4513,7 +4722,7 @@ def test_workbench_chat_tool_preamble_splits_current_llm_reasoning_after_message
             },
             {
                 "reasoning": "send the existing file",
-                "tools": ["send_file"],
+                "tools": ["search", "send_file"],
                 "closed": False,
             },
         ],
@@ -4866,7 +5075,7 @@ def test_workbench_tool_start_is_rendered_then_completed_in_place():
     assert 'toolCallId: String(event.tool_call_id || "")' in runtime
     assert 'status: (toolStarted || toolProgress) ? "running" : "completed"' in runtime
     assert 'progressCurrent: toolProgress ?' in runtime
-    assert "wbcMergeToolLifecycleEntry(item, entry, terminalToolEvent)" in runtime
+    assert "wbcMergeToolOccurrence(items, entry, terminalToolEvent)" in runtime
     assert "progress: mergeToolProgress(activity && activity.progress)" in runtime
     assert "matchedToolCall" in runtime
     assert 'entry.toolCallId || i' in source
@@ -6394,23 +6603,131 @@ def test_workbench_agent_images_render_inline_with_viewer_and_file_actions():
     assert "wbcStartFileDrag(event, file)" in agent_files
 
 
-def test_workbench_execution_card_restores_green_surface():
+def test_workbench_execution_card_uses_collapsible_activity_summary():
     root = Path(__file__).resolve().parent.parent
+    source = (root / "src" / "webui" / "frontend" / "workbench-chat.jsx").read_text(
+        encoding="utf-8"
+    )
     styles = (root / "src" / "webui" / "frontend" / "workbench.css").read_text(
         encoding="utf-8"
     )
 
     trace_rule = styles.split(".wbc-trace {", 1)[1].split("}", 1)[0]
+    summary_rule = styles.split(".wbc-trace-summary {", 1)[1].split("}", 1)[0]
     dark_trace_rule = styles.split(
         'html[data-theme="dark"] .wbc-trace {', 1
     )[1].split("}", 1)[0]
-    assert "var(--wb-green) 6%" in trace_rule
-    assert "var(--wb-green) 10%" in dark_trace_rule
-    assert (
-        "border: 1px solid color-mix(in srgb, var(--wb-green) 26%, transparent);"
-        in trace_rule
-    )
+    assert "border: 0;" in trace_rule
+    assert "background: transparent;" in trace_rule
+    assert "display: flex;" in trace_rule
+    assert "flex-direction: column;" in trace_rule
+    assert "background: transparent;" in dark_trace_rule
     assert "box-shadow:" not in trace_rule
+    assert "min-height: 34px;" in summary_rule
+    assert "width: fit-content;" in summary_rule
+    assert "order: 1;" in summary_rule
+    assert 'font-family: var(--mono, "IBM Plex Mono", ui-monospace, monospace);' in styles
+    chevron_rule = styles.rsplit("\n.wbc-trace-summary-chevron {", 1)[1].split("}", 1)[0]
+    assert "margin-left: 1px;" in chevron_rule
+    assert 'className="wbc-trace-summary"' in source
+    assert 'new CustomEvent("workbench:trace-disclosure"' in source
+    assert "detail: { anchor: event.currentTarget, expanding: nextExpanded }" in source
+    assert 'thread.addEventListener("workbench:trace-disclosure", preserveTraceDisclosureAnchor);' in source
+    assert "stickRef.current = false;" in source
+    assert "thread.scrollTop += anchor.getBoundingClientRect().top - anchorTop;" in source
+    assert "function wbcTraceActionKind(entry)" in source
+    assert "function wbcTraceActionIcon(entry)" in source
+    assert 'if (kind === "search") return WBC_ICONS.search;' in source
+    assert 'if (kind === "command") return WBC_ICONS.slash;' in source
+    assert 'if (kind === "browser") return WBC_ICONS.browser;' in source
+    icon_block = source.split("function wbcTraceActionIcon(entry)", 1)[1].split(
+        "function wbcTraceCollapsedSummary", 1
+    )[0]
+    mapped_icons = re.findall(r"return WBC_ICONS\.([A-Za-z0-9_]+)", icon_block)
+    assert len(mapped_icons) == 23
+    assert len(mapped_icons) == len(set(mapped_icons))
+    assert 'className="wbc-trace-entry-icon" aria-hidden="true">{WBC_ICONS.brain}' in source
+    assert 'failed || isRunning ? <span className="wbc-trace-entry-icon" aria-hidden="true">{wbcTraceActionIcon(entry)}</span> : null' in source
+    reasoning_icon_rule = styles.split(
+        ".wbc-trace-timeline-reasoning > .wbc-trace-entry-icon {", 1
+    )[1].split("}", 1)[0]
+    assert "height: calc(18.17px * var(--wb-ui-font-scale, 1));" in reasoning_icon_rule
+    assert "align-items: center;" in reasoning_icon_rule
+    assert "function wbcTraceCollapsedSummary(entries, fallback)" in source
+    assert "icon: WBC_ICONS.brain" in source
+    assert 'entry && entry.kind === "phase1"' in source
+    assert "if (phase1Entry) return" in source
+    assert 'wbcT("workbenchChat.phase1Understood", "Understood the request")' in source
+    assert "function wbcNormalizeReasoningText(text)" in source
+    assert "function wbcTraceTimelineItems(entries, reasoning)" in source
+    assert "reasoningOffset: String(activity.reasoning || \"\").length" in source
+    assert 'className="wbc-trace-list wbc-trace-timeline"' in source
+    assert "var seen = new Set();" in source
+    assert "seen.has(key)" in source
+    assert "var collapsedSummary = wbcTraceCollapsedSummary(entries, label);" in source
+    assert "summaryItems.map" not in source
+    assert "wbcTraceCollapsedLabel" not in source
+    assert "traceAction.repeated" not in source
+    assert 'className="wbc-trace-details"' in source
+    assert 'className={"wbc-trace-collapse" + (expanded ? " open" : "")}' in source
+    assert 'className="wbc-trace-collapse-inner"' in source
+    assert "aria-hidden={!expanded}" in source
+    assert 'aria-expanded={hasDetails ? expanded : undefined}' in source
+    collapse_rule = styles.split(".wbc-trace-collapse {", 1)[1].split("}", 1)[0]
+    collapse_open_rule = styles.split(".wbc-trace-collapse.open {", 1)[1].split("}", 1)[0]
+    assert "grid-template-rows: 0fr;" in collapse_rule
+    assert "opacity: 0;" in collapse_rule
+    assert "grid-template-rows 200ms" in collapse_rule
+    assert "grid-template-rows: 1fr;" in collapse_open_rule
+    assert "opacity: 1;" in collapse_open_rule
+    detail_rule = styles.split(".wbc-trace-details {", 1)[1].split("}", 1)[0]
+    assert "border: 0;" in detail_rule
+    assert "background: transparent;" in detail_rule
+    assert 'className="wbc-trace-summary-preview"' not in source
+    assert "wbc-trace-summary-preview" not in styles
+    assert "var previewText = wbcToolPreviewText(entry.preview);" in source
+    assert "{previewText ? <small>（{previewText}）</small> : null}" in source
+    assert ".wbc-trace-details .wbc-trace-mark" not in styles
+    assert 'className="wbc-trace-mark"' in source
+    assert "编辑了文件" in (root / "src" / "webui" / "frontend" / "workbench-i18n.jsx").read_text(encoding="utf-8")
+    i18n = (root / "src" / "webui" / "frontend" / "workbench-i18n.jsx").read_text(encoding="utf-8")
+    assert '"workbenchChat.traceAction.usedSkill": "使用了技能工具"' in i18n
+    assert '"workbenchChat.traceAction.conjunction": "并"' in i18n
+    assert '"workbenchChat.traceAction.executed": "执行了{actions}"' in i18n
+    assert 'wbcT(\n      "workbenchChat.traceAction.executed"' in source
+
+
+def test_workbench_trace_timeline_removes_blank_lines_and_interleaves_tools():
+    root = Path(__file__).resolve().parent.parent
+    source = (root / "src" / "webui" / "frontend" / "workbench-chat.jsx").read_text(
+        encoding="utf-8"
+    )
+    timeline_source = "function wbcNormalizeReasoningText(" + source.split(
+        "function wbcNormalizeReasoningText(", 1
+    )[1].split("function WbcTraceCard", 1)[0]
+    script = f"""
+eval({json.dumps(timeline_source)});
+const reasoning = "before\\n\\nmiddle\\n\\nafter";
+const result = wbcTraceTimelineItems([
+  {{ kind: "phase1", text: "Understood", preview: reasoning }},
+  {{ toolCallId: "search_1", reasoningOffset: 8 }},
+  {{ toolCallId: "search_2", reasoningOffset: 16 }}
+], reasoning).map(item => item.kind === "reasoning"
+  ? [item.kind, item.text]
+  : [item.kind, item.entry.toolCallId]);
+process.stdout.write(JSON.stringify(result));
+"""
+    completed = subprocess.run(
+        ["node", "-e", script], check=True, capture_output=True, text=True
+    )
+
+    assert json.loads(completed.stdout) == [
+        ["reasoning", "before"],
+        ["trace", "search_1"],
+        ["reasoning", "middle"],
+        ["trace", "search_2"],
+        ["reasoning", "after"],
+    ]
 
 
 def test_workbench_chat_splits_live_tools_around_intermediate_messages():
@@ -6434,14 +6751,20 @@ def test_workbench_chat_splits_live_tools_around_intermediate_messages():
     assert 'event.type === "assistant_message" && event.intermediate && event.message' in source
 
 
-def test_workbench_chat_retry_truncates_only_after_durable_terminal_event():
+def test_workbench_chat_retry_clears_model_output_before_start_and_reconciles_terminal_event():
     root = Path(__file__).resolve().parent.parent
     source = (root / "src" / "webui" / "frontend" / "workbench-chat.jsx").read_text(
         encoding="utf-8"
     )
 
-    ack_block = source.split("onAck: function (event) {", 1)[1].split(
-        "onReplyStart:", 1
+    selection_helper = source.split("function wbcRetryTurnSelection(chat, messageId) {", 1)[1].split(
+        "function wbcClearModelOutputForRetry", 1
+    )[0]
+    clear_helper = source.split("function wbcClearModelOutputForRetry(chat, messageId) {", 1)[1].split(
+        "function wbcPreserveLiveTimelineAnchors", 1
+    )[0]
+    retry_block = source.split("function handleRetryMessage(messageId) {", 1)[1].split(
+        "function handleEditMessage", 1
     )[0]
     saved_block = source.split("onSaved: function (event) {", 1)[1].split(
         "onAwaitingUser:", 1
@@ -6450,8 +6773,28 @@ def test_workbench_chat_retry_truncates_only_after_durable_terminal_event():
         "onError:", 1
     )[0]
 
-    assert "if (event.retry) return;" in ack_block
-    assert 'fire("onRetryTruncate"' not in ack_block
+    assert 'messages[i].role === "user"' in selection_helper
+    assert 'messages[nextIndex].role === "user"' in selection_helper
+    assert "messages.slice(userIndex + 1, endIndex)" in selection_helper
+    assert "chat.messages.slice(0, selection.userIndex + 1).concat(chat.messages.slice(selection.endIndex))" in clear_helper
+    assert "wbcClearModelOutputForRetry(cachedChat, retryMessageId)" in retry_block
+    assert "wbcClearModelOutputForRetry(prev, retryMessageId)" in retry_block
+    assert "setRetryClearingMessageIds(selection.outputIds);" in retry_block
+    assert "retrySuppressedTurnRef.current = suppressedTurn;" in retry_block
+    assert "setRetrySuppressedTurn(suppressedTurn);" in retry_block
+    assert "setTimeout(startRetryAfterClear, 180)" in retry_block
+    assert 'runtimeEngine.start(retryChatId, { retry: true, mode: retryMode }, model);' in retry_block
+    assert 'className={retryClearing ? "retry-clearing" : ""}' in source
+    assert "retrySuppressedIds.has(String(message && message.id || \"\"))" in source
+    retry_truncate = source.split("onRetryTruncate: function (chatId, truncateInfo) {", 1)[1].split(
+        "onReplyStream:", 1
+    )[0]
+    assert "retrySuppressedTurnRef.current" in retry_truncate
+    assert ".concat(locallySuppressedIds)" in retry_truncate
+    assert 'retrySuppressedTurnRef.current = { chatId: "", messageIds: [] };' in retry_truncate
+    styles = (root / "src" / "webui" / "frontend" / "workbench.css").read_text(encoding="utf-8")
+    clear_animation = styles.split(".wbc-thread-item.retry-clearing {", 1)[1].split("}", 1)[0]
+    assert "animation: wbc-retry-output-clear 180ms" in clear_animation
     assert 'fire("onRetryTruncate"' in saved_block
     assert 'fire("onRetryTruncate"' in awaiting_block
 
@@ -6588,47 +6931,53 @@ def test_workbench_live_trace_keeps_each_llm_activity_independent():
     live_message = chat.split("function WbcLiveMessage", 1)[1].split(
         "var WBC_DRAFT_PREFIX", 1
     )[0]
-    assert "useWbcState(false)" in activity_card
-    assert "useWbcState(0)" in activity_card
-    assert 'setLockedHeight(cardRef.current.getBoundingClientRect().height)' in chat
-    assert 'setLockedHeight(0);' in chat
-    assert 'else if (showReasoning)' in activity_card
+    trace_card = chat.split("function WbcTraceCard", 1)[1].split(
+        "function WbcAssistantMessage", 1
+    )[0]
+    assert "useWbcState(false)" not in activity_card
+    assert "useWbcState(0)" not in activity_card
+    assert "setLockedHeight" not in activity_card
     assert "lockedTraceCount" not in activity_card
-    assert 'style={lockedHeight ? { height: lockedHeight + "px" } : null}' in chat
-    assert 'setShowReasoning(function (visible) { return !visible; });' in chat
     assert 'var hasReasoning = !!String(item.reasoning || "").trim();' in activity_card
     assert "function wbcPhase1ProgressDetail(entries)" in chat
     assert 'var isCodexProvider = String(item.provider || "") === "codex_oauth";' in activity_card
-    assert "var hasExpandableDetail = !isCodexProvider" in activity_card
-    assert 'if (!hasExpandableDetail) return;' in activity_card
-    assert 'onToggle={hasExpandableDetail ? toggleReasoning : null}' in activity_card
-    assert 'showReasoning={hasExpandableDetail && showReasoning}' in activity_card
-    assert 'lockedHeight={hasExpandableDetail ? lockedHeight : 0}' in activity_card
+    assert 'var visibleReasoning = !isCodexProvider && (hasReasoning || isPhase1) ? phase1Detail : "";' in activity_card
+    assert "hasExpandableDetail" not in activity_card
+    assert "toggleReasoning" not in activity_card
     assert 'provider: String(event.provider || activity.provider || "")' in chat
-    assert 'detail.scrollTop = active ? detail.scrollHeight : 0;' in activity_card
-    assert "if (!msg.runtimeActivityActive && activityEntries.length === 0) return null;" in chat
+    assert '!String(activity.reasoning || "").trim()' in chat
+    assert "!msg.runtimeActivityActive\n              && activityEntries.length === 0" in chat
     assert "wbcRuntimeSegmentMessages(runtime).concat(wbcRuntimeTimelineMessages(runtime, { showReasoningPlaceholder }))" in chat
     assert "if (msg.runtimeActivity || msg.activityCard)" in chat
+    assert "if (msg.runtimeHeartbeat) {\n            return null;" in chat
+    assert "if (item.runtimeHeartbeat) {\n          return null;" in chat
+    assert "<WbcHeartbeat startedAt=" not in chat
     assert "activity={activity}" in chat
-    assert "reasoning={phase1Detail}" in activity_card
+    assert "reasoning={visibleReasoning}" in activity_card
     assert "useWbcState(false)" not in live_message
     assert "useWbcState(0)" not in live_message
     assert "trace: hasLiveActivities ? []" in chat
-    assert 'activityRunning ? <span className="wb-spinner small" aria-hidden="true" /> : null' in chat
-    assert 'className="wbc-thinking-detail-text" ref={reasoningRef}' in chat
-    assert ".wbc-trace.live.wbc-trace-locked" in css
-    assert ".wbc-trace.wbc-trace-locked .wbc-trace-view" in css
+    assert 'summaryRunning ? <span className="wb-spinner small" aria-hidden="true" /> : null' in trace_card
+    assert 'isRunning ? <span className="wb-spinner small" /> : WBC_ICONS.check' in trace_card
+    assert 'className="wbc-thinking-detail-text"' in trace_card
+    assert "wbc-trace-reasoning-toggle" not in trace_card
+    assert "wbc-trace-reasoning-toggle" not in css
+    assert "wbc-trace-locked" not in css
     thread_child_css = css.split(".wbc-thread > * {", 1)[1].split("}", 1)[0]
     assert "flex-shrink: 0;" in thread_child_css
     trace_view_css = css.split(".wbc-trace-view {", 1)[1].split("}", 1)[0]
     assert "height: 100%;" not in trace_view_css
-    detail_css = css.split(".wbc-thinking-detail {", 1)[1].split("}", 1)[0]
+    detail_css = css.split("\n.wbc-thinking-detail {", 1)[1].split("}", 1)[0]
     assert "overflow: hidden;" in detail_css
-    detail_text_css = css.split(".wbc-thinking-detail-text {", 1)[1].split("}", 1)[0]
+    detail_text_css = css.split("\n.wbc-thinking-detail-text {", 1)[1].split("}", 1)[0]
     assert "overflow-y: auto;" in detail_text_css
     assert "margin-right: -8px;" in detail_text_css
     assert "padding-right: 8px;" in detail_text_css
-    assert "查看思考详情" in i18n
+    expanded_detail_text_css = css.split(
+        ".wbc-trace-details .wbc-thinking-detail-text {", 1
+    )[1].split("}", 1)[0]
+    assert "overflow: visible;" in expanded_detail_text_css
+    assert "white-space: pre-wrap;" in expanded_detail_text_css
 
 
 def test_codex_reasoning_effort_updates_the_primary_candidate_without_stale_state():
@@ -6803,10 +7152,20 @@ def test_workbench_tool_trace_preview_serializes_nested_arguments():
     )
 
     assert result == {
-        "preview": 'invoke, browser.click_text, {"text":"继续","exact":true}',
-        "localized": '调用能力, 点击文本, {"text":"继续","exact":true}',
+        "preview": "invoke, browser.click_text, text: 继续, exact: true",
+        "localized": "调用能力, 点击文本, text: 继续, exact: true",
         "leakedObjectTag": False,
     }
+
+
+def test_workbench_tool_trace_preview_removes_python_object_braces():
+    result = _run_workbench_trace_i18n_js(
+        """
+wbcToolPreviewText("invoke, skill_tools, {'name': '播放首页推荐首个视频', 'auto': True}")
+"""
+    )
+
+    assert result == "调用能力, 技能工具, name: 播放首页推荐首个视频, auto: True"
 
 
 def test_workbench_phase_events_publish_translation_keys():
@@ -6846,7 +7205,7 @@ def test_workbench_chat_last_user_message_has_retry_action():
     assert 'String(msg.id || "") === lastUserId' in main
     assert "onRetryMessage={canRetryUser ? onRetryMessage : null}" in main
     assert "function WbcUserMessage({ msg, onOpenFile, onEditMessage, canEdit, onRetryMessage })" in source
-    assert "onClick={onRetryMessage}" in user_message
+    assert "onClick={function () { onRetryMessage(msg.id); }}" in user_message
     assert "WBC_ICONS.retry" in user_message
     assert 'wbcT("workbenchChat.retryUserMessage", "Retry message")' in user_message
     assert '"workbenchChat.retryUserMessage": "重试消息"' in i18n
@@ -7447,6 +7806,21 @@ def test_workbench_chat_workspace_chip_follows_project_until_user_overrides_it()
     ) in chat
     assert "workspaceOverride: workspaceOverride," in chat
     assert 'body.workspaceOverride = input.workspaceOverride || "";' in chat
+    assert "model.updateChatPreferences(chatId, { soulActive: next })" in chat
+    assert "model.updateChatPreferences(chatId, { workspaceActive: false })" in chat
+    assert 'body.soulActive = !!input.soulActive;' in chat
+    assert 'body.workspaceActive = !!input.workspaceActive;' in chat
+    assert '"/api/context/remove-soul"' not in chat
+    assert '"/api/context/remove-workspace"' not in chat
+    assert "var composerChat = chat || chatSummary || null;" in chat
+    assert 'key={"main-composer:" + String(composerChat && composerChat.id || "new")}' in chat
+    assert "chat={composerChat}" in chat
+    assert "Array.isArray(chat.remoteDeviceIds) ? chat.remoteDeviceIds.slice() : []" in chat
+    assert 'setReasoningEffort(String(chat && chat.reasoningEffort || "").trim().toLowerCase());' in chat
+    assert "var personaOn = soulActive !== false;" in chat
+    assert "var workspaceOn = workspaceActive !== false;" in chat
+    assert "if (Number(catalog.revision) < 0) return;" in chat
+    assert "Session summaries now carry this field." in chat
 
 
 def test_workbench_tools_menu_combines_content_commands_and_long_workspace_paths():
@@ -7717,6 +8091,10 @@ def test_workbench_chat_exposes_browser_live_view_and_takeover():
     assert "zoomEnabled: true" in browser_split
     assert "resizeEdgeHintEnabled: true" in browser_split
     assert "zoomEnabled: false" not in browser_split
+    assert "WBC_ICONS.windowMaximize" in browser_split
+    assert "WBC_ICONS.windowRestore" in browser_split
+    assert 'className={"wbc-side-agent-split wbc-browser-split" + (maximized ? " maximized" : "")}' in browser_split
+    assert 'window.ReactDOM.createPortal(browserSplit, workbenchPortalRoot)' in browser_split
     assert "handleAnswer(pending.id" in source
 
 
@@ -7958,6 +8336,19 @@ def test_workbench_task_composer_includes_model_and_reasoning_picker():
     )
 
 
+def test_settings_models_use_the_shared_settings_typography():
+    root = Path(__file__).resolve().parent.parent
+    styles = (root / "src/webui/frontend/workbench.css").read_text(encoding="utf-8")
+
+    typography = styles.split(
+        "/* Models is a Settings page, not a code editor.", 1
+    )[1].split(".workbench-shell .wb-text-size-sample", 1)[0]
+    assert ".settings-overlay .wb-models-panel" in typography
+    assert "font-family: var(--wb-font) !important;" in typography
+    assert "font-size: calc(14px * var(--wb-ui-font-scale)) !important;" in typography
+    assert "font-size: calc(12px * var(--wb-ui-font-scale)) !important;" in typography
+
+
 def test_workbench_task_composer_reuses_chat_voice_input_flow():
     root = Path(__file__).resolve().parent.parent
     workbench = (root / "src" / "webui" / "frontend" / "workbench.jsx").read_text(encoding="utf-8")
@@ -7982,6 +8373,7 @@ def test_workbench_task_composer_matches_chat_floating_card_material():
 
     task_box = styles.split(".workbench-composer-box {", 1)[1].split("}", 1)[0]
     chat_box = styles.split(".wbc-composer-box {", 1)[1].split("}", 1)[0]
+    chat_actions = styles.split(".wbc-composer-actions {", 1)[1].split("}", 1)[0]
     disclaimer = styles.split(".wb-composer-disclaimer {", 1)[1].split("}", 1)[0]
 
     assert ".wbc-conversation-split::after" not in styles
@@ -7999,12 +8391,23 @@ def test_workbench_task_composer_matches_chat_floating_card_material():
     assert "border-radius: 14px;" in disclaimer
     assert "background: color-mix(in srgb, var(--wb-card-bg) 72%, transparent);" in disclaimer
     assert "blur(18px) saturate(120%) contrast(102%)" in disclaimer
+    assert "border-top: 0;" in chat_actions
     assert 'className="workbench-composer wbc-composer"' in source
     assert 'className="workbench-composer-box wbc-composer-box"' in source
     assert 'className="workbench-composer-actions wbc-composer-actions"' in source
     assert 'className={"wb-composer-send wbc-send"' in source
     assert '.workbench-composer.wbc-composer {' in styles
     assert "padding: 0 !important;" in styles
+
+
+def test_composer_disclaimer_has_balanced_vertical_clearance():
+    root = Path(__file__).resolve().parent.parent
+    styles = (root / "src" / "webui" / "frontend" / "workbench.css").read_text(
+        encoding="utf-8"
+    )
+
+    disclaimer = styles.split(".wb-composer-disclaimer {", 1)[1].split("}", 1)[0]
+    assert "margin: 4px auto;" in disclaimer
 
 
 def test_workbench_model_picker_compacts_without_overlapping_send_button():
@@ -8897,6 +9300,7 @@ def test_agent_owned_model_picker_uses_acp_config_options():
     assert 'var effectiveReasoningEffort = agentManagedModels ? agentReasoningValue : reasoningEffort;' in source
     assert 'reasoningEffort: agentManagedModels ? "" : reasoningEffort' in source
     assert 'model.updateAgentConfigValues(chatId, { [agentReasoningConfig.id]: effort })' in source
+    assert 'model.updateChatPreferences(chatId, { reasoningEffort: effort })' in source
 
 
 def test_external_agent_usage_is_shared_with_the_reply_finalizer():

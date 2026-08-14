@@ -431,6 +431,9 @@ def register_workbench_chat_routes(
                 agent=agent_snapshot,
                 model_access=model_access_snapshot,
                 capabilities=capabilities_snapshot,
+                soul_active=body.get("soulActive"),
+                workspace_active=body.get("workspaceActive"),
+                reasoning_effort=str(body.get("reasoningEffort") or ""),
             )
             payload.setdefault("chats", []).insert(0, chat)
             _write_chats_store(payload)
@@ -619,6 +622,10 @@ def register_workbench_chat_routes(
             agent["sourceQuote"] = quote[:12_000]
             if parent.get("workspaceOverride"):
                 agent["workspaceOverride"] = str(parent["workspaceOverride"])
+            agent["soulActive"] = _chat_soul_active(parent)
+            agent["workspaceActive"] = _chat_workspace_active(parent)
+            if parent.get("reasoningEffort"):
+                agent["reasoningEffort"] = str(parent["reasoningEffort"])
             payload.setdefault("chats", []).insert(0, agent)
             _write_chats_store(payload)
             return agent
@@ -1271,8 +1278,46 @@ def register_workbench_chat_routes(
                 )
                 chat["modelSelectionId"] = str(value)
                 chat["model"] = str((selected or {}).get("name") or value)
+        if "model" in body:
+            selected_key = str(body.get("model") or "").strip()
+            if selected_key:
+                from cyrene.runtime.settings_store import get_models
+
+                selected = next((item for item in (get_models() or []) if selected_key in {
+                    str(item.get("id") or ""), str(item.get("model") or ""), str(item.get("name") or "")
+                }), None)
+                chat["modelSelectionId"] = selected_key
+                chat["model"] = str((selected or {}).get("model") or (selected or {}).get("name") or selected_key)
+        if "reasoningEffort" in body:
+            effort = str(body.get("reasoningEffort") or "").strip().lower()
+            if effort:
+                chat["reasoningEffort"] = effort
+            else:
+                chat.pop("reasoningEffort", None)
+        if "soulActive" in body:
+            chat["soulActive"] = bool(body.get("soulActive"))
+        if "workspaceActive" in body:
+            chat["workspaceActive"] = bool(body.get("workspaceActive"))
+        if "workspaceOverride" in body:
+            try:
+                override = _normalize_workspace_override(body.get("workspaceOverride"))
+            except ValueError as exc:
+                return JSONResponse({"error": str(exc)}, status_code=400)
+            if override:
+                chat["workspaceOverride"] = override
+            else:
+                chat.pop("workspaceOverride", None)
         chat["updatedAt"] = _utc_now_iso()
         await asyncio.to_thread(_write_chats_store, payload)
+        from cyrene.observability import debug
+
+        await debug.publish_event({
+            "type": "workbench_chat_changed",
+            "change": "updated",
+            "session_id": chat_id,
+            "chat_id": chat_id,
+            "project_id": str(chat.get("projectId") or ""),
+        }, session_id=chat_id)
         return {"ok": True, "chat": _public_chat_full(chat)}
 
     @router.get("/api/workbench/chats/{chat_id}/agent-config-options")
@@ -1656,6 +1701,10 @@ def register_workbench_chat_routes(
         else:
             mode = stored_mode if stored_mode in PERMISSION_MODES else "default"
         chat["permissionMode"] = mode
+        if "soulActive" in body:
+            chat["soulActive"] = bool(body.get("soulActive"))
+        if "workspaceActive" in body:
+            chat["workspaceActive"] = bool(body.get("workspaceActive"))
         project_id = str(chat.get("projectId") or "")
         project_store = await asyncio.to_thread(R._read_workbench_store)
         project = R._workbench_find_project(project_store, project_id)
@@ -2110,30 +2159,71 @@ def register_workbench_chat_routes(
                             external_reasoning_parts[:] = [reasoning_text]
                     elif event_type in {"tool.started", "tool.updated", "tool.completed"}:
                         tool_call_id = str(payload.get("toolCallId") or payload.get("tool_call_id") or "")
+                        tool_status = str(payload.get("status") or ("completed" if event_type == "tool.completed" else "running")).strip().lower()
                         tool_entry: dict[str, Any] = {
                             "kind": "tool",
                             "toolCallId": tool_call_id,
                             "tool": str(payload.get("name") or payload.get("tool") or payload.get("title") or "tool"),
-                            "status": str(payload.get("status") or ("completed" if event_type == "tool.completed" else "running")),
-                            "failed": bool(payload.get("failed")),
+                            "status": tool_status,
+                            "failed": bool(payload.get("failed")) or tool_status in {"failed", "error", "failure", "expired", "cancelled"},
                         }
                         if payload.get("inputSummary") is not None:
                             tool_entry["input"] = payload.get("inputSummary")
                         if payload.get("outputSummary") is not None:
                             tool_entry["output"] = payload.get("outputSummary")
+                        # Prefer invocation parameters in the compact trace;
+                        # the output remains available as structured detail.
+                        visible_summary = payload.get("inputSummary")
+                        if visible_summary is None:
+                            visible_summary = payload.get("outputSummary")
+                        if isinstance(visible_summary, (str, int, float, bool)):
+                            tool_entry["preview"] = str(visible_summary)
+                        elif visible_summary is not None:
+                            try:
+                                tool_entry["preview"] = json.dumps(
+                                    visible_summary,
+                                    ensure_ascii=False,
+                                    separators=(",", ":"),
+                                )[:600]
+                            except (TypeError, ValueError):
+                                tool_entry["preview"] = str(visible_summary)[:600]
                         if isinstance(payload.get("presentation"), dict):
                             tool_entry["presentation"] = payload.get("presentation")
-                        existing_tool_index = next((
+                        matching_tool_indices = [
                             index for index, item in enumerate(external_trace)
                             if tool_call_id and str(item.get("toolCallId") or "") == tool_call_id
-                        ), -1)
+                        ]
+                        terminal_statuses = {"completed", "failed", "error", "failure", "expired", "cancelled"}
+                        open_tool_indices = [
+                            index for index in matching_tool_indices
+                            if str(external_trace[index].get("status") or "").strip().lower() not in terminal_statuses
+                        ]
+                        existing_tool_index = (
+                            open_tool_indices[-1]
+                            if open_tool_indices
+                            else (matching_tool_indices[-1] if matching_tool_indices and tool_status in terminal_statuses else -1)
+                        )
                         if existing_tool_index >= 0:
+                            # Keep the invocation parameters captured by the
+                            # started/updated event. A completion summary is
+                            # output, not a replacement for those parameters.
+                            existing_preview = external_trace[existing_tool_index].get("preview")
+                            if existing_preview not in (None, "") and event_type == "tool.completed":
+                                tool_entry["preview"] = existing_preview
                             external_trace[existing_tool_index] = {
                                 **external_trace[existing_tool_index],
                                 **tool_entry,
                             }
                         else:
+                            # Anchor the call at the amount of reasoning that
+                            # had arrived when the invocation was first seen.
+                            # The frontend uses this to interleave tools with
+                            # the surrounding thought segments.
+                            tool_entry["reasoningOffset"] = len("".join(external_reasoning_parts))
+                            tool_entry["startedAt"] = str(event.get("timestamp") or _utc_now_iso())
                             external_trace.append(tool_entry)
+                        if len(external_trace) > 40:
+                            del external_trace[:-40]
                     elif event_type == "usage.updated":
                         for source, target in (
                             ("inputTokens", "prompt_tokens"),
@@ -2216,6 +2306,8 @@ def register_workbench_chat_routes(
                                 "toolCallId": str(event.get("eventId") or event.get("event_id") or ""),
                                 "tool": f"Agent event · {event_type}",
                                 "status": "completed",
+                                "reasoningOffset": len("".join(external_reasoning_parts)),
+                                "startedAt": str(event.get("timestamp") or _utc_now_iso()),
                                 "output": payload,
                                 "presentation": {"kind": "event"},
                             })
@@ -2260,6 +2352,8 @@ def register_workbench_chat_routes(
                 public_user_message=message or None,
                 public_attachments=public_attachments or None,
                 workspace_dir=workspace_dir,
+                soul_enabled=_chat_soul_active(chat),
+                workspace_enabled=_chat_workspace_active(chat),
                 final_system_extra=build_main_agent_suffix(
                     chat.get("projectMemorySnapshot")
                     if isinstance(chat.get("projectMemorySnapshot"), dict)
@@ -2328,7 +2422,7 @@ def register_workbench_chat_routes(
                 config_options.extend(external_config_options.values())
                 fresh_chat["agentConfigOptions"] = config_options[:100]
             fresh_chat["lastModel"] = model_name
-            if external_trace:
+            if external_trace or external_reasoning_parts:
                 timeline_entries.insert(0, {
                     "id": _short_id("activity"),
                     "role": "assistant",
@@ -2336,7 +2430,7 @@ def register_workbench_chat_routes(
                     "createdAt": assistant_entry["createdAt"],
                     "activityCard": True,
                     "reasoning": "".join(external_reasoning_parts),
-                    "trace": external_trace[:40],
+                    "trace": external_trace[-40:],
                     "intermediate": True,
                     "model": model_name,
                 })
@@ -3052,6 +3146,10 @@ def register_workbench_chat_routes(
         new_chat["forkedAtMessageId"] = message_id
         if chat.get("workspaceOverride"):
             new_chat["workspaceOverride"] = str(chat["workspaceOverride"])
+        new_chat["soulActive"] = _chat_soul_active(chat)
+        new_chat["workspaceActive"] = _chat_workspace_active(chat)
+        if chat.get("reasoningEffort"):
+            new_chat["reasoningEffort"] = str(chat["reasoningEffort"])
         # Immutable divergence snippet — the edited prompt that started this
         # branch. Captured here so the branch tree never has to diff transcripts.
         new_chat["forkMessage"] = new_content.replace("\n", " ").strip()[:80]

@@ -6503,7 +6503,9 @@ html[data-theme="dark"] .wb-goal-loop-number input { color-scheme: dark; }
   width: fit-content;
   max-width: calc(100% - 24px);
   box-sizing: border-box;
-  margin: 4px auto 0;
+  /* Match the clearance above and below the pill so it does not sit on the
+     bottom edge of the shared composer plane. */
+  margin: 4px auto;
   padding: 8px 14px;
   border: 0;
   border-radius: 14px;
@@ -10335,6 +10337,12 @@ html[data-theme] .settings-overlay .wb-toggle.on {
 .wb-voice-preset-row > span.ready {
   color: var(--wb-green);
   background: color-mix(in srgb, var(--wb-green) 12%, transparent);
+}
+
+.wb-voice-preset-select {
+  flex: 0 1 220px;
+  min-width: 170px;
+  max-width: 240px;
 }
 
 .wb-voice-custom-fields {
@@ -14263,10 +14271,17 @@ html[data-theme="dark"] .wb-lib-commandbar::before {
 
 .wb-mem-main {
   --wb-mem-toolbar-overlay-height: 66px;
+  --wb-mem-toolbar-clearance: 4px;
   position: relative;
   flex: 1 1 auto; min-width: 0; min-height: 0;
   display: flex; flex-direction: column;
   border-right: 0;
+}
+/* The dark glass veil extends 10px below the toolbar. Keep the first card and
+   its 1px active outline fully outside that painted region instead of letting
+   the veil wash out the card's top edge. */
+html[data-theme="dark"] .wb-mem-main {
+  --wb-mem-toolbar-clearance: 12px;
 }
 .wb-mem-toolbar {
   position: absolute;
@@ -14333,7 +14348,7 @@ html[data-theme="dark"] .wb-lib-commandbar::before {
   min-height: 0;
   overflow-y: auto;
   box-sizing: border-box;
-  padding: calc(var(--wb-mem-toolbar-overlay-height) + 4px) 22px 14px;
+  padding: calc(var(--wb-mem-toolbar-overlay-height) + var(--wb-mem-toolbar-clearance)) 22px 14px;
 }
 .wb-mem-main > .wb-mem-error + .wb-mem-list-col .wb-mem-scroll {
   padding-top: 4px;
@@ -17010,7 +17025,7 @@ html[data-theme="dark"] .wb-init-progress-dot { border-color: #46586b; }
     minmax(var(--wbc-main-min-width), 1fr)
     var(--wbc-chat-side-preview-width);
 }
-.wbc-page.wbc-side-hidden .wbc-side {
+.wbc-page.wbc-side-hidden > .wbc-side {
   opacity: 0;
   visibility: hidden;
   pointer-events: none;
@@ -17124,9 +17139,9 @@ html[data-theme="dark"] .wb-init-progress-dot { border-color: #46586b; }
 }
 
 .wbc-project-new-chat {
-  width: 32px;
-  height: 32px;
-  flex: 0 0 32px;
+  width: var(--wb-rail-toolbar-control-size, 32px);
+  height: var(--wb-rail-toolbar-control-size, 32px);
+  flex: 0 0 var(--wb-rail-toolbar-control-size, 32px);
   display: grid;
   place-items: center;
   border: 1px solid color-mix(in srgb, var(--wb-line-2) 72%, transparent);
@@ -17211,7 +17226,7 @@ html[data-theme="dark"] .wb-init-progress-dot { border-color: #46586b; }
 
 .wbc-search input {
   width: 100%;
-  height: 38px;
+  height: var(--wb-rail-toolbar-control-size, 32px);
   border: 1px solid color-mix(in srgb, var(--wb-line-2) 68%, transparent);
   border-radius: 12px;
   background: color-mix(in srgb, var(--wb-card-bg) 66%, transparent);
@@ -18663,6 +18678,21 @@ span.wbc-chat-group-toggle {
   padding-top: 34px;
 }
 
+/* The pane frame's 34px grip band already provides the complete gap above
+   resource headers. Remove the header's generic 12px top margin for viewer
+   cards so the 4px handle sits optically centred between the frame edge and
+   the header card (15px of clear space on either side). */
+.wbc-pane-card > .wbc-artifact-split > .wbc-side-agent-split-head {
+  margin-top: 0;
+}
+
+/* Browser splits wrap their header in the tab-picker host, so the direct
+   resource-header rule above does not reach them. Remove the same generic
+   12px top margin here; the shared 34px grip band already owns that space. */
+.wbc-pane-card > .wbc-browser-split > .wbc-resource-split-picker-wrap > .wbc-side-agent-split-head {
+  margin-top: 0;
+}
+
 .wbc-pane-card > .wbc-side-agent-split.wbc-conversation-split {
   padding-top: 34px;
 }
@@ -19413,6 +19443,9 @@ body.wbc-resizing-side-agent .wbc-page.wbc-split-left .wbc-side-agent-split-moti
   z-index: 24;
   inset: auto 0 0;
   isolation: isolate;
+  /* Keep the split composer evenly inset from the three visible card edges.
+     The narrower gutter also gives the controls enough horizontal room. */
+  padding: 10px 14px 14px;
 }
 .wbc-chat-split-state {
   display: flex;
@@ -19871,6 +19904,56 @@ body.wbc-resizing-side-agent .wbc-page.wbc-split-left .wbc-side-agent-split-moti
 .wbc-browser-split-action:focus-visible {
   outline: 2px solid color-mix(in srgb, var(--wb-accent) 34%, transparent);
   outline-offset: 1px;
+}
+
+.wbc-browser-split > .wbc-resource-split-picker-wrap {
+  position: relative;
+  z-index: 1200;
+  display: block;
+  visibility: visible;
+  opacity: 1;
+  color: var(--wb-text);
+}
+
+.wbc-browser-split > .wbc-resource-split-picker-wrap > .wbc-side-agent-split-head {
+  visibility: visible;
+  opacity: 1;
+}
+
+/* A browser card keeps its live WebContentsView and tab state when expanded.
+   Portal it into the themed Workbench root so it is not clipped by the pane
+   card's rounded overflow or its spring-animation transform. */
+.wbc-browser-split.maximized {
+  position: fixed;
+  z-index: 10040;
+  inset: 0;
+  width: auto;
+  height: auto;
+  max-height: none;
+  padding-top: 0;
+  border: 0;
+  border-radius: 0;
+  background: var(--wb-right-bg);
+  box-shadow: none;
+}
+
+.wbc-browser-split.maximized .wbc-side-agent-split-head {
+  min-height: 58px;
+  margin: 0;
+  padding: 6px 12px;
+  border: 0;
+  border-bottom: 1px solid var(--wb-line);
+  border-radius: 0;
+  background: var(--wb-card-bg-strong);
+  box-shadow: none;
+}
+
+html[data-platform="darwin"] .wbc-browser-split.maximized .wbc-side-agent-split-head {
+  padding-left: 92px;
+}
+
+.wbc-browser-split.maximized .wbc-browser-split-body {
+  margin: 8px;
 }
 
 .wbc-browser-picker-menu {
@@ -20751,6 +20834,40 @@ html[data-theme="dark"] .wbc-scroll-to-bottom:hover {
   pointer-events: auto;
 }
 
+/* With the context panel visible, the browser preview belongs to that right
+   rail rather than covering the transcript. Its width already follows the
+   shared side-track variable; move the fixed preview into the same track and
+   cancel the movement region's bottom inset so its lower edge lands on the
+   conversation card baseline. */
+.wbc-page:not(.wbc-side-hidden) > .wbc-pane-layout.single
+  .wbc-pane-card-chat:has(.wbc-browser-window.pip) {
+  overflow: visible;
+}
+
+.wbc-page:not(.wbc-side-hidden) > .wbc-pane-layout.single:has(.wbc-browser-window.pip) {
+  z-index: 45;
+  overflow: visible;
+}
+
+.wbc-page:not(.wbc-side-hidden) > .wbc-pane-layout.single
+  .wbc-browser-window.pip {
+  right: calc(var(--wbc-card-gutter) - var(--wbc-side-track-width));
+  bottom: calc(-34px * var(--wb-ui-font-scale, 1));
+  width: var(
+    --wbc-browser-pip-aligned-width,
+    min(
+      max(240px, calc(var(--wbc-side-track-width) - (2 * var(--wbc-card-gutter)))),
+      calc(100% - 24px)
+    )
+  );
+  height: var(--wbc-browser-pip-user-height, var(--wbc-browser-pip-aligned-height, auto));
+  min-height: 0;
+  aspect-ratio: 4 / 3;
+  translate:
+    var(--wbc-browser-pip-align-x, 0px)
+    calc(var(--wbc-browser-pip-align-y, 0px) + var(--wbc-browser-pip-user-offset-y, 0px));
+}
+
 .wbc-browser-window.maximized {
   position: fixed;
   z-index: 10040;
@@ -20779,19 +20896,23 @@ html[data-theme="dark"] .wbc-scroll-to-bottom:hover {
 }
 
 .wbc-browser-window.pip .wbc-browser-window-bar {
+  position: relative;
+  z-index: 31;
   height: 46px;
   min-height: 46px;
   flex-basis: 46px;
   box-sizing: border-box;
   padding: 0 9px 0 14px;
-  border-bottom-color: color-mix(in srgb, var(--wb-line) 58%, transparent);
+  border-bottom-color: color-mix(in srgb, var(--wb-line) 82%, transparent);
   border-radius: 17px 17px 0 0;
-  background: transparent;
+  background: var(--wb-card-bg-strong);
+  color: var(--wb-text);
+  box-shadow: inset 0 1px 0 color-mix(in srgb, #fff 6%, transparent);
   touch-action: none;
-  cursor: default;
+  cursor: grab;
 }
 
-.wbc-browser-window.pip .wbc-browser-window-bar:active { cursor: default; }
+.wbc-browser-window.pip .wbc-browser-window-bar:active { cursor: grabbing; }
 
 .wbc-browser-window.pip .wbc-browser-window-bar strong {
   color: var(--wb-muted);
@@ -20827,7 +20948,15 @@ html[data-theme="dark"] .wbc-scroll-to-bottom:hover {
 }
 
 .wbc-browser-pip-head-wrap {
+  position: relative;
+  z-index: 30;
+  min-height: 46px;
+  display: block;
   flex: 0 0 auto;
+  visibility: visible;
+  opacity: 1;
+  border-radius: 17px 17px 0 0;
+  background: var(--wb-card-bg-strong);
 }
 
 html[data-platform="darwin"] .wbc-browser-window.maximized .wbc-browser-window-bar {
@@ -21373,7 +21502,7 @@ html[data-platform="darwin"] .wbc-browser-window.maximized .wbc-browser-window-b
 
 .wbc-browser-resize-handle {
   position: absolute;
-  z-index: 8;
+  z-index: 40;
   pointer-events: auto;
   touch-action: none;
 }
@@ -21559,6 +21688,35 @@ html[data-platform="darwin"] .wbc-browser-window.maximized .wbc-browser-window-b
   flex-direction: column;
   padding-inline-start: var(--wbc-browser-avoid-start, 0px);
   padding-inline-end: var(--wbc-browser-avoid-end, 0px);
+}
+
+.wbc-thread-item.retry-clearing {
+  overflow: clip;
+  pointer-events: none;
+  transform-origin: top left;
+  will-change: opacity, transform, filter, clip-path;
+  animation: wbc-retry-output-clear 180ms cubic-bezier(.4, 0, 1, 1) forwards;
+}
+
+@keyframes wbc-retry-output-clear {
+  from {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+    filter: blur(0);
+    clip-path: inset(0 0 0 0);
+  }
+  to {
+    opacity: 0;
+    transform: translateY(-5px) scale(.985);
+    filter: blur(1.5px);
+    clip-path: inset(0 0 100% 0);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .wbc-thread-item.retry-clearing {
+    animation: none;
+  }
 }
 
 /* Main and split conversations share the same shrink chain. Every message
@@ -22674,10 +22832,15 @@ button.wbc-attach-file:focus-visible {
 /* ---- tool trace card ---- */
 
 .wbc-trace {
-  border: 1px solid color-mix(in srgb, var(--wb-green) 26%, transparent);
-  background: color-mix(in srgb, var(--wb-green) 6%, var(--wb-card-bg));
-  border-radius: 11px;
-  padding: 10px 13px;
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  width: 100%;
+  min-width: 0;
+  border: 0;
+  background: transparent;
+  border-radius: 0;
+  padding: 0;
   max-width: 720px;
 }
 
@@ -22687,35 +22850,214 @@ button.wbc-attach-file:focus-visible {
   gap: 8px;
 }
 
-.wbc-trace.live.wbc-trace-interactive {
-  box-sizing: border-box;
+.wbc-trace-summary {
+  order: 1;
+  align-self: flex-start;
+  width: fit-content;
+  max-width: 100%;
+  min-height: 34px;
+  padding: 4px 0;
+  border: 0;
+  background: transparent;
+  color: var(--wb-text);
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  text-align: left;
   cursor: pointer;
-  transition: border-color 0.14s ease, background-color 0.14s ease;
 }
 
-.wbc-trace.live.wbc-trace-interactive:hover,
-.wbc-trace.live.wbc-trace-interactive:focus-visible {
-  border-color: color-mix(in srgb, var(--wb-green) 48%, transparent);
-  background: color-mix(in srgb, var(--wb-green) 9%, var(--wb-card-bg));
+.wbc-trace-summary:hover:not(:disabled) {
+  color: var(--wb-text-strong, var(--wb-text));
 }
 
-.wbc-trace.live.wbc-trace-interactive:focus-visible {
-  outline: 2px solid color-mix(in srgb, var(--wb-green) 40%, transparent);
+.wbc-trace-summary:focus-visible {
+  outline: 2px solid color-mix(in srgb, var(--wb-accent) 48%, transparent);
   outline-offset: 2px;
+  border-radius: 6px;
 }
 
-.wbc-trace.live.wbc-trace-locked {
+.wbc-trace-summary:disabled {
+  cursor: default;
+  opacity: 1;
+}
+
+.wbc-trace-summary-icon,
+.wbc-trace-summary-chevron {
+  flex: 0 0 auto;
+  display: inline-flex;
+  color: var(--wb-faint);
+}
+
+.wbc-trace-summary-items {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 5px;
+}
+
+.wbc-trace-summary-item {
+  display: inline-flex;
+  min-width: 0;
+  align-items: center;
+  gap: 7px;
+}
+
+.wbc-trace-summary-icon svg {
+  width: 16px;
+  height: 16px;
+}
+
+.wbc-trace-summary b {
+  min-width: 0;
   overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--wb-faint);
+  font-family: var(--mono, "IBM Plex Mono", ui-monospace, monospace);
+  font-size: calc(11px * var(--wb-ui-font-scale, 1));
+  font-weight: 550;
+  letter-spacing: .01em;
+}
+
+.wbc-trace-summary .wb-spinner.small {
+  width: 12px;
+  height: 12px;
+  margin-left: 1px;
+  color: var(--wb-green);
+}
+
+.wbc-trace-summary-chevron {
+  margin-left: 1px;
+  transition: transform 0.14s ease;
+}
+
+.wbc-trace.expanded .wbc-trace-summary-chevron {
+  transform: rotate(90deg);
+}
+
+.wbc-trace-collapse {
+  order: 2;
+  align-self: stretch;
+  display: grid;
+  grid-template-rows: 0fr;
+  min-width: 0;
+  opacity: 0;
+  visibility: hidden;
+  transform: translateY(-3px);
+  pointer-events: none;
+  transition:
+    grid-template-rows 200ms cubic-bezier(.2, .8, .2, 1),
+    opacity 140ms ease,
+    transform 200ms cubic-bezier(.2, .8, .2, 1),
+    visibility 0s linear 200ms;
+}
+
+.wbc-trace-collapse.open {
+  grid-template-rows: 1fr;
+  opacity: 1;
+  visibility: visible;
+  transform: translateY(0);
+  pointer-events: auto;
+  transition-delay: 0s;
+}
+
+.wbc-trace-collapse-inner {
+  min-height: 0;
+  min-width: 0;
+  overflow: hidden;
+}
+
+.wbc-trace-details {
+  box-sizing: border-box;
+  width: 100%;
+  max-width: 100%;
+  min-width: 0;
+  margin: 4px 0 0;
+  padding: 3px 0 1px;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  color: var(--wb-muted);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .wbc-trace-collapse,
+  .wbc-trace-summary-chevron {
+    transition: none;
+  }
+
+  .wbc-trace-collapse {
+    transform: none;
+  }
+}
+
+.wbc-trace-details .wbc-trace-list {
+  margin-top: 0;
+  padding-left: 0;
+  gap: 6px;
+}
+
+.wbc-trace-details .wbc-thinking-detail {
+  display: flex;
+  align-items: flex-start;
+  gap: 7px;
+  box-sizing: border-box;
+  width: 100%;
+  max-width: 100%;
+  min-width: 0;
+  font-family: var(--wb-font, var(--wb-sans, system-ui, sans-serif));
+  font-size: calc(11.5px * var(--wb-ui-font-scale, 1));
+  font-weight: 400;
+  line-height: 1.58;
+  color: var(--wb-faint);
+  height: auto;
+  overflow: visible;
+}
+
+.wbc-trace-details .wbc-thinking-detail-text {
+  display: block;
+  flex: 1 1 auto;
+  box-sizing: border-box;
+  width: auto;
+  max-width: 100%;
+  min-width: 0;
+  height: auto;
+  overflow: visible;
+  margin-right: 0;
+  padding-right: 0;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+
+.wbc-trace-timeline {
+  box-sizing: border-box;
+  width: 100%;
+  max-width: 100%;
+  min-width: 0;
+  overflow: visible;
+}
+
+.wbc-trace-timeline-reasoning {
+  margin: 0;
+  padding: 0;
+}
+
+.wbc-trace-timeline-reasoning > .wbc-trace-entry-icon {
+  height: calc(18.17px * var(--wb-ui-font-scale, 1));
+  margin-top: 0;
+  align-items: center;
 }
 
 .wbc-trace-view {
   display: flex;
+  width: 100%;
+  max-width: 100%;
   min-height: 0;
+  min-width: 0;
   flex-direction: column;
-}
-
-.wbc-trace.wbc-trace-locked .wbc-trace-view {
-  height: 100%;
 }
 
 .wbc-trace-head {
@@ -22761,6 +23103,22 @@ button.wbc-attach-file:focus-visible {
   color: var(--wb-green);
   display: inline-flex;
   margin-top: 1px;
+}
+
+.wbc-trace-entry-icon {
+  display: inline-flex;
+  flex: 0 0 auto;
+  width: 16px;
+  height: 16px;
+  align-items: center;
+  justify-content: center;
+  margin-top: 0;
+  color: var(--wb-faint);
+}
+
+.wbc-trace-entry-icon svg {
+  width: 14px;
+  height: 14px;
 }
 
 .wbc-trace-mark .wb-spinner.small {
@@ -23234,6 +23592,19 @@ button.wbc-attach-file:focus-visible {
   backdrop-filter: blur(18px) saturate(120%) contrast(102%);
 }
 
+/* Match the dark composer's glass construction in light mode. The material
+   stays light, but uses the same translucency, blur and three-layer elevation
+   instead of falling back to the nearly flat shared control shadow. */
+html[data-theme="light"] .wbc-composer-box {
+  background: color-mix(in srgb, #fff 76%, transparent);
+  box-shadow:
+    0 10px 28px rgba(15, 23, 42, .12),
+    inset 0 1px 0 color-mix(in srgb, #fff 90%, transparent),
+    inset 0 0 0 1px color-mix(in srgb, #0f172a 3%, transparent);
+  -webkit-backdrop-filter: blur(18px) saturate(120%) contrast(102%);
+  backdrop-filter: blur(18px) saturate(120%) contrast(102%);
+}
+
 /* Resolve the sampled #181818 as translucent glass rather than an opaque
    paint layer. The existing backdrop filters can therefore pick up nearby
    content and the inset highlight remains visible along the top edge. */
@@ -23474,7 +23845,7 @@ html[data-theme="dark"] :is(.wbc-composer-box, .wbc-side-card) {
   min-width: 0;
   gap: 6px;
   padding-top: 6px;
-  border-top: 1px solid var(--wb-line);
+  border-top: 0;
   margin-top: 6px;
 }
 
@@ -23697,19 +24068,22 @@ html[data-theme="dark"] .wbc-model-button.active {
 
 @container wbc-composer (max-width: 420px) {
   .wbc-composer-actions {
-    flex-wrap: wrap;
+    flex-wrap: nowrap;
+    gap: 4px;
   }
 
-  /* Put the model / voice / circular send group on a second row instead of
-     squeezing or clipping it at the split boundary. */
+  /* Keep every composer action on one line in a narrow split. The flexible
+     spacer yields first, while the model control switches to its compact
+     icon-only presentation below. */
   .wbc-composer-spacer {
-    flex: 0 0 100%;
-    height: 0;
+    flex: 1 1 0;
+    min-width: 0;
   }
 
   .wbc-model-anchor {
-    flex: 0 0 auto;
-    margin-left: auto;
+    flex: 0 1 52px;
+    min-width: 44px;
+    margin-left: 0;
   }
 
   .wbc-model-button {
@@ -24253,7 +24627,7 @@ html[data-theme="dark"] .wbc-model-button.active {
   width: 100%;
   max-height: calc(100vh - var(--wbc-card-top-inset) - var(--wbc-card-gutter));
   box-sizing: border-box;
-  overflow: hidden;
+  overflow: visible;
   border: 1px solid color-mix(in srgb, var(--wb-line-2) 72%, transparent);
   border-radius: 18px;
   background: color-mix(in srgb, var(--wb-card-bg) 88%, transparent);
@@ -24286,6 +24660,55 @@ body.wb-col-resizing .wbc-side-card > .wb-col-resizer.card-edge::after,
 body.wb-col-resize-hover .wb-floating-detail-card > .wb-col-resizer.card-edge::after,
 body.wb-col-resizing .wb-floating-detail-card > .wb-col-resizer.card-edge::after {
   content: none;
+  display: none;
+}
+
+/* In the single-card workspace width is adjusted from the 12px seam, never
+   from a card border. The context card and browser PiP each own an independent
+   hover target, so only the handle under the pointer becomes visible. */
+.wbc-side-card > .wb-col-resizer.track-gutter,
+.wbc-browser-window.pip > .wb-col-resizer.track-gutter {
+  z-index: 42;
+  top: 0;
+  bottom: 0;
+  left: -12px;
+  width: 12px;
+  border-radius: 0;
+}
+
+.wbc-side-card > .wb-col-resizer.track-gutter::after,
+.wbc-browser-window.pip > .wb-col-resizer.track-gutter::after {
+  top: 50%;
+  bottom: auto;
+  left: 50%;
+  width: 4px;
+  height: 72px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--wb-muted) 54%, transparent);
+  opacity: 0;
+  transform: translate(-50%, -50%) scaleY(.78);
+  transition:
+    opacity 140ms ease,
+    transform 220ms cubic-bezier(.22, 1.16, .36, 1),
+    background 140ms ease;
+}
+
+.wbc-side-card > .wb-col-resizer.track-gutter:hover::after,
+.wbc-side-card > .wb-col-resizer.track-gutter:focus-visible::after,
+.wbc-browser-window.pip > .wb-col-resizer.track-gutter:hover::after,
+.wbc-browser-window.pip > .wb-col-resizer.track-gutter:focus-visible::after,
+body.wb-col-resizing .wb-col-resizer.track-gutter.is-resizing::after {
+  background: var(--wb-accent);
+  opacity: 1;
+  transform: translate(-50%, -50%) scaleY(1);
+}
+
+/* The legacy body-wide resize state must not reveal the other card's handle. */
+body.wb-col-resizing .wb-col-resizer.track-gutter:not(.is-resizing)::after {
+  opacity: 0;
+}
+
+.wbc-page.wbc-side-hidden .wbc-browser-window.pip > .wb-col-resizer.track-gutter {
   display: none;
 }
 
@@ -27309,7 +27732,7 @@ html[data-theme="dark"] .wbc-overview-token-grid {
     --wbc-reclaimed-side-width: 0px;
     grid-template-columns: var(--wbc-rail-width) minmax(0, 1fr);
   }
-  .wbc-side {
+  .wbc-page > .wbc-side {
     display: none;
   }
 
@@ -27369,7 +27792,7 @@ html[data-theme="dark"] .wbc-edit-bubble {
   border-color: color-mix(in srgb, var(--wb-accent) 34%, transparent);
 }
 html[data-theme="dark"] .wbc-trace {
-  background: color-mix(in srgb, var(--wb-green) 10%, var(--wb-panel));
+  background: transparent;
 }
 
 /* keep chat chips / buttons on one line even in tight layouts */
@@ -30318,6 +30741,40 @@ html[data-density="compact"] :where(.workbench-confirm-modal, .workbench-toast-h
   font-size: calc(20px * var(--wb-ui-font-scale)) !important;
 }
 
+/* Models is a Settings page, not a code editor. Its legacy `.mono` classes
+   previously switched most controls to IBM Plex Mono at a smaller size, which
+   made the entire page feel typographically unrelated to the other tabs.
+   Keep the same Settings type roles here; identifiers remain selectable and
+   readable without changing the page-wide font system. */
+.workbench-shell .settings-overlay .wb-models-panel,
+.workbench-shell .settings-overlay .wb-models-panel :where(button, input, select, textarea) {
+  font-family: var(--wb-font) !important;
+}
+
+.workbench-shell .settings-overlay .wb-models-panel :where(
+  button,
+  input,
+  select,
+  textarea,
+  .wb-model-section-title b,
+  .wb-model-line span,
+  .wb-local-model-copy strong,
+  .wb-codex-auth-copy strong
+) {
+  font-size: calc(14px * var(--wb-ui-font-scale)) !important;
+}
+
+.workbench-shell .settings-overlay .wb-models-panel :where(
+  small,
+  .wb-model-status,
+  .wb-local-model-name,
+  .wb-local-model-progress span,
+  .wb-codex-provider-note
+) {
+  font-family: var(--wb-font) !important;
+  font-size: calc(12px * var(--wb-ui-font-scale)) !important;
+}
+
 .workbench-shell .wb-text-size-sample {
   display: inline-block;
   font-weight: 760;
@@ -31478,8 +31935,8 @@ html[data-theme="dark"] .workbench-grid.integrated-sidebars {
 
 .workbench-grid.integrated-sidebars .workbench-sidebar-collapse-control {
   flex: 0 0 auto;
-  width: 32px;
-  height: 32px;
+  width: var(--wb-rail-toolbar-control-size, 32px);
+  height: var(--wb-rail-toolbar-control-size, 32px);
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -31583,6 +32040,7 @@ html[data-theme="dark"] .workbench-grid.integrated-sidebars {
 }
 
 .workbench-grid.integrated-sidebars .workbench-integrated-rail-search-head {
+  --wb-rail-toolbar-control-size: 32px;
   gap: 6px;
   padding-inline: 12px;
 }
@@ -31593,9 +32051,9 @@ html[data-theme="dark"] .workbench-grid.integrated-sidebars {
 }
 
 .workbench-rail-mode-toggle {
-  flex: 0 0 66px;
-  width: 66px;
-  height: 38px;
+  flex: 0 0 60px;
+  width: 60px;
+  height: var(--wb-rail-toolbar-control-size, 32px);
   min-width: 0;
   padding: 0 6px;
   border: 1px solid color-mix(in srgb, var(--wb-line-2) 68%, transparent);
@@ -33235,6 +33693,21 @@ html[data-performance-mode="on"] .wbc-composer-box {
    that global panel padding from reopening the space below the disclaimer. */
 .workbench-shell .wbc-main > .wbc-composer {
   padding-bottom: 0 !important;
+}
+
+/* When the workspace is split, the main conversation and the detached chat
+   card use the same three-sided composer inset. This more-specific rule must
+   follow the normal main-composer reset above so the left pane is not left
+   flush with the bottom edge while the right pane is correctly inset. */
+.workbench-shell .wbc-page.side-agent-split-open > .wbc-main > .wbc-composer {
+  padding: 10px 14px 14px !important;
+}
+
+/* The active conversation can also be the left card inside the draggable pane
+   layout. Match the detached chat card's inset there as well; this is the DOM
+   shape used by the two-column split workspace. */
+.workbench-shell .wbc-pane-layout.split .wbc-pane-card .wbc-main > .wbc-composer {
+  padding: 10px 14px 14px !important;
 }
 
 html[data-density="compact"] .workbench-shell .workbench-composer.wbc-composer,

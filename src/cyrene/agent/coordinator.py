@@ -314,6 +314,8 @@ async def run_agent(
     permission_mode: str = "default",
     session_id: str = "",
     workspace_dir: str = "",
+    soul_enabled: bool | None = None,
+    workspace_enabled: bool | None = None,
     ephemeral_system: str = "",
     fixed_ephemeral_system: str = "",
     volatile_ephemeral_system: str = "",
@@ -356,6 +358,8 @@ async def run_agent(
     delegation_receipts_token = _state._explicit_delegation_receipts.set(set())
     delegation_batches_token = _state._explicit_delegation_batches.set({})
     workspace_token = _active_workspace_dir.set(workspace_dir or "")
+    soul_enabled_token = _state._soul_context_enabled.set(soul_enabled)
+    workspace_enabled_token = _state._workspace_context_enabled.set(workspace_enabled)
     response_capabilities_token = response_capabilities_context.set(frozenset(
         str(item or "").strip()
         for item in response_capabilities
@@ -385,6 +389,8 @@ async def run_agent(
         _ui_instance_id.reset(ui_instance_token)
         _current_session_id.reset(session_token)
         _active_workspace_dir.reset(workspace_token)
+        _state._workspace_context_enabled.reset(workspace_enabled_token)
+        _state._soul_context_enabled.reset(soul_enabled_token)
 
 
 def is_session_running(session_id: str = "") -> bool:

@@ -227,6 +227,9 @@ class ChatCreateBody(APIBody):
     title: str | None = Field(default=None, max_length=160)
     agent: AgentBindingBody | None = None
     modelAccess: ModelAccessBody | None = None
+    soulActive: bool | None = None
+    workspaceActive: bool | None = None
+    reasoningEffort: Literal["", "low", "medium", "high", "xhigh", "max", "ultra"] = ""
 
 
 class AgentRequestResponseBody(APIBody):
@@ -243,6 +246,11 @@ class ChatUpdateBody(APIBody):
     agent: AgentBindingBody | None = None
     modelAccess: ModelAccessBody | None = None
     agentConfigValues: dict[str, Any] | None = None
+    model: str | None = Field(default=None, max_length=500)
+    reasoningEffort: Literal["", "low", "medium", "high", "xhigh", "max", "ultra"] = ""
+    soulActive: bool | None = None
+    workspaceActive: bool | None = None
+    workspaceOverride: str | None = Field(default=None, max_length=4096)
 
 
 class ChatGroupMetadataBody(APIBody):
@@ -275,6 +283,8 @@ class ChatMessageBody(APIBody):
     mode: str | None = Field(default=None, max_length=80)
     lang: Literal["", "en", "zh"] = ""
     workspaceOverride: str | None = Field(default=None, max_length=4096)
+    soulActive: bool | None = None
+    workspaceActive: bool | None = None
     uiInstanceId: str | None = Field(default=None, max_length=200)
     agent: AgentBindingBody | None = None
     modelAccess: ModelAccessBody | None = None

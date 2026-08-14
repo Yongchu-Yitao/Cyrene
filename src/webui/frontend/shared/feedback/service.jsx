@@ -142,6 +142,21 @@
     }, []);
     var snapshot = service.snapshot();
     var active = snapshot.confirms.length ? snapshot.confirms[0] : null;
+    var toastOverlayActive = snapshot.toasts.length > 0;
+
+    // Electron WebContentsView is always above renderer DOM. While a toast is
+    // visible in the lower-right corner, reuse the shared browser-overlay
+    // coordinator: it captures the current page into the renderer before
+    // hiding the native layer, so the notification can sit over the browser
+    // content without exposing a white placeholder.
+    useEffect(function () {
+      if (!toastOverlayActive) return undefined;
+      var overlays;
+      try { overlays = platform.require("browser-overlays"); } catch (error) {}
+      if (!overlays || typeof overlays.adjust !== "function") return undefined;
+      overlays.adjust(1);
+      return function () { overlays.adjust(-1); };
+    }, [toastOverlayActive]);
 
     useEffect(function () {
       if (!active) return undefined;

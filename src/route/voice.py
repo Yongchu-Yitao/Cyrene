@@ -78,9 +78,15 @@ def register_voice_routes(router: APIRouter) -> None:
     async def api_voice_tts(body: dict[str, Any]):
         try:
             requested_steps = body.get("num_steps")
+            content = engine.normalize_tts_text(str(body.get("text") or ""))
+            if not content:
+                # Sentence chunking happens before backend normalization. A
+                # display-only fragment is a valid no-op, not a fatal playback
+                # error that should stop every later chunk in the queue.
+                return Response(status_code=204, headers={"Cache-Control": "no-store"})
             payload = await asyncio.to_thread(
                 engine.synthesize,
-                str(body.get("text") or ""),
+                content,
                 num_steps=requested_steps,
             )
             return Response(

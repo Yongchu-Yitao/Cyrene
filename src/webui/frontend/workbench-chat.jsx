@@ -953,6 +953,14 @@ var WorkbenchChatModel = (function () {
     }).then(function (payload) { return payload.chat; });
   }
 
+  function updateChatPreferences(chatId, values) {
+    return apiJson("/api/workbench/chats/" + encodeURIComponent(chatId), {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(values || {}),
+    }).then(function (payload) { return payload.chat; });
+  }
+
   function generateChatGroupMetadata(input) {
     return apiJson("/api/workbench/chat-groups/metadata", {
       method: "POST",
@@ -1166,6 +1174,12 @@ var WorkbenchChatModel = (function () {
     if (Object.prototype.hasOwnProperty.call(input, "workspaceOverride")) {
       body.workspaceOverride = input.workspaceOverride || "";
     }
+    if (Object.prototype.hasOwnProperty.call(input, "soulActive")) {
+      body.soulActive = !!input.soulActive;
+    }
+    if (Object.prototype.hasOwnProperty.call(input, "workspaceActive")) {
+      body.workspaceActive = !!input.workspaceActive;
+    }
     return fetch("/api/workbench/chats/" + encodeURIComponent(chatId) + "/messages", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -1266,6 +1280,7 @@ var WorkbenchChatModel = (function () {
     updateChatAgent: updateChatAgent,
     getAgentConfigOptions: getAgentConfigOptions,
     updateAgentConfigValues: updateAgentConfigValues,
+    updateChatPreferences: updateChatPreferences,
     generateChatGroupMetadata: generateChatGroupMetadata,
     listChatGroups: listChatGroups,
     replaceChatGroups: replaceChatGroups,
@@ -1441,6 +1456,49 @@ function wbcReconcileLiveUserMessages(messages, liveUserMessages) {
     }
   });
   return merged;
+}
+
+function wbcRetryTurnSelection(chat, messageId) {
+  var messages = chat && Array.isArray(chat.messages) ? chat.messages : [];
+  var targetId = String(messageId || "");
+  var targetIndex = -1;
+  if (targetId) {
+    targetIndex = messages.findIndex(function (item) { return String(item && item.id || "") === targetId; });
+  }
+  if (targetIndex < 0) targetIndex = messages.length - 1;
+  var userIndex = -1;
+  for (var i = targetIndex; i >= 0; i--) {
+    if (messages[i] && messages[i].role === "user") {
+      userIndex = i;
+      break;
+    }
+  }
+  if (userIndex < 0) return { userIndex: -1, endIndex: -1, outputIds: [] };
+  var endIndex = messages.length;
+  for (var nextIndex = userIndex + 1; nextIndex < messages.length; nextIndex++) {
+    if (messages[nextIndex] && messages[nextIndex].role === "user") {
+      endIndex = nextIndex;
+      break;
+    }
+  }
+  return {
+    userIndex: userIndex,
+    endIndex: endIndex,
+    outputIds: messages.slice(userIndex + 1, endIndex).map(function (item) {
+      return String(item && item.id || "");
+    }).filter(Boolean),
+  };
+}
+
+function wbcClearModelOutputForRetry(chat, messageId) {
+  if (!chat || !Array.isArray(chat.messages)) return chat;
+  var selection = wbcRetryTurnSelection(chat, messageId);
+  if (selection.userIndex < 0) return chat;
+  return {
+    ...chat,
+    messages: chat.messages.slice(0, selection.userIndex + 1).concat(chat.messages.slice(selection.endIndex)),
+    pendingQuestion: selection.endIndex === chat.messages.length ? null : chat.pendingQuestion,
+  };
 }
 
 function wbcPreserveLiveTimelineAnchors(previousChat, hydratedChat, runtime) {
@@ -1651,10 +1709,14 @@ function wbcReduceDetachedRuntime(runtime, action, value, sourceEvent) {
     };
     return withActivity(function (activity) {
       var progress = Array.isArray(activity.progress) ? activity.progress.slice() : [];
-      var index = toolCallId ? progress.findIndex(function (item) { return String(item && item.toolCallId || "") === toolCallId; }) : -1;
-      if (index >= 0) progress[index] = wbcMergeToolLifecycleEntry(progress[index], entry, terminal);
-      else progress.push(entry);
-      return { ...activity, progress: progress.slice(-30) };
+      var merged = wbcMergeToolOccurrence(progress, entry, terminal);
+      progress = merged.items;
+      if (!merged.matched) progress.push({
+        ...entry,
+        reasoningOffset: String(activity.reasoning || "").length,
+        startedAt: now,
+      });
+      return { ...activity, progress: progress.slice(-40) };
     });
   }
   if (action === "notification") {
@@ -1708,6 +1770,36 @@ function wbcMergeToolLifecycleEntry(current, incoming, terminalOnly) {
     output: incoming.output != null ? incoming.output : current.output,
     presentation: incoming.presentation && Object.keys(incoming.presentation).length ? incoming.presentation : current.presentation,
   };
+}
+
+function wbcToolEntryIsTerminal(entry) {
+  var status = String(entry && entry.status || "").trim().toLowerCase();
+  return ["completed", "failed", "error", "failure", "expired", "cancelled"].indexOf(status) >= 0;
+}
+
+function wbcToolOccurrenceIndex(items, toolCallId, incomingTerminal) {
+  var list = Array.isArray(items) ? items : [];
+  var latestMatching = -1;
+  for (var index = list.length - 1; index >= 0; index--) {
+    var item = list[index];
+    if (String(item && item.toolCallId || "") !== String(toolCallId || "")) continue;
+    if (latestMatching < 0) latestMatching = index;
+    if (!wbcToolEntryIsTerminal(item)) return index;
+  }
+  // A new running event after a completed occurrence is a new invocation even
+  // when an Agent incorrectly reuses the same toolCallId. A duplicate terminal
+  // event may still update the latest completed occurrence in place.
+  return incomingTerminal ? latestMatching : -1;
+}
+
+function wbcMergeToolOccurrence(items, incoming, incomingTerminal) {
+  var list = Array.isArray(items) ? items.slice() : [];
+  var index = incoming && incoming.toolCallId
+    ? wbcToolOccurrenceIndex(list, incoming.toolCallId, incomingTerminal)
+    : -1;
+  if (index < 0) return { items: list, matched: false };
+  list[index] = wbcMergeToolLifecycleEntry(list[index], incoming, incomingTerminal);
+  return { items: list, matched: true };
 }
 
 function wbcStructuredEventDetail(entry) {
@@ -1850,8 +1942,39 @@ function wbcT(key, fallback, params) {
   return fallback || key;
 }
 
+function wbcFormatToolParameter(value) {
+  if (value == null || value === "") return "";
+  if (Array.isArray(value)) return value.map(wbcFormatToolParameter).filter(Boolean).join(", ");
+  if (typeof value === "object") return Object.entries(value).map(function (pair) {
+    var formatted = wbcFormatToolParameter(pair[1]);
+    return formatted ? pair[0] + ": " + formatted : "";
+  }).filter(Boolean).join(", ");
+  return String(value);
+}
+
+function wbcFlattenToolObjectLiterals(value) {
+  var text = String(value || "");
+  var objectPattern = /\{([^{}]*)\}/g;
+  for (var pass = 0; pass < 4 && /\{[^{}]*\}/.test(text); pass++) {
+    objectPattern.lastIndex = 0;
+    text = text.replace(objectPattern, function (_match, body) {
+      if (!body.trim()) return "";
+      return body.split(/,\s*(?=(?:['\"][^'\"]+['\"]|[A-Za-z_][\w.-]*)\s*:)/).map(function (part) {
+        var field = part.match(/^\s*['\"]?([^'\":]+)['\"]?\s*:\s*([\s\S]*?)\s*$/);
+        if (!field) return part.trim().replace(/^['\"]|['\"]$/g, "");
+        var fieldValue = field[2].trim();
+        if ((fieldValue.startsWith("'") && fieldValue.endsWith("'")) || (fieldValue.startsWith('"') && fieldValue.endsWith('"'))) {
+          fieldValue = fieldValue.slice(1, -1);
+        }
+        return field[1].trim() + ": " + fieldValue;
+      }).filter(Boolean).join(", ");
+    });
+  }
+  return text.replace(/[{}]/g, "").replace(/\s+,/g, ",").trim();
+}
+
 function wbcToolPreviewText(preview) {
-  var text = String(preview || "");
+  var text = wbcFlattenToolObjectLiterals(preview);
   if (!text) return "";
   var operationKeys = {
     discover: "toolOperation.discover",
@@ -1894,17 +2017,7 @@ function wbcToolPreviewText(preview) {
 
 function wbcToolArgsPreview(args) {
   if (!args || typeof args !== "object") return "";
-  return Object.values(args).map(function (value) {
-    if (value == null || value === "") return "";
-    if (typeof value === "object") {
-      try {
-        return JSON.stringify(value) || "";
-      } catch (_) {
-        return "";
-      }
-    }
-    return String(value);
-  }).filter(Boolean).join(", ").slice(0, 60);
+  return Object.values(args).map(wbcFormatToolParameter).filter(Boolean).join(", ").slice(0, 120);
 }
 
 function wbcThinkingPhrases() {
@@ -2059,7 +2172,9 @@ function wbcLoadBrowserWindowFrame(sessionId) {
       width: Number(saved.width),
       height: Number(saved.height),
     };
-    return Object.keys(frame).every(function (field) { return Number.isFinite(frame[field]); }) ? frame : null;
+    if (!Object.keys(frame).every(function (field) { return Number.isFinite(frame[field]); })) return null;
+    frame.heightCustomized = saved.heightCustomized === true;
+    return frame;
   } catch (e) {
     return null;
   }
@@ -2074,6 +2189,7 @@ function wbcSaveBrowserWindowFrame(sessionId, frame) {
       y: Math.round(Number(frame.y) || 0),
       width: Math.round(Number(frame.width) || 0),
       height: Math.round(Number(frame.height) || 0),
+      heightCustomized: frame.heightCustomized === true,
     }));
   } catch (e) {}
 }
@@ -2379,6 +2495,14 @@ function wbcAgentErrorPresentation(detail, failureKind) {
 var WBC_ICONS = {
   plus: <svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round"><path d="M12 5v14M5 12h14"/></svg>,
   search: <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.2-3.2"/></svg>,
+  brain: <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d="M9.5 4.5A3 3 0 0 0 4.8 7a3.2 3.2 0 0 0-1.3 5.9A3.4 3.4 0 0 0 7 18.5a3 3 0 0 0 5-2.2V7.2a3 3 0 0 0-2.5-2.7Z"/><path d="M14.5 4.5A3 3 0 0 1 19.2 7a3.2 3.2 0 0 1 1.3 5.9 3.4 3.4 0 0 1-3.5 5.6 3 3 0 0 1-5-2.2V7.2a3 3 0 0 1 2.5-2.7Z"/><path d="M8 9.5c1.7 0 3 1.3 3 3M16 9.5c-1.7 0-3 1.3-3 3M7.2 15.5c1.4-.5 2.8 0 3.5 1.1M16.8 15.5c-1.4-.5-2.8 0-3.5 1.1"/></svg>,
+  browser: <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><rect x="3" y="4" width="18" height="16" rx="2.5"/><path d="M3 9h18"/><path d="M7 6.5h.01M10 6.5h.01"/></svg>,
+  code: <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round"><path d="m8.5 8-4 4 4 4M15.5 8l4 4-4 4M14 4l-4 16"/></svg>,
+  phase: <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="9"/><path d="m15.5 8.5-2.1 4.9-4.9 2.1 2.1-4.9Z"/></svg>,
+  subagent: <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><rect x="5" y="7" width="14" height="12" rx="3"/><path d="M9 3h6M12 3v4M8.5 12h.01M15.5 12h.01M9 16h6"/></svg>,
+  permission: <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d="M12 2.5 20 6v5.5c0 4.8-3.2 8.3-8 10-4.8-1.7-8-5.2-8-10V6Z"/><path d="m8.5 12 2.2 2.2 4.8-5"/></svg>,
+  eventPulse: <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d="M3 12h4l2-6 4 12 2-6h6"/></svg>,
+  database: <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><ellipse cx="12" cy="5" rx="8" ry="3"/><path d="M4 5v7c0 1.7 3.6 3 8 3s8-1.3 8-3V5M4 12v7c0 1.7 3.6 3 8 3s8-1.3 8-3v-7"/></svg>,
   alert: <svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round"><path d="M10.3 4 2.5 18a1.5 1.5 0 0 0 1.3 2.3h16.4a1.5 1.5 0 0 0 1.3-2.3L13.7 4a1.5 1.5 0 0 0-3.4 0Z"/><path d="M12 9v4.5M12 17h.01"/></svg>,
   errorCircle: <svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="8.5"/><path d="m9 9 6 6M15 9l-6 6"/></svg>,
   infoCircle: <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="9"/><path d="M12 11v5"/><path d="M12 8h.01"/></svg>,
@@ -2554,6 +2678,16 @@ var WbcVoice = (function () {
   function voiceTextChunks(value) {
     var content = voicePlainText(value);
     if (!content) return [];
+    function hasSpeakableText(chunk) {
+      // Backend normalization can turn punctuation- or emoji-only display
+      // fragments into an empty string.  Never enqueue those fragments: one
+      // empty synthesis request would otherwise stop the whole playback queue.
+      try {
+        return /[\p{L}\p{N}]/u.test(chunk);
+      } catch (e) {
+        return /[A-Za-z0-9\u3400-\u9FFF\u3040-\u30FF\uAC00-\uD7AF]/.test(chunk);
+      }
+    }
     var sentences = [];
     var clauses = content.match(/[^。！？!?；;\n]+[。！？!?；;\n]*/g) || [content];
     clauses.forEach(function (clause) {
@@ -2584,10 +2718,10 @@ var WbcVoice = (function () {
         if (breakAt < 24) breakAt = maxChars;
         else breakAt += 1;
         var chunk = remaining.slice(0, breakAt).trim();
-        if (chunk) chunks.push(chunk);
+        if (chunk && hasSpeakableText(chunk)) chunks.push(chunk);
         remaining = remaining.slice(breakAt).trim();
       }
-      if (remaining) chunks.push(remaining);
+      if (remaining && hasSpeakableText(remaining)) chunks.push(remaining);
     });
     return chunks;
   }
@@ -2602,6 +2736,7 @@ var WbcVoice = (function () {
       body: JSON.stringify({ text: content, num_steps: numSteps === 4 ? 4 : 6 }),
       signal: controller ? controller.signal : undefined,
     }).then(function (response) {
+      if (response.status === 204) return null;
       if (!response.ok) return responseError(response);
       return response.blob();
     }).then(function (blob) {
@@ -2644,6 +2779,14 @@ var WbcVoice = (function () {
       : requestSpeechChunk(chunks[index], sequenceId, index === 0 ? 4 : 6);
     return blobPromise.then(function (blob) {
       if (sequenceId !== activeSequenceId || activeKey !== targetKey) return false;
+      if (!blob) {
+        if (index + 1 < chunks.length) {
+          return playSpeechChunks(chunks, index + 1, targetKey, sequenceId, null);
+        }
+        activeKey = "";
+        notify();
+        return true;
+      }
       var nextResultPromise = null;
       return playSpeechBlob(blob, sequenceId, function () {
         if (index + 1 < chunks.length) {
@@ -2746,6 +2889,7 @@ var WbcVoice = (function () {
     pending.then(function (result) {
       if (result.error) throw result.error;
       if (state !== autoStreamState || state.sequenceId !== activeSequenceId) return false;
+      if (!result.blob) return true;
       return playSpeechBlob(result.blob, state.sequenceId, function () {
         state.playing = true;
         prepareAutoStreamNext(state);
@@ -4409,18 +4553,30 @@ var WorkbenchChatRuntimes = (function () {
 
     // The current LLM call's reasoning was provisionally merged into the last
     // activity while it streamed. Once its visible tool preamble arrives, the
-    // true boundary is known: keep prior tools/reasoning above the prose and
-    // move only this call's reasoning into a fresh activity below the prose.
+    // true boundary is known: keep prior-call tools/reasoning above the prose
+    // and move this call's reasoning and tools into a fresh activity below it.
     var reasoning = String(last.reasoning || "");
     var callStart = Math.max(0, Math.min(Number(last.reasoningCallStart || 0), reasoning.length));
     var priorReasoning = reasoning.slice(0, callStart).replace(/\s+$/, "");
     var currentReasoning = reasoning.slice(callStart).replace(/^\s+/, "");
-    var priorProgress = Array.isArray(last.progress) ? last.progress : [];
+    var allProgress = Array.isArray(last.progress) ? last.progress : [];
+    var progressCallStart = Math.max(
+      0,
+      Math.min(
+        Number.isFinite(Number(last.progressCallStart))
+          ? Number(last.progressCallStart)
+          : allProgress.length,
+        allProgress.length
+      )
+    );
+    var priorProgress = allProgress.slice(0, progressCallStart);
+    var currentProgress = allProgress.slice(progressCallStart);
     activities.pop();
     if (priorProgress.length || priorReasoning.trim()) {
       activities.push({
         ...last,
         reasoning: priorReasoning,
+        progress: priorProgress,
         reasoningActive: false,
         timelineClosed: true,
       });
@@ -4433,8 +4589,12 @@ var WorkbenchChatRuntimes = (function () {
       id: "activity_" + nextSeq,
       reasoning: currentReasoning,
       reasoningCallStart: 0,
+      progressCallStart: 0,
       reasoningActive: false,
-      progress: [],
+      // The state scanner can discover a visible tool preamble after one or
+      // more tools from that same LLM call have already started. Move those
+      // calls with their reasoning so the live timeline matches finalization.
+      progress: currentProgress,
       createdAt: Math.max(Date.now(), Number.isFinite(messageAt) ? messageAt + 1 : 0),
       timelineClosed: false,
     });
@@ -4544,11 +4704,9 @@ var WorkbenchChatRuntimes = (function () {
       if (entry.toolCallId) {
         var matchedToolCall = false;
         function mergeToolProgress(items) {
-          return (Array.isArray(items) ? items : []).map(function (item) {
-            if (String(item && item.toolCallId || "") !== entry.toolCallId) return item;
-            matchedToolCall = true;
-            return wbcMergeToolLifecycleEntry(item, entry, terminal);
-          });
+          var merged = wbcMergeToolOccurrence(items, entry, terminal);
+          if (merged.matched) matchedToolCall = true;
+          return merged.items;
         }
         var mergedActivities = (Array.isArray(latest.activities) ? latest.activities : []).map(function (activity) {
           return { ...activity, progress: mergeToolProgress(activity && activity.progress) };
@@ -4568,14 +4726,23 @@ var WorkbenchChatRuntimes = (function () {
       var activityBase = latestActivity && latestActivity.timelineClosed
         ? appendActivity(latest, {})
         : latest;
+      var appendedEntry = {
+        ...entry,
+        reasoningOffset: String(latestActivity && latestActivity.reasoning || "").length,
+        startedAt: Date.now(),
+      };
       var next = updateLastActivity(activityBase, function (activity) {
         var activityProgress = Array.isArray(activity.progress) ? activity.progress : [];
-        return { ...activity, progress: activityProgress.concat([entry]).slice(-30) };
+        appendedEntry = {
+          ...appendedEntry,
+          reasoningOffset: String(activity && activity.reasoning || "").length,
+        };
+        return { ...activity, progress: activityProgress.concat([appendedEntry]).slice(-40) };
       });
       return {
         ...next,
         lastEventAt: Date.now(),
-        progress: latest.progress.concat([entry]).slice(-30),
+        progress: latest.progress.concat([appendedEntry]).slice(-40),
       };
     });
   }
@@ -4723,6 +4890,9 @@ var WorkbenchChatRuntimes = (function () {
                   ...activity,
                   reasoning: prefix,
                   reasoningCallStart: prefix.length,
+                  progressCallStart: startsContinuousCall
+                    ? (Array.isArray(activity.progress) ? activity.progress.length : 0)
+                    : Number(activity.progressCallStart || 0),
                   reasoningActive: true,
                   reasoningStreamSeen: true,
                   mergeReasoning: false,
@@ -4734,6 +4904,7 @@ var WorkbenchChatRuntimes = (function () {
             : appendActivity(cur, {
                 reasoning: "",
                 reasoningCallStart: 0,
+                progressCallStart: 0,
                 reasoningActive: true,
                 reasoningStreamSeen: true,
                 awaitingLlmEvent: true,
@@ -4839,8 +5010,9 @@ var WorkbenchChatRuntimes = (function () {
       },
       onSaved: function (event) {
         if (event.retry) {
-          // Commit the transcript replacement only after the regenerated reply
-          // is durable. A failed retry therefore leaves the old reply visible.
+          // The old model output is hidden optimistically when retry starts.
+          // Reconcile again with the server's durable replacement ids so a
+          // background retry or a late hydration reaches the same transcript.
           fire("onRetryTruncate", chatId, {
             afterId: String(event.truncateAfterMessageId || ""),
             replacedIds: Array.isArray(event.retryReplacedMessageIds) ? event.retryReplacedMessageIds : [],
@@ -5028,6 +5200,9 @@ var WorkbenchChatRuntimes = (function () {
                   llmPhase: eventPhase || activity.llmPhase || "",
                   reasoningStreamSeen: activity.awaitingLlmEvent ? activity.reasoningStreamSeen : false,
                   mergeReasoning: activity.llmStatus === "completed",
+                  progressCallStart: activity.llmStatus === "completed"
+                    ? (Array.isArray(activity.progress) ? activity.progress.length : 0)
+                    : Number(activity.progressCallStart || 0),
                 };
               });
             } else {
@@ -5039,6 +5214,7 @@ var WorkbenchChatRuntimes = (function () {
                 provider: String(event.provider || ""),
                 llmPhase: eventPhase,
                 reasoningCallStart: 0,
+                progressCallStart: 0,
                 reasoningStreamSeen: false,
               });
             }
@@ -5177,11 +5353,9 @@ var WorkbenchChatRuntimes = (function () {
       if (entry.toolCallId) {
         var matchedToolCall = false;
         function mergeToolProgress(items) {
-          return (Array.isArray(items) ? items : []).map(function (item) {
-            if (String(item && item.toolCallId || "") !== entry.toolCallId) return item;
-            matchedToolCall = true;
-            return wbcMergeToolLifecycleEntry(item, entry, terminalToolEvent);
-          });
+          var merged = wbcMergeToolOccurrence(items, entry, terminalToolEvent);
+          if (merged.matched) matchedToolCall = true;
+          return merged.items;
         }
         var mergedActivities = (Array.isArray(latest.activities) ? latest.activities : []).map(function (activity) {
           return { ...activity, progress: mergeToolProgress(activity && activity.progress) };
@@ -5201,14 +5375,23 @@ var WorkbenchChatRuntimes = (function () {
       var activityBase = latestActivity && latestActivity.timelineClosed
         ? appendActivity(latest, {})
         : latest;
+      var appendedEntry = {
+        ...entry,
+        reasoningOffset: String(latestActivity && latestActivity.reasoning || "").length,
+        startedAt: Date.now(),
+      };
       var next = updateLastActivity(activityBase, function (activity) {
         var activityProgress = Array.isArray(activity.progress) ? activity.progress : [];
-        return { ...activity, progress: activityProgress.concat([entry]).slice(-30) };
+        appendedEntry = {
+          ...appendedEntry,
+          reasoningOffset: String(activity && activity.reasoning || "").length,
+        };
+        return { ...activity, progress: activityProgress.concat([appendedEntry]).slice(-40) };
       });
       return {
         ...next,
         lastEventAt: Date.now(),
-        progress: latest.progress.concat([entry]).slice(-30),
+        progress: latest.progress.concat([appendedEntry]).slice(-40),
       };
     });
   }
@@ -5386,6 +5569,16 @@ function WorkbenchChatPage({ active, project, newChatRequestId, onOpenTask, onAc
   }, [activeChatId]);
   var [error, setError] = useWbcState("");
   var [errorKind, setErrorKind] = useWbcState("load");
+  var [retryClearingMessageIds, setRetryClearingMessageIds] = useWbcState([]);
+  var [retrySuppressedTurn, setRetrySuppressedTurn] = useWbcState({ chatId: "", messageIds: [] });
+  var retrySuppressedTurnRef = useWbcRef({ chatId: "", messageIds: [] });
+  var retryClearTimerRef = useWbcRef(null);
+  var retryPendingChatIdRef = useWbcRef("");
+  useWbcEffect(function () {
+    return function () {
+      if (retryClearTimerRef.current) clearTimeout(retryClearTimerRef.current);
+    };
+  }, []);
   // Which side of the conversation the detail split anchors to. Global across
   // chats (like the split width) so the choice survives conversation switches.
   var [splitSide, setSplitSide] = useWbcState(function () {
@@ -5454,7 +5647,20 @@ function WorkbenchChatPage({ active, project, newChatRequestId, onOpenTask, onAc
     var ownerChatId = String(opts.ownerChatId || activeChatIdRef.current || "");
     var ownerId = paneOwnerKey(ownerChatId);
     if (!ownerId || !type) return null;
-    var card = paneContentCard(type, payload, ownerId);
+    var normalizedType = type === "artifact" ? "file" : String(type || "");
+    var canonicalCardId = normalizedType === "chat" && payload
+      ? "chat:" + String(payload)
+      : "";
+    var existingChatCard = canonicalCardId
+      ? wbcPaneCardLocation(paneLayoutFor(ownerChatId), canonicalCardId)
+      : null;
+    // Opening the conversation that is already visible creates a second view,
+    // not a second card with the same DOM/state identity. Drop highlighting is
+    // keyed by card id, so duplicate canonical ids made both panes display the
+    // same target prompt at once.
+    var card = existingChatCard
+      ? wbcPaneCard("chat", payload, { ownerChatId: ownerId, freshInstance: true })
+      : paneContentCard(normalizedType, payload, ownerId);
     updatePaneLayout(function (layout) {
       var source = opts.sourceCardId ? wbcPaneCardLocation(layout, opts.sourceCardId) : null;
       var targetSide = opts.side === "left" || opts.side === "right"
@@ -6719,15 +6925,17 @@ function WorkbenchChatPage({ active, project, newChatRequestId, onOpenTask, onAc
       },
       onRetryTruncate: function (chatId, truncateInfo) {
         // Regenerating: drop everything after the replayed user message.
+        var suppressedTurn = retrySuppressedTurnRef.current || {};
+        var locallySuppressedIds = String(suppressedTurn.chatId || "") === String(chatId || "")
+          ? (Array.isArray(suppressedTurn.messageIds) ? suppressedTurn.messageIds.map(String) : [])
+          : [];
         setActiveChat(function (prev) {
           if (!prev || prev.id !== chatId) return prev;
           var list = prev.messages || [];
           var afterId = typeof truncateInfo === "string" ? truncateInfo : String(truncateInfo && truncateInfo.afterId || "");
           var hasExplicitReplacedIds = !!(truncateInfo && Array.isArray(truncateInfo.replacedIds));
-          var replacedIds = new Set(
-            hasExplicitReplacedIds ? truncateInfo.replacedIds.map(String) : []
-          );
-          if (hasExplicitReplacedIds) {
+          var replacedIds = new Set((hasExplicitReplacedIds ? truncateInfo.replacedIds.map(String) : []).concat(locallySuppressedIds));
+          if (hasExplicitReplacedIds || locallySuppressedIds.length) {
             return {
               ...prev,
               messages: list.filter(function (item) { return !replacedIds.has(String(item && item.id || "")); }),
@@ -6739,6 +6947,14 @@ function WorkbenchChatPage({ active, project, newChatRequestId, onOpenTask, onAc
           }
           if (cut < 0) return prev;
           return { ...prev, messages: list.slice(0, cut + 1) };
+        });
+        if (String(retrySuppressedTurnRef.current && retrySuppressedTurnRef.current.chatId || "") === String(chatId || "")) {
+          retrySuppressedTurnRef.current = { chatId: "", messageIds: [] };
+        }
+        setRetrySuppressedTurn(function (current) {
+          return String(current && current.chatId || "") === String(chatId || "")
+            ? { chatId: "", messageIds: [] }
+            : current;
         });
       },
       onReplyStream: function (chatId, event) {
@@ -6876,12 +7092,28 @@ function WorkbenchChatPage({ active, project, newChatRequestId, onOpenTask, onAc
           return { ...prev, status: "idle" };
         });
         if (String(activeChatIdRef.current || "") === String(chatId || "")) WbcVoice.stop();
+        if (String(retrySuppressedTurnRef.current && retrySuppressedTurnRef.current.chatId || "") === String(chatId || "")) {
+          retrySuppressedTurnRef.current = { chatId: "", messageIds: [] };
+        }
+        setRetrySuppressedTurn(function (current) {
+          return String(current && current.chatId || "") === String(chatId || "")
+            ? { chatId: "", messageIds: [] }
+            : current;
+        });
         refreshChats();
       },
       onError: function (chatId, err) {
         setErrorKind("message");
         setError(err || wbcT("workbenchChat.agentError.failed", "Agent run failed"));
         if (String(activeChatIdRef.current || "") === String(chatId || "")) WbcVoice.stop();
+        if (String(retrySuppressedTurnRef.current && retrySuppressedTurnRef.current.chatId || "") === String(chatId || "")) {
+          retrySuppressedTurnRef.current = { chatId: "", messageIds: [] };
+        }
+        setRetrySuppressedTurn(function (current) {
+          return String(current && current.chatId || "") === String(chatId || "")
+            ? { chatId: "", messageIds: [] }
+            : current;
+        });
       },
       onSettled: function (chatId) {
         var hydrationSequence = beginChatHydration(chatId);
@@ -7561,7 +7793,7 @@ function WorkbenchChatPage({ active, project, newChatRequestId, onOpenTask, onAc
     setPaneDropTarget(null);
   }
 
-  function handlePaneDropOver(event, cardId, edge) {
+  function handlePaneDropOver(event, cardId, edge, dropKey) {
     if (!wbcHasSplitDrag(event) && !wbcHasChatDrag(event) && !wbcHasResourceDrag(event)) return;
     event.preventDefault();
     event.stopPropagation();
@@ -7569,8 +7801,8 @@ function WorkbenchChatPage({ active, project, newChatRequestId, onOpenTask, onAc
       event.dataTransfer.dropEffect = wbcHasSplitDrag(event) ? "move" : "copy";
     }
     var nextEdge = edge === "top" ? "top" : (edge === "replace" ? "replace" : "bottom");
-    var next = { cardId: String(cardId), edge: nextEdge };
-    if (!paneDropTarget || paneDropTarget.cardId !== next.cardId || paneDropTarget.edge !== next.edge) {
+    var next = { cardId: String(cardId), dropKey: String(dropKey || cardId), edge: nextEdge };
+    if (!paneDropTarget || paneDropTarget.dropKey !== next.dropKey || paneDropTarget.edge !== next.edge) {
       setPaneDropTarget(next);
     }
   }
@@ -7855,9 +8087,37 @@ function WorkbenchChatPage({ active, project, newChatRequestId, onOpenTask, onAc
   }
 
   // Regenerate the last assistant reply (replays the last user message).
-  function handleRetryMessage() {
-    if (!activeChat || activeChat.legacy || runtimeEngine.isRunning(activeChat.id)) return;
-    handleSend({ retry: true });
+  function handleRetryMessage(messageId) {
+    if (!activeChat || activeChat.legacy || runtimeEngine.isRunning(activeChat.id) || retryPendingChatIdRef.current) return;
+    var retryChatId = String(activeChat.id || "");
+    var retryMessageId = typeof messageId === "string" ? messageId : "";
+    var selection = wbcRetryTurnSelection(activeChat, retryMessageId);
+    var retryMode = wbcNormalizePermissionMode(activeChat.permissionMode, "auto");
+    retryPendingChatIdRef.current = retryChatId;
+    setError("");
+    setErrorKind("load");
+    setRetryClearingMessageIds(selection.outputIds);
+    function startRetryAfterClear() {
+      retryClearTimerRef.current = null;
+      var cachedChat = chatCache.details[retryChatId];
+      if (cachedChat) chatCache.details[retryChatId] = wbcClearModelOutputForRetry(cachedChat, retryMessageId);
+      setActiveChat(function (prev) {
+        if (!prev || String(prev.id || "") !== retryChatId) return prev;
+        return wbcClearModelOutputForRetry(prev, retryMessageId);
+      });
+      var suppressedTurn = { chatId: retryChatId, messageIds: selection.outputIds };
+      retrySuppressedTurnRef.current = suppressedTurn;
+      setRetrySuppressedTurn(suppressedTurn);
+      setRetryClearingMessageIds([]);
+      retryPendingChatIdRef.current = "";
+      runtimeEngine.start(retryChatId, { retry: true, mode: retryMode }, model);
+    }
+    var reduceMotion = window.matchMedia && window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+    if (!selection.outputIds.length || reduceMotion) {
+      startRetryAfterClear();
+      return;
+    }
+    retryClearTimerRef.current = setTimeout(startRetryAfterClear, 180);
   }
 
   // Edit a user message → fork the conversation at that point, switch to the
@@ -8369,6 +8629,7 @@ function WorkbenchChatPage({ active, project, newChatRequestId, onOpenTask, onAc
         browserActiveByChat={browserActiveByChat}
         browserSuppressed={browserWindowMode === "maximized"}
         floating={floating}
+        widthResizable={!floating && paneCardCount === 1}
         onCloseFloating={function () { setFloatingConversationPanelOpen(false); }}
       />
     );
@@ -8401,6 +8662,8 @@ function WorkbenchChatPage({ active, project, newChatRequestId, onOpenTask, onAc
         onInterrupt={handleInterrupt}
         onAnswer={handleAnswer}
         onRetryMessage={handleRetryMessage}
+        retryClearingMessageIds={retryClearingMessageIds}
+        retrySuppressedMessageIds={String(retrySuppressedTurn.chatId || "") === String(activeChatId || "") ? retrySuppressedTurn.messageIds : []}
         onEditMessage={handleEditMessage}
         onAskSelection={handleAskSelection}
         sideAgentCreating={sideAgentCreating}
@@ -8443,10 +8706,23 @@ function WorkbenchChatPage({ active, project, newChatRequestId, onOpenTask, onAc
     );
   }
 
-  function renderPaneCard(card, side, columnLength) {
+  function openConversationPanelFromMainGrip() {
+    // In the single-card workspace this action means restoring the docked
+    // conversation panel that the user collapsed. A floating copy is only
+    // appropriate while multiple content cards already occupy the workspace.
+    if (paneCardCount === 1) {
+      setFloatingConversationPanelOpen(false);
+      window.dispatchEvent(new CustomEvent("workbench:show-chat-side"));
+      return;
+    }
+    setFloatingConversationPanelOpen(true);
+  }
+
+  function renderPaneCard(card, side, columnLength, dropKey) {
     var isActiveConversation = card.kind === "chat"
       && String(card.payload || "") === String(activeChatId || "")
       && String(card.id || "") === "chat:" + String(activeChatId || "");
+    var showActiveConversationGrip = paneCardCount > 1 || !sideVisible;
     var content = null;
     var grip = null;
     var close = function () {
@@ -8474,14 +8750,14 @@ function WorkbenchChatPage({ active, project, newChatRequestId, onOpenTask, onAc
     var dragStart = function (event) { handlePaneCardDragStart(event, card.id); };
     if (isActiveConversation) {
       content = renderActiveConversationCard(card);
-      grip = <WbcSplitGripBar
+      grip = showActiveConversationGrip ? <WbcSplitGripBar
         dragSource={card.id}
         onToggleSide={move}
         onClose={close}
-        onOpenConversationPanel={function () { setFloatingConversationPanelOpen(true); }}
+        onOpenConversationPanel={openConversationPanelFromMainGrip}
         onSplitDragStart={dragStart}
         onSplitDragEnd={handlePaneCardDragEnd}
-      />;
+      /> : null;
     } else if (card.kind === "chat") {
       content = <WbcChatSplit
         chatId={String(card.payload || "")}
@@ -8584,6 +8860,8 @@ function WorkbenchChatPage({ active, project, newChatRequestId, onOpenTask, onAc
     return <WbcPaneCardFrame
       key={card.id}
       card={card}
+      dropKey={dropKey || card.id}
+      replaceConversation={paneCardCount === 1 && card.kind === "chat"}
       grip={grip}
       dropEnabled={!!(paneCardDragId || chatDragSession || resourceDragSession)
         && String(paneCardDragId || "") !== String(card.id || "")}
@@ -8606,7 +8884,7 @@ function WorkbenchChatPage({ active, project, newChatRequestId, onOpenTask, onAc
         className={"wbc-pane-column " + side + (cards.length === 2 ? " vertical" : "")}
         style={cards.length === 2 ? { gridTemplateRows: ratio + "fr " + (1 - ratio) + "fr" } : undefined}
       >
-        {cards.map(function (card) { return renderPaneCard(card, side, cards.length); })}
+        {cards.map(function (card, index) { return renderPaneCard(card, side, cards.length, side + ":" + index); })}
         {cards.length === 2 ? <WbcPaneRowResizer ratio={ratio} onResize={function (next) { resizePaneRow(side, next); }} /> : null}
       </section>
     );
@@ -11761,15 +12039,79 @@ function WbcBrowserFloatingSurface({ browserState, browserSessionId, visible, mo
     return measuredFloatingFrame(shellRef.current);
   }
 
-  function commitFrame(next, area) {
+  function browserVerticalOffset(node) {
+    if (!node) return 0;
+    return parseFloat(node.style.getPropertyValue("--wbc-browser-pip-user-offset-y")) || 0;
+  }
+
+  function browserVerticalBounds(host) {
+    if (!host) return { minY: 0, maxBottom: 0 };
+    var hostRect = host.getBoundingClientRect();
+    var maxBottom = host.clientHeight;
+    var minY = 0;
+    var pane = host.closest && host.closest(".wbc-pane-card");
+    if (pane) {
+      var paneRect = pane.getBoundingClientRect();
+      maxBottom = Math.max(maxBottom, paneRect.bottom - hostRect.top);
+      var page = pane.closest && pane.closest(".wbc-page");
+      var sideCard = page && page.querySelector(":scope > .wbc-side .wbc-side-card");
+      if (sideCard) minY = Math.max(0, sideCard.getBoundingClientRect().bottom + 12 - hostRect.top);
+    }
+    minY = Math.min(minY, maxBottom);
+    return { minY: minY, maxBottom: maxBottom };
+  }
+
+  function commitFrame(next, area, anchorFrame, anchorOffset, customizeHeight) {
     var host = area || (shellRef.current && shellRef.current.parentElement);
-    var clamped = host
-      ? wbcClampBrowserWindowFrame(next, host.clientWidth, host.clientHeight, 240, 180)
-      : next;
+    var node = shellRef.current;
+    var measured = measuredFloatingFrame(node);
+    if (!host || !node || !measured || !next) return;
+    // The context-panel track owns horizontal geometry. User interaction only
+    // changes the PiP's vertical position and height, so resizing the panel can
+    // continue to update the browser width without fighting an inline frame.
+    var verticalBounds = browserVerticalBounds(host);
+    var availableHeight = Math.max(0, verticalBounds.maxBottom - verticalBounds.minY);
+    var minimumHeight = Math.min(180, availableHeight || 180);
+    var nextHeight = Math.min(
+      Math.max(minimumHeight, Number(next.height) || measured.height),
+      availableHeight || measured.height
+    );
+    var verticalFrame = {
+      x: measured.x,
+      y: Math.min(
+        Math.max(verticalBounds.minY, Number(next.y) || 0),
+        Math.max(verticalBounds.minY, verticalBounds.maxBottom - nextHeight)
+      ),
+      width: measured.width,
+      height: nextHeight,
+    };
+    var clamped = verticalFrame;
     var constrained = composerDockedRef.current
       ? wbcKeepBrowserWindowClearOfComposer(clamped, host)
       : clamped;
-    var committed = commitFloatingFrame(shellRef.current, constrained, host, 240, 180, frameRef, setFrame);
+    var anchor = anchorFrame || measured;
+    var offset = Number.isFinite(anchorOffset) ? anchorOffset : browserVerticalOffset(node);
+    // The CSS shell is bottom-anchored. Express the user's translation as a
+    // bottom-edge delta so north resizing keeps the bottom fixed, south
+    // resizing keeps the top fixed, and dragging moves both edges together.
+    var nextOffset = offset
+      + (constrained.y + constrained.height)
+      - (anchor.y + anchor.height);
+    var heightCustomized = customizeHeight === true || node.dataset.verticalHeightCustomized === "true";
+    if (heightCustomized) {
+      node.style.setProperty("--wbc-browser-pip-user-height", Math.round(constrained.height) + "px");
+      node.dataset.verticalHeightCustomized = "true";
+    } else {
+      node.style.removeProperty("--wbc-browser-pip-user-height");
+      delete node.dataset.verticalHeightCustomized;
+    }
+    node.style.setProperty("--wbc-browser-pip-user-offset-y", Math.round(nextOffset) + "px");
+    node.dataset.verticalCustomized = "true";
+    constrained.heightCustomized = heightCustomized;
+    frameRef.current = constrained;
+    setFrame(constrained);
+    wbcNotifyBrowserLayoutChanged();
+    var committed = constrained;
     // Collapsing the conversation panel creates a temporary dock above the
     // composer. Do not overwrite the user's saved drag/resize position with
     // that transient frame; reopening the panel must restore it exactly.
@@ -11885,22 +12227,29 @@ function WbcBrowserFloatingSurface({ browserState, browserSessionId, visible, mo
     var start = interaction.frame;
     var next = { x: start.x, y: start.y, width: start.width, height: start.height };
     if (interaction.kind === "drag") {
-      next.x = start.x + dx;
       next.y = start.y + dy;
     } else {
       var direction = interaction.direction;
       var right = start.x + start.width;
       var bottom = start.y + start.height;
       var minWidth = Math.min(240, interaction.area.clientWidth);
-      var minHeight = Math.min(180, interaction.area.clientHeight);
+      var verticalBounds = browserVerticalBounds(interaction.area);
+      var areaHeight = verticalBounds.maxBottom;
+      var minHeight = Math.min(180, Math.max(0, areaHeight - verticalBounds.minY));
       if (direction.indexOf("e") !== -1) right = Math.min(interaction.area.clientWidth, Math.max(start.x + minWidth, right + dx));
-      if (direction.indexOf("s") !== -1) bottom = Math.min(interaction.area.clientHeight, Math.max(start.y + minHeight, bottom + dy));
+      if (direction.indexOf("s") !== -1) bottom = Math.min(areaHeight, Math.max(start.y + minHeight, bottom + dy));
       if (direction.indexOf("w") !== -1) next.x = Math.max(0, Math.min(right - minWidth, start.x + dx));
-      if (direction.indexOf("n") !== -1) next.y = Math.max(0, Math.min(bottom - minHeight, start.y + dy));
+      if (direction.indexOf("n") !== -1) next.y = Math.max(verticalBounds.minY, Math.min(bottom - minHeight, start.y + dy));
       next.width = right - next.x;
       next.height = bottom - next.y;
     }
-    commitFrame(next, interaction.area);
+    commitFrame(
+      next,
+      interaction.area,
+      interaction.frame,
+      interaction.offsetY,
+      interaction.kind === "resize"
+    );
   }
 
   function onBrowserWindowPreviewReady(event) {
@@ -11955,7 +12304,9 @@ function WbcBrowserFloatingSurface({ browserState, browserSessionId, visible, mo
     if (kind === "drag" && event.target && event.target.closest && event.target.closest("button")) return;
     var node = shellRef.current;
     var area = node && node.parentElement;
-    var start = frameRef.current || measuredFrame();
+    // Width and default 4:3 height can change whenever the context panel is
+    // resized, so every gesture must start from the live rendered rectangle.
+    var start = measuredFrame();
     if (!node || !area || !start) return;
     event.preventDefault();
     interactionRef.current = {
@@ -11964,6 +12315,7 @@ function WbcBrowserFloatingSurface({ browserState, browserSessionId, visible, mo
       clientX: event.clientX,
       clientY: event.clientY,
       frame: start,
+      offsetY: browserVerticalOffset(node),
       area: area,
       pointerId: event.pointerId,
       captureNode: event.currentTarget,
@@ -12092,6 +12444,24 @@ function WbcBrowserFloatingSurface({ browserState, browserSessionId, visible, mo
     setFrame(savedFrame);
     setMinimizedFrame(null);
   }, [browserSessionId]);
+
+  useWbcEffect(function () {
+    if (!visible || effectiveMode !== "pip" || !frameRef.current) return undefined;
+    var raf = requestAnimationFrame(function () {
+      var node = shellRef.current;
+      var area = node && node.parentElement;
+      var measured = measuredFloatingFrame(node);
+      var saved = frameRef.current;
+      if (!node || !area || !measured || !saved) return;
+      commitFrame({
+        x: measured.x,
+        y: saved.y,
+        width: measured.width,
+        height: saved.height,
+      }, area, measured, browserVerticalOffset(node), saved.heightCustomized === true);
+    });
+    return function () { cancelAnimationFrame(raf); };
+  }, [visible, effectiveMode, browserSessionId]);
 
   useWbcEffect(function () {
     if (!visible || effectiveMode !== "pip") return undefined;
@@ -12464,6 +12834,7 @@ function WbcBrowserFloatingSurface({ browserState, browserSessionId, visible, mo
       <div ref={effectiveMode === "maximized" ? maximizedPickerRef : undefined} className={effectiveMode === "maximized" ? "wbc-resource-split-picker-wrap wbc-browser-maximized-picker-wrap" : "wbc-browser-pip-head-wrap"}>
         <div
           className={"wbc-browser-window-bar" + (effectiveMode === "maximized" ? " wbc-browser-maximized-head" : "")}
+          onPointerDown={effectiveMode === "pip" ? function (event) { beginInteraction(event, "drag", ""); } : undefined}
           onDoubleClick={effectiveMode === "pip" ? maximizeBrowserWindow : undefined}
         >
           {effectiveMode === "maximized" ? (
@@ -12550,6 +12921,18 @@ function WbcBrowserFloatingSurface({ browserState, browserSessionId, visible, mo
           </div>
         )}
       </div>
+      {effectiveMode === "pip" && React.createElement(
+        window.CyreneUI.require("shell").ColResizer,
+        { trackGutter: true, surfaceId: "browser" }
+      )}
+      {effectiveMode === "pip" && ["n", "s"].map(function (direction) {
+        return <div
+          key={direction}
+          className={"wbc-browser-resize-handle " + direction}
+          aria-hidden="true"
+          onPointerDown={function (event) { beginInteraction(event, "resize", direction); }}
+        />;
+      })}
     </section>
   );
   if (effectiveMode === "maximized" && window.ReactDOM && typeof window.ReactDOM.createPortal === "function") {
@@ -12598,11 +12981,11 @@ function wbcUserMessageNavigationMeta(message) {
   };
 }
 
-function WbcThreadItem({ children, navigation }) {
+function WbcThreadItem({ children, navigation, className }) {
   var nav = navigation || null;
   return (
     <div
-      className="wbc-thread-item"
+      className={"wbc-thread-item" + (className ? " " + className : "")}
       data-wbc-thread-item="true"
       data-wbc-nav-item={nav ? "true" : undefined}
       data-wbc-nav-role={nav ? nav.role : undefined}
@@ -12762,7 +13145,11 @@ function WbcConversationNavigator({ threadRef, chatId }) {
   );
 }
 
-function WbcMain({ project, chat, chatSummary, loading, runtime, error, errorKind, onRetry, running, onSend, onGuidance, onInterrupt, onAnswer, onRetryMessage, onEditMessage, onAskSelection, sideAgentCreating, onConversationContextMenu, onRename, onDelete, onToTask, toTaskBusy, onOpenFile, onOpenDroppedChat, sideVisible, sidePanelTabExpanded, onToggleSide, browserState, browserSessionId, browserVisible, browserWindowMode, onBrowserMaximize, onBrowserRestore, onBrowserTakeoverComplete, splitOpen, draftAgent, onDraftAgentChange, onSwitchAgent, onOpenAgentDetail }) {
+function WbcMain({ project, chat, chatSummary, loading, runtime, error, errorKind, onRetry, running, onSend, onGuidance, onInterrupt, onAnswer, onRetryMessage, retryClearingMessageIds, retrySuppressedMessageIds, onEditMessage, onAskSelection, sideAgentCreating, onConversationContextMenu, onRename, onDelete, onToTask, toTaskBusy, onOpenFile, onOpenDroppedChat, sideVisible, sidePanelTabExpanded, onToggleSide, browserState, browserSessionId, browserVisible, browserWindowMode, onBrowserMaximize, onBrowserRestore, onBrowserTakeoverComplete, splitOpen, draftAgent, onDraftAgentChange, onSwitchAgent, onOpenAgentDetail }) {
+  // The lightweight list item already contains every Composer preference.
+  // Keep using it while the full transcript hydrates so switching chats never
+  // paints a temporary "new chat" Composer with global/default settings.
+  var composerChat = chat || chatSummary || null;
   var mainRef = useWbcRef(null);
   var stageRef = useWbcRef(null);
   var scrollRef = useWbcRef(null);
@@ -12775,6 +13162,7 @@ function WbcMain({ project, chat, chatSummary, loading, runtime, error, errorKin
   var [browserSuppressedForSide, setBrowserSuppressedForSide] = useWbcState(false);
   var avoidanceRafRef = useWbcRef(0);
   var stickyRestoreRafRef = useWbcRef(0);
+  var traceDisclosureRafRef = useWbcRef(0);
   var avoidanceScrollingRef = useWbcRef(false);
   var avoidanceScrollTimerRef = useWbcRef(null);
   // ResizeObserver reports the height changes caused by our own PiP lane
@@ -12821,6 +13209,13 @@ function WbcMain({ project, chat, chatSummary, loading, runtime, error, errorKin
     || reasoningStatus === "degraded";
   var runtimeTimeline = wbcRuntimeSegmentMessages(runtime).concat(wbcRuntimeTimelineMessages(runtime, { showReasoningPlaceholder }));
   var messages = wbcMergeChronologicalMessages(durableMessages, runtimeTimeline);
+  var retrySuppressedIds = new Set(Array.isArray(retrySuppressedMessageIds) ? retrySuppressedMessageIds.map(String) : []);
+  if (retrySuppressedIds.size) {
+    messages = messages.filter(function (message) {
+      return !retrySuppressedIds.has(String(message && message.id || ""));
+    });
+  }
+  var retryClearingIds = new Set(Array.isArray(retryClearingMessageIds) ? retryClearingMessageIds.map(String) : []);
   var activityTraceKeys = new Set();
   messages.forEach(function (message) {
     if (!message || !(message.activityCard || message.runtimeActivity)) return;
@@ -12895,13 +13290,14 @@ function WbcMain({ project, chat, chatSummary, loading, runtime, error, errorKin
       raf = 0;
       var main = mainRef.current;
       var page = main && main.closest(".wbc-page");
-      var side = page && page.querySelector(":scope > .wbc-side");
+      var side = page && page.querySelector(":scope > .wbc-side .wbc-side-card");
       var floating = main && main.querySelector(".wbc-browser-window.pip, .wbc-browser-restore-float");
       if (!side || !floating) return;
       var sideRect = side.getBoundingClientRect();
       var floatingRect = floating.getBoundingClientRect();
       setBrowserSuppressedForSide(
         floatingRect.right > sideRect.left && floatingRect.left < sideRect.right
+        && floatingRect.bottom > sideRect.top && floatingRect.top < sideRect.bottom
       );
     }
     function scheduleMeasure() {
@@ -12919,6 +13315,143 @@ function WbcMain({ project, chat, chatSummary, loading, runtime, error, errorKin
   }, [sidePanelTabExpanded, browserVisible, browserWindowMode]);
 
   var floatingBrowserVisible = browserVisible && !browserSuppressedForSide;
+
+  // The PiP is rendered inside the conversation so it can share the native
+  // browser lifecycle, but visually it belongs below the context card. Align
+  // it from the actual rendered rectangles instead of reconstructing those
+  // coordinates from grid variables: card gutters, transcript insets and
+  // density scaling otherwise accumulate into a visible horizontal drift.
+  useWbcLayoutEffect(function () {
+    if (!sideVisible || !floatingBrowserVisible || browserWindowMode !== "pip") return undefined;
+    var main = mainRef.current;
+    var page = main && main.closest(".wbc-page");
+    var paneCard = main && main.closest(".wbc-pane-card");
+    var sideCard = page && page.querySelector(":scope > .wbc-side .wbc-side-card");
+    var floating = main && main.querySelector(".wbc-browser-window.pip");
+    if (!paneCard || !sideCard || !floating) return undefined;
+    var raf = 0;
+    var nativeBoundsRaf = 0;
+    var nativeBoundsCommitRaf = 0;
+    function dispatchNativeBounds() {
+      window.dispatchEvent(new CustomEvent("workbench:browser-layout", {
+        detail: { source: "pip-context-panel-alignment" },
+      }));
+    }
+    function publishNativeBounds(deferUntilMounted) {
+      if (nativeBoundsRaf) cancelAnimationFrame(nativeBoundsRaf);
+      if (nativeBoundsCommitRaf) cancelAnimationFrame(nativeBoundsCommitRaf);
+      if (!deferUntilMounted) {
+        dispatchNativeBounds();
+        return;
+      }
+      // The viewport subscribes from a passive effect. Two paint frames ensure
+      // that listener exists and that layout has committed the translated
+      // shell before its native surface rectangle is measured.
+      nativeBoundsRaf = requestAnimationFrame(function () {
+        nativeBoundsRaf = 0;
+        nativeBoundsCommitRaf = requestAnimationFrame(function () {
+          nativeBoundsCommitRaf = 0;
+          dispatchNativeBounds();
+        });
+      });
+    }
+    function alignFloatingBrowser(forceNativeSync, immediateNativeSync) {
+      raf = 0;
+      if (!paneCard.isConnected || !sideCard.isConnected || !floating.isConnected) return;
+      var sideRect = sideCard.getBoundingClientRect();
+      var paneRect = paneCard.getBoundingClientRect();
+      var alignedWidth = Math.round(sideRect.width);
+      // The compact browser is a 4:3 card. Width and height must change as one
+      // geometry update so the native page never appears stretched mid-drag.
+      // The right rail has one strict vertical corridor: 12px below the
+      // context panel through the conversation card's bottom edge.
+      var maximumHeight = Math.max(0, Math.floor(paneRect.bottom - sideRect.bottom - 12));
+      var alignedHeight = Math.min(Math.round(alignedWidth * 3 / 4), maximumHeight);
+      var userHeight = parseFloat(floating.style.getPropertyValue("--wbc-browser-pip-user-height")) || 0;
+      var userOffsetY = parseFloat(floating.style.getPropertyValue("--wbc-browser-pip-user-offset-y")) || 0;
+      if (userHeight > maximumHeight) {
+        userHeight = maximumHeight;
+        floating.style.setProperty("--wbc-browser-pip-user-height", userHeight + "px");
+      }
+      // Offset zero is the lowest legal position. The negative bound keeps the
+      // title bar exactly 12px below the context card at the highest position.
+      var renderedHeight = userHeight || alignedHeight;
+      var minimumOffsetY = sideRect.bottom + 12 + renderedHeight - paneRect.bottom;
+      var boundedOffsetY = Math.min(0, Math.max(minimumOffsetY, userOffsetY));
+      if (boundedOffsetY !== userOffsetY) {
+        userOffsetY = boundedOffsetY;
+        floating.style.setProperty("--wbc-browser-pip-user-offset-y", userOffsetY + "px");
+      }
+      var currentWidth = parseFloat(floating.style.getPropertyValue("--wbc-browser-pip-aligned-width")) || 0;
+      var currentHeight = parseFloat(floating.style.getPropertyValue("--wbc-browser-pip-aligned-height")) || 0;
+      if (currentWidth !== alignedWidth) {
+        floating.style.setProperty("--wbc-browser-pip-aligned-width", alignedWidth + "px");
+      }
+      if (!userHeight && currentHeight !== alignedHeight) {
+        floating.style.setProperty("--wbc-browser-pip-aligned-height", alignedHeight + "px");
+      }
+      var floatingRect = floating.getBoundingClientRect();
+      var currentX = parseFloat(floating.style.getPropertyValue("--wbc-browser-pip-align-x")) || 0;
+      var currentY = parseFloat(floating.style.getPropertyValue("--wbc-browser-pip-align-y")) || 0;
+      var nextX = Math.round(currentX + sideRect.left - floatingRect.left);
+      // floatingRect already includes the user's vertical offset. Include that
+      // offset in the target baseline so alignment updates do not cancel a
+      // manual drag when the panel or window is resized.
+      var nextY = Math.round(currentY + paneRect.bottom + userOffsetY - floatingRect.bottom);
+      var geometryChanged = currentWidth !== alignedWidth
+        || (!userHeight && currentHeight !== alignedHeight)
+        || Math.round(currentX) !== nextX
+        || Math.round(currentY) !== nextY;
+      if (geometryChanged) {
+        floating.style.setProperty("--wbc-browser-pip-align-x", nextX + "px");
+        floating.style.setProperty("--wbc-browser-pip-align-y", nextY + "px");
+      }
+      // WebContentsView lives outside the renderer transform tree. Publish one
+      // authoritative bounds refresh after the shell moves, otherwise the old
+      // native rectangle can cover the PiP title bar. Also force the first
+      // mounted frame to sync even when the CSS fallback was already exact.
+      if (geometryChanged || forceNativeSync) publishNativeBounds(!immediateNativeSync);
+    }
+    function scheduleAlignment() {
+      if (raf) cancelAnimationFrame(raf);
+      raf = requestAnimationFrame(function () { alignFloatingBrowser(false); });
+    }
+    alignFloatingBrowser(true);
+    var observer = typeof ResizeObserver === "function"
+      ? new ResizeObserver(scheduleAlignment)
+      : null;
+    if (observer) {
+      observer.observe(sideCard);
+      observer.observe(paneCard);
+    }
+    function onBrowserLayout(event) {
+      if (event && event.detail && event.detail.source === "pip-context-panel-alignment") return;
+      scheduleAlignment();
+    }
+    function onRightResize(event) {
+      var phase = event && event.detail && event.detail.phase;
+      // The panel width has already been written when this event fires. A
+      // synchronous rect read flushes that style and keeps the PiP attached to
+      // the pointer instead of waiting for ResizeObserver's next delivery.
+      alignFloatingBrowser(phase === "end", true);
+    }
+    window.addEventListener("workbench:browser-layout", onBrowserLayout);
+    window.addEventListener("workbench:right-resize", onRightResize);
+    window.addEventListener("resize", scheduleAlignment);
+    return function () {
+      if (raf) cancelAnimationFrame(raf);
+      if (nativeBoundsRaf) cancelAnimationFrame(nativeBoundsRaf);
+      if (nativeBoundsCommitRaf) cancelAnimationFrame(nativeBoundsCommitRaf);
+      if (observer) observer.disconnect();
+      window.removeEventListener("workbench:browser-layout", onBrowserLayout);
+      window.removeEventListener("workbench:right-resize", onRightResize);
+      window.removeEventListener("resize", scheduleAlignment);
+      floating.style.removeProperty("--wbc-browser-pip-aligned-width");
+      floating.style.removeProperty("--wbc-browser-pip-aligned-height");
+      floating.style.removeProperty("--wbc-browser-pip-align-x");
+      floating.style.removeProperty("--wbc-browser-pip-align-y");
+    };
+  }, [sideVisible, floatingBrowserVisible, browserWindowMode, chat && chat.id]);
 
   // Content can finish reflowing one frame after a message/ PiP resize. A
   // scrollHeight change does not emit a scroll event, so the synchronous
@@ -13129,6 +13662,34 @@ function WbcMain({ project, chat, chatSummary, loading, runtime, error, errorKin
         })
       : null;
     if (mutationObserver) mutationObserver.observe(thread, { childList: true, subtree: true, characterData: true });
+    function preserveTraceDisclosureAnchor(event) {
+      var detail = event && event.detail || {};
+      var anchor = detail.anchor;
+      if (!anchor || !anchor.isConnected) return;
+      var anchorTop = anchor.getBoundingClientRect().top;
+      // Expanding a disclosure is an explicit reading action. Release the
+      // live-tail lock before ResizeObserver sees the taller row; otherwise
+      // sticky-bottom restoration scrolls to the new bottom and makes the
+      // details look as though they opened upward above the clicked summary.
+      if (detail.expanding) {
+        stickRef.current = false;
+        setShowScrollToBottom(true);
+      }
+      if (stickyRestoreRafRef.current) {
+        cancelAnimationFrame(stickyRestoreRafRef.current);
+        stickyRestoreRafRef.current = 0;
+      }
+      if (traceDisclosureRafRef.current) cancelAnimationFrame(traceDisclosureRafRef.current);
+      traceDisclosureRafRef.current = requestAnimationFrame(function () {
+        traceDisclosureRafRef.current = requestAnimationFrame(function () {
+          traceDisclosureRafRef.current = 0;
+          if (!anchor.isConnected) return;
+          thread.scrollTop += anchor.getBoundingClientRect().top - anchorTop;
+          lastObservedScrollTopRef.current = thread.scrollTop;
+        });
+      });
+    }
+    thread.addEventListener("workbench:trace-disclosure", preserveTraceDisclosureAnchor);
     window.addEventListener("workbench:browser-layout", scheduleBrowserAvoidance);
     window.addEventListener("resize", scheduleBrowserAvoidance);
     scheduleBrowserAvoidance();
@@ -13143,9 +13704,12 @@ function WbcMain({ project, chat, chatSummary, loading, runtime, error, errorKin
       avoidanceScrollingRef.current = false;
       if (avoidanceScrollTimerRef.current) clearTimeout(avoidanceScrollTimerRef.current);
       avoidanceScrollTimerRef.current = null;
+      if (traceDisclosureRafRef.current) cancelAnimationFrame(traceDisclosureRafRef.current);
+      traceDisclosureRafRef.current = 0;
       if (itemObserver) itemObserver.disconnect();
       if (stageObserver) stageObserver.disconnect();
       if (mutationObserver) mutationObserver.disconnect();
+      thread.removeEventListener("workbench:trace-disclosure", preserveTraceDisclosureAnchor);
       window.removeEventListener("workbench:browser-layout", scheduleBrowserAvoidance);
       window.removeEventListener("resize", scheduleBrowserAvoidance);
     };
@@ -13337,6 +13901,7 @@ function WbcMain({ project, chat, chatSummary, loading, runtime, error, errorKin
           </div>
         )}
         {messages.map(function (msg) {
+          var retryClearing = retryClearingIds.has(String(msg && msg.id || ""));
           var canRetryAssistant = !isLegacy && !running && String(msg.id || "") === lastAssistantId;
           var canRetryUser = !isLegacy && !running && msg.role === "user" && String(msg.id || "") === lastUserId;
           var canEdit = !isLegacy
@@ -13350,10 +13915,10 @@ function WbcMain({ project, chat, chatSummary, loading, runtime, error, errorKin
             && String(chat.pendingQuestion.id || "") === String(msg.questionId || "")
           );
           if (msg.runtimeHeartbeat) {
-            return <WbcThreadItem key={msg.id}><WbcHeartbeat startedAt={runtime && runtime.startedAt} lastEventAt={runtime && runtime.lastEventAt} finalizing={!!msg.runtimeFinalizing} /></WbcThreadItem>;
+            return null;
           }
           if (msg.runtimeNotification || msg.notificationCard) {
-            return <WbcThreadItem key={msg.id}><WbcAgentNotification notice={msg.notification} /></WbcThreadItem>;
+            return <WbcThreadItem key={msg.id} className={retryClearing ? "retry-clearing" : ""}><WbcAgentNotification notice={msg.notification} /></WbcThreadItem>;
           }
           if (msg.runtimeActivity || msg.activityCard) {
             var activity = msg.runtimeActivity || {
@@ -13365,9 +13930,13 @@ function WbcMain({ project, chat, chatSummary, loading, runtime, error, errorKin
             // A tool-free thinking card is useful only while it is the live
             // phase. Once completed, omit it instead of leaving a durable
             // "thinking complete" placeholder between messages.
-            if (!msg.runtimeActivityActive && activityEntries.length === 0) return null;
+            if (
+              !msg.runtimeActivityActive
+              && activityEntries.length === 0
+              && !String(activity.reasoning || "").trim()
+            ) return null;
             return (
-              <WbcThreadItem key={msg.id}>
+              <WbcThreadItem key={msg.id} className={retryClearing ? "retry-clearing" : ""}>
                 <WbcLiveActivityCard
                   activity={activity}
                   active={!!msg.runtimeActivityActive}
@@ -13377,14 +13946,14 @@ function WbcMain({ project, chat, chatSummary, loading, runtime, error, errorKin
             );
           }
           if (isActiveQuestion) {
-            return <WbcThreadItem key={msg.id}><WbcQuestionPrompt pending={chat.pendingQuestion} onAnswer={onAnswer} busy={running} trace={msg.trace} /></WbcThreadItem>;
+            return <WbcThreadItem key={msg.id} className={retryClearing ? "retry-clearing" : ""}><WbcQuestionPrompt pending={chat.pendingQuestion} onAnswer={onAnswer} busy={running} trace={msg.trace} /></WbcThreadItem>;
           }
           var messageTraceKey = wbcTraceDedupeKey(msg.trace);
           var visibleMessage = messageTraceKey && activityTraceKeys.has(messageTraceKey)
             ? { ...msg, trace: [] }
             : msg;
           return (
-            <WbcThreadItem key={msg.id} navigation={msg.role === "user" ? wbcUserMessageNavigationMeta(msg) : null}>
+            <WbcThreadItem key={msg.id} navigation={msg.role === "user" ? wbcUserMessageNavigationMeta(msg) : null} className={retryClearing ? "retry-clearing" : ""}>
               {msg.role === "user"
                 ? <WbcUserMessage msg={visibleMessage} onOpenFile={onOpenFile} onEditMessage={onEditMessage} canEdit={canEdit} onRetryMessage={canRetryUser ? onRetryMessage : null} />
                 : <WbcAssistantMessage msg={visibleMessage} onOpenFile={onOpenFile} onRetryMessage={canRetryAssistant ? onRetryMessage : null} chatId={String(chat && chat.id || "")} />}
@@ -13441,7 +14010,8 @@ function WbcMain({ project, chat, chatSummary, loading, runtime, error, errorKin
       </div>
       </div>
       <WbcComposer
-        chat={chat}
+        key={"main-composer:" + String(composerChat && composerChat.id || "new")}
+        chat={composerChat}
         project={project}
         runtime={runtime}
         running={running}
@@ -14188,7 +14758,7 @@ function WbcUserMessage({ msg, onOpenFile, onEditMessage, canEdit, onRetryMessag
             </button>
           )}
           {onRetryMessage && (
-            <button type="button" className="wbc-msg-action" onClick={onRetryMessage} title={wbcT("workbenchChat.retryUserMessage", "Retry message")}>
+            <button type="button" className="wbc-msg-action" onClick={function () { onRetryMessage(msg.id); }} title={wbcT("workbenchChat.retryUserMessage", "Retry message")}>
               {WBC_ICONS.retry}
             </button>
           )}
@@ -14246,57 +14816,241 @@ function WbcLiveAgentArtifacts({ files, onOpenFile }) {
   );
 }
 
-function WbcTraceCard({ trace, live, running, label, reasoning, showReasoning, onToggle, cardRef, reasoningRef, lockedHeight }) {
-  var entries = Array.isArray(trace) ? trace : [];
-  if (!entries.length && !live) return null;
-  var interactive = live && typeof onToggle === "function";
-  var activityRunning = live && running !== false;
-  var cardClass = "wbc-trace" + (live ? " live" : "") + (interactive ? " wbc-trace-interactive" : "") + (lockedHeight ? " wbc-trace-locked" : "") + (showReasoning ? " showing-reasoning" : "");
-  var toggleLabel = showReasoning
-    ? wbcT("workbenchChat.showActivity", "Show thinking or tool activity")
-    : wbcT("workbenchChat.showReasoning", "Show live reasoning");
-  function handleKeyDown(event) {
-    if (!interactive || (event.key !== "Enter" && event.key !== " ")) return;
-    event.preventDefault();
-    onToggle();
+function wbcTraceActionKind(entry) {
+  var raw = String(entry && (entry.text || entry.tool) || "").trim();
+  var name = raw.toLowerCase().replace(/[^a-z0-9]+/g, "_");
+  var entryKind = String(entry && entry.kind || "").trim().toLowerCase();
+  if (entryKind === "phase1") return "phase1";
+  if (entryKind === "phase") return "phase";
+  if (entryKind === "subagent") return "subagent";
+  if (entryKind === "permission") return "permission";
+  if (entryKind === "event") return "event";
+  if (/(^|_)(edit|apply_patch|replace|patch)($|_)/.test(name)) return "edit";
+  if (/(^|_)(write|create_file|save_file)($|_)/.test(name)) return "write";
+  if (/(^|_)(read|read_file|open_file)($|_)/.test(name)) return "read";
+  if (/(approve|reject|permission)/.test(name)) return "permission";
+  if (/(^|_)(bash|shell|terminal|exec|exec_command|run_command|script)($|_)/.test(name) || /(runscript|startshell|closeshell|sendshell)/.test(name)) return "command";
+  if (/(skill|capability|ability)/.test(name)) return "skill";
+  if (/(search|grep|glob|find|query)/.test(name)) return "search";
+  if (/(browser|navigate|click|screenshot)/.test(name)) return "browser";
+  if (/(git|branch|commit)/.test(name)) return "git";
+  if (/(code|symbol|reference|lint|format|index)/.test(name)) return "code";
+  if (/(task|plan|goal|schedule)/.test(name)) return "task";
+  if (/(memory|knowledge|library|recall|learnpattern)/.test(name)) return "memory";
+  if (/(entity|map|pin_location|track_entity)/.test(name)) return "entity";
+  if (/(remote|device)/.test(name)) return "remote";
+  if (/(desktop|app_ui|appui|cyrene_ui|cyreneui|window|app_use)/.test(name)) return "desktop";
+  if (/(attachment|image|artifact|media|send_file)/.test(name)) return "artifact";
+  if (/(notification|telegram|wechat|delivery|send_message|broadcast)/.test(name)) return "delivery";
+  if (/(settings|lifecycle|control|integration|extension|hook|environment)/.test(name)) return "system";
+  return "tool";
+}
+
+function wbcTraceActionLabel(entry) {
+  var raw = String(entry && (entry.text || entry.tool) || "").trim();
+  var kind = wbcTraceActionKind(entry);
+  if (kind === "edit") return wbcT("workbenchChat.traceAction.edited", "Edited files");
+  if (kind === "write") return wbcT("workbenchChat.traceAction.wrote", "Wrote files");
+  if (kind === "read") return wbcT("workbenchChat.traceAction.read", "Read files");
+  if (kind === "command") return wbcT("workbenchChat.traceAction.command", "Ran commands");
+  if (kind === "skill") return wbcT("workbenchChat.traceAction.usedSkill", "Used skill tools");
+  if (kind === "search") return wbcT("workbenchChat.traceAction.searched", "Searched");
+  if (kind === "browser") return wbcT("workbenchChat.traceAction.browsed", "Used the browser");
+  if (kind === "git") return wbcT("workbenchChat.traceAction.git", "Used Git");
+  if (kind === "code") return wbcT("workbenchChat.traceAction.code", "Analyzed code");
+  if (kind === "task") return wbcT("workbenchChat.traceAction.task", "Updated tasks or plans");
+  if (kind === "memory") return wbcT("workbenchChat.traceAction.memory", "Used memory or knowledge");
+  if (kind === "entity") return wbcT("workbenchChat.traceAction.entity", "Updated entities or maps");
+  if (kind === "remote") return wbcT("workbenchChat.traceAction.remote", "Operated remote devices");
+  if (kind === "desktop") return wbcT("workbenchChat.traceAction.desktop", "Operated the desktop app");
+  if (kind === "artifact") return wbcT("workbenchChat.traceAction.artifact", "Created or handled media");
+  if (kind === "delivery") return wbcT("workbenchChat.traceAction.delivery", "Sent messages or notifications");
+  if (kind === "system") return wbcT("workbenchChat.traceAction.system", "Updated system settings");
+  if (kind === "phase1") return String(entry && entry.text || wbcT("workbenchChat.phase1Understood", "Understood the request"));
+  if (kind === "phase") return wbcT("workbenchChat.traceAction.phase", "Advanced the execution phase");
+  if (kind === "subagent") return wbcT("workbenchChat.traceAction.subagent", "Coordinated subagents");
+  if (kind === "permission") return wbcT("workbenchChat.traceAction.permission", "Reviewed permissions");
+  if (kind === "event") return wbcT("workbenchChat.traceAction.event", "Handled an agent event");
+  return wbcT("toolName." + raw, raw || wbcT("workbenchChat.traceLabel", "Execution"));
+}
+
+function wbcTraceActionIcon(entry) {
+  var kind = wbcTraceActionKind(entry);
+  if (kind === "edit") return WBC_ICONS.edit;
+  if (kind === "write") return WBC_ICONS.file;
+  if (kind === "read") return WBC_ICONS.fileText;
+  if (kind === "command") return WBC_ICONS.slash;
+  if (kind === "skill") return WBC_ICONS.spark;
+  if (kind === "search") return WBC_ICONS.search;
+  if (kind === "browser") return WBC_ICONS.browser;
+  if (kind === "git") return WBC_ICONS.fork;
+  if (kind === "code") return WBC_ICONS.code;
+  if (kind === "task") return WBC_ICONS.task;
+  if (kind === "memory") return WBC_ICONS.database;
+  if (kind === "entity") return WBC_ICONS.pin;
+  if (kind === "remote") return WBC_ICONS.device;
+  if (kind === "desktop") return WBC_ICONS.windowRestore;
+  if (kind === "artifact") return WBC_ICONS.image;
+  if (kind === "delivery") return WBC_ICONS.chat;
+  if (kind === "system") return WBC_ICONS.bolt;
+  if (kind === "phase1") return WBC_ICONS.layers;
+  if (kind === "phase") return WBC_ICONS.phase;
+  if (kind === "subagent") return WBC_ICONS.subagent;
+  if (kind === "permission") return WBC_ICONS.permission;
+  if (kind === "event") return WBC_ICONS.eventPulse;
+  return WBC_ICONS.tool;
+}
+
+function wbcTraceCollapsedSummary(entries, fallback) {
+  var phase1Entry = (Array.isArray(entries) ? entries : []).find(function (entry) {
+    return entry && entry.kind === "phase1";
+  });
+  if (phase1Entry) return {
+    label: String(phase1Entry.text || fallback || wbcT("workbenchChat.phase1Understood", "Understood the request")),
+    icon: WBC_ICONS.layers,
+  };
+  var actions = [];
+  var seen = new Set();
+  (Array.isArray(entries) ? entries : []).forEach(function (entry) {
+    var label = wbcTraceActionLabel(entry);
+    var key = wbcTraceActionKind(entry) + "\n" + label;
+    if (!label || seen.has(key)) return;
+    seen.add(key);
+    actions.push({ entry: entry, label: label });
+  });
+  if (!actions.length) return {
+    label: fallback || wbcT("workbenchChat.traceLabel", "Execution"),
+    icon: WBC_ICONS.brain,
+  };
+  var labels = actions.map(function (action) { return action.label; });
+  var summaryLabel = labels[0];
+  if (labels.length > 1) {
+    summaryLabel = labels.slice(0, -1).join(wbcT("workbenchChat.traceAction.listSeparator", ", "))
+      + wbcT("workbenchChat.traceAction.conjunction", " and ")
+      + labels[labels.length - 1];
+    summaryLabel = wbcT(
+      "workbenchChat.traceAction.executed",
+      "Performed {actions}",
+      { actions: summaryLabel }
+    );
   }
+  return {
+    label: summaryLabel,
+    icon: actions.length === 1 ? wbcTraceActionIcon(actions[0].entry) : WBC_ICONS.layers,
+  };
+}
+
+function wbcNormalizeReasoningText(text) {
+  return String(text || "")
+    .replace(/\r\n?/g, "\n")
+    .split("\n")
+    .map(function (line) { return line.trimEnd(); })
+    .filter(function (line) { return !!line.trim(); })
+    .join("\n")
+    .trim();
+}
+
+function wbcTraceTimelineItems(entries, reasoning) {
+  var traceEntries = Array.isArray(entries) ? entries : [];
+  var rawReasoning = String(reasoning || "");
+  var anchored = [];
+  var trailing = [];
+  traceEntries.forEach(function (entry, index) {
+    // The phase-one row only summarizes the reasoning text and repeats that
+    // same content in its preview. Keep it for the collapsed status, but omit
+    // it from the expanded timeline where the full reasoning is already shown.
+    if (entry && entry.kind === "phase1") return;
+    var offset = Number(entry && entry.reasoningOffset);
+    if (Number.isFinite(offset) && offset >= 0) anchored.push({ entry: entry, index: index, offset: offset });
+    else trailing.push({ entry: entry, index: index });
+  });
+  anchored.sort(function (left, right) {
+    return left.offset === right.offset ? left.index - right.index : left.offset - right.offset;
+  });
+  var items = [];
+  var cursor = 0;
+  anchored.forEach(function (anchor) {
+    var offset = Math.max(cursor, Math.min(rawReasoning.length, anchor.offset));
+    var reasoningText = wbcNormalizeReasoningText(rawReasoning.slice(cursor, offset));
+    if (reasoningText) items.push({ kind: "reasoning", text: reasoningText });
+    items.push({ kind: "trace", entry: anchor.entry, index: anchor.index });
+    cursor = offset;
+  });
+  var remainingReasoning = wbcNormalizeReasoningText(rawReasoning.slice(cursor));
+  if (remainingReasoning) items.push({ kind: "reasoning", text: remainingReasoning });
+  trailing.forEach(function (item) {
+    items.push({ kind: "trace", entry: item.entry, index: item.index });
+  });
+  return items;
+}
+
+function WbcTraceCard({ trace, live, running, label, reasoning }) {
+  var entries = Array.isArray(trace) ? trace : [];
+  var [expanded, setExpanded] = useWbcState(false);
+  if (!entries.length && !live) return null;
+  var activityRunning = live && running !== false;
+  var reasoningText = String(reasoning || "");
+  var hasDetails = entries.length > 0 || !!reasoningText.trim();
+  var cardClass = "wbc-trace" + (live ? " live" : "") + (expanded ? " expanded" : "");
+  var collapsedSummary = wbcTraceCollapsedSummary(entries, label);
+  var summaryRunning = activityRunning && (entries.length === 0 || entries.some(function (entry) {
+    return String(entry && entry.status || "").trim().toLowerCase() === "running";
+  }));
+  var timelineItems = wbcTraceTimelineItems(entries, reasoningText);
   return (
-    <div
-      className={cardClass}
-      ref={cardRef}
-      style={lockedHeight ? { height: lockedHeight + "px" } : null}
-      role={interactive ? "button" : undefined}
-      tabIndex={interactive ? 0 : undefined}
-      aria-label={interactive ? toggleLabel : undefined}
-      aria-pressed={interactive ? !!showReasoning : undefined}
-      title={interactive ? toggleLabel : undefined}
-      onClick={interactive ? onToggle : undefined}
-      onKeyDown={interactive ? handleKeyDown : undefined}
-    >
-      {showReasoning ? (
-        <div className="wbc-thinking-detail" aria-live="polite">
-          {activityRunning ? <span className="wb-spinner small" aria-hidden="true" /> : null}
-          <span className="wbc-thinking-detail-text" ref={reasoningRef}>
-            {reasoning || wbcT("workbenchChat.reasoningPending", "Waiting for live reasoning...")}
+    <div className={cardClass}>
+      <button
+        type="button"
+        className="wbc-trace-summary"
+        onClick={function (event) {
+          if (!hasDetails) return;
+          var nextExpanded = !expanded;
+          var thread = event.currentTarget.closest(".wbc-thread");
+          if (thread) {
+            thread.dispatchEvent(new CustomEvent("workbench:trace-disclosure", {
+              detail: { anchor: event.currentTarget, expanding: nextExpanded },
+            }));
+          }
+          setExpanded(nextExpanded);
+        }}
+        aria-expanded={hasDetails ? expanded : undefined}
+        disabled={!hasDetails}
+      >
+        <span className="wbc-trace-summary-items">
+          <span className="wbc-trace-summary-item">
+            <span className="wbc-trace-summary-icon" aria-hidden="true">{collapsedSummary.icon}</span>
+            <b>{collapsedSummary.label}</b>
+            {summaryRunning ? <span className="wb-spinner small" aria-hidden="true" /> : null}
+            {hasDetails ? <span className="wbc-trace-summary-chevron" aria-hidden="true">{WBC_ICONS.chevronRight}</span> : null}
           </span>
-        </div>
-      ) : (
-        <div className="wbc-trace-view">
-          <div className="wbc-trace-head">
-            {activityRunning && entries.length === 0 ? <span className="wb-spinner" /> : (!live ? <span className="wbc-trace-icon">{WBC_ICONS.tool}</span> : null)}
-            <b>{label || (live ? wbcT("workbenchChat.traceIdle", "Thinking...") : wbcT("workbenchChat.traceSummary", "Execution ({count} tool calls)", { count: entries.length }))}</b>
-          </div>
-          {entries.length > 0 && (
-            <ul className="wbc-trace-list">
-              {entries.map(function (entry, i) {
+        </span>
+      </button>
+      <div className={"wbc-trace-collapse" + (expanded ? " open" : "")} aria-hidden={!expanded}>
+        <div className="wbc-trace-collapse-inner">
+          <div className="wbc-trace-details">
+            <div className="wbc-trace-view">
+          {timelineItems.length > 0 && (
+            <ul className="wbc-trace-list wbc-trace-timeline" aria-live="polite">
+              {timelineItems.map(function (item, timelineIndex) {
+                if (item.kind === "reasoning") return (
+                  <li className="wbc-thinking-detail wbc-trace-timeline-reasoning" key={"reasoning:" + timelineIndex}>
+                    <span className="wbc-trace-entry-icon" aria-hidden="true">{WBC_ICONS.brain}</span>
+                    <span className="wbc-thinking-detail-text">{item.text}</span>
+                  </li>
+                );
+                var entry = item.entry || {};
+                var i = item.index;
+                var entryStatus = String(entry.status || "").trim().toLowerCase();
                 var isRunning = activityRunning && entry.status === "running";
-                var failed = !!entry.failed;
+                var failed = !!entry.failed || ["failed", "error", "failure", "expired", "cancelled"].indexOf(entryStatus) >= 0;
                 var presentationKind = wbcToolPresentationKind(entry);
                 var presentationText = wbcToolPresentationText(entry, presentationKind);
                 var structuredDetail = wbcStructuredEventDetail(entry);
+                var previewText = wbcToolPreviewText(entry.preview);
                 return (
-                  <li key={entry.toolCallId || i} className={(failed ? "failed" : (isRunning ? "active" : "done")) + " presentation-" + presentationKind}>
+                  <li key={(entry.toolCallId || "trace") + ":" + i} className={(failed ? "failed" : (isRunning ? "active" : "done")) + " presentation-" + presentationKind}>
                     <span className="wbc-trace-mark">{failed ? WBC_ICONS.x : (isRunning ? <span className="wb-spinner small" /> : WBC_ICONS.check)}</span>
+                    {failed || isRunning ? <span className="wbc-trace-entry-icon" aria-hidden="true">{wbcTraceActionIcon(entry)}</span> : null}
                     <span className="wbc-trace-text">
                       {(function () {
                         var toolKey = entry.text || entry.tool || "";
@@ -14305,7 +15059,7 @@ function WbcTraceCard({ trace, live, running, label, reasoning, showReasoning, o
                         if (entry.detailKey) return wbcT(entry.detailKey, toolKey, entry.detailParams);
                         return toolKey;
                       })()}
-                      {(entry.preview) ? <small>（{wbcToolPreviewText(entry.preview)}）</small> : null}
+                      {previewText ? <small>（{previewText}）</small> : null}
                       {presentationKind !== "generic" ? <em className="wbc-tool-presentation-kind">{wbcT("workbenchChat.toolPresentation." + presentationKind, presentationKind)}</em> : null}
                       {isRunning && Number(entry.progressTotal) > 0 ? (
                         <span className="wbc-transfer-progress" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow={Math.round(Number(entry.progress || 0) * 100)}>
@@ -14324,8 +15078,10 @@ function WbcTraceCard({ trace, live, running, label, reasoning, showReasoning, o
               })}
             </ul>
           )}
+            </div>
+          </div>
         </div>
-      )}
+      </div>
     </div>
   );
 }
@@ -14400,7 +15156,7 @@ function WbcAssistantMessage({ msg, onOpenFile, onRetryMessage, chatId }) {
           {copied ? WBC_ICONS.check : WBC_ICONS.copy}
         </button>
         {onRetryMessage && (
-          <button type="button" className="wbc-msg-action" onClick={onRetryMessage} title={wbcT("workbenchChat.regenerate", "Regenerate")}>
+          <button type="button" className="wbc-msg-action" onClick={function () { onRetryMessage(msg.id); }} title={wbcT("workbenchChat.regenerate", "Regenerate")}>
             {WBC_ICONS.retry}
           </button>
         )}
@@ -14489,7 +15245,9 @@ function wbcPhase1ProgressDetail(entries) {
       text = wbcT("toolName." + text, text);
     }
     var preview = String(entry && entry.preview || "").trim();
-    var mark = entry && entry.failed ? "×" : (entry && entry.status === "running" ? "◌" : "✓");
+    var status = String(entry && entry.status || "").trim().toLowerCase();
+    var failed = !!(entry && entry.failed) || ["failed", "error", "failure", "expired", "cancelled"].indexOf(status) >= 0;
+    var mark = failed ? "×" : (status === "running" ? "◌" : "✓");
     return [mark, text, preview ? "（" + wbcToolPreviewText(preview) + "）" : ""]
       .filter(Boolean)
       .join(" ");
@@ -14524,34 +15282,7 @@ function WbcLiveActivityCard({ activity, active, hasReplyText }) {
   var phase1Detail = hasReasoning
     ? String(item.reasoning || "")
     : wbcPhase1ProgressDetail(visibleEntries);
-  var hasExpandableDetail = !isCodexProvider
-    && (hasReasoning || (isPhase1 && !!phase1Detail));
-  var [showReasoning, setShowReasoning] = useWbcState(false);
-  var [lockedHeight, setLockedHeight] = useWbcState(0);
-  var cardRef = useWbcRef(null);
-  var reasoningRef = useWbcRef(null);
-  function toggleReasoning() {
-    if (!hasExpandableDetail) return;
-    if (typeof window.getSelection === "function" && String(window.getSelection() || "")) return;
-    if (!showReasoning && !lockedHeight && cardRef.current) {
-      setLockedHeight(cardRef.current.getBoundingClientRect().height);
-    } else if (showReasoning) {
-      // The lock exists only to keep the reasoning side the same size as the
-      // tool side. Returning to tools must always restore natural layout: the
-      // same number of rows can still change height after wrapping or resize.
-      setLockedHeight(0);
-    }
-    setShowReasoning(function (visible) { return !visible; });
-  }
-  useWbcEffect(function () {
-    var detail = reasoningRef.current;
-    if (showReasoning && detail) {
-      // Follow a live stream, but open completed reasoning from its beginning.
-      // Scrolling a one-line locked card to the end can otherwise land on an
-      // empty trailing line and make a populated detail look blank.
-      detail.scrollTop = active ? detail.scrollHeight : 0;
-    }
-  }, [item.reasoning, showReasoning, active]);
+  var visibleReasoning = !isCodexProvider && (hasReasoning || isPhase1) ? phase1Detail : "";
 
   var label = toolCount
     ? (hasRunningTools && !hasReplyText
@@ -14568,12 +15299,7 @@ function WbcLiveActivityCard({ activity, active, hasReplyText }) {
       trace={visibleEntries}
       live={true}
       running={isPhase1 ? phase1Running : active}
-      reasoning={phase1Detail}
-      showReasoning={hasExpandableDetail && showReasoning}
-      onToggle={hasExpandableDetail ? toggleReasoning : null}
-      cardRef={cardRef}
-      reasoningRef={reasoningRef}
-      lockedHeight={hasExpandableDetail ? lockedHeight : 0}
+      reasoning={visibleReasoning}
       label={label}
     />
   );
@@ -14644,7 +15370,7 @@ function WbcRuntimeTranscript({ runtime, onOpenFile }) {
     <React.Fragment>
       {timeline.map(function (item) {
         if (item.runtimeHeartbeat) {
-          return <WbcThreadItem key={item.id}><WbcHeartbeat startedAt={runtime.startedAt} lastEventAt={runtime.lastEventAt} finalizing={!!item.runtimeFinalizing} /></WbcThreadItem>;
+          return null;
         }
         if (item.runtimeNotification) {
           return <WbcThreadItem key={item.id}><WbcAgentNotification notice={item.notification} /></WbcThreadItem>;
@@ -14849,12 +15575,20 @@ function WbcComposer({ chat, project, runtime, running, onSend, onGuidance, onIn
     return String(chat && chat.reasoningEffort || "").trim().toLowerCase();
   });
   var [contextState, setContextState] = useWbcState(null);
+  var [soulActive, setSoulActive] = useWbcState(function () {
+    return chat && typeof chat.soulActive === "boolean" ? chat.soulActive : true;
+  });
+  var [workspaceActive, setWorkspaceActive] = useWbcState(function () {
+    return chat && typeof chat.workspaceActive === "boolean" ? chat.workspaceActive : true;
+  });
   var [workspaceOverride, setWorkspaceOverride] = useWbcState(function () {
     return String(chat && chat.workspaceOverride || "").trim()
       || wbcLoadWorkspaceOverride(workspaceContextKey, draftNs);
   });
   var [remoteDevices, setRemoteDevices] = useWbcState([]);
-  var [remoteDeviceIds, setRemoteDeviceIds] = useWbcState([]);
+  var [remoteDeviceIds, setRemoteDeviceIds] = useWbcState(function () {
+    return chat && Array.isArray(chat.remoteDeviceIds) ? chat.remoteDeviceIds.slice() : [];
+  });
   var [voiceSnapshot, setVoiceSnapshot] = useWbcState({ status: {}, activeKey: "" });
   var [voicePhase, setVoicePhase] = useWbcState("");
   var [agentFlowState, setAgentFlowState] = useWbcState(function () {
@@ -15172,6 +15906,10 @@ function WbcComposer({ chat, project, runtime, running, onSend, onGuidance, onIn
       setDraft(wbcLoadDraft(chatId, draftNs));
       setAttachments(wbcLoadAttachments(chatId, draftNs));
       setMode(wbcNormalizePermissionMode(chat && chat.permissionMode, "auto"));
+      setSoulActive(chat && typeof chat.soulActive === "boolean" ? chat.soulActive : true);
+      setWorkspaceActive(chat && typeof chat.workspaceActive === "boolean" ? chat.workspaceActive : true);
+      setReasoningEffort(String(chat && chat.reasoningEffort || "").trim().toLowerCase());
+      setRemoteDeviceIds(chat && Array.isArray(chat.remoteDeviceIds) ? chat.remoteDeviceIds.slice() : []);
       setFailedImagePreviews({});
       prevChatIdRef.current = chatId;
     }
@@ -15247,6 +15985,9 @@ function WbcComposer({ chat, project, runtime, running, onSend, onGuidance, onIn
     return WbcRemoteDeviceCatalog.subscribe(function (catalog) {
       var nextDevices = Array.isArray(catalog.devices) ? catalog.devices : [];
       setRemoteDevices(nextDevices);
+      // The first catalog snapshot is intentionally empty while its request is
+      // still pending. Do not treat that placeholder as a real revocation pass.
+      if (Number(catalog.revision) < 0) return;
       setRemoteDeviceIds(function (current) {
         var nextIds = current.filter(function (deviceId) {
           var device = nextDevices.find(function (item) { return item.device_id === deviceId; });
@@ -15262,24 +16003,19 @@ function WbcComposer({ chat, project, runtime, running, onSend, onGuidance, onIn
   }, [chatId]);
 
   useWbcEffect(function () {
-    var cancelled = false;
     if (!chatId || String(chatId).indexOf("legacy:") === 0) {
       setRemoteDeviceIds([]);
-      return function () { cancelled = true; };
+      return undefined;
     }
     var pendingIds = pendingRemoteContextRef.current[chatId];
     if (Array.isArray(pendingIds)) {
       setRemoteDeviceIds(pendingIds);
-      return function () { cancelled = true; };
+      return undefined;
     }
-    fetch("/api/workbench/chats/" + encodeURIComponent(chatId) + "/remote-context")
-      .then(function (r) { return r.ok ? r.json() : Promise.reject(new Error("HTTP " + r.status)); })
-      .then(function (payload) {
-        if (!cancelled) setRemoteDeviceIds(payload.device_ids || []);
-      }).catch(function () {
-        if (!cancelled) setRemoteDeviceIds([]);
-      });
-    return function () { cancelled = true; };
+    // Session summaries now carry this field. Keeping it as the single source
+    // prevents a second GET from changing the badge after the chat is painted.
+    setRemoteDeviceIds(chat && Array.isArray(chat.remoteDeviceIds) ? chat.remoteDeviceIds.slice() : []);
+    return undefined;
   }, [chatId]);
 
   function syncHeight() {
@@ -15313,6 +16049,8 @@ function WbcComposer({ chat, project, runtime, running, onSend, onGuidance, onIn
       model: agentManagedModels ? "" : selectedModelId,
       reasoningEffort: agentManagedModels ? "" : reasoningEffort,
       workspaceOverride: workspaceOverride,
+      soulActive: personaOn,
+      workspaceActive: workspaceOn,
     };
     // Optimistically clear on send; restored in the running-transition effect
     // if the send fails (error). The quick-chat surface passes clearOnSend=false
@@ -15554,8 +16292,8 @@ function WbcComposer({ chat, project, runtime, running, onSend, onGuidance, onIn
   var showToolsMenu = (toolsOpen || slashDraftOpen) && !running;
   var activeCommand = command ? (slashPool.find(function (item) { return item.id === command; }) || wbcCommandMeta(command) || { id: command, label: command, desc: "" }) : null;
   var currentMode = wbcModeMeta(mode);
-  var personaOn = !contextState || contextState.soul_active !== false;
-  var workspaceOn = !!(contextState && contextState.workspace_active !== false);
+  var personaOn = soulActive !== false;
+  var workspaceOn = workspaceActive !== false;
   var enabledContentCount = (personaOn ? 1 : 0) + (workspaceOn ? 1 : 0) + remoteDeviceIds.length;
   // Follow the active project's workspace by default. A directory explicitly
   // chosen from the composer remains selected when the user switches projects.
@@ -15618,8 +16356,14 @@ function WbcComposer({ chat, project, runtime, running, onSend, onGuidance, onIn
     : wbcSupportedReasoningEfforts(selectedModel);
 
   function wbcTogglePersona() {
-    window.CyreneUI.require("api").fetch(personaOn ? "/api/context/remove-soul" : "/api/context/add-soul", { method: "POST" })
-      .then(wbcRefreshCtxState, function (err) {
+    var previous = personaOn;
+    var next = !previous;
+    setSoulActive(next);
+    if (!chatId || String(chatId).indexOf("legacy:") === 0) return;
+    model.updateChatPreferences(chatId, { soulActive: next }).then(function (nextChat) {
+      if (chat && nextChat) Object.assign(chat, nextChat);
+    }, function (err) {
+        setSoulActive(previous);
         window.CyreneUI.require("api").toastError(err, wbcT("workbenchChat.personaFailed", "Failed to toggle persona: "));
       }).catch(function () {});
   }
@@ -15627,7 +16371,9 @@ function WbcComposer({ chat, project, runtime, running, onSend, onGuidance, onIn
   function wbcAddWorkspace(path) {
     var selectedPath = String(path || "").trim();
     var previousOverride = workspaceOverride;
+    var previousActive = workspaceOn;
     setWorkspaceOverride(selectedPath && selectedPath !== projectWorkspacePath ? selectedPath : "");
+    setWorkspaceActive(true);
     setContextState(function (prev) {
       if (!prev) return prev;
       var history = Array.isArray(prev.workspace_history) ? prev.workspace_history : [];
@@ -15636,25 +16382,28 @@ function WbcComposer({ chat, project, runtime, running, onSend, onGuidance, onIn
       }
       return { ...prev, workspace_active: true, workspace_dir: selectedPath || prev.workspace_dir, workspace_history: history };
     });
-    window.CyreneUI.require("api").json("/api/context/add-workspace", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ path: selectedPath }),
-      toast: false,
-    }).then(function () {
-      wbcRefreshCtxState();
+    if (!chatId || String(chatId).indexOf("legacy:") === 0) return;
+    model.updateChatPreferences(chatId, {
+      workspaceActive: true,
+      workspaceOverride: selectedPath && selectedPath !== projectWorkspacePath ? selectedPath : "",
+    }).then(function (nextChat) {
+      if (chat && nextChat) Object.assign(chat, nextChat);
     }, function (err) {
       setWorkspaceOverride(previousOverride);
-      wbcRefreshCtxState();
+      setWorkspaceActive(previousActive);
       window.CyreneUI.require("api").toastError(err, wbcT("workbenchChat.workspaceAddFailed", "Failed to add workspace: "));
     }).catch(function () {});
   }
 
   function wbcRemoveWorkspace() {
-    setContextState(function (prev) { return prev ? { ...prev, workspace_active: false } : prev; });
-    window.CyreneUI.require("api").json("/api/context/remove-workspace", { method: "POST", toast: false })
-      .then(wbcRefreshCtxState, function (err) {
-        wbcRefreshCtxState();
+    var previous = workspaceOn;
+    setWorkspaceActive(false);
+    if (!chatId || String(chatId).indexOf("legacy:") === 0) return;
+    model.updateChatPreferences(chatId, { workspaceActive: false })
+      .then(function (nextChat) {
+        if (chat && nextChat) Object.assign(chat, nextChat);
+      }, function (err) {
+        setWorkspaceActive(previous);
         window.CyreneUI.require("api").toastError(err, wbcT("workbenchChat.workspaceRemoveFailed", "Failed to remove workspace: "));
       }).catch(function () {});
   }
@@ -16187,7 +16936,13 @@ function WbcComposer({ chat, project, runtime, running, onSend, onGuidance, onIn
                               });
                             } else {
                               setSelectedModelId(id);
-                              setReasoningEffort(wbcReasoningEffortForModel(item, ""));
+                              var nextEffort = wbcReasoningEffortForModel(item, "");
+                              setReasoningEffort(nextEffort);
+                              if (chatId && String(chatId).indexOf("legacy:") !== 0) {
+                                model.updateChatPreferences(chatId, { model: id, reasoningEffort: nextEffort }).then(function (nextChat) {
+                                  if (chat && nextChat) Object.assign(chat, nextChat);
+                                }).catch(function () {});
+                              }
                             }
                             setModelPanel("root");
                           }}>
@@ -16223,6 +16978,11 @@ function WbcComposer({ chat, project, runtime, running, onSend, onGuidance, onIn
                               });
                             } else {
                               setReasoningEffort(effort);
+                              if (chatId && String(chatId).indexOf("legacy:") !== 0) {
+                                model.updateChatPreferences(chatId, { reasoningEffort: effort }).then(function (nextChat) {
+                                  if (chat && nextChat) Object.assign(chat, nextChat);
+                                }).catch(function () {});
+                              }
                             }
                             setModelPanel("root");
                           }}>
@@ -17029,6 +17789,7 @@ function WbcBrowserSplitHost({ tabId, browserState, browserSessionId, width, onS
 
 function WbcBrowserSplit({ active: splitActive = true, tabId, tabs, browserState, browserSessionId, onSelect, onClose, onTakeoverComplete }) {
   var [pickerOpen, setPickerOpen] = useWbcState(false);
+  var [maximized, setMaximized] = useWbcState(false);
   var browserPickerRef = useWbcRef(null);
   var browserPickerToggleAtRef = useWbcRef(0);
   var [liveState, setLiveState] = useWbcState(browserState || {});
@@ -17115,6 +17876,15 @@ function WbcBrowserSplit({ active: splitActive = true, tabId, tabs, browserState
     };
   }, [hasNativeTabPicker, browserSessionId]);
 
+  useWbcEffect(function () {
+    if (!maximized) return undefined;
+    function restoreOnEscape(event) {
+      if (event.key === "Escape") setMaximized(false);
+    }
+    window.addEventListener("keydown", restoreOnEscape);
+    return function () { window.removeEventListener("keydown", restoreOnEscape); };
+  }, [maximized]);
+
   function selectTab(tab) {
     if (!tab || !tab.id) return;
     setBrowserPickerOpen(false);
@@ -17136,6 +17906,12 @@ function WbcBrowserSplit({ active: splitActive = true, tabId, tabs, browserState
     bridge.setMuted({ sessionId: browserSessionId, tabId: tab.id, muted: !tab.muted }).then(updateFrom).catch(function () {});
   }
 
+  function toggleMaximized(event) {
+    if (event) { event.preventDefault(); event.stopPropagation(); }
+    setBrowserPickerOpen(false);
+    setMaximized(function (value) { return !value; });
+  }
+
   function closeTab(tab, event) {
     if (event) { event.preventDefault(); event.stopPropagation(); }
     if (!bridge || !tab || !tab.id || typeof bridge.closeTab !== "function") return;
@@ -17154,8 +17930,8 @@ function WbcBrowserSplit({ active: splitActive = true, tabId, tabs, browserState
     }).catch(function () {});
   }
 
-  return (
-    <aside className="wbc-side-agent-split wbc-browser-split" aria-label={wbcT("chat.side.browser", "Browser")}>
+  var browserSplit = (
+    <aside className={"wbc-side-agent-split wbc-browser-split" + (maximized ? " maximized" : "")} aria-label={wbcT("chat.side.browser", "Browser")}>
       <div ref={browserPickerRef} className="wbc-resource-split-picker-wrap">
         <header className="wbc-side-agent-split-head">
           <button type="button" className="wbc-side-agent-split-picker" onClick={function () {
@@ -17166,6 +17942,7 @@ function WbcBrowserSplit({ active: splitActive = true, tabId, tabs, browserState
           </button>
           <button type="button" className="wbc-browser-split-action" onClick={function (event) { refreshTab(active, event); }} aria-label={wbcT("browser.context.reload", "Reload")} title={wbcT("browser.context.reload", "Reload")}>{BrowserIcon ? <BrowserIcon name="reload" size={15} /> : WBC_ICONS.retry}</button>
           <button type="button" className={"wbc-browser-split-action" + (active.muted ? " active" : "")} onClick={function (event) { toggleMute(active, event); }} aria-label={active.muted ? wbcT("browser.context.unmute", "Unmute") : wbcT("browser.context.mute", "Mute")} title={active.muted ? wbcT("browser.context.unmute", "Unmute") : wbcT("browser.context.mute", "Mute")}>{BrowserIcon ? <BrowserIcon name={active.muted ? "muted" : "volume"} size={15} /> : null}</button>
+          <button type="button" className="wbc-browser-split-action" onClick={toggleMaximized} aria-label={maximized ? wbcT("workbenchChat.browserRestoreSize", "Restore") : wbcT("workbenchChat.browserMaximize", "Maximize")} title={maximized ? wbcT("workbenchChat.browserRestoreSize", "Restore") : wbcT("workbenchChat.browserMaximize", "Maximize")}>{maximized ? WBC_ICONS.windowRestore : WBC_ICONS.windowMaximize}</button>
           <button type="button" className="wbc-side-agent-split-close" onClick={onClose} aria-label={wbcT("workbenchChat.closeBrowser", "Close browser")}>{WBC_ICONS.x}</button>
         </header>
         {!hasNativeTabPicker && pickerOpen && <div className="wbc-side-agent-split-menu wbc-resource-picker-menu wbc-browser-picker-menu open" role="listbox">{liveTabs.map(function (tab) { var selected = String(tab.id || "") === String(active.id || tabId || ""); return <div key={tab.id} className={"wbc-browser-picker-row" + (selected ? " active" : "")} role="option" aria-selected={selected}><button type="button" className="wbc-browser-picker-select" onClick={function () { selectTab(tab); }}><span className="wbc-browser-picker-favicon" aria-hidden="true"><span className="wbc-browser-picker-favicon-fallback">{WBC_SIDE_TAB_ICONS.browser}</span>{tab.favicon ? <img src={tab.favicon} alt="" draggable="false" onError={function (event) { event.currentTarget.hidden = true; }} /> : null}</span><b>{tab.title || tab.url || wbcT("chat.side.browser", "Browser")}</b></button><span className="wbc-browser-picker-actions"><button type="button" onClick={function (event) { refreshTab(tab, event); }} aria-label={wbcT("browser.context.reload", "Reload")} title={wbcT("browser.context.reload", "Reload")}>{BrowserIcon ? <BrowserIcon name="reload" size={14} /> : WBC_ICONS.retry}</button><button type="button" className={tab.muted ? "active" : ""} onClick={function (event) { toggleMute(tab, event); }} aria-label={tab.muted ? wbcT("browser.context.unmute", "Unmute") : wbcT("browser.context.mute", "Mute")} title={tab.muted ? wbcT("browser.context.unmute", "Unmute") : wbcT("browser.context.mute", "Mute")}>{BrowserIcon ? <BrowserIcon name={tab.muted ? "muted" : "volume"} size={14} /> : null}</button><button type="button" onClick={function (event) { closeTab(tab, event); }} aria-label={wbcT("browser.context.closeTab", "Close tab")} title={wbcT("browser.context.closeTab", "Close tab")}>{WBC_ICONS.x}</button></span></div>; })}</div>}
@@ -17175,6 +17952,11 @@ function WbcBrowserSplit({ active: splitActive = true, tabId, tabs, browserState
       </div>
     </aside>
   );
+  if (maximized && window.ReactDOM && typeof window.ReactDOM.createPortal === "function") {
+    var workbenchPortalRoot = document.querySelector(".workbench-shell") || document.body;
+    return window.ReactDOM.createPortal(browserSplit, workbenchPortalRoot);
+  }
+  return browserSplit;
 }
 
 function WbcSubagentsSplitHost({ open, data, loading, width, onSelectRound, onResize, onClose, splitSide, onToggleSide, onSplitDragStart, onSplitDragEnd }) {
@@ -17659,6 +18441,7 @@ function WbcChatSplit({ chatId, project, onOpenContent, browserActiveByChat, onC
         </div>
       </div>
       <WbcComposer
+        key={"split-composer:" + String(chat && chat.id || chatId || "")}
         chat={chat}
         project={project}
         runtime={streamText ? { text: streamText } : null}
@@ -17680,10 +18463,13 @@ function WbcChatSplit({ chatId, project, onOpenContent, browserActiveByChat, onC
   );
 }
 
-function WbcPaneCardFrame({ card, children, grip, dropEnabled, replaceOnly, dropTarget, onDropOver, onDrop, onDropLeave }) {
-  var activeEdge = dropTarget && String(dropTarget.cardId || "") === String(card && card.id || "")
+function WbcPaneCardFrame({ card, dropKey, children, grip, dropEnabled, replaceOnly, replaceConversation, dropTarget, onDropOver, onDrop, onDropLeave }) {
+  var activeEdge = dropTarget && String(dropTarget.dropKey || "") === String(dropKey || "")
     ? dropTarget.edge
     : "";
+  var replaceLabel = replaceConversation
+    ? wbcT("workbenchChat.dropConversationReplace", "Release to replace the current conversation")
+    : wbcT("workbenchChat.dropPaneReplace", "Release to replace this split");
   return (
     <article
       className={"wbc-pane-card wbc-pane-card-" + String(card && card.kind || "content")}
@@ -17696,28 +18482,28 @@ function WbcPaneCardFrame({ card, children, grip, dropEnabled, replaceOnly, drop
           {replaceOnly ? (
             <div
               className={"wbc-pane-card-drop-zone replace" + (activeEdge === "replace" ? " active" : "")}
-              onDragEnter={function (event) { onDropOver(event, card.id, "replace"); }}
-              onDragOver={function (event) { onDropOver(event, card.id, "replace"); }}
+              onDragEnter={function (event) { onDropOver(event, card.id, "replace", dropKey); }}
+              onDragOver={function (event) { onDropOver(event, card.id, "replace", dropKey); }}
               onDrop={function (event) { onDrop(event, card.id, "replace"); }}
-            ><span>{wbcT("workbenchChat.dropPaneReplace", "Release to replace this split")}</span></div>
+            ><span>{replaceLabel}</span></div>
           ) : (
             <React.Fragment>
               <div
                 className={"wbc-pane-card-drop-zone top" + (activeEdge === "top" ? " active" : "")}
-                onDragEnter={function (event) { onDropOver(event, card.id, "top"); }}
-                onDragOver={function (event) { onDropOver(event, card.id, "top"); }}
+                onDragEnter={function (event) { onDropOver(event, card.id, "top", dropKey); }}
+                onDragOver={function (event) { onDropOver(event, card.id, "top", dropKey); }}
                 onDrop={function (event) { onDrop(event, card.id, "top"); }}
               ><span>{wbcT("workbenchChat.dropPaneTop", "Release to open above")}</span></div>
               <div
                 className={"wbc-pane-card-drop-zone replace" + (activeEdge === "replace" ? " active" : "")}
-                onDragEnter={function (event) { onDropOver(event, card.id, "replace"); }}
-                onDragOver={function (event) { onDropOver(event, card.id, "replace"); }}
+                onDragEnter={function (event) { onDropOver(event, card.id, "replace", dropKey); }}
+                onDragOver={function (event) { onDropOver(event, card.id, "replace", dropKey); }}
                 onDrop={function (event) { onDrop(event, card.id, "replace"); }}
-              ><span>{wbcT("workbenchChat.dropPaneReplace", "Release to replace this split")}</span></div>
+              ><span>{replaceLabel}</span></div>
               <div
                 className={"wbc-pane-card-drop-zone bottom" + (activeEdge === "bottom" ? " active" : "")}
-                onDragEnter={function (event) { onDropOver(event, card.id, "bottom"); }}
-                onDragOver={function (event) { onDropOver(event, card.id, "bottom"); }}
+                onDragEnter={function (event) { onDropOver(event, card.id, "bottom", dropKey); }}
+                onDragOver={function (event) { onDropOver(event, card.id, "bottom", dropKey); }}
                 onDrop={function (event) { onDrop(event, card.id, "bottom"); }}
               ><span>{wbcT("workbenchChat.dropPaneBottom", "Release to open below")}</span></div>
             </React.Fragment>
@@ -17938,6 +18724,20 @@ function WbcSideAgentSplitResizer({ width, onResize, splitSide }) {
 function WbcSplitGripBar({ dragSource, side, onToggleSide, onClose, onOpenConversationPanel, onNewConversation, menuType, onSplitDragStart, onSplitDragEnd }) {
   var [menuOpen, setMenuOpen] = useWbcState(false);
   var rootRef = useWbcRef(null);
+
+  // Electron's native browser surface is composited above renderer DOM, so a
+  // CSS z-index alone cannot keep this menu visible. Reuse the shared overlay
+  // coordinator: it paints an equal-sized screenshot proxy before hiding the
+  // native layer, preserving the browser body's exact geometry without the
+  // stretched white placeholder caused by resizing its viewport.
+  useWbcEffect(function () {
+    if (!menuOpen) return undefined;
+    var overlays;
+    try { overlays = window.CyreneUI.require("browser-overlays"); } catch (e) {}
+    if (!overlays || typeof overlays.adjust !== "function") return undefined;
+    overlays.adjust(1);
+    return function () { overlays.adjust(-1); };
+  }, [menuOpen]);
 
   useWbcEffect(function () {
     if (!menuOpen) return undefined;
@@ -18383,6 +19183,7 @@ function WbcSideAgentTab({ agent, project, onOpenFile, onUpdate }) {
       {error && <div className="wbc-side-agent-error" role="alert">{error}</div>}
       <div className="wbc-side-agent-composer-host">
         <WbcComposer
+          key={"side-agent-composer:" + String(agent && agent.id || "")}
           chat={agent}
           project={project}
           runtime={streamText ? { text: streamText } : null}
@@ -18538,6 +19339,7 @@ function WbcSide({
   browserSuppressed,
   onToggleSide,
   floating,
+  widthResizable,
   onCloseFloating,
 }) {
   window.CyreneUI.require("data").useVersion();
@@ -18674,7 +19476,10 @@ function WbcSide({
   return (
     <aside className={"wbc-side" + (floating ? " wbc-side-floating" : "")}>
       <div className="wbc-side-card">
-        {!floating && React.createElement(window.CyreneUI.require("shell").ColResizer, { cardEdge: true })}
+        {widthResizable && React.createElement(
+          window.CyreneUI.require("shell").ColResizer,
+          { trackGutter: true, surfaceId: "conversation" }
+        )}
         <div className="wbc-side-card-head">
           <strong>{wbcT("workbenchChat.sidePanelTitle", "Conversation panel")}</strong>
           <button

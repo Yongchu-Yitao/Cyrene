@@ -81,6 +81,16 @@ _ui_instance_id: ContextVar[str] = ContextVar("_ui_instance_id", default="")
 # files, so they must NOT be redirected here.
 _active_workspace_dir: ContextVar[str] = ContextVar("_active_workspace_dir", default="")
 
+# Optional per-run content switches. ``None`` preserves the legacy global
+# setting for non-Workbench callers, while Workbench binds explicit values from
+# the active chat so concurrent conversations cannot affect one another.
+_soul_context_enabled: ContextVar[bool | None] = ContextVar(
+    "_soul_context_enabled", default=None
+)
+_workspace_context_enabled: ContextVar[bool | None] = ContextVar(
+    "_workspace_context_enabled", default=None
+)
+
 # Client response features available for the current run.  Keep these separate
 # from the workspace/session identity: they determine the stable model-facing
 # tool bundle and must therefore be set before the catalog snapshot is built.

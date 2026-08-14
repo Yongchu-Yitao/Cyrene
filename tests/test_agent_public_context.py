@@ -13,6 +13,8 @@ def test_public_run_context_binding_is_scoped_and_resettable():
         round_id="round-1",
         session_id="session-1",
         temporary_full_access=True,
+        soul_enabled=False,
+        workspace_enabled=False,
     )
 
     active = current_run_context()
@@ -21,6 +23,8 @@ def test_public_run_context_binding_is_scoped_and_resettable():
     assert active.round_id == "round-1"
     assert active.session_id == "session-1"
     assert active.temporary_full_access is True
+    assert active.soul_context_enabled is False
+    assert active.workspace_context_enabled is False
 
     binding.reset()
     binding.reset()

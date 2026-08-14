@@ -35,6 +35,12 @@ def test_workbench_background_preferences_are_exposed_and_applied_before_paint()
     assert "background: color-mix(in srgb, var(--wb-card-bg) 72%, transparent)" in composer_styles
     assert "backdrop-filter: blur(18px) saturate(120%) contrast(102%)" in composer_styles
     assert "border: 1px solid color-mix(in srgb, var(--wb-line-2) 64%, transparent)" in composer_styles
+    light_composer_styles = styles.split(
+        'html[data-theme="light"] .wbc-composer-box {', 1
+    )[1].split("}", 1)[0]
+    assert "background: color-mix(in srgb, #fff 76%, transparent);" in light_composer_styles
+    assert "0 10px 28px rgba(15, 23, 42, .12)" in light_composer_styles
+    assert "backdrop-filter: blur(18px) saturate(120%) contrast(102%);" in light_composer_styles
     dark_conversation_styles = styles.split(
         'html[data-theme="dark"] :is(.wbc-composer-box, .wbc-side-card) {', 1
     )[1].split("}", 1)[0]

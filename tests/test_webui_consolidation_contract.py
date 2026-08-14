@@ -269,6 +269,9 @@ def test_ui_background_and_pdf_resources_have_explicit_cleanup_paths():
     assert "observer.disconnect()" in actions
     assert 'root.addEventListener("beforeunload", dispose' in feedback
     assert "window.clearTimeout(toastTimers[id])" in feedback
+    assert "var toastOverlayActive = snapshot.toasts.length > 0;" in feedback
+    assert 'platform.require("browser-overlays")' in feedback
+    assert "}, [toastOverlayActive]);" in feedback
     for source in (chat, library):
         assert "abortLoader.abort()" in source
         assert "loadedDocument.destroy()" in source

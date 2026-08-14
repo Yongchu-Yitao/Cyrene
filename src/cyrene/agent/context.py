@@ -39,6 +39,8 @@ class AgentRunContext:
     deep_research: bool
     temporary_full_access: bool
     bounded_remote_authorization: bool
+    soul_context_enabled: bool
+    workspace_context_enabled: bool
 
 
 class ContextBinding:
@@ -78,6 +80,8 @@ def current_run_context() -> AgentRunContext:
         bounded_remote_authorization=bool(
             _state._bounded_remote_authorization.get()
         ),
+        soul_context_enabled=soul_context_enabled(),
+        workspace_context_enabled=workspace_context_enabled(),
     )
 
 
@@ -93,6 +97,8 @@ def bind_run_context(
     session_id: object = _UNSET,
     ui_instance_id: object = _UNSET,
     workspace_dir: object = _UNSET,
+    soul_enabled: object = _UNSET,
+    workspace_enabled: object = _UNSET,
     permission_mode: object = _UNSET,
     response_capabilities: object = _UNSET,
     deep_research: object = _UNSET,
@@ -116,6 +122,8 @@ def bind_run_context(
         (_state._current_session_id, session_id),
         (_state._ui_instance_id, ui_instance_id),
         (_state._active_workspace_dir, workspace_dir),
+        (_state._soul_context_enabled, soul_enabled),
+        (_state._workspace_context_enabled, workspace_enabled),
         (_state._permission_mode, permission_mode),
         (_state.response_capabilities, response_capabilities),
         (_state._deep_research_mode, deep_research),
@@ -202,6 +210,26 @@ get_current_ui_instance_id = current_ui_instance_id
 
 def current_permission_mode() -> str:
     return current_run_context().permission_mode
+
+
+def soul_context_enabled() -> bool:
+    """Return the run-local persona switch, falling back to legacy settings."""
+    value = _state._soul_context_enabled.get()
+    if value is not None:
+        return bool(value)
+    from cyrene.runtime.settings_store import is_soul_active
+
+    return bool(is_soul_active())
+
+
+def workspace_context_enabled() -> bool:
+    """Return the run-local workspace switch, falling back to legacy settings."""
+    value = _state._workspace_context_enabled.get()
+    if value is not None:
+        return bool(value)
+    from cyrene.runtime.settings_store import is_workspace_active
+
+    return bool(is_workspace_active())
 
 
 def is_permission_mode(value: str) -> bool:
