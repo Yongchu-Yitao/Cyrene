@@ -72,6 +72,32 @@ def test_onnx_session_falls_back_when_cuda_initialization_fails():
     assert session.providers == ["DmlExecutionProvider", "CPUExecutionProvider"]
 
 
+def test_mlx_embedding_falls_back_to_existing_onnx_pack(monkeypatch, tmp_path):
+    (tmp_path / "model.onnx").touch()
+    monkeypatch.setattr(local_onnx, "_runtime", lambda: "mlx")
+    monkeypatch.setattr(local_models, "model_dir", lambda _model_id: tmp_path)
+    monkeypatch.setattr(
+        local_onnx,
+        "_embed_mlx_sync",
+        lambda _texts: (_ for _ in ()).throw(RuntimeError("MLX unavailable")),
+    )
+    monkeypatch.setattr(local_onnx, "_embed_sync", lambda _texts: [[0.0, 1.0]])
+
+    assert local_onnx._embed_with_runtime_fallback_sync(["hello"]) == [[0.0, 1.0]]
+
+
+def test_apple_silicon_bundle_explicitly_collects_mlx_runtime():
+    root = Path(__file__).resolve().parents[1]
+    spec = root.joinpath("build/cyrene.spec").read_text(encoding="utf-8")
+    entrypoint = root.joinpath("build/run_cyrene.py").read_text(encoding="utf-8")
+
+    assert 'if _IS_MAC_ARM:' in spec
+    assert '_collect_package("mlx")' in spec
+    assert '_collect_package("mlx_lm")' in spec
+    assert '_smoke_imports["mlx"] = None' in entrypoint
+    assert '_smoke_imports["mlx_lm"] = None' in entrypoint
+
+
 def test_windows_arm_registers_qnn_npu_session(monkeypatch):
     class Options:
         def __init__(self):

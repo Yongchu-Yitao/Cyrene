@@ -1201,8 +1201,19 @@ def register_settings_routes(router: APIRouter, bot: Any, db_path: str) -> None:
             return JSONResponse(
                 {"error": "could not reach the configured service"}, status_code=503
             )
-        except Exception:
+        except Exception as exc:
             logger.info("Integration connectivity test failed", exc_info=True)
+            if (
+                service == "embedding"
+                and isinstance(draft, dict)
+                and str(draft.get("provider") or "").strip().lower().replace("-", "_")
+                == "local_onnx"
+            ):
+                detail = str(exc).strip() or "unknown local inference error"
+                return JSONResponse(
+                    {"error": f"local embedding test failed: {detail[:500]}"},
+                    status_code=502,
+                )
             return JSONResponse({"error": "connection test failed"}, status_code=502)
 
     @router.put("/api/profile")

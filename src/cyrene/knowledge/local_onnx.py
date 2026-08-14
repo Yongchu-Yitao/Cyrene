@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 import os
 import threading
 from typing import Any
@@ -10,6 +11,7 @@ from typing import Any
 from cyrene.knowledge import local_models
 
 
+logger = logging.getLogger(__name__)
 MODEL_ID = "qwen3-embedding-0.6b"
 _MODEL: tuple[Any, Any] | None = None
 _MLX_MODEL: Any = None
@@ -185,10 +187,34 @@ def _embed_sync(texts: list[str]) -> list[list[float]]:
     return pooled.astype(np.float32).tolist()
 
 
+def _embed_with_runtime_fallback_sync(texts: list[str]) -> list[list[float]]:
+    """Prefer MLX on Apple Silicon and retain ONNX as a recovery path."""
+    if _runtime() != "mlx":
+        return _embed_sync(texts)
+    try:
+        return _embed_mlx_sync(texts)
+    except Exception as mlx_error:
+        onnx_path = local_models.model_dir(MODEL_ID) / "model.onnx"
+        if not onnx_path.is_file():
+            raise RuntimeError(
+                f"MLX embedding inference failed and ONNX fallback is unavailable: {mlx_error}"
+            ) from mlx_error
+        logger.warning(
+            "MLX embedding inference failed; falling back to ONNX Runtime",
+            exc_info=True,
+        )
+        try:
+            return _embed_sync(texts)
+        except Exception as onnx_error:
+            raise RuntimeError(
+                "Local embedding inference failed with both MLX and ONNX: "
+                f"MLX: {mlx_error}; ONNX: {onnx_error}"
+            ) from onnx_error
+
+
 async def embed_texts(texts: list[str], *, query: bool = False) -> list[list[float]]:
     if query:
         instruction = "Given a web search query, retrieve relevant passages that answer the query"
         texts = [f"Instruct: {instruction}\nQuery: {text}" for text in texts]
     async with _INFERENCE_LIMIT:
-        target = _embed_mlx_sync if _runtime() == "mlx" else _embed_sync
-        return await asyncio.to_thread(target, texts)
+        return await asyncio.to_thread(_embed_with_runtime_fallback_sync, texts)

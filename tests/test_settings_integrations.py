@@ -289,6 +289,22 @@ def test_integration_settings_routes_hide_secrets_and_probe_drafts(monkeypatch, 
     called_config = integration_settings.test_embedding.await_args.args[0]
     assert called_config["api_key"] == "one-use-secret"
 
+    integration_settings.test_embedding.side_effect = RuntimeError(
+        "MLX inference dependencies are unavailable"
+    )
+    local_response = client.post("/api/settings/integrations/test", json={
+        "service": "embedding",
+        "config": {
+            "provider": "local_onnx",
+            "model": "qwen3-embedding-0.6b",
+            "dimensions": 1024,
+        },
+    })
+    assert local_response.status_code == 502
+    assert local_response.json()["error"] == (
+        "local embedding test failed: MLX inference dependencies are unavailable"
+    )
+
 
 def test_settings_ui_keeps_zotero_in_general_and_embedding_in_models():
     root = Path(__file__).resolve().parent.parent

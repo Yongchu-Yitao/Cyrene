@@ -72,6 +72,9 @@ def _run_smoke_test() -> None:
     import platform
     if os.name == "nt" and platform.machine().lower() in {"arm64", "aarch64"}:
         _smoke_imports["onnxruntime_qnn"] = None
+    if sys.platform == "darwin" and platform.machine().lower() in {"arm64", "aarch64"}:
+        _smoke_imports["mlx"] = None
+        _smoke_imports["mlx_lm"] = None
     for _name in _smoke_imports:
         try:
             mod = importlib.import_module(_name)

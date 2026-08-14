@@ -2,6 +2,7 @@
 """PyInstaller spec for Cyrene — macOS / Windows / Linux 三平台支持。"""
 
 import os
+import platform
 import sys
 from pathlib import Path
 from PyInstaller.utils.hooks import collect_all, copy_metadata
@@ -13,6 +14,7 @@ _PROJECT_ROOT = Path(SPECPATH).resolve().parent
 _SRC = _PROJECT_ROOT / "src"
 _ENTRY = str(Path(SPECPATH).resolve() / "run_cyrene.py")
 _IS_MAC = sys.platform == "darwin"
+_IS_MAC_ARM = _IS_MAC and platform.machine().lower() in {"arm64", "aarch64"}
 _IS_WIN = sys.platform == "win32"
 _BUNDLE_PLAYWRIGHT = os.environ.get("CYRENE_BUNDLE_PLAYWRIGHT") == "1"
 _WOA_NATIVE_CORE = _IS_WIN and os.environ.get("CYRENE_WOA_NATIVE_CORE") == "1"
@@ -168,6 +170,13 @@ for _package in (
 
 if _WOA_NATIVE_CORE:
     _collect_package("onnxruntime_qnn")
+
+if _IS_MAC_ARM:
+    # Qwen embedding imports mlx_lm lazily so PyInstaller cannot reliably
+    # discover the complete MLX runtime from the local_onnx module alone.
+    # Collect both packages explicitly for Apple Silicon desktop releases.
+    _collect_package("mlx")
+    _collect_package("mlx_lm")
 
 if not _WOA_NATIVE_CORE:
     for _package in ("simplexng", "rapidocr", "waitress", "flask", "brotli", "fasttext", "lxml", "msgspec"):

@@ -10239,7 +10239,6 @@ html[data-theme] .settings-overlay .wb-toggle.on {
   gap: 12px;
   padding: 16px 0 2px;
   border: 0;
-  border-top: 1px solid color-mix(in srgb, var(--wb-line-2) 58%, transparent);
   border-radius: 0;
   background: transparent;
 }
