@@ -26,6 +26,7 @@ jobs:
   # macOS Build
   # ==========================================================================
   build-macos:
+    needs: [release]
     runs-on: macos-latest
     steps:
       - uses: actions/checkout@v7
@@ -77,10 +78,17 @@ jobs:
           if-no-files-found: error
           compression-level: 0
 
+      - name: Publish macOS DMG
+        if: startsWith(github.ref, 'refs/tags/')
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release upload "$GITHUB_REF_NAME" dist-electron/Cyrene-*-mac.dmg --clobber
+
   # ==========================================================================
   # Windows Build
   # ==========================================================================
   build-windows:
+    needs: [release]
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v7
@@ -235,6 +243,13 @@ jobs:
           if-no-files-found: error
           compression-level: 0
 
+      - name: Publish Windows x64 packages
+        if: startsWith(github.ref, 'refs/tags/')
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: gh release upload "$GITHUB_REF_NAME" dist-electron/Cyrene-*-win-x64.exe dist-electron/Cyrene-*-win-x64-portable.exe --clobber
+
   # ==========================================================================
   # Windows on ARM Build
   # ==========================================================================
@@ -269,7 +284,7 @@ jobs:
           if-no-files-found: error
 
   build-windows-arm:
-    needs: [build-windows-arm-sidecars]
+    needs: [release, build-windows-arm-sidecars]
     runs-on: windows-11-arm
     steps:
       - uses: actions/checkout@v7
@@ -383,10 +398,18 @@ jobs:
           if-no-files-found: error
           compression-level: 0
 
+      - name: Publish Windows ARM64 packages
+        if: startsWith(github.ref, 'refs/tags/')
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: gh release upload "$GITHUB_REF_NAME" dist-electron/Cyrene-*-win-arm64.exe dist-electron/Cyrene-*-win-arm64-portable.exe --clobber
+
   # ==========================================================================
   # Linux Build
   # ==========================================================================
   build-linux:
+    needs: [release]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
@@ -446,6 +469,12 @@ jobs:
             --no-sandbox \
             --desktop-smoke-test
 
+      - name: Publish Linux AppImage
+        if: startsWith(github.ref, 'refs/tags/')
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release upload "$GITHUB_REF_NAME" dist-electron/Cyrene-*-x64.AppImage --clobber
+
       - name: Install and smoke test Debian package
         env:
           CYRENE_USER_DATA_DIR: ${{ runner.temp }}/cyrene-deb-smoke/data
@@ -463,12 +492,24 @@ jobs:
           test -f "$CYRENE_USER_DATA_DIR/data/config.enc.missing-key.bak"
           test -f "$CYRENE_USER_DATA_DIR/data/.config_key"
 
+      - name: Publish Linux Debian package
+        if: startsWith(github.ref, 'refs/tags/')
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release upload "$GITHUB_REF_NAME" dist-electron/Cyrene-*-x64.deb --clobber
+
       - name: Install and smoke test RPM package
         run: |
           docker run --rm \
             -v "$PWD:/workspace:ro" \
             fedora:latest \
             bash /workspace/build/linux-rpm-release-smoke.sh
+
+      - name: Publish Linux RPM package
+        if: startsWith(github.ref, 'refs/tags/')
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release upload "$GITHUB_REF_NAME" dist-electron/Cyrene-*-x64.rpm --clobber
 
       - name: Upload Linux packages
         uses: actions/upload-artifact@v7
@@ -482,59 +523,17 @@ jobs:
           compression-level: 0
 
   # ==========================================================================
-  # Create GitHub Release
+  # Create the release before builds begin. Each platform publishes its own
+  # verified assets as soon as they are ready, so one failed platform does not
+  # block successful installers from becoming available.
   # ==========================================================================
   release:
-    # Do not publish until every installer offered by the release has been
-    # installed and launched successfully on its native platform.
-    needs: [build-macos, build-windows, build-windows-arm, build-linux]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
 
-      - name: Download macOS artifact
-        uses: actions/download-artifact@v8
-        with:
-          name: macos-dmg
-          path: artifacts
-
-      - name: Download Windows x64 artifact
-        uses: actions/download-artifact@v8
-        with:
-          name: windows-installer
-          path: artifacts
-
-      - name: Download Windows ARM64 artifact
-        uses: actions/download-artifact@v8
-        with:
-          name: windows-installer-arm
-          path: artifacts
-
-      - name: Download Linux artifact
-        uses: actions/download-artifact@v8
-        with:
-          name: linux-packages
-          path: artifacts
-
-      - name: List artifacts
-        run: ls -la artifacts/
-
-      - name: Delete existing assets on current release
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          TAG="${GITHUB_REF_NAME}"
-          if [ "${GITHUB_REF_TYPE}" != "tag" ]; then
-            echo "Not running on a tag; skipping asset cleanup."
-            exit 0
-          fi
-          gh release view "$TAG" --json assets --jq '.assets[].name' 2>/dev/null | while read -r asset; do
-            if [ -n "$asset" ]; then
-              gh release delete-asset "$TAG" "$asset" --yes
-            fi
-          done
-
       - name: Detect pre-release
+        if: startsWith(github.ref, 'refs/tags/')
         id: pre
         run: |
           if echo "${{ github.ref_name }}" | grep -qE '(alpha|beta|[0-9]b[0-9]|rc)'; then
@@ -544,6 +543,7 @@ jobs:
           fi
 
       - name: Extract changelog section
+        if: startsWith(github.ref, 'refs/tags/')
         id: notes
         run: |
           # Extract the first "## [...]" section from CHANGELOG.md
@@ -553,10 +553,9 @@ jobs:
             echo "CHANGELOG_EOF"
           } >> "$GITHUB_OUTPUT"
 
-      - name: Create Release
+      - name: Create or update Release
+        if: startsWith(github.ref, 'refs/tags/')
         uses: softprops/action-gh-release@v2
         with:
-          files: artifacts/*
           body: ${{ steps.notes.outputs.body }}
-          fail_on_unmatched_files: true
           prerelease: ${{ steps.pre.outputs.is_pre == 'true' }}

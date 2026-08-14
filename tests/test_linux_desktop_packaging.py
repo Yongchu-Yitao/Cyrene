@@ -84,6 +84,15 @@ def test_release_pipeline_smoke_tests_and_publishes_all_linux_packages():
     assert "dist-electron/Cyrene-*-x64.AppImage" in workflow
     assert "dist-electron/Cyrene-*-x64.deb" in workflow
     assert "dist-electron/Cyrene-*-x64.rpm" in workflow
+    assert linux_job.index("Smoke test packaged AppImage UI") < linux_job.index(
+        "Publish Linux AppImage"
+    )
+    assert linux_job.index("Install and smoke test Debian package") < linux_job.index(
+        "Publish Linux Debian package"
+    )
+    assert linux_job.index("Install and smoke test RPM package") < linux_job.index(
+        "Publish Linux RPM package"
+    )
 
     rpm_smoke = (ROOT / "build" / "linux-rpm-release-smoke.sh").read_text(
         encoding="utf-8"

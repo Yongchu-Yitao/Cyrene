@@ -45,16 +45,22 @@ def test_release_mounts_and_runs_the_built_macos_dmg():
     assert "MACOS_INSTALL_SMOKE_TEST=ok" in smoke
 
 
-def test_release_waits_for_every_published_platform():
+def test_release_publishes_each_verified_platform_independently():
     workflow = (ROOT / ".github" / "workflows" / "release.yml").read_text(
         encoding="utf-8"
     )
 
     release_job = workflow.split("\n  release:\n", 1)[1]
-    assert "needs: [build-macos, build-windows, build-windows-arm, build-linux]" in release_job
-    assert "name: windows-installer-arm" in release_job
+    assert "needs: [build-macos, build-windows, build-windows-arm, build-linux]" not in release_job
+    assert "Create or update Release" in release_job
+    assert "Publish macOS DMG" in workflow
+    assert "Publish Windows x64 packages" in workflow
+    assert "Publish Windows ARM64 packages" in workflow
+    assert workflow.count("gh release upload") == 6
+    assert workflow.count("--clobber") == 6
     assert "release-windows-arm:" not in workflow
     windows_arm_job = workflow.split("\n  build-windows-arm:\n", 1)[1].split(
         "\n  build-linux:\n", 1
     )[0]
+    assert "needs: [release, build-windows-arm-sidecars]" in windows_arm_job
     assert "continue-on-error: true" not in windows_arm_job
