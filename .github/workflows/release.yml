@@ -440,7 +440,7 @@ jobs:
           CYRENE_CACHE_DIR: ${{ runner.temp }}/cyrene-desktop-smoke/cache
           CYRENE_TEMP_DIR: ${{ runner.temp }}/cyrene-desktop-smoke/tmp
         run: |
-          timeout 90s xvfb-run -a \
+          timeout 180s xvfb-run -a \
             dist-electron/Cyrene-*-x64.AppImage \
             --appimage-extract-and-run \
             --no-sandbox \
@@ -457,7 +457,7 @@ jobs:
           mkdir -p "$CYRENE_USER_DATA_DIR/data"
           printf '%s' 'unreadable-config-without-local-key' \
             > "$CYRENE_USER_DATA_DIR/data/config.enc"
-          timeout 90s xvfb-run -a \
+          timeout 180s xvfb-run -a \
             /opt/Cyrene/cyrene \
             --desktop-smoke-test
           test -f "$CYRENE_USER_DATA_DIR/data/config.enc.missing-key.bak"

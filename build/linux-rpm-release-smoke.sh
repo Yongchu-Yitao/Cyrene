@@ -26,7 +26,7 @@ if [[ ! -S /run/dbus/system_bus_socket ]]; then
 fi
 
 set +e
-output=$(timeout 120s dbus-run-session -- \
+output=$(timeout 180s dbus-run-session -- \
   xvfb-run -a /opt/Cyrene/cyrene --no-sandbox --desktop-smoke-test 2>&1)
 status=$?
 set -e

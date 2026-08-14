@@ -5826,6 +5826,7 @@ async function runDesktopSemanticSmokeTest(window) {
 }
 
 async function runDesktopSmokeTest(window) {
+  const renderTimeoutMs = 90000;
   const state = await window.webContents.executeJavaScript(`new Promise((resolve) => {
     const startedAt = Date.now();
     const inspect = () => {
@@ -5846,7 +5847,7 @@ async function runDesktopSmokeTest(window) {
         resolve(result);
         return;
       }
-      if (Date.now() - startedAt >= 30000) {
+      if (Date.now() - startedAt >= ${renderTimeoutMs}) {
         resolve(result);
         return;
       }

@@ -118,6 +118,8 @@ def test_linux_desktop_uses_software_rendering_and_reports_renderer_failures():
     assert "app.setPath('userData', path.join(getCyreneTempDir(), 'electron-smoke-profile'))" in main
     assert "state.rootChildren < 1" in main
     assert "state.launchScreenPresent" in main
+    assert "const renderTimeoutMs = 90000;" in main
+    assert "Date.now() - startedAt >= ${renderTimeoutMs}" in main
     assert "nonWhitePixels < 100" in main
     assert "Post-load smoke validation failed" in main
     assert main.count("await runDesktopSmokeTest(mainWindow);") == 2
