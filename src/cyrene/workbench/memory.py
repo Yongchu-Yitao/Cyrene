@@ -1201,6 +1201,7 @@ def render_memory_for_injection(
     exclude_ids: list[str] | set[str] | tuple[str, ...] | None = None,
     preserve_id_order: bool = False,
     header: str | None = None,
+    entries: list[dict[str, Any]] | None = None,
 ) -> str:
     """Render a project's durable memories as a compact prompt block for a run.
 
@@ -1209,8 +1210,11 @@ def render_memory_for_injection(
     Strongest (most reinforced, then most recent) first unless
     ``preserve_id_order`` is set with ``include_ids``. Returns "" when there is
     nothing worth injecting.
+
+    ``entries`` lets a caller that already loaded the memory document reuse it
+    across several calls instead of re-reading it once per render.
     """
-    entries = _load(workspace_id)
+    entries = _load(workspace_id) if entries is None else entries
     if not entries:
         return ""
     include_filter_active = include_ids is not None
@@ -1257,9 +1261,13 @@ def render_memory_for_injection(
     return block_header + "\n" + "\n".join(lines)
 
 
-def memory_injection_ids(workspace_id: str | None) -> list[str]:
+def memory_injection_ids(
+    workspace_id: str | None,
+    *,
+    entries: list[dict[str, Any]] | None = None,
+) -> list[str]:
     """Return injectable project-memory ids in the default injection order."""
-    entries = _load(workspace_id)
+    entries = _load(workspace_id) if entries is None else entries
     items: list[tuple[int, str, str]] = []
     for e in entries:
         if not isinstance(e, dict) or e.get("stale"):

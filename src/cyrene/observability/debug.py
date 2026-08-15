@@ -27,6 +27,15 @@ _PERMISSION_EVENT_TYPES = frozenset({
     "host_lifecycle_confirmation",
 })
 
+# Usage/stats writes used to run synchronously on the main path (several
+# SQLite commits per LLM call). They are now batched off the hot path: events
+# are queued here and flushed by a background task with one connection and one
+# commit. Telemetry is best-effort — a full queue drops the oldest events.
+_TELEMETRY_FLUSH_INTERVAL = 2.0
+_TELEMETRY_QUEUE_MAX = 2000
+_telemetry_pending: deque[dict] = deque()
+_telemetry_flush_task: asyncio.Task | None = None
+
 
 def init_debug_log() -> None:
     """Create a timestamped debug log file."""
@@ -143,6 +152,78 @@ def enable_event_bus() -> None:
         _event_queue = asyncio.Queue(maxsize=5000)
 
 
+def _enqueue_telemetry(event: dict) -> None:
+    """Queue one stats event for the background batcher (fire-and-forget)."""
+    _telemetry_pending.append(event)
+    if len(_telemetry_pending) > _TELEMETRY_QUEUE_MAX:
+        _telemetry_pending.popleft()
+    global _telemetry_flush_task
+    if _telemetry_flush_task is None or _telemetry_flush_task.done():
+        stale = True
+    else:
+        # The task may outlive its event loop if the loop was torn down
+        # without cancelling it (pytest-asyncio function-scoped loops,
+        # embedded asyncio.run cycles, dev reload); done() stays False then,
+        # so also check whether the loop is closed.
+        try:
+            stale = _telemetry_flush_task.get_loop().is_closed()
+        except RuntimeError:
+            stale = True  # task no longer bound to a loop, treat as stale
+    if stale:
+        try:
+            _telemetry_flush_task = asyncio.create_task(_telemetry_flush_loop())
+        except RuntimeError:
+            # No running loop in this context (thread/sync call); the events
+            # stay queued and will flush when a loop starts the task.
+            logger.warning("No running event loop to start telemetry flush task", exc_info=True)
+
+
+async def _telemetry_flush_loop() -> None:
+    while True:
+        await asyncio.sleep(_TELEMETRY_FLUSH_INTERVAL)
+        try:
+            await _flush_telemetry_batch()
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            logger.exception("Failed to flush telemetry stats batch")
+
+
+async def _flush_telemetry_batch() -> None:
+    if not _telemetry_pending:
+        return
+    events = list(_telemetry_pending)
+    runtime_events: list[tuple] = []
+    model_events: list[tuple] = []
+    tool_events: list[tuple] = []
+    permission_events: list[dict] = []
+    for event in events:
+        timestamp = str(event.get("timestamp") or "")
+        event_type = str(event.get("type") or "")
+        if event_type == "llm_call":
+            runtime_events.append((timestamp, event.get("usage") or {}))
+            model = str(event.get("model") or "").strip()
+            if model:
+                model_events.append((timestamp, model, event.get("usage") or {}))
+        elif event_type == "tool_call":
+            tool_events.append((timestamp, str(event.get("tool") or "")))
+        elif event_type in _PERMISSION_EVENT_TYPES:
+            permission_events.append(event)
+    from cyrene.runtime import database as cy_db
+
+    await cy_db.record_usage_stats_batch(
+        str(DB_PATH),
+        runtime_events=runtime_events,
+        model_events=model_events,
+        tool_events=tool_events,
+        permission_events=permission_events,
+    )
+    # Only drop the batch once the DB write succeeded; on failure the queue
+    # keeps the events and the next flush cycle retries (the queue cap bounds
+    # growth under persistent failure).
+    _telemetry_pending.clear()
+
+
 async def publish_event(event: dict, session_id: str = "") -> None:
     """发布一条事件（由 agent.py 调用）。自动初始化事件总线。
 
@@ -168,21 +249,8 @@ async def publish_event(event: dict, session_id: str = "") -> None:
             overflow = len(_full_events) - _MAX_FULL_EVENTS
             for key in list(_full_events.keys())[:overflow]:
                 _full_events.pop(key, None)
-
-    try:
-        from cyrene.runtime import database as cy_db
-
-        if event.get("type") == "llm_call":
-            await cy_db.record_runtime_usage(str(DB_PATH), str(event.get("timestamp") or ""), event.get("usage") or {})
-            model = str(event.get("model") or "").strip()
-            if model:
-                await cy_db.record_model_usage(str(DB_PATH), str(event.get("timestamp") or ""), model, event.get("usage") or {})
-        elif event.get("type") == "tool_call":
-            await cy_db.record_tool_call(str(DB_PATH), str(event.get("timestamp") or ""), str(event.get("tool") or ""))
-        elif event.get("type") in _PERMISSION_EVENT_TYPES:
-            await cy_db.record_permission_decision(str(DB_PATH), event)
-    except Exception:
-        logger.exception("Failed to persist runtime stats")
+        # Stats persistence is queued off the hot path (see module docstring).
+        _enqueue_telemetry(dict(event))
 
     _recent_events.append(event)
     if _event_queue is None:

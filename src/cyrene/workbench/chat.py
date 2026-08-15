@@ -24,6 +24,7 @@ import json
 import logging
 import mimetypes
 import re
+import threading
 import time
 import uuid
 from dataclasses import dataclass, field
@@ -97,38 +98,70 @@ async def generate_chat_group_metadata(
             "Chat group, New chat group, 对话组, or 新对话组."
         )
     )
-    prompt = (
-        "You maintain metadata for a group of related AI conversations. "
-        "Infer their shared intent from the supplied titles and previews. "
-        "Return one JSON object only with string fields title and summary. "
-        "The summary should describe the group's combined subject, not list every conversation.\n"
-        f"{language_rule}\n{title_rule}\n"
-        "Current title: " + str(current_title or "")[:160] + "\n"
-        "Members JSON:\n" + json.dumps(cleaned, ensure_ascii=False)
-    )
-    response = await call_agent_model(
-        [{"role": "user", "content": prompt}],
-        tools=None,
-        max_tokens=320,
-        caller="workbench_chat_group_metadata",
-        secondary=True,
-        thinking="low",
-        response_format={"type": "json_object"},
-    )
-    raw_text = assistant_text(response).strip()
-    try:
-        parsed = json.loads(raw_text)
-    except json.JSONDecodeError:
-        match = re.search(r"\{[\s\S]*\}", raw_text)
-        parsed = json.loads(match.group(0)) if match else {}
-    if not isinstance(parsed, dict):
-        parsed = {}
-    title = re.sub(r"\s+", " ", str(parsed.get("title") or "")).strip()[:60]
-    summary = re.sub(r"\s+", " ", str(parsed.get("summary") or "")).strip()[:160]
+    title = ""
+    summary = ""
+    for attempt in range(2):
+        corrective = (
+            "Your previous attempt returned an empty title or summary. "
+            "Both fields are required and must be non-empty strings."
+            if attempt
+            else ""
+        )
+        prompt = (
+            "You maintain metadata for a group of related AI conversations. "
+            "Infer their shared intent from the supplied titles and previews. "
+            "Return one JSON object only with string fields title and summary. "
+            "Write the title first, then the summary. "
+            "The summary should describe the group's combined subject, not list every conversation.\n"
+            f"{language_rule}\n{title_rule}\n{corrective}\n"
+            "Current title: " + str(current_title or "")[:160] + "\n"
+            "Members JSON:\n" + json.dumps(cleaned, ensure_ascii=False)
+        )
+        response = await call_agent_model(
+            [{"role": "user", "content": prompt}],
+            tools=None,
+            max_tokens=512,
+            caller="workbench_chat_group_metadata",
+            secondary=True,
+            thinking="low",
+            response_format={"type": "json_object"},
+        )
+        raw_text = assistant_text(response).strip()
+        try:
+            parsed = json.loads(raw_text)
+        except json.JSONDecodeError:
+            match = re.search(r"\{[\s\S]*\}", raw_text)
+            parsed = json.loads(match.group(0)) if match else {}
+        if not isinstance(parsed, dict):
+            parsed = {}
+        title = re.sub(r"\s+", " ", str(parsed.get("title") or "")).strip()[:60]
+        summary = re.sub(r"\s+", " ", str(parsed.get("summary") or "")).strip()[:160]
+        if (title_locked or title) and summary:
+            break
+        logger.warning(
+            "Chat group metadata attempt %s produced empty fields (title=%r, summary=%r)",
+            attempt + 1,
+            title,
+            summary,
+        )
     if not title_locked and not title:
-        raise RuntimeError("model returned an empty chat group title")
+        title = next(
+            (
+                re.sub(r"\s+", " ", str(item.get("title") or "")).strip()[:60]
+                for item in cleaned
+                if str(item.get("title") or "").strip()
+            ),
+            "",
+        )
     if not summary:
-        raise RuntimeError("model returned an empty chat group summary")
+        summary = next(
+            (
+                re.sub(r"\s+", " ", str(item.get("preview") or "")).strip()[:160]
+                for item in cleaned
+                if str(item.get("preview") or "").strip()
+            ),
+            "",
+        )
     return {
         "title": "" if title_locked else title,
         "summary": summary,
@@ -558,6 +591,13 @@ def _workbench_chat_error_metadata(exc: Exception) -> dict[str, str]:
 # Store
 # ---------------------------------------------------------------------------
 
+# Legacy JSON chats store persists whole-file atomic replaces with no built-in
+# serialization, so concurrent read-modify-write sequences (e.g. the route's
+# inline finalize and the detached workspace finalize) can clobber each other.
+# SQLite mode uses write_document's own merge lock and ignores this one.
+_CHATS_STORE_JSON_LOCK = threading.Lock()
+
+
 def _read_chats_store() -> dict[str, Any]:
     if not _STORE_DB_PATH or _CONFIGURED_CHATS_STORE != _CHATS_STORE:
         data = read_json_safe(_CHATS_STORE)
@@ -664,6 +704,12 @@ def startup_chat_runs() -> None:
 
 async def shutdown_chat_runs() -> None:
     await _CHAT_RUN_MANAGER.shutdown()
+    try:
+        from route.workbench.chat import drain_post_reply_bookkeeping_tasks
+
+        await drain_post_reply_bookkeeping_tasks()
+    except Exception:
+        logger.exception("Workbench post-reply bookkeeping drain failed")
 
 
 async def _capture_workspace_changes_baseline(
@@ -831,6 +877,14 @@ def _sync_chat_generated_files(
     runs.  Persist only workspace-relative metadata; the download route resolves
     and confines the path against the project's current workspace root.
     """
+    with _CHATS_STORE_JSON_LOCK:
+        _sync_chat_generated_files_locked(chat_id, change_set)
+
+
+def _sync_chat_generated_files_locked(
+    chat_id: str,
+    change_set: dict[str, Any] | None = None,
+) -> None:
     payload = _read_chats_store()
     chat = _find_chat(payload, chat_id)
     if not chat:
@@ -2824,10 +2878,29 @@ async def _publish_live_exchange_segments_loop(
     state_ids_before: set[str],
     stop_event: asyncio.Event,
 ) -> None:
+    from cyrene.agent.context import session_state_file
+
+    state_path = session_state_file(chat_id)
     published_ids: set[str] = set()
+    # The agent rewrites the whole state file per save, so a cheap stat is an
+    # exact change signal: skip the full read+parse+segment pass on ticks where
+    # the file is untouched. Finalization still runs one last pass regardless.
+    # On coarse filesystem clocks (1s+ timestamp granularity) two same-size
+    # rewrites within one tick share a signature, so force a pass after the
+    # signature has been unchanged for a while to avoid a stalled transcript.
+    last_signature: tuple[int, int] | None = None
+    last_published_ts = time.monotonic()
     while not stop_event.is_set():
         try:
-            await _publish_live_exchange_segments_once(run, chat_id, state_ids_before, published_ids)
+            try:
+                file_stat = state_path.stat()
+                signature = (file_stat.st_mtime_ns, file_stat.st_size)
+            except OSError:
+                signature = None
+            if signature != last_signature or time.monotonic() - last_published_ts >= 2.0:
+                await _publish_live_exchange_segments_once(run, chat_id, state_ids_before, published_ids)
+                last_signature = signature
+                last_published_ts = time.monotonic()
         except Exception:
             logger.debug("Failed to publish live workbench chat segments for %s", chat_id, exc_info=True)
         try:

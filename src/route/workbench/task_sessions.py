@@ -942,10 +942,11 @@ def register_task_session_routes(
         git_status_before = _workbench_git_status_snapshot(workspace_root)
         workspace_files_before = _workbench_workspace_file_snapshot(workspace_root)
         workspace_text_before = _workbench_workspace_text_snapshot(workspace_root)
+        memory_pair = _workbench_compose_memory_ephemeral(project, session)
         ephemeral_system = _workbench_compose_ephemeral_system(
-            project, session, step_id=step_id if is_step_run else "", workspace_root=workspace_root
+            project, session, step_id=step_id if is_step_run else "", workspace_root=workspace_root, memory_pair=memory_pair
         )
-        volatile_ephemeral_system = _workbench_compose_volatile_ephemeral_system(project, session)
+        volatile_ephemeral_system = _workbench_compose_volatile_ephemeral_system(project, session, memory_pair=memory_pair)
         agent_error = None
         try:
             agent_reply = await _workbench_agent_reply(user_input, session, constraints, attachments=attachments, permission_mode=mode, command=command, project_workspace=str(project.get("workspacePath") or ""), ephemeral_system=ephemeral_system, volatile_ephemeral_system=volatile_ephemeral_system, static_system_extra=_workbench_compose_static_system(project, session), conversation_source="" if ui_instance_id else "webui", ui_instance_id=ui_instance_id, client_request_id=client_request_id)
@@ -1150,11 +1151,12 @@ def register_task_session_routes(
         git_status_before = _workbench_git_status_snapshot(workspace_root)
         workspace_files_before = _workbench_workspace_file_snapshot(workspace_root)
         workspace_text_before = _workbench_workspace_text_snapshot(workspace_root)
+        memory_pair = _workbench_compose_memory_ephemeral(project, session)
         ephemeral_system = _workbench_compose_ephemeral_system(
-            project, session, workspace_root=workspace_root
+            project, session, workspace_root=workspace_root, memory_pair=memory_pair
         )
         ephemeral_system = (ephemeral_system + "\n\n" + _WORKBENCH_TASK_REPLY_DIRECTIVE).strip()
-        volatile_ephemeral_system = _workbench_compose_volatile_ephemeral_system(project, session)
+        volatile_ephemeral_system = _workbench_compose_volatile_ephemeral_system(project, session, memory_pair=memory_pair)
         agent_command = command or "workbench-task-reply"
         try:
             agent_reply = await _workbench_agent_reply(message, session, [], attachments=attachments, permission_mode=mode, command=agent_command, project_workspace=str(project.get("workspacePath") or ""), ephemeral_system=ephemeral_system, volatile_ephemeral_system=volatile_ephemeral_system, static_system_extra=_workbench_compose_static_system(project, session), conversation_source="" if ui_instance_id else "webui", ui_instance_id=ui_instance_id, client_request_id=client_request_id)
@@ -1432,8 +1434,9 @@ def register_task_session_routes(
         git_status_before = _workbench_git_status_snapshot(workspace_root)
         workspace_files_before = _workbench_workspace_file_snapshot(workspace_root)
         workspace_text_before = _workbench_workspace_text_snapshot(workspace_root)
+        memory_pair = _workbench_compose_memory_ephemeral(project, session)
         ephemeral_system = _workbench_compose_ephemeral_system(
-            project, session, workspace_root=workspace_root
+            project, session, workspace_root=workspace_root, memory_pair=memory_pair
         )
         if finalizing:
             ephemeral_system = (ephemeral_system + "\n\n" + _workbench_finalize_directive(session)).strip()
@@ -1441,7 +1444,7 @@ def register_task_session_routes(
             ephemeral_system = (ephemeral_system + "\n\n" + _workbench_acceptance_repair_directive(session)).strip()
         elif kind == "answer":
             ephemeral_system = (ephemeral_system + "\n\n" + _WORKBENCH_TASK_REPLY_DIRECTIVE).strip()
-        volatile_ephemeral_system = _workbench_compose_volatile_ephemeral_system(project, session)
+        volatile_ephemeral_system = _workbench_compose_volatile_ephemeral_system(project, session, memory_pair=memory_pair)
         agent_command = command or ("workbench-task-reply" if kind == "answer" else "")
         try:
             agent_reply = await _workbench_agent_reply(user_input, session, [], attachments=attachments, permission_mode=mode, command=agent_command, project_workspace=str(project.get("workspacePath") or ""), ephemeral_system=ephemeral_system, volatile_ephemeral_system=volatile_ephemeral_system, static_system_extra=_workbench_compose_static_system(project, session), conversation_source="" if ui_instance_id else "webui", ui_instance_id=ui_instance_id, client_request_id=client_request_id)

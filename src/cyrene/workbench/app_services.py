@@ -415,8 +415,12 @@ async def dispatch_session_message(
             if not fresh_project or not fresh_session:
                 return
             workspace_root = runtime._workbench_workspace_root(fresh_project)
+            memory_pair = runtime._workbench_compose_memory_ephemeral(
+                fresh_project, fresh_session,
+            )
             ephemeral = runtime._workbench_compose_ephemeral_system(
                 fresh_project, fresh_session, workspace_root=workspace_root,
+                memory_pair=memory_pair,
             )
             static = runtime._workbench_compose_static_system(
                 fresh_project, fresh_session,
@@ -436,6 +440,7 @@ async def dispatch_session_message(
                 ephemeral_system=ephemeral,
                 volatile_ephemeral_system=runtime._workbench_compose_volatile_ephemeral_system(
                     fresh_project, fresh_session,
+                    memory_pair=memory_pair,
                 ),
                 static_system_extra=static,
                 conversation_source="agent_session",

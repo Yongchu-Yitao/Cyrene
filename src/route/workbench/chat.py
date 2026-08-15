@@ -35,12 +35,47 @@ globals().update({
 
 _DETACHED_ANSWER_TASKS: set[asyncio.Task[Any]] = set()
 _SESSION_TITLE_TASKS: set[asyncio.Task[Any]] = set()
+_POST_REPLY_BOOKKEEPING_TASKS: set[asyncio.Task[Any]] = set()
+
+
+def _schedule_detached(
+    coro: Any,
+    registry: set[asyncio.Task[Any]],
+    *,
+    error_context: str,
+) -> None:
+    """Track one detached background task in *registry*.
+
+    The done callback drops the task reference and surfaces its exception (if
+    any) so a failing detached workload never goes silent.
+    """
+
+    def _done(task: asyncio.Task[Any]) -> None:
+        registry.discard(task)
+        if task.cancelled():
+            return
+        try:
+            exc = task.exception()
+        except asyncio.CancelledError:
+            return
+        if exc is not None:
+            logger.error("Detached task failed: %s", error_context, exc_info=exc)
+
+    task = asyncio.create_task(coro)
+    registry.add(task)
+    task.add_done_callback(_done)
 
 
 def _finish_detached_answer_task(task: asyncio.Task[Any]) -> None:
     _DETACHED_ANSWER_TASKS.discard(task)
-    if not task.cancelled():
-        task.exception()
+    if task.cancelled():
+        return
+    try:
+        exc = task.exception()
+    except asyncio.CancelledError:
+        return
+    if exc is not None:
+        logger.error("Detached answer task failed", exc_info=exc)
 
 
 def _track_session_title_task(task: asyncio.Task[Any]) -> None:
@@ -48,12 +83,17 @@ def _track_session_title_task(task: asyncio.Task[Any]) -> None:
 
     def done(completed: asyncio.Task[Any]) -> None:
         _SESSION_TITLE_TASKS.discard(completed)
+        if completed.cancelled():
+            return
         try:
-            completed.exception()
+            exc = completed.exception()
         except asyncio.CancelledError:
             return
-        except Exception:
-            logger.exception("Failed to inspect Workbench session naming task")
+        if exc is not None:
+            logger.error(
+                "Failed to inspect Workbench session naming task",
+                exc_info=exc,
+            )
 
     task.add_done_callback(done)
 
@@ -96,6 +136,175 @@ def _schedule_structured_memory_capture(
         session_id=session_id,
         round_id=round_id,
     )
+
+
+def _schedule_post_reply_bookkeeping(
+    *,
+    chat_id: str,
+    project_id: str,
+    user_text: str,
+    reply_text: str,
+    prior_message_ids: set[str],
+    command: str,
+    retry: bool,
+    turn_count: int,
+) -> None:
+    """Run post-reply bookkeeping as a detached background task.
+
+    The agent reply is already persisted by the caller at this point, so a
+    bookkeeping failure (e.g. a transient SQLite lock timeout while writing the
+    project-memory prompt document) is logged and must never fail the completed
+    run.
+    """
+    from cyrene.workbench import runtime as legacy_routes
+    from cyrene.agent.context import session_state_file
+
+    state_path = session_state_file(chat_id)
+
+    def _state_signature() -> tuple[int, int] | None:
+        try:
+            st = state_path.stat()
+            return (st.st_mtime_ns, st.st_size)
+        except OSError:
+            return None
+
+    # Capture the state-file signature synchronously at schedule time, while
+    # still inside the run's finalize: the mid-read guards below must compare
+    # against the state this exchange left behind, not against whatever a
+    # follow-up turn rewrote before the detached task body started running.
+    signature_before = _state_signature()
+
+    async def _bookkeeping() -> None:
+        try:
+            if not command and not retry:
+                state_messages = await asyncio.to_thread(
+                    _session_state_messages, chat_id
+                )
+                if _state_signature() != signature_before:
+                    # A follow-up turn rewrote the state file mid-read; the
+                    # captured messages belong to the next exchange, not this
+                    # run's, so skip the memory capture.
+                    logger.info(
+                        "Skip post-reply bookkeeping for %s: state changed mid-read",
+                        chat_id,
+                    )
+                    return
+                _schedule_structured_memory_capture(
+                    legacy_routes,
+                    project_id=project_id,
+                    user_text=user_text,
+                    agent_text=reply_text,
+                    state_messages=state_messages,
+                    prior_message_ids=prior_message_ids,
+                    session_id=chat_id,
+                )
+
+            from cyrene.workbench.project_memory_prompt import (
+                completed_context_snapshot,
+                context_auto_trigger_threshold,
+                schedule_learning,
+            )
+
+            snapshot = await asyncio.to_thread(
+                completed_context_snapshot,
+                chat_id,
+                project_id,
+                completed_turn_count=turn_count,
+                final_assistant_text=reply_text,
+            )
+            threshold = (
+                context_auto_trigger_threshold(
+                    project_id, chat_id, snapshot.get("messages") or []
+                )
+                if snapshot and not command and not retry
+                else None
+            )
+            if snapshot and threshold is not None:
+                if _state_signature() != signature_before:
+                    logger.info(
+                        "Skip learning schedule for %s: state changed mid-read",
+                        chat_id,
+                    )
+                    return
+                snapshot["contextThresholdPercent"] = threshold
+                schedule_learning(
+                    project_id,
+                    snapshot,
+                    source="conversation_auto",
+                    reason=f"context_{threshold}_percent",
+                )
+        except Exception:
+            logger.exception("Post-reply bookkeeping failed for chat %s", chat_id)
+
+    _schedule_detached(
+        _bookkeeping(),
+        _POST_REPLY_BOOKKEEPING_TASKS,
+        error_context=f"post-reply bookkeeping for chat {chat_id}",
+    )
+
+
+def _schedule_workspace_changes_finalize(
+    *,
+    chat_id: str,
+    run_id: str,
+    workspace_dir: str | Path | None,
+    before: Any,
+    status: str,
+) -> None:
+    """Finalize the workspace change set in a detached background task.
+
+    The agent reply is already delivered at this point, so the post-run
+    snapshot and change-set persistence must not delay the run's completion.
+    ``run`` is intentionally not passed: the run stream is closed by then, so
+    the in-stream event has no receiver — only the observability bus push
+    (which the frontend actually listens to) matters, and passing a finished
+    run could raise before that push happens.
+    """
+    async def _finalize() -> None:
+        try:
+            await _finalize_workspace_changes(
+                chat_id=chat_id,
+                run_id=run_id,
+                workspace_dir=workspace_dir,
+                before=before,
+                status=status,
+            )
+        except Exception:
+            logger.exception(
+                "Background workspace changes finalize failed for chat %s", chat_id
+            )
+
+    _schedule_detached(
+        _finalize(),
+        _POST_REPLY_BOOKKEEPING_TASKS,
+        error_context=f"workspace changes finalize for chat {chat_id}",
+    )
+
+
+async def drain_post_reply_bookkeeping_tasks() -> None:
+    """Cancel-safe shutdown drain for the detached post-reply bookkeeping tasks.
+
+    Workspace-changes finalize, structured memory capture and the learning
+    schedule are fire-and-forget; without a drain they are silently lost on app
+    exit (previously they ran inline inside the run task, which ChatRunManager's
+    shutdown waits for). Await them with a bounded grace period, cancel whatever
+    is still pending, and discard the registry so the drain stays idempotent.
+    """
+    tasks = list(_POST_REPLY_BOOKKEEPING_TASKS)
+    if not tasks:
+        return
+    try:
+        _done, pending = await asyncio.wait(tasks, timeout=10.0)
+        for task in pending:
+            task.cancel()
+        if pending:
+            await asyncio.gather(*pending, return_exceptions=True)
+    except (asyncio.CancelledError, asyncio.TimeoutError):
+        for task in tasks:
+            task.cancel()
+        raise
+    finally:
+        _POST_REPLY_BOOKKEEPING_TASKS.clear()
 
 
 def register_workbench_chat_routes(
@@ -2417,102 +2626,103 @@ def register_workbench_chat_routes(
             timeline_entries, usage, files = _extract_exchange_timeline(
                 state_messages, state_ids_before
             )
-            fresh = _read_chats_store()
-            fresh_chat = _find_chat(fresh, chat_id)
-            if not fresh_chat:
-                return {}
-            _commit_retry_cut(fresh_chat)
-            configured_model = str(fresh_chat.get("model") or "")
-            model_name = _last_exchange_model(state_messages, state_ids_before) or configured_model
-            for entry in timeline_entries:
-                entry.setdefault("model", model_name)
-            assistant_entry: dict[str, Any] = {
-                "id": _short_id("msg"),
-                "role": "assistant",
-                "content": str(reply_text or ""),
-                "createdAt": _utc_now_iso(),
-                "model": model_name,
-                "processingDurationMs": max(
-                    0, int(round((time.monotonic() - processing_started_at) * 1000))
-                ),
-            }
-            effective_usage = dict(usage)
-            if is_external_agent:
-                effective_usage.update(external_usage)
-            if any(effective_usage.values()):
-                assistant_entry["usage"] = effective_usage
-            reply_files: list[dict[str, Any]] = []
-            known_reply_files: set[str] = set()
-            for file in [*files, *external_artifacts]:
-                if not isinstance(file, dict):
-                    continue
-                key = str(file.get("id") or file.get("url") or file.get("path") or "")
-                if not key or key in known_reply_files:
-                    continue
-                known_reply_files.add(key)
-                reply_files.append(file)
-            if reply_files:
-                assistant_entry["attachments"] = reply_files
-            if external_commands is not None:
-                fresh_chat["agentCommands"] = external_commands
-            if isinstance(external_plan, dict):
-                fresh_chat["activePlan"] = external_plan
-            if external_agent_mode is not None:
-                fresh_chat["agentMode"] = external_agent_mode
-            if external_config_options:
-                config_options = [
-                    item for item in (fresh_chat.get("agentConfigOptions") or [])
-                    if isinstance(item, dict)
-                    and str(item.get("id") or "") not in external_config_options
-                ]
-                config_options.extend(external_config_options.values())
-                fresh_chat["agentConfigOptions"] = config_options[:100]
-            fresh_chat["lastModel"] = model_name
-            if external_trace or external_reasoning_parts:
-                timeline_entries.insert(0, {
-                    "id": _short_id("activity"),
+            with _CHATS_STORE_JSON_LOCK:
+                fresh = _read_chats_store()
+                fresh_chat = _find_chat(fresh, chat_id)
+                if not fresh_chat:
+                    return {}
+                _commit_retry_cut(fresh_chat)
+                configured_model = str(fresh_chat.get("model") or "")
+                model_name = _last_exchange_model(state_messages, state_ids_before) or configured_model
+                for entry in timeline_entries:
+                    entry.setdefault("model", model_name)
+                assistant_entry: dict[str, Any] = {
+                    "id": _short_id("msg"),
                     "role": "assistant",
-                    "content": "",
-                    "createdAt": assistant_entry["createdAt"],
-                    "activityCard": True,
-                    "reasoning": "".join(external_reasoning_parts),
-                    "trace": external_trace[-40:],
-                    "intermediate": True,
+                    "content": str(reply_text or ""),
+                    "createdAt": _utc_now_iso(),
                     "model": model_name,
-                })
-            if external_notifications:
-                timeline_entries[0:0] = [
-                    {
-                        "id": str(notice.get("eventId") or _short_id("notice")),
+                    "processingDurationMs": max(
+                        0, int(round((time.monotonic() - processing_started_at) * 1000))
+                    ),
+                }
+                effective_usage = dict(usage)
+                if is_external_agent:
+                    effective_usage.update(external_usage)
+                if any(effective_usage.values()):
+                    assistant_entry["usage"] = effective_usage
+                reply_files: list[dict[str, Any]] = []
+                known_reply_files: set[str] = set()
+                for file in [*files, *external_artifacts]:
+                    if not isinstance(file, dict):
+                        continue
+                    key = str(file.get("id") or file.get("url") or file.get("path") or "")
+                    if not key or key in known_reply_files:
+                        continue
+                    known_reply_files.add(key)
+                    reply_files.append(file)
+                if reply_files:
+                    assistant_entry["attachments"] = reply_files
+                if external_commands is not None:
+                    fresh_chat["agentCommands"] = external_commands
+                if isinstance(external_plan, dict):
+                    fresh_chat["activePlan"] = external_plan
+                if external_agent_mode is not None:
+                    fresh_chat["agentMode"] = external_agent_mode
+                if external_config_options:
+                    config_options = [
+                        item for item in (fresh_chat.get("agentConfigOptions") or [])
+                        if isinstance(item, dict)
+                        and str(item.get("id") or "") not in external_config_options
+                    ]
+                    config_options.extend(external_config_options.values())
+                    fresh_chat["agentConfigOptions"] = config_options[:100]
+                fresh_chat["lastModel"] = model_name
+                if external_trace or external_reasoning_parts:
+                    timeline_entries.insert(0, {
+                        "id": _short_id("activity"),
                         "role": "assistant",
                         "content": "",
-                        "createdAt": str(notice.get("createdAt") or assistant_entry["createdAt"]),
-                        "notificationCard": True,
-                        "notification": {
-                            key: notice[key]
-                            for key in (
-                                "severity", "category", "message", "source", "terminal"
-                            )
-                            if key in notice
-                        },
+                        "createdAt": assistant_entry["createdAt"],
+                        "activityCard": True,
+                        "reasoning": "".join(external_reasoning_parts),
+                        "trace": external_trace[-40:],
                         "intermediate": True,
                         "model": model_name,
-                    }
-                    for notice in external_notifications
-                ]
-            saved_messages = [*timeline_entries, assistant_entry]
-            _merge_chat_messages_chronologically(fresh_chat, saved_messages)
-            completed_turn_count = _next_completed_turn_count(
-                {"completedTurnCount": completed_turn_count_before},
-                retry=retry,
-                command=command,
-                is_side_agent=is_side_agent,
-            )
-            fresh_chat["completedTurnCount"] = completed_turn_count
-            fresh_chat["status"] = "idle"
-            fresh_chat.pop("pendingQuestion", None)
-            fresh_chat["updatedAt"] = assistant_entry["createdAt"]
-            _write_chats_store(fresh)
+                    })
+                if external_notifications:
+                    timeline_entries[0:0] = [
+                        {
+                            "id": str(notice.get("eventId") or _short_id("notice")),
+                            "role": "assistant",
+                            "content": "",
+                            "createdAt": str(notice.get("createdAt") or assistant_entry["createdAt"]),
+                            "notificationCard": True,
+                            "notification": {
+                                key: notice[key]
+                                for key in (
+                                    "severity", "category", "message", "source", "terminal"
+                                )
+                                if key in notice
+                            },
+                            "intermediate": True,
+                            "model": model_name,
+                        }
+                        for notice in external_notifications
+                    ]
+                saved_messages = [*timeline_entries, assistant_entry]
+                _merge_chat_messages_chronologically(fresh_chat, saved_messages)
+                completed_turn_count = _next_completed_turn_count(
+                    {"completedTurnCount": completed_turn_count_before},
+                    retry=retry,
+                    command=command,
+                    is_side_agent=is_side_agent,
+                )
+                fresh_chat["completedTurnCount"] = completed_turn_count
+                fresh_chat["status"] = "idle"
+                fresh_chat.pop("pendingQuestion", None)
+                fresh_chat["updatedAt"] = assistant_entry["createdAt"]
+                _write_chats_store(fresh)
             # Persist this exchange to the workspace's per-session conversation
             # file so the conversation survives outside the JSON store and the
             # agent can read its own history by id. Best-effort; never block reply.
@@ -2546,49 +2756,16 @@ def register_workbench_chat_routes(
         async def _finalize_async(reply_text: str) -> dict[str, Any]:
             finalized = await asyncio.to_thread(_finalize, reply_text)
             if finalized and not is_side_agent:
-                if not command and not retry:
-                    state_messages = await asyncio.to_thread(
-                        _session_state_messages, chat_id
-                    )
-                    _schedule_structured_memory_capture(
-                        R,
-                        project_id=project_id,
-                        user_text=message,
-                        agent_text=str(reply_text or ""),
-                        state_messages=state_messages,
-                        prior_message_ids=state_ids_before,
-                        session_id=chat_id,
-                    )
-
-                from cyrene.workbench.project_memory_prompt import (
-                    completed_context_snapshot,
-                    context_auto_trigger_threshold,
-                    schedule_learning,
+                _schedule_post_reply_bookkeeping(
+                    chat_id=chat_id,
+                    project_id=project_id,
+                    user_text=message,
+                    reply_text=str(reply_text or ""),
+                    prior_message_ids=state_ids_before,
+                    command=command,
+                    retry=retry,
+                    turn_count=int(finalized.get("completedTurnCount") or 0),
                 )
-
-                turn_count = int(finalized.get("completedTurnCount") or 0)
-                snapshot = await asyncio.to_thread(
-                    completed_context_snapshot,
-                    chat_id,
-                    project_id,
-                    completed_turn_count=turn_count,
-                    final_assistant_text=str(reply_text or ""),
-                )
-                threshold = (
-                    context_auto_trigger_threshold(
-                        project_id, chat_id, snapshot.get("messages") or []
-                    )
-                    if snapshot and not command and not retry
-                    else None
-                )
-                if snapshot and threshold is not None:
-                    snapshot["contextThresholdPercent"] = threshold
-                    schedule_learning(
-                        project_id,
-                        snapshot,
-                        source="conversation_auto",
-                        reason=f"context_{threshold}_percent",
-                    )
             return finalized
 
         def _restore_retry_state() -> None:
@@ -2723,15 +2900,18 @@ def register_workbench_chat_routes(
                 run.outcome = {"kind": "awaiting", "pending": pending}
                 run.outcome["assistantMessages"] = awaiting_messages
                 return
-            await _finalize_workspace_changes(
+            finalized = await _finalize_async(reply)
+            # Finalize the workspace change set after the timeline write so the
+            # two chats-store writers never run concurrently (JSON store mode
+            # has no merge lock; _finalize_async and the detached finalize both
+            # hold _CHATS_STORE_JSON_LOCK for their read-modify-write).
+            _schedule_workspace_changes_finalize(
                 chat_id=chat_id,
                 run_id=run.run_id,
                 workspace_dir=workspace_dir,
                 before=changes_before,
                 status="completed",
-                run=run,
             )
-            finalized = await _finalize_async(reply)
             from cyrene.runtime.host_actions import finalize_origin
             asyncio.create_task(finalize_origin(
                 chat_id,
@@ -2903,15 +3083,16 @@ def register_workbench_chat_routes(
                     "chatId": chat_id,
                     "runId": run.run_id,
                 })
-                await _finalize_workspace_changes(
+                finalized = await _finalize_async(reply)
+                # See the non-streaming path: finalize after the timeline write
+                # so the chats-store writers are never concurrent.
+                _schedule_workspace_changes_finalize(
                     chat_id=chat_id,
                     run_id=run.run_id,
                     workspace_dir=workspace_dir,
                     before=changes_before,
                     status="completed",
-                    run=run,
                 )
-                finalized = await _finalize_async(reply)
                 saved_event = {
                     "type": "saved",
                     **finalized,

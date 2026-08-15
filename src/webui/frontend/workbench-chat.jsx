@@ -13658,46 +13658,14 @@ function WbcMain({ project, chat, chatSummary, loading, runtime, error, errorKin
     };
   }, [chat && chat.id]);
 
-  // Expanded side-panel content only suppresses a floating browser when the
-  // browser actually occupies the right-side track. A window parked fully to
-  // the left remains available while the accordion content is open.
+  // Expanded side-panel content owns the whole right-side corridor below the
+  // conversation card, leaving no room for a floating browser there. Hide the
+  // PiP outright while a side tab is open instead of compressing it into a
+  // sliver or letting it overlap the panel.
   useWbcEffect(function () {
-    var shouldMeasure = !!(
-      sidePanelTabExpanded
-      && browserVisible
-      && (browserWindowMode === "pip" || browserWindowMode === "minimized")
+    setBrowserSuppressedForSide(
+      !!(sidePanelTabExpanded && browserVisible && (browserWindowMode === "pip" || browserWindowMode === "minimized"))
     );
-    if (!shouldMeasure) {
-      setBrowserSuppressedForSide(false);
-      return undefined;
-    }
-    var raf = 0;
-    function measureOverlap() {
-      raf = 0;
-      var main = mainRef.current;
-      var page = main && main.closest(".wbc-page");
-      var side = page && page.querySelector(":scope > .wbc-side .wbc-side-card");
-      var floating = main && main.querySelector(".wbc-browser-window.pip, .wbc-browser-restore-float");
-      if (!side || !floating) return;
-      var sideRect = side.getBoundingClientRect();
-      var floatingRect = floating.getBoundingClientRect();
-      setBrowserSuppressedForSide(
-        floatingRect.right > sideRect.left && floatingRect.left < sideRect.right
-        && floatingRect.bottom > sideRect.top && floatingRect.top < sideRect.bottom
-      );
-    }
-    function scheduleMeasure() {
-      if (raf) cancelAnimationFrame(raf);
-      raf = requestAnimationFrame(measureOverlap);
-    }
-    scheduleMeasure();
-    window.addEventListener("workbench:browser-layout", scheduleMeasure);
-    window.addEventListener("resize", scheduleMeasure);
-    return function () {
-      if (raf) cancelAnimationFrame(raf);
-      window.removeEventListener("workbench:browser-layout", scheduleMeasure);
-      window.removeEventListener("resize", scheduleMeasure);
-    };
   }, [sidePanelTabExpanded, browserVisible, browserWindowMode]);
 
   var floatingBrowserVisible = browserVisible && !browserSuppressedForSide;

@@ -5,9 +5,9 @@
   inset: 0;
   z-index: 10050;
   display: flex;
-  align-items: flex-start;
+  align-items: center;
   justify-content: center;
-  padding: 10vh 24px 24px;
+  padding: 24px;
   background: rgba(0, 0, 0, 0.55);
   backdrop-filter: blur(4px);
   -webkit-backdrop-filter: blur(4px);
@@ -160,9 +160,95 @@
   text-align: center;
 }
 
+.search-empty-state {
+  padding: 32px 24px 16px;
+}
+
 .search-empty-state .empty-icon {
   margin-bottom: 4px;
   opacity: 0.3;
+}
+
+/* Idle-state New actions: full-width card buttons with icon + title + hint,
+   sharing the panel's visual language with search results. */
+.search-empty-actions {
+  width: 100%;
+  margin-top: 22px;
+  display: flex;
+  flex-direction: column;
+  text-align: left;
+}
+
+.search-new-action {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 11px 14px;
+  background: var(--surface-2);
+  border: 1px solid var(--line);
+  border-radius: var(--r-m);
+  color: inherit;
+  cursor: pointer;
+  transition: border-color 0.15s ease, background 0.15s ease, box-shadow 0.15s ease;
+}
+
+.search-new-action:hover,
+.search-new-action:focus-visible {
+  border-color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 7%, var(--surface-2));
+  outline: none;
+}
+
+.search-new-action:active {
+  background: color-mix(in srgb, var(--accent) 12%, var(--surface-2));
+}
+
+.search-new-action-icon {
+  flex-shrink: 0;
+  width: 34px;
+  height: 34px;
+  display: grid;
+  place-items: center;
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--accent) 14%, transparent);
+  color: var(--accent);
+}
+
+.search-new-action-copy {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+
+.search-new-action-title {
+  font-size: 13.5px;
+  font-weight: 600;
+  color: var(--text);
+}
+
+.search-new-action-hint {
+  font-size: 12px;
+  color: var(--text-2);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.search-new-action-chevron {
+  flex-shrink: 0;
+  color: var(--text-3);
+}
+
+.search-new-action-gap {
+  height: 8px;
+}
+
+.search-empty-tip {
+  margin-top: 14px;
+  font-size: 11.5px;
+  color: var(--text-3);
 }
 
 .search-error-state,

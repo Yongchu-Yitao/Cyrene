@@ -62,16 +62,42 @@ async def test_group_metadata_generation_omits_locked_title(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_group_metadata_rejects_missing_generated_title(monkeypatch):
+async def test_group_metadata_retries_once_when_title_missing(monkeypatch):
+    calls = []
+
     async def fake_call(messages, **kwargs):
-        return {"content": '{"title":"","summary":"Browser tasks."}'}
+        calls.append(messages[0]["content"])
+        if len(calls) == 1:
+            return {"content": '{"summary":"Browser tasks."}'}
+        return {"content": '{"title":"Browser work","summary":"Browser tasks."}'}
 
     monkeypatch.setattr(model_service, "call_agent_model", fake_call)
-    with pytest.raises(RuntimeError, match="empty chat group title"):
-        await chat.generate_chat_group_metadata(
-            [
-                {"title": "Open Bilibili", "preview": "Homepage opened"},
-                {"title": "Open Google", "preview": "Search loaded"},
-            ],
-            lang="en",
-        )
+    result = await chat.generate_chat_group_metadata(
+        [
+            {"title": "Open Bilibili", "preview": "Homepage opened"},
+            {"title": "Open Google", "preview": "Search loaded"},
+        ],
+        lang="en",
+    )
+
+    assert result["title"] == "Browser work"
+    assert len(calls) == 2
+    assert "Both fields are required" in calls[1]
+
+
+@pytest.mark.asyncio
+async def test_group_metadata_falls_back_to_member_derived_title(monkeypatch):
+    async def fake_call(messages, **kwargs):
+        return {"content": '{"title":"","summary":""}'}
+
+    monkeypatch.setattr(model_service, "call_agent_model", fake_call)
+    result = await chat.generate_chat_group_metadata(
+        [
+            {"title": "Open Bilibili", "preview": "Homepage opened"},
+            {"title": "Open Google", "preview": "Search loaded"},
+        ],
+        lang="en",
+    )
+
+    assert result["title"] == "Open Bilibili"
+    assert result["summary"] == "Homepage opened"

@@ -205,9 +205,71 @@ function SettingsOverlay({
   actualTheme,
   onToggleTheme,
   project,
+  scrollToId,
 }) {
   var { t, lang, setLang } = useWorkbenchI18n();
   var [tab, setTab] = useStateSt(initialTab === "skills" ? "extensions" : (initialTab || "general"));
+
+  // Deep-link re-sync: React initializes `tab` only once at mount, so when the
+  // search overlay sends a new deep-link request while the settings overlay is
+  // already open, the initialTab prop changes but the tab state would not.
+  // Re-sync the tab here. Declared before the scroll effect below so the tab
+  // switch is committed before the first scroll attempt runs (the retry loop
+  // also re-checks the anchor after the switch).
+  useEffectSt(function () {
+    if (!initialTab) return; // plain "open settings" — keep the current tab
+    var target = initialTab === "skills" ? "extensions" : initialTab;
+    setTab(function (current) { return current === target ? current : target; });
+  }, [initialTab]);
+
+  // Deep-link support: the search overlay can open a specific setting and ask
+  // the panel to scroll to the anchor (id) after the tab has rendered. Some
+  // anchors render only after async data arrives (e.g. codex quota), so retry
+  // the lookup for up to ~10s. If the anchor still never appears (e.g.
+  // setting-amap-key is only rendered when the AMap provider is selected),
+  // give feedback instead of staying silent and land on the tab top.
+  var deepLinkRetryMs = 200;
+  var deepLinkMaxAttempts = 50;
+  useEffectSt(function () {
+    if (!scrollToId) return;
+    var attempts = 0;
+    var timer = null;
+    var raf = null;
+    function showDeepLinkFallback() {
+      var feedback = window.CyreneUI && window.CyreneUI.require
+        ? window.CyreneUI.require("feedback")
+        : null;
+      if (feedback && typeof feedback.showToast === "function") {
+        feedback.showToast(t("settings.deepLinkUnavailable", null, "This setting is currently unavailable"), "info");
+      }
+      var container = document.querySelector(".settings-overlay-content");
+      if (container && typeof container.scrollTo === "function") {
+        container.scrollTo({ top: 0, behavior: "smooth" });
+      }
+    }
+    function tryScroll() {
+      var el = document.getElementById(scrollToId);
+      if (el) {
+        el.scrollIntoView({ block: "center", behavior: "smooth" });
+        el.classList.add("wb-settings-highlight");
+        setTimeout(function () { el.classList.remove("wb-settings-highlight"); }, 2200);
+        return;
+      }
+      if (attempts < deepLinkMaxAttempts) {
+        attempts += 1;
+        raf = requestAnimationFrame(function () {
+          timer = setTimeout(tryScroll, deepLinkRetryMs);
+        });
+      } else {
+        showDeepLinkFallback();
+      }
+    }
+    raf = requestAnimationFrame(tryScroll);
+    return function () {
+      cancelAnimationFrame(raf);
+      if (timer) clearTimeout(timer);
+    };
+  }, [scrollToId]);
 
   // ── General state ──
   var [desktopNotifications, setDesktopNotifications] = useStateSt(function () {
@@ -1863,6 +1925,7 @@ function GeneralPanel(p) {
         React.createElement("button", { className: "wb-seg-btn" + (lang === "en" ? " active" : ""), onClick: function () { setLang("en"); } }, "English"),
         React.createElement("button", { className: "wb-seg-btn" + (lang === "zh" ? " active" : ""), onClick: function () { setLang("zh"); } }, "中文"),
       ),
+      undefined, "setting-language",
     ),
     FieldRow(t("settings.timezone"), t("settings.timezoneHint"),
       React.createElement("select", {
@@ -1875,9 +1938,11 @@ function GeneralPanel(p) {
           return React.createElement("option", { key: timezone, value: timezone }, timezoneOptionLabel(timezone));
         }),
       ),
+      undefined, "setting-timezone",
     ),
     FieldRow(t("settings.desktopNotifications"), t("settings.desktopNotificationsHint"),
       Toggle(desktopNotifications, toggleDesktopNotifications),
+      undefined, "setting-desktop-notifications",
     ),
     React.cloneElement(SectionBlock(t("settings.agentProxy"), t("settings.agentProxyHint"),
       FieldRow(t("settings.agentProxyEnabled"), t("settings.agentProxyEnabledHint"),
@@ -1902,30 +1967,36 @@ function GeneralPanel(p) {
         ),
         agentProxyStatus && React.createElement("span", { className: "wb-hint saved", role: "status", "aria-live": "polite" }, agentProxyStatus),
       ),
-    ), { className: "wb-section-block wb-agent-proxy-settings" }),
+    ), { className: "wb-section-block wb-agent-proxy-settings", id: "setting-agent-proxy" }),
     FieldRow(t("settings.mapProvider"), t("settings.mapProviderHint"),
       React.createElement("div", { className: "wb-seg" },
         React.createElement("button", { className: "wb-seg-btn" + (mapProvider === "direct" ? " active" : ""), onClick: function () { setMapProvider("direct"); localStorage.setItem("cyrene-tweak-map-provider", "direct"); } }, t("settings.mapProviderDirect")),
         React.createElement("button", { className: "wb-seg-btn" + (mapProvider === "amap" ? " active" : ""), onClick: function () { setMapProvider("amap"); } }, t("settings.mapProviderAmap")),
       ),
+      undefined, "setting-map-provider",
     ),
     mapProvider === "amap" && FieldRow(t("settings.amapKey"), t("settings.amapKeyHint"),
-      React.createElement("div", { className: "wb-inline-row" },
-        React.createElement("input", { className: "wb-input mono", type: "password", value: amapKey, onChange: function (e) { setAmapKey(e.target.value); }, placeholder: t("settings.amapKeyPlaceholder") }),
-        React.createElement("button", { className: "wb-btn primary", onClick: saveAmapKey }, t("settings.save")),
-      ),
-      amapKeySaved && React.createElement("span", { className: "wb-hint saved" }, amapKeySaved),
+      [
+        React.createElement("div", { className: "wb-inline-row" },
+          React.createElement("input", { className: "wb-input mono", type: "password", value: amapKey, onChange: function (e) { setAmapKey(e.target.value); }, placeholder: t("settings.amapKeyPlaceholder") }),
+          React.createElement("button", { className: "wb-btn primary", onClick: saveAmapKey }, t("settings.save")),
+        ),
+        amapKeySaved && React.createElement("span", { className: "wb-hint saved" }, amapKeySaved),
+      ],
+      undefined, "setting-amap-key",
     ),
     supportsDesktop && FieldRow(t("settings.runInBackground"), t("settings.runInBackgroundHint"),
       Toggle(runInBackground, function () { applyDesktop({ runInBackground: !runInBackground }); }, desktopBusy),
+      undefined, "setting-run-in-background",
     ),
     supportsDesktop && FieldRow(t("settings.quickChatAssistant"),
       runInBackground ? t("settings.quickChatAssistantHint") : t("settings.quickChatAssistantNeedsResident"),
       Toggle(quickChatEnabled, function () { applyDesktop({ quickChatEnabled: !quickChatEnabled }); }, desktopBusy || !runInBackground),
+      undefined, "setting-quick-chat",
     ),
     supportsDesktop && desktopNotice
       && React.createElement("div", { className: "wb-hint", style: { color: "var(--wb-error-text)" } }, desktopNotice),
-    SectionBlock(t("settings.zoteroIntegration"), t("settings.zoteroIntegrationHint"),
+    React.cloneElement(SectionBlock(t("settings.zoteroIntegration"), t("settings.zoteroIntegrationHint"),
       FieldRow(t("settings.zoteroLocalApiUrl"), t("settings.zoteroLocalApiUrlHint"),
         React.createElement("div", { className: "wb-integration-control" },
           React.createElement("input", {
@@ -1963,13 +2034,13 @@ function GeneralPanel(p) {
           }, integrationBusy === "save-zotero" ? t("settings.saving") : t("settings.save")),
         ),
       ),
-    ),
+    ), { id: "setting-zotero" }),
   );
 }
 
 // ── Models Panel ──
 function EmbeddingSettingsSection(p) {
-  var { t, settings, setSettings, apiKey, setApiKey, status, setStatus, busy, setBusy } = p;
+  var { t, settings, setSettings, apiKey, setApiKey, status, setStatus, busy, setBusy, anchorId } = p;
 
   function draft() {
     var payload = {
@@ -2016,6 +2087,7 @@ function EmbeddingSettingsSection(p) {
   return ModelSettingsSection({
     title: t("settings.embeddingIntegration"),
     description: t("settings.embeddingIntegrationHint"),
+    anchorId: anchorId,
     children: [
       FieldRow(t("settings.embeddingProvider"), t("settings.embeddingProviderHint"),
         React.createElement("select", {
@@ -2485,6 +2557,7 @@ function ModelsPanel(p) {
     // Primary model
     ModelSettingsSection({
       title: t("settings.primaryModelSlot"),
+      anchorId: "setting-model-source",
       headerAction: React.createElement("div", { className: "wb-primary-source", ref: primarySourceRef },
         React.createElement("button", {
           className: "wb-primary-source-trigger",
@@ -2617,6 +2690,7 @@ function ModelsPanel(p) {
       title: t("settings.secondaryModelSlot"),
       status: secondaryConfigured ? t("settings.modelStatusConfigured") : t("settings.modelStatusNotConfigured"),
       description: t("settings.secondaryModelHint"),
+      anchorId: "setting-secondary-model",
       collapsible: true,
       children: [
       secondaryModel && ModelCard([
@@ -2637,6 +2711,7 @@ function ModelsPanel(p) {
       status: visionConfigured
         ? t("settings.modelStatusConfiguredWithCount", { count: visionFallbackCount })
         : t("settings.modelStatusNotConfigured"),
+      anchorId: "setting-vision-model",
       collapsible: true,
       children: [
       visionModels[0] && ModelCard([
@@ -2680,6 +2755,7 @@ function ModelsPanel(p) {
       apiKey: embeddingApiKey, setApiKey: setEmbeddingApiKey,
       status: embeddingStatus, setStatus: setEmbeddingStatus,
       busy: embeddingBusy, setBusy: setEmbeddingBusy,
+      anchorId: "setting-embedding",
     }),
     ModelSettingsSection({
       title: t("settings.localModels"),
@@ -2789,17 +2865,17 @@ function ModelSettingsSection(options) {
     options.status && React.createElement("span", { className: "wb-model-status", key: "status" }, options.status),
     options.headerAction && React.createElement("div", { className: "wb-model-header-action", key: "action" }, options.headerAction),
   ];
+  var sectionProps = {
+    className: "wb-model-section" + (options.className ? " " + options.className : ""),
+  };
+  if (options.anchorId) sectionProps.id = options.anchorId;
   if (options.collapsible) {
-    return React.createElement("details", {
-      className: "wb-model-section" + (options.className ? " " + options.className : ""),
-    },
+    return React.createElement("details", sectionProps,
       React.createElement("summary", { className: "wb-model-section-head" }, ...headerContent),
       body,
     );
   }
-  return React.createElement("section", {
-    className: "wb-model-section" + (options.className ? " " + options.className : ""),
-  },
+  return React.createElement("section", sectionProps,
     React.createElement("div", { className: "wb-model-section-head" }, ...headerContent),
     body,
   );
@@ -2827,11 +2903,14 @@ function ChannelsPanel(p) {
       ),
       React.createElement("p", { className: "wb-channel-desc" }, t("settings.telegramTokenHint")),
       FieldRow(t("settings.telegramToken"), null,
-        React.createElement("div", { className: "wb-inline-row" },
-          React.createElement("input", { className: "wb-input mono", type: "password", value: telegramToken, onChange: function (e) { setTelegramToken(e.target.value); }, placeholder: t("settings.placeholderOptional") }),
-          React.createElement("button", { className: "wb-btn primary", onClick: saveTelegram }, t("settings.saveNotification")),
-        ),
-        telegramSaved && React.createElement("span", { className: "wb-hint saved" }, telegramSaved),
+        [
+          React.createElement("div", { className: "wb-inline-row" },
+            React.createElement("input", { className: "wb-input mono", type: "password", value: telegramToken, onChange: function (e) { setTelegramToken(e.target.value); }, placeholder: t("settings.placeholderOptional") }),
+            React.createElement("button", { className: "wb-btn primary", onClick: saveTelegram }, t("settings.saveNotification")),
+          ),
+          telegramSaved && React.createElement("span", { className: "wb-hint saved" }, telegramSaved),
+        ],
+        undefined, "setting-telegram",
       ),
       FieldRow(t("settings.notifyTelegram"), t("settings.notifyTelegramHint"),
         Toggle(notifyTelegram, function () {
@@ -2842,7 +2921,7 @@ function ChannelsPanel(p) {
       ),
     ),
 
-    React.createElement(WeChatConnectionPanel, { t, notifyWechat, setNotifyWechat }),
+    React.createElement(WeChatConnectionPanel, { t, notifyWechat, setNotifyWechat, anchorId: "setting-wechat" }),
   );
 }
 
@@ -2980,7 +3059,7 @@ function WeChatConnectionPanel(p) {
     ? (running ? t("settings.wechatConnectedRunning") : t("settings.wechatConnectedStopped"))
     : t("settings.wechatNotConnected");
 
-  return React.createElement("div", { className: "wb-channel-card wb-wechat-card" },
+  return React.createElement("div", { className: "wb-channel-card wb-wechat-card", id: p.anchorId || undefined },
     React.createElement("div", { className: "wb-channel-head wb-channel-head-spread" },
       React.createElement("div", { className: "wb-channel-title" },
         React.createElement("span", { className: "wb-channel-icon" }, "⌖"),
@@ -3052,7 +3131,7 @@ function AgentsPanel(p) {
     SectionTitle(t("settings.agents"), t("settings.agentsSubtitle")),
 
     // SOUL.md
-    React.createElement("div", { className: "wb-field wb-field-stack wb-field-soul" },
+    React.createElement("div", { className: "wb-field wb-field-stack wb-field-soul", id: "setting-soul" },
       React.createElement("div", { className: "wb-label" }, t("settings.soulMd"), React.createElement("small", null, t("settings.soulMdHint"))),
       React.createElement("textarea", { className: "wb-textarea mono wb-textarea-soul", value: soulDraft, onChange: function (e) { setSoulDraft(e.target.value); } }),
       React.createElement("div", { className: "wb-inline-row wb-inline-row-start", style: { marginTop: 8 } },
@@ -3067,10 +3146,13 @@ function AgentsPanel(p) {
         React.createElement("option", { value: "conservative" }, t("settings.conservative")),
         React.createElement("option", { value: "off" }, t("settings.off")),
       ),
+      undefined, "setting-spawn-policy",
     ),
-    FieldRow(t("settings.agentProactive"), t("settings.agentProactiveHint"), Toggle(agentProactive, function () { setAgentProactive(!agentProactive); })),
+    FieldRow(t("settings.agentProactive"), t("settings.agentProactiveHint"), Toggle(agentProactive, function () { setAgentProactive(!agentProactive); }),
+      undefined, "setting-agent-proactive"),
     FieldRow(t("settings.heartbeatInterval"), t("settings.heartbeatIntervalHint"),
       React.createElement("input", { className: "wb-input mono", type: "number", min: "60", step: "1", value: config.heartbeat_interval, onChange: function (e) { setConfig({ ...config, heartbeat_interval: e.target.value }); }, style: { maxWidth: 120 } }),
+      undefined, "setting-heartbeat",
     ),
     React.createElement("div", { className: "wb-save-actions" },
       React.createElement("button", { className: "wb-btn primary", onClick: saveAgents }, t("settings.saveApply")),
@@ -3398,6 +3480,7 @@ function AppearancePanel(p) {
         React.createElement("button", { className: "wb-seg-btn" + (tweaks.theme === "light" ? " active" : ""), onClick: function () { setTweak("theme", "light"); } }, t("settings.light")),
         React.createElement("button", { className: "wb-seg-btn" + (tweaks.theme === "dark" ? " active" : ""), onClick: function () { setTweak("theme", "dark"); } }, t("settings.dark")),
       ),
+      undefined, "setting-theme",
     ),
     FieldRow(t("settings.themeColor"), t("settings.themeColorHint", { theme: actualTheme || t("settings.system") }),
       React.createElement("div", { className: "wb-accent-picker", ref: accentPickerRef },
@@ -3441,6 +3524,7 @@ function AppearancePanel(p) {
           ariaLabel: t("settings.customColor"),
         }),
       ),
+      undefined, "setting-theme-color",
     ),
     FieldRow(t("settings.workbenchBackground"), t("settings.workbenchBackgroundHint"),
       React.createElement("div", { className: "wb-workbench-backgrounds" },
@@ -3461,17 +3545,21 @@ function AppearancePanel(p) {
           setTweak: setTweak,
         }),
       ),
+      undefined, "setting-workbench-background",
     ),
     FieldRow(t("settings.textSize"), t("settings.textSizeHint"),
       React.createElement("div", { className: "wb-seg" },
         React.createElement("button", { className: "wb-seg-btn" + (tweaks.textSize === "default" ? " active" : ""), onClick: function () { setTweak("textSize", "default"); } }, React.createElement("span", { className: "wb-text-size-sample default" }, "A"), " ", t("settings.default")),
         React.createElement("button", { className: "wb-seg-btn" + (tweaks.textSize === "large" ? " active" : ""), onClick: function () { setTweak("textSize", "large"); } }, React.createElement("span", { className: "wb-text-size-sample large" }, "A"), " ", t("settings.large")),
       ),
+      undefined, "setting-text-size",
     ),
     FieldRow(t("settings.performanceMode"), t("settings.performanceModeHint"),
       Toggle(performanceMode, togglePerformanceMode, performanceModeBusy, t("settings.performanceMode")),
+      undefined, "setting-performance-mode",
     ),
-    FieldRow(t("settings.pulseAnimation"), t("settings.pulseAnimationHint"), Toggle(tweaks.animatePulse, function () { setTweak("animatePulse", !tweaks.animatePulse); })),
+    FieldRow(t("settings.pulseAnimation"), t("settings.pulseAnimationHint"), Toggle(tweaks.animatePulse, function () { setTweak("animatePulse", !tweaks.animatePulse); }),
+      undefined, "setting-pulse-animation"),
   );
 }
 
@@ -3534,7 +3622,7 @@ function CapabilitiesPanel(p) {
   return React.createElement("div", { className: "settings-panel" },
     SectionTitle(t("settings.capabilities"), t("settings.capabilitiesSubtitle")),
 
-    SectionBlock(t("settings.voiceCapability"), t("settings.voiceCapabilityHint"),
+    React.cloneElement(SectionBlock(t("settings.voiceCapability"), t("settings.voiceCapabilityHint"),
       React.createElement("div", { className: "wb-voice-settings" },
         FieldRow(
           t("settings.voiceAutoSend"),
@@ -3685,10 +3773,10 @@ function CapabilitiesPanel(p) {
           ),
         ),
       ),
-    ),
+    ), { id: "setting-voice" }),
 
     // Tool packages
-    SectionBlock(t("settings.toolPackages"), t("settings.toolPackagesHint"),
+    React.cloneElement(SectionBlock(t("settings.toolPackages"), t("settings.toolPackagesHint"),
       React.createElement("div", { className: "wb-tool-package-settings" },
         toolGroups.filter(function (group) {
           return group.kind === "package";
@@ -3714,7 +3802,7 @@ function CapabilitiesPanel(p) {
       toolsSaved && React.createElement("div", { className: "wb-save-actions" },
         React.createElement("span", { className: "wb-hint saved" }, toolsSaved),
       ),
-    ),
+    ), { id: "setting-tool-packages" }),
   );
 }
 
@@ -3838,11 +3926,13 @@ function DataPanel(p) {
 
   return React.createElement("div", { className: "settings-panel" },
     SectionTitle(t("settings.data"), t("settings.dataSubtitle")),
-    FieldRow(t("settings.redactSecrets"), t("settings.redactSecretsHint"), Toggle(redactSecrets, function () { saveRedactSecrets(!redactSecrets); })),
+    FieldRow(t("settings.redactSecrets"), t("settings.redactSecretsHint"), Toggle(redactSecrets, function () { saveRedactSecrets(!redactSecrets); }),
+      undefined, "setting-redact-secrets"),
     FieldRow(t("settings.clearSession"), t("settings.clearSessionHint"),
       React.createElement("button", { className: "wb-btn muted", onClick: clearSession }, t("settings.clearSessionBtn")),
+      undefined, "setting-clear-session",
     ),
-    React.createElement("div", { className: "wb-field wb-field-stack wb-field-danger" },
+    React.createElement("div", { className: "wb-field wb-field-stack wb-field-danger", id: "setting-reset-app-data" },
       React.createElement("div", { className: "wb-label" },
         t("settings.resetAppData"),
         React.createElement("small", null, t("settings.resetAppDataHint")),
@@ -3856,15 +3946,15 @@ function DataPanel(p) {
     ),
 
     // Path info
-    SectionBlock(t("settings.pathInfo"), null,
+    React.cloneElement(SectionBlock(t("settings.pathInfo"), null,
       FieldRow(t("settings.baseDir"), null, React.createElement("input", { className: "wb-input mono wb-path-display", value: configLoading ? t("settings.pathLoading") : config.base_dir, readOnly: true })),
       FieldRow(t("settings.dataDir"), null, React.createElement("input", { className: "wb-input mono wb-path-display", value: configLoading ? t("settings.pathLoading") : config.data_dir, readOnly: true })),
       FieldRow(t("settings.workspaceDir"), null, React.createElement("input", { className: "wb-input mono wb-path-display", value: configLoading ? t("settings.pathLoading") : config.workspace_dir, readOnly: true })),
       FieldRow(t("settings.soulPath"), null, React.createElement("input", { className: "wb-input mono wb-path-display", value: configLoading ? t("settings.pathLoading") : config.soul_path, readOnly: true })),
-    ),
+    ), { id: "setting-paths" }),
 
     // Backup
-    SectionBlock(t("settings.backup"), t("settings.backupHint"),
+    React.cloneElement(SectionBlock(t("settings.backup"), t("settings.backupHint"),
       React.createElement("div", { className: "wb-inline-row" },
         React.createElement("button", { className: "wb-btn primary", onClick: createBackup }, t("settings.backupExportBtn")),
         React.createElement("button", { className: "wb-btn", "data-cyrene-risk": "R3", onClick: restoreBackup }, t("settings.backupRestoreBtn")),
@@ -3876,10 +3966,10 @@ function DataPanel(p) {
           React.createElement("span", { className: "wb-backup-meta" }, formatBytes(b.size), " · ", formatDate(b.modified)),
         );
       }),
-    ),
+    ), { id: "setting-backup" }),
 
     // Session export
-    SectionBlock(t("settings.sessionExport"), t("settings.sessionExportHint"),
+    React.cloneElement(SectionBlock(t("settings.sessionExport"), t("settings.sessionExportHint"),
       exportSessions.length > 0 ? React.createElement("div", { className: "wb-export-area" },
         React.createElement("div", { className: "wb-export-session-toolbar" },
           React.createElement("span", null, t("settings.sessionExportSelected", { n: exportSids.length })),
@@ -3906,7 +3996,7 @@ function DataPanel(p) {
           exportMsg && React.createElement("span", { className: "wb-hint" }, exportMsg),
         ),
       ) : React.createElement("p", { className: "wb-hint" }, t("settings.sessionExportNoSessions")),
-    ),
+    ), { id: "setting-session-export" }),
   );
 }
 
@@ -5834,7 +5924,7 @@ function ExtensionsPanel(p) {
   var agentRecommended = Array.isArray(agentListing.recommended) ? agentListing.recommended : [];
   var agentInstalled = Array.isArray(agentListing.installed) ? agentListing.installed : [];
 
-  return React.createElement("div", { className: "wb-extensions-page" },
+  return React.createElement("div", { className: "wb-extensions-page", id: "setting-extensions" },
     React.createElement("header", { className: "wb-extensions-header" },
       SectionTitle(t("settings.extensions"), t("settings.extensionsSubtitle")),
       React.createElement("div", { className: "wb-extension-header-actions" },
@@ -6489,7 +6579,7 @@ function BudgetPanel(p) {
   return React.createElement("div", { className: "settings-panel" },
     SectionTitle(t("settings.budget"), t("settings.budgetSubtitle")),
 
-    codexQuota.connected && SectionBlock(t("settings.codexQuota"), null,
+    codexQuota.connected && React.cloneElement(SectionBlock(t("settings.codexQuota"), null,
       FieldRow(t("settings.codexQuotaLimit"), t("settings.codexQuotaLimitHint"),
         Toggle(codexQuotaEnabled, toggleCodexQuota),
       ),
@@ -6521,7 +6611,7 @@ function BudgetPanel(p) {
             );
           }),
         ),
-    ),
+    ), { id: "setting-codex-quota" }),
 
     // ── Overview section ──
     SectionBlock(t("settings.budgetOverview"), null,
@@ -6558,7 +6648,7 @@ function BudgetPanel(p) {
     ),
 
     // ── Budget configuration ──
-    SectionBlock(t("settings.budgetConfig"), null,
+    React.cloneElement(SectionBlock(t("settings.budgetConfig"), null,
       FieldRow(t("settings.budgetEnable"), t("settings.budgetEnableHint"),
         Toggle(budgetEnabled, toggleEnabled),
       ),
@@ -6628,7 +6718,7 @@ function BudgetPanel(p) {
           budgetSaved && React.createElement("span", { className: "wb-hint saved" }, budgetSaved),
         ),
       ),
-    ),
+    ), { id: "setting-budget" }),
 
     // ── Cost by model ──
     SectionBlock(t("settings.budgetByModel"), t("settings.budgetByModelHint"),
@@ -6675,8 +6765,8 @@ function SectionBlock(title, extra, ...children) {
   );
 }
 
-function FieldRow(label, hint, controls, key) {
-  return React.createElement("div", { className: "wb-field", key: key },
+function FieldRow(label, hint, controls, key, anchorId) {
+  return React.createElement("div", { className: "wb-field", key: key, id: anchorId || undefined },
     React.createElement("div", { className: "wb-label" },
       label,
       hint && React.createElement("small", null, hint),

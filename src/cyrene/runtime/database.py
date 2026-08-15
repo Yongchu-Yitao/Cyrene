@@ -829,60 +829,157 @@ def record_memory_touch_sync(db_path: str, *, day: str | None = None, emotional_
         db.commit()
 
 
-async def record_runtime_usage(db_path: str, timestamp: str, usage: dict | None = None) -> None:
-    day = _normalize_day(timestamp=timestamp)
-    usage = usage if isinstance(usage, dict) else {}
-    async with aiosqlite.connect(db_path) as db:
-        await db.execute("INSERT OR IGNORE INTO daily_stats (day) VALUES (?)", (day,))
-        await db.execute(
-            """
-            UPDATE daily_stats
-            SET llm_requests = llm_requests + 1,
-                prompt_tokens = prompt_tokens + ?,
-                completion_tokens = completion_tokens + ?,
-                total_tokens = total_tokens + ?,
-                cache_hit_tokens = cache_hit_tokens + ?,
-                cache_miss_tokens = cache_miss_tokens + ?
-            WHERE day = ?
-            """,
-            (
-                int(usage.get("prompt_tokens") or 0),
-                int(usage.get("completion_tokens") or 0),
-                int(usage.get("total_tokens") or 0),
-                int(usage.get("prompt_cache_hit_tokens") or 0),
-                int(usage.get("prompt_cache_miss_tokens") or 0),
-                day,
-            ),
-        )
-        await db.commit()
+async def record_usage_stats_batch(
+    db_path: str,
+    *,
+    runtime_events: list[tuple] | tuple = (),
+    model_events: list[tuple] | tuple = (),
+    tool_events: list[tuple] | tuple = (),
+    permission_events: list[dict] | tuple = (),
+) -> None:
+    """Persist per-day usage counters and permission decisions with one commit.
 
-
-async def record_model_usage(db_path: str, timestamp: str, model: str, usage: dict | None = None) -> None:
-    if not model:
+    Batch counterpart of ``record_runtime_usage`` / ``record_model_usage`` /
+    ``record_tool_call`` / ``record_permission_decision``: events are
+    aggregated in memory per day / (day, model) / (day, tool) and written with
+    a single connection and transaction. Counter semantics are identical to the
+    per-event writers.
+    """
+    if not (runtime_events or model_events or tool_events or permission_events):
         return
-    day = _normalize_day(timestamp=timestamp)
-    model = model.strip()
-    usage = usage if isinstance(usage, dict) else {}
+    day_stats: dict[str, dict[str, int]] = {}
+    model_stats: dict[tuple[str, str], list[int]] = {}
+    tool_counts: dict[tuple[str, str], int] = {}
+    for timestamp, usage in runtime_events:
+        usage = usage if isinstance(usage, dict) else {}
+        day = _normalize_day(timestamp=timestamp)
+        stats = day_stats.setdefault(day, {
+            "llm_requests": 0, "prompt_tokens": 0, "completion_tokens": 0,
+            "total_tokens": 0, "cache_hit_tokens": 0, "cache_miss_tokens": 0,
+            "tool_calls": 0,
+        })
+        stats["llm_requests"] += 1
+        stats["prompt_tokens"] += int((usage or {}).get("prompt_tokens") or 0)
+        stats["completion_tokens"] += int((usage or {}).get("completion_tokens") or 0)
+        stats["total_tokens"] += int((usage or {}).get("total_tokens") or 0)
+        stats["cache_hit_tokens"] += int((usage or {}).get("prompt_cache_hit_tokens") or 0)
+        stats["cache_miss_tokens"] += int((usage or {}).get("prompt_cache_miss_tokens") or 0)
+    for timestamp, model, usage in model_events:
+        if not model:
+            continue
+        usage = usage if isinstance(usage, dict) else {}
+        day = _normalize_day(timestamp=timestamp)
+        key = (day, str(model).strip())
+        counts = model_stats.setdefault(key, [0, 0, 0])
+        counts[0] += 1
+        counts[1] += int((usage or {}).get("prompt_tokens") or 0)
+        counts[2] += int((usage or {}).get("completion_tokens") or 0)
+    for timestamp, tool in tool_events:
+        day = _normalize_day(timestamp=timestamp)
+        day_stats.setdefault(day, {
+            "llm_requests": 0, "prompt_tokens": 0, "completion_tokens": 0,
+            "total_tokens": 0, "cache_hit_tokens": 0, "cache_miss_tokens": 0,
+            "tool_calls": 0,
+        })["tool_calls"] += 1
+        tool_name = str(tool or "").strip()
+        if tool_name:
+            tool_key = (day, tool_name)
+            tool_counts[tool_key] = tool_counts.get(tool_key, 0) + 1
+
     async with aiosqlite.connect(db_path) as db:
-        await db.execute(
-            "INSERT OR IGNORE INTO daily_model_stats (day, model) VALUES (?, ?)",
-            (day, model),
-        )
-        await db.execute(
-            """
-            UPDATE daily_model_stats
-            SET requests = requests + 1,
-                prompt_tokens = prompt_tokens + ?,
-                completion_tokens = completion_tokens + ?
-            WHERE day = ? AND model = ?
-            """,
-            (
-                int(usage.get("prompt_tokens") or 0),
-                int(usage.get("completion_tokens") or 0),
-                day,
-                model,
-            ),
-        )
+        for day, stats in day_stats.items():
+            await db.execute("INSERT OR IGNORE INTO daily_stats (day) VALUES (?)", (day,))
+            await db.execute(
+                """
+                UPDATE daily_stats
+                SET llm_requests = llm_requests + ?,
+                    prompt_tokens = prompt_tokens + ?,
+                    completion_tokens = completion_tokens + ?,
+                    total_tokens = total_tokens + ?,
+                    cache_hit_tokens = cache_hit_tokens + ?,
+                    cache_miss_tokens = cache_miss_tokens + ?,
+                    tool_calls = tool_calls + ?
+                WHERE day = ?
+                """,
+                (
+                    stats["llm_requests"], stats["prompt_tokens"],
+                    stats["completion_tokens"], stats["total_tokens"],
+                    stats["cache_hit_tokens"], stats["cache_miss_tokens"],
+                    stats["tool_calls"], day,
+                ),
+            )
+        for (day, model), counts in model_stats.items():
+            await db.execute(
+                "INSERT OR IGNORE INTO daily_model_stats (day, model) VALUES (?, ?)",
+                (day, model),
+            )
+            await db.execute(
+                """
+                UPDATE daily_model_stats
+                SET requests = requests + ?, prompt_tokens = prompt_tokens + ?,
+                    completion_tokens = completion_tokens + ?
+                WHERE day = ? AND model = ?
+                """,
+                (counts[0], counts[1], counts[2], day, model),
+            )
+        for (day, tool), count in tool_counts.items():
+            await db.execute(
+                """
+                INSERT INTO daily_tool_stats (day, tool, count) VALUES (?, ?, ?)
+                ON CONFLICT(day, tool) DO UPDATE SET count = count + ?
+                """,
+                (day, tool, count, count),
+            )
+        if permission_events:
+            await db.execute(
+                """
+                CREATE TABLE IF NOT EXISTS permission_decisions (
+                    id TEXT PRIMARY KEY,
+                    created_at TEXT NOT NULL,
+                    session_id TEXT NOT NULL DEFAULT '',
+                    round_id TEXT NOT NULL DEFAULT '',
+                    event_type TEXT NOT NULL,
+                    source TEXT NOT NULL DEFAULT '',
+                    tool_name TEXT NOT NULL DEFAULT '',
+                    operation TEXT NOT NULL DEFAULT '',
+                    permission_kind TEXT NOT NULL DEFAULT '',
+                    path_hint TEXT NOT NULL DEFAULT '',
+                    approved INTEGER NOT NULL,
+                    rationale TEXT NOT NULL DEFAULT '',
+                    fingerprint TEXT NOT NULL DEFAULT ''
+                )
+                """
+            )
+            rows = []
+            for event in permission_events:
+                event_type = str(event.get("type") or "permission_decision")
+                raw_decision = str(event.get("decision") or "").strip().lower()
+                approved = event.get("approved") is True or raw_decision == "approved"
+                rows.append((
+                    str(event.get("event_id") or uuid.uuid4().hex),
+                    str(event.get("timestamp") or datetime.now(timezone.utc).isoformat()),
+                    str(event.get("session_id") or ""),
+                    str(event.get("round_id") or ""),
+                    event_type,
+                    str(event.get("source") or ("auto_reviewer" if event_type == "auto_review" else "user")),
+                    str(event.get("tool_name") or event.get("tool") or ""),
+                    str(event.get("operation") or ""),
+                    str(event.get("permission_kind") or ""),
+                    str(event.get("path_hint") or ""),
+                    1 if approved else 0,
+                    str(event.get("rationale") or ""),
+                    str(event.get("fingerprint") or ""),
+                ))
+            await db.executemany(
+                """
+                INSERT OR REPLACE INTO permission_decisions (
+                    id, created_at, session_id, round_id, event_type, source,
+                    tool_name, operation, permission_kind, path_hint, approved,
+                    rationale, fingerprint
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                rows,
+            )
         await db.commit()
 
 

@@ -11,6 +11,29 @@ var SEARCH_TYPES = [
   { id: "schedule", labelKey: "search.type.schedule" },
 ];
 
+// Command-palette entries: matched against the translated label/hint/keywords
+// and executed through the onCommand prop (wired in the workbench shell).
+var SEARCH_COMMANDS = [
+  { id: "new-chat", labelKey: "search.command.newChat", hintKey: "search.command.newChatHint", keywords: ["新对话", "对话", "chat", "new chat"] },
+  { id: "new-task", labelKey: "search.command.newTask", hintKey: "search.command.newTaskHint", keywords: ["新任务", "任务", "task", "new task"] },
+  { id: "new-project", labelKey: "search.command.newProject", hintKey: "search.command.newProjectHint", keywords: ["新项目", "项目", "project", "new project"] },
+  { id: "open-settings", labelKey: "search.command.openSettings", hintKey: "search.command.openSettingsHint", keywords: ["设置", "settings", "偏好"] },
+  { id: "open-shortcuts", labelKey: "search.command.openShortcuts", hintKey: "search.command.openShortcutsHint", keywords: ["快捷键", "shortcuts", "按键"] },
+  { id: "open-extensions", labelKey: "search.command.openExtensions", hintKey: "search.command.openExtensionsHint", keywords: ["扩展", "extensions", "插件"] },
+  { id: "open-budget", labelKey: "search.command.openBudget", hintKey: "search.command.openBudgetHint", keywords: ["预算", "budget", "额度"] },
+  { id: "open-about", labelKey: "search.command.openAbout", hintKey: "search.command.openAboutHint", keywords: ["关于", "about", "版本", "更新"] },
+  { id: "toggle-theme", labelKey: "search.command.toggleTheme", hintKey: "search.command.toggleThemeHint", keywords: ["主题", "theme", "深色", "浅色"] },
+  { id: "toggle-sidebar", labelKey: "search.command.toggleSidebar", hintKey: "search.command.toggleSidebarHint", keywords: ["侧边栏", "sidebar", "边栏"] },
+];
+
+var SETTINGS_INDEX = (function () {
+  try {
+    return window.CyreneUI.require("settings-index");
+  } catch (e) {
+    return null;
+  }
+})();
+
 var SEARCH_TYPE_ORDER = ["project", "task", "chat", "knowledge", "memory", "schedule"];
 var SEARCH_REQUEST_TIMEOUT_MS = 10000;
 var SEARCH_GROUP_KEYS = {
@@ -22,7 +45,7 @@ var SEARCH_GROUP_KEYS = {
   schedule: "search.group.schedule",
 };
 
-function SearchOverlay({ onClose }) {
+function SearchOverlay({ onClose, onCommand, onOpenSettings }) {
   var { t, lang } = window.CyreneUI.require("i18n").use();
   var inputRef = useRefSr(null);
   var resultsRef = useRefSr(null);
@@ -35,6 +58,7 @@ function SearchOverlay({ onClose }) {
   var debounceRef = useRefSr(null);
   var abortRef = useRefSr(null);
   var requestSeqRef = useRefSr(0);
+  var flatListRef = useRefSr([]); // flat list of the last committed render (see Enter handler)
 
   // Auto-focus input on mount and restore focus on close.
   useEffectSr(function () {
@@ -52,7 +76,7 @@ function SearchOverlay({ onClose }) {
   useEffectSr(function () {
     function getResultNodes() {
       if (!resultsRef.current) return [];
-      return Array.prototype.slice.call(resultsRef.current.querySelectorAll(".search-result-item"));
+      return Array.prototype.slice.call(resultsRef.current.querySelectorAll(".search-result-item, .search-new-action"));
     }
     function onKeyDown(e) {
       if (e.key === "Escape") {
@@ -64,7 +88,10 @@ function SearchOverlay({ onClose }) {
       if (!nodes.length) return;
       var active = document.activeElement;
       var inputFocused = active === inputRef.current;
-      var resultFocused = active && active.classList && active.classList.contains("search-result-item");
+      var resultFocused = active && active.classList && (
+        active.classList.contains("search-result-item")
+        || active.classList.contains("search-new-action")
+      );
       if (e.key === "ArrowDown") {
         if (inputFocused) {
           e.preventDefault();
@@ -88,15 +115,19 @@ function SearchOverlay({ onClose }) {
       }
       if (e.key === "Enter" && resultFocused) {
         e.preventDefault();
+        // Only activate rows of the current committed render; during the
+        // debounce/loading window the old rows are stale or unmounted, and a
+        // freshly recomputed flat list can disagree with what is focused.
+        if (status !== "done") return;
         var idx = nodes.indexOf(active);
-        var flat = legacyMode ? results : flattenGroups(groups);
+        var flat = flatListRef.current;
         var selected = flat[idx];
         if (selected) handleResultClick(selected);
       }
     }
     window.addEventListener("keydown", onKeyDown);
     return function () { window.removeEventListener("keydown", onKeyDown); };
-  }, [onClose, groups, results, legacyMode]);
+  }, [onClose, status, groups, results, legacyMode, query]);
 
   // Debounced search with request cancellation.
   useEffectSr(function () {
@@ -232,6 +263,68 @@ function SearchOverlay({ onClose }) {
     return out;
   }
 
+  // Command-palette results: commands first, then settings entries, then the
+  // data results. Every entry carries kind so clicks dispatch correctly.
+  function queryMatches(text, q) {
+    return String(text || "").toLowerCase().indexOf(q) >= 0;
+  }
+
+  function matchCommands() {
+    var q = query.trim().toLowerCase();
+    if (!q) return [];
+    return SEARCH_COMMANDS.filter(function (cmd) {
+      if (queryMatches(t(cmd.labelKey), q)) return true;
+      if (cmd.hintKey && queryMatches(t(cmd.hintKey), q)) return true;
+      return (cmd.keywords || []).some(function (kw) { return queryMatches(kw, q); });
+    }).map(function (cmd) {
+      return { kind: "command", id: cmd.id, label: t(cmd.labelKey), hint: cmd.hintKey ? t(cmd.hintKey) : "" };
+    });
+  }
+
+  function matchSettings() {
+    var q = query.trim().toLowerCase();
+    if (!q || !SETTINGS_INDEX) return [];
+    // Guard the shape: a stale/partial settings-index build may register the
+    // module without items/tabs; treat missing keys as empty lists (same
+    // guard pattern as settingTabLabel).
+    var tabs = SETTINGS_INDEX.tabs || [];
+    var items = SETTINGS_INDEX.items || [];
+    var tabsById = {};
+    tabs.forEach(function (tab) { tabsById[tab.id] = tab; });
+    var itemHits = items.filter(function (item) {
+      if (queryMatches(t(item.labelKey), q)) return true;
+      if (item.hintKey && queryMatches(t(item.hintKey), q)) return true;
+      return (item.keywords || []).some(function (kw) { return queryMatches(kw, q); });
+    }).slice(0, 8).map(function (item) {
+      var tab = tabsById[item.tab];
+      return {
+        kind: "setting",
+        id: item.id,
+        tab: item.tab,
+        label: t(item.labelKey),
+        hint: item.hintKey ? t(item.hintKey) : (tab ? t(tab.labelKey) : ""),
+      };
+    });
+    // Tab-level entries let a query jump straight to a settings tab; they
+    // carry no anchor (id === null) so the overlay only switches tabs.
+    var tabHits = tabs.filter(function (tab) {
+      return queryMatches(t(tab.labelKey), q);
+    }).slice(0, 4).map(function (tab) {
+      return {
+        kind: "setting",
+        id: null,
+        tab: tab.id,
+        label: t(tab.labelKey),
+        hint: "",
+      };
+    });
+    // Prefer concrete items over bare tabs when both match (the tab row adds
+    // nothing once an item row already lands the user on that tab).
+    var hitTabIds = {};
+    itemHits.forEach(function (item) { hitTabIds[item.tab] = true; });
+    return itemHits.concat(tabHits.filter(function (tabHit) { return !hitTabIds[tabHit.tab]; }));
+  }
+
   function resultTypeLabel(type) {
     return t("search.result." + (type || "conversation"), {}, type || "");
   }
@@ -255,6 +348,20 @@ function SearchOverlay({ onClose }) {
   }
 
   function handleResultClick(result) {
+    // Command-palette entries: run the action, then close the overlay.
+    if (result.kind === "command") {
+      if (onCommand) onCommand(result.id);
+      onClose && onClose();
+      return;
+    }
+    // Settings entries: open the settings overlay on the owning tab and let
+    // it scroll to the matching anchor (id) once rendered. Tab-level hits
+    // carry id === null, so only the tab switch happens.
+    if (result.kind === "setting") {
+      if (onOpenSettings) onOpenSettings(result.tab, result.id || null);
+      onClose && onClose();
+      return;
+    }
     // Workbench-aware navigation for project/task/chat/knowledge/memory/schedule.
     if (navigateWorkbench(result)) {
       return;
@@ -265,6 +372,9 @@ function SearchOverlay({ onClose }) {
   function handleResultKeyDown(e, result) {
     if (e.key === "Enter" || e.key === " ") {
       e.preventDefault();
+      // Stop the event reaching the window keydown listener, which would
+      // otherwise activate the same result a second time (double dispatch).
+      e.stopPropagation();
       handleResultClick(result);
     }
   }
@@ -376,6 +486,133 @@ function SearchOverlay({ onClose }) {
     return out;
   }
 
+  function renderCommandResult(cmd, index, arr) {
+    var isLast = index === arr.length - 1;
+    return React.createElement(React.Fragment, { key: "cmd_" + cmd.id },
+      React.createElement("div", {
+        className: "search-result-item search-result-command",
+        tabIndex: 0,
+        role: "button",
+        "aria-label": cmd.label + (cmd.hint ? ", " + cmd.hint : ""),
+        onClick: function () { handleResultClick(cmd); },
+        onKeyDown: function (e) { handleResultKeyDown(e, cmd); },
+      },
+        React.createElement("div", { className: "search-result-meta" },
+          React.createElement("span", { className: "search-result-type" }, t("search.commandGroup")),
+        ),
+        React.createElement("div", { className: "search-result-title-line" }, cmd.label),
+        cmd.hint && React.createElement("div", { className: "search-result-snippet" }, cmd.hint),
+      ),
+      !isLast && React.createElement("div", { className: "search-result-divider" })
+    );
+  }
+
+  var NEW_ACTION_ICONS = {
+    "new-chat": React.createElement(React.Fragment, null,
+      React.createElement("path", { d: "M21 11.5a8.38 8.38 0 0 1-.9 3.8 8.5 8.5 0 0 1-7.6 4.7 8.38 8.38 0 0 1-3.8-.9L3 21l1.9-5.7a8.38 8.38 0 0 1-.9-3.8 8.5 8.5 0 0 1 4.7-7.6 8.38 8.38 0 0 1 3.8-.9h.5a8.48 8.48 0 0 1 8 8v.5z" }),
+    ),
+    "new-task": React.createElement(React.Fragment, null,
+      React.createElement("path", { d: "M9 11l3 3L22 4M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11" }),
+    ),
+    "new-project": React.createElement(React.Fragment, null,
+      React.createElement("path", { d: "M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z" }),
+      React.createElement("path", { d: "M12 11v6M9 14h6" }),
+    ),
+  };
+
+  // Idle-state quick actions: three New buttons, hidden as soon as the user
+  // starts typing.
+  function renderNewAction(cmd, index, arr) {
+    return React.createElement(React.Fragment, { key: "new_" + cmd.id },
+      React.createElement("div", {
+        className: "search-new-action",
+        tabIndex: 0,
+        role: "button",
+        "aria-label": cmd.label + (cmd.hint ? ", " + cmd.hint : ""),
+        onClick: function () { handleResultClick(cmd); },
+        onKeyDown: function (e) { handleResultKeyDown(e, cmd); },
+      },
+        React.createElement("span", { className: "search-new-action-icon", "aria-hidden": "true" },
+          React.createElement("svg", { width: "17", height: "17", viewBox: "0 0 24 24", fill: "none", stroke: "currentColor", strokeWidth: "1.8", strokeLinecap: "round", strokeLinejoin: "round" },
+            NEW_ACTION_ICONS[cmd.id] || NEW_ACTION_ICONS["new-chat"]
+          )
+        ),
+        React.createElement("div", { className: "search-new-action-copy" },
+          React.createElement("div", { className: "search-new-action-title" }, cmd.label),
+          cmd.hint && React.createElement("div", { className: "search-new-action-hint" }, cmd.hint),
+        ),
+        React.createElement("svg", { className: "search-new-action-chevron", width: "16", height: "16", viewBox: "0 0 24 24", fill: "none", stroke: "currentColor", strokeWidth: "2", strokeLinecap: "round", strokeLinejoin: "round", "aria-hidden": "true" },
+          React.createElement("path", { d: "m9 18 6-6-6-6" })
+        )
+      ),
+      index < arr.length - 1 && React.createElement("div", { className: "search-new-action-gap", key: "gap_" + cmd.id })
+    );
+  }
+
+  function settingTabLabel(item) {
+    if (!SETTINGS_INDEX) return "";
+    var tab = (SETTINGS_INDEX.tabs || []).find(function (entry) { return entry.id === item.tab; });
+    return tab ? t(tab.labelKey) : "";
+  }
+
+  function renderSettingResult(item, index, arr) {
+    var isLast = index === arr.length - 1;
+    return React.createElement(React.Fragment, { key: "setting_" + (item.id || "tab_" + item.tab) },
+      React.createElement("div", {
+        className: "search-result-item search-result-setting",
+        tabIndex: 0,
+        role: "button",
+        "aria-label": item.label + ", " + t("search.settingsGroup") + ", " + settingTabLabel(item) + (item.hint ? ", " + item.hint : ""),
+        onClick: function () { handleResultClick(item); },
+        onKeyDown: function (e) { handleResultKeyDown(e, item); },
+      },
+        React.createElement("div", { className: "search-result-meta" },
+          React.createElement("span", { className: "search-result-type" }, t("search.settingsGroup")),
+          React.createElement("span", { className: "search-result-context" }, settingTabLabel(item)),
+        ),
+        React.createElement("div", { className: "search-result-title-line" }, item.label),
+        item.hint && React.createElement("div", { className: "search-result-snippet" }, item.hint),
+      ),
+      !isLast && React.createElement("div", { className: "search-result-divider" })
+    );
+  }
+
+  function renderCommandPaletteGroups() {
+    var cmds = matchCommands();
+    var settings = matchSettings();
+    var out = [];
+    if (cmds.length) {
+      out.push(
+        React.createElement("div", { className: "search-result-group", role: "group", "aria-label": t("search.commandGroup"), key: "group_commands" },
+          React.createElement("div", { className: "search-result-group-header" }, t("search.commandGroup")),
+          cmds.map(function (cmd, idx) { return renderCommandResult(cmd, idx, cmds); })
+        )
+      );
+    }
+    if (settings.length) {
+      out.push(
+        React.createElement("div", { className: "search-result-group", role: "group", "aria-label": t("search.settingsGroup"), key: "group_settings" },
+          React.createElement("div", { className: "search-result-group-header" }, t("search.settingsGroup")),
+          settings.map(function (item, idx) { return renderSettingResult(item, idx, settings); })
+        )
+      );
+    }
+    return out;
+  }
+
+  // Flat list of the rows this render commits, in render order: command
+  // palette (commands then settings), then data results. Computed here at
+  // render time — with the same inputs and in the same order as
+  // renderCommandPaletteGroups + the results blocks below — so the window
+  // Enter handler indexes into the exact list the rendered rows came from,
+  // instead of recomputing from a closure query that may no longer match
+  // the committed DOM (the keydown listener re-registers only after a
+  // re-render).
+  flatListRef.current = []
+    .concat(matchCommands())
+    .concat(matchSettings())
+    .concat(legacyMode ? results : flattenGroups(groups));
+
   var totalCount = results.length;
   var placeholder = legacyMode ? t("search.placeholderLegacy") : t("search.placeholder");
   var emptyText = legacyMode ? t("search.emptyStateLegacy") : t("search.emptyState");
@@ -454,7 +691,8 @@ function SearchOverlay({ onClose }) {
           React.createElement("span", { style: { opacity: 0.5 } }, t("search.loading"))
         ),
 
-        // Initial empty state
+        // Initial empty state — the three New actions only show while the
+        // query is empty; typing switches to search results and hides them.
         status === "idle" && React.createElement("div", { className: "search-empty-state" },
           React.createElement("div", { className: "empty-icon" },
             React.createElement("svg", { width: "40", height: "40", viewBox: "0 0 24 24", fill: "none", stroke: "currentColor", strokeWidth: "1.2" },
@@ -462,11 +700,20 @@ function SearchOverlay({ onClose }) {
               React.createElement("path", { d: "M16.5 16.5 L21 21" })
             )
           ),
-          React.createElement("span", null, emptyText)
+          React.createElement("span", null, emptyText),
+          React.createElement("div", { className: "search-empty-actions", role: "group", "aria-label": t("search.newButton") },
+            SEARCH_COMMANDS.slice(0, 3).map(function (cmd, idx, arr) {
+              return renderNewAction(
+                { kind: "command", id: cmd.id, label: t(cmd.labelKey), hint: cmd.hintKey ? t(cmd.hintKey) : "" },
+                idx, arr
+              );
+            })
+          ),
+          React.createElement("div", { className: "search-empty-tip" }, t("search.emptyTip"))
         ),
 
         // No results
-        status === "done" && totalCount === 0 && React.createElement("div", { className: "search-no-results" },
+        status === "done" && totalCount === 0 && matchCommands().length === 0 && matchSettings().length === 0 && React.createElement("div", { className: "search-no-results" },
           noResultsText
         ),
 
@@ -476,6 +723,8 @@ function SearchOverlay({ onClose }) {
         ),
 
         // Results
+        status === "done" && renderCommandPaletteGroups(),
+
         status === "done" && legacyMode && results.map(function (result, index) {
           return renderLegacyResult(result, index);
         }),

@@ -72,7 +72,7 @@ _DURABLE_RETENTION_DAYS = 7
 # durable copies can share a slightly wider transaction window, substantially
 # reducing SQLite writer pressure during fast token streams while terminal
 # events continue to force an immediate flush.
-_DURABLE_EVENT_BATCH_INTERVAL_SECONDS = 0.2
+_DURABLE_EVENT_BATCH_INTERVAL_SECONDS = 1.0
 _DURABLE_EVENT_BATCH_MAX = 512
 _BATCHABLE_DURABLE_EVENT_TYPES = frozenset({
     "reasoning_delta",
@@ -107,9 +107,12 @@ class ChatRunEventStore:
             self._initialize()
 
     def _connect(self) -> sqlite3.Connection:
-        conn = sqlite3.connect(self.db_path, timeout=5)
+        # Same busy_timeout as cyrene.workbench.store: the event store shares
+        # the main SQLite file with document writers, so a shorter timeout
+        # here turned lock contention into hard event loss during finalize.
+        conn = sqlite3.connect(self.db_path, timeout=30)
         conn.row_factory = sqlite3.Row
-        conn.execute("PRAGMA busy_timeout = 5000")
+        conn.execute("PRAGMA busy_timeout = 30000")
         return conn
 
     def _initialize(self) -> None:
@@ -853,9 +856,15 @@ class ChatRunManager:
                     await run.flush_event_store()
                     await asyncio.to_thread(self._event_store.finalize, run)
                 except Exception:
+                    # ``_flush_event_store_now`` re-queued the failed batch, so
+                    # the pending count is exactly what never reached SQLite.
+                    # Log it loudly: with a 30s busy_timeout the lock-contention
+                    # tradeoff (stall vs. silent event loss) stays observable.
                     logger.exception(
-                        "Failed to finalize durable event log for run %s",
+                        "Failed to finalize durable event log for run %s; "
+                        "%d event(s) not persisted (in-memory only, lost on restart)",
                         run.run_id,
+                        len(run._event_store_pending),
                     )
             await persistence_span.finish()
             await run_span.finish(status=run.status)

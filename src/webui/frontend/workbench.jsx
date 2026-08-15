@@ -1322,6 +1322,7 @@ function WorkbenchApp({ theme, actualTheme, onToggleTheme, needsOnboarding }) {
   var [searchOpen, setSearchOpen] = useWorkbenchState(false);
   var [settingsOpen, setSettingsOpen] = useWorkbenchState(false);
   var [settingsTab, setSettingsTab] = useWorkbenchState("");
+  var [settingsScrollTo, setSettingsScrollTo] = useWorkbenchState(null);
   var pythonPromptCheckedRef = useWorkbenchRef(false);
   var [newProjectOpen, setNewProjectOpen] = useWorkbenchState(false);
   var [newTaskOpen, setNewTaskOpen] = useWorkbenchState(false);
@@ -2768,7 +2769,7 @@ function WorkbenchApp({ theme, actualTheme, onToggleTheme, needsOnboarding }) {
         scope: "settings",
         get_node: function () { return { role: "dialog", name: t("settings.title", "Settings"), state: { tab: settingsTab || "general" } }; },
         actions: [{ action_id: "dismiss", kind: "dismiss", risk: "R1", gesture_aliases: ["escape_key", "close_button"] }],
-        handlers: { dismiss: function () { setSettingsOpen(false); } },
+        handlers: { dismiss: function () { setSettingsOpen(false); setSettingsScrollTo(null); } },
       }));
     }
     return function () { unregister.forEach(function (remove) { remove(); }); };
@@ -3184,13 +3185,45 @@ function WorkbenchApp({ theme, actualTheme, onToggleTheme, needsOnboarding }) {
             setSearchOpen(false);
             setFullPage("chat");
           },
+          onCommand: function (id) {
+            setSearchOpen(false);
+            if (id === "new-chat") { createChat(); return; }
+            if (id === "new-task") { createSession(); return; }
+            if (id === "new-project") { createProject(); return; }
+            if (id === "toggle-theme") { onToggleTheme(); return; }
+            if (id === "toggle-sidebar") {
+              setRailCollapsed(function (v) {
+                var next = !v;
+                try { localStorage.setItem("wb-rail-collapsed", next ? "1" : "0"); } catch (e) {}
+                return next;
+              });
+              return;
+            }
+            var tab = id === "open-shortcuts" ? "shortcuts"
+              : id === "open-extensions" ? "extensions"
+              : id === "open-budget" ? "budget"
+              : id === "open-about" ? "about" : "";
+            setSettingsTab(tab);
+            setSettingsScrollTo(null);
+            setSettingsOpen(true);
+          },
+          onOpenSettings: function (tab, anchorId) {
+            setSearchOpen(false);
+            setSettingsTab(tab || "");
+            setSettingsScrollTo(anchorId || null);
+            setSettingsOpen(true);
+          },
         }
       ), document.body)}
       {settingsOpen && React.createElement(
         window.CyreneUI.require("settings").Overlay,
         {
-          onClose: function () { setSettingsOpen(false); },
+          onClose: function () {
+            setSettingsOpen(false);
+            setSettingsScrollTo(null);
+          },
           initialTab: settingsTab,
+          scrollToId: settingsScrollTo,
           theme: theme,
           actualTheme: actualTheme,
           onToggleTheme: onToggleTheme,

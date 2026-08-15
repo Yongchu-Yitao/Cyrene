@@ -9,6 +9,7 @@ import asyncio
 import importlib
 import json
 import logging
+import time
 from datetime import datetime, timezone
 from typing import Any, Awaitable, Callable
 from uuid import uuid4
@@ -527,6 +528,13 @@ async def _run_main_agent_impl(
             ephemeral_context=saved_ephemeral,
         )
 
+    # Throttle the per-tool-batch save (the hottest write path: a full state
+    # rewrite per batch). Every completion path persists before returning, so
+    # skipping intermediate batches changes nothing observable — the only cost
+    # is a wider crash-loss window, matching the run-failure retry semantics.
+    _last_batch_save_ts = time.monotonic()
+    _pending_saved_batches = 0
+
     # Phase 1 and Phase 2 use the same deterministic bundle for the current
     # package settings. Disabling a package intentionally changes the cache key:
     # its gateway schema and package-specific prompt lines are both omitted.
@@ -879,783 +887,75 @@ async def _run_main_agent_impl(
         if message.get("runtime_guidance")
     ]
     messages = [*run_prefix, llm_user_entry, *phase1_runtime_guidance_entries]
-    assistant_entry = _assistant_entry_from_response(response, round_id)
-    messages.append(assistant_entry)
+    # The wait state's durable form is written by _upsert_pending_question
+    # (clean user + question_prompt pair, no raw tool trace), so the finally
+    # below must skip the save when exiting via the pause path.
+    paused = False
+    try:
+        assistant_entry = _assistant_entry_from_response(response, round_id)
+        messages.append(assistant_entry)
 
-    use_tools_call = None
-    ask_user_call = None
-    quit_call = None
-    for tc in tool_calls:
-        name = tc.get("function", {}).get("name")
-        if name == "use_tools":
-            use_tools_call = tc
-        elif name == "ask_user" and not system_initiated:
-            ask_user_call = tc
-        elif name == "quit":
-            quit_call = tc
+        use_tools_call = None
+        ask_user_call = None
+        quit_call = None
+        for tc in tool_calls:
+            name = tc.get("function", {}).get("name")
+            if name == "use_tools":
+                use_tools_call = tc
+            elif name == "ask_user" and not system_initiated:
+                ask_user_call = tc
+            elif name == "quit":
+                quit_call = tc
 
-    # Phase 1 has several direct-return branches. Atomically close guidance
-    # admission before taking one; if a durable command won the race, promote
-    # this turn into Phase 2 so the command is applied instead of cancelled.
-    if (
-        use_tools_call is None
-        and not phase1_concrete_calls
-        and runtime_inbox is not None
-    ):
-        boundary_guidance = await runtime_inbox.collect_guidance_or_seal()
-        if boundary_guidance:
-            phase1_messages.append(_assistant_entry_from_response(response, round_id))
-            for tc in tool_calls:
-                phase1_messages.append({
-                    "role": "tool",
-                    "tool_call_id": tc["id"],
-                    "content": "Decision deferred because new user guidance arrived.",
-                    **({"round_id": round_id} if round_id else {}),
-                })
-            await _inject_runtime_guidance(phase1_messages, boundary_guidance)
-            phase1_runtime_guidance_entries = [
-                message
-                for message in phase1_messages
-                if message.get("runtime_guidance")
-            ]
-            use_tools_call = {
-                "id": f"guidance_use_tools_{uuid4().hex}",
-                "function": {
-                    "name": "use_tools",
-                    "arguments": json.dumps({
-                        "execution_brief": "Apply the newly delivered runtime guidance.",
-                    }),
-                },
-            }
-            phase1_context_messages = phase1_messages
-            phase1_concrete_calls = []
-            ask_user_call = None
-            quit_call = None
-
-    if quit_call is not None:
-        if runtime_inbox is not None:
-            await runtime_inbox.wait_for_active_tools()
-        final_text = await _ensure_text_reply(response, messages)
-        messages[-1]["content"] = final_text
-        messages[-1].pop("tool_calls", None)
-        if client_request_id:
-            messages[-1]["client_request_id"] = client_request_id
-        await _save(_session_messages_to_save(messages))
-        return final_text
-
-    if ask_user_call:
-        try:
-            args = parse_tool_arguments(
-                ask_user_call["function"].get("arguments")
-            )
-            result = await execute_wire_tool(
-                "ask_user", args, bot, chat_id, db_path, None, actor="main"
-            )
-        except Exception as exc:
-            result = f"Tool failed: {exc}"
-        truncated_result = truncate(result)
-        tool_entry: dict[str, Any] = {"role": "tool", "tool_call_id": ask_user_call["id"], "content": truncated_result}
-        tool_entry = attach_context(tool_entry, context_block(
-            f"tool.result.ask_user.{ask_user_call['id']}",
-            "tool_result",
-            source="tool:ask_user",
-            reason="ask_user tool output returned to LLM",
-            transforms=["truncate"] if str(truncated_result) != str(result) else [],
-            content=truncated_result,
-            metadata={"tool_name": "ask_user", "tool_call_id": ask_user_call["id"]},
-        ))
-        if round_id:
-            tool_entry["round_id"] = round_id
-        messages.append(tool_entry)
-        if _tool_result_requests_user_input(result):
-            return _AWAITING_USER_SENTINEL
-        await _save(_session_messages_to_save(messages))
-        return (await _ensure_text_reply(response, messages, fallback=str(result)))
-
-    if use_tools_call or phase1_concrete_calls:
-        event = {"type": "phase_transition", "from": "phase1_decision", "to": "phase2_execution"}
-        if not suppress_initial_detail:
-            phase_task = visible_user_message.strip()[:120]
-            if phase_task:
-                event["detail"] = f"Phase 1 decided to use tools. Task: {phase_task}"
-                event["detail_key"] = "phase.useTools"
-                event["detail_params"] = {"task": phase_task}
-            else:
-                event["detail"] = "Phase 1 decided to use tools. Task: Analyze uploaded attachments"
-                event["detail_key"] = "phase.useToolsAttachments"
-        if phase1_concrete_calls:
-            event["promoted_tool_calls"] = [
-                str(call.get("function", {}).get("name") or "")
-                for call in phase1_concrete_calls
-            ]
-        await _publish_runtime_event(event)
-        promoted_phase1_response: dict[str, Any] | None = None
-        if phase1_concrete_calls:
-            phase2_assistant = _assistant_entry_from_response(response, round_id)
-            phase2_assistant["hidden_from_ui"] = True
-            messages = [*phase1_context_messages, phase2_assistant]
-            promoted_phase1_response = response
-        else:
-            normal_use_tools = any(
-                str(tc.get("id") or "") == str(use_tools_call.get("id") or "")
-                for tc in tool_calls
-            )
-            phase2_assistant = (
-                _assistant_entry_from_response(response, round_id)
-                if normal_use_tools
-                else _apply_assistant_meta({
-                    "role": "assistant",
-                    "content": "",
-                    "tool_calls": [use_tools_call],
-                    **({"round_id": round_id} if round_id else {}),
-                })
-            )
-            phase2_assistant["hidden_from_ui"] = True
-            messages = [*phase1_context_messages, phase2_assistant]
-            phase2_calls = tool_calls if normal_use_tools else [use_tools_call]
-            for phase2_call in phase2_calls:
-                phase2_name = str(
-                    phase2_call.get("function", {}).get("name") or ""
-                )
-                phase2_result = (
-                    "Execution phase entered. Follow the concise execution "
-                    "brief in the original use_tools arguments and adapt from "
-                    "tool evidence."
-                    if phase2_name == "use_tools"
-                    else "Skipped because the same decision selected use_tools."
-                )
-                phase2_tool_entry = attach_context(
-                    {
+        # Phase 1 has several direct-return branches. Atomically close guidance
+        # admission before taking one; if a durable command won the race, promote
+        # this turn into Phase 2 so the command is applied instead of cancelled.
+        if (
+            use_tools_call is None
+            and not phase1_concrete_calls
+            and runtime_inbox is not None
+        ):
+            boundary_guidance = await runtime_inbox.collect_guidance_or_seal()
+            if boundary_guidance:
+                phase1_messages.append(_assistant_entry_from_response(response, round_id))
+                for tc in tool_calls:
+                    phase1_messages.append({
                         "role": "tool",
-                        "tool_call_id": phase2_call["id"],
-                        "content": phase2_result,
-                        "hidden_from_ui": True,
-                    },
-                    context_block(
-                        f"tool.result.{phase2_name}.{phase2_call['id']}",
-                        "tool_result",
-                        source=f"tool:{phase2_name}",
-                        reason="preserve the complete Phase-1 assistant/tool protocol while entering Phase 2",
-                        content=phase2_result,
-                        metadata={
-                            "tool_name": phase2_name,
-                            "tool_call_id": phase2_call["id"],
-                        },
-                    ),
-                )
-                if round_id:
-                    phase2_tool_entry["round_id"] = round_id
-                messages.append(phase2_tool_entry)
-
-        while True:
-            if promoted_phase1_response is not None:
-                response = promoted_phase1_response
-                promoted_phase1_response = None
-                entry = phase2_assistant
-            else:
-                await _inject_runtime_guidance(messages)
-                response = await _call_with_runtime_guidance(
-                    messages,
-                    lambda: _call_llm(
-                        project_history_for_llm(messages),
-                        tools=wire_tool_defs,
-                    ),
-                )
-                entry = {"role": "assistant", "content": response.get("content") or ""}
-                if response.get("reasoning_content"):
-                    entry["reasoning_content"] = response["reasoning_content"]
-                if response.get("tool_calls"):
-                    entry["tool_calls"] = response["tool_calls"]
-                if response.get("usage"):
-                    entry["usage"] = response["usage"]
-                if round_id:
-                    entry["round_id"] = round_id
-                messages.append(_apply_assistant_meta(entry))
-
-            tcs = response.get("tool_calls") or []
-            tool_names = [str(t.get("function", {}).get("name") or "") for t in tcs]
-            # ``quit`` is a hard terminal signal. If the model mistakenly mixes
-            # it with sibling calls, none of those siblings may execute.
-            done_via_quit = "quit" in tool_names
-            if done_via_quit or not tcs:
-                if done_via_quit and runtime_inbox is not None:
-                    await runtime_inbox.wait_for_active_tools()
-                # Guidance may have arrived while this model call was in flight.
-                # Do not finalize an answer that the user has already superseded.
-                if runtime_inbox is not None:
-                    pending_guidance = runtime_inbox.collect_guidance_nowait()
-                    if pending_guidance:
-                        if done_via_quit:
-                            for tc in tcs:
-                                is_quit = str(tc.get("function", {}).get("name") or "") == "quit"
-                                tool_entry = {
-                                    "role": "tool",
-                                    "tool_call_id": tc["id"],
-                                    "content": (
-                                        "Completion deferred because new user guidance arrived."
-                                        if is_quit else
-                                        "Skipped because the same batch contained terminal quit."
-                                    ),
-                                }
-                                if round_id:
-                                    tool_entry["round_id"] = round_id
-                                messages.append(tool_entry)
-                        await _inject_runtime_guidance(messages, pending_guidance)
-                        await _save(_session_messages_to_save(messages))
-                        continue
-                if done_via_quit:
-                    for tc in tcs:
-                        is_quit = (
-                            str(tc.get("function", {}).get("name") or "") == "quit"
-                        )
-                        tool_entry = {
-                            "role": "tool",
-                            "tool_call_id": tc["id"],
-                            "content": (
-                                "Agent requested to finish."
-                                if is_quit
-                                else "Skipped because the same batch contained terminal quit."
-                            ),
-                        }
-                        if round_id:
-                            tool_entry["round_id"] = round_id
-                        messages.append(tool_entry)
-                    await _publish_runtime_event({"type": "phase_transition", "from": "execution", "to": "done", "detail": "Agent called quit", "detail_key": "phase.agentQuit"})
-                # A missing/invalid terminal answer may be repaired, but only by
-                # the no-tool final-reply path used inside ``_ensure_text_reply``.
-                # Once quit is observed, this run can never reopen execution.
-                final_text = await _ensure_text_reply(response, messages)
-                final_entry = entry
-                if done_via_quit:
-                    # Preserve a valid assistant(tool_calls) -> tool-results
-                    # sequence, then store the user-visible answer as the
-                    # terminal assistant message after that sequence.
-                    entry["content"] = ""
-                    final_entry = _apply_assistant_meta(
-                        {
-                            "role": "assistant",
-                            "content": final_text,
-                            **({"round_id": round_id} if round_id else {}),
-                        }
-                    )
-                    if entry.get("usage"):
-                        final_entry["usage"] = entry.pop("usage")
-                    messages.append(final_entry)
-                else:
-                    entry["content"] = final_text
-                    entry.pop("tool_calls", None)
-                _attach_final_usage(final_entry)
-                if client_request_id:
-                    final_entry["client_request_id"] = client_request_id
-
-                # Guidance that arrived while a no-tool repair was in flight
-                # starts a continuation; it does not revive the terminated batch.
-                late_guidance = (
-                    await runtime_inbox.collect_guidance_or_seal()
-                    if runtime_inbox is not None
-                    else []
-                )
-                if late_guidance:
-                    final_entry["intermediate_reply"] = True
-                    await _inject_runtime_guidance(messages, late_guidance)
-                    await _save(_session_messages_to_save(messages))
-                    continue
-                await _save(_session_messages_to_save(messages))
-                return final_text
-
-            awaiting_user = False
-            spawned = False
-            quit_requested = False
-            reflection_requested = False
-            guidance_supersedes_batch = bool(
-                runtime_inbox is not None and runtime_inbox.has_guidance_nowait()
-            )
-            pending_reflection_tool_calls: list[tuple[dict[str, Any], dict[str, Any]]] = []
-            inbox_batch_args: dict[str, dict[str, Any]] = {}
-            mcp_observations: list[dict[str, Any]] = []
-            tool_batch_id = f"batch_{uuid4().hex}"
-            if runtime_inbox is not None and not guidance_supersedes_batch:
-                inbox_calls: list[tuple[Any, ...]] = []
-                for pending_call in tcs:
-                    pending_name = str(pending_call.get("function", {}).get("name") or "")
-                    if pending_name in {"use_tools", "quit", "DeepReflect"}:
-                        continue
-                    if system_initiated and pending_name == "ask_user":
-                        continue
-                    try:
-                        pending_args = parse_tool_arguments(
-                            pending_call["function"].get("arguments")
-                        )
-                    except (KeyError, TypeError, ValueError):
-                        continue
-                    inbox_batch_args[pending_call["id"]] = pending_args
-                    inbox_calls.append((
-                        pending_call["id"],
-                        pending_name,
-                        lambda pending_call_id=pending_call["id"], pending_name=pending_name, pending_args=dict(pending_args): _execute_tool_for_call(
-                            pending_call_id, pending_name, pending_args, bot, chat_id, db_path
-                        ),
-                        _inbox_tool_metadata(pending_name, pending_args),
-                    ))
-                if inbox_calls:
-                    runtime_inbox.submit_tool_batch(
-                        inbox_calls, batch_id=tool_batch_id
-                    )
-            for index, t in enumerate(tcs):
-                tool_name = t.get("function", {}).get("name")
-                capability_id = str(tool_name or "")
-                if guidance_supersedes_batch and t["id"] not in inbox_batch_args:
-                    skipped_tool_entry: dict[str, Any] = {
-                        "role": "tool",
-                        "tool_call_id": t["id"],
-                        "content": "Skipped before execution because new user guidance superseded this tool-call batch.",
-                    }
-                    if round_id:
-                        skipped_tool_entry["round_id"] = round_id
-                    messages.append(skipped_tool_entry)
-                    continue
-                if awaiting_user:
-                    skipped_tool_entry: dict[str, Any] = {
-                        "role": "tool", "tool_call_id": t["id"],
-                        "content": "Skipped because a previous tool already paused the round until the user answers.",
-                    }
-                    skipped_tool_entry = attach_context(skipped_tool_entry, context_block(
-                        f"tool.result.skipped.{t['id']}",
-                        "tool_result",
-                        source="cyrene.agent.agent",
-                        reason="tool skipped after ask_user paused the round",
-                        transforms=["synthetic_tool_result"],
-                        content=skipped_tool_entry["content"],
-                    ))
-                    if round_id:
-                        skipped_tool_entry["round_id"] = round_id
-                    messages.append(skipped_tool_entry)
-                    continue
-                if reflection_requested:
-                    skipped_tool_entry = {
-                        "role": "tool",
-                        "tool_call_id": t["id"],
-                        "content": "Skipped because DeepReflect already reframed this turn; continue from the reflection packet instead of executing stale follow-up tools.",
-                    }
-                    skipped_tool_entry = attach_context(skipped_tool_entry, context_block(
-                        f"tool.result.skipped_after_reflection.{t['id']}",
-                        "tool_result",
-                        source="cyrene.agent.agent",
-                        reason="tool skipped after DeepReflect reframed the round",
-                        transforms=["synthetic_tool_result"],
-                        content=skipped_tool_entry["content"],
-                        metadata={"tool_name": tool_name, "tool_call_id": t["id"]},
-                    ))
-                    if round_id:
-                        skipped_tool_entry["round_id"] = round_id
-                    messages.append(skipped_tool_entry)
-                    continue
-                try:
-                    args = inbox_batch_args.get(t["id"])
-                    if args is None:
-                        args = parse_tool_arguments(
-                            t["function"].get("arguments")
-                        )
-                    capability_id = _resolved_capability_id(str(tool_name or ""), args)
-                    if system_initiated and tool_name == "ask_user":
-                        result = (
-                            "Tool unavailable: proactive system-initiated rounds "
-                            "cannot ask the user to clarify or pause for an answer."
-                        )
-                    elif tool_name == "use_tools":
-                        # ``use_tools`` is the Phase-1 gateway, wired into the
-                        # execution toolset only for prefix-cache parity with Phase 1.
-                        # There is no gate to open here, so treat it as a no-op nudge.
-                        result = "Already in the execution phase — call the concrete tools you need directly, or quit when done."
-                    elif tool_name == "quit":
-                        quit_requested = True
-                        result = "Agent requested to finish after this tool-call batch."
-                    elif tool_name == "DeepReflect":
-                        pending_reflection_tool_calls.append((t, args))
-                        reflection_requested = True
-                        result = "Deep reflection complete. A reflection record will be added to the visible transcript."
-                    else:
-                        if runtime_inbox is None:
-                            result = await _execute_tool_for_call(
-                                t["id"], str(tool_name or ""), args, bot, chat_id, db_path
-                            )
-                        else:
-                            if t["id"] not in inbox_batch_args:
-                                runtime_inbox.submit_tool(
-                                    t["id"],
-                                    str(tool_name or ""),
-                                    lambda tool_call_id=t["id"], tool_name=tool_name, args=dict(args): _execute_tool_for_call(
-                                        tool_call_id, str(tool_name or ""), args, bot, chat_id, db_path
-                                    ),
-                                    batch_id=tool_batch_id,
-                                    metadata=_inbox_tool_metadata(
-                                        str(tool_name or ""), args
-                                    ),
-                                )
-                            result = await runtime_inbox.wait_for_tool_result(t["id"])
-                            guidance_supersedes_batch = runtime_inbox.has_guidance_nowait()
-                except Exception as e:
-                    result = f"Tool failed: {e}"
-                truncated_result = truncate(result)
-                tool_entry: dict[str, Any] = {"role": "tool", "tool_call_id": t["id"], "content": truncated_result}
-                tool_entry = attach_context(tool_entry, context_block(
-                    f"tool.result.{tool_name}.{t['id']}",
-                    "tool_result",
-                    source=f"tool:{tool_name}",
-                    reason="tool output returned to LLM",
-                    transforms=["truncate"] if str(truncated_result) != str(result) else [],
-                    content=truncated_result,
-                    metadata={"tool_name": tool_name, "tool_call_id": t["id"]},
-                ))
-                if round_id:
-                    tool_entry["round_id"] = round_id
-                messages.append(tool_entry)
-                observation = build_mcp_observation_message(
-                    result,
-                    tool_name=str(tool_name or ""),
-                )
-                if observation is not None:
-                    if round_id:
-                        observation["round_id"] = round_id
-                    mcp_observations.append(observation)
-                if _tool_result_requests_user_input(str(result)):
-                    awaiting_user = True
-                if capability_id == "subagent.spawn" and _wire_result_succeeded(result):
-                    spawned = True
-            # Keep the assistant -> N tool-results protocol sequence contiguous.
-            # Multimodal observations follow the complete tool batch as a
-            # model-only user message and are omitted from persisted history.
-            messages.extend(mcp_observations)
-            await _inject_runtime_guidance(messages)
-            if pending_reflection_tool_calls:
-                _ensure_message_identity(messages)
-                pending_reflection_records: list[dict[str, Any]] = []
-                for _tool_call, args in pending_reflection_tool_calls:
-                    reflection_record = await create_deep_reflection_record(
-                        messages,
-                        scope=str(args.get("scope") or "current_round"),
-                        goal_gap=str(args.get("goal_gap") or ""),
-                        user_requirement=str(args.get("user_requirement") or ""),
-                        focus=str(args.get("focus") or ""),
-                        lang_text=user_message,
-                    )
-                    if round_id:
-                        reflection_record["round_id"] = round_id
-                    if client_request_id:
-                        reflection_record["client_request_id"] = client_request_id
-                    pending_reflection_records.append(_apply_assistant_meta(reflection_record))
-                messages.extend(pending_reflection_records)
-            if awaiting_user:
-                boundary_guidance = (
-                    await runtime_inbox.collect_guidance_or_seal()
-                    if runtime_inbox is not None
-                    else []
-                )
-                if boundary_guidance:
-                    await _inject_runtime_guidance(messages, boundary_guidance)
-                    await _save(_session_messages_to_save(messages))
-                    continue
-                return _AWAITING_USER_SENTINEL
-            if quit_requested and not pending_reflection_tool_calls:
-                await _publish_runtime_event({"type": "phase_transition", "from": "execution", "to": "done", "detail": "Agent called quit", "detail_key": "phase.agentQuit"})
-                final_text = await _ensure_text_reply(response, messages)
-                boundary_guidance = (
-                    await runtime_inbox.collect_guidance_or_seal()
-                    if runtime_inbox is not None
-                    else []
-                )
-                if boundary_guidance:
-                    intermediate = _apply_assistant_meta({
-                        "role": "assistant",
-                        "content": final_text,
-                        "intermediate_reply": True,
+                        "tool_call_id": tc["id"],
+                        "content": "Decision deferred because new user guidance arrived.",
                         **({"round_id": round_id} if round_id else {}),
                     })
-                    messages.append(intermediate)
-                    await _inject_runtime_guidance(messages, boundary_guidance)
-                    await _save(_session_messages_to_save(messages))
-                    continue
-                await _save(_session_messages_to_save(messages))
-                return final_text
+                await _inject_runtime_guidance(phase1_messages, boundary_guidance)
+                phase1_runtime_guidance_entries = [
+                    message
+                    for message in phase1_messages
+                    if message.get("runtime_guidance")
+                ]
+                use_tools_call = {
+                    "id": f"guidance_use_tools_{uuid4().hex}",
+                    "function": {
+                        "name": "use_tools",
+                        "arguments": json.dumps({
+                            "execution_brief": "Apply the newly delivered runtime guidance.",
+                        }),
+                    },
+                }
+                phase1_context_messages = phase1_messages
+                phase1_concrete_calls = []
+                ask_user_call = None
+                quit_call = None
+
+        if quit_call is not None:
+            if runtime_inbox is not None:
+                await runtime_inbox.wait_for_active_tools()
+            final_text = await _ensure_text_reply(response, messages)
+            messages[-1]["content"] = final_text
+            messages[-1].pop("tool_calls", None)
+            if client_request_id:
+                messages[-1]["client_request_id"] = client_request_id
             await _save(_session_messages_to_save(messages))
+            return final_text
 
-            # Subagent monitoring loop
-            if spawned:
-                await _publish_runtime_event({
-                    "type": "phase_transition", "from": "phase2_execution", "to": "subagent_monitoring",
-                    "detail": "Subagents spawned, entering monitoring loop",
-                    "detail_key": "phase.subagentMonitoring",
-                })
-                from cyrene.subagent import (
-                    run_subagent, spawn_subagent_task,
-                    build_deep_research_source as _build_deep_research_source,
-                    build_flow_snapshot as _build_subagent_flow_snapshot,
-                    cancel_subagent_tasks as _cancel_subagent_tasks,
-                    clear as _sub_clear, get_snapshot as _sub_snapshot,
-                    get_raw_messages as _sub_raw_msgs, reactivate as _sub_reactivate,
-                    run_summary_subagent as _run_summary_subagent,
-                    timeout_subagents as _timeout_subagents,
-                )
-                from cyrene.runtime.inbox import get_unread_count as _inbox_unread_base
-                fan_out_guidance_to_subagents = importlib.import_module(
-                    "cyrene.agent.guidance"
-                ).fan_out_guidance_to_subagents
-                _agent_session_id = _current_session_id.get()
-
-                def _inbox_unread(agent_id: str) -> int:
-                    return _inbox_unread_base(
-                        agent_id,
-                        session_id=_agent_session_id,
-                    )
-
-                from cyrene.agent.research import (
-                    deduplicate_references as _deduplicate_references,
-                    deep_research_pdf_attachment as _deep_research_pdf_attachment,
-                    expansion_pass as _expansion_pass,
-                    extract_new_references as _extract_new_references,
-                    generate_deep_research_outline as _generate_deep_research_outline,
-                    load_research_template as _load_research_template,
-                    parse_length_preference as _parse_length_preference,
-                    assemble_report as _assemble_report,
-                    write_section as _write_section,
-                )
-
-                _interrupt_event_sess = _ensure_session(_current_session_id.get()).interrupt_event
-                _interrupt_event_sess.clear()
-                interrupted = False
-                monitoring_expired = False
-                quiet_ticks = 0
-                from cyrene.runtime.settings_store import get as _get_runtime_setting
-                monitor_timeout_seconds = max(
-                    int(_get_runtime_setting("subagent_execution_max_wall_seconds", 1800) or 1800),
-                    int(_get_runtime_setting("subagent_discussion_max_wall_seconds", 600) or 600),
-                ) + 30
-                monitor_deadline = asyncio.get_running_loop().time() + monitor_timeout_seconds
-                while asyncio.get_running_loop().time() < monitor_deadline:
-                    if runtime_inbox is not None and runtime_inbox.has_guidance_nowait():
-                        live_guidance = runtime_inbox.collect_guidance_nowait()
-                        guidance_text = "\n\n".join(
-                            str((item.get("payload") or {}).get("text") or "").strip()
-                            for item in live_guidance
-                            if str((item.get("payload") or {}).get("text") or "").strip()
-                        )
-                        await _inject_runtime_guidance(messages, live_guidance)
-                        if guidance_text:
-                            await fan_out_guidance_to_subagents(
-                                round_id, guidance_text, bot, chat_id, db_path
-                            )
-                    try:
-                        await asyncio.wait_for(_interrupt_event_sess.wait(), timeout=0.5)
-                        _interrupt_event_sess.clear()
-                        interrupted = True
-                        break
-                    except asyncio.TimeoutError:
-                        pass
-                    snap = await _sub_snapshot(round_id=round_id)
-                    if not snap:
-                        break
-                    resurrected = False
-                    for aid, info in snap.items():
-                        if info["status"] in ("done", "timeout", "incomplete") and _inbox_unread(aid) > 0:
-                            if await _sub_reactivate(aid):
-                                raw = await _sub_raw_msgs(aid)
-                                spawn_subagent_task(
-                                    run_subagent(aid, info["task"], bot, chat_id, db_path, resume_messages=raw),
-                                    aid,
-                                )
-                                resurrected = True
-                    snap2 = await _sub_snapshot(round_id=round_id)
-                    all_truly_done = all(
-                        info["status"] in ("done", "timeout", "incomplete") and _inbox_unread(aid) == 0
-                        for aid, info in snap2.items()
-                    )
-                    if all_truly_done and not resurrected:
-                        quiet_ticks += 1
-                        if quiet_ticks >= 2:
-                            break
-                    else:
-                        quiet_ticks = 0
-                else:
-                    monitoring_expired = True
-                if interrupted:
-                    await _save(_session_messages_to_save(messages))
-                    # Cancel running subagents immediately and mark them done so
-                    # the summary phase can start right away.
-                    await _cancel_subagent_tasks(round_id=round_id)
-                elif monitoring_expired:
-                    expired_snapshot = await _sub_snapshot(round_id=round_id)
-                    active_ids = [
-                        aid
-                        for aid, info in expired_snapshot.items()
-                        if info.get("status") in ("running", "resumed")
-                    ]
-                    if active_ids:
-                        await _timeout_subagents(
-                            active_ids,
-                            reason="Subagent parent-monitor safety deadline reached.",
-                        )
-                await _publish_runtime_event({
-                    "type": "phase_transition", "from": "subagent_monitoring", "to": "synthesis",
-                    "detail": "All subagents done, starting summary subagent",
-                    "detail_key": "phase.synthesis",
-                })
-                summary_task = asyncio.create_task(_run_summary_subagent(
-                    round_id=round_id, parent_task=user_message, round_history=messages,
-                ))
-                if runtime_inbox is not None:
-                    guidance_task = asyncio.create_task(runtime_inbox.wait_for_guidance())
-                    try:
-                        done, _pending = await asyncio.wait(
-                            {summary_task, guidance_task},
-                            return_when=asyncio.FIRST_COMPLETED,
-                        )
-                    except asyncio.CancelledError:
-                        summary_task.cancel()
-                        guidance_task.cancel()
-                        await asyncio.gather(
-                            summary_task, guidance_task, return_exceptions=True
-                        )
-                        raise
-                    if guidance_task in done and summary_task not in done and await guidance_task:
-                        summary_task.cancel()
-                        await asyncio.gather(summary_task, return_exceptions=True)
-                        live_guidance = runtime_inbox.collect_guidance_nowait()
-                        guidance_text = "\n\n".join(
-                            str((item.get("payload") or {}).get("text") or "").strip()
-                            for item in live_guidance
-                            if str((item.get("payload") or {}).get("text") or "").strip()
-                        )
-                        await _inject_runtime_guidance(messages, live_guidance)
-                        if guidance_text:
-                            await fan_out_guidance_to_subagents(
-                                round_id, guidance_text, bot, chat_id, db_path
-                            )
-                        await _save(_session_messages_to_save(messages))
-                        continue
-                    guidance_task.cancel()
-                    await asyncio.gather(guidance_task, return_exceptions=True)
-                summary_result = await summary_task
-
-                # Deep research Phase 3
-                if _deep_research_mode.get():
-                    source_material = await _build_deep_research_source(round_id)
-                    template = _load_research_template()
-                    length_pref = _parse_length_preference(messages)
-                    outline = await _generate_deep_research_outline(source_material, template, user_message, lang, length_pref)
-                    units: list[dict] = outline.get("units", [])
-                    if not units:
-                        logger.warning("Deep research outline has no units, falling back to research materials")
-                        final_text = source_material
-                        synthesis_entry = {"role": "assistant", "content": final_text}
-                    else:
-                        sections_raw = await asyncio.gather(*[
-                            _write_section(
-                                source_material=source_material, outline=outline,
-                                unit_def=unit_def, unit_no=unit_no,
-                                total_units=len(units), all_units=units,
-                                lang=lang, length_pref=length_pref,
-                            )
-                            for unit_no, unit_def in enumerate(units, 1)
-                        ])
-                        sections_written: list[str] = []
-                        references_accumulated: list[str] = []
-                        for section_text in sections_raw:
-                            body, new_refs = _extract_new_references(section_text)
-                            sections_written.append(body)
-                            references_accumulated.extend(new_refs)
-                        total_len = sum(len(s) for s in sections_written)
-                        expand_threshold = {"short": 4000, "medium": 8000, "long": 15000}.get(length_pref, 8000)
-                        if total_len < expand_threshold:
-                            sections_written = await _expansion_pass(
-                                outline, sections_written, references_accumulated, lang,
-                            )
-                        references_accumulated, dedup_mapping = _deduplicate_references(references_accumulated)
-                        final_text = _assemble_report(sections_written, references_accumulated, outline, dedup_mapping=dedup_mapping)
-                    # Add a brief concluding message after the report
-                    if lang and lang != "en":
-                        closing_note = "\n\n---\n\n✅ **深度研究报告已生成完成。**"
-                    else:
-                        closing_note = "\n\n---\n\n✅ **Deep research report has been generated.**"
-                    pdf_attachment = _deep_research_pdf_attachment(round_id, user_message, final_text)
-                    if pdf_attachment:
-                        pdf_name = pdf_attachment.get("name", "deep-research-report.pdf")
-                        pdf_url = pdf_attachment.get("url", "")
-                        if pdf_url:
-                            closing_note += f"\n\n📎 [{pdf_name}]({pdf_url})"
-                    final_text = final_text.rstrip() + closing_note
-                    synthesis_entry = {"role": "assistant", "content": final_text, "deep_research_report": True}
-                    if pdf_attachment:
-                        synthesis_entry["attachments"] = [pdf_attachment]
-                else:
-                    final_text = summary_result
-                    synthesis_entry = {"role": "assistant", "content": final_text}
-
-                flow_snapshot = await _build_subagent_flow_snapshot(round_id)
-                if client_request_id:
-                    synthesis_entry["client_request_id"] = client_request_id
-                if round_id:
-                    synthesis_entry["round_id"] = round_id
-                if flow_snapshot:
-                    synthesis_entry["subagent_flow_snapshot"] = flow_snapshot
-                boundary_guidance = (
-                    await runtime_inbox.collect_guidance_or_seal()
-                    if runtime_inbox is not None
-                    else []
-                )
-                if boundary_guidance:
-                    synthesis_entry["intermediate_reply"] = True
-                    if _streaming_reply_requested():
-                        messages.pop()
-                    messages.append(_apply_assistant_meta(synthesis_entry))
-                    guidance_text = "\n\n".join(
-                        str((item.get("payload") or {}).get("text") or "").strip()
-                        for item in boundary_guidance
-                        if str((item.get("payload") or {}).get("text") or "").strip()
-                    )
-                    await _inject_runtime_guidance(messages, boundary_guidance)
-                    if guidance_text:
-                        await fan_out_guidance_to_subagents(
-                            round_id, guidance_text, bot, chat_id, db_path
-                        )
-                    await _save(_session_messages_to_save(messages))
-                    continue
-                # 弹出 Phase 2 的 assistant entry（content="" + tool_calls），避免
-                # 流式输出时与 synthesis_entry 的 clientRequestId 重复导致前端去重异常
-                if _streaming_reply_requested():
-                    messages.pop()
-                messages.append(_apply_assistant_meta(synthesis_entry))
-                await _sub_clear(round_id=round_id)
-                await _save(_session_messages_to_save(messages))
-                return final_text
-
-    # Deep research first round: if LLM output text instead of calling ask_user, retry
-    if _deep_research_first_round.get() and not ask_user_call and not use_tools_call:
-        retry_messages = [
-            *phase1_messages,
-            {
-                **_assistant_entry_from_response(response, round_id="", include_tool_calls=False),
-                "content": assistant_text(response) or (response.get("content") or ""),
-            },
-            {
-                "role": "user",
-                "content": (
-                    "You replied with text. You MUST call the `ask_user` function. "
-                    "Call `ask_user` with text=\"请选择报告篇幅\" and "
-                    "options=[\"长（30+页）\", \"中（20+页）\", \"短（10+页）\"]."
-                ),
-            },
-        ]
-        response = await _call_with_runtime_guidance(
-            retry_messages,
-            lambda: _call_phase1_llm(
-                project_history_for_llm(retry_messages),
-                tools=phase1_tools,
-            ),
-        )
-        for tc in (response.get("tool_calls") or []):
-            if tc.get("function", {}).get("name") == "ask_user":
-                ask_user_call = tc
-                break
         if ask_user_call:
             try:
                 args = parse_tool_arguments(
@@ -1672,7 +972,7 @@ async def _run_main_agent_impl(
                 f"tool.result.ask_user.{ask_user_call['id']}",
                 "tool_result",
                 source="tool:ask_user",
-                reason="ask_user tool output returned to LLM after correction",
+                reason="ask_user tool output returned to LLM",
                 transforms=["truncate"] if str(truncated_result) != str(result) else [],
                 content=truncated_result,
                 metadata={"tool_name": "ask_user", "tool_call_id": ask_user_call["id"]},
@@ -1681,25 +981,777 @@ async def _run_main_agent_impl(
                 tool_entry["round_id"] = round_id
             messages.append(tool_entry)
             if _tool_result_requests_user_input(result):
+                # Pause path: _upsert_pending_question already wrote the durable
+                # wait state (clean user + question_prompt pair); saving the raw
+                # in-memory trace here would overwrite it. Just exit.
+                paused = True
                 return _AWAITING_USER_SENTINEL
             await _save(_session_messages_to_save(messages))
             return (await _ensure_text_reply(response, messages, fallback=str(result)))
 
-    # Chat-only path (no tools)
-    event = {"type": "phase_transition", "from": "phase1_decision", "to": "chat_only"}
-    if not suppress_initial_detail:
-        event["detail"] = "Phase 1 decided chat-only, no tools needed"
-        event["detail_key"] = "phase.chatOnly"
-    await _publish_runtime_event(event)
-    if _streaming_reply_requested():
+        if use_tools_call or phase1_concrete_calls:
+            event = {"type": "phase_transition", "from": "phase1_decision", "to": "phase2_execution"}
+            if not suppress_initial_detail:
+                phase_task = visible_user_message.strip()[:120]
+                if phase_task:
+                    event["detail"] = f"Phase 1 decided to use tools. Task: {phase_task}"
+                    event["detail_key"] = "phase.useTools"
+                    event["detail_params"] = {"task": phase_task}
+                else:
+                    event["detail"] = "Phase 1 decided to use tools. Task: Analyze uploaded attachments"
+                    event["detail_key"] = "phase.useToolsAttachments"
+            if phase1_concrete_calls:
+                event["promoted_tool_calls"] = [
+                    str(call.get("function", {}).get("name") or "")
+                    for call in phase1_concrete_calls
+                ]
+            await _publish_runtime_event(event)
+            promoted_phase1_response: dict[str, Any] | None = None
+            if phase1_concrete_calls:
+                phase2_assistant = _assistant_entry_from_response(response, round_id)
+                phase2_assistant["hidden_from_ui"] = True
+                messages = [*phase1_context_messages, phase2_assistant]
+                promoted_phase1_response = response
+            else:
+                normal_use_tools = any(
+                    str(tc.get("id") or "") == str(use_tools_call.get("id") or "")
+                    for tc in tool_calls
+                )
+                phase2_assistant = (
+                    _assistant_entry_from_response(response, round_id)
+                    if normal_use_tools
+                    else _apply_assistant_meta({
+                        "role": "assistant",
+                        "content": "",
+                        "tool_calls": [use_tools_call],
+                        **({"round_id": round_id} if round_id else {}),
+                    })
+                )
+                phase2_assistant["hidden_from_ui"] = True
+                messages = [*phase1_context_messages, phase2_assistant]
+                phase2_calls = tool_calls if normal_use_tools else [use_tools_call]
+                for phase2_call in phase2_calls:
+                    phase2_name = str(
+                        phase2_call.get("function", {}).get("name") or ""
+                    )
+                    phase2_result = (
+                        "Execution phase entered. Follow the concise execution "
+                        "brief in the original use_tools arguments and adapt from "
+                        "tool evidence."
+                        if phase2_name == "use_tools"
+                        else "Skipped because the same decision selected use_tools."
+                    )
+                    phase2_tool_entry = attach_context(
+                        {
+                            "role": "tool",
+                            "tool_call_id": phase2_call["id"],
+                            "content": phase2_result,
+                            "hidden_from_ui": True,
+                        },
+                        context_block(
+                            f"tool.result.{phase2_name}.{phase2_call['id']}",
+                            "tool_result",
+                            source=f"tool:{phase2_name}",
+                            reason="preserve the complete Phase-1 assistant/tool protocol while entering Phase 2",
+                            content=phase2_result,
+                            metadata={
+                                "tool_name": phase2_name,
+                                "tool_call_id": phase2_call["id"],
+                            },
+                        ),
+                    )
+                    if round_id:
+                        phase2_tool_entry["round_id"] = round_id
+                    messages.append(phase2_tool_entry)
+
+            while True:
+                if promoted_phase1_response is not None:
+                    response = promoted_phase1_response
+                    promoted_phase1_response = None
+                    entry = phase2_assistant
+                else:
+                    await _inject_runtime_guidance(messages)
+                    response = await _call_with_runtime_guidance(
+                        messages,
+                        lambda: _call_llm(
+                            project_history_for_llm(messages),
+                            tools=wire_tool_defs,
+                        ),
+                    )
+                    entry = {"role": "assistant", "content": response.get("content") or ""}
+                    if response.get("reasoning_content"):
+                        entry["reasoning_content"] = response["reasoning_content"]
+                    if response.get("tool_calls"):
+                        entry["tool_calls"] = response["tool_calls"]
+                    if response.get("usage"):
+                        entry["usage"] = response["usage"]
+                    if round_id:
+                        entry["round_id"] = round_id
+                    messages.append(_apply_assistant_meta(entry))
+
+                tcs = response.get("tool_calls") or []
+                tool_names = [str(t.get("function", {}).get("name") or "") for t in tcs]
+                # ``quit`` is a hard terminal signal. If the model mistakenly mixes
+                # it with sibling calls, none of those siblings may execute.
+                done_via_quit = "quit" in tool_names
+                if done_via_quit or not tcs:
+                    if done_via_quit and runtime_inbox is not None:
+                        await runtime_inbox.wait_for_active_tools()
+                    # Guidance may have arrived while this model call was in flight.
+                    # Do not finalize an answer that the user has already superseded.
+                    if runtime_inbox is not None:
+                        pending_guidance = runtime_inbox.collect_guidance_nowait()
+                        if pending_guidance:
+                            if done_via_quit:
+                                for tc in tcs:
+                                    is_quit = str(tc.get("function", {}).get("name") or "") == "quit"
+                                    tool_entry = {
+                                        "role": "tool",
+                                        "tool_call_id": tc["id"],
+                                        "content": (
+                                            "Completion deferred because new user guidance arrived."
+                                            if is_quit else
+                                            "Skipped because the same batch contained terminal quit."
+                                        ),
+                                    }
+                                    if round_id:
+                                        tool_entry["round_id"] = round_id
+                                    messages.append(tool_entry)
+                            await _inject_runtime_guidance(messages, pending_guidance)
+                            await _save(_session_messages_to_save(messages))
+                            continue
+                    if done_via_quit:
+                        for tc in tcs:
+                            is_quit = (
+                                str(tc.get("function", {}).get("name") or "") == "quit"
+                            )
+                            tool_entry = {
+                                "role": "tool",
+                                "tool_call_id": tc["id"],
+                                "content": (
+                                    "Agent requested to finish."
+                                    if is_quit
+                                    else "Skipped because the same batch contained terminal quit."
+                                ),
+                            }
+                            if round_id:
+                                tool_entry["round_id"] = round_id
+                            messages.append(tool_entry)
+                        await _publish_runtime_event({"type": "phase_transition", "from": "execution", "to": "done", "detail": "Agent called quit", "detail_key": "phase.agentQuit"})
+                    # A missing/invalid terminal answer may be repaired, but only by
+                    # the no-tool final-reply path used inside ``_ensure_text_reply``.
+                    # Once quit is observed, this run can never reopen execution.
+                    final_text = await _ensure_text_reply(response, messages)
+                    final_entry = entry
+                    if done_via_quit:
+                        # Preserve a valid assistant(tool_calls) -> tool-results
+                        # sequence, then store the user-visible answer as the
+                        # terminal assistant message after that sequence.
+                        entry["content"] = ""
+                        final_entry = _apply_assistant_meta(
+                            {
+                                "role": "assistant",
+                                "content": final_text,
+                                **({"round_id": round_id} if round_id else {}),
+                            }
+                        )
+                        if entry.get("usage"):
+                            final_entry["usage"] = entry.pop("usage")
+                        messages.append(final_entry)
+                    else:
+                        entry["content"] = final_text
+                        entry.pop("tool_calls", None)
+                    _attach_final_usage(final_entry)
+                    if client_request_id:
+                        final_entry["client_request_id"] = client_request_id
+
+                    # Guidance that arrived while a no-tool repair was in flight
+                    # starts a continuation; it does not revive the terminated batch.
+                    late_guidance = (
+                        await runtime_inbox.collect_guidance_or_seal()
+                        if runtime_inbox is not None
+                        else []
+                    )
+                    if late_guidance:
+                        final_entry["intermediate_reply"] = True
+                        await _inject_runtime_guidance(messages, late_guidance)
+                        await _save(_session_messages_to_save(messages))
+                        continue
+                    await _save(_session_messages_to_save(messages))
+                    return final_text
+
+                awaiting_user = False
+                spawned = False
+                quit_requested = False
+                reflection_requested = False
+                guidance_supersedes_batch = bool(
+                    runtime_inbox is not None and runtime_inbox.has_guidance_nowait()
+                )
+                pending_reflection_tool_calls: list[tuple[dict[str, Any], dict[str, Any]]] = []
+                inbox_batch_args: dict[str, dict[str, Any]] = {}
+                mcp_observations: list[dict[str, Any]] = []
+                tool_batch_id = f"batch_{uuid4().hex}"
+                if runtime_inbox is not None and not guidance_supersedes_batch:
+                    inbox_calls: list[tuple[Any, ...]] = []
+                    for pending_call in tcs:
+                        pending_name = str(pending_call.get("function", {}).get("name") or "")
+                        if pending_name in {"use_tools", "quit", "DeepReflect"}:
+                            continue
+                        if system_initiated and pending_name == "ask_user":
+                            continue
+                        try:
+                            pending_args = parse_tool_arguments(
+                                pending_call["function"].get("arguments")
+                            )
+                        except (KeyError, TypeError, ValueError):
+                            continue
+                        inbox_batch_args[pending_call["id"]] = pending_args
+                        inbox_calls.append((
+                            pending_call["id"],
+                            pending_name,
+                            lambda pending_call_id=pending_call["id"], pending_name=pending_name, pending_args=dict(pending_args): _execute_tool_for_call(
+                                pending_call_id, pending_name, pending_args, bot, chat_id, db_path
+                            ),
+                            _inbox_tool_metadata(pending_name, pending_args),
+                        ))
+                    if inbox_calls:
+                        runtime_inbox.submit_tool_batch(
+                            inbox_calls, batch_id=tool_batch_id
+                        )
+                for index, t in enumerate(tcs):
+                    tool_name = t.get("function", {}).get("name")
+                    capability_id = str(tool_name or "")
+                    if guidance_supersedes_batch and t["id"] not in inbox_batch_args:
+                        skipped_tool_entry: dict[str, Any] = {
+                            "role": "tool",
+                            "tool_call_id": t["id"],
+                            "content": "Skipped before execution because new user guidance superseded this tool-call batch.",
+                        }
+                        if round_id:
+                            skipped_tool_entry["round_id"] = round_id
+                        messages.append(skipped_tool_entry)
+                        continue
+                    if awaiting_user:
+                        skipped_tool_entry: dict[str, Any] = {
+                            "role": "tool", "tool_call_id": t["id"],
+                            "content": "Skipped because a previous tool already paused the round until the user answers.",
+                        }
+                        skipped_tool_entry = attach_context(skipped_tool_entry, context_block(
+                            f"tool.result.skipped.{t['id']}",
+                            "tool_result",
+                            source="cyrene.agent.agent",
+                            reason="tool skipped after ask_user paused the round",
+                            transforms=["synthetic_tool_result"],
+                            content=skipped_tool_entry["content"],
+                        ))
+                        if round_id:
+                            skipped_tool_entry["round_id"] = round_id
+                        messages.append(skipped_tool_entry)
+                        continue
+                    if reflection_requested:
+                        skipped_tool_entry = {
+                            "role": "tool",
+                            "tool_call_id": t["id"],
+                            "content": "Skipped because DeepReflect already reframed this turn; continue from the reflection packet instead of executing stale follow-up tools.",
+                        }
+                        skipped_tool_entry = attach_context(skipped_tool_entry, context_block(
+                            f"tool.result.skipped_after_reflection.{t['id']}",
+                            "tool_result",
+                            source="cyrene.agent.agent",
+                            reason="tool skipped after DeepReflect reframed the round",
+                            transforms=["synthetic_tool_result"],
+                            content=skipped_tool_entry["content"],
+                            metadata={"tool_name": tool_name, "tool_call_id": t["id"]},
+                        ))
+                        if round_id:
+                            skipped_tool_entry["round_id"] = round_id
+                        messages.append(skipped_tool_entry)
+                        continue
+                    try:
+                        args = inbox_batch_args.get(t["id"])
+                        if args is None:
+                            args = parse_tool_arguments(
+                                t["function"].get("arguments")
+                            )
+                        capability_id = _resolved_capability_id(str(tool_name or ""), args)
+                        if system_initiated and tool_name == "ask_user":
+                            result = (
+                                "Tool unavailable: proactive system-initiated rounds "
+                                "cannot ask the user to clarify or pause for an answer."
+                            )
+                        elif tool_name == "use_tools":
+                            # ``use_tools`` is the Phase-1 gateway, wired into the
+                            # execution toolset only for prefix-cache parity with Phase 1.
+                            # There is no gate to open here, so treat it as a no-op nudge.
+                            result = "Already in the execution phase — call the concrete tools you need directly, or quit when done."
+                        elif tool_name == "quit":
+                            quit_requested = True
+                            result = "Agent requested to finish after this tool-call batch."
+                        elif tool_name == "DeepReflect":
+                            pending_reflection_tool_calls.append((t, args))
+                            reflection_requested = True
+                            result = "Deep reflection complete. A reflection record will be added to the visible transcript."
+                        else:
+                            if runtime_inbox is None:
+                                result = await _execute_tool_for_call(
+                                    t["id"], str(tool_name or ""), args, bot, chat_id, db_path
+                                )
+                            else:
+                                if t["id"] not in inbox_batch_args:
+                                    runtime_inbox.submit_tool(
+                                        t["id"],
+                                        str(tool_name or ""),
+                                        lambda tool_call_id=t["id"], tool_name=tool_name, args=dict(args): _execute_tool_for_call(
+                                            tool_call_id, str(tool_name or ""), args, bot, chat_id, db_path
+                                        ),
+                                        batch_id=tool_batch_id,
+                                        metadata=_inbox_tool_metadata(
+                                            str(tool_name or ""), args
+                                        ),
+                                    )
+                                result = await runtime_inbox.wait_for_tool_result(t["id"])
+                                guidance_supersedes_batch = runtime_inbox.has_guidance_nowait()
+                    except Exception as e:
+                        result = f"Tool failed: {e}"
+                    truncated_result = truncate(result)
+                    tool_entry: dict[str, Any] = {"role": "tool", "tool_call_id": t["id"], "content": truncated_result}
+                    tool_entry = attach_context(tool_entry, context_block(
+                        f"tool.result.{tool_name}.{t['id']}",
+                        "tool_result",
+                        source=f"tool:{tool_name}",
+                        reason="tool output returned to LLM",
+                        transforms=["truncate"] if str(truncated_result) != str(result) else [],
+                        content=truncated_result,
+                        metadata={"tool_name": tool_name, "tool_call_id": t["id"]},
+                    ))
+                    if round_id:
+                        tool_entry["round_id"] = round_id
+                    messages.append(tool_entry)
+                    observation = build_mcp_observation_message(
+                        result,
+                        tool_name=str(tool_name or ""),
+                    )
+                    if observation is not None:
+                        if round_id:
+                            observation["round_id"] = round_id
+                        mcp_observations.append(observation)
+                    if _tool_result_requests_user_input(str(result)):
+                        awaiting_user = True
+                    if capability_id == "subagent.spawn" and _wire_result_succeeded(result):
+                        spawned = True
+                # Keep the assistant -> N tool-results protocol sequence contiguous.
+                # Multimodal observations follow the complete tool batch as a
+                # model-only user message and are omitted from persisted history.
+                messages.extend(mcp_observations)
+                await _inject_runtime_guidance(messages)
+                if pending_reflection_tool_calls:
+                    _ensure_message_identity(messages)
+                    pending_reflection_records: list[dict[str, Any]] = []
+                    for _tool_call, args in pending_reflection_tool_calls:
+                        reflection_record = await create_deep_reflection_record(
+                            messages,
+                            scope=str(args.get("scope") or "current_round"),
+                            goal_gap=str(args.get("goal_gap") or ""),
+                            user_requirement=str(args.get("user_requirement") or ""),
+                            focus=str(args.get("focus") or ""),
+                            lang_text=user_message,
+                        )
+                        if round_id:
+                            reflection_record["round_id"] = round_id
+                        if client_request_id:
+                            reflection_record["client_request_id"] = client_request_id
+                        pending_reflection_records.append(_apply_assistant_meta(reflection_record))
+                    messages.extend(pending_reflection_records)
+                if awaiting_user:
+                    boundary_guidance = (
+                        await runtime_inbox.collect_guidance_or_seal()
+                        if runtime_inbox is not None
+                        else []
+                    )
+                    if boundary_guidance:
+                        await _inject_runtime_guidance(messages, boundary_guidance)
+                        await _save(_session_messages_to_save(messages))
+                        continue
+                    # Pause path: persist before handing back to the user so a
+                    # resumed run rebuilds its context with the throttled batches
+                    # that were never written to the state file.
+                    await _save(_session_messages_to_save(messages))
+                    return _AWAITING_USER_SENTINEL
+                if quit_requested and not pending_reflection_tool_calls:
+                    await _publish_runtime_event({"type": "phase_transition", "from": "execution", "to": "done", "detail": "Agent called quit", "detail_key": "phase.agentQuit"})
+                    final_text = await _ensure_text_reply(response, messages)
+                    boundary_guidance = (
+                        await runtime_inbox.collect_guidance_or_seal()
+                        if runtime_inbox is not None
+                        else []
+                    )
+                    if boundary_guidance:
+                        intermediate = _apply_assistant_meta({
+                            "role": "assistant",
+                            "content": final_text,
+                            "intermediate_reply": True,
+                            **({"round_id": round_id} if round_id else {}),
+                        })
+                        messages.append(intermediate)
+                        await _inject_runtime_guidance(messages, boundary_guidance)
+                        await _save(_session_messages_to_save(messages))
+                        continue
+                    await _save(_session_messages_to_save(messages))
+                    return final_text
+                _pending_saved_batches += 1
+                if (
+                    _pending_saved_batches >= 5
+                    or time.monotonic() - _last_batch_save_ts >= 5.0
+                    or spawned
+                    # An interrupt may never reach the subagent monitoring loop
+                    # (e.g. no subagents), so persist promptly once one is pending
+                    # — matching the pre-throttle behaviour of saving every batch.
+                    or _ensure_session(_current_session_id.get()).interrupt_event.is_set()
+                ):
+                    await _save(_session_messages_to_save(messages))
+                    _last_batch_save_ts = time.monotonic()
+                    _pending_saved_batches = 0
+
+                # Subagent monitoring loop
+                if spawned:
+                    await _publish_runtime_event({
+                        "type": "phase_transition", "from": "phase2_execution", "to": "subagent_monitoring",
+                        "detail": "Subagents spawned, entering monitoring loop",
+                        "detail_key": "phase.subagentMonitoring",
+                    })
+                    from cyrene.subagent import (
+                        run_subagent, spawn_subagent_task,
+                        build_deep_research_source as _build_deep_research_source,
+                        build_flow_snapshot as _build_subagent_flow_snapshot,
+                        cancel_subagent_tasks as _cancel_subagent_tasks,
+                        clear as _sub_clear, get_snapshot as _sub_snapshot,
+                        get_raw_messages as _sub_raw_msgs, reactivate as _sub_reactivate,
+                        run_summary_subagent as _run_summary_subagent,
+                        timeout_subagents as _timeout_subagents,
+                    )
+                    from cyrene.runtime.inbox import get_unread_count as _inbox_unread_base
+                    fan_out_guidance_to_subagents = importlib.import_module(
+                        "cyrene.agent.guidance"
+                    ).fan_out_guidance_to_subagents
+                    _agent_session_id = _current_session_id.get()
+
+                    def _inbox_unread(agent_id: str) -> int:
+                        return _inbox_unread_base(
+                            agent_id,
+                            session_id=_agent_session_id,
+                        )
+
+                    from cyrene.agent.research import (
+                        deduplicate_references as _deduplicate_references,
+                        deep_research_pdf_attachment as _deep_research_pdf_attachment,
+                        expansion_pass as _expansion_pass,
+                        extract_new_references as _extract_new_references,
+                        generate_deep_research_outline as _generate_deep_research_outline,
+                        load_research_template as _load_research_template,
+                        parse_length_preference as _parse_length_preference,
+                        assemble_report as _assemble_report,
+                        write_section as _write_section,
+                    )
+
+                    _interrupt_event_sess = _ensure_session(_current_session_id.get()).interrupt_event
+                    _interrupt_event_sess.clear()
+                    interrupted = False
+                    monitoring_expired = False
+                    quiet_ticks = 0
+                    from cyrene.runtime.settings_store import get as _get_runtime_setting
+                    monitor_timeout_seconds = max(
+                        int(_get_runtime_setting("subagent_execution_max_wall_seconds", 1800) or 1800),
+                        int(_get_runtime_setting("subagent_discussion_max_wall_seconds", 600) or 600),
+                    ) + 30
+                    monitor_deadline = asyncio.get_running_loop().time() + monitor_timeout_seconds
+                    while asyncio.get_running_loop().time() < monitor_deadline:
+                        if runtime_inbox is not None and runtime_inbox.has_guidance_nowait():
+                            live_guidance = runtime_inbox.collect_guidance_nowait()
+                            guidance_text = "\n\n".join(
+                                str((item.get("payload") or {}).get("text") or "").strip()
+                                for item in live_guidance
+                                if str((item.get("payload") or {}).get("text") or "").strip()
+                            )
+                            await _inject_runtime_guidance(messages, live_guidance)
+                            if guidance_text:
+                                await fan_out_guidance_to_subagents(
+                                    round_id, guidance_text, bot, chat_id, db_path
+                                )
+                        try:
+                            await asyncio.wait_for(_interrupt_event_sess.wait(), timeout=0.5)
+                            _interrupt_event_sess.clear()
+                            interrupted = True
+                            break
+                        except asyncio.TimeoutError:
+                            pass
+                        snap = await _sub_snapshot(round_id=round_id)
+                        if not snap:
+                            break
+                        resurrected = False
+                        for aid, info in snap.items():
+                            if info["status"] in ("done", "timeout", "incomplete") and _inbox_unread(aid) > 0:
+                                if await _sub_reactivate(aid):
+                                    raw = await _sub_raw_msgs(aid)
+                                    spawn_subagent_task(
+                                        run_subagent(aid, info["task"], bot, chat_id, db_path, resume_messages=raw),
+                                        aid,
+                                    )
+                                    resurrected = True
+                        snap2 = await _sub_snapshot(round_id=round_id)
+                        all_truly_done = all(
+                            info["status"] in ("done", "timeout", "incomplete") and _inbox_unread(aid) == 0
+                            for aid, info in snap2.items()
+                        )
+                        if all_truly_done and not resurrected:
+                            quiet_ticks += 1
+                            if quiet_ticks >= 2:
+                                break
+                        else:
+                            quiet_ticks = 0
+                    else:
+                        monitoring_expired = True
+                    if interrupted:
+                        await _save(_session_messages_to_save(messages))
+                        # Cancel running subagents immediately and mark them done so
+                        # the summary phase can start right away.
+                        await _cancel_subagent_tasks(round_id=round_id)
+                    elif monitoring_expired:
+                        expired_snapshot = await _sub_snapshot(round_id=round_id)
+                        active_ids = [
+                            aid
+                            for aid, info in expired_snapshot.items()
+                            if info.get("status") in ("running", "resumed")
+                        ]
+                        if active_ids:
+                            await _timeout_subagents(
+                                active_ids,
+                                reason="Subagent parent-monitor safety deadline reached.",
+                            )
+                    await _publish_runtime_event({
+                        "type": "phase_transition", "from": "subagent_monitoring", "to": "synthesis",
+                        "detail": "All subagents done, starting summary subagent",
+                        "detail_key": "phase.synthesis",
+                    })
+                    summary_task = asyncio.create_task(_run_summary_subagent(
+                        round_id=round_id, parent_task=user_message, round_history=messages,
+                    ))
+                    if runtime_inbox is not None:
+                        guidance_task = asyncio.create_task(runtime_inbox.wait_for_guidance())
+                        try:
+                            done, _pending = await asyncio.wait(
+                                {summary_task, guidance_task},
+                                return_when=asyncio.FIRST_COMPLETED,
+                            )
+                        except asyncio.CancelledError:
+                            summary_task.cancel()
+                            guidance_task.cancel()
+                            await asyncio.gather(
+                                summary_task, guidance_task, return_exceptions=True
+                            )
+                            raise
+                        if guidance_task in done and summary_task not in done and await guidance_task:
+                            summary_task.cancel()
+                            await asyncio.gather(summary_task, return_exceptions=True)
+                            live_guidance = runtime_inbox.collect_guidance_nowait()
+                            guidance_text = "\n\n".join(
+                                str((item.get("payload") or {}).get("text") or "").strip()
+                                for item in live_guidance
+                                if str((item.get("payload") or {}).get("text") or "").strip()
+                            )
+                            await _inject_runtime_guidance(messages, live_guidance)
+                            if guidance_text:
+                                await fan_out_guidance_to_subagents(
+                                    round_id, guidance_text, bot, chat_id, db_path
+                                )
+                            await _save(_session_messages_to_save(messages))
+                            continue
+                        guidance_task.cancel()
+                        await asyncio.gather(guidance_task, return_exceptions=True)
+                    summary_result = await summary_task
+
+                    # Deep research Phase 3
+                    if _deep_research_mode.get():
+                        source_material = await _build_deep_research_source(round_id)
+                        template = _load_research_template()
+                        length_pref = _parse_length_preference(messages)
+                        outline = await _generate_deep_research_outline(source_material, template, user_message, lang, length_pref)
+                        units: list[dict] = outline.get("units", [])
+                        if not units:
+                            logger.warning("Deep research outline has no units, falling back to research materials")
+                            final_text = source_material
+                            synthesis_entry = {"role": "assistant", "content": final_text}
+                        else:
+                            sections_raw = await asyncio.gather(*[
+                                _write_section(
+                                    source_material=source_material, outline=outline,
+                                    unit_def=unit_def, unit_no=unit_no,
+                                    total_units=len(units), all_units=units,
+                                    lang=lang, length_pref=length_pref,
+                                )
+                                for unit_no, unit_def in enumerate(units, 1)
+                            ])
+                            sections_written: list[str] = []
+                            references_accumulated: list[str] = []
+                            for section_text in sections_raw:
+                                body, new_refs = _extract_new_references(section_text)
+                                sections_written.append(body)
+                                references_accumulated.extend(new_refs)
+                            total_len = sum(len(s) for s in sections_written)
+                            expand_threshold = {"short": 4000, "medium": 8000, "long": 15000}.get(length_pref, 8000)
+                            if total_len < expand_threshold:
+                                sections_written = await _expansion_pass(
+                                    outline, sections_written, references_accumulated, lang,
+                                )
+                            references_accumulated, dedup_mapping = _deduplicate_references(references_accumulated)
+                            final_text = _assemble_report(sections_written, references_accumulated, outline, dedup_mapping=dedup_mapping)
+                        # Add a brief concluding message after the report
+                        if lang and lang != "en":
+                            closing_note = "\n\n---\n\n✅ **深度研究报告已生成完成。**"
+                        else:
+                            closing_note = "\n\n---\n\n✅ **Deep research report has been generated.**"
+                        pdf_attachment = _deep_research_pdf_attachment(round_id, user_message, final_text)
+                        if pdf_attachment:
+                            pdf_name = pdf_attachment.get("name", "deep-research-report.pdf")
+                            pdf_url = pdf_attachment.get("url", "")
+                            if pdf_url:
+                                closing_note += f"\n\n📎 [{pdf_name}]({pdf_url})"
+                        final_text = final_text.rstrip() + closing_note
+                        synthesis_entry = {"role": "assistant", "content": final_text, "deep_research_report": True}
+                        if pdf_attachment:
+                            synthesis_entry["attachments"] = [pdf_attachment]
+                    else:
+                        final_text = summary_result
+                        synthesis_entry = {"role": "assistant", "content": final_text}
+
+                    flow_snapshot = await _build_subagent_flow_snapshot(round_id)
+                    if client_request_id:
+                        synthesis_entry["client_request_id"] = client_request_id
+                    if round_id:
+                        synthesis_entry["round_id"] = round_id
+                    if flow_snapshot:
+                        synthesis_entry["subagent_flow_snapshot"] = flow_snapshot
+                    boundary_guidance = (
+                        await runtime_inbox.collect_guidance_or_seal()
+                        if runtime_inbox is not None
+                        else []
+                    )
+                    if boundary_guidance:
+                        synthesis_entry["intermediate_reply"] = True
+                        if _streaming_reply_requested():
+                            messages.pop()
+                        messages.append(_apply_assistant_meta(synthesis_entry))
+                        guidance_text = "\n\n".join(
+                            str((item.get("payload") or {}).get("text") or "").strip()
+                            for item in boundary_guidance
+                            if str((item.get("payload") or {}).get("text") or "").strip()
+                        )
+                        await _inject_runtime_guidance(messages, boundary_guidance)
+                        if guidance_text:
+                            await fan_out_guidance_to_subagents(
+                                round_id, guidance_text, bot, chat_id, db_path
+                            )
+                        await _save(_session_messages_to_save(messages))
+                        continue
+                    # 弹出 Phase 2 的 assistant entry（content="" + tool_calls），避免
+                    # 流式输出时与 synthesis_entry 的 clientRequestId 重复导致前端去重异常
+                    if _streaming_reply_requested():
+                        messages.pop()
+                    messages.append(_apply_assistant_meta(synthesis_entry))
+                    await _sub_clear(round_id=round_id)
+                    await _save(_session_messages_to_save(messages))
+                    return final_text
+
+        # Deep research first round: if LLM output text instead of calling ask_user, retry
+        if _deep_research_first_round.get() and not ask_user_call and not use_tools_call:
+            retry_messages = [
+                *phase1_messages,
+                {
+                    **_assistant_entry_from_response(response, round_id="", include_tool_calls=False),
+                    "content": assistant_text(response) or (response.get("content") or ""),
+                },
+                {
+                    "role": "user",
+                    "content": (
+                        "You replied with text. You MUST call the `ask_user` function. "
+                        "Call `ask_user` with text=\"请选择报告篇幅\" and "
+                        "options=[\"长（30+页）\", \"中（20+页）\", \"短（10+页）\"]."
+                    ),
+                },
+            ]
+            response = await _call_with_runtime_guidance(
+                retry_messages,
+                lambda: _call_phase1_llm(
+                    project_history_for_llm(retry_messages),
+                    tools=phase1_tools,
+                ),
+            )
+            for tc in (response.get("tool_calls") or []):
+                if tc.get("function", {}).get("name") == "ask_user":
+                    ask_user_call = tc
+                    break
+            if ask_user_call:
+                try:
+                    args = parse_tool_arguments(
+                        ask_user_call["function"].get("arguments")
+                    )
+                    result = await execute_wire_tool(
+                        "ask_user", args, bot, chat_id, db_path, None, actor="main"
+                    )
+                except Exception as exc:
+                    result = f"Tool failed: {exc}"
+                truncated_result = truncate(result)
+                tool_entry: dict[str, Any] = {"role": "tool", "tool_call_id": ask_user_call["id"], "content": truncated_result}
+                tool_entry = attach_context(tool_entry, context_block(
+                    f"tool.result.ask_user.{ask_user_call['id']}",
+                    "tool_result",
+                    source="tool:ask_user",
+                    reason="ask_user tool output returned to LLM after correction",
+                    transforms=["truncate"] if str(truncated_result) != str(result) else [],
+                    content=truncated_result,
+                    metadata={"tool_name": "ask_user", "tool_call_id": ask_user_call["id"]},
+                ))
+                if round_id:
+                    tool_entry["round_id"] = round_id
+                messages.append(tool_entry)
+                if _tool_result_requests_user_input(result):
+                    # Pause path: _upsert_pending_question already wrote the
+                    # durable wait state; see the other pause site above.
+                    paused = True
+                    return _AWAITING_USER_SENTINEL
+                await _save(_session_messages_to_save(messages))
+                return (await _ensure_text_reply(response, messages, fallback=str(result)))
+
+        # Chat-only path (no tools)
+        event = {"type": "phase_transition", "from": "phase1_decision", "to": "chat_only"}
+        if not suppress_initial_detail:
+            event["detail"] = "Phase 1 decided chat-only, no tools needed"
+            event["detail_key"] = "phase.chatOnly"
+        await _publish_runtime_event(event)
+        if _streaming_reply_requested():
+            if client_request_id:
+                messages[-1]["client_request_id"] = client_request_id
+            await _save(_session_messages_to_save(messages))
+            return await _ensure_text_reply(response, messages)
         if client_request_id:
             messages[-1]["client_request_id"] = client_request_id
         await _save(_session_messages_to_save(messages))
         return await _ensure_text_reply(response, messages)
-    if client_request_id:
-        messages[-1]["client_request_id"] = client_request_id
-    await _save(_session_messages_to_save(messages))
-    return await _ensure_text_reply(response, messages)
+    finally:
+        # Persist unconditionally (except the pause exit, whose durable state
+        # was already written by _upsert_pending_question). The interrupt path
+        # cancels the run task at its next await point — which may sit inside
+        # the throttle's own save — so a plain save here could be torn down
+        # too. Shield keeps the write running on its own task even if this
+        # finally's await is cancelled again, so every executed batch reaches
+        # the state file.
+        if not paused:
+            try:
+                await asyncio.shield(_save(_session_messages_to_save(messages)))
+            except Exception:
+                # Best-effort: the run's own completion paths already surface
+                # save failures; this must not mask a clean return or a
+                # cancellation.
+                logger.warning("Failed to persist final agent state", exc_info=True)
 
 
 async def _run_main_agent(

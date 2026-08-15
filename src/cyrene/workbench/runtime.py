@@ -5398,6 +5398,8 @@ def _workbench_compose_static_system(
 def _workbench_compose_memory_ephemeral(
     project: dict[str, Any] | None,
     session: dict[str, Any],
+    *,
+    entries: list[dict[str, Any]] | None = None,
 ) -> tuple[str, str]:
     """Return (run_fixed_memory, volatile_tail_memory) for this Workbench session.
 
@@ -5406,12 +5408,26 @@ def _workbench_compose_memory_ephemeral(
     same session are rendered in the volatile tail so they remain visible without
     invalidating the already-established fixed prefix. A new session snapshots
     again and promotes them back into the fixed block.
+
+    ``entries`` is the already-loaded memory document: the caller composes the
+    fixed and volatile blocks once per run, so the three internal reads collapse
+    into a single load.
     """
     if not project:
         return "", ""
     memory_key = _workbench_project_memory_key(project)
+    if entries is None:
+        # Load the memory document once so id selection and both renders share
+        # a single read instead of each loading it independently.
+        try:
+            entries = _memory_service()._load(memory_key)
+        except Exception:
+            logger.exception("Failed to load project memory for prompt injection")
+            return "", ""
     try:
-        current_ids = _memory_service().memory_injection_ids(memory_key)
+        current_ids = _memory_service().memory_injection_ids(
+            memory_key, entries=entries
+        )
     except Exception:
         logger.exception("Failed to list project memory ids for prompt injection")
         return "", ""
@@ -5446,12 +5462,14 @@ def _workbench_compose_memory_ephemeral(
             include_ids=inject_ids,
             preserve_id_order=True,
             limit=25,
+            entries=entries,
         )
         volatile = _memory_service().render_memory_for_injection(
             memory_key,
             include_ids=new_ids,
             preserve_id_order=True,
             header="## 本 session 新增项目记忆（刚写入，放在最后供本轮参考；与当前任务无关则忽略）",
+            entries=entries,
         ) if new_ids else ""
     except Exception:
         logger.exception("Failed to render project memory for prompt injection")
@@ -5721,6 +5739,7 @@ def _workbench_compose_ephemeral_system(
     *,
     step_id: str = "",
     workspace_root: Path | None = None,
+    memory_pair: tuple[str, str] | None = None,
 ) -> str:
     """Assemble run-fixed context for a Workbench agent run.
 
@@ -5731,6 +5750,10 @@ def _workbench_compose_ephemeral_system(
 
     Blocks (in order): Workbench task shared context → project memory snapshot →
     reflection seed → step context cascade → workspace state.
+
+    ``memory_pair`` lets a caller that already composed the memory blocks once
+    (see :func:`_workbench_compose_memory_ephemeral`) reuse them for both the
+    fixed and volatile blocks instead of composing twice per run.
     """
     parts: list[str] = []
     # 1. Workbench task shared context: project blocks first, then session task /
@@ -5739,7 +5762,10 @@ def _workbench_compose_ephemeral_system(
     if shared_task_context:
         parts.append(shared_task_context)
     # 2. Project durable memories: snapshot at session start for cache stability.
-    memory_block, _new_memory_tail = _workbench_compose_memory_ephemeral(project, session)
+    if memory_pair is not None:
+        memory_block, _new_memory_tail = memory_pair
+    else:
+        memory_block, _new_memory_tail = _workbench_compose_memory_ephemeral(project, session)
     if memory_block:
         parts.append(memory_block)
     # 3. Reflection seed: session scoped; keep out of the base system prefix.
@@ -5763,9 +5789,14 @@ def _workbench_compose_ephemeral_system(
 def _workbench_compose_volatile_ephemeral_system(
     project: dict[str, Any] | None,
     session: dict[str, Any],
+    *,
+    memory_pair: tuple[str, str] | None = None,
 ) -> str:
     """Context that intentionally stays at the absolute prompt tail."""
-    _fixed, new_memory_tail = _workbench_compose_memory_ephemeral(project, session)
+    if memory_pair is not None:
+        _fixed, new_memory_tail = memory_pair
+    else:
+        _fixed, new_memory_tail = _workbench_compose_memory_ephemeral(project, session)
     shared_tail = _workbench_task_build_volatile_context(project, session)
     return "\n\n".join(part for part in (shared_tail, new_memory_tail) if part).strip()
 

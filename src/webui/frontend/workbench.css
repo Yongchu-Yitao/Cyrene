@@ -7660,6 +7660,18 @@ html[data-theme="light"] .wb-tool-list .mono {
   border-bottom-color: color-mix(in srgb, var(--wb-line) 64%, transparent);
 }
 
+/* Deep-linked settings: briefly highlight the anchored setting after the
+   search overlay jumps to it. */
+.wb-settings-highlight {
+  animation: wb-settings-highlight-pulse 2.2s ease-out;
+  border-radius: 10px;
+}
+@keyframes wb-settings-highlight-pulse {
+  0% { background: color-mix(in srgb, var(--wb-accent, #4f8cff) 28%, transparent); }
+  60% { background: color-mix(in srgb, var(--wb-accent, #4f8cff) 28%, transparent); }
+  100% { background: transparent; }
+}
+
 html[data-theme] .settings-overlay :where(.wb-input, .wb-select, .wb-textarea, .wb-btn) {
   border: var(--wb-settings-control-border);
   border-radius: var(--wb-settings-control-radius);
@@ -24914,7 +24926,9 @@ body.wb-col-resizing .wb-col-resizer.track-gutter:not(.is-resizing)::after {
   min-width: 0;
   min-height: 0;
   height: max-content;
-  max-height: calc(100vh - 140px);
+  /* 58px top inset + 46px head + 2px borders + 12px gutter = 118px, landing
+     the panel's bottom edge exactly on the conversation card's baseline. */
+  max-height: calc(100vh - var(--wbc-card-top-inset) - 46px - 2px - var(--wbc-card-gutter));
   width: 100%;
   margin: 0;
   overflow-y: auto;

@@ -777,12 +777,17 @@ class GoalLoopManager:
                 workspace_files_before = R._workbench_workspace_file_snapshot(workspace_root)
                 workspace_text_before = R._workbench_workspace_text_snapshot(workspace_root)
                 started_at = _utc_iso()
+                memory_pair = R._workbench_compose_memory_ephemeral(
+                    current_project, current_session,
+                )
                 ephemeral = R._workbench_compose_ephemeral_system(
                     current_project, current_session,
                     step_id=step_id, workspace_root=workspace_root,
+                    memory_pair=memory_pair,
                 )
                 volatile_ephemeral = R._workbench_compose_volatile_ephemeral_system(
                     current_project, current_session,
+                    memory_pair=memory_pair,
                 )
                 # Run-invariant — rides in the cache-stable system prefix (static
                 # extra), not the per-run ephemeral tail.
