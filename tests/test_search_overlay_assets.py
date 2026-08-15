@@ -31,7 +31,7 @@ def test_built_search_overlay_assets_match_the_frontend_sources():
     revisions = set(re.findall(r"\?v=([A-Za-z0-9.+-]+)", built_index))
     assert len(revisions) == 1
     revision = revisions.pop()
-    assert re.fullmatch(r"0\.7\.8-[0-9a-f]{10}", revision)
+    assert re.fullmatch(r"0\.7\.9-[0-9a-f]{10}", revision)
     assert built_index.replace(revision, "0.7.9") == source_index
     assert (STATIC_APP / "shared" / "search" / "overlay.css").read_bytes() == (
         FRONTEND / "shared" / "search" / "overlay.css"
