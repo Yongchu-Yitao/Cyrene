@@ -276,6 +276,11 @@ def extension_environment() -> dict[str, str]:
         "MISE_OVERRIDE_CONFIG_FILENAMES": "cyrene-managed.mise.toml",
         "MISE_OVERRIDE_TOOL_VERSIONS_FILENAMES": "none",
         "MISE_YES": "1",
+        # mise's embedded aube npm backend gates low-download packages behind
+        # an interactive typosquat prompt that aborts ("user aborted `mise add
+        # ...`") when stdin is not a TTY. Extension Center installs are
+        # explicitly user-requested, so disable the weekly-download gate.
+        "AUBE_LOW_DOWNLOAD_THRESHOLD": "0",
         "UV_PYTHON_INSTALL_DIR": str(_UV_PYTHON_DIR),
         "UV_PYTHON_BIN_DIR": str(_UV_BIN_DIR),
         "UV_TOOL_DIR": str(_UV_TOOL_DIR),
