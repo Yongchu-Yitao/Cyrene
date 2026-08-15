@@ -54,6 +54,60 @@ async def test_simplexng_pipeline_makes_no_internal_model_calls(monkeypatch):
     assert "Fetched evidence" in result
 
 
+class _FakeResponse:
+    def __init__(self, content: bytes, encoding: str, apparent: str = "utf-8"):
+        self.content = content
+        self.encoding = encoding
+        self.apparent_encoding = apparent
+        self.status_code = 200
+
+    def raise_for_status(self):
+        pass
+
+
+class _FakeSession:
+    def __init__(self, response):
+        self._response = response
+
+    def get(self, _url, timeout=None):
+        return self._response
+
+    def close(self):
+        pass
+
+
+async def test_fetch_url_decodes_chinese_page_without_charset_declaration(monkeypatch):
+    from cyrene.tooling.backends import search
+
+    # 中文站点头部无 charset 时 requests 默认 ISO-8859-1,UTF-8 页面会整体乱码
+    body = "广州天气 雷阵雨 26℃".encode("utf-8")
+    monkeypatch.setattr(
+        search,
+        "_proxied_session",
+        lambda: _FakeSession(_FakeResponse(body, encoding="ISO-8859-1")),
+    )
+
+    text = await search._fetch_url("https://example.test/weather")
+
+    assert text == "广州天气 雷阵雨 26℃"
+    assert "å¹¿å·ž" not in text
+
+
+async def test_fetch_url_respects_declared_non_utf8_charset(monkeypatch):
+    from cyrene.tooling.backends import search
+
+    body = "广州天气".encode("gbk")
+    monkeypatch.setattr(
+        search,
+        "_proxied_session",
+        lambda: _FakeSession(_FakeResponse(body, encoding="gbk")),
+    )
+
+    text = await search._fetch_url("https://example.test/weather")
+
+    assert text == "广州天气"
+
+
 def test_web_search_contract_declares_self_contained_fetched_evidence():
     from cyrene.tooling.native_definitions import get_native_tool_def
 

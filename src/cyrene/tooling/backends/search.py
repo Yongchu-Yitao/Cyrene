@@ -136,7 +136,12 @@ async def _fetch_url(url: str, session: requests.Session | None = None) -> str:
     def _fetch() -> str:
         r = sess.get(url, timeout=_HTTP_TIMEOUT)
         r.raise_for_status()
-        return r.text
+        encoding = r.encoding
+        if not encoding or encoding.lower() in {"iso-8859-1", "latin-1", "windows-1252"}:
+            # 无 charset 声明的页面 requests 默认按 ISO-8859-1 解码,
+            # 中文站点(UTF-8/GBK)会整体乱码;改按字节级检测
+            encoding = r.apparent_encoding or "utf-8"
+        return r.content.decode(encoding, errors="replace")
 
     try:
         html = await asyncio.to_thread(_fetch)
