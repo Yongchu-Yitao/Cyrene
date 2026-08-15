@@ -2556,6 +2556,11 @@ def _extract_exchange_segments(
             continue
         if str(message.get("role") or "") != "assistant":
             continue
+        # A pending question's text is persisted on its own questionPrompt entry
+        # (``_pending_question_message``); extracting it again here makes the
+        # paused ask_user path render the same text twice.
+        if bool(message.get("question_prompt")):
+            continue
 
         if bool(message.get("intermediate_reply")):
             segments.append(_make_reply_segment(
@@ -2731,6 +2736,10 @@ def _extract_exchange_timeline(
         if mid and mid in state_ids_before:
             continue
         if str(message.get("role") or "") != "assistant":
+            continue
+        # Pending-question rows have their own questionPrompt persistence path;
+        # the live scanner must not republish them as a plain visible reply.
+        if bool(message.get("question_prompt")):
             continue
 
         if idx in claimed_reply_indexes:
