@@ -73,17 +73,21 @@ def test_durable_timeline_keeps_cards_and_messages_in_event_order():
     timeline, _usage, _files = _extract_exchange_timeline(messages, set())
 
     assert [entry["id"] for entry in timeline] == [
+        "reasoning_a1",
         "activity_a1",
         "m1",
         "activity_a2",
+        "reasoning_a4",
     ]
-    assert [tool["tool"] for tool in timeline[2]["trace"]] == [
+    assert [tool["tool"] for tool in timeline[3]["trace"]] == [
         "list_skills",
         "read_file",
     ]
-    assert timeline[1]["trace"] == []
-    assert timeline[2]["reasoning"] == "final thought"
-    assert timeline[0]["createdAt"] < timeline[1]["createdAt"] < timeline[2]["createdAt"]
+    assert timeline[0]["reasoning"] == "first thought"
+    assert timeline[1]["reasoning"] == ""
+    assert timeline[2]["trace"] == []
+    assert timeline[4]["reasoning"] == "final thought"
+    assert timeline[0]["createdAt"] <= timeline[1]["createdAt"] < timeline[2]["createdAt"]
 
 
 def test_durable_timeline_splits_tools_around_visible_tool_preamble():
@@ -128,23 +132,95 @@ def test_durable_timeline_splits_tools_around_visible_tool_preamble():
     timeline, _usage, _files = _extract_exchange_timeline(messages, set())
 
     assert [entry["id"] for entry in timeline] == [
+        "reasoning_a1",
         "activity_a1",
+        "reasoning_a2",
         "a2",
         "activity_a2",
         "file1",
     ]
-    assert [tool["tool"] for tool in timeline[0]["trace"]] == ["Bash"]
     assert timeline[0]["reasoning"] == "先确认文件存在"
-    assert timeline[1]["content"] == "找到了，我发给你。"
-    assert timeline[1]["trace"] == []
-    assert [tool["tool"] for tool in timeline[2]["trace"]] == ["send_file"]
+    assert [tool["tool"] for tool in timeline[1]["trace"]] == ["Bash"]
     assert timeline[2]["reasoning"] == "文件存在，现在发送"
-    assert timeline[3]["content"] == "你的照片"
-    assert timeline[3]["roundId"] == "round_delivery"
+    assert timeline[3]["content"] == "找到了，我发给你。"
     assert timeline[3]["trace"] == []
+    assert [tool["tool"] for tool in timeline[4]["trace"]] == ["send_file"]
+    assert timeline[5]["content"] == "你的照片"
+    assert timeline[5]["roundId"] == "round_delivery"
+    assert timeline[5]["trace"] == []
 
 
-def test_durable_timeline_omits_tool_free_pure_reasoning_card():
+def test_send_message_reply_precedes_sibling_tool_activity_despite_commit_timestamp():
+    messages = [
+        {"role": "user", "message_id": "u1", "content": "查天气"},
+        {
+            # send_message executes before WebSearch, but its public reply is
+            # committed a few microseconds after this parent tool-call row.
+            "role": "assistant",
+            "message_id": "visible1",
+            "created_at": "2026-08-15T06:42:56.234528+00:00",
+            "round_id": "round_weather",
+            "intermediate_reply": True,
+            "content": "好，我查一下今天的天气。",
+        },
+        {
+            "role": "assistant",
+            "message_id": "tools1",
+            "created_at": "2026-08-15T06:42:56.227680+00:00",
+            "round_id": "round_weather",
+            "reasoning_content": "I need to search the weather.",
+            "tool_calls": [
+                {"id": "c1", "function": {"name": "send_message", "arguments": '{"text":"好，我查一下今天的天气。"}'}},
+                {"id": "c2", "function": {"name": "WebSearch", "arguments": '{"query":"今天天气"}'}},
+            ],
+        },
+        _tool_result("c1", '{"ok":true}'),
+        _tool_result("c2", '{"ok":true}'),
+        {
+            "role": "assistant",
+            "message_id": "final1",
+            "created_at": "2026-08-15T06:43:01+00:00",
+            "reasoning_content": "The search completed; now summarize it.",
+            "content": "今天晴。",
+        },
+    ]
+
+    timeline, _usage, _files = _extract_exchange_timeline(messages, set())
+    chat = {
+        "messages": [{
+            "id": "u1",
+            "role": "user",
+            "content": "查天气",
+            "createdAt": "2026-08-15T06:42:00+00:00",
+        }]
+    }
+    _merge_chat_messages_chronologically(chat, timeline)
+
+    assert [entry["id"] for entry in timeline] == [
+        "reasoning_tools1",
+        "visible1",
+        "activity_tools1",
+        "reasoning_final1",
+    ]
+    assert timeline[0]["reasoning"] == "I need to search the weather."
+    assert timeline[1]["content"] == "好，我查一下今天的天气。"
+    assert [entry["tool"] for entry in timeline[2]["trace"]] == ["WebSearch"]
+    assert timeline[3]["reasoning"] == "The search completed; now summarize it."
+    assert timeline[1]["createdAt"] == "2026-08-15T06:42:56.234528+00:00"
+    assert timeline[2]["createdAt"] == "2026-08-15T06:42:56.234529+00:00"
+    # A later normalization pass must not undo the causal order merely because
+    # the assistant tool-call row was committed before send_message returned.
+    _merge_chat_messages_chronologically(chat, [])
+    assert [entry["id"] for entry in chat["messages"]] == [
+        "u1",
+        "reasoning_tools1",
+        "visible1",
+        "activity_tools1",
+        "reasoning_final1",
+    ]
+
+
+def test_durable_timeline_keeps_tool_free_reasoning_as_its_own_events():
     messages = [
         {
             "role": "assistant",
@@ -168,7 +244,9 @@ def test_durable_timeline_omits_tool_free_pure_reasoning_card():
 
     timeline, _usage, _files = _extract_exchange_timeline(messages, set())
 
-    assert timeline == []
+    assert [entry["id"] for entry in timeline] == ["reasoning_a1", "reasoning_a2"]
+    assert [entry["reasoning"] for entry in timeline] == ["first", "second"]
+    assert all(entry["trace"] == [] for entry in timeline)
 
 
 def test_exchange_model_comes_from_actual_fallback_response():
@@ -703,3 +781,56 @@ def test_tool_result_is_error_detection():
     assert not _tool_result_is_error('{"exit_code": 0}')
     assert not _tool_result_is_error('{"exit_code": 1, "stderr": "x"}')  # non-zero bash exit is not flagged
     assert not _tool_result_is_error("")
+
+
+def test_sanitize_durable_traces_whitelists_fields_and_limits_sizes():
+    from cyrene.workbench.chat import _sanitize_durable_traces
+
+    raw = [[
+        {
+            "kind": "tool",
+            "toolCallId": "c1",
+            "text": "Bash",
+            "preview": "run tests",
+            "status": "completed",
+            "failed": False,
+            "progress": 0.5,
+            "startedAt": 1750000000000,
+            "input": {"secret": "value"},
+            "output": "x" * 1000,
+            "presentation": {"kind": "terminal"},
+            "extra": "dropped",
+        },
+        "not-a-dict",
+    ]]
+    result = _sanitize_durable_traces(raw)
+    assert len(result) == 1
+    entries = result[0]
+    assert len(entries) == 1
+    entry = entries[0]
+    assert entry["kind"] == "tool"
+    assert entry["toolCallId"] == "c1"
+    assert entry["status"] == "completed"
+    assert entry["failed"] is False
+    assert entry["progress"] == 0.5
+    assert entry["startedAt"] == 1750000000000
+    assert "input" not in entry
+    assert "output" not in entry
+    assert "extra" not in entry
+    assert "presentation" in entry  # serialized nested value survives
+
+
+def test_sanitize_durable_traces_caps_cards_and_entries():
+    from cyrene.workbench.chat import _sanitize_durable_traces
+
+    long_trace = [{"tool": "Bash", "preview": str(index)} for index in range(60)]
+    result = _sanitize_durable_traces([long_trace] * 5)
+    assert len(result) == 5
+    for entries in result:
+        assert len(entries) == 40  # mirrors the live UI's slice(-40)
+
+    oversized = [[{"tool": "Bash", "preview": "x" * 2000}]]
+    assert len(_sanitize_durable_traces(oversized)[0][0]["preview"]) == 400
+
+    assert _sanitize_durable_traces("junk") == []
+    assert _sanitize_durable_traces([None, [], [{"tool": "Read"}]]) == [[], [], [{"tool": "Read"}]]

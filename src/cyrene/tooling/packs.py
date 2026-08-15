@@ -11,7 +11,7 @@ PACKS = (
     PackSpec("memory", "memory_tools", "Conversation, short-term, and project memory retrieval and maintenance.", ("memory.",), 400),
     PackSpec("knowledge", "knowledge_tools", "Project knowledge documents and literature-library search and metadata.", ("knowledge.",), 500),
     PackSpec("task", "task_tools", "Scheduled tasks plus durable task goals and plan state.", ("task.",), 600),
-    PackSpec("entity", "entity_tools", "Track, query, update, list, and delete durable entities.", ("entity.",), 700),
+    PackSpec("entity", "entity_tools", "Track, query, update, list, and delete records in the user database.", ("entity.",), 700),
     PackSpec("map", "map_tools", "Create map pins and connect locations.", ("map.",), 800),
     PackSpec("subagent", "subagent_tools", "Spawn, inspect, and communicate with subagents.", ("subagent.",), 900),
     PackSpec("delivery", "delivery_tools", "Progress updates, notifications, messages, and file delivery.", ("delivery.",), 1000),

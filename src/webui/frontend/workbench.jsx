@@ -7376,9 +7376,11 @@ function TaskWorkArea(props) {
   return (
     <main className="workbench-main">
       {taskFileDropActive && <WorkbenchFileDropOverlay label={wbT("workbenchChat.dropToAttach", "Release to add files to the task input")} />}
-      <TaskHeader project={project} session={session} controller={controller} onRightTab={props.onRightTab} onSelectSession={props.onSelectSession} onBackToBoard={props.onBackToBoard} />
-      {props.error && <div className="workbench-error">{props.error}</div>}
       <div className="workbench-stage">
+        <div className="workbench-task-header-sticky">
+          <TaskHeader project={project} session={session} controller={controller} onRightTab={props.onRightTab} onSelectSession={props.onSelectSession} onBackToBoard={props.onBackToBoard} />
+        </div>
+        {props.error && <div className="workbench-error">{props.error}</div>}
         <ReflectionHintBanner session={session} controller={controller} />
         <StateCard
           session={session}
@@ -7574,7 +7576,7 @@ function TaskHeader({ project, session, controller, onRightTab, onSelectSession,
   var menuActions = headerMenuActions(status, controller, session, project, onSelectSession, onRightTab);
 
   return (
-    <div className="workbench-task-header">
+    <div className="workbench-task-header workbench-composer-box">
       <div className="wb-th-main">
         <button type="button" className="wb-task-back-board" onClick={onBackToBoard}>{wbT("taskBoard.back", "Back to board")}</button>
         <div className="wb-th-title-row">

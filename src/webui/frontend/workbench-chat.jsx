@@ -36,6 +36,54 @@ function wbcHideNativeDragImage(transfer) {
   } catch (e) {}
 }
 
+// Build every conversation-row drag preview through the same DOM and inline
+// box model. In particular, the preview must not inherit the real rail's
+// clipping/isolation rules or its rounded elevation gets cropped.
+function wbcBuildRailCardDragPreview(root, extraClassName) {
+  if (!root || !root.querySelectorAll) return null;
+  var rect = root.getBoundingClientRect();
+  var host = document.createElement("div");
+  host.className = "wbc-rail wbc-native-chat-drag-image" + (extraClassName ? " " + extraClassName : "");
+  host.setAttribute("aria-hidden", "true");
+  host.style.width = rect.width + "px";
+  host.style.height = rect.height + "px";
+  host.style.display = "block";
+  host.style.padding = "0";
+  host.style.overflow = "visible";
+  host.style.isolation = "auto";
+  host.style.background = "transparent";
+  host.style.pointerEvents = "none";
+  var sourceStyle = window.getComputedStyle(root);
+  for (var index = 0; index < sourceStyle.length; index += 1) {
+    var property = sourceStyle[index];
+    if (property.indexOf("--") === 0) {
+      host.style.setProperty(property, sourceStyle.getPropertyValue(property));
+    }
+  }
+  var clone = root.cloneNode(true);
+  clone.classList.remove(
+    "track-marker-ready",
+    "dragging",
+    "menu-open",
+    "group-drop-target",
+    "wbc-split-card-lifted",
+    "wbc-split-return-target"
+  );
+  clone.querySelectorAll(".track-marker-ready").forEach(function (card) {
+    card.classList.remove("track-marker-ready");
+  });
+  clone.querySelectorAll(".wbc-chat-row-icon").forEach(function (icon) {
+    icon.style.opacity = "1";
+  });
+  clone.style.width = rect.width + "px";
+  clone.style.height = rect.height + "px";
+  clone.style.margin = "0";
+  clone.style.opacity = "1";
+  clone.style.transform = "none";
+  host.appendChild(clone);
+  return { host: host, clone: clone, rect: rect };
+}
+
 function wbcAgentChatFlowSnapshot(chatId) {
   var normalizedChatId = String(chatId || "").trim();
   var current = normalizedChatId ? WBC_AGENT_CHAT_FLOW_STATE[normalizedChatId] : null;
@@ -609,6 +657,8 @@ function wbcAgentPhasePayload(event) {
 
 function wbcAgentToolPayload(event) {
   var payload = wbcAgentEventPayload(event);
+  var timestamp = String(event && event.timestamp || payload.timestamp || payload.createdAt || payload.created_at || "");
+  var parsedAt = timestamp ? Date.parse(timestamp) : NaN;
   var progress = payload.progress && typeof payload.progress === "object"
     ? {
         current: Number(payload.progress.current) || 0,
@@ -622,9 +672,14 @@ function wbcAgentToolPayload(event) {
     title: String(payload.title || payload.name || ""),
     status: String(payload.status || "running"),
     failed: !!payload.failed,
-    inputSummary: wbcStructuredEventSummary(payload.inputSummary != null ? payload.inputSummary : payload.input_summary),
+    createdAt: Number.isFinite(parsedAt) ? parsedAt : Date.now(),
+    inputSummary: wbcStructuredEventSummary(payload.inputSummary != null
+      ? payload.inputSummary
+      : (payload.input_summary != null ? payload.input_summary : payload.args)),
     outputSummary: wbcStructuredEventSummary(payload.outputSummary != null ? payload.outputSummary : payload.output_summary),
-    input: payload.inputSummary != null ? payload.inputSummary : payload.input_summary,
+    input: payload.inputSummary != null
+      ? payload.inputSummary
+      : (payload.input_summary != null ? payload.input_summary : payload.args),
     output: payload.outputSummary != null ? payload.outputSummary : payload.output_summary,
     progress: progress,
     presentation: payload.presentation && typeof payload.presentation === "object" ? payload.presentation : {},
@@ -1107,6 +1162,9 @@ var WorkbenchChatModel = (function () {
       else if (type === "reply_start" && handlers.onReplyStart) handlers.onReplyStart(event);
       else if (type === "reply_delta" && handlers.onReplyDelta) handlers.onReplyDelta(event.delta || "");
       else if (type === "reply_done" && handlers.onReplyDone) handlers.onReplyDone(event.response || "");
+      else if (type === "tool_call_started" && handlers.onToolStarted) handlers.onToolStarted(wbcAgentToolPayload(event));
+      else if (type === "tool_call_progress" && handlers.onToolUpdated) handlers.onToolUpdated(wbcAgentToolPayload(event));
+      else if (type === "tool_call_finished" && handlers.onToolCompleted) handlers.onToolCompleted(wbcAgentToolPayload(event));
       else if (type === "run_finalizing" && handlers.onFinalizing) handlers.onFinalizing(event);
       else if (type === "saved" && handlers.onSaved) handlers.onSaved(event);
       else if (type === "awaiting_user" && handlers.onAwaitingUser) handlers.onAwaitingUser(event);
@@ -1802,19 +1860,76 @@ function wbcMergeToolOccurrence(items, incoming, incomingTerminal) {
   return { items: list, matched: true };
 }
 
-function wbcStructuredEventDetail(entry) {
-  var item = entry || {};
-  var detail = {};
-  if (item.input != null && typeof item.input === "object") detail.input = item.input;
-  if (item.output != null && typeof item.output === "object") detail.output = item.output;
-  if (item.presentation && typeof item.presentation === "object" && Object.keys(item.presentation).length) detail.presentation = item.presentation;
-  if (!Object.keys(detail).length) return "";
-  try {
-    var text = JSON.stringify(detail, null, 2);
-    return text.length > 12000 ? text.slice(0, 12000) + "\n…" : text;
-  } catch (e) {
-    return "";
+// The client's live tool trace (assembled from SSE tool events) is the
+// authoritative execution history. On save we upload it so the completed
+// conversation matches what ran live — the backend's transcript extraction can
+// drop mid-run tool calls (compaction / retry) and drops runtime status fields.
+var WBC_DURABLE_TRACE_FIELDS = [
+  "kind", "toolCallId", "text", "tool", "preview", "status", "failed",
+  "progress", "progressCurrent", "progressTotal", "startedAt", "reasoningOffset",
+  "detailKey", "detailParams", "presentation",
+];
+
+function wbcCleanDurableTraceEntry(entry) {
+  if (!entry || typeof entry !== "object") return null;
+  var out = {};
+  WBC_DURABLE_TRACE_FIELDS.forEach(function (key) {
+    var value = entry[key];
+    if (value === undefined || value === null) return;
+    if (typeof value === "string") value = String(value).slice(0, 400);
+    else if (typeof value === "number" && !Number.isFinite(value)) return;
+    else if (typeof value === "boolean") { /* keep */ }
+    else if (typeof value === "object") {
+      try {
+        value = JSON.stringify(value).slice(0, 2000);
+      } catch (e) { return; }
+    } else return;
+    out[key] = value;
+  });
+  return Object.keys(out).length ? out : null;
+}
+
+// Zip the live activities (in execution order) onto the just-saved activity
+// cards (also in execution order). Both sides have exactly one entry per
+// LLM turn that actually called tools; anything else means the boundaries
+// diverged, so skip the upload and keep the backend-extracted trace.
+function wbcDurableTracePayload(chatId, runtime, assistantMessages) {
+  if (!chatId || !runtime) return null;
+  var withTools = (Array.isArray(runtime.activities) ? runtime.activities : []).filter(function (activity) {
+    return Array.isArray(activity && activity.progress) && activity.progress.length;
+  });
+  if (!withTools.length) return null;
+  var savedCards = (Array.isArray(assistantMessages) ? assistantMessages : []).filter(function (message) {
+    return message && message.activityCard && Array.isArray(message.trace) && message.trace.length;
+  });
+  if (!savedCards.length || savedCards.length !== withTools.length) return null;
+  var messageIds = [];
+  var traces = [];
+  for (var index = 0; index < withTools.length; index += 1) {
+    var progress = withTools[index].progress.map(function (entry) {
+      var status = String(entry && entry.status || "").toLowerCase();
+      if (status === "running" || status === "resumed") {
+        entry = { ...entry, status: "completed", inferredCompletion: true };
+      }
+      return wbcCleanDurableTraceEntry(entry);
+    }).filter(Boolean);
+    if (!progress.length) return null;
+    messageIds.push(String(savedCards[index].id || ""));
+    traces.push(progress);
   }
+  if (!messageIds.some(Boolean)) return null;
+  return { messageIds: messageIds, traces: traces };
+}
+
+function wbcPersistDurableTrace(chatId, payload) {
+  if (!chatId || !payload) return;
+  try {
+    fetch("/api/workbench/chats/" + encodeURIComponent(chatId) + "/trace", {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    }).catch(function () {});
+  } catch (e) {}
 }
 
 function wbcToolPresentationKind(entry) {
@@ -2503,6 +2618,8 @@ var WBC_ICONS = {
   permission: <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d="M12 2.5 20 6v5.5c0 4.8-3.2 8.3-8 10-4.8-1.7-8-5.2-8-10V6Z"/><path d="m8.5 12 2.2 2.2 4.8-5"/></svg>,
   eventPulse: <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d="M3 12h4l2-6 4 12 2-6h6"/></svg>,
   database: <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><ellipse cx="12" cy="5" rx="8" ry="3"/><path d="M4 5v7c0 1.7 3.6 3 8 3s8-1.3 8-3V5M4 12v7c0 1.7 3.6 3 8 3s8-1.3 8-3v-7"/></svg>,
+  book: <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20V4a2 2 0 0 0-2-2H6.5A2.5 2.5 0 0 0 4 4.5Z"/><path d="M4 19.5A2.5 2.5 0 0 0 6.5 22H20v-5"/></svg>,
+  map: <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d="m9 4-5 2v14l5-2 6 2 5-2V4l-5 2Z"/><path d="M9 4v14M15 6v14"/></svg>,
   alert: <svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round"><path d="M10.3 4 2.5 18a1.5 1.5 0 0 0 1.3 2.3h16.4a1.5 1.5 0 0 0 1.3-2.3L13.7 4a1.5 1.5 0 0 0-3.4 0Z"/><path d="M12 9v4.5M12 17h.01"/></svg>,
   errorCircle: <svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="8.5"/><path d="m9 9 6 6M15 9l-6 6"/></svg>,
   infoCircle: <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="9"/><path d="M12 11v5"/><path d="M12 8h.01"/></svg>,
@@ -4551,32 +4668,17 @@ var WorkbenchChatRuntimes = (function () {
       });
     }
 
-    // The current LLM call's reasoning was provisionally merged into the last
-    // activity while it streamed. Once its visible tool preamble arrives, the
-    // true boundary is known: keep prior-call tools/reasoning above the prose
-    // and move this call's reasoning and tools into a fresh activity below it.
+    // The LLM reasons before emitting its visible preamble, and the tools run
+    // after that preamble. Keep those as three distinct timeline events even
+    // when the scanner discovers the prose after streaming has already begun.
     var reasoning = String(last.reasoning || "");
-    var callStart = Math.max(0, Math.min(Number(last.reasoningCallStart || 0), reasoning.length));
-    var priorReasoning = reasoning.slice(0, callStart).replace(/\s+$/, "");
-    var currentReasoning = reasoning.slice(callStart).replace(/^\s+/, "");
     var allProgress = Array.isArray(last.progress) ? last.progress : [];
-    var progressCallStart = Math.max(
-      0,
-      Math.min(
-        Number.isFinite(Number(last.progressCallStart))
-          ? Number(last.progressCallStart)
-          : allProgress.length,
-        allProgress.length
-      )
-    );
-    var priorProgress = allProgress.slice(0, progressCallStart);
-    var currentProgress = allProgress.slice(progressCallStart);
     activities.pop();
-    if (priorProgress.length || priorReasoning.trim()) {
+    if (reasoning.trim()) {
       activities.push({
         ...last,
-        reasoning: priorReasoning,
-        progress: priorProgress,
+        reasoning: reasoning.replace(/\s+$/, ""),
+        progress: [],
         reasoningActive: false,
         timelineClosed: true,
       });
@@ -4587,14 +4689,11 @@ var WorkbenchChatRuntimes = (function () {
     activities.push({
       ...last,
       id: "activity_" + nextSeq,
-      reasoning: currentReasoning,
+      reasoning: "",
       reasoningCallStart: 0,
       progressCallStart: 0,
       reasoningActive: false,
-      // The state scanner can discover a visible tool preamble after one or
-      // more tools from that same LLM call have already started. Move those
-      // calls with their reasoning so the live timeline matches finalization.
-      progress: currentProgress,
+      progress: allProgress,
       createdAt: Math.max(Date.now(), Number.isFinite(messageAt) ? messageAt + 1 : 0),
       timelineClosed: false,
     });
@@ -4678,7 +4777,10 @@ var WorkbenchChatRuntimes = (function () {
     var toolCallId = String(event.toolCallId || event.tool_call_id || "");
     var toolName = String(event.name || event.tool || event.title || "");
     if (!toolCallId && !toolName) return;
+    if (["use_tools", "quit", "send_message", "update_plan_progress"].indexOf(toolName) >= 0) return;
     var status = String(event.status || "running").toLowerCase();
+    var eventAt = Number(event.createdAt || event.startedAt);
+    if (!Number.isFinite(eventAt)) eventAt = Date.now();
     var terminal = status === "completed" || status === "failed" || event.terminal === true;
     var progress = event.progress && typeof event.progress === "object" ? event.progress : null;
     var entry = {
@@ -4723,13 +4825,15 @@ var WorkbenchChatRuntimes = (function () {
       }
       var latestActivities = Array.isArray(latest.activities) ? latest.activities : [];
       var latestActivity = latestActivities.length ? latestActivities[latestActivities.length - 1] : null;
-      var activityBase = latestActivity && latestActivity.timelineClosed
-        ? appendActivity(latest, {})
+      var activityHasReasoning = !!String(latestActivity && latestActivity.reasoning || "").trim();
+      var activityHasTools = !!(latestActivity && Array.isArray(latestActivity.progress) && latestActivity.progress.length);
+      var activityBase = latestActivity && (latestActivity.timelineClosed || (activityHasReasoning && !activityHasTools))
+        ? appendActivity(closeActivityTimeline(latest), { createdAt: eventAt })
         : latest;
       var appendedEntry = {
         ...entry,
         reasoningOffset: String(latestActivity && latestActivity.reasoning || "").length,
-        startedAt: Date.now(),
+        startedAt: eventAt,
       };
       var next = updateLastActivity(activityBase, function (activity) {
         var activityProgress = Array.isArray(activity.progress) ? activity.progress : [];
@@ -4869,6 +4973,7 @@ var WorkbenchChatRuntimes = (function () {
           var reuseLlmCard = !!(
             last
             && !last.timelineClosed
+            && !(Array.isArray(last.progress) && last.progress.length)
             && (!eventPhase || !last.llmPhase || String(last.llmPhase) === eventPhase)
           );
           var next = reuseLlmCard
@@ -5021,9 +5126,26 @@ var WorkbenchChatRuntimes = (function () {
         var savedMessages = Array.isArray(event.assistantMessages) && event.assistantMessages.length
           ? event.assistantMessages
           : (event.assistantMessage ? [event.assistantMessage] : []);
+        // The client-assembled live trace is the authoritative execution
+        // history: the backend's transcript extraction can drop mid-run tool
+        // calls and drops runtime status fields. Overlay it on the saved cards
+        // before they render, and persist it so a reload sees the same data.
+        // Failure to persist is fine — the backend-extracted trace remains.
+        var durableTrace = wbcDurableTracePayload(chatId, runtimes[chatId], savedMessages);
+        if (durableTrace && savedMessages.length) {
+          var durableByMessageId = {};
+          durableTrace.messageIds.forEach(function (mid, index) {
+            durableByMessageId[String(mid || "")] = durableTrace.traces[index];
+          });
+          savedMessages = savedMessages.map(function (message) {
+            var replacement = message && durableByMessageId[String(message.id || "")];
+            return replacement ? { ...message, trace: replacement } : message;
+          });
+        }
         if (savedMessages.length) fire("onAssistantSaved", chatId, savedMessages);
         publishLifecycle(chatId, "completed", event);
         update(chatId, null);
+        if (durableTrace) wbcPersistDurableTrace(chatId, durableTrace);
         fire("onSettled", chatId);
       },
       onAwaitingUser: function (event) {
@@ -5161,6 +5283,8 @@ var WorkbenchChatRuntimes = (function () {
     if (!event) return;
     var chatId = String(event.session_id || "");
     if (!chatId || !runtimes[chatId]) return;
+    var eventAt = Date.parse(String(event.timestamp || event.createdAt || event.created_at || ""));
+    if (!Number.isFinite(eventAt)) eventAt = Date.now();
     if (event.type === "llm_call") {
       update(chatId, function (latest) {
         if (!latest) return null;
@@ -5184,6 +5308,7 @@ var WorkbenchChatRuntimes = (function () {
             var continuesActivity = !!(
               last
               && !last.timelineClosed
+              && !(Array.isArray(last.progress) && last.progress.length)
               && (!eventPhase || !last.llmPhase || String(last.llmPhase) === eventPhase)
             );
             if (continuesActivity) {
@@ -5294,6 +5419,7 @@ var WorkbenchChatRuntimes = (function () {
         progress: toolProgress ? Math.max(0, Math.min(1, Number(event.progress) || 0)) : undefined,
         progressCurrent: toolProgress ? Math.max(0, Number(event.current) || 0) : undefined,
         progressTotal: toolProgress ? Math.max(0, Number(event.total) || 0) : undefined,
+        startedAt: eventAt,
       };
     } else if (event.type === "phase_transition" && (event.detail || event.detail_key)) {
       var phaseText = event.detail_key
@@ -5372,13 +5498,18 @@ var WorkbenchChatRuntimes = (function () {
       }
       var latestActivities = Array.isArray(latest.activities) ? latest.activities : [];
       var latestActivity = latestActivities.length ? latestActivities[latestActivities.length - 1] : null;
-      var activityBase = latestActivity && latestActivity.timelineClosed
-        ? appendActivity(latest, {})
+      var activityHasReasoning = !!String(latestActivity && latestActivity.reasoning || "").trim();
+      var activityHasTools = !!(latestActivity && Array.isArray(latestActivity.progress) && latestActivity.progress.length);
+      // Reasoning describes the LLM call before its tools start. Close that
+      // thought as its own timeline event; only consecutive tool-only calls
+      // continue in the same activity card.
+      var activityBase = latestActivity && (latestActivity.timelineClosed || (activityHasReasoning && !activityHasTools))
+        ? appendActivity(closeActivityTimeline(latest), { createdAt: eventAt })
         : latest;
       var appendedEntry = {
         ...entry,
         reasoningOffset: String(latestActivity && latestActivity.reasoning || "").length,
-        startedAt: Date.now(),
+        startedAt: eventAt,
       };
       var next = updateLastActivity(activityBase, function (activity) {
         var activityProgress = Array.isArray(activity.progress) ? activity.progress : [];
@@ -5572,11 +5703,11 @@ function WorkbenchChatPage({ active, project, newChatRequestId, onOpenTask, onAc
   var [retryClearingMessageIds, setRetryClearingMessageIds] = useWbcState([]);
   var [retrySuppressedTurn, setRetrySuppressedTurn] = useWbcState({ chatId: "", messageIds: [] });
   var retrySuppressedTurnRef = useWbcRef({ chatId: "", messageIds: [] });
-  var retryClearTimerRef = useWbcRef(null);
+  var retryClearCommitRef = useWbcRef(null);
   var retryPendingChatIdRef = useWbcRef("");
   useWbcEffect(function () {
     return function () {
-      if (retryClearTimerRef.current) clearTimeout(retryClearTimerRef.current);
+      retryClearCommitRef.current = null;
     };
   }, []);
   // Which side of the conversation the detail split anchors to. Global across
@@ -7859,17 +7990,24 @@ function WorkbenchChatPage({ active, project, newChatRequestId, onOpenTask, onAc
     // the ghost always shows this exact conversation at its current viewport.
     var cardRect = card.getBoundingClientRect();
     var handleRect = dragHandle.getBoundingClientRect();
+    var capturedClientX = Number(dragHandle.dataset.wbcDragClientX);
+    var capturedClientY = Number(dragHandle.dataset.wbcDragClientY);
+    var capturedHandleX = Number(dragHandle.dataset.wbcDragHandleX);
+    var capturedHandleY = Number(dragHandle.dataset.wbcDragHandleY);
     var conversationViewport = wbcCaptureConversationViewport(card);
     var clonedCard = wbcClonePaneWithLiveState(card);
-    var ghost = clonedCard.clone;
-    ghost.classList.add("wbc-pane-card-drag-ghost");
-    ghost.classList.remove("dragging");
+    var panePreview = clonedCard.clone;
+    panePreview.classList.add("wbc-pane-card-drag-surface");
+    panePreview.classList.remove("dragging");
+    panePreview.removeAttribute("draggable");
+    var ghost = document.createElement("div");
+    ghost.className = "wbc-pane-card-drag-ghost";
     ghost.setAttribute("aria-hidden", "true");
-    ghost.removeAttribute("draggable");
     ghost.style.left = "0px";
     ghost.style.top = "0px";
     ghost.style.width = cardRect.width + "px";
     ghost.style.height = cardRect.height + "px";
+    ghost.appendChild(panePreview);
     var sourceStyle = window.getComputedStyle(card);
     for (var propertyIndex = 0; propertyIndex < sourceStyle.length; propertyIndex += 1) {
       var propertyName = sourceStyle[propertyIndex];
@@ -7877,47 +8015,177 @@ function WorkbenchChatPage({ active, project, newChatRequestId, onOpenTask, onAc
         ghost.style.setProperty(propertyName, sourceStyle.getPropertyValue(propertyName));
       }
     }
+    var draggedPaneLocation = wbcPaneCardLocation(paneLayoutFor(), cardId);
+    var draggedPaneDescriptor = draggedPaneLocation && draggedPaneLocation.card;
+    var draggedChatId = draggedPaneDescriptor && draggedPaneDescriptor.kind === "chat"
+      ? String(draggedPaneDescriptor.payload || "")
+      : "";
+    var railCard = draggedChatId
+      ? Array.prototype.slice.call(document.querySelectorAll(".wbc-rail .wbc-chat-card")).find(function (candidate) {
+          return String(candidate.dataset.chatId || "") === draggedChatId;
+        })
+      : null;
+    var railElement = railCard && railCard.closest
+      ? railCard.closest(".wbc-rail")
+      : null;
+    var railPreview = null;
+    var railPreviewWidth = 0;
+    var railPreviewHeight = 0;
+    if (railCard) {
+      var builtRailPreview = wbcBuildRailCardDragPreview(railCard, "wbc-pane-card-rail-drag-card");
+      if (builtRailPreview) {
+        railPreview = builtRailPreview.host;
+        railPreviewWidth = Math.round(builtRailPreview.rect.width);
+        railPreviewHeight = Math.round(builtRailPreview.rect.height);
+        ghost.appendChild(railPreview);
+      }
+    }
     document.body.appendChild(ghost);
     clonedCard.restoreViewport();
-    wbcRestoreConversationViewport(ghost, conversationViewport);
+    wbcRestoreConversationViewport(panePreview, conversationViewport);
 
     // Preserve the exact point pressed inside the grip. Moving the pointer
     // horizontally across the handle therefore moves the ghost with that same
     // handle point under the cursor instead of snapping to its centre.
-    var handleGrabX = Math.max(0, Math.min(handleRect.width, event.clientX - handleRect.left));
-    var handleGrabY = Math.max(0, Math.min(handleRect.height, event.clientY - handleRect.top));
+    var eventClientX = Number(event.clientX);
+    var eventClientY = Number(event.clientY);
+    var initialClientX = Number.isFinite(eventClientX) && eventClientX !== 0
+      ? eventClientX
+      : capturedClientX;
+    var initialClientY = Number.isFinite(eventClientY) && eventClientY !== 0
+      ? eventClientY
+      : capturedClientY;
+    var handleGrabX = Number.isFinite(capturedHandleX)
+      ? Math.max(0, Math.min(handleRect.width, capturedHandleX))
+      : Math.max(0, Math.min(handleRect.width, initialClientX - handleRect.left));
+    var handleGrabY = Number.isFinite(capturedHandleY)
+      ? Math.max(0, Math.min(handleRect.height, capturedHandleY))
+      : Math.max(0, Math.min(handleRect.height, initialClientY - handleRect.top));
     var grabX = (handleRect.left - cardRect.left) + handleGrabX;
     var grabY = (handleRect.top - cardRect.top) + handleGrabY;
+    var railGrabX = railPreviewWidth && handleRect.width
+      ? railPreviewWidth * (handleGrabX / handleRect.width)
+      : 0;
+    var railGrabY = railPreviewHeight && handleRect.height
+      ? railPreviewHeight * (handleGrabY / handleRect.height)
+      : 0;
+    if (railPreview) {
+      // Keep the outer ghost at the pane's fixed dimensions. The compact card
+      // is offset within it so both preview layers place their mapped grab
+      // point under the same pointer without animating any layout dimension.
+      railPreview.style.left = (grabX - railGrabX) + "px";
+      railPreview.style.top = (grabY - railGrabY) + "px";
+    }
+    var ghostOverRail = false;
+    function pointerIsOverRail(clientX, clientY) {
+      if (!railPreview || !railElement) return false;
+      var rect = railElement.getBoundingClientRect();
+      return !!(rect
+        && clientX >= rect.left && clientX <= rect.right
+        && clientY >= rect.top && clientY <= rect.bottom);
+    }
+    function pointerIsOverMatchingRailCard(clientX, clientY) {
+      var rect = railCard && railCard.getBoundingClientRect();
+      return !!(rect
+        && clientX >= rect.left && clientX <= rect.right
+        && clientY >= rect.top && clientY <= rect.bottom);
+    }
+    function setPaneCardGhostRailMode(overRail, overMatchingCard) {
+      if (ghostOverRail !== overRail) {
+        ghostOverRail = overRail;
+        ghost.classList.toggle("rail-card", overRail);
+        if (railCard) railCard.classList.toggle("dragging", overRail);
+      }
+      if (railCard) railCard.classList.toggle("wbc-split-return-target", !!overMatchingCard);
+    }
     function movePaneCardGhost(moveEvent) {
       var clientX = Number(moveEvent && moveEvent.clientX);
       var clientY = Number(moveEvent && moveEvent.clientY);
       if (!Number.isFinite(clientX) || !Number.isFinite(clientY) || (clientX === 0 && clientY === 0)) return;
+      var overRail = pointerIsOverRail(clientX, clientY);
+      var overMatchingCard = pointerIsOverMatchingRailCard(clientX, clientY);
+      setPaneCardGhostRailMode(overRail, overMatchingCard);
+      // Accept the drag everywhere while this renderer-owned preview is
+      // active. A release outside a real target remains a no-op, but Chromium
+      // no longer runs its cancelled-drag snap-back before emitting drop/end.
+      if (moveEvent && typeof moveEvent.preventDefault === "function") {
+        moveEvent.preventDefault();
+        if (moveEvent.dataTransfer) moveEvent.dataTransfer.dropEffect = "move";
+      }
       ghost.style.transform = "translate3d(" + (clientX - grabX) + "px, " + (clientY - grabY) + "px, 0)";
     }
     var ghostCleared = false;
+    var ghostRetired = false;
+    function retirePaneCardGhost() {
+      if (ghostRetired) return;
+      ghostRetired = true;
+      ghost.style.visibility = "hidden";
+      function detachGhost() {
+        if (ghost.parentNode) ghost.parentNode.removeChild(ghost);
+      }
+      if (typeof window.requestIdleCallback === "function") {
+        window.requestIdleCallback(detachGhost, { timeout: 300 });
+      } else {
+        setTimeout(detachGhost, 80);
+      }
+    }
     function clearPaneCardGhost() {
       if (ghostCleared) return;
       ghostCleared = true;
       document.removeEventListener("drag", movePaneCardGhost, true);
       document.removeEventListener("dragover", movePaneCardGhost, true);
-      document.removeEventListener("drop", clearPaneCardGhost, true);
-      // Hide immediately, but detach the large conversation clone after the
-      // drop layout has committed. Destroying it synchronously in the same
-      // frame as the pane-grid update causes a visible release hitch.
+      document.removeEventListener("drop", finishPaneCardGhost, true);
+      if (railCard) railCard.classList.remove("dragging", "wbc-split-return-target");
+      // Start a compositor-owned fade before React clears drag state. Unlike a
+      // CSS-only class change, Web Animations is submitted immediately and
+      // keeps progressing while the pane/drop overlays reconcile.
+      var reducedMotion = !!(window.matchMedia
+        && window.matchMedia("(prefers-reduced-motion: reduce)").matches);
+      var fadeAnimation = typeof ghost.animate === "function"
+        ? ghost.animate([
+            { opacity: 0.92 },
+            { opacity: 0 },
+          ], {
+            duration: reducedMotion ? 0 : 72,
+            easing: "cubic-bezier(.4, 0, 1, 1)",
+            fill: "forwards",
+          })
+        : null;
+      if (fadeAnimation) {
+        Promise.resolve(fadeAnimation.finished).then(retirePaneCardGhost).catch(retirePaneCardGhost);
+      } else {
+        ghost.addEventListener("transitionend", function (fadeEvent) {
+          if (fadeEvent.propertyName === "opacity") retirePaneCardGhost();
+        }, { once: true });
+      }
       ghost.classList.add("releasing");
-      setTimeout(function () {
-        if (ghost.parentNode) ghost.parentNode.removeChild(ghost);
-      }, 100);
+      setTimeout(retirePaneCardGhost, reducedMotion ? 0 : 120);
       if (paneCardDragImageCleanupRef.current === clearPaneCardGhost) {
         paneCardDragImageCleanupRef.current = null;
       }
     }
+    function finishPaneCardGhost(dropEvent) {
+      var droppedOnRail = pointerIsOverRail(Number(dropEvent.clientX), Number(dropEvent.clientY));
+      var droppedOnMatchingCard = pointerIsOverMatchingRailCard(
+        Number(dropEvent.clientX),
+        Number(dropEvent.clientY)
+      );
+      if (droppedOnRail) {
+        dropEvent.preventDefault();
+        dropEvent.stopImmediatePropagation();
+      }
+      clearPaneCardGhost();
+      // Returning a split conversation to its list is the inverse of opening
+      // that split. Files and other content have no conversation-row preview,
+      // so they keep the normal cancelled-drop behavior over the rail.
+      if (droppedOnMatchingCard && draggedChatId) closePaneCard(cardId);
+    }
     document.addEventListener("drag", movePaneCardGhost, true);
     document.addEventListener("dragover", movePaneCardGhost, true);
-    document.addEventListener("drop", clearPaneCardGhost, true);
+    document.addEventListener("drop", finishPaneCardGhost, true);
     paneCardDragImageCleanupRef.current = clearPaneCardGhost;
     wbcHideNativeDragImage(transfer);
-    movePaneCardGhost(event);
+    movePaneCardGhost({ clientX: initialClientX, clientY: initialClientY });
   }
 
   function handlePaneCardDragEnd() {
@@ -8234,7 +8502,6 @@ function WorkbenchChatPage({ active, project, newChatRequestId, onOpenTask, onAc
     setErrorKind("load");
     setRetryClearingMessageIds(selection.outputIds);
     function startRetryAfterClear() {
-      retryClearTimerRef.current = null;
       var cachedChat = chatCache.details[retryChatId];
       if (cachedChat) chatCache.details[retryChatId] = wbcClearModelOutputForRetry(cachedChat, retryMessageId);
       setActiveChat(function (prev) {
@@ -8253,7 +8520,17 @@ function WorkbenchChatPage({ active, project, newChatRequestId, onOpenTask, onAc
       startRetryAfterClear();
       return;
     }
-    retryClearTimerRef.current = setTimeout(startRetryAfterClear, 180);
+    // Commit the transcript change only after CSS has completed the visual
+    // collapse. A same-duration timer can run before the animation's final
+    // frame and produce a visible second jump.
+    retryClearCommitRef.current = startRetryAfterClear;
+  }
+
+  function handleRetryClearAnimationEnd() {
+    var commit = retryClearCommitRef.current;
+    if (!commit) return;
+    retryClearCommitRef.current = null;
+    commit();
   }
 
   // Edit a user message → fork the conversation at that point, switch to the
@@ -8799,6 +9076,7 @@ function WorkbenchChatPage({ active, project, newChatRequestId, onOpenTask, onAc
         onInterrupt={handleInterrupt}
         onAnswer={handleAnswer}
         onRetryMessage={handleRetryMessage}
+        onRetryClearAnimationEnd={handleRetryClearAnimationEnd}
         retryClearingMessageIds={retryClearingMessageIds}
         retrySuppressedMessageIds={String(retrySuppressedTurn.chatId || "") === String(activeChatId || "") ? retrySuppressedTurn.messageIds : []}
         onEditMessage={handleEditMessage}
@@ -10599,43 +10877,14 @@ function WbcRail({ projectId, projectName, chats, pinnedChatIds, activeChatId, l
     /* Native drag-image capture timing differs across Chromium platforms.
        Hide that native image and move a real DOM clone with the pointer so the
        complete card surface and its status icon remain deterministic. */
-    var rect = root.getBoundingClientRect();
-    var host = document.createElement("div");
-    host.className = "wbc-rail wbc-native-chat-drag-image";
-    host.setAttribute("aria-hidden", "true");
+    var builtPreview = wbcBuildRailCardDragPreview(root, "");
+    if (!builtPreview) return;
+    var rect = builtPreview.rect;
+    var host = builtPreview.host;
     host.style.position = "fixed";
     host.style.left = rect.left + "px";
     host.style.top = rect.top + "px";
-    host.style.width = rect.width + "px";
-    host.style.height = rect.height + "px";
-    host.style.display = "block";
-    host.style.padding = "0";
-    host.style.overflow = "visible";
-    host.style.isolation = "auto";
-    host.style.background = "transparent";
-    host.style.pointerEvents = "none";
     host.style.zIndex = "2147483647";
-    var sourceStyle = window.getComputedStyle(root);
-    for (var index = 0; index < sourceStyle.length; index += 1) {
-      var property = sourceStyle[index];
-      if (property.indexOf("--") === 0) {
-        host.style.setProperty(property, sourceStyle.getPropertyValue(property));
-      }
-    }
-    var clone = root.cloneNode(true);
-    clone.classList.remove("track-marker-ready", "dragging");
-    clone.querySelectorAll(".track-marker-ready").forEach(function (card) {
-      card.classList.remove("track-marker-ready");
-    });
-    clone.querySelectorAll(".wbc-chat-row-icon").forEach(function (icon) {
-      icon.style.opacity = "1";
-    });
-    clone.style.width = rect.width + "px";
-    clone.style.height = rect.height + "px";
-    clone.style.margin = "0";
-    clone.style.opacity = "1";
-    clone.style.transform = "none";
-    host.appendChild(clone);
     document.body.appendChild(host);
     var grabX = Math.max(0, Math.min(rect.width, clientX - rect.left));
     var grabY = Math.max(0, Math.min(rect.height, clientY - rect.top));
@@ -13282,7 +13531,7 @@ function WbcConversationNavigator({ threadRef, chatId }) {
   );
 }
 
-function WbcMain({ project, chat, chatSummary, loading, runtime, error, errorKind, onRetry, running, onSend, onGuidance, onInterrupt, onAnswer, onRetryMessage, retryClearingMessageIds, retrySuppressedMessageIds, onEditMessage, onAskSelection, sideAgentCreating, onConversationContextMenu, onRename, onDelete, onToTask, toTaskBusy, onOpenFile, onOpenDroppedChat, sideVisible, sidePanelTabExpanded, onToggleSide, browserState, browserSessionId, browserVisible, browserWindowMode, onBrowserMaximize, onBrowserRestore, onBrowserTakeoverComplete, splitOpen, draftAgent, onDraftAgentChange, onSwitchAgent, onOpenAgentDetail }) {
+function WbcMain({ project, chat, chatSummary, loading, runtime, error, errorKind, onRetry, running, onSend, onGuidance, onInterrupt, onAnswer, onRetryMessage, onRetryClearAnimationEnd, retryClearingMessageIds, retrySuppressedMessageIds, onEditMessage, onAskSelection, sideAgentCreating, onConversationContextMenu, onRename, onDelete, onToTask, toTaskBusy, onOpenFile, onOpenDroppedChat, sideVisible, sidePanelTabExpanded, onToggleSide, browserState, browserSessionId, browserVisible, browserWindowMode, onBrowserMaximize, onBrowserRestore, onBrowserTakeoverComplete, splitOpen, draftAgent, onDraftAgentChange, onSwitchAgent, onOpenAgentDetail }) {
   // The lightweight list item already contains every Composer preference.
   // Keep using it while the full transcript hydrates so switching chats never
   // paints a temporary "new chat" Composer with global/default settings.
@@ -14022,6 +14271,11 @@ function WbcMain({ project, chat, chatSummary, loading, runtime, error, errorKin
         ref={scrollRef}
         onScroll={onScroll}
         onWheel={handleConversationHorizontalWheel}
+        onAnimationEnd={function (event) {
+          if (event.animationName === "wbc-retry-output-clear" && onRetryClearAnimationEnd) {
+            onRetryClearAnimationEnd();
+          }
+        }}
         onContextMenu={onConversationContextMenu}
       >
         {loading && !chat && (
@@ -14953,9 +15207,24 @@ function WbcLiveAgentArtifacts({ files, onOpenFile }) {
   );
 }
 
+// Read-only tool names (list/query/get/find/search/check/read/analyze/snapshot)
+// — used to distinguish "read the database" from "updated the database" in labels.
+function wbcTraceNormalizeName(raw) {
+  return String(raw || "")
+    .replace(/([a-z0-9])([A-Z])/g, "$1_$2")
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "_")
+    .replace(/^_+|_+$/g, "");
+}
+
+function wbcTraceNameIsRead(raw) {
+  var name = wbcTraceNormalizeName(raw);
+  return /(^|_)(list|query|get|find|search|check|read|analyze|snapshot)($|_)/.test(name);
+}
+
 function wbcTraceActionKind(entry) {
   var raw = String(entry && (entry.text || entry.tool) || "").trim();
-  var name = raw.toLowerCase().replace(/[^a-z0-9]+/g, "_");
+  var name = wbcTraceNormalizeName(raw);
   var entryKind = String(entry && entry.kind || "").trim().toLowerCase();
   if (entryKind === "phase1") return "phase1";
   if (entryKind === "phase") return "phase";
@@ -14973,8 +15242,10 @@ function wbcTraceActionKind(entry) {
   if (/(git|branch|commit)/.test(name)) return "git";
   if (/(code|symbol|reference|lint|format|index)/.test(name)) return "code";
   if (/(task|plan|goal|schedule)/.test(name)) return "task";
-  if (/(memory|knowledge|library|recall|learnpattern)/.test(name)) return "memory";
-  if (/(entity|map|pin_location|track_entity)/.test(name)) return "entity";
+  if (/(memor|recall|learnpattern)/.test(name)) return "memory";
+  if (/(knowledge|library)/.test(name)) return "knowledge";
+  if (/(^|_)(entit)/.test(name)) return "entity";
+  if (/(^|_)(pin|map)/.test(name)) return "map";
   if (/(remote|device)/.test(name)) return "remote";
   if (/(desktop|app_ui|appui|cyrene_ui|cyreneui|window|app_use)/.test(name)) return "desktop";
   if (/(attachment|image|artifact|media|send_file)/.test(name)) return "artifact";
@@ -14994,15 +15265,32 @@ function wbcTraceActionLabel(entry) {
   if (kind === "search") return wbcT("workbenchChat.traceAction.searched", "Searched");
   if (kind === "browser") return wbcT("workbenchChat.traceAction.browsed", "Used the browser");
   if (kind === "git") return wbcT("workbenchChat.traceAction.git", "Used Git");
-  if (kind === "code") return wbcT("workbenchChat.traceAction.code", "Analyzed code");
-  if (kind === "task") return wbcT("workbenchChat.traceAction.task", "Updated tasks or plans");
-  if (kind === "memory") return wbcT("workbenchChat.traceAction.memory", "Used memory or knowledge");
-  if (kind === "entity") return wbcT("workbenchChat.traceAction.entity", "Updated entities or maps");
+  if (kind === "code") {
+    if (wbcTraceNameIsRead(raw)) return wbcT("workbenchChat.traceAction.codeRead", "Checked Claude Code");
+    return wbcT("workbenchChat.traceAction.code", "Operated Claude Code");
+  }
+  if (kind === "task") {
+    if (wbcTraceNameIsRead(raw)) return wbcT("workbenchChat.traceAction.taskRead", "Read tasks");
+    return wbcT("workbenchChat.traceAction.task", "Updated tasks or plans");
+  }
+  if (kind === "memory") return wbcT("workbenchChat.traceAction.memory", "Used memory");
+  if (kind === "knowledge") return wbcT("workbenchChat.traceAction.knowledge", "Used knowledge");
+  if (kind === "entity") {
+    if (wbcTraceNameIsRead(raw)) return wbcT("workbenchChat.traceAction.entityRead", "Read the user database");
+    return wbcT("workbenchChat.traceAction.entity", "Updated the user database");
+  }
+  if (kind === "map") return wbcT("workbenchChat.traceAction.map", "Updated maps");
   if (kind === "remote") return wbcT("workbenchChat.traceAction.remote", "Operated remote devices");
   if (kind === "desktop") return wbcT("workbenchChat.traceAction.desktop", "Operated the desktop app");
-  if (kind === "artifact") return wbcT("workbenchChat.traceAction.artifact", "Created or handled media");
+  if (kind === "artifact") {
+    if (wbcTraceNameIsRead(raw)) return wbcT("workbenchChat.traceAction.artifactRead", "Analyzed media");
+    return wbcT("workbenchChat.traceAction.artifact", "Created or handled media");
+  }
   if (kind === "delivery") return wbcT("workbenchChat.traceAction.delivery", "Sent messages or notifications");
-  if (kind === "system") return wbcT("workbenchChat.traceAction.system", "Updated system settings");
+  if (kind === "system") {
+    if (wbcTraceNameIsRead(raw)) return wbcT("workbenchChat.traceAction.systemRead", "Inspected system settings");
+    return wbcT("workbenchChat.traceAction.system", "Updated system settings");
+  }
   if (kind === "phase1") return String(entry && entry.text || wbcT("workbenchChat.phase1Understood", "Understood the request"));
   if (kind === "phase") return wbcT("workbenchChat.traceAction.phase", "Advanced the execution phase");
   if (kind === "subagent") return wbcT("workbenchChat.traceAction.subagent", "Coordinated subagents");
@@ -15024,7 +15312,9 @@ function wbcTraceActionIcon(entry) {
   if (kind === "code") return WBC_ICONS.code;
   if (kind === "task") return WBC_ICONS.task;
   if (kind === "memory") return WBC_ICONS.database;
+  if (kind === "knowledge") return WBC_ICONS.book;
   if (kind === "entity") return WBC_ICONS.pin;
+  if (kind === "map") return WBC_ICONS.map;
   if (kind === "remote") return WBC_ICONS.device;
   if (kind === "desktop") return WBC_ICONS.windowRestore;
   if (kind === "artifact") return WBC_ICONS.image;
@@ -15177,12 +15467,11 @@ function WbcTraceCard({ trace, live, running, label, reasoning }) {
                 var failed = !!entry.failed || ["failed", "error", "failure", "expired", "cancelled"].indexOf(entryStatus) >= 0;
                 var presentationKind = wbcToolPresentationKind(entry);
                 var presentationText = wbcToolPresentationText(entry, presentationKind);
-                var structuredDetail = wbcStructuredEventDetail(entry);
                 var previewText = wbcToolPreviewText(entry.preview);
                 return (
                   <li key={(entry.toolCallId || "trace") + ":" + i} className={(failed ? "failed" : (isRunning ? "active" : "done")) + " presentation-" + presentationKind}>
                     <span className="wbc-trace-mark">{failed ? WBC_ICONS.x : (isRunning ? <span className="wb-spinner small" /> : WBC_ICONS.check)}</span>
-                    {failed || isRunning ? <span className="wbc-trace-entry-icon" aria-hidden="true">{wbcTraceActionIcon(entry)}</span> : null}
+                    {failed ? <span className="wbc-trace-entry-icon" aria-hidden="true">{wbcTraceActionIcon(entry)}</span> : null}
                     <span className="wbc-trace-text">
                       {(function () {
                         var toolKey = entry.text || entry.tool || "";
@@ -15200,10 +15489,6 @@ function WbcTraceCard({ trace, live, running, label, reasoning }) {
                         </span>
                       ) : null}
                       {presentationText ? <pre className={"wbc-tool-presentation-body " + presentationKind} role={presentationKind === "error" ? "alert" : undefined}>{presentationText}</pre> : null}
-                      {structuredDetail ? <details className="wbc-tool-structured" onClick={function (event) { event.stopPropagation(); }}>
-                        <summary>{wbcT("workbenchChat.toolDetails", "Tool details")}</summary>
-                        <pre>{structuredDetail}</pre>
-                      </details> : null}
                     </span>
                   </li>
                 );
@@ -15422,8 +15707,10 @@ function WbcLiveActivityCard({ activity, active, hasReplyText }) {
       : wbcT("workbenchChat.traceSummary", "Execution ({count} tool calls)", { count: toolCount }))
     : (isPhase1
       ? wbcT("workbenchChat.phase1Card", "Execution · Phase 1")
-      : active
-      ? wbcT("workbenchChat.traceIdle", "Thinking...")
+      : hasReasoning
+      ? (active
+        ? wbcT("workbenchChat.traceIdle", "Thinking...")
+        : wbcT("workbenchChat.thinkingProcess", "Thinking process"))
       : wbcT("workbenchChat.traceLabel", "Execution"));
 
   return (
@@ -18890,6 +19177,18 @@ function WbcSplitGripBar({ dragSource, side, onToggleSide, onClose, onOpenConver
     }
   }
 
+  function captureDragPointer(event) {
+    var target = event.currentTarget;
+    var rect = target.getBoundingClientRect();
+    // Chromium/macOS may report (0, 0) on the later native dragstart event.
+    // Store both the viewport position and the exact point inside the handle
+    // while pointer coordinates are still reliable.
+    target.dataset.wbcDragClientX = String(event.clientX);
+    target.dataset.wbcDragClientY = String(event.clientY);
+    target.dataset.wbcDragHandleX = String(event.clientX - rect.left);
+    target.dataset.wbcDragHandleY = String(event.clientY - rect.top);
+  }
+
   var swapLabel = wbcT("workbenchChat.splitMoveOtherSide", "Move split to the other side");
   function openConversationPanel() {
     setMenuOpen(false);
@@ -18904,6 +19203,7 @@ function WbcSplitGripBar({ dragSource, side, onToggleSide, onClose, onOpenConver
         draggable="true"
         aria-label={wbcT("workbenchChat.detailPanel.move", "Move split panel")}
         title={wbcT("workbenchChat.detailPanel.move", "Move split panel")}
+        onPointerDown={captureDragPointer}
         onClick={function () { setMenuOpen(function (open) { return !open; }); }}
         onDragStart={function (event) { if (onSplitDragStart) onSplitDragStart(event, dragSource); }}
         onDragEnd={function () { if (onSplitDragEnd) onSplitDragEnd(); }}

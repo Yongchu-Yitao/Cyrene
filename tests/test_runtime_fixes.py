@@ -228,12 +228,11 @@ async def test_main_agent_publishes_tool_start_with_identity_and_redacted_args(m
     )
 
     event = publish.await_args.args[0]
-    assert event == {
-        "type": "tool_call_started",
-        "tool_call_id": "call_start_1",
-        "tool": "WebSearch",
-        "args": {"query": "Nanjing travel"},
-    }
+    assert event["type"] == "tool_call_started"
+    assert event["tool_call_id"] == "call_start_1"
+    assert event["tool"] == "WebSearch"
+    assert event["args"] == {"query": "Nanjing travel"}
+    assert event["timestamp"]
 
 
 @pytest.mark.parametrize(
@@ -265,14 +264,75 @@ async def test_progressive_wire_call_always_publishes_terminal_lifecycle(
     )
 
     assert result
-    assert published == [{
-        "type": "tool_call_finished",
-        "tool_call_id": "call_gateway_1",
-        "tool": "memory_tools",
-        "args": arguments,
-        "status": expected_status,
-        "failed": expected_status == "failed",
-    }]
+    assert [event["type"] for event in published] == [
+        "tool_call_started",
+        "tool_call_finished",
+    ]
+    assert all(event["tool_call_id"] == "call_gateway_1" for event in published)
+    assert all(event["tool"] == "memory_tools" for event in published)
+    assert all(event["args"] == arguments for event in published)
+    assert all(event["timestamp"] for event in published)
+    assert published[-1]["status"] == expected_status
+    assert published[-1]["failed"] is (expected_status == "failed")
+
+
+async def test_ordered_tool_batch_publishes_each_start_at_real_execution_time(
+    monkeypatch, tmp_path
+):
+    from cyrene.agent import agent as agent_core
+    from cyrene.workbench.inbox import WorkbenchAgentInbox
+
+    events = []
+
+    async def capture(event):
+        events.append((str(event.get("type") or ""), str(event.get("tool") or "")))
+
+    async def execute(name, _args, _bot, _chat_id, _db_path, _notify_state):
+        if name == "send_message":
+            events.append(("intermediate_message", name))
+        return "ok"
+
+    monkeypatch.setattr(agent_core, "_publish_runtime_event", capture)
+    monkeypatch.setattr(agent_core, "_execute_tool", execute)
+
+    inbox = WorkbenchAgentInbox(
+        "chat_real_tool_order",
+        str(tmp_path / "workbench.db"),
+        run_id="run_real_tool_order",
+    )
+    try:
+        inbox.submit_tool_batch([
+            (
+                "call_send",
+                "send_message",
+                lambda: agent_core._execute_tool_for_call(
+                    "call_send", "send_message", {"text": "我先查一下。"}, None, 0, ""
+                ),
+                agent_core._inbox_tool_metadata(
+                    "send_message", {"text": "我先查一下。"}
+                ),
+            ),
+            (
+                "call_search",
+                "WebSearch",
+                lambda: agent_core._execute_tool_for_call(
+                    "call_search", "WebSearch", {"query": "天气"}, None, 0, ""
+                ),
+                agent_core._inbox_tool_metadata("WebSearch", {"query": "天气"}),
+            ),
+        ], batch_id="batch_real_tool_order")
+        assert await inbox.wait_for_tool_result("call_send") == "ok"
+        assert await inbox.wait_for_tool_result("call_search") == "ok"
+    finally:
+        await inbox.close()
+
+    assert events == [
+        ("tool_call_started", "send_message"),
+        ("intermediate_message", "send_message"),
+        ("tool_call_finished", "send_message"),
+        ("tool_call_started", "WebSearch"),
+        ("tool_call_finished", "WebSearch"),
+    ]
 
 
 @pytest.mark.parametrize(

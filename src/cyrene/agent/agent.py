@@ -9,6 +9,7 @@ import asyncio
 import importlib
 import json
 import logging
+from datetime import datetime, timezone
 from typing import Any, Awaitable, Callable
 from uuid import uuid4
 
@@ -113,12 +114,13 @@ async def _execute_tool(
 async def _publish_tool_call_started(
     tool_call_id: str, tool_name: str, arguments: dict[str, Any]
 ) -> None:
-    """Tell the live transcript about a tool before its handler starts."""
+    """Tell the live transcript when a tool is actually about to execute."""
     await _publish_runtime_event({
         "type": "tool_call_started",
         "tool_call_id": str(tool_call_id),
         "tool": str(tool_name or ""),
         "args": redact_value(arguments),
+        "timestamp": datetime.now(timezone.utc).isoformat(),
     })
 
 
@@ -144,6 +146,7 @@ async def _publish_tool_call_finished(
             "args": redact_value(arguments),
             "status": str(status or "completed"),
             "failed": str(status or "").casefold() == "failed",
+            "timestamp": datetime.now(timezone.utc).isoformat(),
         })
     except Exception:
         # Live activity is observability. A disconnected SSE subscriber must not
@@ -162,6 +165,11 @@ async def _execute_tool_for_call(
     """Execute a tool while tagging its eventual completion with its call id."""
     from cyrene.tooling.executor import bind_active_tool_call
 
+    # Publish from the executor boundary, not while the LLM's whole batch is
+    # merely being submitted. Ordered predecessors (notably ``send_message``)
+    # have completed by the time this coroutine is entered, so the live event
+    # order now reflects the same causal order persisted in session history.
+    await _publish_tool_call_started(tool_call_id, tool_name, arguments)
     binding = bind_active_tool_call(str(tool_call_id))
     try:
         result = await _execute_tool(
@@ -1164,12 +1172,10 @@ async def _run_main_agent_impl(
             )
             pending_reflection_tool_calls: list[tuple[dict[str, Any], dict[str, Any]]] = []
             inbox_batch_args: dict[str, dict[str, Any]] = {}
-            published_tool_starts: set[str] = set()
             mcp_observations: list[dict[str, Any]] = []
             tool_batch_id = f"batch_{uuid4().hex}"
             if runtime_inbox is not None and not guidance_supersedes_batch:
                 inbox_calls: list[tuple[Any, ...]] = []
-                inbox_start_events: list[tuple[str, str, dict[str, Any]]] = []
                 for pending_call in tcs:
                     pending_name = str(pending_call.get("function", {}).get("name") or "")
                     if pending_name in {"use_tools", "quit", "DeepReflect"}:
@@ -1183,9 +1189,6 @@ async def _run_main_agent_impl(
                     except (KeyError, TypeError, ValueError):
                         continue
                     inbox_batch_args[pending_call["id"]] = pending_args
-                    inbox_start_events.append((
-                        pending_call["id"], pending_name, pending_args
-                    ))
                     inbox_calls.append((
                         pending_call["id"],
                         pending_name,
@@ -1195,11 +1198,6 @@ async def _run_main_agent_impl(
                         _inbox_tool_metadata(pending_name, pending_args),
                     ))
                 if inbox_calls:
-                    for pending_call_id, pending_name, pending_args in inbox_start_events:
-                        await _publish_tool_call_started(
-                            pending_call_id, pending_name, pending_args
-                        )
-                        published_tool_starts.add(pending_call_id)
                     runtime_inbox.submit_tool_batch(
                         inbox_calls, batch_id=tool_batch_id
                     )
@@ -1278,17 +1276,11 @@ async def _run_main_agent_impl(
                         result = "Deep reflection complete. A reflection record will be added to the visible transcript."
                     else:
                         if runtime_inbox is None:
-                            if t["id"] not in published_tool_starts:
-                                await _publish_tool_call_started(t["id"], str(tool_name or ""), args)
-                                published_tool_starts.add(t["id"])
                             result = await _execute_tool_for_call(
                                 t["id"], str(tool_name or ""), args, bot, chat_id, db_path
                             )
                         else:
                             if t["id"] not in inbox_batch_args:
-                                if t["id"] not in published_tool_starts:
-                                    await _publish_tool_call_started(t["id"], str(tool_name or ""), args)
-                                    published_tool_starts.add(t["id"])
                                 runtime_inbox.submit_tool(
                                     t["id"],
                                     str(tool_name or ""),

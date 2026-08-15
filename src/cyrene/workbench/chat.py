@@ -27,7 +27,7 @@ import re
 import time
 import uuid
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Callable
 
@@ -206,6 +206,67 @@ def _record_chat_run_outcome(
 
 # Internal control tools that say nothing useful in a progress trace.
 _TRACE_SKIP_TOOLS = {"use_tools", "quit", "send_message", "update_plan_progress"}
+
+# Whitelist for the client-persisted live trace (assembled from SSE tool
+# events). Keeps large/private fields (input/output payloads) out of storage.
+_DURABLE_TRACE_FIELDS = (
+    "kind",
+    "toolCallId",
+    "text",
+    "tool",
+    "preview",
+    "status",
+    "failed",
+    "progress",
+    "progressCurrent",
+    "progressTotal",
+    "startedAt",
+    "reasoningOffset",
+    "detailKey",
+    "detailParams",
+    "presentation",
+)
+
+
+def _sanitize_durable_traces(traces: list[Any]) -> list[list[dict[str, Any]]]:
+    """Sanitize client-uploaded live traces before persisting them.
+
+    Only known scalar fields survive (strings/numbers truncated); nested
+    objects are JSON-serialized with a size cap. Per-card entry count mirrors
+    the live UI's own ``slice(-40)`` so a card can never grow unbounded.
+    """
+    sanitized: list[list[dict[str, Any]]] = []
+    if not isinstance(traces, list):
+        return sanitized
+    for raw_trace in traces[:100]:
+        entries: list[dict[str, Any]] = []
+        if isinstance(raw_trace, list):
+            for raw_entry in raw_trace[:40]:
+                if not isinstance(raw_entry, dict):
+                    continue
+                entry: dict[str, Any] = {}
+                for key in _DURABLE_TRACE_FIELDS:
+                    if key not in raw_entry or raw_entry[key] is None:
+                        continue
+                    value = raw_entry[key]
+                    if isinstance(value, bool):
+                        entry[key] = value
+                    elif isinstance(value, str):
+                        entry[key] = value[:400]
+                    elif isinstance(value, (int, float)):
+                        if not isinstance(value, bool):
+                            entry[key] = value
+                    elif isinstance(value, (dict, list)):
+                        try:
+                            serialized = json.dumps(value, ensure_ascii=False)[:2000]
+                        except (TypeError, ValueError):
+                            continue
+                        if serialized:
+                            entry[key] = serialized
+                if entry:
+                    entries.append(entry)
+        sanitized.append(entries)
+    return sanitized
 _USAGE_KEYS = (
     "prompt_tokens",
     "completion_tokens",
@@ -1496,68 +1557,75 @@ def _public_messages(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
 def _merge_chat_messages_chronologically(
     chat: dict[str, Any], additions: list[dict[str, Any]]
 ) -> list[dict[str, Any]]:
-    """Insert new transcript entries at their actual event time.
+    """Merge an ordered causal batch into the timestamped transcript.
 
     Guidance can be persisted while an agent run is still active.  The assistant
     messages that happened before that guidance are discovered only when the run
-    is checkpointed/finalized, so blindly appending them groups every user entry
-    at the top.  Insert each newly discovered entry before the first later
-    timestamp while preserving the existing order for legacy timestamp-less
-    records.
+    is checkpointed/finalized, so timestamps still choose each batch item's
+    initial insertion point. The order inside ``additions`` is authoritative,
+    though: it is extracted from assistant/tool causality and must not be
+    reversed by small persistence-time races such as ``send_message`` publishing
+    visible prose before a sibling search while being committed a few
+    microseconds later.
     """
     messages = chat.setdefault("messages", [])
-    known_ids = {
-        str(item.get("id") or ""): index
-        for index, item in enumerate(messages)
-        if isinstance(item, dict) and str(item.get("id") or "")
-    }
-    known_intermediate_keys = {
-        key: index
-        for index, item in enumerate(messages)
-        if isinstance(item, dict) and bool(item.get("intermediate"))
-        if (key := _live_segment_dedupe_key(item))
-    }
+    messages[:] = _messages_in_chronological_order(messages)
+
+    def indexes() -> tuple[dict[str, int], dict[str, int]]:
+        return (
+            {
+                str(existing.get("id") or ""): index
+                for index, existing in enumerate(messages)
+                if isinstance(existing, dict) and str(existing.get("id") or "")
+            },
+            {
+                key: index
+                for index, existing in enumerate(messages)
+                if isinstance(existing, dict) and bool(existing.get("intermediate"))
+                if (key := _live_segment_dedupe_key(existing))
+            },
+        )
+
+    known_ids, known_intermediate_keys = indexes()
+    causal_floor = 0
     for item in additions:
         if not isinstance(item, dict):
             continue
         item_id = str(item.get("id") or "")
-        if item_id and item_id in known_ids:
-            index = known_ids[item_id]
-            messages[index] = {**messages[index], **item}
-            continue
         intermediate_key = _live_segment_dedupe_key(item) if bool(item.get("intermediate")) else ""
-        if intermediate_key and intermediate_key in known_intermediate_keys:
-            index = known_intermediate_keys[intermediate_key]
-            messages[index] = {**messages[index], **item, "id": messages[index].get("id") or item_id}
+        existing_index = known_ids.get(item_id, -1) if item_id else -1
+        if existing_index < 0 and intermediate_key:
+            existing_index = known_intermediate_keys.get(intermediate_key, -1)
+        if existing_index >= 0:
+            existing = messages[existing_index]
+            merged = {
+                **existing,
+                **item,
+                "id": existing.get("id") or item_id,
+            }
+            messages[existing_index] = merged
+            if existing_index < causal_floor:
+                messages.pop(existing_index)
+                existing_index = causal_floor - 1
+                messages.insert(existing_index, merged)
+            causal_floor = existing_index + 1
+            known_ids, known_intermediate_keys = indexes()
             continue
-        created_at = str(item.get("createdAt") or item.get("created_at") or "")
+
+        item_time = _message_event_time(item)
         insert_at = len(messages)
-        if created_at:
+        if item_time is not None:
             for index, current in enumerate(messages):
                 if not isinstance(current, dict):
                     continue
-                current_at = str(current.get("createdAt") or current.get("created_at") or "")
-                if current_at and current_at > created_at:
+                current_time = _message_event_time(current)
+                if current_time is not None and current_time > item_time:
                     insert_at = index
                     break
+        insert_at = max(causal_floor, insert_at)
         messages.insert(insert_at, item)
-        if item_id:
-            known_ids[item_id] = insert_at
-        if intermediate_key:
-            known_intermediate_keys[intermediate_key] = insert_at
-        # Insertion shifts every later cached index.
-        known_ids = {
-            str(existing.get("id") or ""): index
-            for index, existing in enumerate(messages)
-            if isinstance(existing, dict) and str(existing.get("id") or "")
-        }
-        known_intermediate_keys = {
-            key: index
-            for index, existing in enumerate(messages)
-            if isinstance(existing, dict) and bool(existing.get("intermediate"))
-            if (key := _live_segment_dedupe_key(existing))
-        }
-    messages[:] = _messages_in_chronological_order(messages)
+        causal_floor = insert_at + 1
+        known_ids, known_intermediate_keys = indexes()
     return messages
 
 
@@ -2489,13 +2557,15 @@ def _extract_exchange_timeline(
     *,
     include_open_tool_preamble: bool = False,
 ) -> tuple[list[dict[str, Any]], dict[str, int], list[dict[str, Any]]]:
-    """Build a durable, chronological stream of activity cards and messages.
+    """Build the same causal timeline shown while an exchange is running.
 
-    Unlike ``_extract_exchange_segments`` (which attaches accumulated tools to
-    a later reply), this representation keeps every card at the timestamp of
-    the LLM turn that created it. Visible assistant messages are emitted as
-    their own entries. Reasoning and tool calls remain in the same activity card
-    until a visible assistant message closes that card.
+    Reasoning, visible intermediate replies, and tool activity are separate
+    events.  In particular, ``send_message`` is executed before its substantive
+    sibling tools, even though its inserted session row can sit immediately
+    *before* the assistant tool-call row that created it.  Pair those rows and
+    emit the real sequence: reasoning -> visible reply -> tools.  A later LLM
+    call's reasoning starts a new event instead of being appended to the tools
+    that just completed.
     """
     messages = _reorder_tool_produced_replies(state_messages)
     result_map = _build_tool_result_map(messages)
@@ -2513,11 +2583,47 @@ def _extract_exchange_timeline(
     seen_file_urls: set[str] = set()
     pending: dict[str, Any] | None = None
 
+    # ``insert_intermediate_user_reply`` inserts the visible reply before the
+    # assistant tool-call row is committed. Match it back to the send_message
+    # invocation so its storage position cannot invert the rendered causality.
+    paired_replies: dict[int, list[int]] = {}
+    claimed_reply_indexes: set[int] = set()
+    for tool_index, message in enumerate(messages):
+        if not isinstance(message, dict) or str(message.get("role") or "") != "assistant":
+            continue
+        send_texts: list[str] = []
+        for tool_call in message.get("tool_calls") or []:
+            fn = tool_call.get("function") if isinstance(tool_call, dict) else None
+            if str((fn or {}).get("name") or "").strip() != "send_message":
+                continue
+            try:
+                args = json.loads(str((fn or {}).get("arguments") or "{}"))
+            except (TypeError, ValueError, json.JSONDecodeError):
+                args = {}
+            text = str(args.get("text") or "").strip() if isinstance(args, dict) else ""
+            if text:
+                send_texts.append(text)
+        if not send_texts:
+            continue
+        tool_round = str(message.get("round_id") or message.get("roundId") or "").strip()
+        for send_text in send_texts:
+            for reply_index, candidate in enumerate(messages):
+                if reply_index in claimed_reply_indexes or not isinstance(candidate, dict):
+                    continue
+                candidate_round = str(candidate.get("round_id") or candidate.get("roundId") or "").strip()
+                if (
+                    str(candidate.get("role") or "") == "assistant"
+                    and bool(candidate.get("intermediate_reply"))
+                    and not candidate.get("attachments")
+                    and str(candidate.get("content") or "").strip() == send_text
+                    and (not tool_round or not candidate_round or candidate_round == tool_round)
+                ):
+                    paired_replies.setdefault(tool_index, []).append(reply_index)
+                    claimed_reply_indexes.add(reply_index)
+                    break
+
     def flush_activity() -> None:
         nonlocal pending
-        # Pure reasoning is a live-only affordance. Once that phase finishes it
-        # should not leave a standalone "thinking complete" card in the durable
-        # transcript. Keep the card only when it owns actual tool activity.
         if pending is not None and pending.get("trace"):
             timeline.append(pending)
         pending = None
@@ -2536,7 +2642,10 @@ def _extract_exchange_timeline(
         entry["trace"] = []
         timeline.append(entry)
 
-    def start_activity(message: dict[str, Any], idx: int) -> dict[str, Any]:
+    def start_activity(
+        message: dict[str, Any], idx: int, *, activity_kind: str = "tools",
+        created_at: str = "",
+    ) -> dict[str, Any]:
         mid = str(message.get("message_id") or message.get("id") or "").strip()
         fallback = _segment_fallback_id(message, idx)
         model_name = str(
@@ -2544,11 +2653,12 @@ def _extract_exchange_timeline(
             if isinstance(message.get("usage"), dict)
             else ""
         ).strip() or str(message.get("model") or "").strip()
+        prefix = "reasoning_" if activity_kind == "reasoning" else "activity_"
         entry: dict[str, Any] = {
-            "id": "activity_" + (mid or fallback),
+            "id": prefix + (mid or fallback),
             "role": "assistant",
             "content": "",
-            "createdAt": str(message.get("created_at") or message.get("createdAt") or _utc_now_iso()),
+            "createdAt": created_at or str(message.get("created_at") or message.get("createdAt") or _utc_now_iso()),
             "activityCard": True,
             "reasoning": "",
             "trace": [],
@@ -2563,6 +2673,9 @@ def _extract_exchange_timeline(
         if mid and mid in state_ids_before:
             continue
         if str(message.get("role") or "") != "assistant":
+            continue
+
+        if idx in claimed_reply_indexes:
             continue
 
         _accumulate_usage(message, usage)
@@ -2585,28 +2698,36 @@ def _extract_exchange_timeline(
             and str(message.get("content") or "").strip()
         )
 
-        # A model turn can say something and request tools in the same response.
-        # Its prose is visible before those tools run, so it is a real timeline
-        # boundary: flush prior calls, show the prose, then start the current
-        # call's reasoning/tool activity. Accumulating first would incorrectly
-        # create one aggregate card above the prose.
-        if visible_tool_preamble:
-            flush_activity()
-            append_visible_message(message, idx)
-
         reasoning = str(message.get("reasoning_content") or "").strip()
         tools: list[dict[str, Any]] = []
         _accumulate_tools(message, tools, result_map)
 
         if reasoning:
-            if pending is None:
-                pending = start_activity(message, idx)
-            prior_reasoning = str(pending.get("reasoning") or "").rstrip()
-            pending["reasoning"] = (prior_reasoning + "\n\n" + reasoning) if prior_reasoning else reasoning
+            flush_activity()
+            reasoning_entry = start_activity(message, idx, activity_kind="reasoning")
+            reasoning_entry["reasoning"] = reasoning
+            timeline.append(reasoning_entry)
+
+        if visible_tool_preamble:
+            flush_activity()
+            append_visible_message(message, idx)
+
+        causal_boundary_time: datetime | None = None
+        for reply_index in paired_replies.get(idx, []):
+            flush_activity()
+            reply = messages[reply_index]
+            append_visible_message(reply, reply_index)
+            reply_time = _message_event_time(reply)
+            if reply_time is not None and (causal_boundary_time is None or reply_time > causal_boundary_time):
+                causal_boundary_time = reply_time
 
         if tools:
             if pending is None:
-                pending = start_activity(message, idx)
+                created_at = ""
+                message_time = _message_event_time(message)
+                if causal_boundary_time is not None and (message_time is None or message_time <= causal_boundary_time):
+                    created_at = (causal_boundary_time + timedelta(microseconds=1)).isoformat()
+                pending = start_activity(message, idx, created_at=created_at)
             pending_trace = pending.setdefault("trace", [])
             pending_trace.extend(tools)
             if len(pending_trace) > 40:

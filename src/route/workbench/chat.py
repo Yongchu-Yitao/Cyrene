@@ -1320,6 +1320,52 @@ def register_workbench_chat_routes(
         }, session_id=chat_id)
         return {"ok": True, "chat": _public_chat_full(chat)}
 
+    @router.patch("/api/workbench/chats/{chat_id}/trace")
+    async def api_workbench_patch_chat_trace(request: Request, chat_id: str):
+        """Persist the client-assembled live trace onto the saved activity cards.
+
+        The runtime trace is built from SSE tool events; the backend's own
+        transcript extraction can lose mid-run calls (compaction/retry) and
+        drops runtime status fields, so the completed conversation would not
+        match what ran live. The client uploads its authoritative trace per
+        saved activity-card message id; this endpoint stores it sanitized.
+        """
+        if chat_id.startswith("legacy:"):
+            return JSONResponse({"error": "legacy chat transcript is read-only"}, status_code=403)
+        body = await request.json()
+        if not isinstance(body, dict):
+            return JSONResponse({"error": "object body required"}, status_code=400)
+        message_ids = body.get("messageIds")
+        traces = body.get("traces")
+        if not isinstance(message_ids, list) or not isinstance(traces, list):
+            return JSONResponse({"error": "messageIds and traces arrays required"}, status_code=400)
+        if not message_ids or len(message_ids) != len(traces) or len(message_ids) > 100:
+            return JSONResponse(
+                {"error": "messageIds and traces must be non-empty, equal-length arrays (≤100)"},
+                status_code=400,
+            )
+        sanitized = await asyncio.to_thread(_sanitize_durable_traces, traces)
+        payload = await asyncio.to_thread(_read_chats_store)
+        chat = _find_chat(payload, chat_id)
+        if not chat:
+            return JSONResponse({"error": "chat not found"}, status_code=404)
+        by_id = {
+            str(message.get("id") or ""): message
+            for message in chat.get("messages") or []
+            if isinstance(message, dict) and str(message.get("id") or "")
+        }
+        updated = 0
+        for message_id, trace in zip(message_ids, sanitized):
+            target = by_id.get(str(message_id or ""))
+            if not isinstance(target, dict) or not target.get("activityCard"):
+                continue
+            target["trace"] = trace
+            updated += 1
+        if updated:
+            chat["updatedAt"] = _utc_now_iso()
+            await asyncio.to_thread(_write_chats_store, payload)
+        return {"ok": True, "updated": updated}
+
     @router.get("/api/workbench/chats/{chat_id}/agent-config-options")
     async def api_workbench_agent_config_options(chat_id: str):
         R = _routes()

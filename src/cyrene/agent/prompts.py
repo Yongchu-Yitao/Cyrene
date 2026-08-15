@@ -85,7 +85,7 @@ _TOOL_PACK_PROMPT_TERMS: dict[str, tuple[str, ...]] = {
         "literature-library",
     ),
     "task_tools": ("task_tools", "task.schedule", "task.goal", "task.plan"),
-    "entity_tools": ("entity_tools", "entity.", "事务追踪"),
+    "entity_tools": ("entity_tools", "entity.", "用户数据库"),
     "map_tools": ("map_tools", "map.", "map pin"),
     "subagent_tools": (
         "subagent_tools",
@@ -295,9 +295,9 @@ When a task may require a local runtime, CLI, MCP server, or plugin whose availa
 
 _MAIN_ENTITY_PROMPT = _tool_pack_prompt_block(
     "entity_tools",
-    """## Entity Tracking
+    """## User Database
 
-Use `entity_tools` to manage user affairs. When a request involves the user's personal life, work, plans, projects, schedule, relationships, or ongoing matters, check records first with `entity.list` or `entity.query`; use `entity.query` for specific entities or references. Before continuing a project or planning, consult both as needed to reuse existing context and conclusions.
+Use `entity_tools` to manage the user database. When a request involves the user's personal life, work, plans, projects, schedule, relationships, or ongoing matters, check records first with `entity.list` or `entity.query`; use `entity.query` for specific records or references. Before continuing a project or planning, consult both as needed to reuse existing context and conclusions.
 
 Track concrete, durable information that should remain followable, including tasks, projects, decisions, knowledge, relationships, events, resources, ideas, problems, and habits. Always `entity.query` first to deduplicate, then `entity.track`: use `source="explicit", confidence=1.0` for explicit requests, otherwise `source="extracted"` with evidence-based confidence. Do not track greetings, transient actions or emotions, hypotheticals, jokes, guesses, or duplicates.
 

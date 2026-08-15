@@ -23,7 +23,7 @@ def test_external_agent_frontend_consumes_unified_dynamic_events_and_viewers():
     assert 'if (value === "agent_defined") return "agent_defined";' in source
     assert '<audio className="wbc-viewer-media"' in source
     assert '<video className="wbc-viewer-media"' in source
-    assert "wbcStructuredEventDetail" in source
+    assert "function wbcDurableTracePayload" in source
     assert "onUnknownAgentEvent" in source
     assert "wbcToolPresentationKind" in source
     assert "progress.slice(-40)" in source
@@ -1247,21 +1247,49 @@ def test_workbench_pane_drag_ghost_preserves_current_viewport_and_handle_hotspot
     )[0]
     assert "var conversationViewport = wbcCaptureConversationViewport(card);" in pane_drag
     assert "var clonedCard = wbcClonePaneWithLiveState(card);" in pane_drag
-    assert "var ghost = clonedCard.clone;" in pane_drag
-    assert 'ghost.classList.add("wbc-pane-card-drag-ghost")' in pane_drag
+    assert "var panePreview = clonedCard.clone;" in pane_drag
+    assert 'panePreview.classList.add("wbc-pane-card-drag-surface")' in pane_drag
+    assert 'ghost.className = "wbc-pane-card-drag-ghost";' in pane_drag
     assert "clonedCard.restoreViewport();" in pane_drag
-    assert "wbcRestoreConversationViewport(ghost, conversationViewport);" in pane_drag
+    assert "wbcRestoreConversationViewport(panePreview, conversationViewport);" in pane_drag
     assert "var handleGrabX" in pane_drag
     assert "var handleGrabY" in pane_drag
+    assert "var capturedClientX = Number(dragHandle.dataset.wbcDragClientX);" in pane_drag
+    assert "var capturedHandleX = Number(dragHandle.dataset.wbcDragHandleX);" in pane_drag
+    assert "movePaneCardGhost({ clientX: initialClientX, clientY: initialClientY });" in pane_drag
     assert "var grabX = (handleRect.left - cardRect.left) + handleGrabX;" in pane_drag
     assert "var grabY = (handleRect.top - cardRect.top) + handleGrabY;" in pane_drag
     assert 'ghost.style.transform = "translate3d("' in pane_drag
     assert 'ghost.classList.add("releasing")' in pane_drag
-    assert "setTimeout(function ()" in pane_drag
+    assert "function retirePaneCardGhost()" in pane_drag
+    assert 'ghost.style.visibility = "hidden";' in pane_drag
+    assert "typeof ghost.animate === \"function\"" in pane_drag
+    assert "Promise.resolve(fadeAnimation.finished)" in pane_drag
+    assert "window.requestIdleCallback(detachGhost, { timeout: 300 });" in pane_drag
+    assert 'wbcBuildRailCardDragPreview(railCard, "wbc-pane-card-rail-drag-card")' in pane_drag
+    assert 'moveEvent.dataTransfer.dropEffect = "move";' in pane_drag
+    assert 'moveEvent.preventDefault();' in pane_drag
+    assert 'ghost.classList.toggle("rail-card", overRail);' in pane_drag
+    assert 'railCard.classList.toggle("dragging", overRail);' in pane_drag
+    assert "function pointerIsOverMatchingRailCard(clientX, clientY)" in pane_drag
+    assert 'railCard.classList.toggle("wbc-split-return-target", !!overMatchingCard);' in pane_drag
+    assert 'railPreview.style.left = (grabX - railGrabX) + "px";' in pane_drag
+    assert 'ghost.style.width = (overRail ? railPreviewWidth' not in pane_drag
+    assert "function finishPaneCardGhost(dropEvent)" in pane_drag
+    assert "if (droppedOnMatchingCard && draggedChatId) closePaneCard(cardId);" in pane_drag
     assert "wbcHideNativeDragImage(transfer);" in pane_drag
     assert "event.dataTransfer.setDragImage(" not in pane_drag
     assert ".wbc-pane-card-drag-ghost" in styles
     assert "will-change: transform, opacity;" in styles
+    ghost_css = styles.split(".wbc-pane-card-drag-ghost {", 1)[1].split("}", 1)[0]
+    assert "opacity 72ms cubic-bezier(.4, 0, 1, 1)" in ghost_css
+    assert ".wbc-pane-card-drag-ghost.rail-card" in styles
+    assert ".wbc-pane-card-rail-drag-card" in styles
+    assert ".wbc-pane-card-drag-surface" in styles
+    assert ".wbc-rail .wbc-chat-card.wbc-split-return-target" in styles
+    grip = source.split("function WbcSplitGripBar(", 1)[1].split("function WbcSplitPickerMenu", 1)[0]
+    assert "function captureDragPointer(event)" in grip
+    assert "onPointerDown={captureDragPointer}" in grip
     pane_drop = source.split("  function handlePaneDrop(event, targetCardId, edge) {", 1)[1].split(
         "\n  function handleSideLayerDragOver", 1
     )[0]
@@ -4771,11 +4799,21 @@ def test_workbench_chat_tool_preamble_splits_current_llm_reasoning_after_message
         "activities": [
             {
                 "reasoning": "check the file",
-                "tools": ["Bash"],
+                "tools": [],
                 "closed": True,
             },
             {
+                "reasoning": "",
+                "tools": ["Bash"],
+                "closed": False,
+            },
+            {
                 "reasoning": "send the existing file",
+                "tools": [],
+                "closed": True,
+            },
+            {
+                "reasoning": "",
                 "tools": ["search", "send_file"],
                 "closed": False,
             },
@@ -4958,9 +4996,16 @@ def test_workbench_chat_cards_reorder_and_open_when_dropped_on_conversation():
     assert "transfer.setDragImage(" not in rail
     assert "function prepareRailDragImage(root, transfer, clientX, clientY)" in rail
     assert rail.count("prepareRailDragImage(") == 3
-    assert 'clone.querySelectorAll(".wbc-chat-row-icon")' in rail
-    assert 'icon.style.opacity = "1"' in rail
-    assert 'clone.classList.remove("track-marker-ready", "dragging")' in rail
+    assert "function wbcBuildRailCardDragPreview(root, extraClassName)" in source
+    drag_preview_helper = source.split(
+        "function wbcBuildRailCardDragPreview(root, extraClassName) {", 1
+    )[1].split("\n}", 1)[0]
+    assert 'host.style.overflow = "visible"' in drag_preview_helper
+    assert 'host.style.isolation = "auto"' in drag_preview_helper
+    assert 'clone.querySelectorAll(".wbc-chat-row-icon")' in drag_preview_helper
+    assert 'icon.style.opacity = "1"' in drag_preview_helper
+    assert '"wbc-split-return-target"' in drag_preview_helper
+    assert 'wbcBuildRailCardDragPreview(root, "")' in rail
     assert 'document.body.appendChild(host)' in rail
     assert 'document.addEventListener("dragover", moveDragImage, true)' in rail
     assert "wbcHideNativeDragImage(transfer)" in rail
@@ -5119,6 +5164,12 @@ def test_workbench_tool_start_is_rendered_then_completed_in_place():
     runtime = source.split("function onSseEvent(event)", 1)[1].split(
         'window.CyreneUI.require("events").subscribe(onSseEvent)', 1
     )[0]
+    stream = source.split("function consumeEventStream(", 1)[1].split(
+        "function streamChat", 1
+    )[0]
+    tool_payload = source.split("function wbcAgentToolPayload(event)", 1)[1].split(
+        "function wbcAgentPermissionPayload", 1
+    )[0]
     activity_card = source.split("function WbcLiveActivityCard", 1)[1].split(
         "function WbcLiveMessage", 1
     )[0]
@@ -5137,6 +5188,10 @@ def test_workbench_tool_start_is_rendered_then_completed_in_place():
     assert "hasRunningTools && !hasReplyText" in activity_card
     assert 'type === "run_finalizing" && handlers.onFinalizing' in source
     assert "wbcFinalizeRuntime(cur)" in source
+    assert 'type === "tool_call_started" && handlers.onToolStarted' in stream
+    assert 'type === "tool_call_finished" && handlers.onToolCompleted' in stream
+    assert "createdAt: Number.isFinite(parsedAt) ? parsedAt : Date.now()" in tool_payload
+    assert "appendActivity(closeActivityTimeline(latest), { createdAt: eventAt })" in runtime
 
 
 def test_workbench_marks_run_finalizing_before_workspace_save():
@@ -5299,6 +5354,12 @@ def test_collapsed_chat_rail_maps_actionable_conversation_states():
 
     assert ".wbc-conversation-status-track" in styles
     assert ".wbc-conversation-status-preview" in styles
+    raised_preview_rail_css = styles.split(
+        ".workbench-grid.integrated-sidebars .workbench-integrated-rail:has(.wbc-conversation-status-preview) {",
+        1,
+    )[1].split("}", 1)[0]
+    assert "z-index: 50;" in raised_preview_rail_css
+    assert "z-index: 64;" in styles.split(".workbench-sidebar-dock {", 1)[1].split("}", 1)[0]
     preview_css = styles.split(".wbc-conversation-status-preview {", 1)[1].split("}", 1)[0]
     assert "background: var(--wb-card-bg-strong, var(--wb-card-bg));" in preview_css
     assert "transparent" not in preview_css.split("background:", 1)[1].split(";", 1)[0]
@@ -6699,10 +6760,10 @@ def test_workbench_execution_card_uses_collapsible_activity_summary():
         "function wbcTraceCollapsedSummary", 1
     )[0]
     mapped_icons = re.findall(r"return WBC_ICONS\.([A-Za-z0-9_]+)", icon_block)
-    assert len(mapped_icons) == 23
+    assert len(mapped_icons) == 25
     assert len(mapped_icons) == len(set(mapped_icons))
     assert 'className="wbc-trace-entry-icon" aria-hidden="true">{WBC_ICONS.brain}' in source
-    assert 'failed || isRunning ? <span className="wbc-trace-entry-icon" aria-hidden="true">{wbcTraceActionIcon(entry)}</span> : null' in source
+    assert '{failed ? <span className="wbc-trace-entry-icon" aria-hidden="true">{wbcTraceActionIcon(entry)}</span> : null}' in source
     reasoning_icon_rule = styles.split(
         ".wbc-trace-timeline-reasoning > .wbc-trace-entry-icon {", 1
     )[1].split("}", 1)[0]
@@ -6715,10 +6776,30 @@ def test_workbench_execution_card_uses_collapsible_activity_summary():
     assert 'wbcT("workbenchChat.phase1Understood", "Understood the request")' in source
     assert "function wbcNormalizeReasoningText(text)" in source
     assert "function wbcTraceTimelineItems(entries, reasoning)" in source
+    assert 'wbcT("workbenchChat.thinkingProcess", "Thinking process")' in source
     assert "reasoningOffset: String(activity.reasoning || \"\").length" in source
+    assert source.count("&& !(Array.isArray(last.progress) && last.progress.length)") == 2
+    assert source.count("var activityHasReasoning = !!String(latestActivity && latestActivity.reasoning") == 2
+    assert source.count("appendActivity(closeActivityTimeline(latest), { createdAt: eventAt })") == 2
     assert 'className="wbc-trace-list wbc-trace-timeline"' in source
     assert "var seen = new Set();" in source
     assert "seen.has(key)" in source
+
+    i18n = (root / "src" / "webui" / "frontend" / "workbench-i18n.jsx").read_text(
+        encoding="utf-8"
+    )
+    assert '"workbenchChat.thinkingProcess": "Thinking process"' in i18n
+    assert '"workbenchChat.thinkingProcess": "思考过程"' in i18n
+
+    styles = (root / "src" / "webui" / "frontend" / "workbench.css").read_text(
+        encoding="utf-8"
+    )
+    trace_mark = styles.split(".wbc-trace-mark {", 1)[1].split("}", 1)[0]
+    trace_mark_icon = styles.split(".wbc-trace-mark > svg {", 1)[1].split("}", 1)[0]
+    assert "font-size: calc(11.5px * var(--wb-ui-font-scale, 1));" in trace_mark
+    assert "height: calc(1.5 * 11.5px * var(--wb-ui-font-scale, 1));" in trace_mark
+    assert "width: 1em;" in trace_mark_icon
+    assert "height: 1em;" in trace_mark_icon
     assert "var collapsedSummary = wbcTraceCollapsedSummary(entries, label);" in source
     assert "summaryItems.map" not in source
     assert "wbcTraceCollapsedLabel" not in source
@@ -6836,7 +6917,10 @@ def test_workbench_chat_retry_clears_model_output_before_start_and_reconciles_te
     assert "setRetryClearingMessageIds(selection.outputIds);" in retry_block
     assert "retrySuppressedTurnRef.current = suppressedTurn;" in retry_block
     assert "setRetrySuppressedTurn(suppressedTurn);" in retry_block
-    assert "setTimeout(startRetryAfterClear, 180)" in retry_block
+    assert "retryClearCommitRef.current = startRetryAfterClear;" in retry_block
+    assert "setTimeout(startRetryAfterClear" not in retry_block
+    assert 'event.animationName === "wbc-retry-output-clear"' in source
+    assert "onRetryClearAnimationEnd();" in source
     assert 'runtimeEngine.start(retryChatId, { retry: true, mode: retryMode }, model);' in retry_block
     assert 'className={retryClearing ? "retry-clearing" : ""}' in source
     assert "retrySuppressedIds.has(String(message && message.id || \"\"))" in source
@@ -6849,6 +6933,15 @@ def test_workbench_chat_retry_clears_model_output_before_start_and_reconciles_te
     styles = (root / "src" / "webui" / "frontend" / "workbench.css").read_text(encoding="utf-8")
     clear_animation = styles.split(".wbc-thread-item.retry-clearing {", 1)[1].split("}", 1)[0]
     assert "animation: wbc-retry-output-clear 180ms" in clear_animation
+    assert "grid-template-rows: 1fr" in clear_animation
+    assert "will-change: grid-template-rows, margin-block-end, opacity, transform" in clear_animation
+    clear_keyframes = styles.split("@keyframes wbc-retry-output-clear {", 1)[1].split(
+        "@media (prefers-reduced-motion: reduce)", 1
+    )[0]
+    assert "grid-template-rows: 0fr" in clear_keyframes
+    assert "margin-block-end: -16px" in clear_keyframes
+    assert "filter:" not in clear_keyframes
+    assert "clip-path:" not in clear_keyframes
     assert 'fire("onRetryTruncate"' in saved_block
     assert 'fire("onRetryTruncate"' in awaiting_block
 
@@ -8489,6 +8582,16 @@ def test_workbench_task_composer_matches_chat_floating_card_material():
     styles = (root / "src" / "webui" / "frontend" / "workbench.css").read_text(encoding="utf-8")
 
     task_box = styles.split(".workbench-composer-box {", 1)[1].split("}", 1)[0]
+    task_header = source.split("function TaskHeader", 1)[1].split(
+        "function headerMenuActions", 1
+    )[0]
+    task_header_layout = styles.split(".workbench-task-header {", 1)[1].split("}", 1)[0]
+    task_header_sticky = styles.split(".workbench-task-header-sticky {", 1)[1].split("}", 1)[0]
+    task_header_corner_masks = styles.split(
+        ".workbench-task-header-sticky::before,\n.workbench-task-header-sticky::after {", 1
+    )[1].split("}", 1)[0]
+    task_header_left_mask = styles.split(".workbench-task-header-sticky::before {", 1)[1].split("}", 1)[0]
+    task_header_right_mask = styles.rsplit(".workbench-task-header-sticky::after {", 1)[1].split("}", 1)[0]
     chat_box = styles.split(".wbc-composer-box {", 1)[1].split("}", 1)[0]
     chat_actions = styles.split("\n.wbc-composer-actions {", 1)[1].split("}", 1)[0]
     disclaimer = styles.split(".wb-composer-disclaimer {", 1)[1].split("}", 1)[0]
@@ -8511,10 +8614,53 @@ def test_workbench_task_composer_matches_chat_floating_card_material():
     assert "border-top: 0;" in chat_actions
     assert 'className="workbench-composer wbc-composer"' in source
     assert 'className="workbench-composer-box wbc-composer-box"' in source
+    assert 'className="workbench-task-header workbench-composer-box"' in task_header
+    assert 'className="wb-th-main"' in task_header
+    assert "position: sticky;" in task_header_sticky
+    assert "top: 0;" in task_header_sticky
+    assert "isolation: isolate;" in task_header_sticky
+    assert "position: relative;" in task_header_layout
+    assert "z-index: 1;" in task_header_layout
+    assert "padding: 14px 16px;" in task_header_layout
+    assert "width: 14px;" in task_header_corner_masks
+    assert "height: 14px;" in task_header_corner_masks
+    assert "background: var(--wb-floating-rail-bg, var(--wb-main-bg));" in task_header_corner_masks
+    assert "right: 0;" not in task_header_corner_masks
+    assert "left: 0;" not in task_header_corner_masks
+    assert "radial-gradient(circle at 100% 100%" in task_header_left_mask
+    assert "radial-gradient(circle at 0 100%" in task_header_right_mask
+    task_main = source.split("function TaskWorkArea", 1)[1].split(
+        "function TaskHeader", 1
+    )[0]
+    stage_body = task_main.split('<div className="workbench-stage">', 1)[1]
+    assert '<div className="workbench-task-header-sticky">' in stage_body
+    assert stage_body.index("<TaskHeader") < stage_body.index("<StateCard")
     assert 'className="workbench-composer-actions wbc-composer-actions"' in source
     assert 'className={"wb-composer-send wbc-send"' in source
     assert '.workbench-composer.wbc-composer {' in styles
     assert "padding: 0 !important;" in styles
+
+
+def test_workbench_task_detail_max_height_aligns_with_main_card_bottom():
+    root = Path(__file__).resolve().parent.parent
+    styles = (root / "src" / "webui" / "frontend" / "workbench.css").read_text(
+        encoding="utf-8"
+    )
+
+    detail_shell = styles.split(
+        ".workbench-grid.integrated-sidebars.is-task-detail .wb-task-detail-shell {",
+        1,
+    )[1].split("}", 1)[0]
+    detail_card = styles.split(".wb-task-detail-card {", 1)[1].split("}", 1)[0]
+    open_panel = styles.split(".wb-task-detail-tab-panel.open {", 1)[1].split("}", 1)[0]
+
+    assert "padding: 12px 12px 12px 4px;" in detail_shell
+    assert "height: 100%;" in detail_shell
+    assert "max-height: 100%;" in detail_card
+    assert "max-height: calc(100vh" not in detail_card
+    assert "flex: 1 1 auto;" in open_panel
+    assert "max-height: none;" in open_panel
+    assert "100vh" not in open_panel
 
 
 def test_composer_disclaimer_has_balanced_vertical_clearance():
@@ -10180,3 +10326,89 @@ def test_performance_mode_disables_renderer_effects_and_is_boot_persistent():
     assert "box-shadow: none !important" in css
     assert "animation: none !important" in css
     assert "transition: none !important" in css
+
+
+def _run_workbench_durable_trace_js(expression: str):
+    root = Path(__file__).resolve().parent.parent
+    source = (root / "src" / "webui" / "frontend" / "workbench-chat.jsx").read_text(
+        encoding="utf-8"
+    )
+    durable_source = "var WBC_DURABLE_TRACE_FIELDS" + source.split(
+        "var WBC_DURABLE_TRACE_FIELDS", 1
+    )[1].split("function wbcToolPresentationKind(entry)", 1)[0]
+    script = f"""
+eval({json.dumps(durable_source)});
+const result = ({expression});
+process.stdout.write(JSON.stringify(result));
+"""
+    completed = subprocess.run(["node", "-e", script], check=True, capture_output=True, text=True)
+    return json.loads(completed.stdout)
+
+
+def test_workbench_durable_trace_reuses_client_assembled_activities():
+    result = _run_workbench_durable_trace_js(
+        """
+(() => {
+  const runtime = {
+    activities: [
+      {
+        id: "activity_1",
+        progress: [
+          { kind: "tool", toolCallId: "c1", text: "Bash", preview: "run", status: "running", failed: false, input: { secret: "x" } },
+          { kind: "tool", toolCallId: "c2", text: "Read", preview: "a.md", status: "completed", failed: false },
+        ],
+      },
+      {
+        id: "activity_2",
+        progress: [
+          { kind: "tool", toolCallId: "c3", text: "WebFetch", preview: "", status: "completed", failed: true },
+        ],
+      },
+    ],
+  };
+  const saved = [
+    { id: "activity_reasoning_x", activityCard: true, trace: [] },
+    { id: "msg1", activityCard: true, trace: [{ tool: "old" }] },
+    { id: "msg2", activityCard: true, trace: [{ tool: "old" }] },
+  ];
+  return wbcDurableTracePayload("chat1", runtime, saved);
+})()
+"""
+    )
+    assert result["messageIds"] == ["msg1", "msg2"]
+    assert len(result["traces"]) == 2
+    first = result["traces"][0]
+    assert len(first) == 2
+    assert first[0]["status"] == "completed"  # straggler running entry settled
+    assert first[0]["toolCallId"] == "c1"
+    assert first[0]["text"] == "Bash"
+    assert "input" not in first[0]  # payload fields scrubbed
+    assert "secret" not in json.dumps(result)
+    assert result["traces"][1][0]["failed"] is True
+
+
+def test_workbench_durable_trace_skips_when_boundaries_diverge():
+    result = _run_workbench_durable_trace_js(
+        """
+(() => {
+  const withTools = [
+    { id: "a", progress: [{ kind: "tool", toolCallId: "c1", text: "Bash" }] },
+    { id: "b", progress: [{ kind: "tool", toolCallId: "c2", text: "Read" }] },
+  ];
+  const noTools = [{ id: "c", progress: [] }];
+  const savedOne = [{ id: "m1", activityCard: true, trace: [{ tool: "old" }] }];
+  return {
+    mismatch: wbcDurableTracePayload("chat", { activities: withTools }, savedOne),
+    noActivity: wbcDurableTracePayload("chat", { activities: noTools }, savedOne),
+    noSaved: wbcDurableTracePayload("chat", { activities: withTools }, []),
+    emptyRuntime: wbcDurableTracePayload("chat", null, savedOne),
+  };
+})()
+"""
+    )
+    assert result == {
+        "mismatch": None,
+        "noActivity": None,
+        "noSaved": None,
+        "emptyRuntime": None,
+    }
