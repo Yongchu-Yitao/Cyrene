@@ -36,6 +36,7 @@ from route.settings.general import register_settings_routes
 from route.skills import register_skill_routes
 from route.system.events import register_event_routes
 from route.system.instance import register_instance_routes
+from route.system.logs import register_log_routes
 from route.system.shell import register_shell_routes
 from route.system.updates import register_update_routes
 from route.tasks import register_task_routes
@@ -167,6 +168,7 @@ def register_routes(app: FastAPI, bot: Any, db_path: str) -> None:
         register_settings_routes,
         register_task_routes,
         register_update_routes,
+        register_log_routes,
     ):
         _register_shared_adapter(factory, router, bot, db_path)
 

@@ -2065,7 +2065,13 @@ async def call_llm(
                                     if isinstance(_choices, list) and _choices and isinstance(_choices[0], dict):
                                         _finish = _choices[0].get("finish_reason")
                                         if _finish:
-                                            msg["finish_reason"] = str(_finish)
+                                            _finish = str(_finish)
+                                            msg["finish_reason"] = _finish
+                                            if _finish == "length":
+                                                logger.warning(
+                                                    "LLM response truncated by max_tokens (caller=%s, phase=%s)",
+                                                    caller, phase,
+                                                )
                                 request_ms = (_time.monotonic() - attempt_started) * 1000
                                 break
                             except httpx.TransportError as exc:
@@ -2539,6 +2545,7 @@ async def _handle_stream(
     reasoning_parts: list[str] = []
     tool_call_fragments: dict[int, dict[str, Any]] = {}
     usage: dict[str, Any] = {}
+    finished_reason: str | None = None
     started = False
     reasoning_started = False
     dsml_filter = _DsmlStreamFilter()
@@ -2578,6 +2585,9 @@ async def _handle_stream(
             if isinstance(data.get("usage"), dict):
                 usage = data["usage"]
             for choice in data.get("choices") or []:
+                finish = choice.get("finish_reason")
+                if finish:
+                    finished_reason = str(finish)
                 delta = choice.get("delta") or {}
                 rc = delta.get("reasoning_content")
                 if isinstance(rc, str) and rc.strip():
@@ -2637,5 +2647,9 @@ async def _handle_stream(
     tool_calls = _finalize_tool_call_fragments(tool_call_fragments)
     if tool_calls:
         msg["tool_calls"] = tool_calls
+    if finished_reason:
+        msg["finish_reason"] = finished_reason
+        if finished_reason == "length":
+            logger.warning("LLM stream truncated by max_tokens (finish_reason=length)")
     msg["usage"] = _normalized_usage(usage, payload.get("messages", []), msg)
     return msg

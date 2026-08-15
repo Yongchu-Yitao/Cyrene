@@ -25,6 +25,11 @@ _UPDATE_REPO = os.environ.get("UPDATE_REPO", _DEFAULT_REPO)
 _GITHUB_API = f"https://api.github.com/repos/{_UPDATE_REPO}/releases"
 _DEFAULT_UPDATE_CHECK_INTERVAL_SECONDS = 6 * 60 * 60
 _notified_update_keys: set[str] = set()
+_download_in_progress = False
+_auto_download_task: "asyncio.Task | None" = None
+_UPDATE_STATE_KEY = "update_download_state"
+_UPDATE_PENDING_KEY = "update_download_pending"
+_state_restored = False
 
 
 def _release_version(value: str) -> Version:
@@ -45,6 +50,15 @@ def _beta_updates_enabled() -> bool:
         return bool(settings_store.get("beta_updates", False))
     except Exception:
         return False
+
+
+def _auto_update_enabled() -> bool:
+    """读取用户是否开启自动下载更新（下载后仍需用户手动重启安装）。"""
+    try:
+        from cyrene.runtime import settings_store
+        return bool(settings_store.get("auto_update", True))
+    except Exception:
+        return True
 
 
 def _update_check_interval_seconds() -> int:
@@ -258,37 +272,117 @@ async def download_update(
     url: str,
     progress_callback: Callable[[int, int], None] | None = None,
 ) -> DownloadResult | None:
-    """下载更新包到临时目录。"""
+    """下载更新包到临时目录，支持断点续传。
+
+    - 目标文件已存在部分内容时（上次失败/中断留下的），发 ``Range`` 请求续传
+      而非从头下载；服务器不支持 Range（返回 200 全量）则回退为从头重下。
+    - 本地部分与服务器不一致（416 且大小不符）时删除后从头下载。
+    - 同一时间只允许一个下载任务（后台自动下载与手动下载并发时会竞争写同一个
+      目标文件）。并发调用直接抛 ValueError，由调用方（工具/路由）转为可读错误。
+    """
+    global _download_in_progress
+    if _download_in_progress:
+        raise ValueError("update download already in progress")
     if not url:
         return None
 
     dest = TEMP_DIR / "updates" / Path(url).name
     dest.parent.mkdir(parents=True, exist_ok=True)
 
-    hasher = hashlib.sha256()
-    downloaded = 0
+    _download_in_progress = True
+    try:
+        return await _download_to(dest, url, progress_callback)
+    finally:
+        _download_in_progress = False
+
+
+def _content_range_total(resp) -> int:
+    """Parse ``Content-Range: bytes start-end/total`` and return total bytes."""
+    raw = str(resp.headers.get("content-range") or "")
+    try:
+        return int(raw.split("/")[-1])
+    except (ValueError, IndexError):
+        return 0
+
+
+async def _download_to(
+    dest: Path,
+    url: str,
+    progress_callback: Callable[[int, int], None] | None,
+) -> DownloadResult:
+    """单次下载会话：从已有部分续传，最终返回完整文件（含全文件 sha256）。"""
+    resume_from = dest.stat().st_size if dest.exists() else 0
 
     async with httpx.AsyncClient(timeout=600.0, follow_redirects=True) as client:
-        async with client.stream("GET", url) as resp:
-            resp.raise_for_status()
-            total = int(resp.headers.get("content-length", 0))
-            downloaded = 0
+        headers = {"Range": f"bytes={resume_from}-"} if resume_from > 0 else None
+        async with client.stream("GET", url, headers=headers) as resp:
+            if resp.status_code == 416 and resume_from > 0:
+                # Range 超界：本地文件已等于服务器总大小（上次下载已完整但未校验）。
+                size = _content_range_total(resp)
+                if size and dest.stat().st_size == size:
+                    checksum = _hash_file(dest)
+                    logger.info(
+                        "Update already fully downloaded: %s (%d bytes), SHA256=%s",
+                        dest, size, checksum,
+                    )
+                    return DownloadResult(path=dest, size=size, sha256=checksum)
+                # 本地部分与服务器不一致，删掉从头下。
+                logger.warning(
+                    "Local partial %s (%d bytes) does not match server total %d; re-downloading",
+                    dest, dest.stat().st_size, size,
+                )
+                dest.unlink(missing_ok=True)
+                return await _download_to(dest, url, progress_callback)
 
-            with open(dest, "wb") as f:
+            if resp.status_code == 206 and resume_from > 0:
+                total = _content_range_total(resp)
+                if not total:
+                    total = resume_from + int(resp.headers.get("content-length", 0))
+                mode = "ab"
+            else:
+                resp.raise_for_status()
+                if resume_from > 0:
+                    # 服务器忽略了 Range（200 全量返回）：覆盖重写。
+                    dest.unlink(missing_ok=True)
+                    resume_from = 0
+                total = int(resp.headers.get("content-length", 0))
+                mode = "wb"
+
+            downloaded = resume_from
+            with open(dest, mode) as f:
                 async for chunk in resp.aiter_bytes(65536):
                     f.write(chunk)
-                    hasher.update(chunk)
                     downloaded += len(chunk)
                     if progress_callback and total > 0:
                         progress_callback(downloaded, total)
 
-    checksum = hasher.hexdigest()
-    size_mb = downloaded / (1024 * 1024)
-    logger.info(
-        "Downloaded update: %s (%d bytes / %.1f MB), SHA256=%s",
-        dest, downloaded, size_mb, checksum,
-    )
+            if total and downloaded != total:
+                raise ValueError(
+                    f"update download incomplete: {downloaded} of {total} bytes"
+                )
+
+    # 散列必须覆盖整个文件（续传时 = 已存在部分 + 本次追加），统一重读全文件。
+    checksum = _hash_file(dest)
+    if resume_from > 0:
+        logger.info(
+            "Resumed update download: %s (%d bytes / %.1f MB, resumed from %d), SHA256=%s",
+            dest, downloaded, downloaded / (1024 * 1024), resume_from, checksum,
+        )
+    else:
+        logger.info(
+            "Downloaded update: %s (%d bytes / %.1f MB), SHA256=%s",
+            dest, downloaded, downloaded / (1024 * 1024), checksum,
+        )
     return DownloadResult(path=dest, size=downloaded, sha256=checksum)
+
+
+def _hash_file(path: Path) -> str:
+    """Read a local file and return its bare sha256 hex digest."""
+    hasher = hashlib.sha256()
+    with open(path, "rb") as f:
+        for block in iter(lambda: f.read(1 << 20), b""):
+            hasher.update(block)
+    return hasher.hexdigest()
 
 
 def get_restart_script(update_file: Path) -> str:
@@ -492,7 +586,103 @@ def set_cached_update_info(info: UpdateInfo) -> None:
     _latest_update_info = info
 
 
+def _restore_download_state() -> None:
+    """进程重启后恢复上次自动下载的进度/结果。
+
+    ``_download_progress`` 是进程内存状态，没有恢复的话每次启动都会把
+    几百 MB 的更新包重新下载一遍。恢复顺序：先恢复已校验完成的包，否则
+    恢复未完成的下载（部分文件 + 元数据），由检查循环续传。
+    """
+    global _state_restored
+    if _state_restored:
+        return
+    _state_restored = True
+    try:
+        from cyrene.runtime import settings_store
+
+        state = settings_store.get(_UPDATE_STATE_KEY, None) or {}
+        if isinstance(state, dict) and state.get("verified"):
+            path = Path(str(state.get("path") or ""))
+            if path.is_file():
+                sha256 = str(state.get("sha256") or "")
+                _download_progress.update({
+                    "downloaded": int(state.get("downloaded") or 0),
+                    "total": int(state.get("total") or 0),
+                    "done": True,
+                    "path": str(path),
+                    "expected_sha256": sha256,
+                    "actual_sha256": sha256,
+                    "verified": True,
+                    "verification_error": "",
+                })
+                logger.info("Restored verified update package from previous run: %s", path)
+                return
+
+        pending = settings_store.get(_UPDATE_PENDING_KEY, None) or {}
+        if not isinstance(pending, dict):
+            return
+        path = Path(str(pending.get("path") or ""))
+        total = int(pending.get("total") or 0)
+        if not path.is_file() or total <= 0:
+            return
+        existing = path.stat().st_size
+        if existing >= total:
+            return  # 已完整但未校验：交给检查循环重新走下载-校验流程（416 分支直接复用）
+        sha256 = str(pending.get("sha256") or "")
+        _download_progress.update({
+            "downloaded": existing,
+            "total": total,
+            "done": False,
+            "path": str(path),
+            "expected_sha256": sha256,
+            "actual_sha256": "",
+            "verified": False,
+            "verification_error": "",
+        })
+        logger.info(
+            "Restored interrupted update download: %s (%d / %d bytes)",
+            path, existing, total,
+        )
+    except Exception:
+        logger.debug("Failed to restore update download state", exc_info=True)
+
+
+def _persist_pending_state(info: UpdateInfo) -> None:
+    """下载开始时记录进行中状态，供进程重启后续传。"""
+    try:
+        from cyrene.runtime import settings_store
+
+        settings_store.set_(_UPDATE_PENDING_KEY, {
+            "version": info.latest_version,
+            "url": info.download_url,
+            "sha256": info.asset_sha256,
+            "total": info.asset_size,
+            "path": str(TEMP_DIR / "updates" / Path(info.download_url).name),
+        })
+    except Exception:
+        logger.debug("Failed to persist pending update download", exc_info=True)
+
+
+def _persist_download_state(info: UpdateInfo, result: DownloadResult) -> None:
+    try:
+        from cyrene.runtime import settings_store
+
+        settings_store.set_(_UPDATE_STATE_KEY, {
+            "version": info.latest_version,
+            "sha256": result.sha256,
+            "size": result.size,
+            "downloaded": result.size,
+            "total": info.asset_size,
+            "path": str(result.path),
+            "verified": True,
+        })
+        settings_store.set_(_UPDATE_PENDING_KEY, None)
+    except Exception:
+        logger.debug("Failed to persist update download state", exc_info=True)
+
+
 def get_download_progress() -> dict:
+    _restore_download_state()
     return dict(_download_progress)
 
 
@@ -509,31 +699,20 @@ def _format_bytes(size: int) -> str:
     return f"{n / (1024 * 1024 * 1024):.1f} GB"
 
 
-def _append_update_notification(info: UpdateInfo) -> None:
+def _push_update_notification(info: UpdateInfo, stage: str, title: str, body: str) -> None:
+    """推送一条更新相关通知，stage 参与去重 key（available/ready/failed 各自只发一次）。"""
     if not info.available or not info.latest_version:
         return
-    key = f"{info.latest_version}:{info.asset_name or info.error}"
+    key = f"{info.latest_version}:{info.asset_name or info.error}:{stage}"
     if key in _notified_update_keys:
         return
     _notified_update_keys.add(key)
-
-    version = f"v{info.latest_version}"
-    if info.asset_name:
-        body = f"发现新版本 {version}，安装包 {info.asset_name}"
-        if info.asset_size:
-            body += f"（{_format_bytes(info.asset_size)}）"
-        if not info.asset_sha256:
-            body += "。该版本缺少 sha256 校验值，无法自动安装。"
-    else:
-        body = f"发现新版本 {version}，但当前平台暂无可自动安装的更新包。"
-        if info.error:
-            body += f" {info.error}"
 
     try:
         from cyrene.workbench.notifications import append_notification
 
         append_notification(
-            title=f"Cyrene {version} 可用",
+            title=title,
             body=body,
             tab="system",
             source="updater",
@@ -541,6 +720,7 @@ def _append_update_notification(info: UpdateInfo) -> None:
             link_label="打开设置",
             meta={
                 "category": "app_update",
+                "stage": stage,
                 "currentVersion": info.current_version,
                 "latestVersion": info.latest_version,
                 "publishedAt": info.published_at,
@@ -554,6 +734,100 @@ def _append_update_notification(info: UpdateInfo) -> None:
         logger.debug("Failed to append update notification", exc_info=True)
 
 
+def _append_update_notification(info: UpdateInfo) -> None:
+    version = f"v{info.latest_version}"
+    if info.asset_name:
+        body = f"发现新版本 {version}，安装包 {info.asset_name}"
+        if info.asset_size:
+            body += f"（{_format_bytes(info.asset_size)}）"
+        if not info.asset_sha256:
+            body += "。该版本缺少 sha256 校验值，无法自动安装。"
+    else:
+        body = f"发现新版本 {version}，但当前平台暂无可自动安装的更新包。"
+        if info.error:
+            body += f" {info.error}"
+    _push_update_notification(info, "available", f"Cyrene {version} 可用", body)
+
+
+def _append_update_ready_notification(info: UpdateInfo) -> None:
+    if not info.asset_name:
+        return
+    version = f"v{info.latest_version}"
+    body = f"更新包 {info.asset_name} 已自动下载并校验通过"
+    if info.asset_size:
+        body += f"（{_format_bytes(info.asset_size)}）"
+    body += "。打开设置点击「重启更新」即可完成安装。"
+    _push_update_notification(info, "ready", f"Cyrene {version} 已就绪", body)
+
+
+def _append_update_failed_notification(info: UpdateInfo, reason: str) -> None:
+    if not info.asset_name:
+        return
+    version = f"v{info.latest_version}"
+    body = f"自动下载 {version} 更新包失败：{reason or '未知原因'}。可在设置中手动下载。"
+    _push_update_notification(info, "failed", f"Cyrene {version} 下载失败", body)
+
+
+async def _auto_download_latest(info: UpdateInfo) -> None:
+    """后台自动下载并校验更新包，完成后推送就绪通知。
+
+    安装仍是用户显式操作（设置页「重启更新」），这里只负责把包下载好、
+    校验好并放进全局下载进度状态，让 UI/工具都能看到。
+    """
+    progress = _download_progress
+    progress.update({
+        "downloaded": 0, "total": info.asset_size, "done": False,
+        "path": "", "expected_sha256": info.asset_sha256,
+        "actual_sha256": "", "verified": False, "verification_error": "",
+    })
+    _persist_pending_state(info)
+    try:
+        result = await download_update(
+            info.download_url,
+            lambda current, total: progress.update({"downloaded": current, "total": total}),
+        )
+        if result is None:
+            raise ValueError("update download failed")
+        progress.update({
+            "done": True,
+            "path": str(result.path),
+            "actual_sha256": result.sha256,
+        })
+        if info.asset_size and result.size != info.asset_size:
+            raise ValueError("downloaded package size does not match the release asset")
+        if result.sha256.lower() != (info.asset_sha256 or "").lower():
+            raise ValueError("downloaded package SHA-256 verification failed")
+        progress["verified"] = True
+        _persist_download_state(info, result)
+        logger.info("Auto-downloaded update %s ready for install", info.latest_version)
+        _append_update_ready_notification(info)
+    except Exception as exc:
+        progress["done"] = True
+        progress["verification_error"] = str(exc)
+        logger.warning("Auto-download of update failed: %s", exc)
+        _append_update_failed_notification(info, str(exc))
+
+
+def _maybe_auto_download(info: UpdateInfo) -> None:
+    """检查到新版后，按 auto_update 设置启动后台自动下载（防重复/防并发）。"""
+    global _auto_download_task
+    if not info.available or not info.download_url or not info.asset_sha256:
+        return
+    if not _auto_update_enabled():
+        return
+    if _auto_download_task is not None and not _auto_download_task.done():
+        return
+    _restore_download_state()
+    progress = _download_progress
+    if (
+        progress.get("done")
+        and progress.get("verified")
+        and str(progress.get("actual_sha256") or "").lower() == info.asset_sha256.lower()
+    ):
+        return
+    _auto_download_task = asyncio.create_task(_auto_download_latest(info))
+
+
 async def _run_update_check_once() -> UpdateInfo:
     info = await check_for_update()
     set_cached_update_info(info)
@@ -563,6 +837,7 @@ async def _run_update_check_once() -> UpdateInfo:
             "Update available: %s → %s (%s)",
             info.current_version, info.latest_version, info.asset_name,
         )
+        _maybe_auto_download(info)
     return info
 
 

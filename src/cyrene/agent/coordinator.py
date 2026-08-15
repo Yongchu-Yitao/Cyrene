@@ -133,7 +133,7 @@ async def _kick_behavior_learning_processing() -> None:
         if runtime_scheduler is not None and runtime_scheduler.running:
             return
     except Exception:
-        pass
+        logger.debug("Cannot inspect runtime scheduler; will defer behavior learning", exc_info=True)
 
     loop = asyncio.get_running_loop()
     existing = _DEFERRED_BEHAVIOR_TASK
@@ -1158,6 +1158,11 @@ async def _run_chat_agent_impl(
             from cyrene.workbench.pinned_resources import global_agent_context
             pinned_resource_context = global_agent_context(_current_session_id.get())
         except Exception:
+            logger.warning(
+                "Failed to load pinned resource context (session=%s); running without it",
+                _current_session_id.get() or "-",
+                exc_info=True,
+            )
             pinned_resource_context = ""
         effective_fixed_ephemeral = "\n\n".join(
             part
@@ -1389,7 +1394,7 @@ async def run_steward_agent(conversation_text: str, soulmd_content: str, bot: An
             ]
             _existing_entity_hint = "\n".join(_lines[:50])  # cap at 50 to keep prompt reasonable
     except Exception:
-        pass
+        logger.warning("Failed to query existing entities for steward dedup hint", exc_info=True)
 
     steward_prompt = f"""You are a memory steward and entity extractor. Your job is twofold:
 

@@ -591,7 +591,10 @@ class GoalLoopManager:
                 try:
                     _write_session(str(row["session_id"]), apply)
                 except KeyError:
-                    pass
+                    logger.warning(
+                        "Crash recovery: session projection not written (session=%s, run=%s)",
+                        row["session_id"], row["id"], exc_info=True,
+                    )
                 await _publish(recovered)
             self.wake(str(row["id"]))
 
@@ -1437,7 +1440,10 @@ async def resume_after_answer(db_path: str, session_id: str, *, permission_denie
                 try:
                     _write_session(session_id, apply)
                 except KeyError:
-                    pass
+                    logger.warning(
+                        "Pause state not written to session document (session=%s); UI may revert",
+                        session_id, exc_info=True,
+                    )
                 await _publish(paused)
         return
     now = _utc_iso()

@@ -293,6 +293,9 @@ def main() -> None:
     parser.add_argument("--port", type=int, default=9876)
     args = parser.parse_args()
     logging.basicConfig(level=logging.INFO)
+    from cyrene.observability.logging_setup import setup_persistent_logging
+
+    setup_persistent_logging()
     asyncio.run(run_relay(args.host, args.port))
 
 

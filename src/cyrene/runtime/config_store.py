@@ -371,7 +371,7 @@ def _migrate_if_needed() -> dict:
             try:
                 legacy_path.rename(legacy_path.with_suffix(legacy_path.suffix + ".bak"))
             except OSError:
-                pass
+                logger.warning("Failed to archive legacy plaintext config %s", legacy_path, exc_info=True)
 
     _migrated = True
     logger.info("Migrated legacy config to encrypted store at %s", _ENCRYPTED_PATH)

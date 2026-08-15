@@ -149,7 +149,7 @@ def _resolve_workspace_id(workspace_id: str | None) -> str:
         if project:
             return R._workbench_project_memory_key(project)
     except Exception:
-        pass
+        logger.debug("Workspace id %r lookup failed; falling back to wid", wid, exc_info=True)
     return wid
 
 

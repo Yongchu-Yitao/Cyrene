@@ -182,12 +182,14 @@ def stop_external_services(
         stop_searxng()
         if context is not None:
             context.started_services.discard("search")
+        logger.info("Stopped search service")
     if mcp and (context is None or "mcp" in context.started_services):
         from cyrene.tooling.backends.mcp_manager import stop_mcp
 
         stop_mcp()
         if context is not None:
             context.started_services.discard("mcp")
+        logger.info("Stopped MCP service")
 
 
 async def stop_external_services_async(
@@ -203,12 +205,14 @@ async def stop_external_services_async(
         stop_searxng()
         if context is not None:
             context.started_services.discard("search")
+        logger.info("Stopped search service")
     if mcp and (context is None or "mcp" in context.started_services):
         from cyrene.tooling.backends.mcp_manager import stop_mcp_async
 
         await stop_mcp_async()
         if context is not None:
             context.started_services.discard("mcp")
+        logger.info("Stopped MCP service")
 
 
 def start_update_check() -> asyncio.Task[Any] | None:

@@ -191,6 +191,7 @@ function AboutRelatedIcon(name) {
   var path = name === "issue" ? "M12 8v4M12 16h.01M21 12a9 9 0 1 1-18 0 9 9 0 0 1 18 0Z"
     : name === "changelog" ? "M4 19V5M4 19h16M4 19l4-4M8 15V7M8 15h12M12 11V3M12 11h8"
     : name === "website" ? "M12 21a9 9 0 1 0 0-18 9 9 0 0 0 0 18ZM3.6 9h16.8M3.6 15h16.8M12 3a14 14 0 0 1 0 18M12 3a14 14 0 0 0 0 18"
+    : name === "log" ? "M8 13v-1h8v1M8 17v-1h5M8 21v-1h3M20 5.5A2.5 2.5 0 0 0 17.5 3H6.5A2.5 2.5 0 0 0 4 5.5v15A2.5 2.5 0 0 0 6.5 23h11a2.5 2.5 0 0 0 2.5-2.5V5.5ZM4 9h16"
     : "M4 19.5A2.5 2.5 0 0 1 6.5 17H20M4 4.5A2.5 2.5 0 0 1 6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15Z";
   return React.createElement("svg", { width: "23", height: "23", viewBox: "0 0 24 24", fill: "none", stroke: "currentColor", strokeWidth: "2", strokeLinecap: "round", strokeLinejoin: "round", "aria-hidden": "true" },
     React.createElement("path", { d: path })
@@ -4012,23 +4013,42 @@ function UpdateSection({ t, config }) {
   var [progress, setProgress] = useStateSt({ downloaded: 0, total: 0, done: false });
   var [downloaded, setDownloaded] = useStateSt(false);
   var [error, setError] = useStateSt("");
+  var [exporting, setExporting] = useStateSt(false);
   var [beta, setBeta] = useStateSt(!!(config && config.beta_updates));
   var [autoUpdate, setAutoUpdate] = useStateSt(!!(!config || config.auto_update !== false));
   var [changelogOpen, setChangelogOpen] = useStateSt(false);
   var [changelog, setChangelog] = useStateSt({ version: "", published_at: "", release_notes: "" });
 
   useEffectSt(function () { checkUpdate(); }, []);
+  // 后台自动下载可能已完成/进行中，页面打开时恢复其状态（checkUpdate 失败也兜底）。
+  useEffectSt(function () { syncDownloadState(); }, []);
   // Sync local toggle with config once it loads from the server.
   useEffectSt(function () { setBeta(!!(config && config.beta_updates)); }, [config && config.beta_updates]);
   useEffectSt(function () { setAutoUpdate(!!(!config || config.auto_update !== false)); }, [config && config.auto_update]);
+
+  function syncDownloadState() {
+    settingsFetch("/api/update/progress").then(function (r) { return r.json(); }).then(function (d) {
+      if (!d || typeof d.done === "undefined") return;
+      setProgress(d);
+      if (d.done) {
+        setDownloading(false);
+        if (d.verified) {
+          setDownloaded(true);
+        } else if (d.verification_error) {
+          setError(d.verification_error);
+        }
+      } else if (d.downloaded > 0 && d.total > 0) {
+        setDownloading(true);
+      }
+    }).catch(function () {});
+  }
 
   function checkUpdate() {
     setChecking(true); setError("");
     settingsFetch("/api/update/check").then(function (r) { return r.json(); }).then(function (d) {
       setInfo(d);
       setChangelog({ version: d.latest_version || "", published_at: d.published_at || "", release_notes: d.release_notes || "" });
-      setDownloaded(false);
-      setProgress({ downloaded: 0, total: d.asset_size || 0, done: false, verified: false, verification_error: "" });
+      syncDownloadState();
     }).catch(function () { setError(t("settings.updateCheckFailed")); }).finally(function () { setChecking(false); });
   }
 
@@ -4142,7 +4162,15 @@ function UpdateSection({ t, config }) {
   useEffectSt(function () {
     if (!downloading) return;
     var timer = setInterval(function () {
-      settingsFetch("/api/update/progress").then(function (r) { return r.json(); }).then(function (d) { setProgress(d); if (d.done) clearInterval(timer); }).catch(function () { clearInterval(timer); });
+      settingsFetch("/api/update/progress").then(function (r) { return r.json(); }).then(function (d) {
+        setProgress(d);
+        if (d.done) {
+          clearInterval(timer);
+          setDownloading(false);
+          if (d.verified) setDownloaded(true);
+          else if (d.verification_error) setError(d.verification_error);
+        }
+      }).catch(function () { clearInterval(timer); setDownloading(false); });
     }, 500);
     return function () { clearInterval(timer); };
   }, [downloading]);
@@ -4161,12 +4189,47 @@ function UpdateSection({ t, config }) {
       : (info && info.update_available ? t("settings.updateToVersion", { version: lv }) : t("settings.checkForUpdates")));
   var actionHandler = downloaded ? confirmInstall : (info && info.update_available ? startDownload : checkUpdate);
   var statusDetail = statusDetailText();
+  function exportLogs() {
+    if (exporting) return;
+    setExporting(true);
+    var feedback = window.CyreneUI.require("feedback");
+    window.fetch("/api/logs/export", { method: "GET" })
+      .then(function (response) {
+        if (!response.ok) {
+          return response.json().then(function (payload) {
+            throw new Error(String(payload.error || payload.detail || ("HTTP " + response.status)));
+          });
+        }
+        return response.blob();
+      })
+      .then(function (blob) {
+        var url = URL.createObjectURL(blob);
+        var link = document.createElement("a");
+        link.href = url;
+        link.download = "cyrene-logs-" + new Date().toISOString().replace(/[:.]/g, "-").slice(0, 19) + ".zip";
+        document.body.appendChild(link);
+        link.click();
+        link.remove();
+        URL.revokeObjectURL(url);
+        if (feedback && typeof feedback.showToast === "function") {
+          feedback.showToast(t("settings.logExportDone", null, "Logs exported"), "success");
+        }
+      })
+      .catch(function (err) {
+        if (feedback && typeof feedback.showToast === "function") {
+          feedback.showToast(t("settings.logExportFailed", null, "Log export failed") + ": " + String((err && err.message) || err), "error");
+        }
+      })
+      .finally(function () { setExporting(false); });
+  }
+
   var relatedLinks = [
     { icon: "docs", title: t("settings.relatedDocs", null, "Help docs"), action: t("settings.view", null, "View"), href: REPO_DOCS_URL },
     { icon: "changelog", title: t("settings.relatedChangelog", null, "Changelog"), action: t("settings.view", null, "View"), onClick: openChangelog },
     { icon: "website", title: t("settings.relatedWebsite", null, "Official website"), action: t("settings.view", null, "View"), href: REPO_URL },
     { icon: "github", title: t("settings.relatedGithub", null, "GitHub repository"), action: t("settings.view", null, "View"), href: REPO_URL },
     { icon: "issue", title: t("settings.relatedIssue", null, "Submit Issue"), action: t("settings.feedback", null, "Feedback"), href: REPO_ISSUES_URL },
+    { icon: "log", title: t("settings.exportLogs", null, "Export logs"), action: t("settings.exportLogsAction", null, "Download"), onClick: exportLogs },
   ];
 
   return React.createElement("div", { className: "wb-about-stack" },

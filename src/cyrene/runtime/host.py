@@ -113,6 +113,7 @@ def _pick_web_port(preferred_port: int = WEB_PORT) -> int:
             except OSError:
                 continue
             return int(sock.getsockname()[1])
+    logger.error("Failed to allocate a local web port (preferred=%s)", preferred_port)
     raise RuntimeError("Failed to allocate a local web port")
 
 
@@ -468,6 +469,9 @@ def _run_electron_mode() -> None:
     fire-and-forget background services, and prints PORT=<n> to stdout
     so Electron can discover the server.
     """
+    from cyrene.observability.logging_setup import setup_persistent_logging
+
+    setup_persistent_logging()
     import sys as _sys
     ui_mode = _get_default_ui_mode()
     if "--verbose" in _sys.argv:
@@ -551,6 +555,7 @@ def _run_electron_mode() -> None:
         async def _startup_and_notify(sockets=None):
             await _orig_startup(sockets=sockets)
             if not server.should_exit:
+                logger.info("Electron backend listening on 127.0.0.1:%s (ui_mode=%s)", selected_port, ui_mode)
                 # Tell Electron which UI is being served (before PORT) so it can
                 # pick the matching window chrome: the workbench draws its own
                 # inset title bar, the legacy/agent UI needs the native one.
@@ -562,6 +567,7 @@ def _run_electron_mode() -> None:
         try:
             await server.serve()
         finally:
+            logger.info("Electron backend stopped")
             # SIGINT may cancel the main coroutine while it is already inside
             # this finalizer. Give the owned cleanup task a cancellation shield
             # so scheduler/background teardown still completes before exit.
@@ -575,6 +581,9 @@ def _run_electron_mode() -> None:
 
 def _run_web_mode(ui_mode: str = "workbench") -> None:
     """Start web UI mode."""
+    from cyrene.observability.logging_setup import setup_persistent_logging
+
+    setup_persistent_logging()
     import sys as _sys
     if "--verbose" in _sys.argv:
         import cyrene.observability.debug as _debug
@@ -603,15 +612,20 @@ def _run_web_mode(ui_mode: str = "workbench") -> None:
             scheduler,
             close=lambda: scheduler.shutdown(wait=False),
         )
+        logger.info(
+            "Web UI starting at http://127.0.0.1:%s (ui_mode=%s)", selected_port, ui_mode
+        )
         print(f"{ASSISTANT_NAME} Web UI starting at http://127.0.0.1:{selected_port}")
         if selected_port != preferred_port:
             print(f"Port {preferred_port} is busy; using {selected_port} instead.")
+            logger.info("Port %s is busy; using %s instead.", preferred_port, selected_port)
 
         # 后台检查更新（不阻塞启动）
         application.start_update_check()
 
         try:
             await run_web(bot, str(DB_PATH), port=selected_port, ui_mode=ui_mode)
+            logger.info("Web UI stopped")
         except KeyboardInterrupt:
             logger.info("Shutting down...")
         finally:

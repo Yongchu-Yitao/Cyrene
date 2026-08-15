@@ -18,6 +18,7 @@ logger = logging.getLogger(__name__)
 
 VERBOSE = False
 _log_file: Path | None = None
+_write_failure_reported = False
 _PERMISSION_EVENT_TYPES = frozenset({
     "auto_review",
     "permission_decision",
@@ -51,13 +52,18 @@ def init_debug_log() -> None:
 
 def _write_entry(entry: dict) -> None:
     """Append a JSON line to the debug log."""
+    global _write_failure_reported
     if _log_file is None:
         return
     try:
         with open(_log_file, "a", encoding="utf-8") as f:
             f.write(json.dumps(entry, ensure_ascii=False, default=str) + "\n")
     except Exception:
-        pass
+        # Report once: a wedged debug log would otherwise spam one warning per
+        # LLM call, hiding the very failures the file exists to expose.
+        if not _write_failure_reported:
+            _write_failure_reported = True
+            logger.warning("Debug log write failed: %s", _log_file, exc_info=True)
 
 
 def log_llm_call(

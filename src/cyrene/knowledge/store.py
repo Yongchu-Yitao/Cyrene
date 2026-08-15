@@ -5,6 +5,8 @@ Mirrors the style of cyrene.tool_impl.entity.store with aiosqlite, JSON serializ
 """
 
 import hashlib
+import logging
+import sqlite3
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
@@ -18,6 +20,8 @@ from cyrene.runtime.sqlite_json import (
     serialize_dict as _serialize_dict,
     serialize_list as _serialize_list,
 )
+
+logger = logging.getLogger(__name__)
 
 
 def _now() -> str:
@@ -384,7 +388,7 @@ async def delete_document(db_path: str, doc_id: str, *, remove_file: bool = True
             if file_path.exists():
                 file_path.unlink()
         except Exception:
-            pass
+            logger.warning("Failed to remove document file from disk: %s", doc.get("path"), exc_info=True)
 
     return True
 
@@ -459,7 +463,7 @@ async def deduplicate_documents(db_path: str) -> dict:
                 file_path.unlink()
                 removed_files += 1
         except Exception:
-            pass
+            logger.warning("Failed to remove duplicate file from disk: %s", path, exc_info=True)
 
     return {
         "updated_hashes": updated_hashes,
@@ -942,8 +946,14 @@ async def create_relation(
             cursor = await db.execute("SELECT * FROM kb_relations WHERE id = ?", (rel_id,))
             row = await cursor.fetchone()
             return _row_to_relation(row) if row else None
+        except sqlite3.IntegrityError:
+            # Expected UNIQUE constraint violation (duplicate relation)
+            return None
         except Exception:
-            # Likely UNIQUE constraint violation
+            logger.warning(
+                "create_relation failed (%s): %s -> %s", relation, src_id, dst_id,
+                exc_info=True,
+            )
             return None
 
 

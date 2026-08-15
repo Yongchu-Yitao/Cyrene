@@ -174,18 +174,22 @@ def register_update_routes(router: APIRouter, bot: Any, db_path: str) -> None:
 
         from cyrene.runtime.host_actions import finalize_origin, schedule_action
         from cyrene.runtime.host_bridge import HostBridgeError, call_host
-        from cyrene.runtime.updater import _download_progress
+        from cyrene.runtime.updater import get_download_progress
+
+        # get_download_progress() restores a verified auto-download left over
+        # from a previous run so a restart can install it without re-downloading.
+        progress = get_download_progress()
 
         ok, message, code, status_code = _launch_update_restart(
-            _download_progress, validate_only=True,
+            progress, validate_only=True,
         )
         if not ok:
             return error_response(message, status_code, code)
         parameter_hash = hashlib.sha256(json.dumps(
             {
-                "path": str(_download_progress.get("path") or ""),
-                "size": int(_download_progress.get("total") or 0),
-                "sha256": str(_download_progress.get("actual_sha256") or ""),
+                "path": str(progress.get("path") or ""),
+                "size": int(progress.get("total") or 0),
+                "sha256": str(progress.get("actual_sha256") or ""),
             },
             sort_keys=True,
         ).encode("utf-8")).hexdigest()
@@ -202,8 +206,8 @@ def register_update_routes(router: APIRouter, bot: Any, db_path: str) -> None:
             expected_app_version=str(host_status.get("appVersion") or ""),
             approval_receipt="local_ui_update_restart",
             revalidation={
-                "sha256": str(_download_progress.get("actual_sha256") or ""),
-                "size": int(_download_progress.get("total") or 0),
+                "sha256": str(progress.get("actual_sha256") or ""),
+                "size": int(progress.get("total") or 0),
             },
         )
         # The coordinator performs its own delay before launching the updater

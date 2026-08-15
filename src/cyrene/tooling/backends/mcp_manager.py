@@ -585,7 +585,7 @@ class MCPServerConnection:
                     self._process.kill()
                     await asyncio.wait_for(self._process.wait(), timeout=3)
                 except Exception:
-                    pass
+                    logger.debug("MCP child %s survived terminate and kill; orphan may remain", self.name, exc_info=True)
             except Exception:
                 pass
             self._process = None

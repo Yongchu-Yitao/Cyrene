@@ -154,7 +154,7 @@ def _has_existing_data() -> bool:
             if workbench_db.exists() and list_document_keys(workbench_db, prefix="memory:"):
                 return True
     except Exception:
-        pass
+        logger.warning("Failed to detect existing workbench data; user may be misjudged as new install", exc_info=True)
 
     # Note: projects are excluded on purpose — an empty default project is
     # auto-created and is not evidence of prior use.

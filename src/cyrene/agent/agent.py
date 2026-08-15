@@ -423,6 +423,12 @@ async def _run_main_agent_impl(
     _caller_type.set("main_agent")
     suppress_initial_detail = _ui_round_hide_initial_detail.get()
     round_id = _current_round_id.get()
+    logger.info(
+        "Agent run started (round=%s, chat=%s, user_msg=%.120r)",
+        round_id or "-",
+        chat_id,
+        user_message,
+    )
     assistant_meta = _ui_round_assistant_meta.get()
     system_initiated = bool(
         isinstance(assistant_meta, dict) and assistant_meta.get("system_initiated")
@@ -967,6 +973,7 @@ async def _run_main_agent_impl(
                     "ask_user", args, bot, chat_id, db_path, None, actor="main"
                 )
             except Exception as exc:
+                logger.warning("Tool ask_user failed: %s", exc, exc_info=True)
                 result = f"Tool failed: {exc}"
             truncated_result = truncate(result)
             tool_entry: dict[str, Any] = {"role": "tool", "tool_call_id": ask_user_call["id"], "content": truncated_result}
@@ -993,6 +1000,7 @@ async def _run_main_agent_impl(
             return (await _ensure_text_reply(response, messages, fallback=str(result)))
 
         if use_tools_call or phase1_concrete_calls:
+            logger.info("Agent run phase1 -> phase2_execution (round=%s)", round_id or "-")
             event = {"type": "phase_transition", "from": "phase1_decision", "to": "phase2_execution"}
             if not suppress_initial_detail:
                 phase_task = visible_user_message.strip()[:120]
@@ -1316,6 +1324,9 @@ async def _run_main_agent_impl(
                                 result = await runtime_inbox.wait_for_tool_result(t["id"])
                                 guidance_supersedes_batch = runtime_inbox.has_guidance_nowait()
                     except Exception as e:
+                        logger.warning(
+                            "Tool %r failed: %s", tool_name, e, exc_info=True
+                        )
                         result = f"Tool failed: {e}"
                     truncated_result = truncate(result)
                     tool_entry: dict[str, Any] = {"role": "tool", "tool_call_id": t["id"], "content": truncated_result}
@@ -1705,6 +1716,7 @@ async def _run_main_agent_impl(
                         "ask_user", args, bot, chat_id, db_path, None, actor="main"
                     )
                 except Exception as exc:
+                    logger.warning("Tool ask_user failed (retry): %s", exc, exc_info=True)
                     result = f"Tool failed: {exc}"
                 truncated_result = truncate(result)
                 tool_entry: dict[str, Any] = {"role": "tool", "tool_call_id": ask_user_call["id"], "content": truncated_result}
@@ -1730,6 +1742,7 @@ async def _run_main_agent_impl(
                 return (await _ensure_text_reply(response, messages, fallback=str(result)))
 
         # Chat-only path (no tools)
+        logger.info("Agent run phase1 -> chat_only (round=%s)", round_id or "-")
         event = {"type": "phase_transition", "from": "phase1_decision", "to": "chat_only"}
         if not suppress_initial_detail:
             event["detail"] = "Phase 1 decided chat-only, no tools needed"

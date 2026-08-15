@@ -290,8 +290,8 @@ def cmd_stop(args: argparse.Namespace) -> None:
         return
     try:
         _api("/api/shutdown", method="POST")
-    except Exception:
-        pass
+    except Exception as exc:
+        print(f"Warning: shutdown request failed ({exc}); daemon may still be running.", file=sys.stderr)
     print("Cyrene stopped.")
 
 

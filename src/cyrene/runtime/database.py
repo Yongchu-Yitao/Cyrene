@@ -5,6 +5,7 @@ The DB is used for structured data that needs querying and stable aggregates.
 """
 
 import json
+import logging
 import re
 import sqlite3
 import threading
@@ -13,6 +14,8 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import aiosqlite
+
+logger = logging.getLogger(__name__)
 
 _CREATE_TABLES = """
 CREATE TABLE IF NOT EXISTS scheduled_tasks (
@@ -709,14 +712,15 @@ async def init_knowledge_db(db_path: str) -> None:
         try:
             await db.execute("ALTER TABLE kb_documents ADD COLUMN content_hash TEXT DEFAULT ''")
         except Exception:
-            pass
+            # Expected when the column already exists on upgraded databases
+            logger.debug("KB migration: content_hash column already present", exc_info=True)
         try:
             await db.execute(
                 "CREATE UNIQUE INDEX IF NOT EXISTS idx_kb_documents_content_hash "
                 "ON kb_documents(content_hash) WHERE content_hash <> ''"
             )
         except Exception:
-            pass
+            logger.warning("Failed to create KB content_hash dedup index", exc_info=True)
         await db.execute(
             "CREATE INDEX IF NOT EXISTS idx_kb_documents_updated_at "
             "ON kb_documents(updated_at DESC)"

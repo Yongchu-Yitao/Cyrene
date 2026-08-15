@@ -6,12 +6,15 @@ import asyncio
 import errno
 import ipaddress
 import json
+import logging
 import socket
 from typing import Any, Awaitable, Callable
 
 import httpx
 
 from cyrene.runtime.remote_control import DIRECT_PAIRING_PORT, RemoteControlStore
+
+logger = logging.getLogger(__name__)
 
 _MAX_REQUEST_BYTES = 64 * 1024
 _MAX_ENVELOPE_BYTES = 24 * 1024 * 1024
@@ -379,12 +382,16 @@ class DirectPairingServer:
                 else:
                     status, payload = 404, {"error": "not found"}
         except RuntimeError as exc:
+            logger.warning("Pairing request failed (429): %s", exc)
             status, payload = 429, {"error": str(exc)}
         except (ValueError, KeyError, json.JSONDecodeError) as exc:
+            logger.warning("Pairing request rejected (400): %s", exc)
             status, payload = 400, {"error": str(exc)}
         except (asyncio.IncompleteReadError, asyncio.LimitOverrunError):
+            logger.warning("Pairing request rejected (400): invalid pairing request")
             status, payload = 400, {"error": "invalid pairing request"}
         except Exception:
+            logger.warning("Pairing request failed (500)", exc_info=True)
             status, payload = 500, {"error": "pairing request failed"}
         raw = json.dumps(payload, ensure_ascii=False, separators=(",", ":")).encode()
         reason = {

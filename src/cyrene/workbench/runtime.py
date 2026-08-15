@@ -7624,6 +7624,7 @@ def _build_current_session() -> dict | None:
             state = loaded if isinstance(loaded, dict) else {}
             raw_msgs = state.get("messages", []) or []
         except Exception:
+            logger.warning("Failed to parse state file %s; showing empty session", STATE_FILE, exc_info=True)
             raw_msgs = []
             state = {}
 
@@ -8789,6 +8790,7 @@ async def _build_dashboard(ui_tz=None) -> dict:
     try:
         tasks = await cy_db.get_all_tasks(_db_path)
     except Exception:
+        logger.warning("Failed to load tasks from DB %s; task list empty", _db_path, exc_info=True)
         tasks = []
 
     today = now_local.strftime("%Y-%m-%d")

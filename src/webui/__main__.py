@@ -6,6 +6,7 @@ import logging
 from cyrene.config import (
     DB_PATH,
 )
+from cyrene.observability.logging_setup import setup_persistent_logging
 from cyrene.runtime.bootstrap import (
     initialize_runtime,
     start_external_services,
@@ -20,6 +21,7 @@ logging.basicConfig(
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
     level=logging.INFO,
 )
+setup_persistent_logging()
 logger = logging.getLogger(__name__)
 
 

@@ -2,12 +2,15 @@ import base64
 import hashlib
 import io
 import json
+import logging
 import mimetypes
 import os
 import re
 import shutil
 from pathlib import Path
 from typing import Any
+
+logger = logging.getLogger(__name__)
 
 from PIL import Image
 from pypdf import PdfReader
@@ -597,6 +600,7 @@ async def analyze_attachment(path_str: str, prompt: str = "", force_refresh: boo
                 payload["ocr_text"] = truncate(recognized, 12000)
                 payload["ocr_chars"] = len(recognized)
         except Exception:
+            logger.debug("Local OCR failed for %s", path, exc_info=True)
             payload["local_ocr_status"] = "failed"
 
         # Good OCR is enough for the default text-extraction request. A short

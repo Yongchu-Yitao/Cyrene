@@ -508,8 +508,8 @@ class AcpStdioTransport:
                 pass
         try:
             self._notifications.put_nowait(frame)
-        except Exception:  # pragma: no cover - defensive
-            pass
+        except Exception as exc:  # pragma: no cover - defensive
+            logger.warning("ACP notification dropped (%s); pending request may hang", exc)
 
     async def _drain_stderr(self) -> None:
         process = self.process
@@ -524,8 +524,8 @@ class AcpStdioTransport:
                 self._capture_stderr(chunk)
         except asyncio.CancelledError:
             raise
-        except Exception:  # pragma: no cover - defensive
-            pass
+        except Exception as exc:  # pragma: no cover - defensive
+            logger.debug("ACP stderr capture interrupted (%s); crash diagnostics lost", exc)
 
     def _capture_stderr(self, chunk: bytes) -> None:
         if self.stderr_limit <= 0:

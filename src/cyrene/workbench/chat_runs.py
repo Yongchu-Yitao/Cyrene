@@ -366,7 +366,7 @@ class ChatRunEventStore:
                 return None
             event_rows = conn.execute(
                 """
-                SELECT event_json FROM workbench_chat_run_events
+                SELECT event_json, seq FROM workbench_chat_run_events
                 WHERE run_id = ? ORDER BY seq
                 """,
                 (str(row["run_id"]),),
@@ -376,6 +376,11 @@ class ChatRunEventStore:
             try:
                 event = json.loads(str(event_row["event_json"]))
             except Exception:
+                logger.warning(
+                    "Corrupt durable event row dropped (run=%s, row=%s)",
+                    run_id, event_row.get("seq") or event_row.get("id") or "?",
+                    exc_info=True,
+                )
                 continue
             if isinstance(event, dict):
                 events.append(event)

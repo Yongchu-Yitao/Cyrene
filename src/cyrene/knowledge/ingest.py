@@ -74,6 +74,7 @@ async def extract_document_text(path: Path, kind: str, *, content_hash: str = ""
                 try:
                     page_text = page.extract_text() or ""
                 except Exception:
+                    logger.debug("PDF page %s extract failed: %s", path, index, exc_info=True)
                     page_text = ""
                 if len(page_text.strip()) < 20 and pdfium is not None:
                     try:
@@ -83,7 +84,7 @@ async def extract_document_text(path: Path, kind: str, *, content_hash: str = ""
                             page_text = recognized
                             used_ocr = True
                     except Exception:
-                        pass
+                        logger.debug("PDF page %s OCR failed: %s", path, index, exc_info=True)
                 pages.append(page_text.strip())
             if used_ocr:
                 await asyncio.to_thread(ocr.write_cache, content_hash, pages)
@@ -106,6 +107,7 @@ async def extract_document_text(path: Path, kind: str, *, content_hash: str = ""
                         if len(recognized.strip()) >= 30:
                             return recognized.strip()
                 except Exception:
+                    logger.warning("Image OCR failed, falling back to vision: %s", path, exc_info=True)
                     recognized = ""
             try:
                 result = await vision_analysis(path, prompt="")
@@ -115,6 +117,7 @@ async def extract_document_text(path: Path, kind: str, *, content_hash: str = ""
                     await asyncio.to_thread(ocr.write_cache, content_hash, [combined])
                 return combined
             except Exception:
+                logger.warning("Image vision analysis failed, extracting nothing: %s", path, exc_info=True)
                 return recognized.strip()
 
         office_text = _extract_office_xml_text(path)
@@ -133,8 +136,10 @@ async def extract_document_text(path: Path, kind: str, *, content_hash: str = ""
                 return ""  # binary content — archive only
             return path.read_text(encoding="utf-8", errors="ignore")
         except Exception:
+            logger.warning("Text extraction failed, archiving without content: %s", path, exc_info=True)
             return ""
     except Exception:
+        logger.warning("Document extraction failed, archiving without content: %s", path, exc_info=True)
         return ""
 
 

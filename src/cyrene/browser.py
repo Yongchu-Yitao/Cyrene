@@ -949,7 +949,7 @@ class _BrowserSession:
             try:
                 await self._context.close()
             except Exception:
-                pass
+                logger.warning("Failed to close old browser context before relaunch; profile may be locked", exc_info=True)
             finally:
                 self._closing_deliberately = False
             self._context = None
@@ -986,7 +986,7 @@ class _BrowserSession:
             try:
                 self._context.on("close", self._on_headed_close)
             except Exception:
-                pass
+                logger.warning("Failed to register takeover window close handler; takeover may stick", exc_info=True)
             try:
                 await self._page.bring_to_front()
             except Exception:
@@ -1023,7 +1023,7 @@ class _BrowserSession:
                 event["session_id"] = self._takeover_session_id
             await debug.publish_event(event)
         except Exception:
-            pass
+            logger.warning("Failed to publish takeover-cancelled event; panel may stay stuck", exc_info=True)
 
     async def _publish_takeover_cancelled(self) -> None:
         self._takeover_active = False
@@ -1034,7 +1034,7 @@ class _BrowserSession:
                 event["session_id"] = self._takeover_session_id
             await debug.publish_event(event)
         except Exception:
-            pass
+            logger.warning("Failed to publish takeover-cancelled event; panel may stay stuck", exc_info=True)
 
     async def end_takeover(self, url: str = "") -> None:
         """Return to headless after the user finished logging in, same profile."""
@@ -1713,11 +1713,11 @@ class _BrowserSession:
             try:
                 await self._cdp.send("Page.stopScreencast")
             except Exception:
-                pass
+                logger.debug("Failed to stop CDP screencast; frames may keep flowing", exc_info=True)
             try:
                 await self._cdp.detach()
             except Exception:
-                pass
+                logger.debug("Failed to detach CDP session; live view may be orphaned", exc_info=True)
         self._cdp = None
         self._screencasting = False
 
@@ -1750,7 +1750,7 @@ class _BrowserSession:
             if self._cdp is not None:
                 await self._cdp.send("Page.screencastFrameAck", {"sessionId": session_id})
         except Exception:
-            pass
+            logger.debug("CDP screencast ack failed; browser may stop pushing frames", exc_info=True)
 
     # -- User live-control (S3): mouse/keyboard injection over CDP -----------
     #
@@ -1929,7 +1929,7 @@ async def end_browser_takeover(url: str = "") -> None:
                 event["session_id"] = session_id
             await debug.publish_event(event)
         except Exception:
-            pass
+            logger.warning("Failed to publish takeover-cancelled event; panel may stay stuck", exc_info=True)
         return
     session = _get_session()
     if session._context is not None:
@@ -1944,7 +1944,7 @@ async def end_browser_takeover(url: str = "") -> None:
             event["session_id"] = session_id
         await debug.publish_event(event)
     except Exception:
-        pass
+        logger.warning("Failed to publish takeover-cancelled event; panel may stay stuck", exc_info=True)
 
 
 # ---------------------------------------------------------------------------
