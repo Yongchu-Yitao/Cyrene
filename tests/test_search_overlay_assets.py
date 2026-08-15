@@ -14,7 +14,7 @@ def test_search_overlay_styles_are_owned_and_loaded_by_shared_search():
         encoding="utf-8"
     )
 
-    assert 'href="shared/search/overlay.css?v=0.7.8"' in index
+    assert 'href="shared/search/overlay.css?v=0.7.9"' in index
     for selector in (
         ".search-overlay {",
         ".search-overlay-panel {",
@@ -32,7 +32,7 @@ def test_built_search_overlay_assets_match_the_frontend_sources():
     assert len(revisions) == 1
     revision = revisions.pop()
     assert re.fullmatch(r"0\.7\.8-[0-9a-f]{10}", revision)
-    assert built_index.replace(revision, "0.7.8") == source_index
+    assert built_index.replace(revision, "0.7.9") == source_index
     assert (STATIC_APP / "shared" / "search" / "overlay.css").read_bytes() == (
         FRONTEND / "shared" / "search" / "overlay.css"
     ).read_bytes()

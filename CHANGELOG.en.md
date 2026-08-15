@@ -5,6 +5,20 @@
 This English edition preserves the release history of the Chinese changelog.
 The Chinese edition remains the most detailed record for older releases.
 
+## [0.7.9] - 2026-08-15
+
+### Features and interface changes
+
+- Web search is faster and returns fuller evidence: search results and fetched page content go straight into the conversation for synthesis without an extra internal pass. On Windows, search prefers the official DeepSeek backend and automatically falls back to the local search service when unavailable.
+- The execution timeline in conversations is more precise: reasoning, replies, and tool calls appear in their true execution order, and tool summaries distinguish read from update operations, with dedicated icons and labels for memory, knowledge, maps, tasks, system settings, and media analysis.
+- Saved conversations keep their complete execution history: reopening a conversation shows the same activity cards seen live, including mid-run tool calls and their status.
+- Message and execution order stay consistent in long conversations, so process entries no longer drift out of place next to replies.
+- The task page header stays visible while scrolling, keeping the title and action buttons pinned to the top of the page.
+- A conversation in a split can be dragged back onto the conversation list to close the split, with a preview that switches smoothly between the list and the split content.
+- Retrying a message now collapses the old answer more smoothly, without a second jump.
+- "Entity tools" is now called "User database tools" across tool names, descriptions, and execution summaries.
+- Conversation status preview cards are no longer hidden behind split content and stay fully visible.
+
 ## [0.7.8] - 2026-08-15
 
 ### Features and interface changes

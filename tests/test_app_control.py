@@ -350,14 +350,14 @@ def test_lifecycle_records_revalidation_and_reconciles_only_host_accepted_action
             "restart_app",
             idempotency_key="restart-1",
             parameter_hash="a" * 64,
-            expected_app_version="0.7.8",
+            expected_app_version="0.7.9",
             approval_receipt="delegation_receipt",
         )
         second = host_actions.schedule_action(
             "restart_backend",
             idempotency_key="restart-2",
             parameter_hash="b" * 64,
-            expected_app_version="0.7.8",
+            expected_app_version="0.7.9",
         )
     finally:
         binding.reset()
@@ -395,7 +395,7 @@ async def test_update_install_uses_host_prepare_launch_commit_order(monkeypatch,
     async def fake_host(method, args=None):
         calls.append((method, dict(args or {})))
         if method == "host.status":
-            return {"ok": True, "hostKind": "electron", "appVersion": "0.7.8"}
+            return {"ok": True, "hostKind": "electron", "appVersion": "0.7.9"}
         return {"ok": True, "summary": str((args or {}).get("phase") or "")}
 
     monkeypatch.setattr(host_actions, "call_host", fake_host)
@@ -403,7 +403,7 @@ async def test_update_install_uses_host_prepare_launch_commit_order(monkeypatch,
         "action_id": "host_action_" + "b" * 32,
         "action": "update_install",
         "parameter_hash": "c" * 64,
-        "expected_app_version": "0.7.8",
+        "expected_app_version": "0.7.9",
         "required_host_kind": "electron",
         "revalidation": {"sha256": "a" * 64, "size": 12},
     })
@@ -1201,7 +1201,7 @@ async def test_lifecycle_finalization_is_scoped_to_origin_request(
                 "restart_backend",
                 idempotency_key=key,
                 parameter_hash=digest,
-                expected_app_version="0.7.8",
+                expected_app_version="0.7.9",
             )
         finally:
             binding.reset()

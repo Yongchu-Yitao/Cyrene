@@ -100,7 +100,7 @@ def test_release_pipeline_smoke_tests_and_publishes_all_linux_packages():
     assert "dnf install -y" in rpm_smoke
     assert "dbus-daemon" in rpm_smoke
     assert "/opt/Cyrene/resources/python-bundle/Cyrene --smoke-test" in rpm_smoke
-    assert "Cyrene smoke test OK: v0.7.8" in rpm_smoke
+    assert "Cyrene smoke test OK: v0.7.9" in rpm_smoke
     assert "numpy=[0-9]+\\.[0-9]+" in rpm_smoke
     assert "dbus-run-session" in rpm_smoke
     assert "/opt/Cyrene/cyrene --no-sandbox --desktop-smoke-test" in rpm_smoke

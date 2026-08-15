@@ -1273,7 +1273,7 @@ final result: passed
 
 ## Verification
 
-- Frontend production build passed; generated asset version: `0.7.8-afd7ab071e`.
+- Frontend production build passed; generated asset version: `0.7.9-afd7ab071e`.
 - Focused frontend contract test passed (`1 passed`, `289 deselected`).
 - `git diff --check` passed.
 - Browser-rendered comparison, interaction check, and console-error inspection are blocked because the in-app browser cannot access the local server.
