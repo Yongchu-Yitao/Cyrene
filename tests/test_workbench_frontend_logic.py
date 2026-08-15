@@ -4533,7 +4533,7 @@ def test_workbench_chat_tracks_actual_model_from_live_llm_events():
     assert result == "mimo-v2.5"
 
 
-def test_workbench_chat_groups_reasoning_and_tools_until_visible_message():
+def test_workbench_chat_splits_reasoning_and_tools_into_distinct_cards():
     result = _run_workbench_runtime_js(
         """
 (() => {
@@ -4611,11 +4611,28 @@ def test_workbench_chat_groups_reasoning_and_tools_until_visible_message():
 """
     )
 
-    assert result == [{
-        "id": "activity_1",
-        "reasoning": "first reasoning\n\nsecond reasoning",
-        "tools": ["read_file", "list_skills", "read_file"],
-    }]
+    assert result == [
+        {
+            "id": "activity_1",
+            "reasoning": "first reasoning",
+            "tools": [],
+        },
+        {
+            "id": "activity_2",
+            "reasoning": "",
+            "tools": ["read_file"],
+        },
+        {
+            "id": "activity_3",
+            "reasoning": "second reasoning",
+            "tools": [],
+        },
+        {
+            "id": "activity_4",
+            "reasoning": "",
+            "tools": ["list_skills", "read_file"],
+        },
+    ]
 
 
 def test_workbench_chat_dedupes_cross_connection_llm_event_race():
@@ -4720,6 +4737,10 @@ def test_workbench_chat_visible_message_closes_activity_group():
     assert result == [
         {
             "reasoning": "first thought\n\nsecond thought",
+            "tools": [],
+        },
+        {
+            "reasoning": "",
             "tools": ["read_file"],
         },
         {
@@ -4822,7 +4843,7 @@ def test_workbench_chat_tool_preamble_splits_current_llm_reasoning_after_message
     }
 
 
-def test_workbench_chat_merges_tool_only_calls_without_visible_boundary():
+def test_workbench_chat_llm_boundaries_separate_tool_only_groups():
     result = _run_workbench_runtime_js(
         """
 (() => {
@@ -4861,7 +4882,7 @@ def test_workbench_chat_merges_tool_only_calls_without_visible_boundary():
 """
     )
 
-    assert result == [["read_file", "list_skills"]]
+    assert result == [["read_file"], ["list_skills"]]
 
 
 def test_workbench_chat_model_label_and_context_usage_use_live_data():
@@ -7571,7 +7592,7 @@ def test_workbench_task_details_reuse_floating_animated_accordion():
     assert "padding: 12px 12px 12px 4px;" in task_shell_css
     assert "overflow: visible;" in task_shell_css
     assert "height: auto;" in task_card_css
-    assert "max-height: calc(100vh - 82px);" in task_card_css
+    assert "max-height: 100%;" in task_card_css
     assert "overflow: visible;" in task_card_css
     assert ".wb-task-detail-card > .wb-col-resizer.track-gutter" in styles
     shared_grip_css = styles.split(
@@ -7590,7 +7611,7 @@ def test_workbench_task_details_reuse_floating_animated_accordion():
     assert "height: 72px;" in shared_grip_visual_css
     assert "opacity: 0;" in shared_grip_visual_css
     assert ".wb-task-detail-tab-panel.open" in styles
-    assert "max-height: calc(100vh - 330px);" in styles
+    assert "max-height: none;" in styles
     assert ".wb-task-detail-card .workbench-side-section + .workbench-side-section" in styles
     assert ".wb-task-overview-meta" in styles
     assert ".wb-task-detail-card .wb-task-context-tab" in styles

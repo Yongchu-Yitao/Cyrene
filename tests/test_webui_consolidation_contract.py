@@ -20,13 +20,13 @@ WEBUI_ROOT = ROOT / "src" / "webui"
 WORKBENCH_ROOT = WEBUI_ROOT / "frontend"
 INDEX = WORKBENCH_ROOT / "index.html"
 
-OPENAPI_OPERATION_COUNT = 372
+OPENAPI_OPERATION_COUNT = 373
 OPENAPI_BASELINE_FASTAPI = "0.136.1"
 OPENAPI_BASELINE_PYDANTIC = "2.13.4"
-OPENAPI_SHA256 = "67371c870f2ef33e2aaa186e197e1ded7532322257d4bd7f68742e29325acf7c"
+OPENAPI_SHA256 = "00e6ffde097f1c4d8c6e09fbc3cb03686c4363e8efc1359d47059bccb3057371"
 TOOL_REGISTRY_SHA256 = "7079a9961c61cab1daf1ea01ab94bf3c9b6f557aecc332e556e9685514a261ed"
-MAIN_WIRE_SHA256 = "96a70b943b1e5fd0a485fa500ebdfc9a09ddc63edd2fa751c5da942199c54f55"
-SUBAGENT_WIRE_SHA256 = "47c5b76b33a0cd98620bdee73e477735070034757b152cb916334c194867a7e7"
+MAIN_WIRE_SHA256 = "9219ea2279d8ee4a06f52b36d02489cc993f58c6e28a0b50ea9bf804a1cf5fd7"
+SUBAGENT_WIRE_SHA256 = "f0ce882133fdf13e48eec46b065649b45e55eebb082a6c7ff5990d21366ddcc8"
 
 # CyreneUI owns runtime services. The launch lifecycle is the sole bootstrap
 # global because it must guard fetch before the platform registry is loaded.
@@ -70,6 +70,7 @@ BROWSER_AND_VENDOR_GLOBALS = {
     "cancelAnimationFrame",
     "fetch",
     "requestAnimationFrame",
+    "requestIdleCallback",
     "webkitAudioContext",
 }
 
