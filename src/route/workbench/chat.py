@@ -19,10 +19,7 @@ from fastapi import APIRouter, Form, Request, UploadFile
 from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 
 from cyrene.workbench import chat as _service
-from cyrene.workbench.chat_runs import (
-    drain_post_reply_bookkeeping_tasks,
-    schedule_post_reply_bookkeeping,
-)
+from cyrene.workbench.chat_runs import schedule_post_reply_bookkeeping
 from cyrene.workbench.inbox import GuidanceAdmissionClosed
 from cyrene.workbench.workspace_changes import (
     delete_chat_change_sets,
