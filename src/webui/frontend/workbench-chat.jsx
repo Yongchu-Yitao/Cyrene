@@ -14928,11 +14928,6 @@ function wbcTraceCollapsedSummary(entries, fallback) {
     summaryLabel = labels.slice(0, -1).join(wbcT("workbenchChat.traceAction.listSeparator", ", "))
       + wbcT("workbenchChat.traceAction.conjunction", " and ")
       + labels[labels.length - 1];
-    summaryLabel = wbcT(
-      "workbenchChat.traceAction.executed",
-      "Performed {actions}",
-      { actions: summaryLabel }
-    );
   }
   return {
     label: summaryLabel,

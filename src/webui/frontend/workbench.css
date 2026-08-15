@@ -16957,10 +16957,15 @@ html[data-theme="dark"] .wb-init-progress-dot { border-color: #46586b; }
 .wbc-page {
   --wbc-composer-reserve-height: calc(164px * var(--wb-ui-font-scale, 1));
   --wbc-card-gutter: 12px;
+  --wbc-topbar-clearance: 58px;
   /* The 32px session tabs are vertically centred in the 58px topbar, so their
-     visible lower edge is 45px. Keep the card row one shared gutter below it. */
+     visible lower edge is 45px. Keep the card row one shared gutter below it,
+     while never letting the fixed topbar paint over the card's top border. */
   --wbc-topbar-tab-bottom: 45px;
-  --wbc-card-top-inset: calc(var(--wbc-topbar-tab-bottom) + var(--wbc-card-gutter));
+  --wbc-card-top-inset: max(
+    var(--wbc-topbar-clearance),
+    calc(var(--wbc-topbar-tab-bottom) + var(--wbc-card-gutter))
+  );
   --wbc-rail-width: 300px;
   --wbc-side-track-width: var(--wb-right-w, 350px);
   /* Right anchor: the overlay panel's left edge sits at the right track. */
@@ -30862,6 +30867,7 @@ html[data-density="compact"] .workbench-session-tab {
 }
 
 html[data-density="compact"] .wbc-page {
+  --wbc-topbar-clearance: 50px;
   --wbc-topbar-tab-bottom: 39px;
 }
 

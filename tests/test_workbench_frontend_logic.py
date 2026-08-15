@@ -1208,9 +1208,13 @@ def test_workbench_chat_single_card_uses_independent_hidden_gutter_resize_handle
         ".wbc-side {", 1
     )[1].split("}", 1)[0]
     assert "--wbc-card-gutter: 12px;" in page_css
+    assert "--wbc-topbar-clearance: 58px;" in page_css
     assert "--wbc-topbar-tab-bottom: 45px;" in page_css
-    assert "--wbc-card-top-inset: calc(var(--wbc-topbar-tab-bottom) + var(--wbc-card-gutter));" in page_css
+    assert "--wbc-card-top-inset: max(" in page_css
+    assert "var(--wbc-topbar-clearance)," in page_css
+    assert "calc(var(--wbc-topbar-tab-bottom) + var(--wbc-card-gutter))" in page_css
     compact_page_css = styles.split('html[data-density="compact"] .wbc-page {', 1)[1].split("}", 1)[0]
+    assert "--wbc-topbar-clearance: 50px;" in compact_page_css
     assert "--wbc-topbar-tab-bottom: 39px;" in compact_page_css
     assert "inset: var(--wbc-card-top-inset) var(--wbc-card-gutter) var(--wbc-card-gutter);" in rail_card_css
     assert "padding: var(--wbc-card-top-inset) 0 var(--wbc-card-gutter) var(--wbc-card-gutter);" in pane_layout_css
@@ -6697,8 +6701,7 @@ def test_workbench_execution_card_uses_collapsible_activity_summary():
     i18n = (root / "src" / "webui" / "frontend" / "workbench-i18n.jsx").read_text(encoding="utf-8")
     assert '"workbenchChat.traceAction.usedSkill": "使用了技能工具"' in i18n
     assert '"workbenchChat.traceAction.conjunction": "并"' in i18n
-    assert '"workbenchChat.traceAction.executed": "执行了{actions}"' in i18n
-    assert 'wbcT(\n      "workbenchChat.traceAction.executed"' in source
+    assert '"workbenchChat.traceAction.executed"' not in i18n
 
 
 def test_workbench_trace_timeline_removes_blank_lines_and_interleaves_tools():
