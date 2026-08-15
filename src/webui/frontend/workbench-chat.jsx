@@ -5606,6 +5606,7 @@ function WorkbenchChatPage({ active, project, newChatRequestId, onOpenTask, onAc
   }
   var [paneLayoutsByChat, setPaneLayoutsByChat] = useWbcState({});
   var paneLayoutRestoreRef = useWbcRef({});
+  var paneCardDragImageCleanupRef = useWbcRef(null);
   var [paneDropTarget, setPaneDropTarget] = useWbcState(null);
   var [paneCardDragId, setPaneCardDragId] = useWbcState("");
   var [resourceDragSession, setResourceDragSession] = useWbcState(false);
@@ -5744,6 +5745,77 @@ function WorkbenchChatPage({ active, project, newChatRequestId, onOpenTask, onAc
       return;
     }
     updatePaneLayout(next, ownerChatId);
+  }
+
+  function closeDeletedChatSplits(chatId) {
+    var deletedChatId = String(chatId || "");
+    if (!deletedChatId) return;
+
+    setPaneLayoutsByChat(function (current) {
+      var updated = Object.assign({}, current);
+      var changed = false;
+      Object.keys(current).forEach(function (ownerId) {
+        if (String(ownerId) === deletedChatId) {
+          delete updated[ownerId];
+          changed = true;
+          return;
+        }
+        var ownerChatId = String(ownerId).indexOf("project:") === 0 ? "" : String(ownerId);
+        var layout = wbcNormalizePaneLayout(current[ownerId], ownerChatId);
+        var left = layout.left.filter(function (card) {
+          return !(card && card.kind === "chat" && String(card.payload || "") === deletedChatId);
+        });
+        var right = layout.right.filter(function (card) {
+          return !(card && card.kind === "chat" && String(card.payload || "") === deletedChatId);
+        });
+        if (left.length === layout.left.length && right.length === layout.right.length) return;
+        if (!left.length && right.length) {
+          left = right;
+          right = [];
+        }
+        updated[ownerId] = wbcNormalizePaneLayout({
+          left: left,
+          right: right,
+          leftRatio: layout.leftRatio,
+          rightRatio: layout.rightRatio,
+        }, ownerChatId);
+        changed = true;
+      });
+      return changed ? updated : current;
+    });
+
+    setResourceSplitByChat(function (current) {
+      var updated = Object.assign({}, current);
+      var changed = false;
+      Object.keys(current).forEach(function (ownerId) {
+        var resource = current[ownerId];
+        if (
+          String(ownerId) === deletedChatId
+          || (resource && resource.type === "chat" && String(resource.payload || "") === deletedChatId)
+        ) {
+          delete updated[ownerId];
+          changed = true;
+        }
+      });
+      return changed ? updated : current;
+    });
+
+    Object.keys(paneLayoutRestoreRef.current).forEach(function (cardId) {
+      var restore = paneLayoutRestoreRef.current[cardId];
+      var cards = restore && (restore.left || []).concat(restore.right || []);
+      if (cards && cards.some(function (card) {
+        return card && card.kind === "chat" && String(card.payload || "") === deletedChatId;
+      })) {
+        delete paneLayoutRestoreRef.current[cardId];
+      }
+    });
+    var floatingRestore = floatingSplitRestoreRef.current;
+    if (floatingRestore && (
+      String(floatingRestore.chatId || "") === deletedChatId
+      || String(floatingRestore.activeChatId || "") === deletedChatId
+    )) {
+      floatingSplitRestoreRef.current = null;
+    }
   }
 
   function movePaneCardOtherSide(cardId) {
@@ -7776,19 +7848,80 @@ function WorkbenchChatPage({ active, project, newChatRequestId, onOpenTask, onAc
     var card = event.currentTarget && event.currentTarget.closest
       ? event.currentTarget.closest(".wbc-pane-card")
       : null;
-    if (card && event.dataTransfer && event.dataTransfer.setDragImage) {
-      var rect = card.getBoundingClientRect();
-      try {
-        event.dataTransfer.setDragImage(
-          card,
-          Math.max(0, Math.min(rect.width, event.clientX - rect.left)),
-          Math.max(0, Math.min(36, event.clientY - rect.top))
-        );
-      } catch (e) {}
+    var dragHandle = event.currentTarget;
+    var transfer = event.dataTransfer;
+    if (!card || !dragHandle || !transfer) return;
+    if (paneCardDragImageCleanupRef.current) paneCardDragImageCleanupRef.current();
+
+    // Never ask Chromium to snapshot the live scroll container. Its native
+    // drag image can clip or blank the transcript near the bottom. Capture the
+    // visible message anchor first, then restore it inside a detached clone so
+    // the ghost always shows this exact conversation at its current viewport.
+    var cardRect = card.getBoundingClientRect();
+    var handleRect = dragHandle.getBoundingClientRect();
+    var conversationViewport = wbcCaptureConversationViewport(card);
+    var clonedCard = wbcClonePaneWithLiveState(card);
+    var ghost = clonedCard.clone;
+    ghost.classList.add("wbc-pane-card-drag-ghost");
+    ghost.classList.remove("dragging");
+    ghost.setAttribute("aria-hidden", "true");
+    ghost.removeAttribute("draggable");
+    ghost.style.left = "0px";
+    ghost.style.top = "0px";
+    ghost.style.width = cardRect.width + "px";
+    ghost.style.height = cardRect.height + "px";
+    var sourceStyle = window.getComputedStyle(card);
+    for (var propertyIndex = 0; propertyIndex < sourceStyle.length; propertyIndex += 1) {
+      var propertyName = sourceStyle[propertyIndex];
+      if (propertyName.indexOf("--") === 0) {
+        ghost.style.setProperty(propertyName, sourceStyle.getPropertyValue(propertyName));
+      }
     }
+    document.body.appendChild(ghost);
+    clonedCard.restoreViewport();
+    wbcRestoreConversationViewport(ghost, conversationViewport);
+
+    // Preserve the exact point pressed inside the grip. Moving the pointer
+    // horizontally across the handle therefore moves the ghost with that same
+    // handle point under the cursor instead of snapping to its centre.
+    var handleGrabX = Math.max(0, Math.min(handleRect.width, event.clientX - handleRect.left));
+    var handleGrabY = Math.max(0, Math.min(handleRect.height, event.clientY - handleRect.top));
+    var grabX = (handleRect.left - cardRect.left) + handleGrabX;
+    var grabY = (handleRect.top - cardRect.top) + handleGrabY;
+    function movePaneCardGhost(moveEvent) {
+      var clientX = Number(moveEvent && moveEvent.clientX);
+      var clientY = Number(moveEvent && moveEvent.clientY);
+      if (!Number.isFinite(clientX) || !Number.isFinite(clientY) || (clientX === 0 && clientY === 0)) return;
+      ghost.style.transform = "translate3d(" + (clientX - grabX) + "px, " + (clientY - grabY) + "px, 0)";
+    }
+    var ghostCleared = false;
+    function clearPaneCardGhost() {
+      if (ghostCleared) return;
+      ghostCleared = true;
+      document.removeEventListener("drag", movePaneCardGhost, true);
+      document.removeEventListener("dragover", movePaneCardGhost, true);
+      document.removeEventListener("drop", clearPaneCardGhost, true);
+      // Hide immediately, but detach the large conversation clone after the
+      // drop layout has committed. Destroying it synchronously in the same
+      // frame as the pane-grid update causes a visible release hitch.
+      ghost.classList.add("releasing");
+      setTimeout(function () {
+        if (ghost.parentNode) ghost.parentNode.removeChild(ghost);
+      }, 100);
+      if (paneCardDragImageCleanupRef.current === clearPaneCardGhost) {
+        paneCardDragImageCleanupRef.current = null;
+      }
+    }
+    document.addEventListener("drag", movePaneCardGhost, true);
+    document.addEventListener("dragover", movePaneCardGhost, true);
+    document.addEventListener("drop", clearPaneCardGhost, true);
+    paneCardDragImageCleanupRef.current = clearPaneCardGhost;
+    wbcHideNativeDragImage(transfer);
+    movePaneCardGhost(event);
   }
 
   function handlePaneCardDragEnd() {
+    if (paneCardDragImageCleanupRef.current) paneCardDragImageCleanupRef.current();
     setPaneCardDragId("");
     setPaneDropTarget(null);
   }
@@ -7853,6 +7986,9 @@ function WorkbenchChatPage({ active, project, newChatRequestId, onOpenTask, onAc
       }
     }
     if (!card) return;
+    // Stop compositor tracking before React recalculates the pane grid. The
+    // hidden clone is detached asynchronously by its cleanup routine.
+    if (paneCardDragImageCleanupRef.current) paneCardDragImageCleanupRef.current();
     updatePaneLayout(function (current) {
       return wbcPlacePaneCard(current, card, target.side, effectiveEdge, sourceCardId, targetCardId);
     });
@@ -8289,6 +8425,7 @@ function WorkbenchChatPage({ active, project, newChatRequestId, onOpenTask, onAc
       model.deleteChat(chatId).then(function () {
         runtimeEngine.abort(chatId);
         runtimeEngine.clear(chatId);
+        closeDeletedChatSplits(chatId);
       }).catch(function (err) {
         if (deletedItem) {
           setChats(function (prev) {

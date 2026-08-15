@@ -257,7 +257,7 @@
 .wb-lib-commandbar .wb-lib-head-actions { grid-column: 3; grid-row: 1; justify-self: end; }
 .wb-lib-commandbar .wb-lib-search { grid-column: 1; grid-row: 2; width: 100%; min-width: 160px; max-width: none; }
 .wb-lib-commandbar .wb-lib-tools { grid-column: 3; grid-row: 2; justify-self: end; }
-.wb-lib-commandbar .wb-lib-heading span { font-size: calc(13px * var(--wb-ui-font-scale, 1)); font-weight: 620; }
+.wb-lib-commandbar .wb-lib-count { font-size: calc(13px * var(--wb-ui-font-scale, 1)); font-weight: 620; }
 .wb-lib-commandbar .wb-lib-head-actions { gap: 6px; }
 .wb-lib-commandbar .wb-lib-primary,
 .wb-lib-commandbar .wb-lib-head-button,
@@ -284,9 +284,10 @@
 }
 
 .wb-lib-sidebar-toggle { display: none; }
-.wb-lib-heading { min-width: 0; flex: 1; display: flex; align-items: baseline; gap: 12px; }
+.wb-lib-heading { min-width: 0; flex: 1; display: flex; align-items: center; gap: 12px; }
+.wb-lib-heading .wb-lib-menu-wrap { flex: 0 0 auto; }
 .wb-lib-heading h2 { margin: 0; font-size: calc(24px * var(--wb-ui-font-scale, 1)); font-weight: 760; letter-spacing: -.02em; white-space: nowrap; }
-.wb-lib-heading span { color: var(--wb-muted); font-size: calc(14px * var(--wb-ui-font-scale, 1)); white-space: nowrap; }
+.wb-lib-count { color: var(--wb-muted); font-size: calc(14px * var(--wb-ui-font-scale, 1)); white-space: nowrap; }
 .wb-lib-head-actions { flex: 0 0 auto; display: flex; align-items: center; gap: 6px; }
 .wb-lib-primary, .wb-lib-secondary, .wb-lib-head-button, .wb-lib-tool {
   min-height: 36px;
@@ -908,7 +909,7 @@
   .wb-lib-right { position: absolute; z-index: 390; inset: 0 0 0 auto; width: min(360px, 90%); box-shadow: -18px 0 48px rgba(0,0,0,.22); }
   .wb-lib-right-tabs .wb-lib-right-close { display: block; }
   .wb-lib-right.empty { display: none; }
-  .wb-lib-heading span { display: none; }
+  .wb-lib-count { display: none; }
   .wb-lib-head-button { width: 34px; padding: 0; font-size: 0; border-color: var(--wb-line); }
   .wb-lib-head-button svg { width: 16px; }
 }

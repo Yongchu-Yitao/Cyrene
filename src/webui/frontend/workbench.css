@@ -15625,15 +15625,40 @@ html[data-theme="dark"] .wb-mem-main {
   padding: 6px 0 0;
 }
 .workbench-grid.integrated-sidebars.is-task-detail .workbench-main {
-  border-right: 0;
+  height: calc(100% - 24px);
+  max-height: calc(100% - 24px);
+  margin: 12px 8px;
+  box-sizing: border-box;
+  border: var(--wb-floating-rail-border);
+  border-radius: var(--wb-floating-rail-radius);
+  background: var(--wb-floating-rail-bg);
+  box-shadow: var(--wb-floating-rail-shadow);
+  -webkit-backdrop-filter: blur(32px) saturate(170%) contrast(102%);
+  backdrop-filter: blur(32px) saturate(170%) contrast(102%);
 }
 .workbench-grid.integrated-sidebars.is-task-detail .wb-task-detail-shell {
+  /* The task rail ends with a 4px track margin. Pair it with the centre
+     card's 8px inset, then mirror the same 8px + 4px seam on the right so
+     every visible card gap and outer edge resolves to exactly 12px. */
+  padding: 12px 12px 12px 4px;
   border-right: 0;
+  /* The separator extends 8px beyond the shell's track edge. Clipping here
+     cuts away half of its visible grip even though the hit target still works. */
+  overflow: visible;
 }
 .wb-task-detail-card {
   width: 100%;
   height: auto;
   max-height: calc(100vh - 82px);
+  /* The resize target lives in the 12px seam rather than on the card border. */
+  overflow: visible;
+}
+.workbench-grid.integrated-sidebars.is-task-detail .wb-task-detail-card {
+  border: var(--wb-floating-rail-border);
+  background: var(--wb-floating-rail-bg);
+  box-shadow: var(--wb-floating-rail-shadow);
+  -webkit-backdrop-filter: blur(32px) saturate(170%) contrast(102%);
+  backdrop-filter: blur(32px) saturate(170%) contrast(102%);
 }
 .wb-task-detail-tabs {
   padding-block: 8px;
@@ -15935,8 +15960,8 @@ html[data-theme="dark"] .wb-mem-main {
   line-height: 1.55;
 }
 html[data-theme="dark"] .wb-task-detail-card {
-  background: color-mix(in srgb, var(--wb-card-bg) 82%, transparent);
-  border-color: color-mix(in srgb, var(--wb-line-2) 58%, transparent);
+  background: var(--wb-floating-rail-bg);
+  border-color: color-mix(in srgb, #fff 9%, transparent);
 }
 @container (max-width: 320px) {
   .wb-task-detail-head,
@@ -18555,7 +18580,10 @@ span.wbc-chat-group-toggle {
   gap: 12px;
   padding: var(--wbc-card-top-inset) 0 var(--wbc-card-gutter) var(--wbc-card-gutter);
   overflow: hidden;
-  transition: grid-template-columns 500ms cubic-bezier(.22, 1.16, .36, 1);
+  /* Track sizing is layout work, so it should converge monotonically. The
+     lightweight card transform below carries the visible elastic overshoot
+     without forcing the transcript and composer to reflow backwards. */
+  transition: grid-template-columns 380ms cubic-bezier(.22, 1, .36, 1);
 }
 
 .wbc-pane-layout.split {
@@ -18579,7 +18607,11 @@ span.wbc-chat-group-toggle {
 .wbc-pane-layout.split > .wbc-pane-column { grid-row: 1; }
 
 .wbc-pane-layout.single {
-  grid-template-columns: minmax(0, 1fr);
+  /* Keep the same three-track shape as the split state. Grid tracks with a
+     different count switch discretely; matching them lets Chromium animate
+     the new column in one continuous layout pass. */
+  grid-template-columns: minmax(0, 1fr) 0px 0px;
+  gap: 0;
 }
 
 /* Files opened without an active conversation are a project workspace, not a
@@ -18626,7 +18658,7 @@ span.wbc-chat-group-toggle {
   display: grid;
   gap: 12px;
   overflow: visible;
-  transition: grid-template-rows 420ms cubic-bezier(.22, 1.16, .36, 1);
+  transition: grid-template-rows 360ms cubic-bezier(.22, 1, .36, 1);
 }
 
 .wbc-pane-card {
@@ -18642,13 +18674,14 @@ span.wbc-chat-group-toggle {
   box-shadow: var(--wb-floating-rail-shadow);
   -webkit-backdrop-filter: blur(18px) saturate(112%);
   backdrop-filter: blur(18px) saturate(112%);
-  animation: wbc-pane-card-settle 420ms cubic-bezier(.22, 1.16, .36, 1) both;
+  animation: wbc-pane-card-settle 360ms cubic-bezier(.22, 1.16, .36, 1) both;
+  backface-visibility: hidden;
 }
 
 @keyframes wbc-pane-card-settle {
-  0% { opacity: 0; transform: translateY(10px) scale(.986); }
-  72% { opacity: 1; transform: translateY(-1px) scale(1.002); }
-  100% { opacity: 1; transform: translateY(0) scale(1); }
+  0% { opacity: 0; transform: translate3d(0, 10px, 0); }
+  72% { opacity: 1; transform: translate3d(0, -1px, 0); }
+  100% { opacity: 1; transform: translate3d(0, 0, 0); }
 }
 
 /* A side split is born from a horizontal drop target, so its first movement
@@ -18658,13 +18691,13 @@ span.wbc-chat-group-toggle {
    travel in from its anchored edge instead. */
 .wbc-pane-layout.split > .wbc-pane-column.right > .wbc-pane-card {
   transform-origin: right center;
-  animation: wbc-pane-card-settle-from-right 500ms cubic-bezier(.22, 1.16, .36, 1) both;
+  animation: wbc-pane-card-settle-from-right 400ms cubic-bezier(.22, 1.16, .36, 1) both;
 }
 
 @keyframes wbc-pane-card-settle-from-right {
-  0% { opacity: 0; transform: translateX(24px) scale(.976); }
-  68% { opacity: 1; transform: translateX(-2px) scale(1.002); }
-  100% { opacity: 1; transform: translateX(0) scale(1); }
+  0% { opacity: 0; transform: translate3d(20px, 0, 0); }
+  68% { opacity: 1; transform: translate3d(-2px, 0, 0); }
+  100% { opacity: 1; transform: translate3d(0, 0, 0); }
 }
 
 .wbc-pane-card > .wbc-main,
@@ -19426,6 +19459,28 @@ body.wbc-resizing-side-agent .wbc-page.wbc-split-left .wbc-side-agent-split-moti
 }
 .wbc-split-drag-ghost.card > .wbc-chat-card {
   display: flex;
+}
+
+/* Pane-card grips use a renderer-owned drag preview as well. Keeping the
+   clone outside the live scroll tree prevents Chromium from clipping its
+   native bitmap while JS restores the exact visible conversation viewport. */
+.wbc-pane-card-drag-ghost {
+  position: fixed !important;
+  z-index: 2147483647 !important;
+  margin: 0 !important;
+  opacity: .92;
+  pointer-events: none !important;
+  overflow: hidden !important;
+  contain: layout paint style;
+  will-change: transform, opacity;
+  transform-origin: top left;
+  transition: opacity 100ms cubic-bezier(.22, 1.16, .36, 1);
+  box-shadow:
+    0 1px 2px rgba(15, 23, 42, 0.04),
+    0 10px 28px rgba(15, 23, 42, 0.12) !important;
+}
+.wbc-pane-card-drag-ghost.releasing {
+  opacity: 0;
 }
 
 /* ── Chat split (rail chat dragged onto the side) ──────────────────────────
@@ -24668,11 +24723,12 @@ body.wb-col-resizing .wb-floating-detail-card > .wb-col-resizer.card-edge::after
   display: none;
 }
 
-/* In the single-card workspace width is adjusted from the 12px seam, never
-   from a card border. The context card and browser PiP each own an independent
-   hover target, so only the handle under the pointer becomes visible. */
+/* In single-card workspaces width is adjusted from the 12px seam, never from
+   a card border. Conversation details, task details and browser PiP reuse the
+   same hidden hover target and centred grip treatment. */
 .wbc-side-card > .wb-col-resizer.track-gutter,
-.wbc-browser-window.pip > .wb-col-resizer.track-gutter {
+.wbc-browser-window.pip > .wb-col-resizer.track-gutter,
+.wb-task-detail-card > .wb-col-resizer.track-gutter {
   z-index: 42;
   top: 0;
   bottom: 0;
@@ -24682,10 +24738,13 @@ body.wb-col-resizing .wb-floating-detail-card > .wb-col-resizer.card-edge::after
 }
 
 .wbc-side-card > .wb-col-resizer.track-gutter::after,
-.wbc-browser-window.pip > .wb-col-resizer.track-gutter::after {
+.wbc-browser-window.pip > .wb-col-resizer.track-gutter::after,
+.wb-task-detail-card > .wb-col-resizer.track-gutter::after {
   top: 50%;
   bottom: auto;
-  left: 50%;
+  /* Centre on the space between the two visible 1px card edges, rather than
+     the abstract grid seam, which reads one pixel too far toward the panel. */
+  left: calc(50% - 1px);
   width: 4px;
   height: 72px;
   border-radius: 999px;
@@ -24702,6 +24761,8 @@ body.wb-col-resizing .wb-floating-detail-card > .wb-col-resizer.card-edge::after
 .wbc-side-card > .wb-col-resizer.track-gutter:focus-visible::after,
 .wbc-browser-window.pip > .wb-col-resizer.track-gutter:hover::after,
 .wbc-browser-window.pip > .wb-col-resizer.track-gutter:focus-visible::after,
+.wb-task-detail-card > .wb-col-resizer.track-gutter:hover::after,
+.wb-task-detail-card > .wb-col-resizer.track-gutter:focus-visible::after,
 body.wb-col-resizing .wb-col-resizer.track-gutter.is-resizing::after {
   background: var(--wb-accent);
   opacity: 1;

@@ -9503,7 +9503,7 @@ function RightContextPanel({ project, session, expandedStepId, tab, onTabChange,
     return (
       <aside className="workbench-right-panel wb-floating-detail-shell wb-task-detail-shell">
         <div className="wb-floating-detail-card wb-task-detail-card empty">
-          <WbColResizer cardEdge />
+          <WbColResizer trackGutter surfaceId="task-detail-empty" />
           <div className="wb-detail-empty-state">
             {ICONS.target}
             <p>{wbT("task.noTaskSelected", "Select a task.")}</p>
@@ -9530,7 +9530,7 @@ function RightContextPanel({ project, session, expandedStepId, tab, onTabChange,
   return (
     <aside className="workbench-right-panel wb-floating-detail-shell wb-task-detail-shell" aria-label={wbT("task.side.detailPanel", "Task details")}>
       <div className="wb-floating-detail-card wb-task-detail-card">
-        <WbColResizer cardEdge />
+        <WbColResizer trackGutter surfaceId="task-detail" />
         <nav className="wb-detail-accordion wb-task-detail-tabs" aria-label={wbT("task.side.detailPanel", "Task details")}>
           <div className="wb-detail-accordion-head wb-task-detail-head">
             <span>{wbT("task.side.detailPanel", "Task details")}</span>

@@ -1186,10 +1186,9 @@ def test_workbench_chat_single_card_uses_independent_hidden_gutter_resize_handle
     assert '(trackGutter ? " track-gutter" : "")' in shell
     assert "if (cardEdge || trackGutter) return;" in shell
     gutter_css = styles.split(
-        ".wbc-side-card > .wb-col-resizer.track-gutter,\n"
-        ".wbc-browser-window.pip > .wb-col-resizer.track-gutter {",
-        1,
+        ".wbc-side-card > .wb-col-resizer.track-gutter,", 1
     )[1].split("}", 1)[0]
+    assert ".wbc-browser-window.pip > .wb-col-resizer.track-gutter" in gutter_css
     assert "top: 0;" in gutter_css
     assert "bottom: 0;" in gutter_css
     assert "left: -12px;" in gutter_css
@@ -1219,6 +1218,54 @@ def test_workbench_chat_single_card_uses_independent_hidden_gutter_resize_handle
     assert "inset: var(--wbc-card-top-inset) var(--wbc-card-gutter) var(--wbc-card-gutter);" in rail_card_css
     assert "padding: var(--wbc-card-top-inset) 0 var(--wbc-card-gutter) var(--wbc-card-gutter);" in pane_layout_css
     assert "padding: var(--wbc-card-top-inset) var(--wbc-card-gutter) var(--wbc-card-gutter);" in side_css
+
+
+def test_workbench_deleted_chat_closes_every_split_reference():
+    root = Path(__file__).resolve().parent.parent
+    source = (root / "src" / "webui" / "frontend" / "workbench-chat.jsx").read_text(encoding="utf-8")
+    close_deleted = source.split("  function closeDeletedChatSplits(chatId) {", 1)[1].split(
+        "\n  function movePaneCardOtherSide", 1
+    )[0]
+    assert "setPaneLayoutsByChat(function (current)" in close_deleted
+    assert 'card.kind === "chat" && String(card.payload || "") === deletedChatId' in close_deleted
+    assert "if (!left.length && right.length)" in close_deleted
+    assert "setResourceSplitByChat(function (current)" in close_deleted
+    assert 'resource.type === "chat" && String(resource.payload || "") === deletedChatId' in close_deleted
+    assert "delete paneLayoutRestoreRef.current[cardId]" in close_deleted
+    delete_success = source.split("model.deleteChat(chatId).then(function () {", 1)[1].split(
+        "}).catch(function (err)", 1
+    )[0]
+    assert "closeDeletedChatSplits(chatId);" in delete_success
+
+
+def test_workbench_pane_drag_ghost_preserves_current_viewport_and_handle_hotspot():
+    root = Path(__file__).resolve().parent.parent
+    source = (root / "src" / "webui" / "frontend" / "workbench-chat.jsx").read_text(encoding="utf-8")
+    styles = (root / "src" / "webui" / "frontend" / "workbench.css").read_text(encoding="utf-8")
+    pane_drag = source.split("  function handlePaneCardDragStart(event, cardId) {", 1)[1].split(
+        "\n  function handlePaneCardDragEnd", 1
+    )[0]
+    assert "var conversationViewport = wbcCaptureConversationViewport(card);" in pane_drag
+    assert "var clonedCard = wbcClonePaneWithLiveState(card);" in pane_drag
+    assert "var ghost = clonedCard.clone;" in pane_drag
+    assert 'ghost.classList.add("wbc-pane-card-drag-ghost")' in pane_drag
+    assert "clonedCard.restoreViewport();" in pane_drag
+    assert "wbcRestoreConversationViewport(ghost, conversationViewport);" in pane_drag
+    assert "var handleGrabX" in pane_drag
+    assert "var handleGrabY" in pane_drag
+    assert "var grabX = (handleRect.left - cardRect.left) + handleGrabX;" in pane_drag
+    assert "var grabY = (handleRect.top - cardRect.top) + handleGrabY;" in pane_drag
+    assert 'ghost.style.transform = "translate3d("' in pane_drag
+    assert 'ghost.classList.add("releasing")' in pane_drag
+    assert "setTimeout(function ()" in pane_drag
+    assert "wbcHideNativeDragImage(transfer);" in pane_drag
+    assert "event.dataTransfer.setDragImage(" not in pane_drag
+    assert ".wbc-pane-card-drag-ghost" in styles
+    assert "will-change: transform, opacity;" in styles
+    pane_drop = source.split("  function handlePaneDrop(event, targetCardId, edge) {", 1)[1].split(
+        "\n  function handleSideLayerDragOver", 1
+    )[0]
+    assert pane_drop.index("paneCardDragImageCleanupRef.current()") < pane_drop.index("updatePaneLayout(function (current)")
 
 
 def test_workbench_chat_sidebar_keeps_only_overview_and_context_unconditional():
@@ -7392,7 +7439,7 @@ def test_workbench_task_details_reuse_floating_animated_accordion():
     panel = source.split("function RightContextPanel", 1)[1].split("function ReflectionSection", 1)[0]
     assert 'className="workbench-right-panel wb-floating-detail-shell wb-task-detail-shell"' in panel
     assert 'className="wb-floating-detail-card wb-task-detail-card"' in panel
-    assert "<WbColResizer cardEdge />" in panel
+    assert '<WbColResizer trackGutter surfaceId="task-detail" />' in panel
     assert 'className="wb-detail-accordion wb-task-detail-tabs"' in panel
     assert 'aria-expanded={expanded}' in panel
     assert 'onTabChange(expanded ? "" : item.id)' in panel
@@ -7414,7 +7461,41 @@ def test_workbench_task_details_reuse_floating_animated_accordion():
     assert "activeBodyRef.current.scrollTop = 0" in panel
     assert ".workbench-grid.integrated-sidebars.is-task-detail .workbench-main" in styles
     assert ".workbench-grid.integrated-sidebars.is-task-detail .wb-task-detail-shell" in styles
-    assert "max-height: calc(100vh - 82px);" in styles
+    task_main_css = styles.split(
+        ".workbench-grid.integrated-sidebars.is-task-detail .workbench-main {", 1
+    )[1].split("}", 1)[0]
+    task_shell_css = styles.split(
+        ".workbench-grid.integrated-sidebars.is-task-detail .wb-task-detail-shell {", 1
+    )[1].split("}", 1)[0]
+    task_card_css = styles.split(".wb-task-detail-card {", 1)[1].split("}", 1)[0]
+    assert "height: calc(100% - 24px);" in task_main_css
+    assert "max-height: calc(100% - 24px);" in task_main_css
+    assert "margin: 12px 8px;" in task_main_css
+    assert "border: var(--wb-floating-rail-border);" in task_main_css
+    assert "border-radius: var(--wb-floating-rail-radius);" in task_main_css
+    assert "background: var(--wb-floating-rail-bg);" in task_main_css
+    assert "box-shadow: var(--wb-floating-rail-shadow);" in task_main_css
+    assert "padding: 12px 12px 12px 4px;" in task_shell_css
+    assert "overflow: visible;" in task_shell_css
+    assert "height: auto;" in task_card_css
+    assert "max-height: calc(100vh - 82px);" in task_card_css
+    assert "overflow: visible;" in task_card_css
+    assert ".wb-task-detail-card > .wb-col-resizer.track-gutter" in styles
+    shared_grip_css = styles.split(
+        ".wbc-side-card > .wb-col-resizer.track-gutter,", 1
+    )[1].split("}", 1)[0]
+    shared_grip_visual_css = styles.split(
+        ".wbc-side-card > .wb-col-resizer.track-gutter::after,", 1
+    )[1].split("}", 1)[0]
+    assert ".wb-task-detail-card > .wb-col-resizer.track-gutter" in shared_grip_css
+    assert "left: -12px;" in shared_grip_css
+    assert "width: 12px;" in shared_grip_css
+    assert ".wb-task-detail-card > .wb-col-resizer.track-gutter::after" in shared_grip_visual_css
+    assert "top: 50%;" in shared_grip_visual_css
+    assert "left: calc(50% - 1px);" in shared_grip_visual_css
+    assert "width: 4px;" in shared_grip_visual_css
+    assert "height: 72px;" in shared_grip_visual_css
+    assert "opacity: 0;" in shared_grip_visual_css
     assert ".wb-task-detail-tab-panel.open" in styles
     assert "max-height: calc(100vh - 330px);" in styles
     assert ".wb-task-detail-card .workbench-side-section + .workbench-side-section" in styles
@@ -7546,6 +7627,39 @@ def test_linux_desktop_uses_native_frame_and_directory_picker():
     assert "await window.cyrene.pickDirectory()" in create
     assert 'window.cyrene.platform === "linux"' in chat
     assert "window.cyrene.pickDirectory().then(function (data)" in chat
+
+
+def test_topbar_theme_toggle_persists_to_the_appearance_namespace():
+    root = Path(__file__).resolve().parent.parent
+    bootstrap = (root / "src/webui/frontend/entry/bootstrap.jsx").read_text(encoding="utf-8")
+
+    assert "function persistWorkbenchTheme(mode)" in bootstrap
+    assert 'fetch("/api/settings/namespaces/appearance"' in bootstrap
+    assert "var changes = { theme: mode };" in bootstrap
+    assert "if (!values.appearance_migrated)" in bootstrap
+    assert "changes.appearance_migrated = true;" in bootstrap
+    assert "expected_revision: payload.revision" in bootstrap
+    assert "if (response.status === 409 && !retry)" in bootstrap
+    toggle = bootstrap.split("function toggleWorkbenchTheme()", 1)[1].split("var WorkbenchApp", 1)[0]
+    assert "writeWorkbenchThemeLocal(next);" in toggle
+    assert "persistWorkbenchTheme(next);" in toggle
+
+
+def test_split_opening_keeps_elastic_motion_off_layout_sizing():
+    root = Path(__file__).resolve().parent.parent
+    styles = (root / "src/webui/frontend/workbench.css").read_text(encoding="utf-8")
+
+    pane_layout = styles.split("\n.wbc-pane-layout {", 1)[1].split("}", 1)[0]
+    pane_single = styles.split(".wbc-pane-layout.single {", 1)[1].split("}", 1)[0]
+    right_card = styles.split(
+        ".wbc-pane-layout.split > .wbc-pane-column.right > .wbc-pane-card {", 1
+    )[1].split("}", 1)[0]
+    right_keyframes = styles.split("@keyframes wbc-pane-card-settle-from-right {", 1)[1].split("}", 3)[0:3]
+
+    assert "grid-template-columns 380ms cubic-bezier(.22, 1, .36, 1)" in pane_layout
+    assert "grid-template-columns: minmax(0, 1fr) 0px 0px" in pane_single
+    assert "wbc-pane-card-settle-from-right 400ms cubic-bezier(.22, 1.16, .36, 1)" in right_card
+    assert all("scale(" not in block for block in right_keyframes)
 
 
 def test_backup_actions_use_native_file_pickers_and_comfortable_density_only():

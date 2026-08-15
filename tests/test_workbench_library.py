@@ -849,6 +849,18 @@ def test_library_frontend_uses_project_api_and_clears_filtered_selection():
     assert 'setSelectedId("")' in source
     assert 'scope.type === "all" ? L("library.title", "Knowledge base")' in source
     assert 'scope.type !== "all" && h("h2"' in source
+    heading_markup = source.split('h("div", { className: "wb-lib-heading" }', 1)[1].split(
+        'h("div", { className: "wb-lib-head-actions" }', 1
+    )[0]
+    head_actions_markup = source.split(
+        'h("div", { className: "wb-lib-head-actions" }', 1
+    )[1].split('h("div", { className: "wb-lib-toolbar" }', 1)[0]
+    assert 'className: "wb-lib-primary"' in heading_markup
+    assert 'className: "wb-lib-count"' not in heading_markup
+    assert 'className: "wb-lib-count"' in head_actions_markup
+    assert head_actions_markup.index('className: "wb-lib-count"') < head_actions_markup.index(
+        'className: "wb-lib-head-button"'
+    )
     assert 'className: "wb-lib-head-button zotero"' not in source
     assert "wb-lib-side-section-toggle" in source
     assert 'L("library.copyPlainText", "Copy plain text")' in source

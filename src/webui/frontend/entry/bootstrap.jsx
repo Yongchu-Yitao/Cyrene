@@ -11,6 +11,57 @@ function readWorkbenchTweak(key, fallback) {
   }
 }
 
+var workbenchThemeSaveQueue = Promise.resolve();
+var workbenchThemePendingMode = "";
+
+function writeWorkbenchThemeLocal(mode) {
+  try {
+    localStorage.setItem("cyrene-tweak-theme", JSON.stringify(mode));
+    localStorage.setItem("cyrene-theme-mode", mode);
+  } catch (error) {}
+}
+
+function saveWorkbenchThemeToAppearance(mode, retry) {
+  return fetch("/api/settings/namespaces/appearance").then(function (response) {
+    return response.ok ? response.json() : Promise.reject(new Error("appearance unavailable"));
+  }).then(function (payload) {
+    var values = payload.values || {};
+    var changes = { theme: mode };
+    // If the settings overlay has never performed its one-time migration,
+    // preserve every existing local appearance choice when the top bar becomes
+    // the first writer to the durable namespace.
+    if (!values.appearance_migrated) {
+      changes.accent = readWorkbenchTweak("accent", "") || "";
+      changes.background_light = readWorkbenchTweak("backgroundLight", "") || "";
+      changes.background_dark = readWorkbenchTweak("backgroundDark", "") || "";
+      changes.text_size = readWorkbenchTweak("textSize", "default") || "default";
+      changes.animate_pulse = readWorkbenchTweak("animatePulse", true) !== false;
+      changes.appearance_migrated = true;
+    }
+    return fetch("/api/settings/namespaces/appearance", {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        changes: changes,
+        expected_revision: payload.revision,
+      }),
+    });
+  }).then(function (response) {
+    if (response.ok) return response;
+    if (response.status === 409 && !retry) return saveWorkbenchThemeToAppearance(mode, true);
+    throw new Error("appearance theme save failed");
+  });
+}
+
+function persistWorkbenchTheme(mode) {
+  workbenchThemePendingMode = mode;
+  workbenchThemeSaveQueue = workbenchThemeSaveQueue.catch(function () {}).then(function () {
+    return saveWorkbenchThemeToAppearance(mode, false);
+  }).catch(function () {}).then(function () {
+    if (workbenchThemePendingMode === mode) workbenchThemePendingMode = "";
+  });
+}
+
 function readWorkbenchSurface() {
   try {
     return new URLSearchParams(window.location.search || "").get("surface") || "";
@@ -101,7 +152,11 @@ function WorkbenchRoot() {
         var values = payload.values || {};
         if (!values.appearance_migrated) return;
         var next = {
-          theme: values.theme || "system",
+          // A settings_changed event can arrive while rapid top-bar toggles
+          // are still queued. Keep the newest optimistic choice visible until
+          // its matching backend write completes instead of flashing an older
+          // server value between clicks.
+          theme: workbenchThemePendingMode || values.theme || "system",
           accent: values.accent || null,
           backgroundLight: values.background_light || null,
           backgroundDark: values.background_dark || null,
@@ -128,10 +183,7 @@ function WorkbenchRoot() {
   }, []);
 
   useEffectBootstrap(function () {
-    try {
-      localStorage.setItem("cyrene-tweak-theme", JSON.stringify(themeMode));
-      localStorage.setItem("cyrene-theme-mode", themeMode);
-    } catch (error) {}
+    writeWorkbenchThemeLocal(themeMode);
     document.documentElement.dataset.theme = actualTheme;
     delete document.documentElement.dataset.booting;
   }, [themeMode, actualTheme]);
@@ -187,7 +239,10 @@ function WorkbenchRoot() {
   function toggleWorkbenchTheme() {
     var order = ["system", "light", "dark"];
     var index = order.indexOf(themeMode);
-    setThemeMode(order[(index + 1) % order.length]);
+    var next = order[(index + 1) % order.length];
+    writeWorkbenchThemeLocal(next);
+    setThemeMode(next);
+    persistWorkbenchTheme(next);
   }
 
   var WorkbenchApp = window.CyreneUI.require("shell").App;
