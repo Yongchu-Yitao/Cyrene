@@ -52,6 +52,7 @@ _AGENT_BIN_DIR = _AGENT_DIR / "bin"
 _MISE_DATA = _ROOT / "mise"
 _MISE_CONFIG = _ROOT / "mise-config"
 _MISE_CACHE = CACHE_DIR / "extensions" / "mise"
+_NPM_CACHE_DIR = CACHE_DIR / "extensions" / "npm-cache"
 _UV_PYTHON_DIR = _ROOT / "python"
 _UV_BIN_DIR = _ROOT / "python-bin"
 _UV_TOOL_DIR = _ROOT / "uv-tools"
@@ -154,6 +155,25 @@ def _command_version(path: Path, args: tuple[str, ...], timeout: float = 3.0) ->
     except (OSError, subprocess.SubprocessError):
         return ""
     return _safe_version_text((result.stdout or "") + "\n" + (result.stderr or ""))
+
+
+def _managed_npm_executable() -> str | None:
+    """Locate npm for managed Agent installs.
+
+    A GUI-launched Electron process inherits LaunchServices' minimal PATH,
+    which lacks the user's shell-managed runtimes (nvm, Homebrew). Search
+    managed mise shims, common install roots, and nvm version bins before
+    falling back to the inherited PATH.
+    """
+    search_dirs = [str(path) for path in agent_extension_paths()]
+    search_dirs.extend(_COMMON_PATHS.get(os.sys.platform, ()))
+    nvm_root = Path.home() / ".nvm" / "versions" / "node"
+    if nvm_root.is_dir():
+        search_dirs.extend(str(candidate) for candidate in sorted(nvm_root.glob("*/bin"), reverse=True))
+    env_path = extension_environment().get("PATH", "")
+    search_path = os.pathsep.join([*search_dirs, env_path]) if search_dirs else env_path
+    found = shutil.which("npm", path=search_path)
+    return str(found) if found else None
 
 
 def _is_under(path: Path, root: Path) -> bool:
@@ -261,6 +281,7 @@ def extension_environment() -> dict[str, str]:
     _ROOT.mkdir(parents=True, exist_ok=True)
     _MISE_CONFIG.mkdir(parents=True, exist_ok=True)
     _MISE_CACHE.mkdir(parents=True, exist_ok=True)
+    _NPM_CACHE_DIR.mkdir(parents=True, exist_ok=True)
     _UV_PYTHON_DIR.mkdir(parents=True, exist_ok=True)
     _UV_BIN_DIR.mkdir(parents=True, exist_ok=True)
     _UV_TOOL_DIR.mkdir(parents=True, exist_ok=True)
@@ -287,6 +308,10 @@ def extension_environment() -> dict[str, str]:
         "UV_TOOL_BIN_DIR": str(_UV_BIN_DIR),
         "UV_CACHE_DIR": str(CACHE_DIR / "extensions" / "uv"),
         "UV_PYTHON_DOWNLOADS": "manual",
+        # Isolate npm from the user's shared ~/.npm cache: a corrupted or
+        # concurrently-written entry there aborts Cyrene installs with npm
+        # "tarball data ... seems to be corrupted" / ENOENT failures.
+        "npm_config_cache": str(_NPM_CACHE_DIR),
     })
     sources = source_settings(include_secret=True)
     if sources.get("npm_registry"):
@@ -1549,7 +1574,7 @@ class ExtensionService:
             destination = install_root / "node_modules" / ".bin" / npm_shim
             if destination.is_file():
                 return str(destination), ""
-            npm = shutil.which("npm", path=extension_environment().get("PATH"))
+            npm = _managed_npm_executable()
             package = str(distribution.get("package") or "")
             if not npm or not package:
                 raise RuntimeError("Recommended Agent requires the managed Node.js/npm runtime")
@@ -1607,6 +1632,23 @@ class ExtensionService:
     async def _run_manager(self, task_id: str, command: list[str], *, env: dict[str, str], timeout: float = 1800) -> tuple[str, str]:
         if task_id:
             self.tasks.update(task_id, progress=35, message="Downloading and installing")
+        stdout, stderr, returncode = await self._run_subprocess(command, env=env, timeout=timeout)
+        if returncode != 0 and self._is_npm_install(command):
+            # npm tarball extraction can fail transiently on a corrupted cache
+            # entry or a dropped registry connection; a retry is idempotent
+            # for an install into the staging prefix.
+            logger.warning("npm install failed (exit %s); retrying once", returncode)
+            stdout, stderr, returncode = await self._run_subprocess(command, env=env, timeout=timeout)
+        if returncode != 0:
+            raise RuntimeError((stderr or stdout).decode("utf-8", errors="replace")[-2000:])
+        return stdout.decode("utf-8", errors="replace"), stderr.decode("utf-8", errors="replace")
+
+    @staticmethod
+    def _is_npm_install(command: list[str]) -> bool:
+        return bool(command) and Path(command[0]).name in {"npm", "npm.cmd", "npm.exe"} and "install" in command
+
+    @staticmethod
+    async def _run_subprocess(command: list[str], *, env: dict[str, str], timeout: float) -> tuple[bytes, bytes, int]:
         proc = await asyncio.create_subprocess_exec(*command, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE, env=env)
         try:
             stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=timeout)
@@ -1616,9 +1658,7 @@ class ExtensionService:
         except asyncio.CancelledError:
             await _terminate_process(proc)
             raise
-        if proc.returncode != 0:
-            raise RuntimeError((stderr or stdout).decode("utf-8", errors="replace")[-2000:])
-        return stdout.decode("utf-8", errors="replace"), stderr.decode("utf-8", errors="replace")
+        return stdout, stderr, proc.returncode
 
     async def _mise_exact_version(self, executable: Path, ref: str, requested: str) -> str:
         if requested and requested not in {"latest", "lts", "stable"} and re.search(r"\d", requested):

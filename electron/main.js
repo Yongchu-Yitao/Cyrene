@@ -4857,6 +4857,20 @@ function spawnPython() {
     CYRENE_ELECTRON_RPC_PORT: electronRpcPort ? String(electronRpcPort) : '',
     CYRENE_ELECTRON_RPC_TOKEN: AUTH_TOKEN,
   };
+  if (!isWindows) {
+    // GUI-launched Electron inherits LaunchServices' minimal PATH, which lacks
+    // the user's shell-managed runtimes (nvm, Homebrew, ~/.local/bin). Without
+    // them the Python backend cannot locate npm/node for managed installs.
+    const userBins = ['/opt/homebrew/bin', '/usr/local/bin', path.join(os.homedir(), '.local', 'bin')];
+    const nvmRoot = path.join(os.homedir(), '.nvm', 'versions', 'node');
+    let nvmBins = [];
+    try {
+      nvmBins = fs.readdirSync(nvmRoot).sort().reverse().map((version) => path.join(nvmRoot, version, 'bin'));
+    } catch (_) {
+      // no nvm installation; fall through with the default PATH
+    }
+    childEnv.PATH = [process.env.PATH, ...userBins, ...nvmBins].filter(Boolean).join(path.delimiter);
+  }
   if (!isDev) {
     // Respect explicit path overrides for portable installs, diagnostics and
     // isolated packaged-app smoke tests. Normal launches have no overrides and

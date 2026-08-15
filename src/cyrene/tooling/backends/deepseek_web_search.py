@@ -222,12 +222,16 @@ async def search_with_deepseek(
     payload = {
         "model": candidate.search_model,
         "instructions": (
-            "Search the web before answering. Return a concise, factual answer "
-            "grounded in the search results and preserve source citations."
+            "Search the web to answer the user's question. Follow these rules exactly:\n"
+            "1. Answer in the same language as the question.\n"
+            "2. Start with a direct conclusion, then present the key facts.\n"
+            "3. Ground every factual claim in the search results; never invent information.\n"
+            "4. End with the sources as a markdown list: - [title](url), using only URLs the search returned."
         ),
         "input": str(query),
         "tools": [{"type": "web_search"}],
         "tool_choice": {"type": "web_search"},
+        "thinking": {"type": "disabled"},
     }
     headers = {
         "Authorization": f"Bearer {candidate.api_key}",
