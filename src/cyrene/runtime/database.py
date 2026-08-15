@@ -7,6 +7,7 @@ The DB is used for structured data that needs querying and stable aggregates.
 import json
 import re
 import sqlite3
+import threading
 import uuid
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -829,6 +830,34 @@ def record_memory_touch_sync(db_path: str, *, day: str | None = None, emotional_
         db.commit()
 
 
+_EMPTY_DAY_STATS: dict[str, int] = {
+    "llm_requests": 0, "prompt_tokens": 0, "completion_tokens": 0,
+    "total_tokens": 0, "cache_hit_tokens": 0, "cache_miss_tokens": 0,
+    "tool_calls": 0,
+}
+
+_PERMISSION_DECISIONS_DDL = """
+CREATE TABLE IF NOT EXISTS permission_decisions (
+    id TEXT PRIMARY KEY,
+    created_at TEXT NOT NULL,
+    session_id TEXT NOT NULL DEFAULT '',
+    round_id TEXT NOT NULL DEFAULT '',
+    event_type TEXT NOT NULL,
+    source TEXT NOT NULL DEFAULT '',
+    tool_name TEXT NOT NULL DEFAULT '',
+    operation TEXT NOT NULL DEFAULT '',
+    permission_kind TEXT NOT NULL DEFAULT '',
+    path_hint TEXT NOT NULL DEFAULT '',
+    approved INTEGER NOT NULL,
+    rationale TEXT NOT NULL DEFAULT '',
+    fingerprint TEXT NOT NULL DEFAULT ''
+)
+"""
+
+_permission_ddl_ensured: set[str] = set()
+_permission_ddl_lock = threading.Lock()
+
+
 async def record_usage_stats_batch(
     db_path: str,
     *,
@@ -839,11 +868,8 @@ async def record_usage_stats_batch(
 ) -> None:
     """Persist per-day usage counters and permission decisions with one commit.
 
-    Batch counterpart of ``record_runtime_usage`` / ``record_model_usage`` /
-    ``record_tool_call`` / ``record_permission_decision``: events are
-    aggregated in memory per day / (day, model) / (day, tool) and written with
-    a single connection and transaction. Counter semantics are identical to the
-    per-event writers.
+    Events are aggregated in memory per day / (day, model) / (day, tool) and
+    written with a single connection and transaction.
     """
     if not (runtime_events or model_events or tool_events or permission_events):
         return
@@ -853,11 +879,7 @@ async def record_usage_stats_batch(
     for timestamp, usage in runtime_events:
         usage = usage if isinstance(usage, dict) else {}
         day = _normalize_day(timestamp=timestamp)
-        stats = day_stats.setdefault(day, {
-            "llm_requests": 0, "prompt_tokens": 0, "completion_tokens": 0,
-            "total_tokens": 0, "cache_hit_tokens": 0, "cache_miss_tokens": 0,
-            "tool_calls": 0,
-        })
+        stats = day_stats.setdefault(day, dict(_EMPTY_DAY_STATS))
         stats["llm_requests"] += 1
         stats["prompt_tokens"] += int((usage or {}).get("prompt_tokens") or 0)
         stats["completion_tokens"] += int((usage or {}).get("completion_tokens") or 0)
@@ -876,11 +898,7 @@ async def record_usage_stats_batch(
         counts[2] += int((usage or {}).get("completion_tokens") or 0)
     for timestamp, tool in tool_events:
         day = _normalize_day(timestamp=timestamp)
-        day_stats.setdefault(day, {
-            "llm_requests": 0, "prompt_tokens": 0, "completion_tokens": 0,
-            "total_tokens": 0, "cache_hit_tokens": 0, "cache_miss_tokens": 0,
-            "tool_calls": 0,
-        })["tool_calls"] += 1
+        day_stats.setdefault(day, dict(_EMPTY_DAY_STATS))["tool_calls"] += 1
         tool_name = str(tool or "").strip()
         if tool_name:
             tool_key = (day, tool_name)
@@ -931,25 +949,13 @@ async def record_usage_stats_batch(
                 (day, tool, count, count),
             )
         if permission_events:
-            await db.execute(
-                """
-                CREATE TABLE IF NOT EXISTS permission_decisions (
-                    id TEXT PRIMARY KEY,
-                    created_at TEXT NOT NULL,
-                    session_id TEXT NOT NULL DEFAULT '',
-                    round_id TEXT NOT NULL DEFAULT '',
-                    event_type TEXT NOT NULL,
-                    source TEXT NOT NULL DEFAULT '',
-                    tool_name TEXT NOT NULL DEFAULT '',
-                    operation TEXT NOT NULL DEFAULT '',
-                    permission_kind TEXT NOT NULL DEFAULT '',
-                    path_hint TEXT NOT NULL DEFAULT '',
-                    approved INTEGER NOT NULL,
-                    rationale TEXT NOT NULL DEFAULT '',
-                    fingerprint TEXT NOT NULL DEFAULT ''
-                )
-                """
-            )
+            # The schema init creates the table for the main DB; this guard
+            # covers temp/other DB paths once per process instead of re-parsing
+            # the DDL on every flush.
+            with _permission_ddl_lock:
+                if db_path not in _permission_ddl_ensured:
+                    await db.execute(_PERMISSION_DECISIONS_DDL)
+                    _permission_ddl_ensured.add(db_path)
             rows = []
             for event in permission_events:
                 event_type = str(event.get("type") or "permission_decision")
@@ -1025,25 +1031,10 @@ async def record_permission_decision(db_path: str, event: dict) -> None:
     async with aiosqlite.connect(db_path) as db:
         # Keep this writer safe during a rolling upgrade where the process may
         # publish a decision before the next full ``init_db`` pass.
-        await db.execute(
-            """
-            CREATE TABLE IF NOT EXISTS permission_decisions (
-                id TEXT PRIMARY KEY,
-                created_at TEXT NOT NULL,
-                session_id TEXT NOT NULL DEFAULT '',
-                round_id TEXT NOT NULL DEFAULT '',
-                event_type TEXT NOT NULL,
-                source TEXT NOT NULL DEFAULT '',
-                tool_name TEXT NOT NULL DEFAULT '',
-                operation TEXT NOT NULL DEFAULT '',
-                permission_kind TEXT NOT NULL DEFAULT '',
-                path_hint TEXT NOT NULL DEFAULT '',
-                approved INTEGER NOT NULL,
-                rationale TEXT NOT NULL DEFAULT '',
-                fingerprint TEXT NOT NULL DEFAULT ''
-            )
-            """
-        )
+        with _permission_ddl_lock:
+            if db_path not in _permission_ddl_ensured:
+                await db.execute(_PERMISSION_DECISIONS_DDL)
+                _permission_ddl_ensured.add(db_path)
         await db.execute(
             """
             INSERT OR REPLACE INTO permission_decisions (

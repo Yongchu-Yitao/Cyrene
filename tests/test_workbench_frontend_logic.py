@@ -713,9 +713,9 @@ def test_chat_sidebar_context_is_flat_and_overview_is_integrated():
         "function WbcArtifactsTab(", 1
     )[0]
     assert 'className="wbc-context-sections"' in context_source
-    assert '<WbcContextBlockList chat={chat} running={!!runtime} compact={false} />' in context_source
+    assert '<WbcContextBlockList data={contextBlocks} compact={false} />' in context_source
     assert 'className: "wbc-context-detail"' in source
-    assert '<WbcInboxCard chat={chat} running={!!runtime} hideTitle={true} />' in context_source
+    assert '<WbcInboxCard liveView={inboxView} hideTitle={true} />' in context_source
     assert "usedToolPackages.length === 0" in context_source
     assert "workbenchChat.noUsedToolPackages" in context_source
     tool_package_heading = context_source.index('className="wbc-context-empty-head wbc-tool-pack-head"')
@@ -3976,7 +3976,7 @@ def test_workbench_chat_opens_bounded_browser_window_from_live_browser_events():
     assert ".wbc-pane-layout.single:has(.wbc-browser-window.pip)" in styles
     assert "right: calc(var(--wbc-card-gutter) - var(--wbc-side-track-width));" in styles
     assert "bottom: calc(-34px * var(--wb-ui-font-scale, 1));" in styles
-    assert "floatingRect.bottom > sideRect.top && floatingRect.top < sideRect.bottom" in source
+    assert "setBrowserSuppressedForSide(\n      !!(sidePanelTabExpanded && browserVisible" in source
     assert 'querySelector(":scope > .wbc-side .wbc-side-card")' in source
     assert 'function alignFloatingBrowser(forceNativeSync, immediateNativeSync)' in source
     assert 'sideRect.left - floatingRect.left' in source
@@ -5227,10 +5227,10 @@ def test_workbench_marks_run_finalizing_before_workspace_save():
 
     reply_done = normal_completion.index('"type": "reply_done"')
     finalizing = normal_completion.index('"type": "run_finalizing"')
-    workspace_finalize = normal_completion.index("await _finalize_workspace_changes(")
     saved = normal_completion.index('"type": "saved"')
+    workspace_finalize = normal_completion.index("await _finalize_workspace_changes(")
 
-    assert reply_done < finalizing < workspace_finalize < saved
+    assert reply_done < finalizing < saved < workspace_finalize
 
 
 def test_workbench_assistant_footer_formats_persisted_processing_duration():
@@ -5805,7 +5805,7 @@ def test_workbench_context_tab_has_live_session_inbox_card():
     inbox_card = source.split("function WbcInboxCard", 1)[1].split(
         "function WbcContextTab", 1
     )[0]
-    inbox_call = '<WbcInboxCard chat={chat} running={!!runtime} hideTitle={true} />'
+    inbox_call = '<WbcInboxCard liveView={inboxView} hideTitle={true} />'
     assert inbox_call in context_tab
     assert context_tab.index(inbox_call) > context_tab.index(
         'workbenchChat.conversationContext'

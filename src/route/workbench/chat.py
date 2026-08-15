@@ -19,6 +19,10 @@ from fastapi import APIRouter, Form, Request, UploadFile
 from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 
 from cyrene.workbench import chat as _service
+from cyrene.workbench.chat_runs import (
+    drain_post_reply_bookkeeping_tasks,
+    schedule_post_reply_bookkeeping,
+)
 from cyrene.workbench.inbox import GuidanceAdmissionClosed
 from cyrene.workbench.workspace_changes import (
     delete_chat_change_sets,
@@ -35,39 +39,17 @@ globals().update({
 
 _DETACHED_ANSWER_TASKS: set[asyncio.Task[Any]] = set()
 _SESSION_TITLE_TASKS: set[asyncio.Task[Any]] = set()
-_POST_REPLY_BOOKKEEPING_TASKS: set[asyncio.Task[Any]] = set()
 
 
-def _schedule_detached(
-    coro: Any,
+def _finish_detached_done(
     registry: set[asyncio.Task[Any]],
-    *,
     error_context: str,
+    task: asyncio.Task[Any],
 ) -> None:
-    """Track one detached background task in *registry*.
-
-    The done callback drops the task reference and surfaces its exception (if
-    any) so a failing detached workload never goes silent.
+    """Done-callback body for detached tasks: drop the reference and surface
+    the exception (if any) so a failing detached workload never goes silent.
     """
-
-    def _done(task: asyncio.Task[Any]) -> None:
-        registry.discard(task)
-        if task.cancelled():
-            return
-        try:
-            exc = task.exception()
-        except asyncio.CancelledError:
-            return
-        if exc is not None:
-            logger.error("Detached task failed: %s", error_context, exc_info=exc)
-
-    task = asyncio.create_task(coro)
-    registry.add(task)
-    task.add_done_callback(_done)
-
-
-def _finish_detached_answer_task(task: asyncio.Task[Any]) -> None:
-    _DETACHED_ANSWER_TASKS.discard(task)
+    registry.discard(task)
     if task.cancelled():
         return
     try:
@@ -75,27 +57,22 @@ def _finish_detached_answer_task(task: asyncio.Task[Any]) -> None:
     except asyncio.CancelledError:
         return
     if exc is not None:
-        logger.error("Detached answer task failed", exc_info=exc)
+        logger.error("%s", error_context, exc_info=exc)
+
+
+def _finish_detached_answer_task(task: asyncio.Task[Any]) -> None:
+    _finish_detached_done(_DETACHED_ANSWER_TASKS, "Detached answer task failed", task)
 
 
 def _track_session_title_task(task: asyncio.Task[Any]) -> None:
     _SESSION_TITLE_TASKS.add(task)
-
-    def done(completed: asyncio.Task[Any]) -> None:
-        _SESSION_TITLE_TASKS.discard(completed)
-        if completed.cancelled():
-            return
-        try:
-            exc = completed.exception()
-        except asyncio.CancelledError:
-            return
-        if exc is not None:
-            logger.error(
-                "Failed to inspect Workbench session naming task",
-                exc_info=exc,
-            )
-
-    task.add_done_callback(done)
+    task.add_done_callback(
+        lambda completed: _finish_detached_done(
+            _SESSION_TITLE_TASKS,
+            "Failed to inspect Workbench session naming task",
+            completed,
+        )
+    )
 
 
 def _schedule_structured_memory_capture(
@@ -157,22 +134,15 @@ def _schedule_post_reply_bookkeeping(
     run.
     """
     from cyrene.workbench import runtime as legacy_routes
-    from cyrene.agent.context import session_state_file
+    from cyrene.agent.context import session_state_file, state_file_signature
 
     state_path = session_state_file(chat_id)
-
-    def _state_signature() -> tuple[int, int] | None:
-        try:
-            st = state_path.stat()
-            return (st.st_mtime_ns, st.st_size)
-        except OSError:
-            return None
 
     # Capture the state-file signature synchronously at schedule time, while
     # still inside the run's finalize: the mid-read guards below must compare
     # against the state this exchange left behind, not against whatever a
     # follow-up turn rewrote before the detached task body started running.
-    signature_before = _state_signature()
+    signature_before = state_file_signature(state_path)
 
     async def _bookkeeping() -> None:
         try:
@@ -180,7 +150,7 @@ def _schedule_post_reply_bookkeeping(
                 state_messages = await asyncio.to_thread(
                     _session_state_messages, chat_id
                 )
-                if _state_signature() != signature_before:
+                if state_file_signature(state_path) != signature_before:
                     # A follow-up turn rewrote the state file mid-read; the
                     # captured messages belong to the next exchange, not this
                     # run's, so skip the memory capture.
@@ -220,7 +190,7 @@ def _schedule_post_reply_bookkeeping(
                 else None
             )
             if snapshot and threshold is not None:
-                if _state_signature() != signature_before:
+                if state_file_signature(state_path) != signature_before:
                     logger.info(
                         "Skip learning schedule for %s: state changed mid-read",
                         chat_id,
@@ -236,9 +206,8 @@ def _schedule_post_reply_bookkeeping(
         except Exception:
             logger.exception("Post-reply bookkeeping failed for chat %s", chat_id)
 
-    _schedule_detached(
+    schedule_post_reply_bookkeeping(
         _bookkeeping(),
-        _POST_REPLY_BOOKKEEPING_TASKS,
         error_context=f"post-reply bookkeeping for chat {chat_id}",
     )
 
@@ -274,37 +243,10 @@ def _schedule_workspace_changes_finalize(
                 "Background workspace changes finalize failed for chat %s", chat_id
             )
 
-    _schedule_detached(
+    schedule_post_reply_bookkeeping(
         _finalize(),
-        _POST_REPLY_BOOKKEEPING_TASKS,
         error_context=f"workspace changes finalize for chat {chat_id}",
     )
-
-
-async def drain_post_reply_bookkeeping_tasks() -> None:
-    """Cancel-safe shutdown drain for the detached post-reply bookkeeping tasks.
-
-    Workspace-changes finalize, structured memory capture and the learning
-    schedule are fire-and-forget; without a drain they are silently lost on app
-    exit (previously they ran inline inside the run task, which ChatRunManager's
-    shutdown waits for). Await them with a bounded grace period, cancel whatever
-    is still pending, and discard the registry so the drain stays idempotent.
-    """
-    tasks = list(_POST_REPLY_BOOKKEEPING_TASKS)
-    if not tasks:
-        return
-    try:
-        _done, pending = await asyncio.wait(tasks, timeout=10.0)
-        for task in pending:
-            task.cancel()
-        if pending:
-            await asyncio.gather(*pending, return_exceptions=True)
-    except (asyncio.CancelledError, asyncio.TimeoutError):
-        for task in tasks:
-            task.cancel()
-        raise
-    finally:
-        _POST_REPLY_BOOKKEEPING_TASKS.clear()
 
 
 def register_workbench_chat_routes(

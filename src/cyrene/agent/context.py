@@ -502,6 +502,21 @@ def session_state_file(session_id: str = "") -> Path:
     return _state._session_state_file(session_id)
 
 
+def state_file_signature(path: Path) -> tuple[int, int] | None:
+    """(mtime_ns, size) change signature of a state file, or None when unreadable.
+
+    The agent rewrites the whole state file per save, so a stat is an exact
+    change signal. On coarse filesystem clocks (1s+ timestamp granularity) two
+    same-size rewrites within one tick share a signature; consumers that need
+    to catch those (live transcript polling) must force a pass on a timer.
+    """
+    try:
+        file_stat = path.stat()
+        return (file_stat.st_mtime_ns, file_stat.st_size)
+    except OSError:
+        return None
+
+
 def session_interrupt_event(session_id: str = "") -> asyncio.Event:
     # Keep the default-session compatibility point observable to existing
     # integrations and tests that replace the module-level event.

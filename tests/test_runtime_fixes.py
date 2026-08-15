@@ -3949,9 +3949,15 @@ def test_flush_intermediate_replies_keeps_messages_for_later_saves():
     assert base_messages[-1]["intermediate_reply"] is True
 
 
-async def test_query_round_tool_reports_live_round():
+async def test_query_round_tool_reports_live_round(monkeypatch, tmp_path):
     from cyrene import subagent
     from cyrene.tool_impl.subagent import query_round as tools
+
+    # Isolate from the ambient data/state.json: the live-round view merges the
+    # session state file with the subagent registry, and a real round_1 in the
+    # repo state file would shadow the registry entry this test registers.
+    _patch_state_file(monkeypatch, tmp_path / "state.json")
+    _patch_data_dir(monkeypatch, tmp_path)
 
     await subagent.clear()
     await subagent.register("alice", "research topic", round_id="round_1")

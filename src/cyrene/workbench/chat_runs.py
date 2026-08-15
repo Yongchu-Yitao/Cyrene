@@ -1015,4 +1015,64 @@ class ChatRunManager:
         self._cleanup_tasks.clear()
 
 
-__all__ = ["ChatRun", "ChatRunManager"]
+# Detached post-reply bookkeeping (workspace-changes finalize, structured
+# memory capture, learning schedule) owned at the cyrene layer so both the
+# route and the runtime shutdown path can drain it without a layering cycle.
+_POST_REPLY_BOOKKEEPING_TASKS: set[asyncio.Task[Any]] = set()
+
+
+async def drain_post_reply_bookkeeping_tasks() -> None:
+    """Cancel-safe shutdown drain for the detached post-reply bookkeeping tasks.
+
+    Workspace-changes finalize, structured memory capture and the learning
+    schedule are fire-and-forget; without a drain they are silently lost on app
+    exit (previously they ran inline inside the run task, which ChatRunManager's
+    shutdown waits for). Await them with a bounded grace period, cancel whatever
+    is still pending, and discard the registry so the drain stays idempotent.
+    """
+    tasks = list(_POST_REPLY_BOOKKEEPING_TASKS)
+    if not tasks:
+        return
+    try:
+        _done, pending = await asyncio.wait(tasks, timeout=10.0)
+        for task in pending:
+            task.cancel()
+        if pending:
+            await asyncio.gather(*pending, return_exceptions=True)
+    except asyncio.CancelledError:
+        for task in tasks:
+            task.cancel()
+        raise
+    finally:
+        _POST_REPLY_BOOKKEEPING_TASKS.clear()
+
+
+def schedule_post_reply_bookkeeping(coro: Any, *, error_context: str) -> None:
+    """Track one detached post-reply bookkeeping task in the registry.
+
+    The done callback drops the task reference and surfaces its exception (if
+    any) so a failing detached workload never goes silent.
+    """
+
+    def _done(task: asyncio.Task[Any]) -> None:
+        _POST_REPLY_BOOKKEEPING_TASKS.discard(task)
+        if task.cancelled():
+            return
+        try:
+            exc = task.exception()
+        except asyncio.CancelledError:
+            return
+        if exc is not None:
+            logger.error("Detached task failed: %s", error_context, exc_info=exc)
+
+    task = asyncio.create_task(coro)
+    _POST_REPLY_BOOKKEEPING_TASKS.add(task)
+    task.add_done_callback(_done)
+
+
+__all__ = [
+    "ChatRun",
+    "ChatRunManager",
+    "drain_post_reply_bookkeeping_tasks",
+    "schedule_post_reply_bookkeeping",
+]

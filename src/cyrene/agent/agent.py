@@ -891,6 +891,7 @@ async def _run_main_agent_impl(
     # (clean user + question_prompt pair, no raw tool trace), so the finally
     # below must skip the save when exiting via the pause path.
     paused = False
+    final_saved = False
     try:
         assistant_entry = _assistant_entry_from_response(response, round_id)
         messages.append(assistant_entry)
@@ -954,6 +955,7 @@ async def _run_main_agent_impl(
             if client_request_id:
                 messages[-1]["client_request_id"] = client_request_id
             await _save(_session_messages_to_save(messages))
+            final_saved = True
             return final_text
 
         if ask_user_call:
@@ -987,6 +989,7 @@ async def _run_main_agent_impl(
                 paused = True
                 return _AWAITING_USER_SENTINEL
             await _save(_session_messages_to_save(messages))
+            final_saved = True
             return (await _ensure_text_reply(response, messages, fallback=str(result)))
 
         if use_tools_call or phase1_concrete_calls:
@@ -1178,6 +1181,7 @@ async def _run_main_agent_impl(
                         await _save(_session_messages_to_save(messages))
                         continue
                     await _save(_session_messages_to_save(messages))
+                    final_saved = True
                     return final_text
 
                 awaiting_user = False
@@ -1376,6 +1380,7 @@ async def _run_main_agent_impl(
                     # resumed run rebuilds its context with the throttled batches
                     # that were never written to the state file.
                     await _save(_session_messages_to_save(messages))
+                    final_saved = True
                     return _AWAITING_USER_SENTINEL
                 if quit_requested and not pending_reflection_tool_calls:
                     await _publish_runtime_event({"type": "phase_transition", "from": "execution", "to": "done", "detail": "Agent called quit", "detail_key": "phase.agentQuit"})
@@ -1397,6 +1402,7 @@ async def _run_main_agent_impl(
                         await _save(_session_messages_to_save(messages))
                         continue
                     await _save(_session_messages_to_save(messages))
+                    final_saved = True
                     return final_text
                 _pending_saved_batches += 1
                 if (
@@ -1659,6 +1665,7 @@ async def _run_main_agent_impl(
                     messages.append(_apply_assistant_meta(synthesis_entry))
                     await _sub_clear(round_id=round_id)
                     await _save(_session_messages_to_save(messages))
+                    final_saved = True
                     return final_text
 
         # Deep research first round: if LLM output text instead of calling ask_user, retry
@@ -1719,6 +1726,7 @@ async def _run_main_agent_impl(
                     paused = True
                     return _AWAITING_USER_SENTINEL
                 await _save(_session_messages_to_save(messages))
+                final_saved = True
                 return (await _ensure_text_reply(response, messages, fallback=str(result)))
 
         # Chat-only path (no tools)
@@ -1731,10 +1739,12 @@ async def _run_main_agent_impl(
             if client_request_id:
                 messages[-1]["client_request_id"] = client_request_id
             await _save(_session_messages_to_save(messages))
+            final_saved = True
             return await _ensure_text_reply(response, messages)
         if client_request_id:
             messages[-1]["client_request_id"] = client_request_id
         await _save(_session_messages_to_save(messages))
+        final_saved = True
         return await _ensure_text_reply(response, messages)
     finally:
         # Persist unconditionally (except the pause exit, whose durable state
@@ -1743,8 +1753,9 @@ async def _run_main_agent_impl(
         # the throttle's own save — so a plain save here could be torn down
         # too. Shield keeps the write running on its own task even if this
         # finally's await is cancelled again, so every executed batch reaches
-        # the state file.
-        if not paused:
+        # the state file. The completion paths save the exact final payload
+        # themselves (final_saved), so a clean return only writes once.
+        if not paused and not final_saved:
             try:
                 await asyncio.shield(_save(_session_messages_to_save(messages)))
             except Exception:

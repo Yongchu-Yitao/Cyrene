@@ -19831,6 +19831,10 @@ function WbcSide({
   }
   var activeTab = tabs.some(function (item) { return item.id === tab; }) ? tab : "";
   useWbcLiveChatMetrics(chat, !!runtime);
+  // Keep the Context tab's two async sources warm while the panel is visible
+  // so expanding the tab renders the latest data with no loading flash.
+  var contextBlocks = useWbcLiveContextBlocks(chat, !!runtime);
+  var inboxView = useWbcLiveInbox(chat, !!runtime);
   var flush = false;
   var sideTabMeta = {
     plan: pendingPlan && Array.isArray(pendingPlan.steps) && pendingPlan.steps.length
@@ -19849,7 +19853,7 @@ function WbcSide({
     <>
       {activeTab === "overview" && <WbcOverviewTab chat={chat} loading={chatLoading} detailed={chatDetailed} runtime={runtime} onRename={onRename} onDelete={onDelete} onToTask={onToTask} toTaskBusy={toTaskBusy} onCompact={onCompact} compactBusy={compactBusy} />}
       {activeTab === "plan" && <WbcPlanTab plan={pendingPlan} />}
-      {activeTab === "context" && <WbcContextTab project={project} chat={chat} runtime={runtime} />}
+      {activeTab === "context" && <WbcContextTab project={project} chat={chat} runtime={runtime} contextBlocks={contextBlocks} inboxView={inboxView} />}
       {activeTab === "files" && <WbcArtifactsTab chat={chat} onSelectArtifact={onSelectArtifact} />}
       {activeTab === "artifacts" && <WbcArtifactsTab chat={chat} files={artifactItems} emptyKey="workbenchChat.noArtifacts" emptyFallback="This chat has not delivered any artifacts yet." onSelectArtifact={onSelectArtifact} />}
       {activeTab === "changes" && <WbcChangesTab chatId={activeChatId} onSelectChange={onSelectChange} />}
@@ -21794,6 +21798,43 @@ function useWbcLiveChatMetrics(chat, running) {
   return data && data.chatId === chatId ? data.payload : null;
 }
 
+var WBC_CONTEXT_BLOCKS_CACHE = new Map();
+
+// Same always-mounted preload contract as useWbcLiveChatMetrics: the panel
+// keeps the context composition warm so opening the Context tab renders the
+// latest snapshot immediately instead of flashing placeholder states.
+function useWbcLiveContextBlocks(chat, running) {
+  var chatId = chat ? chat.id : "";
+  var [data, setData] = useWbcState(function () {
+    var cached = chatId ? WBC_CONTEXT_BLOCKS_CACHE.get(chatId) : null;
+    return cached && cached.chatId === chatId ? cached : null;
+  });
+  var updatedAt = chat ? chat.updatedAt : "";
+  var contextRevision = chat ? chat.contextRevision : 0;
+
+  useWbcEffect(function () {
+    if (!chatId) { setData(null); return undefined; }
+    var cancelled = false;
+    function load() {
+      fetch("/api/workbench/chats/" + encodeURIComponent(chatId) + "/context-blocks")
+        .then(function (r) { return r.json(); })
+        .then(function (payload) {
+          if (!cancelled && payload && !payload.error) {
+            var next = { chatId: chatId, payload: payload };
+            WBC_CONTEXT_BLOCKS_CACHE.set(chatId, next);
+            setData(next);
+          }
+        })
+        .catch(function () {});
+    }
+    load();
+    var timer = running ? setInterval(load, 3500) : null;
+    return function () { cancelled = true; if (timer) clearInterval(timer); };
+  }, [chatId, updatedAt, contextRevision, running]);
+
+  return data && data.chatId === chatId ? data.payload : null;
+}
+
 function WbcContextUsage({ data, compact }) {
 
   if (!data) return null;
@@ -22236,26 +22277,9 @@ function wbcBlockLabel(block) {
   return id.replace(/^(main\.|runtime\.|command\.|spawn_policy\.|history\.|session\.)/, "");
 }
 
-function WbcContextBlockList({ chat, running, compact }) {
-  var [data, setData] = useWbcState(null);
-  var chatId = chat ? chat.id : "";
-  var updatedAt = chat ? chat.updatedAt : "";
-  var contextRevision = chat ? chat.contextRevision : 0;
-
-  useWbcEffect(function () {
-    if (!chatId) { setData(null); return undefined; }
-    var cancelled = false;
-    function load() {
-      fetch("/api/workbench/chats/" + encodeURIComponent(chatId) + "/context-blocks")
-        .then(function (r) { return r.json(); })
-        .then(function (payload) { if (!cancelled && payload && !payload.error) setData(payload); })
-        .catch(function () {});
-    }
-    load();
-    var timer = running ? setInterval(load, 3500) : null;
-    return function () { cancelled = true; if (timer) clearInterval(timer); };
-  }, [chatId, updatedAt, contextRevision, running]);
-
+// Data is supplied by the panel-level useWbcLiveContextBlocks preload; this
+// stays a pure renderer so expanding the Context tab never waits on a fetch.
+function WbcContextBlockList({ data, compact }) {
   if (!data || !Array.isArray(data.layers) || data.layers.length === 0) {
     return React.createElement("p", { className: "workbench-muted" },
       wbcT("workbenchChat.ctxBlocks.empty", "Send a message and the context composition will appear here."));
@@ -22623,8 +22647,9 @@ function wbcInboxArgumentPreview(argumentsValue) {
   }).filter(Boolean).join(" · ").slice(0, 240);
 }
 
-function WbcInboxCard({ chat, running, hideTitle }) {
-  var liveView = useWbcLiveInbox(chat, running);
+// The live inbox view is produced by the panel-level useWbcLiveInbox preload
+// so the card renders the latest snapshot the moment the tab opens.
+function WbcInboxCard({ liveView, hideTitle }) {
   var data = liveView.data;
   var counts = (data && data.counts) || {};
   var live = (data && data.live) || {};
@@ -22767,16 +22792,16 @@ function wbcUsedToolPackages(chat, runtime) {
   return used;
 }
 
-function WbcContextTab({ project, chat, runtime }) {
+function WbcContextTab({ project, chat, runtime, contextBlocks, inboxView }) {
   var usedToolPackages = wbcUsedToolPackages(chat, runtime);
   var conversationTitle = wbcT("workbenchChat.conversationContext", "Conversation context");
   var externalAgent = !!wbcChatAgent(chat) && !wbcIsBuiltinAgent(wbcChatAgent(chat));
   return (
     <div className="wbc-context-sections">
       <section className="workbench-side-section" aria-label={conversationTitle}>
-        <WbcContextBlockList chat={chat} running={!!runtime} compact={false} />
+        <WbcContextBlockList data={contextBlocks} compact={false} />
       </section>
-      {!externalAgent && <WbcInboxCard chat={chat} running={!!runtime} hideTitle={true} />}
+      {!externalAgent && <WbcInboxCard liveView={inboxView} hideTitle={true} />}
       {!externalAgent && <section className="workbench-side-section" aria-label={wbcT("workbenchChat.usedToolPackages", "Used tool packages")}>
         <div className="wbc-context-empty-head wbc-tool-pack-head">
           <span className="wbc-context-empty-label">{wbcT("workbenchChat.usedToolPackages", "Used tool packages")}</span>

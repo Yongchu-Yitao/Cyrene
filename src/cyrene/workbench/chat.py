@@ -72,12 +72,16 @@ async def generate_chat_group_metadata(
     from cyrene.model_runtime.messages import assistant_text
 
     target_lang = "en" if str(lang or "").strip().lower() == "en" else "zh"
+
+    def _collapse(value: Any, max_len: int) -> str:
+        return re.sub(r"\s+", " ", str(value or "")).strip()[:max_len]
+
     cleaned: list[dict[str, str]] = []
     for raw in (members or [])[:50]:
         if not isinstance(raw, dict):
             continue
-        title = re.sub(r"\s+", " ", str(raw.get("title") or "")).strip()[:160]
-        preview = re.sub(r"\s+", " ", str(raw.get("preview") or "")).strip()[:800]
+        title = _collapse(raw.get("title"), 160)
+        preview = _collapse(raw.get("preview"), 800)
         if title or preview:
             cleaned.append({"title": title, "preview": preview})
     if len(cleaned) < 2:
@@ -134,8 +138,8 @@ async def generate_chat_group_metadata(
             parsed = json.loads(match.group(0)) if match else {}
         if not isinstance(parsed, dict):
             parsed = {}
-        title = re.sub(r"\s+", " ", str(parsed.get("title") or "")).strip()[:60]
-        summary = re.sub(r"\s+", " ", str(parsed.get("summary") or "")).strip()[:160]
+        title = _collapse(parsed.get("title"), 60)
+        summary = _collapse(parsed.get("summary"), 160)
         if (title_locked or title) and summary:
             break
         logger.warning(
@@ -147,7 +151,7 @@ async def generate_chat_group_metadata(
     if not title_locked and not title:
         title = next(
             (
-                re.sub(r"\s+", " ", str(item.get("title") or "")).strip()[:60]
+                _collapse(item.get("title"), 60)
                 for item in cleaned
                 if str(item.get("title") or "").strip()
             ),
@@ -156,7 +160,7 @@ async def generate_chat_group_metadata(
     if not summary:
         summary = next(
             (
-                re.sub(r"\s+", " ", str(item.get("preview") or "")).strip()[:160]
+                _collapse(item.get("preview"), 160)
                 for item in cleaned
                 if str(item.get("preview") or "").strip()
             ),
@@ -705,7 +709,7 @@ def startup_chat_runs() -> None:
 async def shutdown_chat_runs() -> None:
     await _CHAT_RUN_MANAGER.shutdown()
     try:
-        from route.workbench.chat import drain_post_reply_bookkeeping_tasks
+        from cyrene.workbench.chat_runs import drain_post_reply_bookkeeping_tasks
 
         await drain_post_reply_bookkeeping_tasks()
     except Exception:
@@ -2878,7 +2882,7 @@ async def _publish_live_exchange_segments_loop(
     state_ids_before: set[str],
     stop_event: asyncio.Event,
 ) -> None:
-    from cyrene.agent.context import session_state_file
+    from cyrene.agent.context import session_state_file, state_file_signature
 
     state_path = session_state_file(chat_id)
     published_ids: set[str] = set()
@@ -2888,16 +2892,14 @@ async def _publish_live_exchange_segments_loop(
     # On coarse filesystem clocks (1s+ timestamp granularity) two same-size
     # rewrites within one tick share a signature, so force a pass after the
     # signature has been unchanged for a while to avoid a stalled transcript.
+    # 5s sits past the agent-side save throttle, so a forced pass only fires
+    # when the state file has been idle (or collision-hidden) for a full tick.
     last_signature: tuple[int, int] | None = None
     last_published_ts = time.monotonic()
     while not stop_event.is_set():
         try:
-            try:
-                file_stat = state_path.stat()
-                signature = (file_stat.st_mtime_ns, file_stat.st_size)
-            except OSError:
-                signature = None
-            if signature != last_signature or time.monotonic() - last_published_ts >= 2.0:
+            signature = state_file_signature(state_path)
+            if signature != last_signature or time.monotonic() - last_published_ts >= 5.0:
                 await _publish_live_exchange_segments_once(run, chat_id, state_ids_before, published_ids)
                 last_signature = signature
                 last_published_ts = time.monotonic()

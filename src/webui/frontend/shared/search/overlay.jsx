@@ -45,6 +45,19 @@ var SEARCH_GROUP_KEYS = {
   schedule: "search.group.schedule",
 };
 
+var NEW_ACTION_ICONS = {
+  "new-chat": React.createElement(React.Fragment, null,
+    React.createElement("path", { d: "M21 11.5a8.38 8.38 0 0 1-.9 3.8 8.5 8.5 0 0 1-7.6 4.7 8.38 8.38 0 0 1-3.8-.9L3 21l1.9-5.7a8.38 8.38 0 0 1-.9-3.8 8.5 8.5 0 0 1 4.7-7.6 8.38 8.38 0 0 1 3.8-.9h.5a8.48 8.48 0 0 1 8 8v.5z" }),
+  ),
+  "new-task": React.createElement(React.Fragment, null,
+    React.createElement("path", { d: "M9 11l3 3L22 4M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11" }),
+  ),
+  "new-project": React.createElement(React.Fragment, null,
+    React.createElement("path", { d: "M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z" }),
+    React.createElement("path", { d: "M12 11v6M9 14h6" }),
+  ),
+};
+
 function SearchOverlay({ onClose, onCommand, onOpenSettings }) {
   var { t, lang } = window.CyreneUI.require("i18n").use();
   var inputRef = useRefSr(null);
@@ -127,7 +140,7 @@ function SearchOverlay({ onClose, onCommand, onOpenSettings }) {
     }
     window.addEventListener("keydown", onKeyDown);
     return function () { window.removeEventListener("keydown", onKeyDown); };
-  }, [onClose, status, groups, results, legacyMode, query]);
+  }, [onClose, status, groups, results, legacyMode]);
 
   // Debounced search with request cancellation.
   useEffectSr(function () {
@@ -507,19 +520,6 @@ function SearchOverlay({ onClose, onCommand, onOpenSettings }) {
     );
   }
 
-  var NEW_ACTION_ICONS = {
-    "new-chat": React.createElement(React.Fragment, null,
-      React.createElement("path", { d: "M21 11.5a8.38 8.38 0 0 1-.9 3.8 8.5 8.5 0 0 1-7.6 4.7 8.38 8.38 0 0 1-3.8-.9L3 21l1.9-5.7a8.38 8.38 0 0 1-.9-3.8 8.5 8.5 0 0 1 4.7-7.6 8.38 8.38 0 0 1 3.8-.9h.5a8.48 8.48 0 0 1 8 8v.5z" }),
-    ),
-    "new-task": React.createElement(React.Fragment, null,
-      React.createElement("path", { d: "M9 11l3 3L22 4M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11" }),
-    ),
-    "new-project": React.createElement(React.Fragment, null,
-      React.createElement("path", { d: "M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z" }),
-      React.createElement("path", { d: "M12 11v6M9 14h6" }),
-    ),
-  };
-
   // Idle-state quick actions: three New buttons, hidden as soon as the user
   // starts typing.
   function renderNewAction(cmd, index, arr) {
@@ -577,9 +577,7 @@ function SearchOverlay({ onClose, onCommand, onOpenSettings }) {
     );
   }
 
-  function renderCommandPaletteGroups() {
-    var cmds = matchCommands();
-    var settings = matchSettings();
+  function renderCommandPaletteGroups(cmds, settings) {
     var out = [];
     if (cmds.length) {
       out.push(
@@ -608,9 +606,11 @@ function SearchOverlay({ onClose, onCommand, onOpenSettings }) {
   // instead of recomputing from a closure query that may no longer match
   // the committed DOM (the keydown listener re-registers only after a
   // re-render).
+  var paletteCommands = matchCommands();
+  var paletteSettings = matchSettings();
   flatListRef.current = []
-    .concat(matchCommands())
-    .concat(matchSettings())
+    .concat(paletteCommands)
+    .concat(paletteSettings)
     .concat(legacyMode ? results : flattenGroups(groups));
 
   var totalCount = results.length;
@@ -713,7 +713,7 @@ function SearchOverlay({ onClose, onCommand, onOpenSettings }) {
         ),
 
         // No results
-        status === "done" && totalCount === 0 && matchCommands().length === 0 && matchSettings().length === 0 && React.createElement("div", { className: "search-no-results" },
+        status === "done" && totalCount === 0 && paletteCommands.length === 0 && paletteSettings.length === 0 && React.createElement("div", { className: "search-no-results" },
           noResultsText
         ),
 
@@ -723,7 +723,7 @@ function SearchOverlay({ onClose, onCommand, onOpenSettings }) {
         ),
 
         // Results
-        status === "done" && renderCommandPaletteGroups(),
+        status === "done" && renderCommandPaletteGroups(paletteCommands, paletteSettings),
 
         status === "done" && legacyMode && results.map(function (result, index) {
           return renderLegacyResult(result, index);

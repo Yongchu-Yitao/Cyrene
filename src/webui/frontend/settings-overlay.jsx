@@ -228,13 +228,10 @@ function SettingsOverlay({
   // the lookup for up to ~10s. If the anchor still never appears (e.g.
   // setting-amap-key is only rendered when the AMap provider is selected),
   // give feedback instead of staying silent and land on the tab top.
-  var deepLinkRetryMs = 200;
-  var deepLinkMaxAttempts = 50;
   useEffectSt(function () {
     if (!scrollToId) return;
     var attempts = 0;
     var timer = null;
-    var raf = null;
     function showDeepLinkFallback() {
       var feedback = window.CyreneUI && window.CyreneUI.require
         ? window.CyreneUI.require("feedback")
@@ -255,18 +252,15 @@ function SettingsOverlay({
         setTimeout(function () { el.classList.remove("wb-settings-highlight"); }, 2200);
         return;
       }
-      if (attempts < deepLinkMaxAttempts) {
+      if (attempts < 50) {
         attempts += 1;
-        raf = requestAnimationFrame(function () {
-          timer = setTimeout(tryScroll, deepLinkRetryMs);
-        });
+        timer = setTimeout(tryScroll, 200);
       } else {
         showDeepLinkFallback();
       }
     }
-    raf = requestAnimationFrame(tryScroll);
+    timer = setTimeout(tryScroll, 0);
     return function () {
-      cancelAnimationFrame(raf);
       if (timer) clearTimeout(timer);
     };
   }, [scrollToId]);
