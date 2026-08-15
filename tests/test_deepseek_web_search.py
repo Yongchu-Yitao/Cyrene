@@ -198,7 +198,6 @@ async def test_native_search_errors_are_safe_and_do_not_include_api_key(monkeypa
 
 
 async def test_deep_search_skips_native_search_when_disabled(monkeypatch):
-    from cyrene.tooling.backends import deepseek_web_search as dws
     from cyrene.tooling.backends import search
 
     monkeypatch.setattr(search, "_NATIVE_DEEPSEEK_SEARCH_ENABLED", False)
@@ -260,7 +259,6 @@ async def test_deep_search_uses_native_deepseek_when_enabled(monkeypatch):
 
 
 async def test_deep_search_falls_back_without_official_account(monkeypatch):
-    from cyrene.tooling.backends import deepseek_web_search as dws
     from cyrene.tooling.backends import search
 
     monkeypatch.setattr(search, "_NATIVE_DEEPSEEK_SEARCH_ENABLED", True)
