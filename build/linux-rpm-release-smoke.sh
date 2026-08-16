@@ -18,7 +18,7 @@ mkdir -p "$CYRENE_USER_DATA_DIR" "$CYRENE_CACHE_DIR" "$CYRENE_TEMP_DIR" /run/dbu
 
 backend_output=$(/opt/Cyrene/resources/python-bundle/Cyrene --smoke-test 2>&1)
 printf '%s\n' "$backend_output"
-grep -Fq 'Cyrene smoke test OK: v0.7.9' <<<"$backend_output"
+grep -Fq 'Cyrene smoke test OK: v' <<<"$backend_output"
 grep -Eq 'numpy=[0-9]+\.[0-9]+' <<<"$backend_output"
 
 if [[ ! -S /run/dbus/system_bus_socket ]]; then

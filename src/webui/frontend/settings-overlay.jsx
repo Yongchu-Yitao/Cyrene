@@ -970,7 +970,7 @@ function SettingsOverlay({
     settingsFetch("/api/backup/list").then(function (r) { return r.json(); }).then(function (d) { if (d.ok) setBackupList(d.backups || []); }).catch(function () {});
   }
 
-  function formatBytes(n) { n = Number(n || 0); if (n < 1024) return n + " B"; if (n < 1048576) return (n / 1024).toFixed(1) + " KB"; return (n / 1048576).toFixed(1) + " MB"; }
+  function formatBytes(n) { n = Number(n || 0); if (n < 1024) return n + " B"; if (n < 1048576) return (n / 1024).toFixed(1) + " KB"; if (n < 1073741824) return (n / 1048576).toFixed(1) + " MB"; return (n / 1073741824).toFixed(2) + " GB"; }
   function formatDate(iso) { if (!iso) return "—"; try { return new Date(iso).toLocaleString(); } catch (e) { return iso; } }
 
   // ── Render helpers ──
@@ -1062,7 +1062,7 @@ function SettingsOverlay({
           }),
           tab === "extensions" && React.createElement(ExtensionsPanel, { t }),
           tab === "shortcuts" && React.createElement(ShortcutsPanel, { t }),
-          tab === "data" && DataPanel({ t, redactSecrets, saveRedactSecrets, config, configLoading, resetStatus, setResetStatus, resetting, setResetting, backupList, backupMsg, setBackupMsg, loadBackups, exportSids, setExportSids, workbenchExportSessions, exportFmt, setExportFmt, exportMsg, setExportMsg, formatBytes, formatDate }),
+          tab === "data" && React.createElement(DataPanel, { t, redactSecrets, saveRedactSecrets, config, configLoading, resetStatus, setResetStatus, resetting, setResetting, backupList, backupMsg, setBackupMsg, loadBackups, exportSids, setExportSids, workbenchExportSessions, exportFmt, setExportFmt, exportMsg, setExportMsg, formatBytes, formatDate }),
           tab === "budget" && React.createElement(BudgetPanel, { t, config }),
           tab === "about" && AboutPanel({ t, config }),
         ),
@@ -3963,8 +3963,68 @@ function CapabilitiesPanel(p) {
 }
 
 // ── Data Panel ──
+var STORAGE_LABEL = {
+  database: "settings.storageDatabase",
+  knowledge: "settings.storageKnowledge",
+  memory: "settings.storageMemory",
+  conversations: "settings.storageConversations",
+  plans: "settings.storagePlans",
+  deliverables: "settings.storageDeliverables",
+  projects: "settings.storageProjects",
+  sessions: "settings.storageSessions",
+  inbox: "settings.storageInbox",
+  skills: "settings.storageSkills",
+  attachments: "settings.storageAttachments",
+  backups: "settings.storageBackups",
+  local_models: "settings.storageLocalModels",
+  codex_cli: "settings.storageCodexCli",
+  opencv_runtime: "settings.storageOpencvRuntime",
+  browser: "settings.storageBrowser",
+  caches: "settings.storageCaches",
+};
+
+var STORAGE_COLORS = {
+  database: "#3b82f6",
+  knowledge: "#a855f7",
+  memory: "#d946ef",
+  conversations: "#22c55e",
+  plans: "#f59e0b",
+  deliverables: "#ef4444",
+  projects: "#06b6d4",
+  sessions: "#ec4899",
+  inbox: "#84cc16",
+  skills: "#8b5cf6",
+  attachments: "#f97316",
+  backups: "#64748b",
+  local_models: "#14b8a6",
+  codex_cli: "#0ea5e9",
+  opencv_runtime: "#eab308",
+  browser: "#6366f1",
+  caches: "#78716c",
+};
+
 function DataPanel(p) {
   var { t, redactSecrets, saveRedactSecrets, config, configLoading, resetStatus, setResetStatus, resetting, setResetting, backupList, backupMsg, setBackupMsg, loadBackups, exportSids, setExportSids, workbenchExportSessions, exportFmt, setExportFmt, exportMsg, setExportMsg, formatBytes, formatDate } = p;
+
+  var [storage, setStorage] = useStateSt(null);
+  var [storageLoading, setStorageLoading] = useStateSt(false);
+  var [storageError, setStorageError] = useStateSt("");
+
+  function loadStorage() {
+    setStorageLoading(true);
+    setStorageError("");
+    settingsFetch("/api/settings/storage").then(function (r) { return r.json(); }).then(function (payload) {
+      setStorage(payload);
+      setStorageLoading(false);
+    }).catch(function (e) {
+      setStorageError(e.message || String(e));
+      setStorageLoading(false);
+    });
+  }
+
+  useEffectSt(function () { loadStorage(); }, []);
+
+  var storageList = (storage ? storage.categories : []).slice().sort(function (a, b) { return b.bytes - a.bytes; });
 
   var dataStore = window.CyreneUI.require("data");
   var dataState = dataStore.state;
@@ -4082,6 +4142,40 @@ function DataPanel(p) {
 
   return React.createElement("div", { className: "settings-panel" },
     SectionTitle(t("settings.data"), t("settings.dataSubtitle")),
+
+    // Storage usage
+    React.cloneElement(SectionBlock(t("settings.storageUsage"), t("settings.storageUsageHint"),
+      React.createElement("div", { className: "wb-inline-row" },
+        React.createElement("b", { className: "mono" }, storage ? formatBytes(storage.total) : t("settings.storageLoading")),
+      ),
+      storageLoading && !storage
+        ? React.createElement("p", { className: "wb-hint" }, t("settings.storageLoading"))
+        : storageError
+          ? React.createElement("p", { className: "wb-hint" }, t("settings.storageError") + ": " + storageError)
+          : storage && React.createElement("div", { className: "wb-storage" },
+              storage.total > 0 && React.createElement("div", { className: "wb-storage-bar", role: "img", "aria-label": t("settings.storageUsage") },
+                storageList.filter(function (c) { return c.bytes > 0; }).map(function (c) {
+                  return React.createElement("span", {
+                    key: c.key,
+                    className: "wb-storage-seg",
+                    style: { width: (c.bytes / storage.total * 100) + "%", background: STORAGE_COLORS[c.key] || "#78716c" },
+                    title: t(STORAGE_LABEL[c.key] || "settings.storageCaches") + ": " + formatBytes(c.bytes) + " · " + t("settings.storageFiles", { n: c.files }),
+                  });
+                }),
+              ),
+              React.createElement("div", { className: "wb-storage-legend" },
+                storageList.map(function (c) {
+                  return React.createElement("div", { className: "wb-storage-legend-row" + (c.bytes === 0 ? " empty" : ""), key: c.key },
+                    React.createElement("span", { className: "wb-storage-swatch", style: { background: STORAGE_COLORS[c.key] || "#78716c" } }),
+                    React.createElement("span", { className: "wb-storage-legend-name" }, t(STORAGE_LABEL[c.key] || "settings.storageCaches")),
+                    React.createElement("b", { className: "mono" }, formatBytes(c.bytes)),
+                  );
+                }),
+              ),
+            ),
+      storage && storage.truncated ? React.createElement("p", { className: "wb-hint" }, t("settings.storageTruncated")) : null,
+    ), { id: "setting-storage" }),
+
     FieldRow(t("settings.redactSecrets"), t("settings.redactSecretsHint"), Toggle(redactSecrets, function () { saveRedactSecrets(!redactSecrets); }),
       undefined, "setting-redact-secrets"),
     FieldRow(t("settings.clearSession"), t("settings.clearSessionHint"),

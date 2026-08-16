@@ -1062,6 +1062,12 @@ def register_settings_routes(router: APIRouter, bot: Any, db_path: str) -> None:
     async def api_get_config():
         return _build_config()
 
+    @router.get("/api/settings/storage")
+    async def api_get_storage():
+        from cyrene.runtime.storage import scan_storage
+
+        return await asyncio.to_thread(scan_storage)
+
     @router.get("/api/settings/namespaces/{namespace}")
     async def api_get_settings_namespace(namespace: str):
         from cyrene.runtime.host_bridge import HostBridgeError, call_host
