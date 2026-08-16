@@ -1839,9 +1839,9 @@ async def _backfill_runtime_logs(db_path: str) -> None:
 
 async def _backfill_conversation_archives(db_path: str) -> None:
     from cyrene.runtime.memory.archive_format import parse_archive_sections
-    from cyrene.runtime.paths import WORKSPACE_DIR
+    from cyrene.runtime.paths import WORKSPACE_DIR, cyrene_dir
 
-    conversations_dir = WORKSPACE_DIR / "conversations"
+    conversations_dir = cyrene_dir(WORKSPACE_DIR) / "conversations"
     if not conversations_dir.exists():
         return
     async with aiosqlite.connect(db_path) as db:

@@ -1,0 +1,416 @@
+/* ── In-app tutorial: center overlay + spotlight ── */
+
+/* z-index ladder (above context menu 10150, confirm 10100, help 10020):
+   scrim 10160 / frame 10170 / bubble 10180 */
+
+/* The tutorial portal renders on <body>, outside .workbench-shell where the
+   --wb-* surface tokens are defined. Re-derive the few tokens the panel and
+   bubble need from the global theme tokens (styles.css) so light/dark and
+   the accent stay consistent. */
+.tour-center-overlay,
+.tour-spotlight {
+  --wb-modal-bg: var(--bg-2, #ffffff);
+  --wb-modal-border: color-mix(in srgb, var(--text) 11%, var(--line));
+  --wb-modal-radius: 16px;
+  --wb-modal-scrim-bg: color-mix(in srgb, #06101d 55%, transparent);
+  --wb-modal-scrim-filter: blur(4px);
+  --wb-modal-shadow:
+    0 28px 80px color-mix(in srgb, #06101d 34%, transparent),
+    0 3px 12px color-mix(in srgb, #06101d 12%, transparent);
+  --wb-line: var(--line);
+  --wb-text-dim: color-mix(in srgb, var(--text) 68%, transparent);
+  --wb-row-hover-bg: color-mix(in srgb, var(--accent) 8%, var(--bg-2));
+  --wb-line-strong: color-mix(in srgb, var(--text) 20%, transparent);
+  --wb-line-soft: color-mix(in srgb, var(--text) 9%, transparent);
+}
+
+.tour-center-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 10160;
+  display: grid;
+  place-items: center;
+  padding: 24px;
+  background: var(--wb-modal-scrim-bg);
+  -webkit-backdrop-filter: var(--wb-modal-scrim-filter);
+  backdrop-filter: var(--wb-modal-scrim-filter);
+  animation: wb-confirm-fade 0.14s ease-out;
+}
+
+.tour-center-panel {
+  width: min(860px, calc(100vw - 48px));
+  height: min(620px, calc(100vh - 48px));
+  display: flex;
+  flex-direction: column;
+  overflow: hidden; /* keep child surfaces (list/detail backgrounds) inside the rounded corners */
+  background: var(--wb-modal-bg, var(--wb-panel-bg, #fff));
+  border: 1px solid var(--wb-modal-border);
+  border-radius: var(--wb-modal-radius);
+  box-shadow: 0 18px 60px rgba(0, 0, 0, 0.35);
+  outline: none;
+}
+
+.tour-center-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 18px 22px;
+  border-bottom: 1px solid var(--wb-line, #e2e7ee);
+}
+
+.tour-center-head-copy h2 {
+  margin: 0;
+  font-size: 17px;
+  font-weight: 650;
+}
+
+.tour-center-head-copy p {
+  margin: 3px 0 0;
+  font-size: 12.5px;
+  color: var(--wb-text-dim, #7a8394);
+}
+
+.tour-center-body {
+  flex: 1;
+  display: grid;
+  grid-template-columns: 260px 1fr;
+  min-height: 0;
+}
+
+.tour-center-list {
+  overflow-y: auto;
+  padding: 12px 10px;
+  border-right: 1px solid var(--wb-line, #e2e7ee);
+  background: var(--wb-row-hover-bg, rgba(127, 127, 127, 0.05));
+}
+
+.tour-center-module-title {
+  padding: 10px 10px 5px;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--wb-text-dim, #7a8394);
+}
+
+.tour-center-guide {
+  display: flex;
+  align-items: flex-start;
+  gap: 9px;
+  width: 100%;
+  text-align: left;
+  padding: 9px 10px;
+  border-radius: 9px;
+  border: 1px solid transparent;
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+}
+
+.tour-center-guide:hover {
+  background: var(--wb-row-hover-bg, rgba(127, 127, 127, 0.08));
+}
+
+.tour-center-guide.active {
+  background: color-mix(in srgb, var(--accent, #4f7cff) 14%, transparent);
+  border-color: color-mix(in srgb, var(--accent, #4f7cff) 38%, transparent);
+}
+
+.tour-center-guide-check {
+  flex: 0 0 18px;
+  width: 18px;
+  height: 18px;
+  margin-top: 1px;
+  display: grid;
+  place-items: center;
+  border-radius: 50%;
+  border: 1.5px solid var(--wb-line-strong, #cdd5e0);
+  color: transparent;
+}
+
+.tour-center-guide.active .tour-center-guide-check {
+  border-color: var(--accent, #4f7cff);
+}
+
+.tour-center-guide-check svg {
+  color: var(--accent, #4f7cff);
+}
+
+.tour-center-guide-main {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.tour-center-guide-main b {
+  font-size: 13px;
+  font-weight: 600;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.tour-center-guide-main small {
+  font-size: 11.5px;
+  color: var(--wb-text-dim, #7a8394);
+}
+
+.tour-center-detail {
+  overflow-y: auto;
+  padding: 22px 26px;
+}
+
+.tour-center-detail-title {
+  font-size: 19px;
+  font-weight: 700;
+}
+
+.tour-center-detail-desc {
+  margin-top: 7px;
+  font-size: 13px;
+  line-height: 1.6;
+  color: var(--wb-text-dim, #7a8394);
+}
+
+.tour-center-detail-steps {
+  margin-top: 18px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.tour-center-step {
+  display: flex;
+  align-items: center;
+  gap: 11px;
+  padding: 9px 12px;
+  border-radius: 10px;
+  background: var(--wb-row-hover-bg, rgba(127, 127, 127, 0.05));
+}
+
+.tour-center-step-index {
+  flex: 0 0 22px;
+  width: 22px;
+  height: 22px;
+  display: grid;
+  place-items: center;
+  border-radius: 50%;
+  background: var(--accent, #4f7cff);
+  color: #fff;
+  font-size: 12px;
+  font-weight: 650;
+}
+
+.tour-center-step-label {
+  flex: 1;
+  font-size: 13px;
+  font-weight: 550;
+}
+
+.tour-center-step-kind {
+  font-size: 11px;
+  color: var(--wb-text-dim, #7a8394);
+  background: var(--wb-line-soft, rgba(127, 127, 127, 0.12));
+  padding: 2px 8px;
+  border-radius: 999px;
+}
+
+.tour-center-detail-done {
+  margin-top: 14px;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  font-size: 12.5px;
+  color: var(--wb-green, #22b07a);
+}
+
+.tour-center-detail-actions {
+  margin-top: 18px;
+  display: flex;
+  gap: 10px;
+}
+
+/* ── spotlight ── */
+
+.tour-spotlight {
+  position: fixed;
+  inset: 0;
+  z-index: 10160;
+  pointer-events: none;
+}
+
+.tour-scrim {
+  position: fixed;
+  pointer-events: auto;
+  cursor: default;
+  animation: tour-scrim-fade 0.18s ease-out;
+}
+
+@keyframes tour-scrim-fade {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+.tour-frame {
+  position: fixed;
+  pointer-events: none;
+  animation: tour-frame-pop 0.16s ease-out;
+}
+
+@keyframes tour-frame-pop {
+  from { opacity: 0; transform: scale(0.98); }
+  to { opacity: 1; transform: scale(1); }
+}
+
+.tour-bubble {
+  position: fixed;
+  width: min(360px, calc(100vw - 32px));
+  background: var(--wb-modal-bg, var(--wb-panel-bg, #fff));
+  border: 1px solid var(--wb-modal-border);
+  border-radius: 14px;
+  box-shadow: 0 14px 48px rgba(0, 0, 0, 0.38);
+  padding: 15px 17px 13px;
+  pointer-events: auto;
+  animation: tour-bubble-pop 0.16s ease-out;
+}
+
+.tour-bubble-centered {
+  left: 50%;
+  top: 50%;
+  transform: translate(-50%, -50%);
+}
+
+@keyframes tour-bubble-pop {
+  from { opacity: 0; transform: translateY(8px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+.tour-bubble-centered.tour-bubble-centered {
+  animation-name: tour-bubble-pop-center;
+}
+
+@keyframes tour-bubble-pop-center {
+  from { opacity: 0; transform: translate(-50%, calc(-50% + 8px)); }
+  to { opacity: 1; transform: translate(-50%, -50%); }
+}
+
+.tour-bubble-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  margin-bottom: 9px;
+}
+
+.tour-bubble-guide {
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--accent, #4f7cff);
+}
+
+.tour-bubble-count {
+  font-size: 11.5px;
+  color: var(--wb-text-dim, #7a8394);
+}
+
+.tour-bubble-title {
+  font-size: 14.5px;
+  font-weight: 650;
+  margin-bottom: 7px;
+}
+
+.tour-bubble-body {
+  font-size: 13px;
+  line-height: 1.6;
+}
+
+.tour-bubble-body p {
+  margin: 0 0 6px;
+}
+
+.tour-bubble-body p:last-child {
+  margin-bottom: 0;
+}
+
+.tour-bubble-point {
+  display: flex;
+  gap: 8px;
+  margin-top: 5px;
+}
+
+.tour-bubble-point-bullet {
+  color: var(--accent, #4f7cff);
+}
+
+.tour-bubble-tip {
+  margin-top: 9px;
+  padding: 8px 10px;
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--accent, #4f7cff) 10%, transparent);
+  font-size: 12.5px;
+}
+
+.tour-bubble-interact {
+  margin-top: 9px;
+  padding: 8px 10px;
+  border-radius: 8px;
+  background: var(--wb-row-hover-bg, rgba(127, 127, 127, 0.08));
+  font-size: 12.5px;
+  font-weight: 600;
+  color: var(--accent, #4f7cff);
+}
+
+.tour-bubble-missing {
+  margin-top: 9px;
+  font-size: 12px;
+  color: var(--wb-amber, #c98a12);
+}
+
+.tour-bubble-foot {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  margin-top: 13px;
+}
+
+.tour-bubble-dots {
+  display: flex;
+  gap: 5px;
+}
+
+.tour-bubble-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--wb-line-strong, #cdd5e0);
+}
+
+.tour-bubble-dot.active {
+  background: var(--accent, #4f7cff);
+}
+
+.tour-bubble-actions {
+  display: flex;
+  gap: 7px;
+  align-items: center;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+
+.tour-bubble-stop {
+  color: var(--wb-text-dim, #7a8394);
+}
+
+@media (max-width: 640px) {
+  .tour-center-body {
+    grid-template-columns: 1fr;
+  }
+  .tour-center-list {
+    display: none;
+  }
+}

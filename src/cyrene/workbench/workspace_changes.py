@@ -18,6 +18,7 @@ from typing import Any
 
 from cyrene.config import DATA_DIR
 from cyrene.runtime.io import atomic_write_json, read_json_safe
+from cyrene.runtime.paths import CYRENE_DIR_NAME
 from cyrene.workbench.store import read_document, write_document
 
 
@@ -28,8 +29,15 @@ _IGNORED_DIRS = {
 }
 # Cyrene writes these folders as an implementation detail of a conversation.
 # They are useful memory/plan mirrors, but they are not files the Agent created
-# for the user and must never appear as run-scoped workspace changes.
-_CYRENE_MANAGED_ROOT_DIRS = frozenset({"conversations", "plan"})
+# for the user and must never appear as run-scoped workspace changes. Since
+# everything Cyrene-owned now lives under the hidden .cyrene dir, any path
+# rooted there is managed.
+_CYRENE_MANAGED_ROOT_DIRS = frozenset({CYRENE_DIR_NAME})
+# A failed migration can leave signature-matching legacy folders at the
+# workspace root; those are Cyrene-owned too and must stay filtered. The
+# signature check keeps a user's own same-named folders visible.
+_LEGACY_SIGNATURE_ROOT_DIRS = frozenset({"conversations", "plan"})
+_legacy_managed_dir_cache: dict[tuple[str, str], bool] = {}
 _MAX_TEXT_FILE_BYTES = 1_000_000
 _MAX_CAPTURED_TEXT_BYTES = 32_000_000
 _MAX_CAPTURED_TEXT_FILES = 2_000
@@ -45,15 +53,52 @@ def _utc_now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
-def is_cyrene_managed_workspace_path(path_value: Any) -> bool:
-    """Return whether a workspace-relative path is Cyrene-owned run state."""
+def _looks_like_legacy_managed_dir(workspace_root: Path, root_name: str) -> bool:
+    """Whether a workspace-root folder matches Cyrene's output signature.
+
+    Cached per (root, name); once the legacy folder is migrated away it no
+    longer exists and the check short-circuits on the is_dir() probe.
+    """
+    folder = workspace_root / root_name
+    if not folder.is_dir():
+        return False
+    key = (str(workspace_root), root_name)
+    cached = _legacy_managed_dir_cache.get(key)
+    if cached is not None:
+        return cached
+    from cyrene.runtime.cyrene_migration import _looks_like_cyrene_folder
+
+    result = _looks_like_cyrene_folder(workspace_root, root_name)
+    _legacy_managed_dir_cache[key] = result
+    return result
+
+
+def is_cyrene_managed_workspace_path(
+    path_value: Any,
+    workspace_root: Any = None,
+) -> bool:
+    """Return whether a workspace-relative path is Cyrene-owned run state.
+
+    ``workspace_root`` enables signature-based filtering of legacy root-level
+    folders (conversations/plan) that a failed migration left behind; without
+    it, only the hidden .cyrene dir is considered managed.
+    """
     normalized = str(path_value or "").strip().replace("\\", "/")
     while normalized.startswith("./"):
         normalized = normalized[2:]
     if not normalized or normalized.startswith("/"):
         return False
     root_name = normalized.split("/", 1)[0]
-    return root_name in _CYRENE_MANAGED_ROOT_DIRS
+    if root_name in _CYRENE_MANAGED_ROOT_DIRS:
+        return True
+    if workspace_root and root_name in _LEGACY_SIGNATURE_ROOT_DIRS:
+        try:
+            root = Path(workspace_root).expanduser().resolve()
+        except OSError:
+            root = None
+        if root is not None and _looks_like_legacy_managed_dir(root, root_name):
+            return True
+    return False
 
 
 @dataclass(frozen=True)
@@ -232,7 +277,7 @@ def compare_workspace_snapshots(
         return []
     changes: list[dict[str, Any]] = []
     for path in sorted(set(before.files) | set(after.files)):
-        if is_cyrene_managed_workspace_path(path):
+        if is_cyrene_managed_workspace_path(path, after.root):
             continue
         old = before.files.get(path)
         new = after.files.get(path)
@@ -343,11 +388,12 @@ def save_change_set(db_path: str, change_set: dict[str, Any]) -> dict[str, Any]:
     items = payload.setdefault("changeSets", [])
     change_id = str(change_set.get("id") or "")
     replacement = dict(change_set)
+    workspace_root = change_set.get("workspacePath")
     replacement["files"] = [
         dict(item)
         for item in change_set.get("files") or []
         if isinstance(item, dict)
-        and not is_cyrene_managed_workspace_path(item.get("path"))
+        and not is_cyrene_managed_workspace_path(item.get("path"), workspace_root)
     ]
     replacement["fileCount"] = len(replacement["files"])
     replacement["additions"] = sum(
@@ -405,11 +451,12 @@ def _public_change_set(change_set: dict[str, Any]) -> dict[str, Any]:
         key: value for key, value in change_set.items()
         if key not in {"files", "workspacePath"}
     }
+    workspace_root = change_set.get("workspacePath")
     result["files"] = [
         {key: value for key, value in item.items() if key != "diff"}
         for item in change_set.get("files") or []
         if isinstance(item, dict)
-        and not is_cyrene_managed_workspace_path(item.get("path"))
+        and not is_cyrene_managed_workspace_path(item.get("path"), workspace_root)
     ]
     result["fileCount"] = len(result["files"])
     result["additions"] = sum(int(item.get("additions") or 0) for item in result["files"])
@@ -438,8 +485,6 @@ def get_chat_file_change(
     change_set_id: str,
     file_path: str,
 ) -> dict[str, Any] | None:
-    if is_cyrene_managed_workspace_path(file_path):
-        return None
     payload = _read_store(db_path)
     for change_set in payload.get("changeSets") or []:
         if not isinstance(change_set, dict):
@@ -448,6 +493,8 @@ def get_chat_file_change(
             continue
         if str(change_set.get("id") or "") != str(change_set_id):
             continue
+        if is_cyrene_managed_workspace_path(file_path, change_set.get("workspacePath")):
+            return None
         for item in change_set.get("files") or []:
             if isinstance(item, dict) and str(item.get("path") or "") == str(file_path):
                 return dict(item)

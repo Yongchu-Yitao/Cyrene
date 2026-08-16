@@ -3265,6 +3265,15 @@ function WorkbenchApp({ theme, actualTheme, onToggleTheme, needsOnboarding }) {
         }
       )}
       {React.createElement(window.CyreneUI.require("feedback").Host)}
+      {React.createElement(window.CyreneUI.require("tour-host").Host, {
+        setOverlayObscured: wbSetBrowserOverlayObscured,
+        onOpenPage: handleOpenPage,
+        onOpenSettings: function (tab) {
+          setSettingsTab(typeof tab === "string" ? tab : "");
+          setSettingsScrollTo(null);
+          setSettingsOpen(true);
+        },
+      })}
     </div>
   );
 }
@@ -4384,6 +4393,7 @@ function WorkbenchTopbar({ projects, activeProject, activePage, taskView, active
         ) : null}
       </nav>
       <div
+        data-tour="topbar_resources"
         className={"workbench-resource-shelf" + (resourceDropActive ? " drop-active" : "")}
         aria-label={t("workbench.resourceShelf.title", "Pinned resources")}
         onDragEnter={function (event) {
@@ -4595,7 +4605,7 @@ function WorkbenchNotificationCenter({ notifications, onReload, onOpenNotificati
 
   return (
     <div className={"workbench-notif-anchor" + (open ? " open" : "")} ref={rootRef}>
-      <button type="button" className={"workbench-icon-btn workbench-notif-btn" + (open ? " active" : "")} title={t("notifications.title")} onClick={function () { setOpen(!open); }}>
+      <button type="button" data-tour="topbar_notifications" className={"workbench-icon-btn workbench-notif-btn" + (open ? " active" : "")} title={t("notifications.title")} onClick={function () { setOpen(!open); }}>
         <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d="M18 8a6 6 0 1 0-12 0c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M10.3 21a1.9 1.9 0 0 0 3.4 0"/></svg>
         {unreadCount > 0 ? <span className="workbench-notif-badge">{unreadCount > 99 ? "99+" : unreadCount}</span> : null}
       </button>
@@ -4741,6 +4751,11 @@ function WorkbenchHelpCenter({ onNewProject, onNewTask, onOpenPage, onSettings }
 
   var quickItems = [
     {
+      id: "tutorial", tone: "cyan", title: t("help.tutorial"), desc: t("help.tutorialDesc"),
+      icon: <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20V2H6.5A2.5 2.5 0 0 0 4 4.5v15Z"/><path d="M4 19.5A2.5 2.5 0 0 0 6.5 22H20v-5"/><path d="M8.5 7h7M8.5 11h7"/></svg>,
+      action: function () { window.CyreneUI.require("tour").open(); },
+    },
+    {
       id: "get-started", tone: "purple", title: t("help.getStarted"), desc: t("help.getStartedDesc"),
       icon: <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d="M5 15c-1.5 1.5-2 5-2 5s3.5-.5 5-2M9 11a9 9 0 0 1 9-9c1.5 0 2 .5 2 2a9 9 0 0 1-9 9M9 11l4 4M9 11l-4-1 2.5-2.5M13 15l1 4 2.5-2.5"/></svg>,
       action: function () { onOpenPage && onOpenPage("welcome"); },
@@ -4779,7 +4794,7 @@ function WorkbenchHelpCenter({ onNewProject, onNewTask, onOpenPage, onSettings }
 
   return (
     <div className={"workbench-help-anchor" + (open ? " open" : "")} ref={rootRef}>
-      <button type="button" className={"workbench-icon-btn" + (open ? " active" : "")} title={t("workbench.help")} aria-label={t("workbench.help")} aria-expanded={open} onClick={function () { setOpen(!open); }}>
+      <button type="button" data-tour="topbar_help" className={"workbench-icon-btn" + (open ? " active" : "")} title={t("workbench.help")} aria-label={t("workbench.help")} aria-expanded={open} onClick={function () { setOpen(!open); }}>
         <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="10"/><path d="M9.1 9a3 3 0 0 1 5.8 1c0 2-3 3-3 3"/><path d="M12 17h.01"/></svg>
       </button>
       {open ? (
@@ -5345,6 +5360,7 @@ function WorkbenchSidebarDock({ activePage, onOpenPage, onSettings, collapsed, p
             <button
               key={item.id}
               type="button"
+              data-tour={"rail_" + item.id}
               className={active ? "active" : ""}
               title={item.label}
               aria-label={item.label}
@@ -5973,7 +5989,7 @@ function TaskBoard({ project, loading, error, onOpenSession, onCreateSession, on
   }
 
   return (
-    <main className="workbench-task-board" aria-label={t("taskBoard.title")}>
+    <main className="workbench-task-board" data-tour="task_board" aria-label={t("taskBoard.title")}>
       <header className="wb-board-header">
         <div className="wb-board-heading">
           <span className="wb-board-kicker">{t("taskBoard.title")}</span>
@@ -5984,7 +6000,7 @@ function TaskBoard({ project, loading, error, onOpenSession, onCreateSession, on
           <button type="button" className={"wb-board-tool-btn" + (recentFirst ? " active" : "")} onClick={function () { setRecentFirst(!recentFirst); }}>
             {recentFirst ? t("taskBoard.sortRecent") : t("taskBoard.sortDefault")}
           </button>
-          <button type="button" className="wb-board-new-btn" onClick={onCreateSession}>{t("taskBoard.newTask")}</button>
+          <button type="button" data-tour="task_new" className="wb-board-new-btn" onClick={onCreateSession}>{t("taskBoard.newTask")}</button>
         </div>
       </header>
       {error && <div className="workbench-error wb-board-error">{error}</div>}

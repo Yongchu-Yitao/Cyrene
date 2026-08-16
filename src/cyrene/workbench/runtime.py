@@ -81,6 +81,7 @@ from cyrene.config import (
     STATE_FILE,
     TEMP_DIR,
     WORKSPACE_DIR,
+    cyrene_dir,
 )
 from cyrene.runtime.memory.conversations import (
     CONVERSATIONS_DIR,
@@ -4042,7 +4043,7 @@ def _workbench_workspace_root(project: dict[str, Any] | None) -> Path | None:
         (project or {}).get("workspacePathSource") or ""
     ).strip().lower()
     if workspace_source == "generated" and project_id:
-        return (WORKSPACE_DIR / "projects" / project_id).resolve()
+        return (cyrene_dir(WORKSPACE_DIR) / "projects" / project_id).resolve()
     if (
         _workbench_project_data_key(project or {}) == _WORKBENCH_LEGACY_DATA_KEY
         and not workspace_source
@@ -4056,9 +4057,18 @@ def _workbench_workspace_root(project: dict[str, Any] | None) -> Path | None:
     if not workspace_path:
         return None
     try:
-        return Path(workspace_path).expanduser().resolve()
+        candidate = Path(workspace_path).expanduser().resolve()
     except OSError:
         return None
+    # Projects created before workspacePathSource existed store the pre-
+    # migration location (workspace/projects/<id>). The migration moved that
+    # whole folder into .cyrene/projects, so rebase the stored path instead of
+    # letting the agent recreate an empty directory at the old location.
+    if project_id and not workspace_source:
+        legacy_root = (WORKSPACE_DIR / "projects").resolve()
+        if candidate.is_relative_to(legacy_root):
+            return (cyrene_dir(WORKSPACE_DIR) / "projects" / project_id).resolve()
+    return candidate
 
 
 def _workbench_display_path(path_value: Any, workspace_root: Path | None = None) -> str:
@@ -4083,7 +4093,7 @@ def _workbench_display_path(path_value: Any, workspace_root: Path | None = None)
 
 def _workbench_file_change(path_value: Any, status: str, workspace_root: Path | None = None, source: str = "") -> dict[str, Any] | None:
     path = _workbench_display_path(path_value, workspace_root)
-    if not path or is_cyrene_managed_workspace_path(path):
+    if not path or is_cyrene_managed_workspace_path(path, workspace_root):
         return None
     return {
         "id": _short_id("file"),
@@ -4111,9 +4121,19 @@ def _workbench_file_changes_from_tool_event(event: dict[str, Any], workspace_roo
     elif tool == "send_file" and isinstance(args, dict):
         # send_file is an explicit declaration that an existing workspace file
         # is a user-facing deliverable. It may not mutate the file, but it is the
-        # strongest available artifact signal.
+        # strongest available artifact signal. The tool result carries the
+        # durable webui_exports attachment (public payload: id/name/url, no
+        # path); pin its id so artifact downloads resolve the exported copy even
+        # if the source is later edited or removed.
         change = _workbench_file_change(args.get("path"), "produced", workspace_root, tool)
         if change:
+            try:
+                parsed = json.loads(result or "{}")
+                attachment = (parsed or {}).get("attachment")
+                if isinstance(attachment, dict) and attachment.get("id"):
+                    change["attachment"] = attachment
+            except Exception:
+                pass
             changes.append(change)
 
     # Tool output is a useful fallback for older/remote tool names and for
@@ -4157,8 +4177,12 @@ def _workbench_merge_file_changes(changes: list[dict[str, Any]]) -> list[dict[st
             old["changeType"] = new_status
             if new_status == "produced" and item.get("source"):
                 old["source"] = item.get("source")
+            if new_status == "produced" and isinstance(item.get("attachment"), dict):
+                old["attachment"] = item.get("attachment")
         if item.get("source") and not old.get("source"):
             old["source"] = item.get("source")
+        if item.get("attachment") and not old.get("attachment"):
+            old["attachment"] = item.get("attachment")
         if item.get("diff") and not old.get("diff"):
             old["diff"] = item.get("diff")
             if item.get("diffSource"):
@@ -4199,7 +4223,7 @@ def _workbench_workspace_file_snapshot(workspace_root: Path | None) -> dict[str,
             if current_path == root:
                 dirnames[:] = [
                     name for name in dirnames
-                    if not is_cyrene_managed_workspace_path(name)
+                    if not is_cyrene_managed_workspace_path(name, root)
                 ]
             for filename in filenames:
                 if filename.startswith("."):
@@ -4241,7 +4265,7 @@ def _workbench_workspace_text_snapshot(workspace_root: Path | None) -> dict[str,
             if current_path == root:
                 dirnames[:] = [
                     name for name in dirnames
-                    if not is_cyrene_managed_workspace_path(name)
+                    if not is_cyrene_managed_workspace_path(name, root)
                 ]
             if len(snapshot) >= _WORKBENCH_TEXT_SNAPSHOT_MAX_FILES:
                 break
@@ -4424,7 +4448,7 @@ def _workbench_git_status_snapshot(workspace_root: Path | None) -> dict[str, str
         else:
             path = repo_path
         normalized = _workbench_display_path(path, workspace_root)
-        if normalized and not is_cyrene_managed_workspace_path(normalized):
+        if normalized and not is_cyrene_managed_workspace_path(normalized, workspace_root):
             snapshot[normalized] = code
     return snapshot
 
@@ -4483,13 +4507,59 @@ def _workbench_artifact_download_target(
         raise LookupError("artifact not found")
     if artifact.get("type") != "file_change":
         raise ValueError("artifact is not a downloadable file")
+    # Prefer the durable webui_exports copy pinned by send_file (attachment id
+    # is the exported filename); fall back to the workspace-relative path for
+    # artifacts created before that pinning existed (or for plain
+    # created/modified file changes).
+    attachment_id = str((artifact.get("attachment") or {}).get("id") or "").strip()
+    if attachment_id:
+        try:
+            exported = (_EXPORTS_DIR / attachment_id).resolve()
+            if exported.is_relative_to(_EXPORTS_DIR.resolve()) and exported.is_file():
+                return artifact, exported
+        except (OSError, ValueError):
+            pass
     target = _workbench_resolve_workspace_file(
         _workbench_workspace_root(project),
         artifact.get("path") or artifact.get("name"),
     )
     if not target.exists() or not target.is_file():
-        raise FileNotFoundError("artifact file not found")
+        fallback = _workbench_find_exported_copy(
+            artifact.get("path") or artifact.get("name")
+        )
+        if fallback is None:
+            raise FileNotFoundError("artifact file not found")
+        return artifact, fallback
     return artifact, target
+
+
+def _workbench_find_exported_copy(path_value: Any) -> Path | None:
+    """Find the durable webui_exports copy of a missing legacy artifact.
+
+    Old artifacts recorded workspace-relative paths (e.g. deliverables/...)
+    whose sources are neither backed up nor migrated. The copy pinned by
+    send_file survives in webui_exports as ``<stem>_<hash><suffix>``; match it
+    by basename prefix so those downloads keep working after a cross-machine
+    restore.
+    """
+    raw = str(path_value or "").strip().replace("\\", "/")
+    name = raw.rsplit("/", 1)[-1]
+    if not name:
+        return None
+    stem, dot, suffix = name.rpartition(".")
+    if not dot:
+        stem, suffix = name, ""
+    prefix = f"{stem}_"
+    try:
+        exports_root = _EXPORTS_DIR.resolve()
+    except OSError:
+        return None
+    for candidate in exports_root.iterdir():
+        if not candidate.is_file():
+            continue
+        if candidate.name.startswith(prefix) and candidate.name.endswith(suffix):
+            return candidate
+    return None
 
 
 def _workbench_unified_diff(left_text: str, right_text: str, left_label: str, right_label: str) -> str:
@@ -4499,25 +4569,6 @@ def _workbench_unified_diff(left_text: str, right_text: str, left_label: str, ri
         fromfile=left_label,
         tofile=right_label,
     ))
-
-
-def _workbench_relabel_diff_paths(diff: str, old_path: str, new_path: str) -> str:
-    if not diff or not old_path or not new_path or old_path == new_path:
-        return diff
-    old_left = f"--- a/{old_path}"
-    old_right = f"+++ b/{old_path}"
-    new_left = f"--- a/{new_path}"
-    new_right = f"+++ b/{new_path}"
-    old_created = f"+++ b/{old_path}"
-    lines = diff.splitlines(keepends=True)
-    for idx, line in enumerate(lines[:4]):
-        suffix = "\n" if line.endswith("\n") else ""
-        bare = line[:-1] if suffix else line
-        if bare == old_left:
-            lines[idx] = new_left + suffix
-        elif bare == old_right or bare == old_created:
-            lines[idx] = new_right + suffix
-    return "".join(lines)
 
 
 _WORKBENCH_DIFF_SNAPSHOT_MAX_BYTES = 1_000_000
@@ -4538,7 +4589,7 @@ def _workbench_current_file_snapshot_diff(target: Path, rel: str) -> str:
 
 def _workbench_recorded_diff_for_path(session: dict[str, Any], path_value: Any, workspace_root: Path | None = None) -> dict[str, Any] | None:
     rel = _workbench_display_path(path_value, workspace_root) or str(path_value or "").strip()
-    if not rel or is_cyrene_managed_workspace_path(rel):
+    if not rel or is_cyrene_managed_workspace_path(rel, workspace_root):
         return None
 
     candidates: list[dict[str, Any]] = []
@@ -4587,7 +4638,7 @@ async def _workbench_git_diff_for_path(workspace_root: Path | None, path_value: 
     target = _workbench_resolve_workspace_file(workspace_root, path_value)
     root = workspace_root.resolve() if workspace_root else None
     rel = target.relative_to(root).as_posix() if root else str(path_value)
-    if is_cyrene_managed_workspace_path(rel):
+    if is_cyrene_managed_workspace_path(rel, workspace_root):
         return {
             "path": rel,
             "diff": "",
@@ -4712,13 +4763,14 @@ def _workbench_prune_non_file_artifacts(session: dict[str, Any]) -> bool:
     return True
 
 
-def _workbench_promote_file_artifacts(session: dict[str, Any], file_changes: list[dict[str, Any]], now: str, workspace_root: Path | None = None) -> int:
+def _workbench_promote_file_artifacts(session: dict[str, Any], file_changes: list[dict[str, Any]], now: str) -> int:
     """Surface explicitly produced files as task artifacts (dedup by path).
 
-    When ``workspace_root`` is provided, files declared via ``send_file``
-    (changeType ``produced``) are copied into ``deliverables/`` for artifact
-    download.  The source must remain in place: moving it after the Agent has
-    verified the requested path can silently invalidate the task's result.
+    Files declared via ``send_file`` (changeType ``produced``) get a durable
+    webui_exports copy registered (the same one chat attachments download
+    from); the artifact records that copy so downloads survive later edits to
+    the Agent-verified source path. Other file changes (created/modified) keep
+    their workspace-relative path and resolve on download.
     """
     _workbench_prune_non_file_artifacts(session)
     if not file_changes:
@@ -4735,7 +4787,6 @@ def _workbench_promote_file_artifacts(session: dict[str, Any], file_changes: lis
         "modified": "modified",
         "renamed": "modified",
     }
-    deliverables_dir = (workspace_root / "deliverables").resolve() if workspace_root else None
     added = 0
     for change in file_changes:
         if not isinstance(change, dict):
@@ -4751,25 +4802,10 @@ def _workbench_promote_file_artifacts(session: dict[str, Any], file_changes: lis
             status = "ready"
         if not status:
             continue
-        original_path = path
-        # Copy send_file deliverables into deliverables/ for download while
-        # preserving the Agent-verified source path. Skip files already there.
-        if change_type == "produced" and deliverables_dir:
-            src_path = (workspace_root / path).resolve()  # type: ignore[union-attr]
-            try:
-                src_path.relative_to(deliverables_dir)
-            except ValueError:
-                if src_path.exists():
-                    deliverables_dir.mkdir(parents=True, exist_ok=True)
-                    dest_name = path.rsplit("/", 1)[-1] or path
-                    dest_path = deliverables_dir / dest_name
-                    if dest_path.exists():
-                        stem = Path(dest_name).stem
-                        suffix = Path(dest_name).suffix or ".bin"
-                        dest_path = deliverables_dir / f"{stem}_{_short_id('f')}{suffix}"
-                    if src_path != dest_path:
-                        shutil.copy2(str(src_path), str(dest_path))
-                        path = str(dest_path.relative_to(workspace_root))  # type: ignore[union-attr]
+        # send_file already copied the file into webui_exports and the tool
+        # event carries the attachment; pin it so downloads survive later edits
+        # to the Agent-verified source path. No deliverables/ copy is made.
+        attachment = change.get("attachment") if isinstance(change.get("attachment"), dict) else None
         known_paths.add(path)
         artifact = {
             "id": _short_id("artifact"),
@@ -4781,8 +4817,10 @@ def _workbench_promote_file_artifacts(session: dict[str, Any], file_changes: lis
             "summary": path,
             "source": change.get("source"),
         }
+        if attachment:
+            artifact["attachment"] = attachment
         if change.get("diff"):
-            artifact["diff"] = _workbench_relabel_diff_paths(str(change.get("diff") or ""), original_path, path)
+            artifact["diff"] = change.get("diff")
             if change.get("diffSource"):
                 artifact["diffSource"] = change.get("diffSource")
         artifacts.append(artifact)
@@ -4826,7 +4864,6 @@ def _workbench_backfill_file_artifacts(
         session,
         merged,
         now,
-        workspace_root,
     )
 
 
@@ -4907,7 +4944,6 @@ async def _workbench_backfill_referenced_file_artifacts(
         session,
         _workbench_merge_file_changes(changes),
         now,
-        root,
     )
 
 
@@ -4934,11 +4970,14 @@ def _workbench_final_artifact_file_changes(session: dict[str, Any]) -> list[dict
         if status in {"deleted", "removed", "missing"}:
             continue
         seen_paths.add(path)
-        changes.append({
+        change: dict[str, Any] = {
             "path": path,
             "status": "produced",
             "source": artifact.get("source") or "final_artifact",
-        })
+        }
+        if isinstance(artifact.get("attachment"), dict):
+            change["attachment"] = artifact.get("attachment")
+        changes.append(change)
     return changes
 
 
@@ -5370,7 +5409,7 @@ _WORKBENCH_TASK_MODE_SYSTEM = (
     "- 例：代码生成数据分析报告时，默认只交付最终报告（如 PDF/HTML/Markdown），不交付分析脚本；"
     "LaTeX 生成文档时，默认只交付编译后的 PDF，不交付 .tex/.aux/.log。\n"
     "- 如果最终交付文件是通过 Bash/shell/命令行生成的，也必须用 send_file 声明，否则不会出现在「产物」面板。\n"
-    "- 交付物请写到 deliverables/ 子目录下；用 send_file 声明的文件会被自动归档到 deliverables/。\n"
+    "- send_file 的 path 参数写文件当前的实际位置即可（工作区相对路径或已授权的外部路径），不需要挪到专门目录。\n"
     "- 不要只在回复里写出文件路径就当作已经交付。"
 )
 
@@ -6385,19 +6424,48 @@ async def _workbench_answer_pending(
         binding.reset()
 
 
+def _migrate_project_workspace(workspace_path: Path) -> None:
+    """Fold Cyrene-owned folders inside a project workspace into its .cyrene.
+
+    Project workspaces are resolved lazily (per request / per agent run), so
+    the migration hooks here instead of the startup sweep which only covers the
+    global workspace. Best-effort and idempotent per process.
+    """
+    try:
+        from cyrene.runtime.cyrene_migration import migrate_workspace_to_cyrene
+
+        migrate_workspace_to_cyrene(workspace_path)
+    except Exception:
+        logger.warning("Failed to migrate project workspace %s", workspace_path, exc_info=True)
+
+
 def _workbench_resolve_workspace_dir(project: dict[str, Any] | None) -> str:
     """Resolve a project's confined workspace dir (created if missing). Empty →
-    the global WORKSPACE_DIR. Mirrors the logic in ``_workbench_agent_reply``."""
-    ws_raw = str((project or {}).get("workspacePath") or "").strip()
-    if not ws_raw:
+    the global WORKSPACE_DIR. ``_workbench_workspace_root`` is the single source
+    of truth for the mapping (generated projects, legacy path rebasing)."""
+    root = _workbench_workspace_root(project)
+    if root is None:
         return ""
     try:
-        ws_path = Path(ws_raw).expanduser()
-        ws_path.mkdir(parents=True, exist_ok=True)
-        return str(ws_path.resolve())
+        root.mkdir(parents=True, exist_ok=True)
+        # root is already resolved by _workbench_workspace_root; resolving
+        # again here (and inside the migration) costs extra stats per request.
+        _migrate_project_workspace(root)
+        return str(root)
     except OSError:
-        logger.warning("Workbench workspace unavailable, using global: %s", ws_raw)
+        logger.warning(
+            "Workbench workspace unavailable, using global: %s",
+            str((project or {}).get("workspacePath") or ""),
+        )
         return ""
+
+
+async def _workbench_resolve_workspace_dir_async(
+    project: dict[str, Any] | None,
+) -> str:
+    """Async variant for request paths: the one-time legacy migration inside
+    ``_workbench_resolve_workspace_dir`` must not block the event loop."""
+    return await asyncio.to_thread(_workbench_resolve_workspace_dir, project)
 
 
 async def _check_budget_gate(session_id: str) -> dict | None:
@@ -6458,6 +6526,10 @@ async def _workbench_agent_reply(
         try:
             ws_path = Path(ws_raw).expanduser()
             ws_path.mkdir(parents=True, exist_ok=True)
+            # The one-time legacy migration can move whole folders; keep it
+            # off the event loop (steady-state calls short-circuit on the
+            # migration marker and cost a few stats).
+            await asyncio.to_thread(_migrate_project_workspace, ws_path)
             workspace_dir = str(ws_path.resolve())
         except OSError:
             logger.warning("Workbench workspace unavailable, using global: %s", ws_raw)
@@ -6607,6 +6679,32 @@ def _remove_path_checked(path: Path) -> None:
         shutil.rmtree(path)
 
 
+def _reset_legacy_workspace_root_leftovers() -> None:
+    """Remove pre-.cyrene leftovers at the workspace root.
+
+    A failed migration or an old restore can leave signature-matching Cyrene
+    folders/files at the root. If a reset skips them, the startup migration
+    sweeps them into the fresh .cyrene on the next launch and the reset is
+    partially undone. Signature checks keep user-owned folders of the same
+    name in place.
+    """
+    from cyrene.runtime.cyrene_migration import (
+        _looks_like_cyrene_folder,
+        _looks_like_cyrene_soul,
+    )
+
+    for name in ("conversations", "patterns", "plan", "projects"):
+        path = WORKSPACE_DIR / name
+        if path.is_dir() and _looks_like_cyrene_folder(WORKSPACE_DIR, name):
+            _remove_path_checked(path)
+    scratch = WORKSPACE_DIR / "scratch"
+    if scratch.is_dir():
+        _remove_path_checked(scratch)
+    soul = WORKSPACE_DIR / "SOUL.md"
+    if soul.is_file() and _looks_like_cyrene_soul(soul):
+        _remove_path_checked(soul)
+
+
 def _remove_directory_children(
     root: Path,
     *,
@@ -6698,16 +6796,18 @@ async def _reset_app_data() -> dict[str, Any]:
     # a later migration resurrecting anything from the reset installation.
     _remove_directory_children(STORE_DIR)
 
+    cyrene_root = cyrene_dir(WORKSPACE_DIR)
     for path in (
-        WORKSPACE_DIR / "conversations",
-        WORKSPACE_DIR / "patterns",
-        WORKSPACE_DIR / "plan",
-        WORKSPACE_DIR / "deliverables",
-        WORKSPACE_DIR / "projects",
+        cyrene_root / "conversations",
+        cyrene_root / "patterns",
+        cyrene_root / "plan",
+        cyrene_root / "projects",
+        cyrene_root / "scratch",
         BASE_DIR / "backups",
         CACHE_DIR / "voice",
     ):
         _remove_path_checked(path)
+    _reset_legacy_workspace_root_leftovers()
 
     db_path = Path(_db_path or str(DB_PATH))
     _remove_path_checked(db_path)

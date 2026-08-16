@@ -15117,7 +15117,7 @@ function WbcUserMessage({ msg, onOpenFile, onEditMessage, canEdit, onRetryMessag
             </button>
           )}
           {onRetryMessage && (
-            <button type="button" className="wbc-msg-action" onClick={function () { onRetryMessage(msg.id); }} title={wbcT("workbenchChat.retryUserMessage", "Retry message")}>
+            <button type="button" data-tour="chat_retry" className="wbc-msg-action" onClick={function () { onRetryMessage(msg.id); }} title={wbcT("workbenchChat.retryUserMessage", "Retry message")}>
               {WBC_ICONS.retry}
             </button>
           )}
@@ -15541,7 +15541,7 @@ function WbcAssistantMessage({ msg, onOpenFile, onRetryMessage, chatId }) {
           {copied ? WBC_ICONS.check : WBC_ICONS.copy}
         </button>
         {onRetryMessage && (
-          <button type="button" className="wbc-msg-action" onClick={function () { onRetryMessage(msg.id); }} title={wbcT("workbenchChat.regenerate", "Regenerate")}>
+          <button type="button" data-tour="chat_retry" className="wbc-msg-action" onClick={function () { onRetryMessage(msg.id); }} title={wbcT("workbenchChat.regenerate", "Regenerate")}>
             {WBC_ICONS.retry}
           </button>
         )}
@@ -16996,7 +16996,7 @@ function WbcComposer({ chat, project, runtime, running, onSend, onGuidance, onIn
   }
 
   return (
-    <div className={"wbc-composer" + (compact ? " compact" : "")}>
+    <div className={"wbc-composer" + (compact ? " compact" : "")} data-tour="chat_composer">
       {activeCommand && (
         <div className="wbc-command-row">
           <span className="wbc-command-chip">
@@ -17064,7 +17064,7 @@ function WbcComposer({ chat, project, runtime, running, onSend, onGuidance, onIn
         <div className="wbc-composer-actions">
           <input ref={fileRef} type="file" multiple accept={!capFile && capImage ? "image/*" : undefined} style={{ display: "none" }} onChange={onFilePick} />
           {(capFile || capImage) && (
-            <button type="button" className="wbc-composer-icon" title={uploading ? wbcT("workbenchChat.uploading", "Uploading...") : wbcT("workbenchChat.addAttachment", "Add attachment")} disabled={uploading || running} onClick={pickFiles}>
+            <button type="button" data-tour="chat_attach" className="wbc-composer-icon" title={uploading ? wbcT("workbenchChat.uploading", "Uploading...") : wbcT("workbenchChat.addAttachment", "Add attachment")} disabled={uploading || running} onClick={pickFiles}>
               {uploading ? <span className="wb-spinner small" /> : WBC_ICONS.attach}
             </button>
           )}
@@ -17072,6 +17072,7 @@ function WbcComposer({ chat, project, runtime, running, onSend, onGuidance, onIn
             <span className="wbc-pop-anchor wbc-tools-anchor" ref={toolsPickerRef}>
               <button
                 type="button"
+                data-tour="chat_tools"
                 className={"wbc-composer-icon wbc-tools-trigger" + (enabledContentCount > 0 ? " has-content" : "") + (showToolsMenu ? " active" : "")}
                 title={wbcT("workbenchChat.toolsCount", "Tools · {count} enabled", { count: enabledContentCount })}
                 aria-label={wbcT("workbenchChat.toolsCount", "Tools · {count} enabled", { count: enabledContentCount })}
@@ -17179,6 +17180,7 @@ function WbcComposer({ chat, project, runtime, running, onSend, onGuidance, onIn
             <span className="wbc-pop-anchor wbc-model-anchor" ref={modelPickerRef}>
               <button
                 type="button"
+                data-tour="chat_model_picker"
                 className={"wbc-model-button" + (modelOpen ? " active" : "")}
                 title={modelButtonLabel}
                 aria-label={modelButtonLabel}
@@ -17408,6 +17410,7 @@ function WbcComposer({ chat, project, runtime, running, onSend, onGuidance, onIn
           {!compact && capAudio && voiceSnapshot.status.asr_ready ? (
             <button
               type="button"
+              data-tour="chat_voice"
               className={"wbc-composer-icon wbc-voice-input" + (voicePhase ? " " + voicePhase : "")}
               onClick={toggleVoiceInput}
               disabled={voicePhase === "starting" || voicePhase === "transcribing"}
@@ -18729,7 +18732,7 @@ function WbcChatSplit({ chatId, project, onOpenContent, browserActiveByChat, onC
   var messages = chat && Array.isArray(chat.messages) ? chat.messages : [];
   var errorText = error;
   return (
-    <aside className="wbc-side-agent-split wbc-chat-split wbc-conversation-split" aria-label={wbcT("workbenchChat.chatSplitLabel", "Chat")}>
+    <aside className="wbc-side-agent-split wbc-chat-split wbc-conversation-split" data-tour="chat_split_pane" aria-label={wbcT("workbenchChat.chatSplitLabel", "Chat")}>
       <div className="wbc-split-panel-grip">
         <WbcSplitGripBar
           dragSource="split"
@@ -19900,7 +19903,7 @@ function WbcSide({
             {floating ? WBC_ICONS.x : WBC_ICONS.chevronsRight}
           </button>
         </div>
-        <div className="wbc-side-accordion">
+        <div className="wbc-side-accordion" data-tour="chat_sidebar">
           {tabs.map(function (item) {
             var opensSplit = item.id === "subagents" || item.id === "browser";
             var expanded = !opensSplit && activeTab === item.id;

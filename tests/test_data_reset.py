@@ -149,6 +149,49 @@ async def test_clear_browser_data_erases_electron_and_playwright_profiles(
     browser.close_session.assert_awaited_once()
 
 
+def test_reset_clears_legacy_workspace_root_leftovers_but_keeps_user_folders(
+    monkeypatch, tmp_path: Path
+):
+    from cyrene.workbench import runtime
+
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    monkeypatch.setattr(runtime, "WORKSPACE_DIR", workspace)
+
+    # Signature-matching Cyrene leftovers from a failed migration/old restore.
+    conversations = workspace / "conversations"
+    conversations.mkdir()
+    (conversations / "2026-01-01.md").write_text(
+        "# Conversations - 2026-01-01\nold", encoding="utf-8"
+    )
+    (workspace / "plan").mkdir()
+    (workspace / "plan" / "plan_deadbeef01.md").write_text("# plan", encoding="utf-8")
+    (workspace / "projects").mkdir()
+    (workspace / "projects" / "project_deadbeef01").mkdir()
+    (workspace / "scratch").mkdir()
+    (workspace / "scratch" / "tmp.bin").write_bytes(b"\x00")
+    soul = workspace / "SOUL.md"
+    soul.write_text("# Soul\n\n## SELF:IDENTITY\n- legacy\n", encoding="utf-8")
+
+    # User-owned folders with the same names but no Cyrene signature survive.
+    user_plan = workspace / "patterns"
+    user_plan.mkdir()
+    (user_plan / "notes.md").write_text("# my notes", encoding="utf-8")
+    user_soul = workspace / "notes.md"
+    user_soul.write_text("# not a soul", encoding="utf-8")
+
+    runtime._reset_legacy_workspace_root_leftovers()
+
+    assert not conversations.exists()
+    assert not (workspace / "plan").exists()
+    assert not (workspace / "projects").exists()
+    assert not (workspace / "scratch").exists()
+    assert not soul.exists()
+    assert user_plan.exists()
+    assert (user_plan / "notes.md").read_text(encoding="utf-8") == "# my notes"
+    assert user_soul.exists()
+
+
 def test_reset_frontend_confirms_and_clears_all_client_storage():
     root = Path(__file__).resolve().parent.parent
     settings = (root / "src/webui/frontend/settings-overlay.jsx").read_text(

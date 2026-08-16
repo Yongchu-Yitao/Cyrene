@@ -1340,7 +1340,7 @@
           React.createElement(
             "div", { className: "wb-sched-toolbar-right" },
             React.createElement(
-              "div", { className: "wb-sched-viewseg" },
+              "div", { className: "wb-sched-viewseg", "data-tour": "schedule_views" },
               [{ id: "day", labelKey: "schedule.view.day" }, { id: "week", labelKey: "schedule.view.week" }, { id: "month", labelKey: "schedule.view.month" }].map(function (v) {
                 return React.createElement("button", {
                   key: v.id, type: "button", className: viewMode === v.id ? "on" : "",
@@ -1349,7 +1349,7 @@
               })
             ),
             React.createElement(
-              "button", { type: "button", className: "wb-btn primary wb-sched-new", onClick: function () { setFormMode({ defaultDate: anchorDate }); } },
+              "button", { type: "button", "data-tour": "schedule_new", className: "wb-btn primary wb-sched-new", onClick: function () { setFormMode({ defaultDate: anchorDate }); } },
               svg(["M12 5v14M5 12h14"], { width: 15, height: 15, strokeWidth: 2.4 }),
               React.createElement("span", null, T("schedule.add"))
             )

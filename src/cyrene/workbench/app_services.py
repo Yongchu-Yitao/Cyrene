@@ -13,6 +13,7 @@ from pathlib import Path
 from typing import Any
 
 from cyrene.agent.context import active_workspace_dir
+from cyrene.config import cyrene_dir
 
 _BACKGROUND_SESSION_TASKS: set[asyncio.Task[Any]] = set()
 
@@ -55,7 +56,7 @@ def create_project(name: str, *, description: str = "", workspace_path: str = ""
     now = runtime._utc_now_iso()
     project_id = runtime._short_id("project")
     root = active_workspace_dir().resolve()
-    target = Path(workspace_path).expanduser() if workspace_path else root / "projects" / project_id
+    target = Path(workspace_path).expanduser() if workspace_path else cyrene_dir(root) / "projects" / project_id
     if not target.is_absolute():
         target = root / target
     target = target.resolve(strict=False)
@@ -436,7 +437,7 @@ async def dispatch_session_message(
                 fresh_session,
                 [],
                 permission_mode="default",
-                project_workspace=str(fresh_project.get("workspacePath") or ""),
+                project_workspace=runtime._workbench_resolve_workspace_dir(fresh_project),
                 ephemeral_system=ephemeral,
                 volatile_ephemeral_system=runtime._workbench_compose_volatile_ephemeral_system(
                     fresh_project, fresh_session,

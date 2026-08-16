@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import mimetypes
 import re
+import stat
 from pathlib import Path
 from typing import Any
 
@@ -111,19 +112,44 @@ async def archive_workbench_run(
         if not raw_path or raw_path in seen_paths:
             continue
         seen_paths.add(raw_path)
-        source_path = Path(raw_path)
-        if not source_path.is_absolute() and root is not None:
-            source_path = root / source_path
-        try:
-            source_path = source_path.resolve()
-        except OSError:
-            continue
-        if root is not None and source_path != root and root not in source_path.parents:
-            continue
-        if not source_path.exists() or not source_path.is_file():
-            continue
 
-        registered = register_generated_attachment(str(source_path), display_name=source_path.name)
+        # Prefer the durable webui_exports copy pinned at send_file time
+        # (attachment id is the exported filename) so a later edit to the
+        # workspace source cannot corrupt the archived file. This works even
+        # when the workspace source has been deleted.
+        registered = None
+        pinned_id = str((item.get("attachment") or {}).get("id") or "").strip()
+        if pinned_id:
+            try:
+                pinned_path = (EXPORTS_DIR / pinned_id).resolve()
+                if pinned_path.is_relative_to(EXPORTS_DIR.resolve()):
+                    try:
+                        pinned_stat = pinned_path.stat()
+                    except OSError:
+                        pinned_stat = None
+                    if pinned_stat is not None and stat.S_ISREG(pinned_stat.st_mode):
+                        registered = {
+                            "name": str((item.get("attachment") or {}).get("name") or "file"),
+                            "path": str(pinned_path),
+                            "content_type": str((item.get("attachment") or {}).get("content_type") or "application/octet-stream"),
+                            "size": pinned_stat.st_size,
+                            "kind": str((item.get("attachment") or {}).get("kind") or "file"),
+                        }
+            except (OSError, ValueError):
+                registered = None
+        if registered is None:
+            source_path = Path(raw_path)
+            if not source_path.is_absolute() and root is not None:
+                source_path = root / source_path
+            try:
+                source_path = source_path.resolve()
+            except OSError:
+                continue
+            if root is not None and source_path != root and root not in source_path.parents:
+                continue
+            if not source_path.exists() or not source_path.is_file():
+                continue
+            registered = register_generated_attachment(str(source_path), display_name=source_path.name)
         exported = Path(str(registered.get("path") or ""))
         if not exported.exists():
             continue

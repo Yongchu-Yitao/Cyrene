@@ -118,7 +118,7 @@ def register_project_routes(
         project = _workbench_find_project_lightweight(project_id)
         if project is None:
             return error_response("Project not found", 404, "project_not_found")
-        raw_root = _workbench_resolve_workspace_dir(project)
+        raw_root = await _workbench_resolve_workspace_dir_async(project)
         if not raw_root:
             return error_response("Project has no workspace", 404, "workspace_unavailable")
         root = Path(raw_root).expanduser().resolve()
@@ -158,7 +158,7 @@ def register_project_routes(
         project = _workbench_find_project_lightweight(project_id)
         if project is None:
             return error_response("Project not found", 404, "project_not_found")
-        raw_root = _workbench_resolve_workspace_dir(project)
+        raw_root = await _workbench_resolve_workspace_dir_async(project)
         if not raw_root:
             return error_response("Project has no workspace", 404, "workspace_unavailable")
         root = Path(raw_root).expanduser().resolve()
@@ -317,12 +317,12 @@ def register_project_routes(
         workspace_path_source = "user" if raw_workspace else "generated"
         if not raw_workspace:
             # No explicit workspace folder picked — create a fresh per-project
-            # subdirectory under the global WORKSPACE_DIR so the new project
-            # starts empty instead of inheriting the (non-empty) default
-            # workspace. This ensures _is_workspace_empty() returns True and
-            # the init flow takes the "brand-new project" branch rather than
-            # exploring the default workspace's contents.
-            raw_workspace = str(Path(WORKSPACE_DIR) / "projects" / project_id)
+            # subdirectory under the global WORKSPACE_DIR/.cyrene so the new
+            # project starts empty instead of inheriting the (non-empty)
+            # default workspace. This ensures _is_workspace_empty() returns
+            # True and the init flow takes the "brand-new project" branch
+            # rather than exploring the default workspace's contents.
+            raw_workspace = str(cyrene_dir(WORKSPACE_DIR) / "projects" / project_id)
         try:
             workspace_path = str(
                 validate_workspace_path(

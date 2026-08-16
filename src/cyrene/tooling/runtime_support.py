@@ -31,6 +31,7 @@ from cyrene.config import (
     STATE_FILE,
     TEMP_DIR,
     WORKSPACE_DIR,
+    cyrene_dir,
 )
 from cyrene.model_runtime.messages import truncate
 from cyrene.runtime.schedule_spec import compute_next_run
@@ -745,7 +746,7 @@ def _is_safe_review_directory_refresh(command: str) -> bool:
         resolved = target.resolve(strict=False)
     except OSError:
         return False
-    allowed_roots = ((WORKSPACE_DIR / "scratch").resolve(), (TEMP_DIR / "reviews").resolve())
+    allowed_roots = ((cyrene_dir(WORKSPACE_DIR) / "scratch").resolve(), (TEMP_DIR / "reviews").resolve())
     if not any(root in resolved.parents for root in allowed_roots):
         return False
     if not resolved.name.casefold().endswith(("-review", "_review")):

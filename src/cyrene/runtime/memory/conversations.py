@@ -5,7 +5,7 @@ import re
 from datetime import datetime, timedelta
 from pathlib import Path
 
-from cyrene.config import ASSISTANT_NAME, DB_PATH, WORKSPACE_DIR
+from cyrene.config import ASSISTANT_NAME, DB_PATH, WORKSPACE_DIR, cyrene_dir
 from cyrene.runtime.memory.archive_format import (
     parse_archive_meta,
     parse_archive_sections as _parse_archive_sections,
@@ -14,7 +14,7 @@ from cyrene.runtime.memory.archive_format import (
 
 logger = logging.getLogger(__name__)
 
-CONVERSATIONS_DIR = WORKSPACE_DIR / "conversations"
+CONVERSATIONS_DIR = cyrene_dir(WORKSPACE_DIR) / "conversations"
 
 
 def ensure_conversations_dir() -> None:
@@ -42,10 +42,10 @@ def session_conversations_dir(workspace_dir: str | Path | None = None) -> Path:
 
     A non-empty ``workspace_dir`` (a Workbench project's workspacePath) scopes
     archives to that project; empty/None falls back to the global
-    ``WORKSPACE_DIR/conversations`` so non-project runs keep their location.
+    ``WORKSPACE_DIR/.cyrene/conversations`` so non-project runs keep their location.
     """
     base = Path(workspace_dir).expanduser() if workspace_dir else WORKSPACE_DIR
-    return base / "conversations"
+    return cyrene_dir(base) / "conversations"
 
 
 def session_conversation_file(

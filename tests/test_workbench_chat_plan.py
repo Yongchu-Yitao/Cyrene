@@ -72,13 +72,59 @@ def test_plan_markdown_path_rebases_after_portable_restore(monkeypatch, tmp_path
     )
     resolved = chat._resolve_managed_plan_path(old_path)
 
+    # Plan mirrors now live under the workspace's hidden .cyrene dir; the
+    # legacy workspace/projects/... segment rebases into it.
     assert resolved == (
         current_workspace
+        / ".cyrene"
         / "projects"
         / "project_demo"
         / "plan"
         / "plan_demo.md"
     )
+
+
+def test_plan_markdown_path_rebases_same_machine_legacy_root_path(
+    monkeypatch, tmp_path
+):
+    from cyrene.workbench import chat
+
+    current_workspace = tmp_path / "current" / "workspace"
+    monkeypatch.setattr(chat, "WORKSPACE_DIR", current_workspace)
+
+    # Pre-migration records stored workspace-root-level plan/ mirrors. Writing
+    # back to that location would recreate a root plan/ that is no longer
+    # filtered as Cyrene-managed; it must rebase into .cyrene/plan/.
+    old_path = str(current_workspace / "plan" / "plan_demo.md")
+    resolved = chat._resolve_managed_plan_path(old_path)
+
+    assert resolved == (
+        current_workspace / ".cyrene" / "plan" / "plan_demo.md"
+    ).resolve()
+
+
+def test_plan_markdown_path_keeps_current_cyrene_location(monkeypatch, tmp_path):
+    from cyrene.workbench import chat
+
+    current_workspace = tmp_path / "current" / "workspace"
+    monkeypatch.setattr(chat, "WORKSPACE_DIR", current_workspace)
+
+    current_path = str(current_workspace / ".cyrene" / "plan" / "plan_demo.md")
+    resolved = chat._resolve_managed_plan_path(current_path)
+
+    assert resolved == Path(current_path).resolve()
+
+
+def test_plan_markdown_path_keeps_external_folder(monkeypatch, tmp_path):
+    from cyrene.workbench import chat
+
+    current_workspace = tmp_path / "current" / "workspace"
+    monkeypatch.setattr(chat, "WORKSPACE_DIR", current_workspace)
+
+    external = "/home/user/myproject/plan/plan_demo.md"
+    resolved = chat._resolve_managed_plan_path(external)
+
+    assert str(resolved) == external
 
 
 def test_workbench_plan_progress_tool_is_main_only():

@@ -293,7 +293,10 @@ def test_send_file_prompt_registers_user_requested_save_locations_as_artifacts()
     assert "printing or guessing a path is not delivery" in _MAIN_DELIVERY_FILE_PROMPT
     assert "specific save location" in _MAIN_DELIVERY_FILE_PROMPT
     assert "registered as an artifact" in _MAIN_DELIVERY_FILE_PROMPT
-    assert "save the file there first" in workspace_scope_block()
+    # The workspace scope block must still push send_file as the delivery path
+    # (no dedicated deliverables/ folder anymore).
+    assert "send_file" in workspace_scope_block()
+    assert "deliverables/" not in workspace_scope_block()
 
 
 def test_global_search_times_out_and_ignores_stale_requests():

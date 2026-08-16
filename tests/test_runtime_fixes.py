@@ -3065,9 +3065,9 @@ def test_review_clone_refresh_is_not_classified_as_destructive(monkeypatch, tmp_
     from cyrene.tooling import runtime_support
 
     workspace = tmp_path / "workspace"
-    workspace.joinpath("scratch").mkdir(parents=True)
+    workspace.joinpath(".cyrene", "scratch").mkdir(parents=True)
     monkeypatch.setattr(runtime_support, "WORKSPACE_DIR", workspace)
-    command = "rm -rf scratch/demo-review && git clone --depth 1 https://example.com/demo.git scratch/demo-review"
+    command = "rm -rf .cyrene/scratch/demo-review && git clone --depth 1 https://example.com/demo.git .cyrene/scratch/demo-review"
     assert runtime_support._classify_destructive_shell_command(command) is None
     assert runtime_support._classify_destructive_shell_command("rm -rf scratch/demo") is not None
     assert runtime_support._classify_destructive_shell_command("rm -rf ../demo-review && git clone https://example.com/demo.git ../demo-review") is not None

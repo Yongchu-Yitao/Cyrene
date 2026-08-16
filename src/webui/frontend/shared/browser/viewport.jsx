@@ -928,7 +928,7 @@ function ElectronBrowserViewportPanel({ roundId, browserSessionId, onClose, brow
   }
 
   return (
-    <div className={"browser-view native" + (splitChrome ? " split-chrome" : "")} data-browser-session-id={electronSessionId}>
+    <div className={"browser-view native" + (splitChrome ? " split-chrome" : "")} data-tour="browser_viewport" data-browser-session-id={electronSessionId}>
       {!hideTabStrip && <div className="browser-tabs-strip">
         {tabs.map(function (tab) {
           return (

@@ -12,6 +12,7 @@ from typing import Mapping
 
 APP_NAME = "Cyrene"
 TEMP_ARTIFACT_TTL_SECONDS = 24 * 60 * 60
+CYRENE_DIR_NAME = ".cyrene"
 
 
 @dataclass(frozen=True)
@@ -162,6 +163,17 @@ def resolve_app_paths(
         cache=cache_root,
         temp=temp_root,
     )
+
+
+def cyrene_dir(workspace_root: str | Path) -> Path:
+    """Return the hidden Cyrene-managed directory inside a workspace root.
+
+    All Cyrene-owned subdirectories (conversations, plan, patterns, projects,
+    scratch, SOUL.md) live under this folder so user files stay visible at the
+    workspace root. Applies uniformly to the global workspace and every
+    Workbench project workspace.
+    """
+    return Path(workspace_root) / CYRENE_DIR_NAME
 
 
 def ensure_runtime_dirs(paths: AppPaths | None = None) -> None:

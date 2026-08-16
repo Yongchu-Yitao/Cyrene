@@ -1,4 +1,5 @@
 import asyncio
+import hashlib
 import json
 import sqlite3
 from pathlib import Path
@@ -35,11 +36,10 @@ def backup_sandbox(monkeypatch, tmp_path):
         directory.mkdir(exist_ok=True)
 
     managed = [
-        (workspace / "conversations", "workspace/conversations"),
-        (workspace / "patterns", "workspace/patterns"),
-        (workspace / "plan", "workspace/plan"),
-        (workspace / "deliverables", "workspace/deliverables"),
-        (workspace / "projects", "workspace/projects"),
+        (workspace / ".cyrene" / "conversations", "workspace/conversations"),
+        (workspace / ".cyrene" / "patterns", "workspace/patterns"),
+        (workspace / ".cyrene" / "plan", "workspace/plan"),
+        (workspace / ".cyrene" / "projects", "workspace/projects"),
         (data / "sessions", "data/sessions"),
         (data / "inbox", "data/inbox"),
         (data / "installed_skills", "data/installed_skills"),
@@ -91,8 +91,8 @@ async def test_backup_round_trip_is_exact_and_restores_sqlite_and_config(backup_
     backup = env["backup"]
     data = env["data"]
     store = env["store"]
-    conversations = env["workspace"] / "conversations"
-    conversations.mkdir()
+    conversations = env["workspace"] / ".cyrene" / "conversations"
+    conversations.mkdir(parents=True)
     (conversations / "old.md").write_text("archived", encoding="utf-8")
     (data / "state.json").write_text('{"state":"old"}', encoding="utf-8")
     _create_db(store / "cyrene.runtime.database", "old-db")
@@ -120,29 +120,25 @@ async def test_backup_round_trip_is_exact_and_restores_sqlite_and_config(backup_
     assert env["activated"] == [env["snapshot"]]
 
 
-async def test_backup_restores_chat_exports_and_deliverables_referenced_by_ui(
+async def test_backup_restores_exports_and_workspace_collections_into_cyrene(
     backup_sandbox,
 ):
     env = backup_sandbox
     backup = env["backup"]
     exports = env["data"] / "webui_exports"
-    deliverables = env["workspace"] / "deliverables"
-    plans = env["workspace"] / "plan"
+    plans = env["workspace"] / ".cyrene" / "plan"
     project_deliverables = (
-        env["workspace"] / "projects" / "project_deadbeef" / "deliverables"
+        env["workspace"] / ".cyrene" / "projects" / "project_deadbeef" / "deliverables"
     )
     exports.mkdir()
-    deliverables.mkdir()
-    plans.mkdir()
+    plans.mkdir(parents=True)
     project_deliverables.mkdir(parents=True)
     exported_pdf = exports / "paper_deadbeef.pdf"
     exported_html = exports / "report_deadbeef.html"
-    deliverable_html = deliverables / "report.html"
     plan_markdown = plans / "plan_deadbeef.md"
     project_artifact = project_deliverables / "analysis.html"
     exported_pdf.write_bytes(b"%PDF-1.4\nbackup fixture\n")
     exported_html.write_text("<h1>render me</h1>", encoding="utf-8")
-    deliverable_html.write_text("<h1>source</h1>", encoding="utf-8")
     plan_markdown.write_text("# Persisted plan", encoding="utf-8")
     project_artifact.write_text("<h1>project artifact</h1>", encoding="utf-8")
 
@@ -152,15 +148,16 @@ async def test_backup_restores_chat_exports_and_deliverables_referenced_by_ui(
         names = set(archive.namelist())
     assert "data/webui_exports/paper_deadbeef.pdf" in names
     assert "data/webui_exports/report_deadbeef.html" in names
-    assert "workspace/deliverables/report.html" in names
     assert "workspace/plan/plan_deadbeef.md" in names
     assert (
         "workspace/projects/project_deadbeef/deliverables/analysis.html" in names
     )
+    # The deliverables collection was removed from the backup; legacy files
+    # pinned into webui_exports are the durable copies.
+    assert not any(name.startswith("workspace/deliverables/") for name in names)
 
     exported_pdf.unlink()
     exported_html.write_text("<h1>newer, must be rolled back</h1>", encoding="utf-8")
-    deliverable_html.unlink()
     plan_markdown.unlink()
     project_artifact.unlink()
 
@@ -168,12 +165,12 @@ async def test_backup_restores_chat_exports_and_deliverables_referenced_by_ui(
     assert restored["ok"] is True
     assert exported_pdf.read_bytes() == b"%PDF-1.4\nbackup fixture\n"
     assert exported_html.read_text(encoding="utf-8") == "<h1>render me</h1>"
-    assert deliverable_html.read_text(encoding="utf-8") == "<h1>source</h1>"
     assert plan_markdown.read_text(encoding="utf-8") == "# Persisted plan"
     assert (
         project_artifact.read_text(encoding="utf-8")
         == "<h1>project artifact</h1>"
     )
+    assert not (env["workspace"] / ".cyrene" / "deliverables").exists()
 
 
 async def test_restore_rolls_back_all_path_changes_on_commit_failure(backup_sandbox, monkeypatch):
@@ -250,3 +247,35 @@ async def test_legacy_v04_archive_remains_restoreable(backup_sandbox):
     result = await backup.restore_backup(str(archive))
     assert result["ok"] is True
     assert (env["workspace"] / "conversations" / "legacy.md").read_text() == "legacy"
+
+
+async def test_archive_with_removed_replace_root_is_rejected(backup_sandbox):
+    """Backups from before the deliverables removal keep their old replace
+    root; they are rejected outright instead of restoring half the state."""
+    env = backup_sandbox
+    backup = env["backup"]
+    archive = env["base"] / "pre-deliverables-removal.zip"
+    payload = b"<h1>legacy deliverable</h1>"
+    with ZipFile(archive, "w", ZIP_DEFLATED) as zf:
+        zf.writestr("workspace/deliverables/report.html", payload)
+        zf.writestr(
+            "manifest.json",
+            json.dumps(
+                {
+                    "format": "cyrene-backup",
+                    "version": "0.5",
+                    "entries": [
+                        {
+                            "name": "workspace/deliverables/report.html",
+                            "size": len(payload),
+                            "sha256": hashlib.sha256(payload).hexdigest(),
+                            "kind": "file",
+                        }
+                    ],
+                    "replace_roots": ["workspace/deliverables"],
+                }
+            ),
+        )
+    result = await backup.restore_backup(str(archive))
+    assert result["ok"] is False
+    assert "unsupported replace root" in result["error"]

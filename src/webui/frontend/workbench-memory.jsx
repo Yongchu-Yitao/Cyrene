@@ -630,7 +630,7 @@
     }
 
     function learningPanelShell(label, body, footer) {
-      return h("aside", { className: "wb-floating-detail-shell wb-mem-detail wb-mem-skill-panel wb-mem-replay-panel", "aria-label": t("memory.learning.detailPanel", "Skill learning details") },
+      return h("aside", { className: "wb-floating-detail-shell wb-mem-detail wb-mem-skill-panel wb-mem-replay-panel", "data-tour": "memory_skills", "aria-label": t("memory.learning.detailPanel", "Skill learning details") },
         h("div", { className: "wb-floating-detail-card wb-mem-detail-card" },
           h("nav", { className: "wb-detail-accordion wb-mem-detail-tabs", "aria-label": t("memory.learning.detailPanel", "Skill learning details") },
             h("div", { className: "wb-detail-accordion-head wb-mem-detail-nav-head" }, t("memory.learning.detailPanel", "Skill learning details")),
@@ -1349,10 +1349,11 @@
       h("div", { className: "wb-mem-rail-head workbench-integrated-rail-head" },
           h("b", null, t("memory.title", "Memory")),
         h("div", { className: "workbench-integrated-rail-actions" },
-          h("button", { type: "button", className: "wb-mem-new-btn workbench-integrated-rail-primary-action", onClick: function () { setModal({ mode: "create", draft: {} }); } },
+          h("button", { type: "button", "data-tour": "memory_new", className: "wb-mem-new-btn workbench-integrated-rail-primary-action", onClick: function () { setModal({ mode: "create", draft: {} }); } },
             svg({ width: 13, height: 13, strokeWidth: 2.4 }, h("path", { d: "M12 5v14M5 12h14" })), h("span", null, t("memory.new", "New memory"))),
           props.onEditProjectMemory && !props.sidebarCollapsed && h("button", {
             type: "button",
+            "data-tour": "project_memory",
             className: "wb-mem-project-memory-btn",
             onClick: props.onEditProjectMemory,
             title: t("memory.editProjectMemory", "Edit project memory"),

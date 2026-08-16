@@ -810,7 +810,7 @@ class GoalLoopManager:
                             str(run["session_id"]),
                             str(resume_answer.get("questionId") or ""),
                             str(resume_answer.get("answer") or ""),
-                            R._workbench_resolve_workspace_dir(current_project),
+                            await R._workbench_resolve_workspace_dir_async(current_project),
                             permission_mode=str(run.get("permission_mode") or "auto"),
                         )
                     else:
@@ -819,7 +819,7 @@ class GoalLoopManager:
                             current_session,
                             [],
                             permission_mode=str(run.get("permission_mode") or "auto"),
-                            project_workspace=str(current_project.get("workspacePath") or ""),
+                            project_workspace=R._workbench_resolve_workspace_dir(current_project),
                             ephemeral_system=ephemeral,
                             volatile_ephemeral_system=volatile_ephemeral,
                             static_system_extra=R._workbench_compose_static_system(current_project, current_session) + loop_instruction,
@@ -1062,7 +1062,7 @@ class GoalLoopManager:
                                 or "步骤验收未通过，请继续修复。"
                             )
                     R._workbench_apply_step_file_changes(fresh, step_id, file_changes)
-                    R._workbench_promote_file_artifacts(fresh, file_changes, _utc_iso(), workspace_root)
+                    R._workbench_promote_file_artifacts(fresh, file_changes, _utc_iso())
                     fresh["status"] = "running"
                     fresh["goalLoop"] = _public_run(latest_run)
 

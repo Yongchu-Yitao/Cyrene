@@ -100,23 +100,73 @@ def test_workspace_snapshot_ignores_cyrene_managed_run_state(tmp_path):
     )
 
     before = capture_workspace_snapshot(tmp_path)
-    (tmp_path / "conversations").mkdir()
-    (tmp_path / "conversations" / "wbchat_1.md").write_text(
+    cyrene_root = tmp_path / ".cyrene"
+    (cyrene_root / "conversations").mkdir(parents=True)
+    (cyrene_root / "conversations" / "wbchat_1.md").write_text(
         "# Conversation\n", encoding="utf-8"
     )
-    (tmp_path / "plan").mkdir()
-    (tmp_path / "plan" / "plan_1.md").write_text("# Plan\n", encoding="utf-8")
+    (cyrene_root / "plan").mkdir()
+    (cyrene_root / "plan" / "plan_1.md").write_text("# Plan\n", encoding="utf-8")
     user_file = tmp_path / "docs" / "conversations" / "notes.md"
     user_file.parent.mkdir(parents=True)
     user_file.write_text("keep tracking this\n", encoding="utf-8")
     after = capture_workspace_snapshot(tmp_path)
 
-    assert is_cyrene_managed_workspace_path("conversations/wbchat_1.md") is True
-    assert is_cyrene_managed_workspace_path("plan/plan_1.md") is True
+    assert is_cyrene_managed_workspace_path(".cyrene/conversations/wbchat_1.md") is True
+    assert is_cyrene_managed_workspace_path(".cyrene/plan/plan_1.md") is True
     assert is_cyrene_managed_workspace_path("docs/conversations/notes.md") is False
+    # .cyrene is a hidden dot dir: the snapshot walk skips it entirely, and
+    # user files under docs/ remain the only reported change.
     assert [item["path"] for item in compare_workspace_snapshots(before, after)] == [
         "docs/conversations/notes.md"
     ]
+
+
+def test_legacy_signature_root_dirs_are_filtered_when_migration_failed(tmp_path):
+    from cyrene.workbench.workspace_changes import is_cyrene_managed_workspace_path
+
+    (tmp_path / "conversations").mkdir()
+    (tmp_path / "conversations" / "2026-01-01.md").write_text(
+        "# Conversations - 2026-01-01\narchived", encoding="utf-8"
+    )
+    (tmp_path / "plan").mkdir()
+    (tmp_path / "plan" / "plan_deadbeef01.md").write_text(
+        "# Persisted plan", encoding="utf-8"
+    )
+
+    assert (
+        is_cyrene_managed_workspace_path("conversations/2026-01-01.md", tmp_path)
+        is True
+    )
+    assert (
+        is_cyrene_managed_workspace_path("plan/plan_deadbeef01.md", tmp_path)
+        is True
+    )
+
+
+def test_user_owned_same_name_folders_are_kept_without_signature(tmp_path):
+    from cyrene.workbench.workspace_changes import is_cyrene_managed_workspace_path
+
+    (tmp_path / "conversations").mkdir()
+    (tmp_path / "conversations" / "notes.md").write_text(
+        "# my own notes", encoding="utf-8"
+    )
+    (tmp_path / "plan").mkdir()
+    (tmp_path / "plan" / "roadmap.md").write_text("# roadmap", encoding="utf-8")
+
+    # Same folder names but no Cyrene signature: user-owned, stay visible.
+    assert (
+        is_cyrene_managed_workspace_path("conversations/notes.md", tmp_path)
+        is False
+    )
+    assert (
+        is_cyrene_managed_workspace_path("plan/roadmap.md", tmp_path)
+        is False
+    )
+    # Without a workspace root the signature check cannot run; only .cyrene
+    # is managed.
+    assert is_cyrene_managed_workspace_path("conversations/notes.md") is False
+    assert is_cyrene_managed_workspace_path(".cyrene/scratch/x.txt") is True
 
 
 def test_workspace_diff_keeps_rows_separate_without_final_newline(tmp_path):
@@ -203,8 +253,8 @@ def test_change_store_hides_historical_cyrene_managed_records(tmp_path):
         "additions": 30,
         "deletions": 0,
         "files": [
-            {"path": "conversations/wbchat_1.md", "additions": 13, "deletions": 0, "diff": "+chat\n"},
-            {"path": "plan/plan_1.md", "additions": 7, "deletions": 0, "diff": "+plan\n"},
+            {"path": ".cyrene/conversations/wbchat_1.md", "additions": 13, "deletions": 0, "diff": "+chat\n"},
+            {"path": ".cyrene/plan/plan_1.md", "additions": 7, "deletions": 0, "diff": "+plan\n"},
             {"path": "src/app.py", "additions": 10, "deletions": 0, "diff": "+code\n"},
         ],
     }
@@ -217,7 +267,7 @@ def test_change_store_hides_historical_cyrene_managed_records(tmp_path):
         "additions": 13,
         "deletions": 0,
         "files": [{
-            "path": "conversations/wbchat_2.md",
+            "path": ".cyrene/conversations/wbchat_2.md",
             "additions": 13,
             "deletions": 0,
             "diff": "+chat\n",
@@ -232,7 +282,7 @@ def test_change_store_hides_historical_cyrene_managed_records(tmp_path):
     assert [item["path"] for item in listed[0]["files"]] == ["src/app.py"]
     assert list_chat_change_sets(db_path, "chat_2") == []
     assert get_chat_file_change(
-        db_path, "chat_1", "run_mixed", "conversations/wbchat_1.md"
+        db_path, "chat_1", "run_mixed", ".cyrene/conversations/wbchat_1.md"
     ) is None
 
 
@@ -244,7 +294,7 @@ def test_change_store_never_persists_new_cyrene_managed_records(tmp_path):
         "id": "run_internal",
         "chatId": "chat_1",
         "files": [{
-            "path": "conversations/wbchat_1.md",
+            "path": ".cyrene/conversations/wbchat_1.md",
             "additions": 13,
             "deletions": 0,
         }],
@@ -256,7 +306,7 @@ def test_change_store_never_persists_new_cyrene_managed_records(tmp_path):
         "id": "run_mixed",
         "chatId": "chat_1",
         "files": [
-            {"path": "plan/plan_1.md", "additions": 7, "deletions": 0},
+            {"path": ".cyrene/plan/plan_1.md", "additions": 7, "deletions": 0},
             {"path": "src/app.py", "additions": 2, "deletions": 1},
         ],
     })

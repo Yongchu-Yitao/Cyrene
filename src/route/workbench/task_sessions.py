@@ -949,7 +949,7 @@ def register_task_session_routes(
         volatile_ephemeral_system = _workbench_compose_volatile_ephemeral_system(project, session, memory_pair=memory_pair)
         agent_error = None
         try:
-            agent_reply = await _workbench_agent_reply(user_input, session, constraints, attachments=attachments, permission_mode=mode, command=command, project_workspace=str(project.get("workspacePath") or ""), ephemeral_system=ephemeral_system, volatile_ephemeral_system=volatile_ephemeral_system, static_system_extra=_workbench_compose_static_system(project, session), conversation_source="" if ui_instance_id else "webui", ui_instance_id=ui_instance_id, client_request_id=client_request_id)
+            agent_reply = await _workbench_agent_reply(user_input, session, constraints, attachments=attachments, permission_mode=mode, command=command, project_workspace=await _workbench_resolve_workspace_dir_async(project), ephemeral_system=ephemeral_system, volatile_ephemeral_system=volatile_ephemeral_system, static_system_extra=_workbench_compose_static_system(project, session), conversation_source="" if ui_instance_id else "webui", ui_instance_id=ui_instance_id, client_request_id=client_request_id)
         except _WorkbenchAgentRunError as exc:
             agent_error = exc
             agent_reply = exc.message
@@ -1090,7 +1090,7 @@ def register_task_session_routes(
         }
         session.setdefault("runs", []).append(run)
         session.setdefault("events", []).extend(events)
-        _workbench_promote_file_artifacts(session, file_changes, finished_at, workspace_root)
+        _workbench_promote_file_artifacts(session, file_changes, finished_at)
         if not awaiting_user and agent_error is None:
             await _workbench_archive_run_knowledge(
                 project, session, run, workspace_root, finished_at,
@@ -1159,7 +1159,7 @@ def register_task_session_routes(
         volatile_ephemeral_system = _workbench_compose_volatile_ephemeral_system(project, session, memory_pair=memory_pair)
         agent_command = command or "workbench-task-reply"
         try:
-            agent_reply = await _workbench_agent_reply(message, session, [], attachments=attachments, permission_mode=mode, command=agent_command, project_workspace=str(project.get("workspacePath") or ""), ephemeral_system=ephemeral_system, volatile_ephemeral_system=volatile_ephemeral_system, static_system_extra=_workbench_compose_static_system(project, session), conversation_source="" if ui_instance_id else "webui", ui_instance_id=ui_instance_id, client_request_id=client_request_id)
+            agent_reply = await _workbench_agent_reply(message, session, [], attachments=attachments, permission_mode=mode, command=agent_command, project_workspace=await _workbench_resolve_workspace_dir_async(project), ephemeral_system=ephemeral_system, volatile_ephemeral_system=volatile_ephemeral_system, static_system_extra=_workbench_compose_static_system(project, session), conversation_source="" if ui_instance_id else "webui", ui_instance_id=ui_instance_id, client_request_id=client_request_id)
         except _WorkbenchAgentRunError as exc:
             return agent_run_error_response(exc)
         git_status_after = _workbench_git_status_snapshot(workspace_root)
@@ -1191,7 +1191,7 @@ def register_task_session_routes(
         )
         if chat_tool_events:
             session.setdefault("events", []).extend(chat_tool_events)
-        _workbench_promote_file_artifacts(session, file_changes, now, workspace_root)
+        _workbench_promote_file_artifacts(session, file_changes, now)
         payload["activeSessionId"] = session_id
         _write_workbench_store(payload)
         finalize_host_actions_after_reply(session_id, client_request_id)
@@ -1447,7 +1447,7 @@ def register_task_session_routes(
         volatile_ephemeral_system = _workbench_compose_volatile_ephemeral_system(project, session, memory_pair=memory_pair)
         agent_command = command or ("workbench-task-reply" if kind == "answer" else "")
         try:
-            agent_reply = await _workbench_agent_reply(user_input, session, [], attachments=attachments, permission_mode=mode, command=agent_command, project_workspace=str(project.get("workspacePath") or ""), ephemeral_system=ephemeral_system, volatile_ephemeral_system=volatile_ephemeral_system, static_system_extra=_workbench_compose_static_system(project, session), conversation_source="" if ui_instance_id else "webui", ui_instance_id=ui_instance_id, client_request_id=client_request_id)
+            agent_reply = await _workbench_agent_reply(user_input, session, [], attachments=attachments, permission_mode=mode, command=agent_command, project_workspace=await _workbench_resolve_workspace_dir_async(project), ephemeral_system=ephemeral_system, volatile_ephemeral_system=volatile_ephemeral_system, static_system_extra=_workbench_compose_static_system(project, session), conversation_source="" if ui_instance_id else "webui", ui_instance_id=ui_instance_id, client_request_id=client_request_id)
         except _WorkbenchAgentRunError as exc:
             return agent_run_error_response(exc)
         git_status_after = _workbench_git_status_snapshot(workspace_root)
@@ -1510,7 +1510,7 @@ def register_task_session_routes(
         }
         session.setdefault("runs", []).append(run)
         session.setdefault("events", []).extend(events)
-        _workbench_promote_file_artifacts(session, file_changes, finished_at, workspace_root)
+        _workbench_promote_file_artifacts(session, file_changes, finished_at)
         if not awaiting_user:
             await _workbench_archive_run_knowledge(
                 project, session, run, workspace_root, finished_at,
@@ -1615,7 +1615,7 @@ def register_task_session_routes(
         now = _utc_now_iso()
         run_start_ts = now
         workspace_root = _workbench_workspace_root(project)
-        workspace_dir = _workbench_resolve_workspace_dir(project)
+        workspace_dir = await _workbench_resolve_workspace_dir_async(project)
         git_status_before = _workbench_git_status_snapshot(workspace_root)
         workspace_files_before = _workbench_workspace_file_snapshot(workspace_root)
         workspace_text_before = _workbench_workspace_text_snapshot(workspace_root)
@@ -1760,7 +1760,7 @@ def register_task_session_routes(
         }
         session.setdefault("runs", []).append(run)
         session.setdefault("events", []).extend(events)
-        _workbench_promote_file_artifacts(session, file_changes, finished_at, workspace_root)
+        _workbench_promote_file_artifacts(session, file_changes, finished_at)
         continue_plan_execution = False
         if pending_plan_step and not awaiting_user:
             pending_step_id = str(pending_plan_step.get("stepId") or "").strip()

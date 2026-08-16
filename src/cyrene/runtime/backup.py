@@ -19,7 +19,7 @@ from pathlib import Path, PurePosixPath
 from typing import Any, BinaryIO
 from zipfile import ZIP_DEFLATED, ZipFile, ZipInfo
 
-from cyrene.config import BASE_DIR, DATA_DIR, STORE_DIR, TEMP_DIR, WORKSPACE_DIR
+from cyrene.config import BASE_DIR, DATA_DIR, STORE_DIR, TEMP_DIR, WORKSPACE_DIR, cyrene_dir
 
 logger = logging.getLogger(__name__)
 
@@ -31,22 +31,24 @@ _BACKUP_DIR = BASE_DIR / "backups"
 # These directories are Cyrene-owned collections. A v0.5 restore replaces each
 # collection as a unit, so files created after the backup do not survive a
 # rollback. Root-level files are restored individually.
+#
+# Workspace collections live under the workspace's hidden .cyrene dir. Arcnames
+# keep the legacy "workspace/<name>" form, but _resolve_target rewrites that
+# prefix straight back into .cyrene — the location the app reads and writes
+# today — so archives restore without depending on the startup migration sweep.
+# Backups created before a collection was removed (e.g. workspace/deliverables)
+# carry a replace root no longer accepted and are rejected by _inspect_archive.
 _MANAGED_DIRECTORIES: list[tuple[Path, str]] = [
-    (WORKSPACE_DIR / "conversations", "workspace/conversations"),
-    (WORKSPACE_DIR / "patterns", "workspace/patterns"),
+    (cyrene_dir(WORKSPACE_DIR) / "conversations", "workspace/conversations"),
+    (cyrene_dir(WORKSPACE_DIR) / "patterns", "workspace/patterns"),
     # Plan records persist markdownPath values into chat state. Keep the
     # generated markdown mirrors so those stored paths remain valid.
-    (WORKSPACE_DIR / "plan", "workspace/plan"),
-    # Files declared through send_file are durable user-facing state.  Chat
-    # messages and project knowledge store URLs/paths into this directory, so
-    # omitting it from a backup preserves the references while losing the
-    # actual PDF/HTML/media bytes after restore.
-    (WORKSPACE_DIR / "deliverables", "workspace/deliverables"),
+    (cyrene_dir(WORKSPACE_DIR) / "plan", "workspace/plan"),
     # Projects created without a user-selected directory live here. Their task
     # sessions persist relative artifact paths and download directly from these
     # workspaces. User-selected external project folders remain user-owned and
     # intentionally stay outside the Cyrene state backup.
-    (WORKSPACE_DIR / "projects", "workspace/projects"),
+    (cyrene_dir(WORKSPACE_DIR) / "projects", "workspace/projects"),
     (DATA_DIR / "sessions", "data/sessions"),
     (DATA_DIR / "inbox", "data/inbox"),
     (DATA_DIR / "installed_skills", "data/installed_skills"),
@@ -126,8 +128,9 @@ def _resolve_target(name: str) -> Path:
     if name.startswith("data/"):
         return DATA_DIR / name[len("data/"):]
     if name.startswith("workspace/"):
-        return WORKSPACE_DIR / name[len("workspace/"):]
-    # Compatibility with v0.4 conversation entries.
+        return cyrene_dir(WORKSPACE_DIR) / name[len("workspace/"):]
+    # Compatibility with v0.4 conversation entries, which were stored at the
+    # workspace root; the startup migration sweeps those into .cyrene.
     return WORKSPACE_DIR / name
 
 
@@ -228,7 +231,7 @@ def _iter_export_sources() -> tuple[list[_Source], list[str]]:
     ]
     replace_roots: list[str] = []
 
-    soul = WORKSPACE_DIR / "SOUL.md"
+    soul = cyrene_dir(WORKSPACE_DIR) / "SOUL.md"
     if soul.is_file() and not soul.is_symlink():
         sources.append(_Source(path=soul, arcname="workspace/SOUL.md"))
 

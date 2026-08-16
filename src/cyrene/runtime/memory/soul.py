@@ -15,11 +15,12 @@ Sections:
 
 import logging
 import re
+import shutil
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import List, Optional, Tuple
 
-from cyrene.config import ASSISTANT_NAME, WORKSPACE_DIR
+from cyrene.config import ASSISTANT_NAME, WORKSPACE_DIR, cyrene_dir
 
 logger = logging.getLogger(__name__)
 
@@ -56,14 +57,33 @@ def get_default_soul_content(name: str | None = None) -> str:
 
 def get_soul_path() -> Path:
     """Return the path to SOUL.md."""
-    return WORKSPACE_DIR / "SOUL.md"
+    return cyrene_dir(WORKSPACE_DIR) / "SOUL.md"
 
 
 def ensure_soul() -> None:
-    """Create a default SOUL.md if it does not already exist."""
+    """Create a default SOUL.md if it does not already exist.
+
+    If a legacy root-level SOUL.md survives (e.g. the startup migration's move
+    failed), fold it in first. When that move fails, no default is written so
+    the user's persona file is never silently replaced — the migration retries
+    on the next startup and keep_soul leaves the file absent in between.
+    """
     soul_path = get_soul_path()
     if soul_path.exists():
         return
+    legacy = WORKSPACE_DIR / "SOUL.md"
+    if legacy.is_file():
+        from cyrene.runtime.cyrene_migration import _looks_like_cyrene_soul
+
+        if _looks_like_cyrene_soul(legacy):
+            try:
+                soul_path.parent.mkdir(parents=True, exist_ok=True)
+                shutil.move(str(legacy), str(soul_path))
+                logger.info("Migrated legacy SOUL.md into %s", soul_path)
+                return
+            except OSError:
+                logger.exception("Failed to migrate legacy SOUL.md from %s", legacy)
+                return
     try:
         soul_path.parent.mkdir(parents=True, exist_ok=True)
         soul_path.write_text(get_default_soul_content(), encoding="utf-8")

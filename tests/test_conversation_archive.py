@@ -21,7 +21,7 @@ def test_archive_writes_one_file_per_session(tmp_path: Path) -> None:
     assert a1 == a2 == session_conversation_file("wbchat_aaa", ws)
     assert b1 != a1
     conv_dir = session_conversations_dir(ws)
-    assert conv_dir == tmp_path / "conversations"
+    assert conv_dir == tmp_path / ".cyrene" / "conversations"
     assert sorted(p.name for p in conv_dir.iterdir()) == ["wbchat_aaa.md", "wbchat_bbb.md"]
 
 
@@ -56,4 +56,4 @@ def test_identity_block_only_for_session_scoped_runs() -> None:
     assert conversation_identity_block("") == ""
     block = conversation_identity_block("wbchat_xyz")
     assert "wbchat_xyz" in block
-    assert "conversations/wbchat_xyz.md" in block
+    assert ".cyrene/conversations/wbchat_xyz.md" in block

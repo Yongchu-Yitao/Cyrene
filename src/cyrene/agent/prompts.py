@@ -31,8 +31,8 @@ def workspace_scope_block(workspace_dir: Any = WORKSPACE_DIR, shell_kind: str = 
         f"- For requests about this project or its local files, proactively inspect the workspace before deciding what to do: list the top-level entries, read applicable instruction files, and then open or search the relevant source, configuration, documentation, and tests. Do not wait for the user to name every file, and do not claim the workspace is empty or unrelated without checking it. Skip this inspection only when the request clearly does not depend on workspace contents.\n"
         f"- Only access external paths when the task explicitly requires a specific external location. External access pauses the workflow for user permission, except read-only shell commands, which may access external paths freely. Shell writes, moves, and deletes must stay within the workspace or trigger permission.\n"
         f"- Avoid `$(...)` and backticks because they trigger security review. Avoid `rm` unless deletion is required; even workspace deletions require user confirmation.\n"
-        f"- Put user-facing outputs in `deliverables/` and temporary or intermediate files in `scratch/`; never place deliverables directly in the workspace root.\n"
-        f"- If the user requests a specific save path, save the file there first, then call `delivery.send_file`; authorized external paths are supported and registered as deliverables."
+        f"- Call `delivery.send_file` on every file you want the user to be able to download; the tool registers the file as a deliverable at the path you pass (workspace-relative or an authorized external path), and writing a path without `send_file` does not count as a delivery.\n"
+        f"- Put temporary or intermediate files in `.cyrene/scratch/`; avoid leaving them in the workspace root."
     )
     if shell_kind and shell_kind != "bash":
         block += (
@@ -193,16 +193,16 @@ def conversation_identity_block(session_id: Any = "") -> str:
     Returned only for session-scoped runs (Workbench conversations carry a
     ``session_id``; the legacy single-session agent uses an empty id and gets no
     block). Each conversation is archived after every exchange to
-    ``conversations/<session_id>.md`` inside the workspace, so the agent can read
-    its own earlier turns — or any sibling conversation — straight from disk.
+    ``.cyrene/conversations/<session_id>.md`` inside the workspace, so the agent
+    can read its own earlier turns — or any sibling conversation — straight from disk.
     """
     sid = str(session_id or "").strip()
     if not sid:
         return ""
     return (
         f"## Conversation Identity\n"
-        f"- Your conversation ID is `{sid}`. Its history is appended to `conversations/{sid}.md`; "
-        f"other conversations are stored as `conversations/<conversation-id>.md`.\n"
+        f"- Your conversation ID is `{sid}`. Its history is appended to `.cyrene/conversations/{sid}.md`; "
+        f"other conversations are stored as `.cyrene/conversations/<conversation-id>.md`.\n"
         f"- These files are read-only history. Use `Read`, `Glob`, or `Grep` to consult them; never edit or delete them."
     )
 

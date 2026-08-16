@@ -1708,21 +1708,23 @@ def test_workbench_file_changes_reject_cyrene_managed_run_state(tmp_path):
         _workbench_workspace_text_snapshot,
     )
 
-    (tmp_path / "conversations").mkdir()
-    (tmp_path / "conversations" / "wbchat_1.md").write_text("chat\n", encoding="utf-8")
-    (tmp_path / "plan").mkdir()
-    (tmp_path / "plan" / "plan_1.md").write_text("plan\n", encoding="utf-8")
+    cyrene_root = tmp_path / ".cyrene"
+    (cyrene_root / "conversations").mkdir(parents=True)
+    (cyrene_root / "conversations" / "wbchat_1.md").write_text("chat\n", encoding="utf-8")
+    (cyrene_root / "plan").mkdir()
+    (cyrene_root / "plan" / "plan_1.md").write_text("plan\n", encoding="utf-8")
     (tmp_path / "app.py").write_text("print('ok')\n", encoding="utf-8")
 
     assert _workbench_file_changes_from_tool_event(
-        {"tool": "Write", "args": {"path": "conversations/wbchat_1.md"}, "result": ""},
+        {"tool": "Write", "args": {"path": ".cyrene/conversations/wbchat_1.md"}, "result": ""},
         tmp_path,
     ) == []
     assert _workbench_git_status_delta(
         {},
-        {"conversations/wbchat_1.md": "??", "plan/plan_1.md": "??", "app.py": "??"},
+        {".cyrene/conversations/wbchat_1.md": "??", ".cyrene/plan/plan_1.md": "??", "app.py": "??"},
         tmp_path,
     )[0]["path"] == "app.py"
+    # The snapshot walks skip dot directories, so .cyrene is invisible.
     assert set(_workbench_workspace_file_snapshot(tmp_path)) == {"app.py"}
     assert set(_workbench_workspace_text_snapshot(tmp_path)) == {"app.py"}
 
@@ -2074,7 +2076,63 @@ def test_workbench_promote_file_artifacts_promotes_and_dedups():
     assert _workbench_promote_file_artifacts(session, changes, "2026-06-14T01:00:00Z") == 0
 
 
-def test_workbench_promote_file_artifacts_copies_source_and_relabels_diff_headers(tmp_path):
+def test_workbench_promote_file_artifacts_pins_attachment_copy(tmp_path):
+    from cyrene.workbench.runtime import _workbench_promote_file_artifacts
+
+    (tmp_path / "report.md").write_text("# Report\n", encoding="utf-8")
+    session = {"artifacts": []}
+    changes = [{
+        "path": "report.md",
+        "status": "produced",
+        "source": "workspace_output",
+        "diff": "--- /dev/null\n+++ b/report.md\n@@ -0,0 +1 @@\n+# Report\n",
+        "diffSource": "workspace_snapshot",
+        # send_file's tool event pins the durable webui_exports copy. The
+        # public attachment payload carries an id (the exported filename) but
+        # no path — mirror the real build_public_attachment_payload shape.
+        "attachment": {
+            "id": "report_f1a2b3c4d5.md",
+            "name": "report.md",
+            "content_type": "text/markdown",
+            "size": 11,
+            "kind": "file",
+            "url": "/api/chat/export/report_f1a2b3c4d5.md",
+        },
+    }]
+
+    assert _workbench_promote_file_artifacts(session, changes, "2026-06-14T00:00:00Z") == 1
+    artifact = session["artifacts"][0]
+    # No deliverables/ dir anymore: the artifact keeps the Agent-verified
+    # relative path and pins the durable webui_exports copy for download.
+    assert artifact["path"] == "report.md"
+    assert (tmp_path / "report.md").read_text(encoding="utf-8") == "# Report\n"
+    assert artifact["attachment"]["id"] == "report_f1a2b3c4d5.md"
+    assert artifact["attachment"].get("path") is None
+    # Diff headers keep the source path since no copy is made.
+    assert "+++ b/report.md" in artifact["diff"]
+    assert "deliverables" not in artifact["diff"]
+
+
+def test_workbench_promote_file_artifacts_attachment_flows_from_tool_event():
+    """send_file's real tool-event result pins the attachment on the change."""
+    from cyrene.workbench.runtime import _workbench_file_changes_from_tool_event
+
+    changes = _workbench_file_changes_from_tool_event(
+        {
+            "tool": "send_file",
+            "args": {"path": "report.md"},
+            "result": '{"status": "sent", "attachment": {"id": "report_abc123.md", "name": "report.md", "url": "/api/chat/export/report_abc123.md"}}',
+        },
+        None,
+    )
+
+    assert len(changes) == 1
+    assert changes[0]["path"] == "report.md"
+    assert changes[0]["status"] == "produced"
+    assert changes[0]["attachment"]["id"] == "report_abc123.md"
+
+
+def test_workbench_promote_file_artifacts_no_attachment_keeps_workspace_path(tmp_path):
     from cyrene.workbench.runtime import _workbench_promote_file_artifacts
 
     (tmp_path / "report.md").write_text("# Report\n", encoding="utf-8")
@@ -2087,13 +2145,10 @@ def test_workbench_promote_file_artifacts_copies_source_and_relabels_diff_header
         "diffSource": "workspace_snapshot",
     }]
 
-    assert _workbench_promote_file_artifacts(session, changes, "2026-06-14T00:00:00Z", tmp_path) == 1
+    assert _workbench_promote_file_artifacts(session, changes, "2026-06-14T00:00:00Z") == 1
     artifact = session["artifacts"][0]
-    assert artifact["path"] == "deliverables/report.md"
-    assert (tmp_path / "report.md").read_text(encoding="utf-8") == "# Report\n"
-    assert (tmp_path / "deliverables" / "report.md").read_text(encoding="utf-8") == "# Report\n"
-    assert "+++ b/deliverables/report.md" in artifact["diff"]
-    assert "+++ b/report.md" not in artifact["diff"]
+    assert artifact["path"] == "report.md"
+    assert "attachment" not in artifact
 
 
 def test_workbench_final_artifact_file_changes_use_declared_artifacts_only():
@@ -2220,9 +2275,10 @@ async def test_workbench_backfills_reported_historical_output(monkeypatch, tmp_p
     )
 
     assert added == 1
-    assert session["artifacts"][0]["path"] == "deliverables/final.pdf"
+    # No deliverables/ copy: the artifact keeps the source-relative path.
+    assert session["artifacts"][0]["path"] == "exports/final.pdf"
     assert session["legacyArtifactModelMigrationVersion"] == 1
-    assert (tmp_path / "deliverables" / "final.pdf").read_bytes() == b"%PDF-1.7\n"
+    assert (tmp_path / "exports" / "final.pdf").read_bytes() == b"%PDF-1.7\n"
 
 
 def test_workbench_prunes_parent_repo_git_files_and_artifacts(tmp_path):

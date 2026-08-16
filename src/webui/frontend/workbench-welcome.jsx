@@ -51,6 +51,7 @@
     knowledge: <Svg><path d="M5 4.5A2.5 2.5 0 0 1 7.5 2H20v15H7.5A2.5 2.5 0 0 0 5 19.5Z" /><path d="M5 19.5A2.5 2.5 0 0 0 7.5 22H20" /></Svg>,
     collab: <Svg><circle cx="9" cy="8.5" r="3" /><path d="M3.5 19a5.5 5.5 0 0 1 11 0M16 6.2a3 3 0 0 1 0 5.6M20.5 19a5.5 5.5 0 0 0-3.5-5.1" /></Svg>,
     automation: <Svg><path d="M14.7 6.3a4 4 0 1 0-5 5l-7 7 2 2 7-7a4 4 0 0 0 5-5l-2.6 2.6-2.4-.6-.6-2.4Z" /></Svg>,
+    tutorial: <Svg><path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20V2H6.5A2.5 2.5 0 0 0 4 4.5v15Z" /><path d="M4 19.5A2.5 2.5 0 0 0 6.5 22H20v-5" /><path d="M9 7h6M9 11h6" /></Svg>,
     // preferences
     theme: <Svg><circle cx="12" cy="12" r="9" /><path d="M12 3a9 9 0 0 1 0 18Z" fill="currentColor" stroke="none" /></Svg>,
     globe: <Svg><circle cx="12" cy="12" r="9" /><path d="M3 12h18M12 3c2.6 2.5 2.6 15 0 18M12 3c-2.6 2.5-2.6 15 0 18" /></Svg>,
@@ -153,6 +154,7 @@
       { id: "knowledge", tone: "violet", icon: ICON.knowledge, label: T("welcome.cap.knowledge", null, "Knowledge base & context"), action: function () { props.onOpenPage("knowledge"); } },
       { id: "collab", tone: "amber", icon: ICON.collab, label: T("welcome.cap.collab", null, "Projects & collaboration"), action: function () { props.onOpenPage("task"); } },
       { id: "automation", tone: "green", icon: ICON.automation, label: T("welcome.cap.automation", null, "Automation & integrations"), action: function () { props.onOpenPage("schedule"); } },
+      { id: "tutorial", tone: "cyan", icon: ICON.tutorial, label: T("welcome.cap.tutorial", null, "In-app tutorials"), action: function () { window.CyreneUI.require("tour").open(); } },
     ];
     return (
       <section className="wb-wel-card">

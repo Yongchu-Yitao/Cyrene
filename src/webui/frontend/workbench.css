@@ -2236,6 +2236,7 @@ html[data-theme="dark"] .workbench-notif-item-icon.system { background: rgba(255
 .workbench-help-quick-icon.green { background: #dff6df; color: #22a95b; }
 .workbench-help-quick-icon.amber { background: #fff1df; color: #ff8a1f; }
 .workbench-help-quick-icon.purple { background: #f0e6ff; color: #7957d5; }
+.workbench-help-quick-icon.cyan { background: #dff3f8; color: #0e93ad; }
 
 .workbench-help-quick-main {
   min-width: 0;
@@ -2360,6 +2361,7 @@ html[data-theme="dark"] .workbench-help-quick-icon.blue { background: rgba(45, 1
 html[data-theme="dark"] .workbench-help-quick-icon.green { background: rgba(34, 169, 91, 0.16); color: #7fe0a4; }
 html[data-theme="dark"] .workbench-help-quick-icon.amber { background: rgba(255, 138, 31, 0.18); color: #ffbf78; }
 html[data-theme="dark"] .workbench-help-quick-icon.purple { background: rgba(121, 87, 213, 0.18); color: #c1a7ff; }
+html[data-theme="dark"] .workbench-help-quick-icon.cyan { background: rgba(14, 147, 173, 0.16); color: #6fd3e8; }
 
 @media (max-width: 860px) {
   .workbench-help-popover {

@@ -21,6 +21,7 @@ SOURCE_ROOT = app_paths.INSTALL_RESOURCES_DIR
 INSTALL_RESOURCES_DIR = app_paths.INSTALL_RESOURCES_DIR
 USER_DATA_DIR = app_paths.USER_DATA_DIR
 BASE_DIR = app_paths.BASE_DIR
+cyrene_dir = app_paths.cyrene_dir
 
 # 路径
 WORKSPACE_DIR = BASE_DIR / "workspace"      # 工作区，存放 SOUL.md、CLAUDE.md 等运行时文件
@@ -32,10 +33,10 @@ DB_PATH = STORE_DIR / "cyrene.runtime.database"           # SQLite 数据库路�
 STATE_FILE = DATA_DIR / "state.json"        # 运行时状态持久化
 LOTTERY_FILE = DATA_DIR / "lottery_state.json"  # 抽奖状态持久化
 INBOX_DIR = DATA_DIR / "inbox"              # 收件箱目录，存放外部消息
-SOUL_PATH = WORKSPACE_DIR / "SOUL.md"       # 人格/身份文件
+SOUL_PATH = cyrene_dir(WORKSPACE_DIR) / "SOUL.md"   # 人格/身份文件
 
 # Pattern (automatic script learning)
-PATTERNS_DIR = WORKSPACE_DIR / "patterns"
+PATTERNS_DIR = cyrene_dir(WORKSPACE_DIR) / "patterns"
 
 # —— 从加密配置加载环境变量并注入 os.environ ——
 _env = _store.get_all_env()

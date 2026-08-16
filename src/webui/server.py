@@ -10,6 +10,30 @@ from typing import Any
 import uvicorn
 from fastapi import FastAPI
 from fastapi.staticfiles import StaticFiles
+from starlette.requests import Request
+from starlette.responses import Response
+from starlette.types import Receive, Scope, Send
+
+
+class NoCacheStaticFiles(StaticFiles):
+    """Static assets without explicit cache headers fall back to Chromium's
+    heuristic caching, which made Electron renderers keep stale JSX builds
+    after `npm run build` (the index.html ?v= query never changes). Force
+    revalidation so dev reloads always see the newest frontend."""
+
+    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+        await super().__call__(scope, receive, send)
+
+    def file_response(
+        self,
+        full_path: str,
+        stat_result: Any,
+        scope: Scope,
+        status_code: int = 200,
+    ) -> Response:
+        response = super().file_response(full_path, stat_result, scope, status_code)
+        response.headers["Cache-Control"] = "no-cache"
+        return response
 
 from cyrene.config import WEB_PORT
 from cyrene.runtime.task_lifecycle import cancel_and_wait
@@ -68,7 +92,7 @@ def create_app(bot: Any, db_path: str, instance_id: str = "", ui_mode: str = "wo
     # but Workbench is now the only served UI.
     app.state.ui_mode = "workbench"
     app.state.web_port = WEB_PORT
-    app.mount("/static", StaticFiles(directory=str(_STATIC_DIR)), name="static")
+    app.mount("/static", NoCacheStaticFiles(directory=str(_STATIC_DIR)), name="static")
 
     register_routes(app, bot, db_path)
 

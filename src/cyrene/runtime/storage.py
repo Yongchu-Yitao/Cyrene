@@ -17,7 +17,7 @@ import stat
 from pathlib import Path
 from typing import Callable
 
-from cyrene.config import BASE_DIR, CACHE_DIR, DATA_DIR, STORE_DIR, WORKSPACE_DIR
+from cyrene.config import BASE_DIR, CACHE_DIR, DATA_DIR, STORE_DIR, WORKSPACE_DIR, cyrene_dir
 
 _MAX_SCAN_ENTRIES = 200_000
 
@@ -49,10 +49,9 @@ STORAGE_CATEGORIES: list[tuple[str, tuple[Path, ...], _NameFilter | None]] = [
     ("database", (STORE_DIR,), _DATABASE_FILES),
     ("knowledge", (STORE_DIR,), _KB_FILES),
     ("memory", (STORE_DIR,), _MEMORY_FILES),
-    ("conversations", (WORKSPACE_DIR / "conversations",), None),
-    ("plans", (WORKSPACE_DIR / "plan",), None),
-    ("deliverables", (WORKSPACE_DIR / "deliverables",), None),
-    ("projects", (WORKSPACE_DIR / "projects",), None),
+    ("conversations", (cyrene_dir(WORKSPACE_DIR) / "conversations",), None),
+    ("plans", (cyrene_dir(WORKSPACE_DIR) / "plan",), None),
+    ("projects", (cyrene_dir(WORKSPACE_DIR) / "projects",), None),
     ("sessions", (DATA_DIR / "sessions",), None),
     ("inbox", (DATA_DIR / "inbox",), None),
     ("skills", (DATA_DIR / "installed_skills", DATA_DIR / "learned_skill_scripts"), None),

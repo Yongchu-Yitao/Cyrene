@@ -35,7 +35,7 @@ from typing import Any, Callable
 import httpx
 
 from cyrene.call_llm import NETWORK_RETRY_LIMIT
-from cyrene.config import DATA_DIR, WORKSPACE_DIR
+from cyrene.config import DATA_DIR, WORKSPACE_DIR, cyrene_dir
 from cyrene.agent_runtime import builtin as _agent_runtime_builtin
 from cyrene.agent_runtime.capabilities import normalize_capabilities as _normalize_capabilities
 from cyrene.runtime.memory.conversations import archive_session_exchange
@@ -367,13 +367,21 @@ def _write_plan_markdown(plan: dict[str, Any]) -> None:
 
 
 def _resolve_managed_plan_path(raw_path: str) -> Path:
-    """Rebase plan mirrors restored from another Cyrene data directory."""
+    """Rebase plan mirrors to the workspace's hidden ``.cyrene/plan`` dir.
+
+    Current installs store plan mirrors under ``.cyrene/plan``. Legacy records
+    carry either the pre-migration location under the workspace root
+    (``workspace/plan/...``, ``workspace/projects/.../plan/...``) or a
+    cross-machine path containing a ``/workspace/`` segment; both rebase into
+    the hidden location so stored markdown paths stay valid. Paths outside the
+    workspace (user-selected folders) are left untouched.
+    """
     raw = str(raw_path or "").strip()
     direct = Path(raw).expanduser()
     try:
         resolved = direct.resolve()
-        workspace_root = WORKSPACE_DIR.resolve()
-        if resolved == workspace_root or workspace_root in resolved.parents:
+        managed_plan_root = (cyrene_dir(WORKSPACE_DIR) / "plan").resolve()
+        if resolved == managed_plan_root or managed_plan_root in resolved.parents:
             return resolved
     except Exception:
         pass
@@ -386,7 +394,7 @@ def _resolve_managed_plan_path(raw_path: str) -> Path:
     ):
         relative = normalized[marker_index + len(marker):]
         if relative == "plan" or relative.startswith(("plan/", "projects/")):
-            candidate = (WORKSPACE_DIR / Path(relative)).resolve()
+            candidate = (cyrene_dir(WORKSPACE_DIR) / Path(relative)).resolve()
             root = WORKSPACE_DIR.resolve()
             if candidate == root or root in candidate.parents:
                 return candidate
@@ -425,7 +433,7 @@ def _normalize_chat_plan(
     })
     if workspace_dir and not out.get("markdownPath"):
         slug = re.sub(r"[^A-Za-z0-9._-]+", "-", plan_id).strip("-") or "plan"
-        out["markdownPath"] = str(Path(workspace_dir) / "plan" / f"{slug}.md")
+        out["markdownPath"] = str(cyrene_dir(workspace_dir) / "plan" / f"{slug}.md")
     return out
 
 
