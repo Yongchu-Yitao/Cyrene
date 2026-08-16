@@ -5,6 +5,13 @@
 This English edition preserves the release history of the Chinese changelog.
 The Chinese edition remains the most detailed record for older releases.
 
+## [0.7.10-beta2] - 2026-08-16
+
+### Features and interface changes
+
+- Added in-app tutorials and guided walkthroughs: step-by-step guides open from the welcome page and the help menu, covering chat, tasks, knowledge, memory, schedule, and the browser, so new users can quickly learn each feature and existing users can revisit key operations.
+- Backups and restores are more reliable: conversations, plans, persona, and project data are all restored to their correct locations, so nothing is lost or misplaced after moving between devices.
+
 ## [0.7.10-beta1] - 2026-08-16
 
 ### Features and interface changes

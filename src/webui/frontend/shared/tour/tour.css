@@ -18,10 +18,20 @@
     0 28px 80px color-mix(in srgb, #06101d 34%, transparent),
     0 3px 12px color-mix(in srgb, #06101d 12%, transparent);
   --wb-line: var(--line);
+  --wb-line-2: var(--line-2);
+  --wb-text: var(--text);
   --wb-text-dim: color-mix(in srgb, var(--text) 68%, transparent);
   --wb-row-hover-bg: color-mix(in srgb, var(--accent) 8%, var(--bg-2));
   --wb-line-strong: color-mix(in srgb, var(--text) 20%, transparent);
   --wb-line-soft: color-mix(in srgb, var(--text) 9%, transparent);
+  /* .wb-btn and friends need these surface tokens; without them buttons
+     render transparent-on-white and look like they are missing. */
+  --wb-accent: var(--accent);
+  --wb-control-bg: var(--control-bg);
+  --wb-control-hover-bg: var(--control-bg-hover);
+  --wb-green: #1f9d57;
+  --wb-amber: var(--warn);
+  --wb-red: var(--err);
 }
 
 .tour-center-overlay {
