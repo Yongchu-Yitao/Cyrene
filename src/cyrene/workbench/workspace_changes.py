@@ -66,9 +66,9 @@ def _looks_like_legacy_managed_dir(workspace_root: Path, root_name: str) -> bool
     cached = _legacy_managed_dir_cache.get(key)
     if cached is not None:
         return cached
-    from cyrene.runtime.cyrene_migration import _looks_like_cyrene_folder
+    from cyrene.runtime.cyrene_migration import looks_like_cyrene_folder
 
-    result = _looks_like_cyrene_folder(workspace_root, root_name)
+    result = looks_like_cyrene_folder(workspace_root, root_name)
     _legacy_managed_dir_cache[key] = result
     return result
 

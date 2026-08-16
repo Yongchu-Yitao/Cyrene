@@ -73,9 +73,9 @@ def ensure_soul() -> None:
         return
     legacy = WORKSPACE_DIR / "SOUL.md"
     if legacy.is_file():
-        from cyrene.runtime.cyrene_migration import _looks_like_cyrene_soul
+        from cyrene.runtime.cyrene_migration import looks_like_cyrene_soul
 
-        if _looks_like_cyrene_soul(legacy):
+        if looks_like_cyrene_soul(legacy):
             try:
                 soul_path.parent.mkdir(parents=True, exist_ok=True)
                 shutil.move(str(legacy), str(soul_path))

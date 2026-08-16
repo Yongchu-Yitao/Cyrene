@@ -4552,13 +4552,13 @@ def _workbench_find_exported_copy(path_value: Any) -> Path | None:
     prefix = f"{stem}_"
     try:
         exports_root = _EXPORTS_DIR.resolve()
+        if not exports_root.is_dir():
+            return None
+        for candidate in exports_root.iterdir():
+            if candidate.name.startswith(prefix) and candidate.name.endswith(suffix):
+                return candidate
     except OSError:
         return None
-    for candidate in exports_root.iterdir():
-        if not candidate.is_file():
-            continue
-        if candidate.name.startswith(prefix) and candidate.name.endswith(suffix):
-            return candidate
     return None
 
 
@@ -6689,19 +6689,19 @@ def _reset_legacy_workspace_root_leftovers() -> None:
     name in place.
     """
     from cyrene.runtime.cyrene_migration import (
-        _looks_like_cyrene_folder,
-        _looks_like_cyrene_soul,
+        looks_like_cyrene_folder,
+        looks_like_cyrene_soul,
     )
 
     for name in ("conversations", "patterns", "plan", "projects"):
         path = WORKSPACE_DIR / name
-        if path.is_dir() and _looks_like_cyrene_folder(WORKSPACE_DIR, name):
+        if path.is_dir() and looks_like_cyrene_folder(WORKSPACE_DIR, name):
             _remove_path_checked(path)
     scratch = WORKSPACE_DIR / "scratch"
     if scratch.is_dir():
         _remove_path_checked(scratch)
     soul = WORKSPACE_DIR / "SOUL.md"
-    if soul.is_file() and _looks_like_cyrene_soul(soul):
+    if soul.is_file() and looks_like_cyrene_soul(soul):
         _remove_path_checked(soul)
 
 

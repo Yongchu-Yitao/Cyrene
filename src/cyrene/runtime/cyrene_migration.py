@@ -53,7 +53,7 @@ _PLAN_FILE_RE = re.compile(r"^plan_[0-9a-f]{10}\.md$")
 _migrated_roots: set[str] = set()
 
 
-def _looks_like_cyrene_folder(root: Path, name: str) -> bool:
+def looks_like_cyrene_folder(root: Path, name: str) -> bool:
     """Return whether the folder's contents match Cyrene's output signature.
 
     Signature checks keep user-owned directories of the same name (e.g. a
@@ -85,7 +85,7 @@ def _looks_like_cyrene_folder(root: Path, name: str) -> bool:
     return False
 
 
-def _looks_like_cyrene_soul(file_path: Path) -> bool:
+def looks_like_cyrene_soul(file_path: Path) -> bool:
     """Return whether the file matches Cyrene's SOUL.md structure."""
     try:
         head = file_path.read_text(encoding="utf-8", errors="replace")[:400]
@@ -137,7 +137,7 @@ def migrate_workspace_to_cyrene(workspace_root: str | Path) -> int:
         source = root / name
         if not source.is_dir():
             continue
-        if name in _SIGNATURE_FOLDER_NAMES and not _looks_like_cyrene_folder(root, name):
+        if name in _SIGNATURE_FOLDER_NAMES and not looks_like_cyrene_folder(root, name):
             logger.info(
                 "Leaving %s in place: contents do not match the Cyrene output signature",
                 source,
@@ -157,7 +157,7 @@ def migrate_workspace_to_cyrene(workspace_root: str | Path) -> int:
         source = root / name
         if not source.is_file():
             continue
-        if not _looks_like_cyrene_soul(source):
+        if not looks_like_cyrene_soul(source):
             logger.info(
                 "Leaving %s in place: contents do not match the Cyrene SOUL.md signature",
                 source,
