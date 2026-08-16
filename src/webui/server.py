@@ -10,9 +10,11 @@ from typing import Any
 import uvicorn
 from fastapi import FastAPI
 from fastapi.staticfiles import StaticFiles
-from starlette.requests import Request
 from starlette.responses import Response
 from starlette.types import Receive, Scope, Send
+
+from cyrene.config import WEB_PORT
+from cyrene.runtime.task_lifecycle import cancel_and_wait
 
 
 class NoCacheStaticFiles(StaticFiles):
@@ -35,8 +37,6 @@ class NoCacheStaticFiles(StaticFiles):
         response.headers["Cache-Control"] = "no-cache"
         return response
 
-from cyrene.config import WEB_PORT
-from cyrene.runtime.task_lifecycle import cancel_and_wait
 
 logger = logging.getLogger(__name__)
 
