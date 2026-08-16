@@ -2228,6 +2228,7 @@ def register_workbench_chat_routes(
         external_notification_keys: set[str] = set()
 
         async def _run(run: ChatRun) -> str:
+            logger.info("Workbench chat _run entered [chat=%s run=%s]", chat_id, run.run_id)
             if is_external_agent:
                 from cyrene.agent_runtime import run_external_agent_turn
                 from cyrene.agent_runtime.events import event_envelope
@@ -2921,6 +2922,7 @@ def register_workbench_chat_routes(
             ack["userMessage"] = _public_message(user_entry)
 
         async def run_streaming(run: ChatRun) -> None:
+            logger.info("Workbench chat run_streaming entered [chat=%s run=%s]", chat_id, run.run_id)
             changes_before = await _capture_workspace_changes_baseline(
                 workspace_dir, run.run_id
             )

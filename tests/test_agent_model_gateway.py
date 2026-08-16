@@ -10,6 +10,7 @@ def _candidate() -> dict:
         "id": "configured-primary",
         "provider": "openai_compatible",
         "model": "configured-model",
+        "name": "configured-model",
         "base_url": "https://models.example/v1",
         "api_key": "test-only",
         "reasoning_effort": "high",
@@ -215,3 +216,113 @@ def test_responses_protocol_maps_messages_tool_results_and_calls():
         "arguments": '{"q":"x"}',
         "status": "completed",
     }]
+
+
+def test_pi_acp_binding_injects_redirected_config_dir_pointing_at_gateway(monkeypatch, tmp_path):
+    from cyrene.agent_runtime import model_gateway
+    from cyrene.agent_runtime.models import ModelAccess
+
+    monkeypatch.setattr(
+        "cyrene.model_runtime.client.resolve_session_model_candidate",
+        lambda session_id: _candidate(),
+    )
+    config_dir = tmp_path / "pi-agent-config"
+    monkeypatch.setattr(model_gateway, "_PI_AGENT_CONFIG_ROOT", config_dir)
+    monkeypatch.setattr(model_gateway, "_GATEWAY_PORT", 4321)
+
+    env = model_gateway.issue_model_gateway_binding(
+        ModelAccess(mode="cyrene_managed", profile_id="primary"),
+        {"chat_id": "chat_selected", "run_id": "run_selected", "installation_id": "agent_pi-acp_default", "agent_id": "pi-acp"},
+    )
+    assert env["OPENAI_API_KEY"]
+    expected_dir = config_dir / "configured-model"
+    assert env["PI_CODING_AGENT_DIR"] == str(expected_dir)
+    models = (expected_dir / "models.json").read_text("utf-8")
+    assert models == (
+        '{"providers":{"openai":{"baseUrl":"http://127.0.0.1:4321/api/agent-model-gateway/v1",'
+        '"models":[{"id":"configured-model","name":"configured-model","api":"openai-responses"}]}}}'
+    )
+    settings = (expected_dir / "settings.json").read_text("utf-8")
+    assert settings == '{"defaultProvider":"openai","defaultModel":"configured-model"}'
+
+
+def test_pi_acp_binding_uses_configured_model_name_not_entry_id(monkeypatch, tmp_path):
+    from cyrene.agent_runtime import model_gateway
+    from cyrene.agent_runtime.models import ModelAccess
+
+    candidate = dict(_candidate(), id="deepseek-chat", model="deepseek-v4-flash", name="deepseek-v4-flash")
+    monkeypatch.setattr(
+        "cyrene.model_runtime.client.resolve_session_model_candidate",
+        lambda session_id: candidate,
+    )
+    config_dir = tmp_path / "pi-agent-config"
+    monkeypatch.setattr(model_gateway, "_PI_AGENT_CONFIG_ROOT", config_dir)
+
+    model_gateway.issue_model_gateway_binding(
+        ModelAccess(mode="cyrene_managed", profile_id="primary"),
+        {"chat_id": "chat_selected", "run_id": "run_selected", "installation_id": "agent_pi-acp_default", "agent_id": "pi-acp"},
+    )
+    expected_dir = config_dir / "deepseek-v4-flash"
+    settings = (expected_dir / "settings.json").read_text("utf-8")
+    models = (expected_dir / "models.json").read_text("utf-8")
+    assert '"defaultModel":"deepseek-v4-flash"' in settings
+    assert "deepseek-v4-flash" in models
+    assert "deepseek-chat" not in settings
+    assert "gpt-5.4" not in models
+
+
+def test_pi_acp_binding_falls_back_to_model_when_name_missing(monkeypatch, tmp_path):
+    from cyrene.agent_runtime import model_gateway
+    from cyrene.agent_runtime.models import ModelAccess
+
+    candidate = dict(_candidate())
+    candidate.pop("name", None)
+    monkeypatch.setattr(
+        "cyrene.model_runtime.client.resolve_session_model_candidate",
+        lambda session_id: candidate,
+    )
+    config_dir = tmp_path / "pi-agent-config"
+    monkeypatch.setattr(model_gateway, "_PI_AGENT_CONFIG_ROOT", config_dir)
+
+    model_gateway.issue_model_gateway_binding(
+        ModelAccess(mode="cyrene_managed", profile_id="primary"),
+        {"chat_id": "chat_selected", "run_id": "run_selected", "installation_id": "agent_pi-acp_default", "agent_id": "pi-acp"},
+    )
+    settings = (config_dir / "configured-model" / "settings.json").read_text("utf-8")
+    assert '"defaultModel":"configured-model"' in settings
+
+
+def test_pi_acp_binding_is_idempotent(monkeypatch, tmp_path):
+    from cyrene.agent_runtime import model_gateway
+    from cyrene.agent_runtime.models import ModelAccess
+
+    monkeypatch.setattr(
+        "cyrene.model_runtime.client.resolve_session_model_candidate",
+        lambda session_id: _candidate(),
+    )
+    config_dir = tmp_path / "pi-agent-config"
+    monkeypatch.setattr(model_gateway, "_PI_AGENT_CONFIG_ROOT", config_dir)
+
+    context = {"chat_id": "chat_selected", "run_id": "run_selected", "installation_id": "agent_pi-acp_default", "agent_id": "pi-acp"}
+    first = model_gateway.issue_model_gateway_binding(ModelAccess(mode="cyrene_managed", profile_id="primary"), context)
+    second = model_gateway.issue_model_gateway_binding(ModelAccess(mode="cyrene_managed", profile_id="primary"), context)
+    assert first == second
+    assert first["PI_CODING_AGENT_DIR"] == str(config_dir / "configured-model")
+
+
+def test_non_pi_agents_do_not_receive_pi_config_dir(monkeypatch, tmp_path):
+    from cyrene.agent_runtime import model_gateway
+    from cyrene.agent_runtime.models import ModelAccess
+
+    monkeypatch.setattr(
+        "cyrene.model_runtime.client.resolve_session_model_candidate",
+        lambda session_id: _candidate(),
+    )
+    monkeypatch.setattr(model_gateway, "_PI_AGENT_CONFIG_ROOT", tmp_path / "unused")
+
+    env = model_gateway.issue_model_gateway_binding(
+        ModelAccess(mode="cyrene_managed", profile_id="primary"),
+        {"chat_id": "chat_selected", "run_id": "run_selected", "installation_id": "agent_codex-acp_default", "agent_id": "codex-acp"},
+    )
+    assert "PI_CODING_AGENT_DIR" not in env
+    assert "OPENAI_API_KEY" in env

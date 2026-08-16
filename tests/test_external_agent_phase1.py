@@ -449,6 +449,9 @@ async def test_recommended_npm_agent_same_version_install_is_idempotent(saved_se
     destination = install_root / "node_modules" / ".bin" / "pi-acp"
     destination.parent.mkdir(parents=True, exist_ok=True)
     destination.write_bytes(b"#!/usr/bin/env node\n")
+    # The pi-acp profile declares the ``pi`` runtime as a dependency; the
+    # idempotency short-circuit requires that shim to exist as well.
+    (install_root / "node_modules" / ".bin" / "pi").write_bytes(b"#!/usr/bin/env node\n")
 
     calls = []
 
@@ -477,9 +480,11 @@ async def test_recommended_npm_agent_install_does_not_claim_self_checksum(saved_
 
     async def fake_run_manager(task_id, command, *, env, timeout=1800):
         assert command[0] == "npm"
-        shim = tmp_path / "staging" / task_id / "agent" / "npm" / "node_modules" / ".bin" / "pi-acp"
-        shim.parent.mkdir(parents=True, exist_ok=True)
-        shim.write_bytes(b"#!/usr/bin/env node\n")
+        bin_dir = tmp_path / "staging" / task_id / "agent" / "npm" / "node_modules" / ".bin"
+        bin_dir.mkdir(parents=True, exist_ok=True)
+        (bin_dir / "pi-acp").write_bytes(b"#!/usr/bin/env node\n")
+        # The pi-acp profile bundles the ``pi`` runtime as a dependency.
+        (bin_dir / "pi").write_bytes(b"#!/usr/bin/env node\n")
 
     service = _service()
     monkeypatch.setattr(service, "_run_manager", fake_run_manager)

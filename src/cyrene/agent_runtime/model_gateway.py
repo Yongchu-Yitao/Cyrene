@@ -7,12 +7,17 @@ ACP Agents while keeping Cyrene's real provider credentials in-process.
 from __future__ import annotations
 
 import json
+import logging
+import re
 import secrets
 import threading
 import time
+from pathlib import Path
 from typing import Any
 
-from cyrene.config import WEB_PORT
+logger = logging.getLogger(__name__)
+
+from cyrene.config import CACHE_DIR, WEB_PORT
 from cyrene.model_runtime.client import call_llm
 
 # ACP sessions outlive an individual prompt and may wait on a human for a long
@@ -28,6 +33,82 @@ _GATEWAY_PORT = int(WEB_PORT)
 def configure_model_gateway(port: int) -> None:
     global _GATEWAY_PORT
     _GATEWAY_PORT = int(port)
+
+
+_PI_AGENT_CONFIG_ROOT = CACHE_DIR / "pi-agent-config"
+
+
+def _pi_agent_config_dir(model_id: str) -> Path:
+    """Per-model override directory: same model shares, different models never collide."""
+    safe = re.sub(r"[^A-Za-z0-9._-]", "_", str(model_id or "cyrene-managed"))[:80] or "cyrene-managed"
+    return _PI_AGENT_CONFIG_ROOT / safe
+
+
+def _atomic_write_json(path: Path, content: str) -> None:
+    temporary = path.with_suffix(path.suffix + ".tmp")
+    temporary.write_text(content, encoding="utf-8")
+    temporary.replace(path)
+
+
+def _ensure_pi_agent_config(gateway_url: str, model_id: str, model_name: str) -> str | None:
+    """Idempotently write Pi's config pointing its default model at Cyrene.
+
+    Pi picks its model from settings (defaultProvider/defaultModel) before
+    falling back to the first provider whose API key env is present, so the
+    override directory must both define the Cyrene model in ``models.json``
+    and pin it in ``settings.json``.  The model id/name is the selected Cyrene
+    model candidate (e.g. deepseek-v4-flash), never a Pi built-in like gpt-5.4.
+
+    The override directory is keyed by the model id so concurrent chats using
+    different candidates never rewrite each other's config, and both files are
+    replaced atomically so a reader never observes a torn pair.
+
+    Returns the agent config directory to pass as ``PI_CODING_AGENT_DIR``, or
+    None when the cache directory cannot be written (the binding then simply
+    omits the override and Pi falls back to its own configuration).
+    """
+    config_dir = _pi_agent_config_dir(model_id)
+    models_path = config_dir / "models.json"
+    settings_path = config_dir / "settings.json"
+    models_content = json.dumps(
+        {
+            "providers": {
+                "openai": {
+                    "baseUrl": gateway_url,
+                    "models": [
+                        {
+                            "id": model_id,
+                            "name": model_name,
+                            "api": "openai-responses",
+                        }
+                    ],
+                }
+            }
+        },
+        ensure_ascii=False,
+        separators=(",", ":"),
+    )
+    settings_content = json.dumps(
+        {"defaultProvider": "openai", "defaultModel": model_id},
+        ensure_ascii=False,
+        separators=(",", ":"),
+    )
+    try:
+        try:
+            current_models = models_path.read_text("utf-8") if models_path.is_file() else ""
+            current_settings = settings_path.read_text("utf-8") if settings_path.is_file() else ""
+        except (OSError, UnicodeDecodeError):
+            # Unreadable/corrupt leftovers (e.g. from a crashed earlier write)
+            # are treated as a mismatch and atomically rewritten.
+            current_models = current_settings = ""
+        if current_models == models_content and current_settings == settings_content:
+            return str(config_dir)
+        config_dir.mkdir(parents=True, exist_ok=True)
+        _atomic_write_json(models_path, models_content)
+        _atomic_write_json(settings_path, settings_content)
+    except OSError:
+        return None
+    return str(config_dir)
 
 
 def issue_model_gateway_binding(_model_access: Any, context: dict[str, Any]) -> dict[str, str]:
@@ -126,6 +207,25 @@ def issue_model_gateway_binding(_model_access: Any, context: dict[str, Any]) -> 
                 },
             },
         }, ensure_ascii=False, separators=(",", ":"))
+    # Pi resolves its model the same way OpenCode does not: it picks the first
+    # provider whose API key env is present (OPENAI_API_KEY) and sends requests
+    # to that provider's baseUrl. Pi ignores generic OPENAI_BASE_URL, so point
+    # its openai provider at Cyrene's gateway through an ephemeral config dir
+    # (PI_CODING_AGENT_DIR redirects the whole ~/.pi/agent layout, keeping the
+    # user's own auth/sessions untouched and isolated per Cyrene install).
+    if str(context.get("agent_id") or "") == "pi-acp":
+        # Use the model name the user configured in Cyrene (e.g. deepseek-v4-flash),
+        # not the entry id (deepseek-chat) or a Pi built-in.
+        pi_model_id = str(candidate.get("name") or candidate.get("model") or "cyrene-managed").strip() or "cyrene-managed"
+        pi_config_dir = _ensure_pi_agent_config(gateway_url, pi_model_id, pi_model_id)
+        if pi_config_dir:
+            result["PI_CODING_AGENT_DIR"] = pi_config_dir
+        else:
+            # Without the redirect dir Pi ignores OPENAI_BASE_URL and would send
+            # the gateway token to its own provider's endpoint; drop the token
+            # so it falls back to the user's own ~/.pi configuration cleanly.
+            result.pop("OPENAI_API_KEY", None)
+            result.pop("OPENAI_BASE_URL", None)
     return result
 
 
@@ -232,6 +332,7 @@ def _openai_response(message: dict[str, Any], requested_model: str = "") -> dict
 
 
 async def call_model_gateway(body: dict[str, Any], scope: dict[str, Any]) -> dict[str, Any] | str:
+    logger.info("gateway call_model_gateway entered [messages=%s]", len(body.get("messages") or []))
     messages = body.get("messages")
     if not isinstance(messages, list):
         raise ValueError("messages must be an array")
@@ -251,7 +352,8 @@ async def call_model_gateway(body: dict[str, Any], scope: dict[str, Any]) -> dic
             "model_binding_unsupported",
             "The Cyrene model selected for this Agent is no longer available",
         )
-    return await call_llm(
+    logger.info("gateway call_model_gateway calling call_llm [candidate=%s model=%s]", candidate.get("id"), candidate.get("model"))
+    result = await call_llm(
         messages,
         tools=tools,
         candidates=[candidate],
@@ -263,6 +365,8 @@ async def call_model_gateway(body: dict[str, Any], scope: dict[str, Any]) -> dic
         publish_events=False,
         record_usage=True,
     )
+    logger.info("gateway call_model_gateway call_llm returned [kind=%s]", type(result).__name__)
+    return result
 
 
 __all__ = [

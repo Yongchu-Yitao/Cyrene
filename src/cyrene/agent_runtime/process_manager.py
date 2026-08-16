@@ -72,6 +72,69 @@ def profile_args_for(agent_id: str) -> tuple[str, ...]:
     return BUILTIN_PROFILE_ARGS.get(str(agent_id or "").strip(), ())
 
 
+_MANAGED_BIN_CHECKED = False
+_MANAGED_BIN_RESULT: str | None = None
+
+
+def _managed_runtime_bin_dir() -> str | None:
+    """Bin directory holding the managed Node.js/npm runtime, if resolvable.
+
+    ACP adapter shims are ``#!/usr/bin/env node`` wrappers, so the managed
+    Node runtime must be visible to the child even when the parent process was
+    launched from a minimal GUI PATH. The npm discovery mirrors
+    ``cyrene.extensions.service._managed_npm_executable`` through a lazy
+    import so the runtime never depends on the extensions package at load
+    time (and vice versa). The result is memoized per process: it only feeds
+    newly spawned children, so re-running the discovery (which touches
+    extension settings and the filesystem) on every turn would be wasted work.
+    """
+    global _MANAGED_BIN_CHECKED, _MANAGED_BIN_RESULT
+    if _MANAGED_BIN_CHECKED:
+        return _MANAGED_BIN_RESULT
+    try:
+        from cyrene.extensions.service import _managed_npm_executable
+
+        npm = _managed_npm_executable()
+    except Exception:
+        logger.debug("managed npm runtime unavailable for ACP PATH injection", exc_info=True)
+        npm = None
+    _MANAGED_BIN_CHECKED = True
+    _MANAGED_BIN_RESULT = str(Path(npm).resolve().parent) if npm else None
+    return _MANAGED_BIN_RESULT
+
+
+def agent_child_path_dirs(installation: dict[str, Any]) -> list[str]:
+    """Extra PATH directories to prepend for an ACP child process.
+
+    Managed installs live under ``extensions/agents/<agent_id>/<version>``;
+    the adapter shim and any bundled runtime dependency (e.g. the ``pi``
+    executable for pi-acp) sit on that prefix's ``node_modules/.bin``.
+    Prepending that directory plus the managed Node bin directory lets
+    adapters resolve their own executables regardless of the parent PATH.
+    """
+    dirs: list[str] = []
+    managed_path = str(installation.get("managed_path") or "").strip()
+    if managed_path:
+        # Resolve only the directory itself, not the shim file: npm's
+        # node_modules/.bin shims are symlinks to the real script, so
+        # resolving the file would inject the package's dist/ dir instead of
+        # the .bin directory that holds sibling executables (e.g. pi).
+        shim_dir = Path(managed_path).parent.resolve()
+        if shim_dir.is_dir() and str(shim_dir) not in dirs:
+            dirs.append(str(shim_dir))
+    managed_bin = _managed_runtime_bin_dir()
+    if managed_bin and managed_bin not in dirs:
+        dirs.append(managed_bin)
+    return dirs
+
+
+def prepend_path_dirs(path: str, dirs: list[str]) -> str:
+    """Return ``path`` with ``dirs`` prepended, order preserved and deduped."""
+    from cyrene.runtime.user_path import _merge_path_entries
+
+    return _merge_path_entries(*dirs, path)
+
+
 class AcpProcessManager:
     """Spawns, caches, and reaps ACP stdio transports keyed by installation."""
 
@@ -147,6 +210,28 @@ class AcpProcessManager:
                 "managed Agent executable is missing",
                 detail={"command": command},
             )
+        # Recommended npm agents may declare a runtime dependency (e.g. pi-acp
+        # spawns the ``pi`` executable); without its shim the adapter fails at
+        # session/new with a cryptic command-not-found, so treat the install as
+        # incomplete rather than spawning it.
+        agent_id = str(installation.get("agent_id") or "").strip()
+        version = str(installation.get("version") or "").strip()
+        if agent_id and version and managed_path:
+            try:
+                from cyrene.extensions.catalog import RECOMMENDED_AGENTS
+            except ImportError:
+                RECOMMENDED_AGENTS = {}
+            profile = RECOMMENDED_AGENTS.get(agent_id) or {}
+            dependency = profile.get("dependency") if isinstance(profile.get("dependency"), dict) else {}
+            dependency_bin = str(dependency.get("bin") or "")
+            if dependency_bin:
+                shim_name = dependency_bin + (".cmd" if os.name == "nt" else "")
+                if not (Path(managed_path).parent / shim_name).is_file():
+                    raise AgentRuntimeError(
+                        "dependency_missing",
+                        f"managed Agent runtime dependency {dependency_bin!r} is missing; reinstall the agent",
+                        detail={"command": command},
+                    )
 
     def resolve_args(self, installation: dict[str, Any]) -> tuple[str, ...]:
         """Return the built-in profile args for this installation.
@@ -198,7 +283,11 @@ class AcpProcessManager:
                 "command": command,
                 "args": list(args),
                 "cwd": cwd or "",
-                "env": sorted(env.items()),
+                # PATH carries only the injected runtime dirs, which cannot be
+                # changed inside a running process; excluding it avoids tearing
+                # down live transports when npm discoverability changes
+                # (extension enablement, nvm installs) mid-session.
+                "env": sorted((key, value) for key, value in env.items() if key != "PATH"),
             },
             ensure_ascii=True,
             separators=(",", ":"),
@@ -231,6 +320,9 @@ class AcpProcessManager:
             base=os.environ,
             extra={**configured_agent_proxy_environment(), **(env or {})},
         )
+        extra_dirs = agent_child_path_dirs(installation)
+        if extra_dirs:
+            child_env["PATH"] = prepend_path_dirs(child_env.get("PATH", ""), extra_dirs)
         signature = self._spawn_signature(
             command=command,
             args=args,

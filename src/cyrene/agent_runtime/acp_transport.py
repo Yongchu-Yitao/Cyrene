@@ -326,6 +326,10 @@ class AcpStdioTransport:
         future: asyncio.Future[Any] = loop.create_future()
         self._pending[request_id] = future
         frame = build_request(method, params, request_id)
+        logger.info(
+            "ACP request %s (id=%s) to %s; pending=%d",
+            method, request_id, getattr(self.process, "pid", "?"), len(self._pending),
+        )
         try:
             await self._write_frame(frame)
         except Exception:

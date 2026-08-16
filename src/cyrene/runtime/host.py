@@ -900,6 +900,12 @@ def run_web_mode(ui_mode: str = "workbench") -> None:
 
 def main() -> None:
     import sys
+    # Electron and local_cli.py launches never pass through cyrene.__main__,
+    # so the idempotent login-shell PATH merge must also run here for
+    # GUI-launched processes with LaunchServices' minimal PATH.
+    from cyrene.runtime.user_path import ensure_user_path
+
+    ensure_user_path()
     if "--electron-mode" in sys.argv:
         _run_electron_mode()
         return

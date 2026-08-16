@@ -189,6 +189,9 @@ BINDER_ENV_ALLOWLIST = frozenset({
     "OPENROUTER_API_KEY",
     "OPENROUTER_BASE_URL",
     "OPENCODE_CONFIG_CONTENT",
+    # Pi redirects its config directory (models.json) via this env; the value
+    # is a Cyrene-managed cache path, never a credential.
+    "PI_CODING_AGENT_DIR",
 })
 
 
@@ -1124,6 +1127,11 @@ async def run_external_agent_turn(
         model_access = normalize_model_access(
             chat.get("modelAccess") if isinstance(chat, dict) else None
         )
+        if logger.isEnabledFor(logging.INFO):
+            logger.info(
+                "Workbench external agent turn entered [chat=%s run=%s agent=%s mode=%s]",
+                chat_id, run_id, binding.agent_id, getattr(model_access, "mode", ""),
+            )
         if session_id_hint and model_access.mode == "cyrene_managed":
             from cyrene.agent_runtime.model_gateway import is_model_gateway_session_current
 

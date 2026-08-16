@@ -76,6 +76,12 @@ def main() -> None:
     from cyrene.observability.logging_setup import setup_persistent_logging
 
     setup_persistent_logging()
+    # GUI-launched Electron inherits LaunchServices' minimal PATH; pull the
+    # user's login-shell PATH so ACP agents and toolchain subprocesses can
+    # find shell-managed runtimes (nvm, Homebrew, mise).
+    from cyrene.runtime.user_path import ensure_user_path
+
+    ensure_user_path()
     if "--gui" in sys.argv or "--electron-mode" in sys.argv:
         _runtime_started = True
         from cyrene.runtime.host import main as _local_main

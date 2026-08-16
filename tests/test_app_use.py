@@ -63,6 +63,54 @@ def test_app_use_is_one_stable_main_only_tool():
     assert json.dumps(main_before, sort_keys=True) == json.dumps(main_after, sort_keys=True)
 
 
+def _normalize_and_resolve(arguments):
+    from cyrene.tooling import gateway
+
+    normalized = gateway._normalize_module_arguments("desktop_tools", arguments)
+    return gateway.resolve_wire_call("desktop_tools", normalized, actor="main")
+
+
+def test_gateway_repairs_missing_outer_operation_when_capability_id_present():
+    resolution = _normalize_and_resolve({
+        "arguments": {"operation": "connect", "target_id": "target_abc"},
+        "capability_id": "desktop.use",
+    })
+    assert resolution.operation == "invoke"
+    assert resolution.capability_id == "desktop.use"
+    assert resolution.concrete_arguments == {
+        "operation": "connect", "target_id": "target_abc",
+    }
+
+
+def test_gateway_repairs_visual_envelope_on_semantic_capability():
+    resolution = _normalize_and_resolve({
+        "operation": "invoke",
+        "capability_id": "desktop.semantic.snapshot",
+        "arguments": {
+            "operation": "call", "session_id": "app_session_test",
+            "capability": "snapshot", "parameters": {"max_nodes": 400, "max_depth": 10},
+        },
+    })
+    assert resolution.operation == "invoke"
+    assert resolution.capability_id == "desktop.semantic.snapshot"
+    assert resolution.concrete_arguments == {
+        "operation": "snapshot", "session_id": "app_session_test",
+        "max_nodes": 400, "max_depth": 10,
+    }
+
+
+def test_gateway_keeps_rejecting_envelope_without_payload():
+    from cyrene.tooling.results import ToolProtocolError
+
+    with pytest.raises(ToolProtocolError) as caught:
+        _normalize_and_resolve({
+            "arguments": {"capability_id": "desktop.use", "operation": "invoke"},
+            "capability_id": "desktop.use", "operation": "invoke",
+        })
+    assert caught.value.code == "invalid_arguments"
+    assert "capability_id" in caught.value.message
+
+
 def test_app_use_schema_keeps_runtime_capabilities_out_of_function_enum():
     from cyrene.tool_impl.desktop.app_use import TOOL_DEF
 

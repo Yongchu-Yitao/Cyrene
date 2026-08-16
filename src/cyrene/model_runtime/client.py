@@ -474,6 +474,7 @@ def _normalized_candidate(raw: dict[str, Any], index: int = 0, *, active_model: 
     return {
         "id": str(raw.get("id") or f"candidate-{index + 1}").strip() or f"candidate-{index + 1}",
         "model": model,
+        "name": str(raw.get("name") or model).strip() or model,
         "provider": provider,
         "reasoning_effort": str(raw.get("reasoning_effort") or "").strip().lower(),
         # Codex app-server accepts image and localImage turn inputs. Treat the

@@ -138,7 +138,7 @@ def _extension_error_reason(exc: BaseException) -> str:
         return "dependency_conflict"
     if "could not be connected" in message or "not connected" in message:
         return "mcp_connection_failed"
-    if "deterministic executable" in message or "did not expose" in message:
+    if "deterministic executable" in message or "did not expose" in message or "did not provide its" in message:
         return "executable_not_found"
     if "fixed-version" in message or "exact version" in message or "@latest" in message:
         return "fixed_version_required"
@@ -157,6 +157,11 @@ def _command_version(path: Path, args: tuple[str, ...], timeout: float = 3.0) ->
     return _safe_version_text((result.stdout or "") + "\n" + (result.stderr or ""))
 
 
+def _npm_bin_shim(name: str) -> str:
+    """Return the npm ``node_modules/.bin`` shim file name for ``name``."""
+    return str(name or "") + (".cmd" if os.name == "nt" else "")
+
+
 def _managed_npm_executable() -> str | None:
     """Locate npm for managed Agent installs.
 
@@ -167,9 +172,11 @@ def _managed_npm_executable() -> str | None:
     """
     search_dirs = [str(path) for path in agent_extension_paths()]
     search_dirs.extend(_COMMON_PATHS.get(os.sys.platform, ()))
-    nvm_root = Path.home() / ".nvm" / "versions" / "node"
-    if nvm_root.is_dir():
-        search_dirs.extend(str(candidate) for candidate in sorted(nvm_root.glob("*/bin"), reverse=True))
+    # Shared shell-managed runtime roots (Homebrew, nvm with numerical version
+    # ordering, mise) so GUI-minimal PATHs still resolve npm.
+    from cyrene.runtime.user_path import _common_install_dirs
+
+    search_dirs.extend(_common_install_dirs())
     env_path = extension_environment().get("PATH", "")
     search_path = os.pathsep.join([*search_dirs, env_path]) if search_dirs else env_path
     found = shutil.which("npm", path=search_path)
@@ -1430,6 +1437,26 @@ class ExtensionService:
 
         return await agent_runtime.create_agent_install_proposal(source, requested_version, actor=actor)
 
+    def _agent_install_complete(self, agent_id: str, version: str) -> bool:
+        """Whether the installed adapter (and any declared runtime dependency) exists."""
+        try:
+            from cyrene.extensions.catalog import RECOMMENDED_AGENTS
+        except ImportError:
+            return True
+        profile = RECOMMENDED_AGENTS.get(str(agent_id or "")) or {}
+        distribution = profile.get("distribution") if isinstance(profile.get("distribution"), dict) else {}
+        command = str(profile.get("command") or "")
+        if distribution.get("kind") != "npm" or not command:
+            return True
+        install_root = _AGENT_DIR / str(agent_id or "") / str(version or "")
+        if not (install_root / "node_modules" / ".bin" / _npm_bin_shim(command)).is_file():
+            return False
+        dependency = profile.get("dependency") if isinstance(profile.get("dependency"), dict) else {}
+        dependency_bin = str(dependency.get("bin") or "")
+        if dependency_bin and not (install_root / "node_modules" / ".bin" / _npm_bin_shim(dependency_bin)).is_file():
+            return False
+        return True
+
     async def confirm_agent_install_proposal(self, proposal_id: str, *, actor: str = "user") -> dict[str, Any]:
         """Confirm a pending proposal and feed the async install/audit pipeline.
 
@@ -1450,8 +1477,13 @@ class ExtensionService:
         agent_runtime.validate_agent_manifest(proposal.get("manifest"))
         existing = agent_runtime.find_installation_by_agent_id(str(proposal.get("agentId") or ""))
         if existing and str(existing.get("version")) == str(proposal.get("version") or ""):
-            agent_runtime.mark_proposal_confirmed(proposal_id)
-            return {"ok": True, "already_installed": True, "installation": agent_runtime.agent_card(existing), "proposalId": proposal_id}
+            # A same-version install is only "already installed" when complete:
+            # installs made before a runtime dependency was declared (adapter
+            # shim present, dependency absent) must fall through to a reinstall
+            # or the agent fails at session/new.
+            if self._agent_install_complete(str(proposal.get("agentId") or ""), str(existing.get("version") or "")):
+                agent_runtime.mark_proposal_confirmed(proposal_id)
+                return {"ok": True, "already_installed": True, "installation": agent_runtime.agent_card(existing), "proposalId": proposal_id}
         task = self.start_install("agent", str(proposal.get("agentId") or ""), {
             "proposal_id": proposal_id,
             "manifest": proposal.get("manifest"),
@@ -1572,7 +1604,16 @@ class ExtensionService:
             # exact path is the same-version idempotency check. npm packages
             # have no pinned digest, so no self-computed checksum is claimed.
             destination = install_root / "node_modules" / ".bin" / npm_shim
-            if destination.is_file():
+            # Some adapters spawn a separate runtime executable (e.g. pi-acp
+            # spawns the ``pi`` coding agent). The runtime is declared on the
+            # profile as a ``dependency`` and installed into the same prefix;
+            # it must be present too, otherwise the install is incomplete.
+            dependency = profile.get("dependency") if isinstance(profile.get("dependency"), dict) else {}
+            dependency_package = str(dependency.get("package") or "")
+            dependency_bin = str(dependency.get("bin") or "")
+            dependency_shim = _npm_bin_shim(dependency_bin)
+            dependency_destination = install_root / "node_modules" / ".bin" / dependency_shim if dependency_bin else None
+            if destination.is_file() and (dependency_destination is None or dependency_destination.is_file()):
                 return str(destination), ""
             npm = _managed_npm_executable()
             package = str(distribution.get("package") or "")
@@ -1581,15 +1622,29 @@ class ExtensionService:
             install_root.parent.mkdir(parents=True, exist_ok=True)
             npm_stage = stage_root / "npm"
             npm_stage.mkdir(parents=True, exist_ok=True)
+            install_args = [
+                npm, "install", "--ignore-scripts", "--no-audit", "--no-fund",
+                "--prefix", str(npm_stage), package,
+            ]
+            if dependency_package:
+                install_args.append(dependency_package)
             await self._run_manager(
                 task_id,
-                [npm, "install", "--ignore-scripts", "--no-audit", "--no-fund", "--prefix", str(npm_stage), package],
+                install_args,
                 env=extension_environment(),
                 timeout=900,
             )
             source = npm_stage / "node_modules" / ".bin" / npm_shim
             if not source.is_file():
                 raise RuntimeError("Recommended Agent package did not expose its reviewed executable")
+            if dependency_bin:
+                dependency_source = npm_stage / "node_modules" / ".bin" / dependency_shim
+                if not dependency_source.is_file():
+                    raise RuntimeError(
+                        f"Recommended Agent dependency {dependency_package} did not provide its "
+                        f"{dependency_bin} executable; {profile.get('displayName') or agent_id} "
+                        f"coding agent 本体未安装或未找到"
+                    )
             if install_root.exists():
                 shutil.rmtree(install_root)
             shutil.move(str(npm_stage), str(install_root))

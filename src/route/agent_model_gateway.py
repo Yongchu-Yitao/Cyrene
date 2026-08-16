@@ -121,7 +121,9 @@ def register_agent_model_gateway_routes(router: APIRouter) -> None:
     async def api_agent_model_gateway_chat(request: Request):
         scope = authorize_model_gateway(str(request.headers.get("authorization") or ""))
         if scope is None:
+            logger.info("gateway chat/completions rejected: missing or expired token")
             return JSONResponse({"error": {"message": "invalid or expired gateway token"}}, status_code=401)
+        logger.info("gateway chat/completions authorized [chat=%s model=%s]", (scope or {}).get("chatId") or "?", (scope or {}).get("modelIdentity", {}).get("model") or "?")
         try:
             body = await request.json()
             if not isinstance(body, dict):
@@ -161,9 +163,14 @@ def register_agent_model_gateway_routes(router: APIRouter) -> None:
     async def api_agent_model_gateway_responses(request: Request):
         scope = authorize_model_gateway(str(request.headers.get("authorization") or ""))
         if scope is None:
+            logger.info("gateway /responses rejected: missing or expired token")
             return JSONResponse({"error": {"message": "invalid or expired gateway token"}}, status_code=401)
+        logger.info("gateway /responses authorized [chat=%s model=%s]", (scope or {}).get("chatId") or "?", (scope or {}).get("modelIdentity", {}).get("model") or "?")
         try:
             body = await request.json()
+            if logger.isEnabledFor(logging.INFO):
+                logger.info("gateway /responses body received [model=%s input_blocks=%s]",
+                            body.get("model"), len(body.get("input") or []))
             if not isinstance(body, dict):
                 raise ValueError("request body must be an object")
             messages = _responses_input_to_messages(body.get("input"))

@@ -149,6 +149,11 @@ RECOMMENDED_AGENTS: dict[str, dict] = {
         "default_model_access": "agent_managed", "risk": "medium",
         "capabilities": _AGENT_BASE_CAPABILITIES,
         "distribution": {"kind": "npm", "package": "pi-acp@0.0.33"},
+        # The pi-acp adapter spawns the ``pi`` executable when a session/new
+        # request arrives, but the adapter package does not bundle it. Install
+        # the pinned runtime alongside the adapter (same staging prefix) so the
+        # agent works without relying on a global npm install or shell PATH.
+        "dependency": {"kind": "npm", "package": "@earendil-works/pi-coding-agent@0.74.2", "bin": "pi"},
         "repository": "https://github.com/svkozak/pi-acp",
     },
 }

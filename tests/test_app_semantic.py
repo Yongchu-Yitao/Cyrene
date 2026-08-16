@@ -150,6 +150,85 @@ async def test_public_semantic_nodes_expose_expandability(monkeypatch):
     assert snapshot["nodes"][0]["expandable"] is True
 
 
+def test_app_ui_snapshot_schema_exposes_find():
+    from cyrene.tool_impl.desktop.app_ui_snapshot import TOOL_DEF
+
+    properties = TOOL_DEF["function"]["parameters"]["properties"]
+    assert properties["operation"]["enum"] == [
+        "list_targets", "connect", "snapshot", "reprobe", "find", "status", "disconnect",
+    ]
+    assert "contains" in properties
+    assert "max_results" in properties
+    assert "enabled" in properties
+    assert "find" in TOOL_DEF["function"]["description"]
+
+
+@pytest.mark.asyncio
+async def test_find_forwards_parameters_and_leases_matched_nodes(monkeypatch):
+    calls: list[tuple[str, dict]] = []
+
+    async def fake_rpc(operation, arguments=None, **_kwargs):
+        arguments = arguments or {}
+        calls.append((operation, arguments))
+        if operation == "connect":
+            return {
+                "status": "success", "session_id": "app_session_find", "target": {},
+                "semantic_profile": {"status": "available"},
+            }
+        if operation == "call" and arguments.get("capability") == "find":
+            return {
+                "status": "success", "snapshot_revision": 4,
+                "semantic_profile": {"status": "available"},
+                "nodes": [{"ref": "e7", "role": "link", "name": "Cyrene-0.7.10-beta2-win-arm64.exe", "actions": ["press"]}],
+            }
+        if operation == "call" and arguments.get("capability") == "press":
+            return {"status": "success", "verification": {"nodes": [{"ref": "e7", "role": "link", "actions": []}]}}
+        raise AssertionError((operation, arguments))
+
+    monkeypatch.setattr(app_semantic, "electron_app_rpc", fake_rpc)
+    await app_semantic.execute_snapshot({"operation": "connect", "target_id": "target_1"})
+    found = await app_semantic.execute_snapshot({
+        "operation": "find", "session_id": "app_session_find",
+        "contains": "arm64", "max_results": 20,
+    })
+    find_call = next(args for operation, args in calls if operation == "call" and args.get("capability") == "find")
+    assert find_call["parameters"] == {"contains": "arm64", "max_results": 20}
+    node = found["nodes"][0]
+    assert node["name"] == "Cyrene-0.7.10-beta2-win-arm64.exe"
+    clicked = await app_semantic.execute_action("click", {
+        "session_id": "app_session_find", "snapshot_id": found["snapshot_id"],
+        "revision": found["revision"], "node_id": node["node_id"], "action_id": node["actions"][0]["action_id"],
+        "reason": "download the installer", "idempotency_key": "find-click-123",
+    })
+    assert clicked["status"] == "success"
+    assert clicked["effect_verified"] is True
+
+
+@pytest.mark.asyncio
+async def test_semantic_connect_filters_unreachable_manifest_capabilities(monkeypatch):
+    async def fake_rpc(operation, arguments=None, **_kwargs):
+        assert operation == "connect"
+        return {
+            "status": "success", "session_id": "app_session_filter", "target": {},
+            "semantic_profile": {"status": "available"},
+            "capabilities": [
+                {"name": "snapshot"}, {"name": "inspect"}, {"name": "find"},
+                {"name": "press"}, {"name": "set_value"}, {"name": "type_text"},
+                {"name": "scroll"}, {"name": "semantic_double_click"}, {"name": "semantic_drag"},
+                {"name": "wait"},
+            ],
+        }
+
+    monkeypatch.setattr(app_semantic, "electron_app_rpc", fake_rpc)
+    result = await app_semantic.execute_snapshot({"operation": "connect", "target_id": "target-1"})
+    names = [item["name"] for item in result["capabilities"]]
+    assert "wait" not in names
+    assert set(names) == {
+        "snapshot", "inspect", "find", "press", "set_value",
+        "type_text", "scroll", "semantic_double_click", "semantic_drag",
+    }
+
+
 def test_all_seven_external_semantic_tools_are_registered():
     from cyrene.tool_impl import NATIVE_TOOL_MODULES
     from cyrene.tooling.packs import CAPABILITY_BINDINGS

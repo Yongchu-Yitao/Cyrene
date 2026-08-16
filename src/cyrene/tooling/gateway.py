@@ -477,6 +477,42 @@ def _unique_nested_value(
     return True, first
 
 
+def _flatten_call_envelope(
+    candidate: dict[str, Any],
+    schema: dict[str, Any],
+) -> dict[str, Any] | None:
+    """Unwrap a visual-style call envelope into flat schema-shaped arguments.
+
+    Models sometimes route a flat capability through the visual scheme's
+    ``operation=call`` + ``capability`` + ``parameters`` envelope even when the
+    target capability expects a flat ``operation`` and inline fields. Only
+    flatten when the envelope's capability is a real operation of this schema
+    and the reconstructed payload still passes strict schema validation.
+    """
+    if str(candidate.get("operation") or "") != "call":
+        return None
+    capability = candidate.get("capability")
+    parameters = candidate.get("parameters")
+    if not isinstance(capability, str) or not capability.strip():
+        return None
+    if not isinstance(parameters, dict):
+        return None
+    operation_enum = ((schema.get("properties") or {}).get("operation") or {}).get("enum") or []
+    if capability.strip() not in operation_enum:
+        return None
+    flattened = {
+        key: value
+        for key, value in candidate.items()
+        if key not in {"operation", "capability", "parameters"}
+    }
+    flattened.update(parameters)
+    # The envelope's declared capability wins over any echoed key inside
+    # parameters (e.g. a leaked "operation"), which would otherwise execute a
+    # different operation than the one the model declared.
+    flattened["operation"] = capability.strip()
+    return flattened
+
+
 def _repair_concrete_arguments(
     arguments: dict[str, Any],
     schema: dict[str, Any],
@@ -492,6 +528,9 @@ def _repair_concrete_arguments(
     for candidate in reversed(candidates):
         if _schema_accepts(candidate, schema):
             return candidate
+        flattened = _flatten_call_envelope(candidate, schema)
+        if flattened is not None and _schema_accepts(flattened, schema):
+            return flattened
 
     properties = schema.get("properties")
     if not isinstance(properties, dict) or not properties:
@@ -556,7 +595,10 @@ def _normalize_module_arguments(
         operation = str(normalized.get("operation") or "").strip()
         if not operation:
             nested_operation = nested_copy.get("operation")
-            if isinstance(nested_operation, str) and nested_operation.strip():
+            if (
+                isinstance(nested_operation, str)
+                and nested_operation.strip() in {"discover", "describe", "invoke"}
+            ):
                 normalized["operation"] = nested_operation.strip()
                 nested_copy.pop("operation", None)
                 operation = nested_operation.strip()
@@ -579,6 +621,20 @@ def _normalize_module_arguments(
             normalized["arguments"] = nested_copy
         else:
             normalized.pop("arguments", None)
+
+    if not str(normalized.get("operation") or "").strip():
+        nested = normalized.get("arguments")
+        nested_copy = dict(nested) if isinstance(nested, dict) else {}
+        capability_id = str(normalized.get("capability_id") or "").strip()
+        if not capability_id and isinstance(nested_copy.get("capability_id"), str):
+            capability_id = nested_copy.pop("capability_id").strip()
+            normalized["capability_id"] = capability_id
+            if nested_copy:
+                normalized["arguments"] = nested_copy
+            else:
+                normalized.pop("arguments", None)
+        if capability_id:
+            normalized["operation"] = "invoke"
 
     if str(normalized.get("operation") or "").strip() == "invoke":
         capability_id = str(normalized.get("capability_id") or "").strip()

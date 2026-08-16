@@ -19,6 +19,19 @@ _IDEMPOTENCY_PATH = Path(DATA_DIR) / "app_semantic_idempotency.json"
 _SESSION_TTL_SECONDS = 5 * 60
 _MAX_SNAPSHOTS = 4
 
+# Host capabilities disclosed by connect that the Python wire surface can
+# actually reach. Anything else (for example the host's ``wait``) must not be
+# advertised, or models burn turns calling an operation the schema rejects.
+_MANIFEST_SUPPORTED_CAPABILITIES = frozenset({
+    "snapshot", "inspect", "find", "press", "select", "toggle",
+    "set_value", "type_text", "scroll", "semantic_double_click", "semantic_drag",
+})
+
+_FIND_PARAMETER_FIELDS = (
+    "role", "subrole", "name", "contains", "action", "native_action",
+    "automation_id", "class_name", "enabled", "max_results",
+)
+
 
 @dataclass
 class SemanticSession:
@@ -188,18 +201,35 @@ def _public_snapshot(session: SemanticSession, raw: dict[str, Any], *, page_size
     return _page_snapshot(session, snapshot_id, 0, page_size)
 
 
-async def _take_snapshot(session: SemanticSession, args: dict[str, Any]) -> dict[str, Any]:
+def _page_from_cursor(session: SemanticSession, args: dict[str, Any]) -> dict[str, Any] | None:
+    """Page an existing snapshot when ``cursor`` is supplied, else None."""
     cursor = str(args.get("cursor") or "")
-    if cursor:
-        try:
-            decoded = json.loads(bytes.fromhex(cursor).decode())
-            snapshot_id = str(decoded["snapshot_id"])
-            start = int(decoded["offset"])
-            if snapshot_id not in session.snapshots or start < 0:
-                raise ValueError
-            return _page_snapshot(session, snapshot_id, start, int(args.get("page_size") or 120))
-        except Exception:
-            return _error("invalid_cursor", "The semantic snapshot cursor is invalid or expired.")
+    if not cursor:
+        return None
+    try:
+        decoded = json.loads(bytes.fromhex(cursor).decode())
+        snapshot_id = str(decoded["snapshot_id"])
+        start = int(decoded["offset"])
+        if snapshot_id not in session.snapshots or start < 0:
+            raise ValueError
+        return _page_snapshot(session, snapshot_id, start, int(args.get("page_size") or 120))
+    except Exception:
+        return _error("invalid_cursor", "The semantic snapshot cursor is invalid or expired.")
+
+
+def _handoff_if_degraded(result: dict[str, Any], session: SemanticSession) -> dict[str, Any] | None:
+    """Visual handoff when the host reports a degraded semantic profile, else None."""
+    if result.get("semantic_profile", {}).get("status") in {"unavailable", "provider_error", "permission_required"}:
+        return _visual_handoff(result, session.target)
+    if result.get("visual_recommended") is True:
+        return _visual_handoff(result, session.target)
+    return None
+
+
+async def _take_snapshot(session: SemanticSession, args: dict[str, Any]) -> dict[str, Any]:
+    paged = _page_from_cursor(session, args)
+    if paged is not None:
+        return paged
     raw = await electron_app_rpc("call", {
         "session_id": session.session_id,
         "capability": "snapshot",
@@ -213,20 +243,32 @@ async def _take_snapshot(session: SemanticSession, args: dict[str, Any]) -> dict
             return _visual_handoff(raw, session.target)
         return raw
     result = _public_snapshot(session, raw, page_size=int(args.get("page_size") or 120))
-    if result.get("semantic_profile", {}).get("status") in {"unavailable", "provider_error", "permission_required"}:
-        return _visual_handoff(result, session.target)
-    if result.get("visual_recommended") is True:
-        return _visual_handoff(result, session.target)
-    return result
+    return _handoff_if_degraded(result, session) or result
+
+
+async def _execute_find(session: SemanticSession, args: dict[str, Any]) -> dict[str, Any]:
+    paged = _page_from_cursor(session, args)
+    if paged is not None:
+        return paged
+    parameters = {key: args[key] for key in _FIND_PARAMETER_FIELDS if key in args}
+    raw = await electron_app_rpc("call", {
+        "session_id": session.session_id, "capability": "find", "parameters": parameters,
+    })
+    if raw.get("status") != "success":
+        if raw.get("type") in {"provider_error", "unsupported_capability", "permission_required"}:
+            return _visual_handoff(raw, session.target)
+        return raw
+    result = _public_snapshot(session, raw, page_size=int(args.get("page_size") or 120))
+    return _handoff_if_degraded(result, session) or result
 
 
 async def execute_snapshot(args: dict[str, Any]) -> dict[str, Any]:
     operation = str(args.get("operation") or "snapshot")
-    valid_operations = {"list_targets", "connect", "snapshot", "reprobe", "status", "disconnect"}
+    valid_operations = {"list_targets", "connect", "snapshot", "reprobe", "find", "status", "disconnect"}
     if operation not in valid_operations:
         return _error(
             "invalid_arguments",
-            "operation must be list_targets, connect, snapshot, reprobe, status, or disconnect",
+            "operation must be list_targets, connect, snapshot, reprobe, find, status, or disconnect",
         )
     if operation == "list_targets":
         result = await electron_app_rpc("list_targets", {})
@@ -246,6 +288,15 @@ async def execute_snapshot(args: dict[str, Any]) -> dict[str, Any]:
                 profile=dict(result.get("semantic_profile") or {}),
             )
             result = {**result, "target": _SESSIONS[session_id].target}
+            capabilities = result.get("capabilities")
+            if isinstance(capabilities, list):
+                result = {
+                    **result,
+                    "capabilities": [
+                        item for item in capabilities
+                        if isinstance(item, dict) and item.get("name") in _MANIFEST_SUPPORTED_CAPABILITIES
+                    ],
+                }
             if _SESSIONS[session_id].profile.get("status") in {"unavailable", "provider_error", "permission_required"}:
                 result = _visual_handoff(result, _SESSIONS[session_id].target)
         elif result.get("type") in {"provider_error", "unsupported_mode", "permission_required"}:
@@ -264,6 +315,8 @@ async def execute_snapshot(args: dict[str, Any]) -> dict[str, Any]:
         return _error("stale_session", "The semantic App Use session expired; reconnect before continuing.")
     if operation in {"snapshot", "reprobe"}:
         return await _take_snapshot(session, args)
+    if operation == "find":
+        return await _execute_find(session, args)
     if operation == "status":
         result = await electron_app_rpc("status", {"session_id": session.session_id})
         return {**result, "semantic_profile": session.profile}
