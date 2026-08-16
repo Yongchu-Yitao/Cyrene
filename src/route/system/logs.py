@@ -35,7 +35,7 @@ def register_log_routes(router: APIRouter, bot: Any, db_path: str) -> None:
                 (p for p in log_dir.glob("cyrene.log*") if p.is_file()),
                 key=lambda p: p.stat().st_mtime,
             )
-        except OSError as exc:
+        except OSError:
             logger.warning("Failed to scan log directory %s", log_dir, exc_info=True)
             return error_response("Failed to read log files", 500, "log_scan_failed")
         if not files:
@@ -47,7 +47,7 @@ def register_log_routes(router: APIRouter, bot: Any, db_path: str) -> None:
             with zipfile.ZipFile(tmp_path, "w", zipfile.ZIP_DEFLATED) as archive:
                 for path in files:
                     archive.write(path, arcname=path.name)
-        except Exception as exc:
+        except Exception:
             logger.warning("Failed to package log files into %s", tmp_path, exc_info=True)
             try:
                 os.unlink(tmp_path)

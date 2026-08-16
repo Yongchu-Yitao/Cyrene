@@ -10,14 +10,14 @@ import shutil
 from pathlib import Path
 from typing import Any
 
-logger = logging.getLogger(__name__)
-
 from PIL import Image
 from pypdf import PdfReader
 
 from cyrene.config import DATA_DIR
 from cyrene.call_llm import call_llm
 from cyrene.model_runtime.messages import assistant_text, truncate
+
+logger = logging.getLogger(__name__)
 
 UPLOADS_DIR = DATA_DIR / "webui_uploads"
 EXPORTS_DIR = DATA_DIR / "webui_exports"

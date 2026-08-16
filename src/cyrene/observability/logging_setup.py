@@ -10,7 +10,7 @@ capture. Logs roll every 2 hours and keep a rolling 3-day window (36 files).
 from __future__ import annotations
 
 import logging
-from logging.handlers import RotatingFileHandler, TimedRotatingFileHandler
+from logging.handlers import TimedRotatingFileHandler
 from pathlib import Path
 
 from cyrene.config import DATA_DIR
