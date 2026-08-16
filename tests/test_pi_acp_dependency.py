@@ -97,10 +97,9 @@ def _stage_shims(tmp_path, task_id, *, with_dependency: bool):
 
 @pytest.mark.asyncio
 async def test_npm_install_command_bundles_dependency_package(monkeypatch, tmp_path):
-    from cyrene.extensions import service as service_module
     from cyrene.extensions.catalog import RECOMMENDED_AGENTS
 
-    service_module = _patch_extension_dirs(monkeypatch, tmp_path)
+    _patch_extension_dirs(monkeypatch, tmp_path)
     install_root = tmp_path / "agents" / "pi-acp" / "0.0.33"
     calls = []
 
@@ -153,7 +152,6 @@ async def test_npm_install_missing_dependency_raises_with_clear_message(monkeypa
 
 @pytest.mark.asyncio
 async def test_npm_install_idempotent_only_when_dependency_present(monkeypatch, tmp_path):
-    from cyrene.extensions import service as service_module
     from cyrene.extensions.catalog import RECOMMENDED_AGENTS
 
     _patch_extension_dirs(monkeypatch, tmp_path)
@@ -180,10 +178,9 @@ async def test_npm_install_idempotent_only_when_dependency_present(monkeypatch, 
 
 @pytest.mark.asyncio
 async def test_npm_install_reinstalls_when_dependency_shim_missing(monkeypatch, tmp_path):
-    from cyrene.extensions import service as service_module
     from cyrene.extensions.catalog import RECOMMENDED_AGENTS
 
-    service_module = _patch_extension_dirs(monkeypatch, tmp_path)
+    _patch_extension_dirs(monkeypatch, tmp_path)
     install_root = tmp_path / "agents" / "pi-acp" / "0.0.33"
     destination = install_root / "node_modules" / ".bin" / "pi-acp"
     destination.parent.mkdir(parents=True, exist_ok=True)

@@ -15,10 +15,10 @@ import time
 from pathlib import Path
 from typing import Any
 
-logger = logging.getLogger(__name__)
-
 from cyrene.config import CACHE_DIR, WEB_PORT
 from cyrene.model_runtime.client import call_llm
+
+logger = logging.getLogger(__name__)
 
 # ACP sessions outlive an individual prompt and may wait on a human for a long
 # time. Tokens live only in this backend process, are loopback-only, and are
