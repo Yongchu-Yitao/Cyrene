@@ -13,6 +13,7 @@ snapshots) split into separate chips without adding a third path list.
 
 import fnmatch
 import os
+import stat
 from pathlib import Path
 from typing import Callable
 
@@ -37,6 +38,12 @@ def _name_excludes(*patterns: str) -> _NameFilter:
 _KB_FILES = _name_matches("kb_*.db*")
 _MEMORY_FILES = _name_matches("wb_memory_*.json", "project_memory_*.json")
 _DATABASE_FILES = _name_excludes("kb_*.db*", "wb_memory_*.json", "project_memory_*.json")
+_STORE_FAMILIES: list[tuple[str, _NameFilter]] = [
+    ("database", _DATABASE_FILES),
+    ("knowledge", _KB_FILES),
+    ("memory", _MEMORY_FILES),
+]
+_STORE_FAMILY_KEYS = {key for key, _ in _STORE_FAMILIES}
 
 STORAGE_CATEGORIES: list[tuple[str, tuple[Path, ...], _NameFilter | None]] = [
     ("database", (STORE_DIR,), _DATABASE_FILES),
@@ -61,51 +68,89 @@ STORAGE_CATEGORIES: list[tuple[str, tuple[Path, ...], _NameFilter | None]] = [
 ]
 
 
-def _walk_size(root: Path, budget: list[int], name_filter: _NameFilter | None) -> tuple[int, int]:
-    total = 0
-    files = 0
-    try:
-        with os.scandir(root) as iterator:
-            for entry in iterator:
-                if budget[0] <= 0:
-                    return total, files
-                budget[0] -= 1
-                if name_filter is not None and not name_filter(entry.name):
-                    continue
-                try:
-                    if entry.is_dir(follow_symlinks=False):
-                        sub_total, sub_files = _walk_size(Path(entry.path), budget, name_filter)
-                        total += sub_total
-                        files += sub_files
-                    elif entry.is_file(follow_symlinks=False):
-                        total += entry.stat().st_size
-                        files += 1
-                except OSError:
-                    continue
-    except OSError:
-        pass
-    return total, files
-
-
 def scan_storage() -> dict:
     """Walk every category and return byte totals without blocking the loop."""
-    budget = [_MAX_SCAN_ENTRIES]
-    categories = []
-    total = 0
-    for entry in STORAGE_CATEGORIES:
-        key, paths = entry[0], entry[1]
-        name_filter = entry[2] if len(entry) > 2 else None
-        category_bytes = 0
-        category_files = 0
+    remaining = _MAX_SCAN_ENTRIES
+    totals: dict[str, list[int]] = {key: [0, 0] for key, _, _ in STORAGE_CATEGORIES}
+
+    def walk(root: Path, name_filter: _NameFilter | None) -> tuple[int, int]:
+        nonlocal remaining
+        total = 0
+        files = 0
+        try:
+            with os.scandir(root) as iterator:
+                for entry in iterator:
+                    if remaining <= 0:
+                        return total, files
+                    remaining -= 1
+                    if name_filter is not None and not name_filter(entry.name):
+                        continue
+                    try:
+                        st = entry.stat(follow_symlinks=False)
+                        if stat.S_ISDIR(st.st_mode):
+                            sub_total, sub_files = walk(Path(entry.path), name_filter)
+                            total += sub_total
+                            files += sub_files
+                        elif stat.S_ISREG(st.st_mode):
+                            total += st.st_size
+                            files += 1
+                    except OSError:
+                        continue
+        except OSError:
+            pass
+        return total, files
+
+    def walk_store(root: Path) -> None:
+        # The three store/ families share one tree; walk it once and dispatch
+        # each entry (and its whole subtree) to the matching bucket.
+        nonlocal remaining
+        try:
+            with os.scandir(root) as iterator:
+                for entry in iterator:
+                    if remaining <= 0:
+                        return
+                    remaining -= 1
+                    for key, name_filter in _STORE_FAMILIES:
+                        if not name_filter(entry.name):
+                            continue
+                        try:
+                            st = entry.stat(follow_symlinks=False)
+                            if stat.S_ISDIR(st.st_mode):
+                                size, count = walk(Path(entry.path), name_filter)
+                            elif stat.S_ISREG(st.st_mode):
+                                size, count = st.st_size, 1
+                            else:
+                                break
+                            totals[key][0] += size
+                            totals[key][1] += count
+                        except OSError:
+                            pass
+                        break
+        except OSError:
+            pass
+
+    store_roots = {
+        path
+        for key, paths, _ in STORAGE_CATEGORIES
+        if key in _STORE_FAMILY_KEYS
+        for path in paths
+    }
+    for root in store_roots:
+        walk_store(root)
+    for key, paths, name_filter in STORAGE_CATEGORIES:
+        if key in _STORE_FAMILY_KEYS:
+            continue
         for path in paths:
             if path.is_dir():
-                size, count = _walk_size(path, budget, name_filter)
-                category_bytes += size
-                category_files += count
-        categories.append({"key": key, "bytes": category_bytes, "files": category_files})
-        total += category_bytes
+                size, count = walk(path, name_filter)
+                totals[key][0] += size
+                totals[key][1] += count
+
     return {
-        "total": total,
-        "categories": categories,
-        "truncated": budget[0] <= 0,
+        "total": sum(size for size, _ in totals.values()),
+        "categories": [
+            {"key": key, "bytes": totals[key][0], "files": totals[key][1]}
+            for key, _, _ in STORAGE_CATEGORIES
+        ],
+        "truncated": remaining <= 0,
     }

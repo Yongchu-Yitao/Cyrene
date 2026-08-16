@@ -4007,24 +4007,21 @@ function DataPanel(p) {
   var { t, redactSecrets, saveRedactSecrets, config, configLoading, resetStatus, setResetStatus, resetting, setResetting, backupList, backupMsg, setBackupMsg, loadBackups, exportSids, setExportSids, workbenchExportSessions, exportFmt, setExportFmt, exportMsg, setExportMsg, formatBytes, formatDate } = p;
 
   var [storage, setStorage] = useStateSt(null);
-  var [storageLoading, setStorageLoading] = useStateSt(false);
   var [storageError, setStorageError] = useStateSt("");
 
   function loadStorage() {
-    setStorageLoading(true);
     setStorageError("");
     settingsFetch("/api/settings/storage").then(function (r) { return r.json(); }).then(function (payload) {
       setStorage(payload);
-      setStorageLoading(false);
     }).catch(function (e) {
       setStorageError(e.message || String(e));
-      setStorageLoading(false);
     });
   }
 
   useEffectSt(function () { loadStorage(); }, []);
 
   var storageList = (storage ? storage.categories : []).slice().sort(function (a, b) { return b.bytes - a.bytes; });
+  var storageNonEmpty = storageList.filter(function (c) { return c.bytes > 0; });
 
   var dataStore = window.CyreneUI.require("data");
   var dataState = dataStore.state;
@@ -4148,31 +4145,29 @@ function DataPanel(p) {
       React.createElement("div", { className: "wb-inline-row" },
         React.createElement("b", { className: "mono" }, storage ? formatBytes(storage.total) : t("settings.storageLoading")),
       ),
-      storageLoading && !storage
-        ? React.createElement("p", { className: "wb-hint" }, t("settings.storageLoading"))
-        : storageError
-          ? React.createElement("p", { className: "wb-hint" }, t("settings.storageError") + ": " + storageError)
-          : storage && React.createElement("div", { className: "wb-storage" },
-              storage.total > 0 && React.createElement("div", { className: "wb-storage-bar", role: "img", "aria-label": t("settings.storageUsage") },
-                storageList.filter(function (c) { return c.bytes > 0; }).map(function (c) {
-                  return React.createElement("span", {
-                    key: c.key,
-                    className: "wb-storage-seg",
-                    style: { width: (c.bytes / storage.total * 100) + "%", background: STORAGE_COLORS[c.key] || "#78716c" },
-                    title: t(STORAGE_LABEL[c.key] || "settings.storageCaches") + ": " + formatBytes(c.bytes) + " · " + t("settings.storageFiles", { n: c.files }),
-                  });
-                }),
-              ),
-              React.createElement("div", { className: "wb-storage-legend" },
-                storageList.map(function (c) {
-                  return React.createElement("div", { className: "wb-storage-legend-row" + (c.bytes === 0 ? " empty" : ""), key: c.key },
-                    React.createElement("span", { className: "wb-storage-swatch", style: { background: STORAGE_COLORS[c.key] || "#78716c" } }),
-                    React.createElement("span", { className: "wb-storage-legend-name" }, t(STORAGE_LABEL[c.key] || "settings.storageCaches")),
-                    React.createElement("b", { className: "mono" }, formatBytes(c.bytes)),
-                  );
-                }),
-              ),
+      storageError
+        ? React.createElement("p", { className: "wb-hint" }, t("settings.storageError") + ": " + storageError)
+        : storage && React.createElement("div", { className: "wb-storage" },
+            storage.total > 0 && React.createElement("div", { className: "wb-storage-bar", role: "img", "aria-label": t("settings.storageUsage") },
+              storageNonEmpty.map(function (c) {
+                return React.createElement("span", {
+                  key: c.key,
+                  className: "wb-storage-seg",
+                  style: { width: (c.bytes / storage.total * 100) + "%", background: STORAGE_COLORS[c.key] },
+                  title: t(STORAGE_LABEL[c.key] || c.key) + ": " + formatBytes(c.bytes) + " · " + t("settings.storageFiles", { n: c.files }),
+                });
+              }),
             ),
+            React.createElement("div", { className: "wb-storage-legend" },
+              storageList.map(function (c) {
+                return React.createElement("div", { className: "wb-storage-legend-row" + (c.bytes === 0 ? " empty" : ""), key: c.key },
+                  React.createElement("span", { className: "wb-storage-swatch", style: { background: STORAGE_COLORS[c.key] } }),
+                  React.createElement("span", { className: "wb-storage-legend-name" }, t(STORAGE_LABEL[c.key] || c.key)),
+                  React.createElement("b", { className: "mono" }, formatBytes(c.bytes)),
+                );
+              }),
+            ),
+          ),
       storage && storage.truncated ? React.createElement("p", { className: "wb-hint" }, t("settings.storageTruncated")) : null,
     ), { id: "setting-storage" }),
 

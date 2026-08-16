@@ -7428,6 +7428,63 @@ html[data-theme="light"] .wb-tool-list .mono {
   to { opacity: 1; }
 }
 
+/* Storage usage bar + legend (settings → Data) */
+.wb-storage {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.wb-storage-bar {
+  display: flex;
+  width: 100%;
+  height: 12px;
+  border-radius: 6px;
+  overflow: hidden;
+  background: var(--wb-icon-bg);
+}
+
+.wb-storage-seg {
+  height: 100%;
+  min-width: 0;
+}
+
+.wb-storage-legend {
+  display: flex;
+  flex-direction: column;
+}
+
+.wb-storage-legend-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 3px 0;
+  font-size: calc(12.5px * var(--wb-ui-font-scale, 1));
+  color: var(--wb-text);
+}
+
+.wb-storage-legend-row.empty {
+  opacity: 0.55;
+}
+
+.wb-storage-swatch {
+  flex: 0 0 auto;
+  width: 12px;
+  height: 12px;
+  border-radius: 3px;
+}
+
+.wb-storage-legend-name {
+  flex: 1 1 auto;
+  min-width: 0;
+  color: var(--wb-text);
+}
+
+.wb-storage-legend-row b {
+  font-weight: 600;
+  color: var(--wb-muted);
+}
+
 .settings-overlay-panel {
   width: min(920px, calc(100vw - 48px));
   height: var(--wb-settings-panel-height);
@@ -24002,63 +24059,6 @@ html[data-theme="dark"] :is(.wbc-composer-box, .wbc-side-card) {
 
 .wbc-ctx-chip.on svg {
   color: var(--wb-accent);
-}
-
-/* Storage usage bar + legend (settings → Data) */
-.wb-storage {
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-}
-
-.wb-storage-bar {
-  display: flex;
-  width: 100%;
-  height: 12px;
-  border-radius: 6px;
-  overflow: hidden;
-  background: var(--wb-icon-bg);
-}
-
-.wb-storage-seg {
-  height: 100%;
-  min-width: 0;
-}
-
-.wb-storage-legend {
-  display: flex;
-  flex-direction: column;
-}
-
-.wb-storage-legend-row {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  padding: 3px 0;
-  font-size: calc(12.5px * var(--wb-ui-font-scale, 1));
-  color: var(--wb-text);
-}
-
-.wb-storage-legend-row.empty {
-  opacity: 0.55;
-}
-
-.wb-storage-swatch {
-  flex: 0 0 auto;
-  width: 12px;
-  height: 12px;
-  border-radius: 3px;
-}
-
-.wb-storage-legend-name {
-  flex: 1 1 auto;
-  min-width: 0;
-  color: var(--wb-text);
-}
-
-.wb-storage-legend-row b {
-  font-weight: 600;
-  color: var(--wb-muted);
 }
 
 .wbc-ctx-x {
