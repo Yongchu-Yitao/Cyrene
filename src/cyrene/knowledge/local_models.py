@@ -21,6 +21,7 @@ from typing import Any, Callable
 import httpx
 
 from cyrene.config import CACHE_DIR
+from cyrene.model_runtime import opencv_runtime
 
 
 MODEL_ROOT = Path(CACHE_DIR) / "knowledge_models"
@@ -514,7 +515,7 @@ def status() -> dict[str, Any]:
             "download_bytes": int(spec.get("download_bytes") or 0),
             "error": str(progress.get("error") or ""),
         })
-    return {"models": models}
+    return {"models": models, "cv2_runtime": opencv_runtime.status()}
 
 
 async def _download_file(client: httpx.AsyncClient, item: dict[str, Any], destination: Path, model_id: str) -> None:

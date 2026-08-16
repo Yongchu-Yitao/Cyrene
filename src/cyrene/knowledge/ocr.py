@@ -43,25 +43,55 @@ def _load_engine():
         if _ENGINE is not None:
             return _ENGINE
         try:
+            # OpenCV is not bundled: OCR downloads the full opencv-python
+            # wheel (which also carries FFmpeg video codecs) on first use.
+            from cyrene.model_runtime import opencv_runtime
+
+            opencv_runtime.ensure()
+            import rapidocr as _rapidocr
+
             from rapidocr import EngineType, ModelType, OCRVersion, RapidOCR
+            from rapidocr.utils.download_file import DownloadFileException
         except ImportError as exc:
             raise RuntimeError("RapidOCR is unavailable") from exc
+        except opencv_runtime.OpencvRuntimeMissingError:
+            raise
         root = local_models.model_dir(MODEL_ID)
+        # The CLS model is the only model RapidOCR resolves through its
+        # default config (Det/Rec get explicit paths below); the spec
+        # bundles this single onnx so a frozen build never attempts a
+        # runtime download into the transient bundle dir.
+        cls_model = (
+            Path(_rapidocr.__file__).resolve().parent
+            / "models"
+            / "ch_ppocr_mobile_v2.0_cls_mobile.onnx"
+        )
         use_dml = "DmlExecutionProvider" in set(__import__("onnxruntime").get_available_providers())
-        _ENGINE = RapidOCR(params={
-            "EngineConfig.onnxruntime.use_dml": use_dml,
-            "EngineConfig.onnxruntime.intra_op_num_threads": max(1, min(4, (os.cpu_count() or 2) // 2)),
-            "EngineConfig.onnxruntime.inter_op_num_threads": 1,
-            "Det.engine_type": EngineType.ONNXRUNTIME,
-            "Det.model_type": ModelType.MEDIUM,
-            "Det.ocr_version": OCRVersion.PPOCRV6,
-            "Det.model_path": str(root / "det.onnx"),
-            "Rec.engine_type": EngineType.ONNXRUNTIME,
-            "Rec.model_type": ModelType.MEDIUM,
-            "Rec.ocr_version": OCRVersion.PPOCRV6,
-            "Rec.model_path": str(root / "rec.onnx"),
-            "Rec.rec_keys_path": str(root / "ppocrv6_dict.txt"),
-        })
+        try:
+            _ENGINE = RapidOCR(params={
+                "EngineConfig.onnxruntime.use_dml": use_dml,
+                "EngineConfig.onnxruntime.intra_op_num_threads": max(1, min(4, (os.cpu_count() or 2) // 2)),
+                "EngineConfig.onnxruntime.inter_op_num_threads": 1,
+                "Det.engine_type": EngineType.ONNXRUNTIME,
+                "Det.model_type": ModelType.MEDIUM,
+                "Det.ocr_version": OCRVersion.PPOCRV6,
+                "Det.model_path": str(root / "det.onnx"),
+                "Rec.engine_type": EngineType.ONNXRUNTIME,
+                "Rec.model_type": ModelType.MEDIUM,
+                "Rec.ocr_version": OCRVersion.PPOCRV6,
+                "Rec.model_path": str(root / "rec.onnx"),
+                "Rec.rec_keys_path": str(root / "ppocrv6_dict.txt"),
+                "Cls.model_path": str(cls_model),
+            })
+        except (DownloadFileException, FileNotFoundError) as exc:
+            # Reachable only when the bundled CLS onnx is missing (e.g. a
+            # stale bundle): RapidOCR would then try a modelscope download
+            # into the transient bundle dir and fail when offline (or raise
+            # FileNotFoundError directly for the explicit model path).
+            raise RuntimeError(
+                "RapidOCR model download failed: the CLS model is missing "
+                f"from the package ({cls_model}) or the network is unavailable"
+            ) from exc
         return _ENGINE
 
 

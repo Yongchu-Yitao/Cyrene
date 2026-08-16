@@ -30,6 +30,72 @@ function visibleProcesses(se) {
   return se.applicationProcesses().filter((proc) => !Boolean(safe(() => proc.backgroundOnly(), true)));
 }
 
+function serverWindowRows() {
+  const rows = safe(() => {
+    const reference = $.CGWindowListCopyWindowInfo(
+      $.kCGWindowListOptionAll,
+      $.kCGNullWindowID,
+    );
+    const rows = ObjC.deepUnwrap(ObjC.castRefToObject(reference));
+    if (!Array.isArray(rows)) return [];
+    const seen = new Set();
+    return rows.filter((row) => {
+      const number = Number(row.kCGWindowNumber || 0);
+      const pid = Number(row.kCGWindowOwnerPID || 0);
+      if (!(number > 0) || !(pid > 0) || Number(row.kCGWindowLayer || 0) !== 0) return false;
+      if (seen.has(number)) return false;
+      seen.add(number);
+      // WindowServer also tracks chrome surfaces (menu-bar strips, toolbars,
+      // web-process backing stores) at layer 0; only real windows are useful
+      // as App Use targets. The 60x60 cutoff is a heuristic: it drops the
+      // ~30/33px menu-bar strips and other chrome while keeping small 54x54
+      // floating palettes; the real criterion is "a visible window that can
+      // carry clicks".
+      const bounds = row.kCGWindowBounds || {};
+      if (Number(bounds.Width || 0) < 60 || Number(bounds.Height || 0) < 60) return false;
+      return true;
+    });
+  }, []);
+  // CGWindowList's OptionAll rows carry no minimized flag; one extra
+  // OnScreenOnly query (millisecond-scale) yields the visible window numbers,
+  // so a row absent from that set is reported as minimized. This also flags
+  // windows on other Spaces and hidden windows as minimized — they are equally
+  // invisible, so hiding the pointer for them is correct.
+  rows.onscreenWindowNumbers = safe(() => {
+    const reference = $.CGWindowListCopyWindowInfo(
+      $.kCGWindowListOptionOnScreenOnly,
+      $.kCGNullWindowID,
+    );
+    const onScreen = ObjC.deepUnwrap(ObjC.castRefToObject(reference));
+    if (!Array.isArray(onScreen)) return new Set();
+    return new Set(onScreen.map((row) => Number(row.kCGWindowNumber || 0)));
+  }, new Set());
+  return rows;
+}
+
+function runningAppInfo() {
+  // In the JXA ObjC bridge, NSString-typed properties are exposed as
+  // non-callable proxies (typeof reports "function" but invoking throws);
+  // unwrap the property access directly.
+  const readString = (app, property) => safe(() => String(ObjC.unwrap(app[property]) || ''), '');
+  const info = new Map();
+  const apps = $.NSWorkspace.sharedWorkspace.runningApplications;
+  for (let index = 0; index < apps.count; index += 1) {
+    const app = apps.objectAtIndex(index);
+    const pid = Number(app.processIdentifier);
+    if (!(pid > 0)) continue;
+    info.set(pid, {
+      name: readString(app, 'localizedName'),
+      applicationId: readString(app, 'bundleIdentifier'),
+      // NSApplicationActivationPolicyRegular (0) mirrors the old System
+      // Events backgroundOnly filter: Dock-less helpers (extension UIs,
+      // loginwindow) are not useful App Use targets.
+      policy: Number(app.activationPolicy),
+    });
+  }
+  return info;
+}
+
 function windowIdentifier(win, index) {
   const nativeId = safe(() => win.id(), '');
   return nativeId === '' ? `index:${index}` : String(nativeId);
@@ -47,88 +113,71 @@ function windowBounds(win) {
   };
 }
 
-function windowServerWindows() {
-  return safe(() => {
-    const reference = $.CGWindowListCopyWindowInfo(
-      $.kCGWindowListOptionAll,
-      $.kCGNullWindowID,
-    );
-    const rows = ObjC.deepUnwrap(ObjC.castRefToObject(reference));
-    return Array.isArray(rows) ? rows.filter((row) => (
-      Number(row.kCGWindowNumber || 0) > 0
-      && Number(row.kCGWindowOwnerPID || 0) > 0
-      && Number(row.kCGWindowLayer || 0) === 0
-    )) : [];
-  }, []);
-}
-
-function windowServerIdentifier(pid, title, bounds, rows, claimed) {
-  if (!bounds) return '';
-  const candidates = rows.filter((row) => (
-    Number(row.kCGWindowOwnerPID || 0) === Number(pid || 0)
-    && !claimed.has(Number(row.kCGWindowNumber || 0))
-  ));
-  const scored = candidates.map((row) => {
-    const candidateBounds = row.kCGWindowBounds || {};
-    const distance = Math.abs(Number(candidateBounds.X || 0) - Number(bounds.x || 0))
-      + Math.abs(Number(candidateBounds.Y || 0) - Number(bounds.y || 0))
-      + Math.abs(Number(candidateBounds.Width || 0) - Number(bounds.width || 0))
-      + Math.abs(Number(candidateBounds.Height || 0) - Number(bounds.height || 0));
-    const candidateTitle = String(row.kCGWindowName || '');
-    const titlePenalty = title && candidateTitle && candidateTitle !== title ? 100000 : 0;
-    return { row, score: distance + titlePenalty, distance };
-  }).sort((left, right) => left.score - right.score);
-  const match = scored.find((item) => item.distance <= 8);
-  if (!match) return '';
-  const identifier = Number(match.row.kCGWindowNumber || 0);
-  claimed.add(identifier);
-  return String(identifier);
-}
-
 function listTargets(payload) {
-  const se = systemEvents();
+  // AppKit + WindowServer enumeration only: no System Events accessibility
+  // reads, so listing stays fast (~200ms) and works without accessibility
+  // permission. Window names are only disclosed by CGWindowList when the
+  // caller holds Screen Recording permission; the semantic snapshot re-reads
+  // titles from the accessibility tree once a target is selected.
   const frontmostPid = Number($.NSWorkspace.sharedWorkspace.frontmostApplication.processIdentifier);
   const excludePid = Number(payload.excludePid || 0);
   const excludedApplicationIds = new Set((payload.excludeApplicationIds || []).map((value) => String(value).toLowerCase()));
   const excludedAppNames = new Set((payload.excludeAppNames || []).map((value) => String(value).toLowerCase()));
-  const serverWindows = windowServerWindows();
-  const claimedServerWindows = new Set();
+  const appInfo = runningAppInfo();
+  const rows = serverWindowRows();
+  const onscreenWindowNumbers = rows.onscreenWindowNumbers;
   const targets = [];
-  for (const proc of visibleProcesses(se)) {
-    const pid = Number(safe(() => proc.unixId(), 0));
-    if (!pid || pid === excludePid) continue;
-    const appName = String(safe(() => proc.name(), ''));
-    const bundleId = String(safe(() => proc.bundleIdentifier(), ''));
-    if (excludedApplicationIds.has(bundleId.toLowerCase()) || excludedAppNames.has(appName.toLowerCase())) continue;
-    const windows = proc.windows();
-    for (let index = 0; index < windows.length; index += 1) {
-      const win = windows[index];
-      const title = String(safe(() => win.name(), ''));
-      const role = String(safe(() => win.role(), ''));
-      if (role && role !== 'AXWindow' && role !== 'window') continue;
-      const bounds = windowBounds(win);
-      const serverIdentifier = windowServerIdentifier(
-        pid, title, bounds, serverWindows, claimedServerWindows,
-      );
-      targets.push({
-        platform: 'darwin',
-        pid,
-        processStartTime: '',
-        appName,
-        applicationId: bundleId,
-        // AX window ids are commonly absent on macOS.  Keep the WindowServer
-        // number when available because process-directed mouse events need it
-        // to route the NSEvent into the correct background NSWindow.
-        windowId: serverIdentifier || windowIdentifier(win, index),
-        windowIndex: index,
-        windowTitle: title,
-        foreground: pid === frontmostPid,
-        minimized: Boolean(safe(() => win.attributes.byName('AXMinimized').value(), false)),
-        bounds,
-      });
-    }
+  const perPidIndexes = new Map();
+  for (const row of rows) {
+    const pid = Number(row.kCGWindowOwnerPID || 0);
+    if (pid === excludePid) continue;
+    const info = appInfo.get(pid);
+    if (!info || Number(info.policy) !== 0) continue;
+    const appName = String(info.name || row.kCGWindowOwnerName || '');
+    const applicationId = String(info.applicationId || '');
+    if (excludedApplicationIds.has(applicationId.toLowerCase()) || excludedAppNames.has(appName.toLowerCase())) continue;
+    const bounds = row.kCGWindowBounds || {};
+    const index = perPidIndexes.get(pid) || 0;
+    perPidIndexes.set(pid, index + 1);
+    targets.push({
+      platform: 'darwin',
+      pid,
+      processStartTime: '',
+      appName,
+      applicationId,
+      // WindowServer window number: process-directed mouse events need it to
+      // route the NSEvent into the correct background NSWindow.
+      windowId: String(row.kCGWindowNumber || 0),
+      windowIndex: index,
+      // CGWindowList only discloses titles with Screen Recording permission;
+      // an empty title without it is expected, and the semantic snapshot
+      // re-reads AX titles once the target is connected.
+      windowTitle: String(row.kCGWindowName || ''),
+      foreground: pid === frontmostPid,
+      // CGWindowList's OptionAll rows carry no minimized flag; derive it from
+      // the extra OnScreenOnly query: windows absent from the on-screen set
+      // (minimized, on another Space, or hidden) are reported as minimized.
+      minimized: !onscreenWindowNumbers.has(Number(row.kCGWindowNumber || 0)),
+      bounds: {
+        x: Number(bounds.X || 0),
+        y: Number(bounds.Y || 0),
+        width: Number(bounds.Width || 0),
+        height: Number(bounds.Height || 0),
+      },
+    });
   }
   return { ok: true, targets };
+}
+
+function boundsMatch(axBounds, targetBounds, tolerance) {
+  if (!axBounds || !targetBounds) return false;
+  const width = Number(targetBounds.width || 0);
+  const height = Number(targetBounds.height || 0);
+  if (!(width > 0) || !(height > 0) || !(axBounds.width > 0) || !(axBounds.height > 0)) return false;
+  return Math.abs(axBounds.x - Number(targetBounds.x || 0)) <= tolerance
+    && Math.abs(axBounds.y - Number(targetBounds.y || 0)) <= tolerance
+    && Math.abs(axBounds.width - width) <= tolerance
+    && Math.abs(axBounds.height - height) <= tolerance;
 }
 
 function resolveTarget(target) {
@@ -138,17 +187,38 @@ function resolveTarget(target) {
   const proc = processes.find((candidate) => Number(safe(() => candidate.unixId(), 0)) === pid);
   if (!proc) throw new Error('Target application process is no longer available.');
   const windows = proc.windows();
-  let windowIndex = Number.isInteger(Number(target.windowIndex)) ? Number(target.windowIndex) : -1;
   let win = null;
-  for (let index = 0; index < windows.length; index += 1) {
-    if (windowIdentifier(windows[index], index) === String(target.windowId || '')) {
-      win = windows[index];
-      windowIndex = index;
-      break;
+  // Listed windowId is a WindowServer number, which lives in a different
+  // namespace than AX window ids, so prefer a bounds match first.
+  if (target.bounds) {
+    const candidates = windows.filter((candidate) => boundsMatch(windowBounds(candidate), target.bounds, 8));
+    if (candidates.length === 1) {
+      win = candidates[0];
+    } else if (candidates.length > 1) {
+      // Several windows share the same bounds (e.g. stacked windows): prefer
+      // the one at the listed windowIndex position in the AX array, falling
+      // back to the first candidate.
+      const wantedIndex = Number.isInteger(Number(target.windowIndex)) ? Number(target.windowIndex) : -1;
+      win = candidates.find((candidate) => windows.indexOf(candidate) === wantedIndex) || candidates[0];
     }
   }
-  if (!win && windowIndex >= 0 && windowIndex < windows.length) win = windows[windowIndex];
-  if (!win) throw new Error('Target application window is no longer available.');
+  if (!win) {
+    // No bounds match (the window moved or was resized): fall back to a strict
+    // window-id match. The WindowServer id namespace differs from AX ids, so a
+    // hit is trustworthy, but never blindly index the AX window array with the
+    // listing's cross-namespace index.
+    const wantedId = String(target.windowId || '');
+    for (let index = 0; index < windows.length; index += 1) {
+      if (windowIdentifier(windows[index], index) === wantedId) {
+        win = windows[index];
+        break;
+      }
+    }
+    if (!win) {
+      throw new Error('Target application window is no longer available: the window moved or resized since listing.');
+    }
+  }
+  const windowIndex = windows.indexOf(win);
   return { se, proc, win, windowIndex };
 }
 
@@ -157,9 +227,42 @@ function safariTab(target) {
   const safari = Application('Safari');
   if (!safari.running()) fail('stale_session', 'Safari is no longer running.');
   const windows = safari.windows();
-  const index = Math.max(0, Number(target.windowIndex || 0));
-  if (index >= windows.length) fail('stale_session', 'The connected Safari window is no longer available.');
-  return { safari, window: windows[index], tab: windows[index].currentTab };
+  const targetHeight = Number((target.bounds || {}).height || 0);
+  let picked = null;
+  if (targetHeight > 0) {
+    // Safari's AppleScript windows() order can differ from the CG listing
+    // order, so verify by height instead of trusting the index: AppleScript
+    // bounds are {left, top, right, bottom}, height = bottom - top, though
+    // the JXA bridge also exposes them as a record {x, y, width, height}.
+    // Among candidates, the nearest height wins; beyond 8px the window must
+    // have been replaced, so fail rather than operate on the wrong window.
+    let bestDistance = Infinity;
+    for (const candidate of windows) {
+      const bounds = safe(() => candidate.bounds(), null);
+      let height = 0;
+      if (Array.isArray(bounds) && bounds.length >= 4) {
+        height = Number(bounds[3] || 0) - Number(bounds[1] || 0);
+      } else if (bounds && typeof bounds === 'object') {
+        height = Number(bounds.height || 0) > 0
+          ? Number(bounds.height || 0)
+          : Number(bounds.bottom || 0) - Number(bounds.top || 0);
+      }
+      if (!(height > 0)) continue;
+      const distance = Math.abs(height - targetHeight);
+      if (distance < bestDistance) {
+        bestDistance = distance;
+        picked = candidate;
+      }
+    }
+    if (!picked || bestDistance > 8) {
+      fail('stale_session', 'The connected Safari window moved or was resized since listing.');
+    }
+  } else {
+    const index = Math.max(0, Number(target.windowIndex || 0));
+    if (index >= windows.length) fail('stale_session', 'The connected Safari window is no longer available.');
+    picked = windows[index];
+  }
+  return { safari, window: picked, tab: picked.currentTab };
 }
 
 function safariState(target) {

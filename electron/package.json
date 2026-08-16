@@ -1,6 +1,6 @@
 {
   "name": "cyrene",
-  "version": "0.7.9",
+  "version": "0.7.10-beta1",
   "license": "Apache-2.0",
   "description": "Cyrene AI Agent — self-evolving AI companion",
   "desktopName": "cyrene.desktop",
@@ -25,6 +25,11 @@
     "beforePack": "build-app-use-macos.js",
     "appId": "com.cyrene.app",
     "productName": "Cyrene",
+    "electronLanguages": [
+      "en",
+      "zh-CN",
+      "zh-TW"
+    ],
     "directories": {
       "output": "../dist-electron"
     },

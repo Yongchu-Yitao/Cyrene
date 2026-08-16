@@ -12,6 +12,7 @@ from cyrene.model_runtime import client as model_client
 from cyrene.model_runtime.codex_provider import (
     CODEX_BASE_URL,
     CODEX_AUTHENTICATION_EXPIRED,
+    CODEX_CLI_REQUIRED,
     CODEX_MODEL_UNAVAILABLE,
     CODEX_PROVIDER,
     CODEX_QUOTA_EXHAUSTED,
@@ -22,6 +23,7 @@ from cyrene.model_runtime.codex_provider import (
     _codex_image_sdk_config,
     _codex_sdk_config,
     _disabled_host_skills_override,
+    _is_cli_protocol_mismatch,
     _normalize_provider_action,
     _normalized_effort,
     _provider_action_schema,
@@ -29,16 +31,22 @@ from cyrene.model_runtime.codex_provider import (
     _provider_input,
     _provider_instructions,
     _provider_turn_input,
+    _recover_with_pinned_cli,
+    _require_cli,
     codex_availability_error,
     codex_error_should_cooldown,
     provider_request_cache_material,
 )
+from cyrene.model_runtime import codex_cli
 
 
-def test_codex_sdk_uses_its_pinned_runtime_and_system_proxy() -> None:
-    config = _codex_sdk_config()
+def test_codex_sdk_uses_its_pinned_runtime_and_system_proxy(
+    tmp_path,
+) -> None:
+    cli_path = tmp_path / "codex"
+    config = _codex_sdk_config(cli_path)
 
-    assert config.codex_bin is None
+    assert config.codex_bin == str(cli_path)
     assert config.cwd
     assert {
         "features.respect_system_proxy=true",
@@ -64,9 +72,10 @@ def test_codex_sdk_uses_its_pinned_runtime_and_system_proxy() -> None:
     assert _normalized_effort("MAX") == "max"
 
 
-def test_codex_image_sdk_enables_only_image_generation() -> None:
-    config = _codex_image_sdk_config()
+def test_codex_image_sdk_enables_only_image_generation(tmp_path) -> None:
+    config = _codex_image_sdk_config(tmp_path / "codex")
 
+    assert config.codex_bin == str(tmp_path / "codex")
     assert "features.image_generation=true" in config.config_overrides
     assert {
         "features.plugins=false",
@@ -1230,3 +1239,224 @@ def test_codex_provider_converts_openai_image_content_to_turn_input() -> None:
         item.get("text", "") for item in turn_input if item["type"] == "text"
     )
     assert "[Image 1 is attached to this turn.]" in turn_input[1]["text"]
+
+
+def test_codex_cli_missing_surfaces_actionable_availability_error(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def missing() -> Path:
+        raise codex_cli.CodexCliMissingError("Codex CLI runtime is not downloaded")
+
+    monkeypatch.setattr(codex_cli, "ensure_cli", missing)
+
+    with pytest.raises(CodexAvailabilityError) as exc_info:
+        _require_cli()
+
+    assert exc_info.value.kind == CODEX_CLI_REQUIRED
+    assert "not downloaded" in str(exc_info.value)
+
+
+@pytest.mark.asyncio
+async def test_codex_snapshot_reports_cli_required_state(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    provider = CodexAppServer()
+
+    async def missing_account() -> dict:
+        raise CodexAvailabilityError(
+            CODEX_CLI_REQUIRED, "Codex CLI runtime is not downloaded"
+        )
+
+    monkeypatch.setattr(provider, "account", missing_account)
+    monkeypatch.setattr(
+        codex_cli, "status", lambda: {"installed": False, "version": ""}
+    )
+
+    snapshot = await provider.snapshot()
+
+    assert snapshot["available"] is False
+    assert snapshot["connected"] is False
+    assert snapshot["cli"] == {"installed": False, "version": ""}
+    assert "Codex CLI" in snapshot["error"]
+
+
+@pytest.mark.asyncio
+async def test_codex_snapshot_reports_broken_installed_cli(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    provider = CodexAppServer()
+
+    async def failing_account() -> dict:
+        raise RuntimeError("codex app-server failed to start")
+
+    monkeypatch.setattr(provider, "account", failing_account)
+    provider._client_start_error = "codex app-server failed to start"
+    monkeypatch.setattr(codex_cli, "status", lambda: {"installed": True, "version": "0.200.0"})
+
+    snapshot = await provider.snapshot()
+
+    assert snapshot["available"] is False
+    assert snapshot["connected"] is False
+    assert snapshot["cli"] == {
+        "installed": True,
+        "broken": True,
+        "version": "0.200.0",
+        "error": "codex app-server failed to start",
+    }
+    assert snapshot["error"] == "codex app-server failed to start"
+
+
+@pytest.mark.asyncio
+async def test_codex_snapshot_does_not_mark_cli_broken_on_upstream_failure(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    provider = CodexAppServer()
+
+    async def failing_account() -> dict:
+        raise RuntimeError("quota service unavailable")
+
+    monkeypatch.setattr(provider, "account", failing_account)
+    provider._client_start_error = None
+
+    with pytest.raises(RuntimeError, match="quota service unavailable"):
+        await provider.snapshot()
+
+
+def test_codex_cli_protocol_mismatch_detection() -> None:
+    assert _is_cli_protocol_mismatch(RuntimeError("SDK/CLI protocol mismatch"))
+    assert _is_cli_protocol_mismatch(RuntimeError("unknown method: v2/foo"))
+    assert _is_cli_protocol_mismatch(
+        RuntimeError("app-server version incompatible with SDK")
+    )
+    assert _is_cli_protocol_mismatch(
+        RuntimeError("app-server protocol version 3 is not supported")
+    )
+    assert not _is_cli_protocol_mismatch(
+        RuntimeError("stream disconnected")
+    )
+    assert not _is_cli_protocol_mismatch(
+        TimeoutError("Codex request timed out")
+    )
+    assert not _is_cli_protocol_mismatch(
+        OSError("no route to host")
+    )
+    # Transport-layer wording shares "protocol version" with genuine clash
+    # messages and must never trigger the pinned-runtime fallback.
+    assert not _is_cli_protocol_mismatch(
+        OSError("tlsv1 alert protocol version")
+    )
+    assert not _is_cli_protocol_mismatch(
+        RuntimeError("SSL: certificate verify failed")
+    )
+    assert not _is_cli_protocol_mismatch(
+        RuntimeError("proxy connection refused")
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("installed", "download_error", "expected", "expected_downloads"),
+    [
+        # Already on the pinned runtime: nothing to fix by re-downloading.
+        ("0.144.4", None, False, []),
+        # Newer CLI + protocol clash: the pinned runtime is downloaded.
+        ("0.200.0", None, True, ["0.144.4"]),
+        # A failed fallback download keeps the original error, never masks it.
+        ("0.200.0", OSError("disk full"), False, ["0.144.4"]),
+    ],
+)
+async def test_codex_recover_with_pinned_cli(
+    monkeypatch: pytest.MonkeyPatch,
+    installed: str,
+    download_error: Exception | None,
+    expected: bool,
+    expected_downloads: list[str],
+) -> None:
+    downloaded: list[str | None] = []
+
+    async def download_and_wait(version: str | None) -> Path:
+        downloaded.append(version)
+        if download_error is not None:
+            raise download_error
+        return Path("/tmp/codex")
+
+    monkeypatch.setattr(codex_cli, "sdk_pinned_version", lambda: "0.144.4")
+    monkeypatch.setattr(codex_cli, "installed_version", lambda: installed)
+    monkeypatch.setattr(codex_cli, "download_and_wait", download_and_wait)
+
+    assert (
+        await _recover_with_pinned_cli(
+            RuntimeError("app-server protocol mismatch")
+        )
+        is expected
+    )
+    assert downloaded == expected_downloads
+
+
+@pytest.mark.asyncio
+async def test_codex_start_client_requires_cli(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    provider = CodexAppServer()
+
+    def missing() -> Path:
+        raise codex_cli.CodexCliMissingError("Codex CLI runtime is not downloaded")
+
+    monkeypatch.setattr(codex_cli, "ensure_cli", missing)
+
+    with pytest.raises(CodexAvailabilityError) as exc_info:
+        await provider._start_client(_codex_sdk_config)
+
+    assert exc_info.value.kind == CODEX_CLI_REQUIRED
+
+
+@pytest.mark.asyncio
+async def test_codex_start_client_retries_once_with_pinned_cli_on_mismatch(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    provider = CodexAppServer()
+    spawns: list[tuple[str, int]] = []
+
+    class FailingThenWorkingClient:
+        def __init__(self, config):
+            self.config = config
+
+        async def start(self) -> None:
+            spawns.append((str(self.config.codex_bin), len(spawns)))
+
+        async def initialize(self) -> SimpleNamespace:
+            if len(spawns) == 1:
+                raise RuntimeError("app-server protocol mismatch")
+            return SimpleNamespace(user_agent="pinned")
+
+        async def close(self) -> None:
+            pass
+
+    monkeypatch.setattr(
+        "cyrene.model_runtime.codex_provider.AsyncCodexClient",
+        FailingThenWorkingClient,
+    )
+    monkeypatch.setattr(
+        codex_cli, "ensure_cli", lambda: Path("/cache/codex_cli/versions/latest")
+    )
+    monkeypatch.setattr(
+        codex_cli, "installed_cli_path", lambda: Path("/cache/codex_cli/versions/0.144.4")
+    )
+    monkeypatch.setattr(
+        codex_cli, "installed_version", lambda: "0.144.4"
+    )
+    monkeypatch.setattr(codex_cli, "sdk_pinned_version", lambda: "0.144.4")
+
+    async def recover(error: BaseException) -> bool:
+        assert _is_cli_protocol_mismatch(error)
+        return True
+
+    monkeypatch.setattr(
+        "cyrene.model_runtime.codex_provider._recover_with_pinned_cli",
+        recover,
+    )
+
+    client = await provider._start_client(_codex_sdk_config)
+
+    assert len(spawns) == 2
+    assert str(client.config.codex_bin).endswith("0.144.4")

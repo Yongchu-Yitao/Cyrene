@@ -25,6 +25,7 @@ from openai_codex.generated.v2_all import (
 )
 from pydantic import BaseModel
 
+from cyrene.model_runtime import codex_cli
 from cyrene.tooling.results import ToolProtocolError
 from cyrene.tooling.validation import validate_schema
 
@@ -44,6 +45,7 @@ _TRANSPORT_ERROR_KEYS = frozenset(
 CODEX_QUOTA_EXHAUSTED = "quota_exhausted"
 CODEX_AUTHENTICATION_EXPIRED = "authentication_expired"
 CODEX_MODEL_UNAVAILABLE = "model_unavailable"
+CODEX_CLI_REQUIRED = "cli_required"
 _ISOLATED_CODEX_WORKSPACE: tempfile.TemporaryDirectory[str] | None = None
 
 
@@ -285,7 +287,7 @@ def _disabled_host_skills_override() -> str:
     return f"skills.config=[{entries}]"
 
 
-def _codex_sdk_config() -> CodexConfig:
+def _codex_sdk_config(cli_path: Path) -> CodexConfig:
     isolation_root = _codex_isolation_workspace()
     overrides = [
         "features.respect_system_proxy=true",
@@ -313,9 +315,9 @@ def _codex_sdk_config() -> CodexConfig:
     if skills_override:
         overrides.append(skills_override)
     return CodexConfig(
-        # Published SDK builds own a same-version Codex runtime. Do not pass
-        # codex_bin: that would fall back to an unpinned PATH/ChatGPT.app
-        # executable.
+        # Cyrene owns the Codex runtime: a downloaded, verified binary whose
+        # version is managed independently of PATH/ChatGPT.app installs.
+        codex_bin=str(cli_path),
         config_overrides=tuple(overrides),
         cwd=str(isolation_root),
         client_name="cyrene",
@@ -325,7 +327,7 @@ def _codex_sdk_config() -> CodexConfig:
     )
 
 
-def _codex_image_sdk_config() -> CodexConfig:
+def _codex_image_sdk_config(cli_path: Path) -> CodexConfig:
     """Return an isolated SDK runtime that may use only image generation."""
     isolation_root = _codex_isolation_workspace()
     overrides = [
@@ -353,6 +355,7 @@ def _codex_image_sdk_config() -> CodexConfig:
     if skills_override:
         overrides.append(skills_override)
     return CodexConfig(
+        codex_bin=str(cli_path),
         config_overrides=tuple(overrides),
         cwd=str(isolation_root),
         client_name="cyrene-image-generation",
@@ -360,6 +363,81 @@ def _codex_image_sdk_config() -> CodexConfig:
         client_version="1",
         experimental_api=True,
     )
+
+
+def _require_cli() -> Path:
+    """Return the installed Codex CLI or raise a user-actionable error."""
+    try:
+        return codex_cli.ensure_cli()
+    except codex_cli.CodexCliMissingError as exc:
+        raise CodexAvailabilityError(
+            CODEX_CLI_REQUIRED,
+            str(exc) or "Codex CLI runtime is not downloaded",
+        ) from exc
+
+
+# Explicit app-server/SDK version-clash wording.  The SDK surfaces app-server
+# JSON-RPC errors as "JSON-RPC error {code}: {message}"; genuine clashes name
+# the protocol version, the method surface, or the app-server/SDK pair.  Bare
+# words like "protocol" or "incompatible" are NOT enough: transport errors and
+# TLS alerts ("tlsv1 alert protocol version") also use them.
+_VERSION_CLASH_TOKENS = (
+    "protocol version",
+    "protocol mismatch",
+    "app-server version",
+    "app-server protocol",
+    "version mismatch",
+    "incompatible sdk",
+    "method not found",
+    "unknown method",
+)
+# Transport-layer noise that shares wording with clash messages; never treated
+# as an SDK/CLI version clash.
+_TRANSPORT_NOISE_TOKENS = (
+    "tls",
+    "ssl",
+    "handshake",
+    "certificate",
+    "proxy",
+    "connection",
+    "dns",
+)
+
+
+def _is_cli_protocol_mismatch(error: BaseException) -> bool:
+    """Whether a failed spawn/initialize looks like an SDK/CLI version clash."""
+    lowered = str(error).lower()
+    if any(token in lowered for token in _TRANSPORT_NOISE_TOKENS):
+        return False
+    return any(token in lowered for token in _VERSION_CLASH_TOKENS)
+
+
+async def _recover_with_pinned_cli(error: BaseException) -> bool:
+    """Swap the installed CLI for the SDK-pinned version and report success.
+
+    Only invoked when the installed runtime is a newer (unpinned) version and
+    the SDK/CLI exchange failed in a way that suggests a protocol clash.  A
+    failed fallback download keeps the original error, never masks it.
+    """
+    if not _is_cli_protocol_mismatch(error):
+        return False
+    pinned = codex_cli.sdk_pinned_version()
+    installed = codex_cli.installed_version()
+    if not pinned or installed == pinned:
+        return False
+    logger.warning(
+        "Codex CLI %s spoke an incompatible protocol to the openai-codex "
+        "SDK %s; installing the pinned runtime %s",
+        installed or "?",
+        pinned,
+        pinned,
+    )
+    try:
+        await codex_cli.download_and_wait(pinned)
+        return True
+    except Exception as exc:
+        logger.warning("Codex CLI pinned-runtime fallback download failed: %s", exc)
+        return False
 
 
 class CodexAppServer:
@@ -374,6 +452,34 @@ class CodexAppServer:
         self._image_start_lock = asyncio.Lock()
         self._limits_cache: tuple[float, dict[str, Any]] | None = None
         self._limits_refresh_task: asyncio.Task[dict[str, Any]] | None = None
+        # Set when the latest _start_client attempt failed with an installed
+        # runtime; snapshot() reports cli.broken to offer a forced reinstall.
+        self._client_start_error: str | None = None
+
+    async def _start_client(
+        self,
+        config_factory: Callable[[Path], CodexConfig],
+    ) -> AsyncCodexClient:
+        """Spawn the Codex app-server with a verified CLI.
+
+        When the installed (latest) CLI fails to speak the SDK's protocol, the
+        SDK-pinned runtime is downloaded and the spawn retried exactly once.
+        Callers run this outside _start_lock so the fallback download never
+        holds the lock across its multi-minute duration.
+        """
+        cli_path = _require_cli()
+        for attempt in range(2):
+            client = AsyncCodexClient(config_factory(cli_path))
+            try:
+                await asyncio.wait_for(client.start(), timeout=15)
+                await asyncio.wait_for(client.initialize(), timeout=15)
+            except BaseException as exc:
+                await client.close()
+                if attempt == 0 and await _recover_with_pinned_cli(exc):
+                    cli_path = codex_cli.installed_cli_path() or cli_path
+                    continue
+                raise
+            return client
 
     async def _ensure_started(self) -> None:
         current_loop = asyncio.get_running_loop()
@@ -381,22 +487,24 @@ class CodexAppServer:
             return
         if self._client is not None:
             await self.close()
+        # A first-run or pinned-fallback download can take minutes. Probing
+        # and downloading happen outside _start_lock; concurrent starts join
+        # the single in-flight download, and the lock only guards assignment
+        # (the losing client is discarded).
+        await codex_cli.wait_for_inflight_download()
+        try:
+            client = await self._start_client(_codex_sdk_config)
+        except Exception as exc:
+            self._client_start_error = str(exc)
+            raise
+        self._client_start_error = None
         async with self._start_lock:
             if self._client is not None and self._client_loop is current_loop:
-                return
-            client = AsyncCodexClient(_codex_sdk_config())
-            try:
-                await asyncio.wait_for(client.start(), timeout=15)
-                metadata = await asyncio.wait_for(client.initialize(), timeout=15)
-            except BaseException:
                 await client.close()
-                raise
+                return
             self._client = client
             self._client_loop = current_loop
-            logger.info(
-                "Codex SDK runtime started [sdk_runtime=%s system_proxy=true]",
-                str(getattr(metadata, "user_agent", "") or "pinned"),
-            )
+            logger.info("Codex SDK runtime started [system_proxy=true]")
 
     async def _ready_client(self) -> AsyncCodexClient:
         await self._ensure_started()
@@ -413,19 +521,22 @@ class CodexAppServer:
             return
         if self._image_client is not None:
             await self._close_image_client()
+        # Same lock discipline as _ensure_started: probing and any pinned
+        # fallback download run outside _image_start_lock.
+        await codex_cli.wait_for_inflight_download()
+        try:
+            client = await self._start_client(_codex_image_sdk_config)
+        except Exception as exc:
+            self._client_start_error = str(exc)
+            raise
+        self._client_start_error = None
         async with self._image_start_lock:
             if (
                 self._image_client is not None
                 and self._image_client_loop is current_loop
             ):
-                return
-            client = AsyncCodexClient(_codex_image_sdk_config())
-            try:
-                await asyncio.wait_for(client.start(), timeout=15)
-                await asyncio.wait_for(client.initialize(), timeout=15)
-            except BaseException:
                 await client.close()
-                raise
+                return
             self._image_client = client
             self._image_client_loop = current_loop
             logger.info("Codex image-generation SDK runtime started")
@@ -825,7 +936,41 @@ class CodexAppServer:
         include_models: bool = True,
         stale_limits: bool = False,
     ) -> dict[str, Any]:
-        account = await self.account()
+        try:
+            account = await self.account()
+        except CodexAvailabilityError as exc:
+            if exc.kind == CODEX_CLI_REQUIRED:
+                return {
+                    "available": False,
+                    "connected": False,
+                    "models": [],
+                    "limits": {},
+                    "cli": codex_cli.status(),
+                    "error": str(exc),
+                }
+            raise
+        except Exception:
+            # An installed CLI that fails to start (corrupt binary, unfixable
+            # protocol clash) is a UI dead end without a reinstall path.
+            # Report it as broken; the settings UI reads cli.broken and offers
+            # a forced re-download (POST .../cli/download with force=true).
+            start_error = self._client_start_error
+            if start_error is not None:
+                cli_status = codex_cli.status()
+                return {
+                    "available": False,
+                    "connected": False,
+                    "models": [],
+                    "limits": {},
+                    "cli": {
+                        "installed": True,
+                        "broken": True,
+                        "version": cli_status.get("version") or "",
+                        "error": start_error,
+                    },
+                    "error": start_error,
+                }
+            raise
         account_data = account.get("account")
         connected = (
             isinstance(account_data, dict)

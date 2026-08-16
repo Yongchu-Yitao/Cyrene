@@ -1,4 +1,4 @@
-"""Run pip's consistency check with the one intentional Windows substitution."""
+"""Run pip's consistency check with the intentional Windows substitutions."""
 
 from __future__ import annotations
 
@@ -9,6 +9,12 @@ import sys
 
 _ALLOWED_WINDOWS_CONFLICTS = (
     re.compile(r"^simplexng \S+ requires uvloop, which is not installed\.$"),
+    # The build swaps opencv-python for opencv-python-headless on purpose:
+    # cv2 is excluded from the bundle (OCR downloads the full wheel on
+    # demand) and the GUI wheel only adds build-environment deps.  pip
+    # check still reports rapidocr's metadata requirement on
+    # opencv-python even though the headless wheel provides the same cv2.
+    re.compile(r"^rapidocr \S+ requires opencv-python, which is not installed\.$"),
 )
 
 

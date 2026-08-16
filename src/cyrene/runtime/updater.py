@@ -395,6 +395,11 @@ def get_restart_script(update_file: Path) -> str:
         return _restart_script_linux(update_file)
 
 
+# 注意：不再提供旧版捆绑运行时（codex_cli_bin / cv2）的迁移。
+# 捆绑运行时无法跨版本迁移：旧版本（0.7.x）进程没有迁移代码，且各平台重启脚本
+# （macOS rm -rf / Windows NSIS / Linux mv）在新代码运行前已删除旧 bundle。
+# 新版本依赖按需下载兜底（codex_cli.py / opencv_runtime.py 的 on-demand 下载器）。
+
 def _current_app_executable() -> Path | None:
     raw = os.environ.get("CYRENE_APP_EXECUTABLE", "").strip()
     return Path(raw).expanduser() if raw else None

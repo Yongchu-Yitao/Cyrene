@@ -117,6 +117,36 @@ def _collect_package(name: str) -> None:
         print(f"[warn] collect_all({name!r}) failed: {exc}")
         return
 
+    if name == "rapidocr":
+        # The OCR runtime downloads its PP-OCRv6 models on demand (see
+        # cyrene.knowledge.ocr / local_models) and always passes explicit
+        # model paths, so the ~30 MB of default models bundled in the wheel
+        # are dead weight.
+        datas = [
+            item for item in datas
+            if not str(item[1]).startswith("rapidocr/models")
+        ]
+        # The CLS model is the one exception: ocr.py passes explicit
+        # Det/Rec model paths but leaves the Cls config at its defaults, so
+        # RapidOCR resolves the CLS model through its default config.  If
+        # the bundle lacks it, a frozen app would try a modelscope download
+        # into the transient (read-only) bundle dir on every start and fail
+        # offline.  Bundle just the single ~0.6 MB CLS onnx; the det/rec
+        # small models stay excluded as dead weight.
+        import rapidocr as _rapidocr
+
+        _cls_model = (
+            Path(_rapidocr.__file__).resolve().parent
+            / "models"
+            / "ch_ppocr_mobile_v2.0_cls_mobile.onnx"
+        )
+        if not _cls_model.is_file():
+            raise SystemExit(
+                f"[fatal] rapidocr CLS model not found at {_cls_model}; "
+                "frozen OCR would fail offline without it"
+            )
+        _datas.append((str(_cls_model), "rapidocr/models"))
+
     _datas.extend(datas)
     _binaries.extend(binaries)
     _hidden.extend(hiddenimports)
@@ -164,7 +194,6 @@ for _package in (
     "soundfile",
     "tokenizers",
     "openai_codex",
-    "codex_cli_bin",
 ):
     _collect_package(_package)
 
@@ -191,9 +220,12 @@ if _BUNDLE_PLAYWRIGHT:
 if _IS_WIN:
     _collect_package("winloop")
 
-# The Codex OAuth runtime is required at startup of the model settings page;
-# a build environment missing it must fail the build, not ship a broken app.
-for _critical in ("openai_codex", "codex_cli_bin"):
+# The openai-codex SDK is required at startup of the model settings page; a
+# build environment missing it must fail the build, not ship a broken app.
+# The Codex CLI binary is deliberately NOT bundled: it is downloaded on
+# demand by cyrene.model_runtime.codex_cli (and excluded below so the SDK's
+# lazy import does not drag the multi-hundred-MB runtime into the package).
+for _critical in ("openai_codex",):
     if not any(
         _mod == _critical or _mod.startswith(_critical + ".")
         for _mod in _hidden
@@ -224,6 +256,15 @@ if _BUNDLE_PLAYWRIGHT and _playwright_browser_root:
 _excludes = [
     "tkinter", "matplotlib", "pandas", "scipy",
     "PIL._tkinter_finder", "curses",
+    # Codex CLI runtime is downloaded on demand (see codex_cli.py); the SDK
+    # imports it lazily but PyInstaller would otherwise collect the whole
+    # multi-hundred-MB binary tree.
+    "codex_cli_bin",
+    # OpenCV is downloaded on demand by OCR (see opencv_runtime.py). The
+    # full wheel (with FFmpeg video codecs) is hard-linked into cv2.abi3.so
+    # and cannot be slimmed, so it ships outside the bundle; PyInstaller
+    # would otherwise drag it in through rapidocr's `import cv2`.
+    "cv2",
 ]
 if not _BUNDLE_PLAYWRIGHT:
     _excludes.append("playwright")

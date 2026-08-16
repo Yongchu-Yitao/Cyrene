@@ -75,6 +75,57 @@ function codexModelReasoningEfforts(model, selectedEffort) {
   return Array.from(new Set(efforts));
 }
 
+function downloadPercent(state) {
+  return state && state.total_bytes
+    ? Math.min(100, Math.round(state.downloaded_bytes * 100 / state.total_bytes))
+    : 0;
+}
+
+// Polls pollFn every intervalMs until it resolves to { done: true } (or
+// rejects). onDone receives the outcome; onError receives any error, including
+// a timeout error (error.code === "poll_timeout") when timeoutMs is set.
+// Returns the interval id so callers can clear it on unmount.
+function pollUntil(pollFn, options) {
+  var intervalMs = options.intervalMs || 1000;
+  var timeoutMs = options.timeoutMs || 0;
+  var onDone = options.onDone;
+  var onError = options.onError;
+  var finished = false;
+  var timer = setInterval(function () {
+    var result;
+    try {
+      result = pollFn();
+    } catch (error) {
+      finish(error);
+      return;
+    }
+    Promise.resolve(result).then(function (outcome) {
+      if (outcome && outcome.done) finish(null, outcome);
+    }).catch(finish);
+  }, intervalMs);
+  var timeoutHandle = timeoutMs > 0
+    ? setTimeout(function () {
+      var timeoutError = new Error("poll timeout");
+      timeoutError.code = "poll_timeout";
+      finish(timeoutError);
+    }, timeoutMs)
+    : null;
+  function finish(error, outcome) {
+    if (finished) return;
+    finished = true;
+    clearInterval(timer);
+    if (timeoutHandle) clearTimeout(timeoutHandle);
+    if (error) {
+      if (onError) onError(error);
+    } else if (outcome && outcome.error) {
+      if (onError) onError(outcome.error);
+    } else if (onDone) {
+      onDone(outcome);
+    }
+  }
+  return timer;
+}
+
 async function readSettingsResponse(response) {
   var payload = {};
   try {
@@ -2216,6 +2267,7 @@ function ModelsPanel(p) {
   var [embeddingBusy, setEmbeddingBusy] = useStateSt("");
   var [localModels, setLocalModels] = useStateSt([]);
   var [localBusy, setLocalBusy] = useStateSt("");
+  var [cv2Runtime, setCv2Runtime] = useStateSt(null);
   var [corpusEmbedding, setCorpusEmbedding] = useStateSt(null);
   var savedEmbeddingIdentityRef = useRefSt("");
   var voiceModelSignatureRef = useRefSt("");
@@ -2233,11 +2285,14 @@ function ModelsPanel(p) {
   var [codexEffort, setCodexEffort] = useStateSt(savedCodexCandidate ? savedCodexCandidate.reasoning_effort : "");
   var [codexBusy, setCodexBusy] = useStateSt("");
   var [codexNotice, setCodexNotice] = useStateSt("");
+  var [codexCliBusy, setCodexCliBusy] = useStateSt(false);
+  var [codexCliProgress, setCodexCliProgress] = useStateSt(null);
   var [primaryMenuOpen, setPrimaryMenuOpen] = useStateSt(false);
   var [hoveredPrimarySource, setHoveredPrimarySource] = useStateSt("");
   var primarySource = modelSource;
   var setPrimarySource = setModelSource;
   var codexPoll = useRefSt(null);
+  var codexCliPoll = useRefSt(null);
   var primarySourceRef = useRefSt(null);
   var codexCandidateRef = useRefSt(savedCodexCandidate);
   codexCandidateRef.current = codexCandidate;
@@ -2245,6 +2300,7 @@ function ModelsPanel(p) {
   function loadLocalModels() {
     return settingsFetch("/api/settings/local-models/status").then(readSettingsResponse).then(function (payload) {
       var items = normalizeLocalModels(payload.models || []);
+      setCv2Runtime(payload.cv2_runtime || null);
       setLocalModels(items);
       var voiceSignature = items.filter(function (item) {
         return item.kind === "asr" || item.kind === "tts";
@@ -2335,11 +2391,32 @@ function ModelsPanel(p) {
 
   function manageLocalModel(modelId, action) {
     setLocalBusy(modelId + ":" + action);
-    settingsFetch("/api/settings/local-models/" + encodeURIComponent(modelId) + (action === "download" ? "/download" : ""), {
+    var modelRequest = settingsFetch("/api/settings/local-models/" + encodeURIComponent(modelId) + (action === "download" ? "/download" : ""), {
       method: action === "download" ? "POST" : "DELETE",
-    }).then(readSettingsResponse).then(function (payload) {
-      setLocalModels(normalizeLocalModels(payload.models || []));
-      if (action === "delete") setLocalBusy("");
+    }).then(readSettingsResponse);
+    // OCR needs the OpenCV runtime too; download both together so the model
+    // does not finish while its runtime is still missing. Keep the two
+    // downloads independent: a failure in one must not cancel or mask the other.
+    var runtimeRequest = action === "download" && modelId === "pp-ocrv6-medium" && cv2Runtime && !cv2Runtime.installed && !cv2Runtime.downloading
+      ? settingsFetch("/api/settings/local-models/ocr-runtime/download", { method: "POST" }).then(readSettingsResponse)
+      : Promise.resolve(null);
+    Promise.allSettled([modelRequest, runtimeRequest]).then(function (results) {
+      setLocalBusy("");
+      return loadLocalModels().then(function () {
+        var modelResult = results[0];
+        var runtimeResult = results[1];
+        if (modelResult.status === "fulfilled" && runtimeResult.status === "fulfilled") return;
+        var messages = [];
+        if (modelResult.status === "rejected") {
+          messages.push(modelResult.reason && modelResult.reason.message || t("settings.error"));
+        }
+        if (runtimeResult.status === "rejected") {
+          messages.push(modelResult.status === "fulfilled"
+            ? t("settings.localModelRuntimeFailed")
+            : (runtimeResult.reason && runtimeResult.reason.message || t("settings.ocrRuntimeFailed")));
+        }
+        setEmbeddingStatus({ kind: "error", text: messages.join(" ") });
+      });
     }).catch(function (error) {
       setLocalBusy("");
       setEmbeddingStatus({ kind: "error", text: error.message || t("settings.error") });
@@ -2446,7 +2523,10 @@ function ModelsPanel(p) {
 
   useEffectSt(function () {
     loadCodexState();
-    return function () { if (codexPoll.current) clearInterval(codexPoll.current); };
+    return function () {
+      if (codexPoll.current) clearInterval(codexPoll.current);
+      if (codexCliPoll.current) clearInterval(codexCliPoll.current);
+    };
   }, []);
 
   function startCodexLogin() {
@@ -2457,16 +2537,73 @@ function ModelsPanel(p) {
         var authUrl = data.authUrl || data.auth_url || data.url;
         if (authUrl) window.open(authUrl, "_blank", "noopener,noreferrer");
         if (codexPoll.current) clearInterval(codexPoll.current);
-        codexPoll.current = setInterval(function () {
-          loadCodexState().then(function (state) {
-            if (state && state.connected) {
-              clearInterval(codexPoll.current); codexPoll.current = null;
-              setCodexBusy(""); setCodexNotice(t("settings.openaiOAuthConnected"));
-            }
+        codexPoll.current = pollUntil(function () {
+          return loadCodexState().then(function (state) {
+            return state && state.connected ? { done: true } : null;
           });
-        }, 1500);
+        }, {
+          intervalMs: 1500,
+          onDone: function () {
+            codexPoll.current = null;
+            setCodexBusy(""); setCodexNotice(t("settings.openaiOAuthConnected"));
+          },
+          onError: function (error) {
+            codexPoll.current = null;
+            setCodexBusy(""); setCodexNotice(String(error && error.message || error || ""));
+          },
+        });
       })
       .catch(function (error) { setCodexBusy(""); setCodexNotice(error.message); });
+  }
+
+  function downloadCodexCli(force) {
+    setCodexCliBusy(true); setCodexNotice("");
+    var init = { method: "POST" };
+    if (force) {
+      init.headers = { "Content-Type": "application/json" };
+      init.body = JSON.stringify({ force: true });
+    }
+    settingsFetch("/api/settings/openai-oauth/cli/download", init)
+      .then(readSettingsResponse)
+      .then(function () {
+        if (codexCliPoll.current) clearInterval(codexCliPoll.current);
+        codexCliPoll.current = pollUntil(function () {
+          return settingsFetch("/api/settings/openai-oauth/cli")
+            .then(readSettingsResponse)
+            .then(function (cli) {
+              setCodexCliProgress(cli.installed ? null : {
+                downloaded_bytes: cli.downloaded_bytes || 0,
+                total_bytes: cli.total_bytes || 0,
+              });
+              // Priority: an in-flight download wins over any stale error
+              // that the backend has not reset yet.
+              if (cli.downloading) return null;
+              if (cli.installed) return { done: true };
+              if (cli.error) return { done: true, error: cli.error };
+              return null;
+            });
+        }, {
+          intervalMs: 1000,
+          timeoutMs: 600000,
+          onDone: function () {
+            codexCliPoll.current = null;
+            setCodexCliBusy(false);
+            setCodexNotice(t("settings.codexCliReady"));
+            return loadCodexState();
+          },
+          onError: function (error) {
+            codexCliPoll.current = null;
+            setCodexCliBusy(false);
+            setCodexNotice(error && error.code === "poll_timeout"
+              ? t("settings.codexCliDownloadTimeout")
+              : String(error && error.message || error || ""));
+          },
+        });
+      })
+      .catch(function (error) {
+        setCodexCliBusy(false);
+        setCodexNotice(error.message || "");
+      });
   }
 
   function logoutCodex() {
@@ -2545,6 +2682,9 @@ function ModelsPanel(p) {
   var codexModelOptions = codexModelSelectOptions(codexState.models, codexModel);
   var selectedCodexModel = codexModelOptions.find(function (item) { return codexModelId(item) === codexModel; });
   var codexEffortOptions = codexModelReasoningEfforts(selectedCodexModel, codexEffort);
+  var codexCliRequired = !!(codexState.cli && (!codexState.cli.installed || codexState.cli.broken));
+  var codexCliDownloading = !!(codexCliBusy || (codexState.cli && codexState.cli.downloading));
+  var codexCliPercent = downloadPercent(codexCliProgress);
 
   return React.createElement("div", { className: "settings-panel wb-models-panel" },
     SectionTitle(t("settings.models"), t("settings.modelsSubtitle")),
@@ -2601,9 +2741,20 @@ function ModelsPanel(p) {
                 : t("settings.openaiOAuthTitle")),
               React.createElement("span", null, codexState.connected ? t("settings.openaiOAuthConnectedHint") : t("settings.openaiOAuthHint")),
             ),
-            !codexState.connected && React.createElement("button", {
+            !codexState.connected && !codexCliRequired && React.createElement("button", {
               className: "wb-btn primary", disabled: !!codexBusy || codexState.available === false, onClick: startCodexLogin,
             }, codexBusy === "login" ? t("settings.openaiOAuthWaiting") : t("settings.openaiOAuthLogin")),
+            !codexState.connected && codexCliRequired && React.createElement("div", { className: "wb-codex-cli-required" },
+              React.createElement("span", { className: "wb-codex-cli-hint" }, t("settings.codexCliRequiredHint")),
+              React.createElement("div", { className: "wb-codex-cli-download" },
+                codexCliDownloading
+                  ? React.createElement("span", { className: "wb-codex-cli-progress" }, t("settings.codexCliDownloading") + (codexCliPercent ? " " + codexCliPercent + "%" : ""))
+                  : React.createElement("button", {
+                    className: "wb-btn primary",
+                    onClick: function () { downloadCodexCli(!!(codexState.cli && codexState.cli.broken)); },
+                  }, codexState.cli && codexState.cli.broken ? t("settings.codexCliRedownload") : t("settings.codexCliDownload")),
+              ),
+            ),
             codexState.connected && React.createElement("button", { className: "wb-btn muted", disabled: !!codexBusy, onClick: logoutCodex }, t("settings.openaiOAuthLogout")),
           ),
           codexState.connected && React.createElement("div", { className: "wb-codex-model-picker" },
@@ -2757,7 +2908,9 @@ function ModelsPanel(p) {
       description: t("settings.localModelsHint"),
       className: "is-local-models",
       children: localModels.map(function (item) {
-        var percent = item.total_bytes ? Math.min(100, Math.round(item.downloaded_bytes * 100 / item.total_bytes)) : 0;
+        var percent = downloadPercent(item);
+        var cv2RuntimeMissing = item.id === "pp-ocrv6-medium" && cv2Runtime && !cv2Runtime.installed;
+        var cv2RuntimePercent = downloadPercent(cv2Runtime);
         var kind = item.kind || "model";
         var localCopy = {
           "qwen3-embedding-0.6b": ["settings.localEmbeddingTitle", "settings.localQwenName", "settings.localQwenHint"],
@@ -2794,6 +2947,14 @@ function ModelsPanel(p) {
               React.createElement("progress", { max: "100", value: percent, "aria-label": t("settings.localModelDownloading", { percent: percent }) }),
               React.createElement("span", null, percent + "%"),
             ),
+            cv2RuntimeMissing && React.createElement("small", {
+              className: "wb-local-model-runtime" + (cv2Runtime.error ? " wb-local-model-error" : ""),
+            },
+              cv2Runtime.downloading
+                ? t("settings.ocrRuntimeDownloading", { percent: cv2RuntimePercent })
+                : cv2Runtime.error
+                  ? t("settings.ocrRuntimeFailed") + ": " + cv2Runtime.error
+                  : t("settings.ocrRuntimeBundled")),
             hasError && React.createElement("small", { className: "wb-local-model-error" }, localizeLocalModelError(item.error, t)),
           ),
           React.createElement("div", { className: "wb-local-model-actions" },

@@ -11361,6 +11361,12 @@ html[data-theme="dark"] .wb-local-model-icon.is-tts { --wb-local-model-icon-colo
   color: var(--wb-red);
 }
 
+.wb-local-model-copy .wb-local-model-runtime {
+  display: block;
+  color: var(--wb-muted);
+  font-size: calc(10.5px * var(--wb-ui-font-scale, 1));
+}
+
 .wb-local-model-actions {
   display: flex;
   align-items: center;
@@ -11515,6 +11521,26 @@ html[data-theme="dark"] .wb-local-model-actions > .wb-runtime-badge.is-onnx { co
   height: 7px;
   border-radius: 50%;
   background: var(--wb-accent);
+}
+
+.wb-codex-cli-required {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 8px;
+}
+
+.wb-codex-cli-hint {
+  color: var(--wb-muted);
+  font-size: calc(11.5px * var(--wb-ui-font-scale, 1));
+  max-width: 260px;
+  text-align: right;
+}
+
+.wb-codex-cli-progress {
+  color: var(--wb-muted);
+  font-size: calc(11.5px * var(--wb-ui-font-scale, 1));
+  font-variant-numeric: tabular-nums;
 }
 
 /* Icon button small */

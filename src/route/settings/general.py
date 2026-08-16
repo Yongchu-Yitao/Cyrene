@@ -261,6 +261,33 @@ def register_settings_routes(router: APIRouter, bot: Any, db_path: str) -> None:
             return JSONResponse({"error": str(exc)}, status_code=503)
         return {"ok": True}
 
+    @router.get("/api/settings/openai-oauth/cli")
+    async def api_get_codex_cli_status():
+        from cyrene.model_runtime import codex_cli
+
+        return codex_cli.status()
+
+    @router.post("/api/settings/openai-oauth/cli/download")
+    async def api_start_codex_cli_download(request: Request):
+        """Start the Codex CLI download.
+
+        Contract: the response mirrors codex_cli.status(). A JSON body with
+        ``force=true`` (sent by the settings UI when the snapshot reports
+        ``cli.broken``) is the reinstall path for a broken-but-installed
+        runtime: the current install is wiped and the SDK-pinned version —
+        the one known to speak the SDK's protocol — is downloaded.
+        """
+        from cyrene.model_runtime import codex_cli
+
+        try:
+            body = await request.json()
+        except ValueError:
+            body = {}
+        try:
+            return codex_cli.start_download(force=bool(body.get("force")))
+        except Exception as exc:
+            return JSONResponse({"error": str(exc)}, status_code=503)
+
     @router.get("/api/settings/openai-oauth/limits")
     async def api_get_openai_oauth_limits():
         try:
@@ -1137,6 +1164,15 @@ def register_settings_routes(router: APIRouter, bot: Any, db_path: str) -> None:
         from cyrene.knowledge.local_models import status
 
         return status()
+
+    @router.post("/api/settings/local-models/ocr-runtime/download")
+    async def api_download_ocr_runtime():
+        from cyrene.model_runtime import opencv_runtime
+
+        try:
+            return {"ok": True, **opencv_runtime.start_download()}
+        except Exception as exc:
+            return JSONResponse({"error": str(exc)}, status_code=503)
 
     @router.post("/api/settings/local-models/{model_id}/download")
     async def api_download_local_model(model_id: str):

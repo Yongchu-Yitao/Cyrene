@@ -346,7 +346,7 @@ class CommandPlatformProvider {
       catch (error) { throw new AppUseError('provider_error', String(error.message || error), { retryable: true }); }
     }
     const normalized = typeof exclusions === 'number' ? { excludePid: exclusions } : exclusions;
-    const result = await this.request('list_targets', normalized, 10000);
+    const result = await this.request('list_targets', normalized, 20000);
     return Array.isArray(result.targets) ? result.targets : [];
   }
 
@@ -397,7 +397,7 @@ class CommandPlatformProvider {
 
   async focusTarget(target) {
     if (this.linuxProvider) throw new AppUseError('unsupported_capability', 'Linux App Use is semantic-only and never changes focus.');
-    return this.request('focus', { target }, 10000);
+    return this.request('focus', { target }, 20000);
   }
 }
 

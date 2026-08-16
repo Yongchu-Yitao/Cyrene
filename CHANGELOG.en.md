@@ -5,6 +5,22 @@
 This English edition preserves the release history of the Chinese changelog.
 The Chinese edition remains the most detailed record for older releases.
 
+## [0.7.10-beta1] - 2026-08-16
+
+### Features and interface changes
+
+- The Codex model now downloads the components it needs on first use, with download progress shown in Settings; failed downloads can be retried, and protocol incompatibilities are resolved automatically by switching to a compatible version.
+- Settings gains a Codex CLI status panel: install, download, and failure states are clearly shown, and a broken component can be redownloaded with one click.
+- Knowledge-base OCR models and runtime components are now downloaded on demand; the model panel shows the download and readiness state of each component, and the model and runtime can be retried independently.
+- Desktop app control on macOS is much faster: the target window list refreshes instantly instead of taking seconds, minimized and off-screen window states are recognized accurately, Safari browser actions target the right window, and clear messages are shown when a window state changes.
+- The installer is significantly smaller: large runtime components (Codex CLI, OpenCV) are no longer bundled and are downloaded on first use.
+- Log export is now available: run logs can be exported to a file from Settings for troubleshooting and feedback.
+- Conversation transcripts and execution timelines are more accurate: question-prompt rows no longer appear inside execution segments, and the ordering of attachments and tool calls is more reliable.
+- The search overlay and Settings panel received a visual refresh with unified styling and finer interaction details.
+- Fetching Chinese web pages is more reliable, including pages without a declared character set.
+- Extension installs are no longer limited by the weekly download gate.
+- Usage statistics are reported more promptly, and conversation context tab switching is smoother.
+
 ## [0.7.9] - 2026-08-15
 
 ### Features and interface changes
