@@ -4502,6 +4502,7 @@ function WorkbenchTopbar({ projects, activeProject, activePage, taskView, active
         >
           <button
             type="button"
+            data-cyrene-node-id="open_search"
             className="workbench-icon-btn workbench-search-btn"
             onClick={onSearch}
             title={t("workbench.search")}

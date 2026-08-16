@@ -35,11 +35,14 @@
   }
 
   // Match the frame's corner to the element's own corner radius so the
-  // highlight wraps the button exactly (pill buttons stay pills).
+  // highlight wraps the button exactly (pill buttons stay pills). Square
+  // containers still get a visible minimum radius so the spotlight reads as
+  // rounded instead of a hard-edged box.
+  var MIN_RADIUS = 10;
   function frameRadius(elementRadius, extra) {
     var m = String(elementRadius || "").match(/^([\d.]+)px$/);
-    if (m) return (Number(m[1]) + extra) + "px";
-    return elementRadius || (extra + "px");
+    if (m) return Math.max(Number(m[1]) + extra, MIN_RADIUS) + "px";
+    return elementRadius || (MIN_RADIUS + "px");
   }
 
   // Pick a bubble spot below/above/right/left of the target, scoring each
