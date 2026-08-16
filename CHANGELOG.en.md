@@ -5,6 +5,19 @@
 This English edition preserves the release history of the Chinese changelog.
 The Chinese edition remains the most detailed record for older releases.
 
+## [0.7.10-beta3] - 2026-08-17
+
+### Features and interface changes
+
+- External coding agents are hardened across the board for more reliable integration:
+  - Pi ACP connections are more reliable: each model gets its own isolated config directory, config writes can no longer leave torn or corrupt files behind, and leftover corrupt configs are repaired automatically; when the config directory cannot be written, the binding falls back cleanly to your own Pi configuration instead of failing or misrouting credentials.
+  - Pi ACP's runtime component is installed together with the adapter and validated before launch; if the component is missing, you get a clear prompt to reinstall instead of a cryptic startup failure.
+  - Desktop launches now merge the login shell's PATH, so Node runtimes managed by nvm, Homebrew or mise are discoverable by external agents, and multiple nvm versions are picked in numeric order.
+  - Running external agent sessions are no longer interrupted by environment changes mid-session (such as enabling an extension or installing a new Node version), and runtime discovery results are reused within the process so repeated launches respond faster.
+- The desktop semantic UI snapshot gains a "find" operation: locate interface elements directly by role, name, or text, with pagination for large element sets; when the semantic snapshot is unavailable, the agent automatically falls back to visual handoff instead of attempting unsupported operations.
+- The model candidate list now carries a display name, so choosing a model shows more accurate names.
+- Tutorial spotlight highlights keep a minimum corner radius on square elements, so the highlight looks softer and consistent instead of sharp-edged.
+
 ## [0.7.10-beta2] - 2026-08-16
 
 ### Features and interface changes
