@@ -4354,13 +4354,8 @@ function UpdateSection({ t, config }) {
     if (exporting) return;
     setExporting(true);
     var feedback = window.CyreneUI.require("feedback");
-    window.fetch("/api/logs/export", { method: "GET" })
+    settingsFetch("/api/logs/export", { method: "GET" })
       .then(function (response) {
-        if (!response.ok) {
-          return response.json().then(function (payload) {
-            throw new Error(String(payload.error || payload.detail || ("HTTP " + response.status)));
-          });
-        }
         return response.blob();
       })
       .then(function (blob) {

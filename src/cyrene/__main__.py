@@ -1,13 +1,10 @@
 import asyncio
 import logging
 
-from cyrene.observability.logging_setup import setup_persistent_logging
-
 logging.basicConfig(
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
     level=logging.INFO,
 )
-setup_persistent_logging()
 logger = logging.getLogger(__name__)
 _runtime_started = False
 
@@ -75,6 +72,10 @@ def main() -> None:
     if "--help" in sys.argv or "-h" in sys.argv:
         _print_help()
         return
+    # File logging must not touch the filesystem on the --help path.
+    from cyrene.observability.logging_setup import setup_persistent_logging
+
+    setup_persistent_logging()
     if "--gui" in sys.argv or "--electron-mode" in sys.argv:
         _runtime_started = True
         from cyrene.runtime.host import main as _local_main
