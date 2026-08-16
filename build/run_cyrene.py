@@ -13,7 +13,6 @@ import importlib
 import importlib.util
 import jinja2
 import multipart
-import subprocess
 import sniffio
 import websockets
 
@@ -88,24 +87,18 @@ def _run_smoke_test() -> None:
         print(f"{_name}={_ver}")
     print(f"legacy_module_aliases={len(compatibility_aliases)}")
 
-    # OAuth model discovery and login depend on the pinned Codex App Server
-    # executable shipped by openai-codex-cli-bin. Importing the Python adapter
-    # alone is insufficient: PyInstaller must also retain the platform binary,
-    # package metadata, and companion PATH tools.
-    from codex_cli_bin import bundled_codex_path
+    # The Codex CLI is no longer bundled: codex_cli.py downloads the wheel
+    # on demand (the SDK's openai-codex-cli-bin metadata dependency is
+    # satisfied at runtime by that downloader, not by PyInstaller).
+    # Smoke-test only that the on-demand downloader and the SDK adapter
+    # import cleanly in the frozen build.
     from openai_codex import CodexConfig
 
-    codex_path = bundled_codex_path()
-    codex_version = subprocess.run(
-        [str(codex_path), "--version"],
-        check=True,
-        capture_output=True,
-        text=True,
-        timeout=15,
-    ).stdout.strip()
-    if not codex_version:
-        raise RuntimeError(f"Bundled Codex runtime returned no version: {codex_path}")
-    print(f"codex_runtime={codex_version}")
+    import cyrene.model_runtime.codex_cli as _codex_cli
+
+    if not hasattr(_codex_cli, "status") or not hasattr(_codex_cli, "start_download"):
+        raise RuntimeError("On-demand Codex CLI downloader is incomplete")
+    print("codex_runtime=on-demand")
     print(f"codex_config={CodexConfig.__name__}")
 
     if os.environ.get("PLAYWRIGHT_BROWSERS_PATH"):
