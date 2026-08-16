@@ -7,12 +7,12 @@ from cyrene.runtime import user_path
 
 
 def test_merge_path_entries_dedupes_preserving_order():
-    merged = user_path._merge_path_entries("/a:/b", "/b:/c", "/d")
+    merged = user_path.merge_path_entries("/a:/b", "/b:/c", "/d")
     assert merged == os.pathsep.join(["/a", "/b", "/c", "/d"])
 
 
 def test_merge_path_entries_skips_blanks():
-    merged = user_path._merge_path_entries("", " /a ::/b ", "/a")
+    merged = user_path.merge_path_entries("", " /a ::/b ", "/a")
     assert merged == os.pathsep.join(["/a", "/b"])
 
 
@@ -61,5 +61,5 @@ def test_ensure_user_path_merges_and_is_idempotent(monkeypatch):
 
 
 def test_common_install_dirs_are_absolute():
-    dirs = user_path._common_install_dirs()
+    dirs = user_path.common_install_dirs()
     assert all(d.startswith("/") for d in dirs)

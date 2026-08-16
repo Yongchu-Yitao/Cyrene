@@ -24,7 +24,7 @@ _SHELL_PROBE_TIMEOUT_SECONDS = 3.0
 _done = False
 
 
-def _merge_path_entries(*groups: str) -> str:
+def merge_path_entries(*groups: str) -> str:
     """Join PATH entry groups, deduplicated, preserving first-seen order."""
     seen: set[str] = set()
     merged: list[str] = []
@@ -79,7 +79,7 @@ def _nvm_version_key(path: Path) -> tuple[int, ...]:
     return digits or (0,)
 
 
-def _common_install_dirs() -> list[str]:
+def common_install_dirs() -> list[str]:
     home = Path.home()
     dirs: list[str] = []
     if sys.platform == "darwin":
@@ -103,7 +103,7 @@ def _path_has_runtime_dirs(path: str) -> bool:
     startup latency and reorder entries for no benefit.
     """
     entries = set(entry for entry in path.split(os.pathsep) if entry)
-    return any(str(directory) in entries for directory in _common_install_dirs())
+    return any(str(directory) in entries for directory in common_install_dirs())
 
 
 def ensure_user_path() -> str:
@@ -125,7 +125,7 @@ def ensure_user_path() -> str:
     probe = _probe_login_shell_path(shell) if shell else ""
     # Inherited entries stay first so a venv/parent-supplied PATH is never
     # shadowed; the login-shell PATH and common install roots only extend it.
-    merged = _merge_path_entries(current, probe, *_common_install_dirs())
+    merged = merge_path_entries(current, probe, *common_install_dirs())
     if merged and merged != current:
         os.environ["PATH"] = merged
         logger.info("Augmented subprocess PATH with user shell directories")

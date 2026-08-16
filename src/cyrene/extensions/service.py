@@ -174,9 +174,9 @@ def _managed_npm_executable() -> str | None:
     search_dirs.extend(_COMMON_PATHS.get(os.sys.platform, ()))
     # Shared shell-managed runtime roots (Homebrew, nvm with numerical version
     # ordering, mise) so GUI-minimal PATHs still resolve npm.
-    from cyrene.runtime.user_path import _common_install_dirs
+    from cyrene.runtime.user_path import common_install_dirs
 
-    search_dirs.extend(_common_install_dirs())
+    search_dirs.extend(common_install_dirs())
     env_path = extension_environment().get("PATH", "")
     search_path = os.pathsep.join([*search_dirs, env_path]) if search_dirs else env_path
     found = shutil.which("npm", path=search_path)

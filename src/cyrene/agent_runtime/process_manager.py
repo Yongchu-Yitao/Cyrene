@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import importlib
 import json
 import logging
 import os
@@ -92,9 +93,9 @@ def _managed_runtime_bin_dir() -> str | None:
     if _MANAGED_BIN_CHECKED:
         return _MANAGED_BIN_RESULT
     try:
-        from cyrene.extensions.service import _managed_npm_executable
-
-        npm = _managed_npm_executable()
+        # Dynamic import: extensions.service statically imports this module,
+        # so a direct import would create an import cycle.
+        npm = importlib.import_module("cyrene.extensions.service")._managed_npm_executable()
     except Exception:
         logger.debug("managed npm runtime unavailable for ACP PATH injection", exc_info=True)
         npm = None
@@ -130,9 +131,9 @@ def agent_child_path_dirs(installation: dict[str, Any]) -> list[str]:
 
 def prepend_path_dirs(path: str, dirs: list[str]) -> str:
     """Return ``path`` with ``dirs`` prepended, order preserved and deduped."""
-    from cyrene.runtime.user_path import _merge_path_entries
+    from cyrene.runtime.user_path import merge_path_entries
 
-    return _merge_path_entries(*dirs, path)
+    return merge_path_entries(*dirs, path)
 
 
 class AcpProcessManager:
