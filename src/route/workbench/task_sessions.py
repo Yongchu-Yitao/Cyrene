@@ -990,6 +990,8 @@ def register_task_session_routes(
             session["status"] = "planning" if session.get("status") in ("idle", "pending") else session.get("status", "planning")
         normalized_attachments = _workbench_normalize_attachments(attachments)
         public_attachments = [build_public_attachment_payload(item) for item in normalized_attachments]
+        if normalized_attachments:
+            await _workbench_register_attachments_kb(session_id, normalized_attachments)
         run_id = _short_id("run")
         activity_events = _collect_run_activity_events(session_id, run_start_ts, run_id, workspace_root)
         tool_call_events = [event for event in activity_events if event.get("type") == "ToolCallEvent"]
@@ -1471,6 +1473,8 @@ def register_task_session_routes(
 
         normalized_attachments = _workbench_normalize_attachments(attachments)
         public_attachments = [build_public_attachment_payload(item) for item in normalized_attachments]
+        if normalized_attachments:
+            await _workbench_register_attachments_kb(session_id, normalized_attachments)
         run_id = _short_id("run")
         activity_events = _collect_run_activity_events(session_id, run_start_ts, run_id, workspace_root)
         tool_call_events = [event for event in activity_events if event.get("type") == "ToolCallEvent"]

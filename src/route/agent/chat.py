@@ -13,7 +13,7 @@ def register_chat_routes(router: APIRouter, bot: Any, db_path: str) -> None:
     # ---- Chat API ----
 
     @router.post("/api/chat/upload")
-    async def api_chat_upload(background_tasks: BackgroundTasks, files: list[UploadFile]):
+    async def api_chat_upload(files: list[UploadFile]):
         if not files:
             return JSONResponse({"error": "no files uploaded"}, status_code=400)
 
@@ -46,18 +46,6 @@ def register_chat_routes(router: APIRouter, bot: Any, db_path: str) -> None:
                 **({"width": width} if isinstance(width, int) else {}),
                 **({"height": height} if isinstance(height, int) else {}),
             })
-
-            # The response now owns this exact path. Run KB registration only
-            # after the upload response is ready, and never let content-hash
-            # deduplication delete a file referenced by the current session.
-            background_tasks.add_task(
-                _deduplicate_chat_upload_after_response,
-                target,
-                display_name=file.filename or safe_name,
-                content_type=content_type,
-                kind=kind,
-                size=file_size,
-            )
 
         return {"files": uploaded}
 

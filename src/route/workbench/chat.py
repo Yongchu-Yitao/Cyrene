@@ -2090,6 +2090,11 @@ def register_workbench_chat_routes(
         _mark_user_activity(chat, now)
         await asyncio.to_thread(_write_chats_store, payload)
 
+        # Register sent attachments into the session's project knowledge base
+        # (idempotent by content hash; failures never block the message).
+        if normalized and not retry:
+            await R._workbench_register_attachments_kb(chat_id, normalized)
+
         async def _name_session_once() -> None:
             if not should_generate_title:
                 return

@@ -45,17 +45,27 @@ def _load_engine():
         try:
             # OpenCV is not bundled: OCR downloads the full opencv-python
             # wheel (which also carries FFmpeg video codecs) on first use.
+            # Prefer that managed runtime, but accept an OpenCV already
+            # importable in this environment (dev venv / system packages) so
+            # local OCR never requires the download when cv2 exists.
             from cyrene.model_runtime import opencv_runtime
 
-            opencv_runtime.ensure()
+            try:
+                opencv_runtime.ensure()
+            except opencv_runtime.OpencvRuntimeMissingError:
+                import cv2  # noqa: F401
+        except ImportError as exc:
+            raise RuntimeError(
+                "OpenCV is unavailable: no managed runtime and no importable cv2"
+            ) from exc
+
+        try:
             import rapidocr as _rapidocr
 
             from rapidocr import EngineType, ModelType, OCRVersion, RapidOCR
             from rapidocr.utils.download_file import DownloadFileException
         except ImportError as exc:
             raise RuntimeError("RapidOCR is unavailable") from exc
-        except opencv_runtime.OpencvRuntimeMissingError:
-            raise
         root = local_models.model_dir(MODEL_ID)
         # The CLS model is the only model RapidOCR resolves through its
         # default config (Det/Rec get explicit paths below); the spec

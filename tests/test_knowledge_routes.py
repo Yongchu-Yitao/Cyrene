@@ -273,9 +273,25 @@ class TestKnowledgeRoutes:
         assert client.get(second_file["url"]).content == payload
 
         from cyrene.knowledge import store
+        from cyrene.workbench import runtime as runtime_routes
 
         import asyncio
 
+        # Upload alone no longer registers into the knowledge base; registration
+        # happens when the attachment is sent in a chat message.
+        all_docs = asyncio.run(store.list_documents(temp_db))
+        assert len(all_docs) == 0
+        assert len(list(tmp_path.iterdir())) == 2
+
+        # Sending both attachments in one message registers a single canonical
+        # document (content-hash dedup) without touching either file on disk.
+        asyncio.run(runtime_routes._workbench_register_attachments_kb(
+            "session_dup",
+            [
+                {"name": first_file["name"], "path": first_file["path"], "content_type": "text/plain", "kind": "file", "size": len(payload)},
+                {"name": second_file["name"], "path": second_file["path"], "content_type": "text/plain", "kind": "file", "size": len(payload)},
+            ],
+        ))
         all_docs = asyncio.run(store.list_documents(temp_db))
         assert len(all_docs) == 1
         assert len(list(tmp_path.iterdir())) == 2

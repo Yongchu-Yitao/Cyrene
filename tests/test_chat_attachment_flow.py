@@ -154,7 +154,9 @@ async def test_workbench_attachment_only_turn_preserves_empty_public_message(
 
 
 @pytest.mark.asyncio
-async def test_chat_upload_hashing_runs_off_event_loop(tmp_path, monkeypatch):
+async def test_chat_attachment_kb_registration_runs_hash_off_event_loop(
+    tmp_path, monkeypatch
+):
     from cyrene import config
     from cyrene.runtime import database as db
     from cyrene.knowledge import store
@@ -176,15 +178,23 @@ async def test_chat_upload_hashing_runs_off_event_loop(tmp_path, monkeypatch):
 
     monkeypatch.setattr(store, "content_hash_file", tracked_hash)
     try:
-        await routes._deduplicate_chat_upload_after_response(
-            target,
-            display_name="upload.txt",
-            content_type="text/plain",
-            kind="code",
-            size=target.stat().st_size,
+        await routes._workbench_register_attachments_kb(
+            "session_test",
+            [{
+                "id": "upload_1",
+                "name": "upload.txt",
+                "path": str(target),
+                "content_type": "text/plain",
+                "kind": "code",
+                "size": target.stat().st_size,
+            }],
         )
     finally:
         config.set_knowledge_db_path_override(None)
 
     assert hash_thread is not None
     assert hash_thread != main_thread
+    docs = await store.list_documents(db_path, source="chat_upload")
+    assert len(docs) == 1
+    assert docs[0]["name"] == "upload.txt"
+    assert docs[0]["source"] == "chat_upload"

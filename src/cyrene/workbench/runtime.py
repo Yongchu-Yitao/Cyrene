@@ -4016,6 +4016,49 @@ def _workbench_normalize_attachments(attachments: Any) -> list[dict[str, Any]]:
     return out
 
 
+async def _workbench_register_attachments_kb(
+    session_id: str, items: list[dict[str, Any]]
+) -> None:
+    """Register attachments sent in a Workbench session into its project KB.
+
+    Idempotent by content hash; mirrors the send_file tool's registration so
+    user uploads land in the same workspace-scoped database as agent output.
+    """
+    try:
+        from cyrene.knowledge import ingest, store
+        from cyrene.workbench.context import ensure_knowledge_db_for_session
+
+        if not items:
+            return
+        kb_db_path = await ensure_knowledge_db_for_session(session_id)
+        for item in items:
+            path = str(item.get("path") or "").strip()
+            if not path:
+                continue
+            doc_file = Path(path)
+            if not doc_file.is_file():
+                continue
+            content_hash = await asyncio.to_thread(store.content_hash_file, doc_file)
+            doc = await store.upsert_document_by_path(
+                kb_db_path,
+                path=str(doc_file.resolve()),
+                source="chat_upload",
+                name=str(item.get("name") or doc_file.name),
+                content_type=str(item.get("content_type") or "application/octet-stream"),
+                kind=str(item.get("kind") or "file"),
+                size=int(item.get("size") or 0) or doc_file.stat().st_size,
+                metadata={"session_id": session_id},
+                content_hash=content_hash,
+            )
+            if doc.get("status") in {"pending", "error"}:
+                asyncio.create_task(ingest.index_document(kb_db_path, doc["id"]))
+    except Exception:
+        logger.exception(
+            "Failed to register chat attachments in knowledge base for session %s",
+            session_id,
+        )
+
+
 def _tool_args_preview(args: Any) -> str:
     """One-line compact preview of tool arguments (≤80 chars)."""
     if not isinstance(args, dict) or not args:
@@ -7081,47 +7124,6 @@ def _image_dimensions(path: Path) -> tuple[int | None, int | None]:
             return int(image.width), int(image.height)
     except Exception:
         return None, None
-
-
-async def _deduplicate_chat_upload_after_response(
-    target: Path,
-    *,
-    display_name: str,
-    content_type: str,
-    kind: str,
-    size: int,
-) -> None:
-    """Register a durable chat upload in the knowledge base after upload.
-
-    Knowledge-base deduplication owns database rows, not chat attachment files.
-    The exact upload path is persisted in chat/session state and may still be
-    referenced by the composer, transcript, retries, and AnalyzeAttachment, so
-    it must remain valid even when identical content already exists in the KB.
-    """
-    try:
-        from cyrene.config import get_knowledge_db_path
-        from cyrene.knowledge import ingest, store
-
-        if not target.exists() or not target.is_file():
-            logger.warning("Skipping knowledge registration for missing chat upload: %s", target)
-            return
-
-        kb_db_path = str(get_knowledge_db_path())
-        content_hash = await asyncio.to_thread(store.content_hash_file, target)
-        doc = await store.upsert_document_by_path(
-            kb_db_path,
-            path=str(target.resolve()),
-            source="chat_upload",
-            name=display_name,
-            content_type=content_type,
-            kind=kind,
-            size=size,
-            content_hash=content_hash,
-        )
-        if doc.get("status") in {"pending", "error"}:
-            asyncio.create_task(ingest.index_document(kb_db_path, doc["id"]))
-    except Exception:
-        logger.exception("Failed to register chat upload in knowledge base: %s", target)
 
 
 def _attachment_prompt_block(items: list[dict[str, Any]]) -> str:
