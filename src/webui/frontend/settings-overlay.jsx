@@ -4341,12 +4341,19 @@ function UpdateSection({ t, config }) {
       if (d.ok && d.verified) {
         setDownloaded(true);
         setProgress(function (p) { return Object.assign({}, p, { done: true, verified: true, actual_sha256: d.sha256 || p.actual_sha256 || "" }); });
-      } else {
-        setDownloaded(false);
-        setProgress(function (p) { return Object.assign({}, p, { done: !!d.done, verified: false, verification_error: d.error || "" }); });
-        setError(d.error || t("settings.updateDownloadFailed"));
+        return "done";
       }
-    }).catch(function () { setError(t("settings.updateDownloadFailed")); }).finally(function () { setDownloading(false); });
+      if (d.code === "update_download_in_progress") {
+        // 后台已在下载：保持 downloading=true，由下方轮询 effect 直接展示后台进度，
+        // 完成后按钮自动变为「重启更新」，不再报「already in progress」错误。
+        return "following";
+      }
+      setDownloaded(false);
+      setProgress(function (p) { return Object.assign({}, p, { done: !!d.done, verified: false, verification_error: d.error || "" }); });
+      setError(d.error || t("settings.updateDownloadFailed"));
+      return "done";
+    }).catch(function () { setError(t("settings.updateDownloadFailed")); return "done"; })
+      .then(function (mode) { if (mode !== "following") setDownloading(false); });
   }
 
   function fmtBytes(n) {

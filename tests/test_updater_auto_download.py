@@ -101,6 +101,17 @@ def test_auto_download_skips_without_checksum(fresh_auto_state, monkeypatch):
     assert updater._auto_download_task is None
 
 
+def test_auto_download_skips_while_manual_download_running(fresh_auto_state, monkeypatch):
+    """手动下载进行中时，后台检查不启动新任务（避免清空共享进度/撞锁失败）。"""
+    monkeypatch.setattr(updater, "download_update", lambda *a, **k: pytest.fail("should not download"))
+    updater._download_in_progress = True
+    try:
+        updater._maybe_auto_download(_info())
+        assert updater._auto_download_task is None
+    finally:
+        updater._download_in_progress = False
+
+
 def test_auto_download_skips_when_verified_package_exists(fresh_auto_state, monkeypatch):
     monkeypatch.setattr(updater, "download_update", lambda *a, **k: pytest.fail("should not re-download"))
     updater._download_progress.update({

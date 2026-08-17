@@ -88,6 +88,8 @@ def register_update_routes(router: APIRouter, bot: Any, db_path: str) -> None:
         from cyrene.runtime.updater import (
             get_cached_update_info,
             download_update,
+            is_download_in_progress,
+            UpdateDownloadInProgressError,
             _download_progress,
         )
 
@@ -106,6 +108,11 @@ def register_update_routes(router: APIRouter, bot: Any, db_path: str) -> None:
             _download_progress["verification_error"] = "无法验证更新包：发布资产缺少 sha256 校验值。"
             return {"ok": False, "error": _download_progress["verification_error"], "code": "update_checksum_missing"}
 
+        if is_download_in_progress():
+            # 后台自动下载正在进行的常见场景：不打断它，也不重置共享进度，
+            # 返回专门 code，由前端转去轮询展示正在进行的下载进度。
+            return {"ok": False, "code": "update_download_in_progress", "error": "更新包正在后台下载中。"}
+
         def _progress(downloaded: int, total: int) -> None:
             _download_progress["downloaded"] = downloaded
             _download_progress["total"] = total
@@ -121,6 +128,9 @@ def register_update_routes(router: APIRouter, bot: Any, db_path: str) -> None:
 
         try:
             result = await download_update(info.download_url, _progress)
+        except UpdateDownloadInProgressError:
+            # 竞态兜底（检查后、调用前其他任务拿到锁）：同样不碰进度状态。
+            return {"ok": False, "code": "update_download_in_progress", "error": "更新包正在后台下载中。"}
         except Exception as exc:
             logger.warning("Update download failed", exc_info=True)
             result = None

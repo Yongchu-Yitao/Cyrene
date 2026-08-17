@@ -63,6 +63,9 @@ async def handler(args: dict[str, Any], _bot: Any, _chat_id: int, _db_path: str,
                 raise ValueError(info.error if info and info.error else "no compatible update is available")
             if not info.asset_sha256:
                 raise ValueError("release asset has no SHA-256 digest")
+            if updater.is_download_in_progress():
+                # 已有下载在跑（后台自动下载/手动下载）时不重置共享进度。
+                raise ValueError("update download already in progress")
             progress = updater._download_progress
             progress.update({
                 "downloaded": 0, "total": info.asset_size, "done": False,

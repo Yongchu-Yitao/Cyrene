@@ -94,6 +94,10 @@ class DownloadResult:
     sha256: str
 
 
+class UpdateDownloadInProgressError(ValueError):
+    """请求下载时已有另一个下载任务正在进行（后台自动下载或手动下载）。"""
+
+
 def _platform_filter() -> str:
     """返回当前平台 release asset 名称中应包含的匹配关键词（统一小写）。
 
@@ -278,11 +282,12 @@ async def download_update(
       而非从头下载；服务器不支持 Range（返回 200 全量）则回退为从头重下。
     - 本地部分与服务器不一致（416 且大小不符）时删除后从头下载。
     - 同一时间只允许一个下载任务（后台自动下载与手动下载并发时会竞争写同一个
-      目标文件）。并发调用直接抛 ValueError，由调用方（工具/路由）转为可读错误。
+      目标文件）。并发调用直接抛 UpdateDownloadInProgressError（ValueError 子类），
+      由调用方（工具/路由）转为可读错误或转去展示已有下载的进度。
     """
     global _download_in_progress
     if _download_in_progress:
-        raise ValueError("update download already in progress")
+        raise UpdateDownloadInProgressError("update download already in progress")
     if not url:
         return None
 
@@ -294,6 +299,15 @@ async def download_update(
         return await _download_to(dest, url, progress_callback)
     finally:
         _download_in_progress = False
+
+
+def is_download_in_progress() -> bool:
+    """是否有下载任务正在进行（后台自动下载或手动下载）。
+
+    调用方（路由/工具）在重置共享下载进度前先检查它：已有下载在跑时不应
+    清空/改写进度状态，而应转去展示正在进行的下载。
+    """
+    return _download_in_progress
 
 
 def _content_range_total(resp) -> int:
@@ -803,6 +817,8 @@ async def _auto_download_latest(info: UpdateInfo) -> None:
         if result.sha256.lower() != (info.asset_sha256 or "").lower():
             raise ValueError("downloaded package SHA-256 verification failed")
         progress["verified"] = True
+        # 清掉历史失败/冲突的残留文案，避免"验证失败"误显示在已就绪的包上。
+        progress["verification_error"] = ""
         _persist_download_state(info, result)
         logger.info("Auto-downloaded update %s ready for install", info.latest_version)
         _append_update_ready_notification(info)
@@ -821,6 +837,9 @@ def _maybe_auto_download(info: UpdateInfo) -> None:
     if not _auto_update_enabled():
         return
     if _auto_download_task is not None and not _auto_download_task.done():
+        return
+    if is_download_in_progress():
+        # 已有下载在跑（手动下载等）：跳过本次，避免清空其进度或撞锁失败。
         return
     _restore_download_state()
     progress = _download_progress
