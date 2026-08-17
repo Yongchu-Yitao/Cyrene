@@ -5,6 +5,16 @@
 This English edition preserves the release history of the Chinese changelog.
 The Chinese edition remains the most detailed record for older releases.
 
+## [0.7.10-beta4] - 2026-08-17
+
+### Features and interface changes
+
+- Long-term memory is more concise and focused: the memory steward now records only a brief summary of what each project is about, never implementation details, code-level changes, or step-by-step procedures; the focus is on your important habits, explicit requirements, and personal information, with short entries and no examples.
+- Attachments uploaded in Workbench chats are now registered into the current project's knowledge base: uploaded documents and images are deduplicated by content and indexed alongside agent-generated outputs, so later questions can reference the uploaded content directly.
+- Knowledge-base OCR works more smoothly: when a usable OpenCV is already available on the machine, the managed runtime download is skipped and the local environment is used instead.
+- Update downloads in Settings are more reliable: background auto-download and manual download no longer conflict — triggering a download while one is already running follows and shows the in-progress progress, and the button turns into "Restart & Update" when complete; stale failure messages are cleared once verification passes.
+- Execution-timeline labels are simplified: "Created or processed media" and "Sent a message or notification" are now the shorter "Processed media" and "Sent content".
+
 ## [0.7.10-beta3] - 2026-08-17
 
 ### Features and interface changes
