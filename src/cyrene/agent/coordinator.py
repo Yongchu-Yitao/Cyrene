@@ -1417,6 +1417,12 @@ MEMORY:HIGH_IMPACT, PATTERN:USER, RELATIONSHIP:USER, or SELF:BELIEFS. Never use
 ``APPEND: ...``, ``APPEND SECTION: content``, parentheses, or an em dash as a
 separator.
 
+Content policy: only record what each of the user's projects is doing — never
+the details of how it is done (no implementation details, code changes, file
+names, or step-by-step procedures). Focus on the user's important habits,
+explicit requirements, and personal information. No examples; keep entries
+concise.
+
 ### Part 2: Entity extraction
 From the conversation, extract entities the user mentioned. Only extract when you are confident the user is talking about something real — not hypotheticals, jokes, or casual remarks.
 
