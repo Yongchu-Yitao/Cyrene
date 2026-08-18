@@ -164,6 +164,174 @@ final result: passed
 
 ---
 
+# Model Provider Brand Icons Follow-up — 2026-08-19
+
+- Source visual truth: `/var/folders/zm/qgh_rgw903j0b9t01yg2l0mc0000gn/T/codex-clipboard-241a83e1-d12a-4265-9597-226fb15ffe3c.png` (`537 × 824 px`, approximately 2× density).
+- Browser-rendered implementation: `/Users/syw/Documents/playground/Cyrene/artifacts/model-provider-icons-full.png` (`1261 × 863 px`, CSS viewport `1261 × 863`, DPR 1).
+- Focused implementation crop: `/Users/syw/Documents/playground/Cyrene/artifacts/model-provider-icons-implementation-crop.png` (`260 × 400 px`).
+- Normalized source: `/Users/syw/Documents/playground/Cyrene/artifacts/model-provider-icons-source-normalized.png` (`268 × 412 px`).
+- Combined comparison evidence: `/Users/syw/Documents/playground/Cyrene/artifacts/model-provider-icons-comparison.png` (`528 × 412 px`).
+- State: desktop dark theme, Settings → 模型服务, provider rail fully visible, OpenAI-compatible connection selected.
+
+## Findings
+
+- No actionable P0/P1/P2 mismatch remains for the requested provider-icon change.
+- Fonts and typography: provider names, adapter metadata, weights, truncation, and row density are unchanged from the source screen.
+- Spacing and layout rhythm: the existing 34 px icon slot, 58 px row, selected outline, status dot, and internal list geometry are unchanged. Brand artwork is contained at 19 px so it does not enlarge or shift cards.
+- Colors and visual tokens: DeepSeek uses its blue brand asset, MiniMax its pink-orange gradient, Gemini its multicolor gradient, OpenAI green, Anthropic coral, and ONNX blue. Ollama remains its authentic monochrome mark. Selection and status colors continue to use Workbench tokens.
+- Image and icon fidelity: color assets come from the maintained LobeHub AI icon library; monochrome brand shapes come from Tabler/Simple Icons. Custom OpenAI-compatible connections retain the generic server icon. No emoji, text glyph, handcrafted SVG, CSS drawing, or placeholder was introduced.
+- Copy and content: provider names and model counts are unchanged except for the separately requested persisted DeepSeek provider migration.
+
+## Interaction Verification
+
+- Browser inspection found the expected provider-specific classes for OpenAI, DeepSeek, Codex/OpenAI, ONNX, and MiniMax; the legacy custom connection retained the generic server mark.
+- Both rendered color SVG images loaded with non-zero natural dimensions.
+- Selecting DeepSeek updated the detail heading to `DeepSeek`.
+- Right-clicking MiniMax still opened the existing `删除` context menu, and Escape closed it without deleting anything.
+- Provider-list internal scrolling remains `overflow-y: auto`; no console errors were reported.
+- Frontend production build and `git diff --check` passed.
+
+## Comparison History
+
+1. Initial state: every provider card used the same server icon, making built-in providers visually indistinguishable.
+2. First implementation: provider-specific silhouettes were added, but they inherited `currentColor` and did not satisfy the requirement for real brand colors.
+3. Final implementation: Gemini, DeepSeek, and MiniMax use full-color SVG assets; monochrome logos use their real brand colors or authentic theme-aware monochrome presentation. The focused post-fix comparison confirms unchanged layout with clearly differentiated providers.
+
+final result: passed
+
+---
+
+# Model Adapter Protocol Follow-up — 2026-08-19
+
+- A new connection exposes exactly four selectable adapters: `Anthropic`, `OpenAI`, `OpenAI Responses`, and `Gemini`.
+- Existing managed connections (`Codex OAuth`, `Ollama`, and `Local ONNX`) remain visible in the provider rail but are not selectable from the generic Adapter field.
+- Existing `openai_compatible` connections remain editable through a disabled `OpenAI Compatible（旧配置）` current value so legacy configuration is not silently rewritten.
+- Browser verification confirmed provider-specific defaults: Anthropic `/v1`, OpenAI `/v1`, OpenAI Responses `/v1`, and Gemini `/v1beta`.
+- Runtime verification covers provider-native authentication, message/image/tool conversion, non-streaming responses, SSE streaming, usage, finish reasons, and model discovery.
+- Focused verification passed with `104 passed`; the frontend production build and `git diff --check` also passed.
+
+final result: passed
+
+---
+
+# Local Model Legacy Content, Flat Rows Design QA — 2026-08-19
+
+- Source visual truth: `/var/folders/zm/qgh_rgw903j0b9t01yg2l0mc0000gn/T/codex-clipboard-d9df2212-40ef-46ed-bdb6-1f72744f324d.png`.
+- Previous-commit implementation source: `HEAD^:src/webui/frontend/settings-overlay.jsx` and `HEAD^:src/webui/frontend/workbench.css` (`wb-local-model` content and state treatment).
+- Final implementation screenshot: `/Users/syw/Documents/playground/Cyrene/.codex-local-models-flat-final-top.png`.
+- Combined source/final comparison: `/Users/syw/Documents/playground/Cyrene/.codex-local-models-flat-comparison.png`.
+- Test state: desktop dark theme, Settings → Model services → Local models, five ready local models.
+
+## Findings
+
+- Content fidelity: restored the previous implementation's model-type title, localized display name and description, runtime-aware status, progress, OCR runtime note, localized errors, and download/retry/delete actions.
+- Layout: the Local ONNX provider no longer exposes generic Connection or Model profile editors. The right pane is dedicated to the local-model manager.
+- Card removal: each local-model row computes to `border-radius: 0`, transparent background, no shadow, and a single `1px` bottom divider.
+- Assets: type-specific icons reuse Cyrene's existing browser and Settings icon systems; no new visual asset language was introduced.
+- Interaction: Refresh retains all five rows and the browser console reports no errors.
+- Responsive safety: the page has no horizontal overflow in the tested desktop viewport; the existing narrow breakpoint converts each row to a two-column icon/copy layout with actions beneath.
+
+## Comparison History
+
+- Initial P1: the first port retained shared `wb-model-card` chrome, so every local model still appeared as a rounded bordered card.
+- Fix: added a scoped Settings override that removes shared card border, radius, background, and shadow while preserving the legacy row content and status treatment.
+- Final verification: five flat rows render, generic local connection/profile forms are absent, and refresh remains functional.
+
+- Frontend production build passed.
+- Focused verification passed: `22 passed`.
+- `git diff --check` passed.
+
+final result: passed
+
+---
+
+# Plugin Model Settings Two-column QA — 2026-08-19
+
+- Source visual truth: `/var/folders/zm/qgh_rgw903j0b9t01yg2l0mc0000gn/T/codex-clipboard-20b9902b-e32b-459e-8610-2611c0c8ce9f.png` (`1800 × 1484 px`).
+- Browser-rendered implementation: `/Users/syw/Documents/playground/Cyrene/.codex-model-services-qa.png` (`1800 × 1484 px`).
+- Combined comparison evidence: `/Users/syw/Documents/playground/Cyrene/.codex-model-services-comparison.png` (`3600 × 1484 px`).
+- Viewport and normalization: `1800 × 1484` CSS px at device scale factor 1; both inputs have identical pixel dimensions, so no density resampling was required.
+- State: desktop dark theme, Settings navigation expanded, Model services selected, OpenAI Compatible connection selected, populated connection/profile data.
+
+## Findings
+
+- Typography: the implementation keeps Cyrene's established Manrope/Noto Sans SC hierarchy and uses the same model-service title, provider title, labels, and compact metadata density as the rest of Settings. The reference is visually larger because it crops out the application navigation; this is an intentional product-shell difference.
+- Spacing and layout rhythm: the user-reported nested-card P1 is resolved. The service workspace has a measured `280px` left column and `640px` right column, one vertical divider, transparent outer background, no outer border, and `0px` outer radius. Connection, OAuth/local, and profile sections are flat and separated by horizontal rules and whitespace.
+- Colors and tokens: backgrounds, purple selection state, muted borders, success dots, and destructive actions use existing Workbench tokens. No new elevation layer or conflicting card surface remains.
+- Image and icon fidelity: navigation and provider/order controls use copied Tabler outline assets; no emoji, text-arrow, inline SVG, or placeholder image is used.
+- Copy and content: the page retains connection name, Adapter, endpoint, secret handling, test/discover actions, model profiles, capabilities, and context limits. Model purposes remain a separate Settings destination.
+- Focused-region comparison was not needed because both source and implementation are same-size desktop captures and the provider/detail controls remain readable in the full-view combined evidence.
+
+## Interaction Verification
+
+- Provider selection updates the right-hand detail pane without changing the two-column geometry.
+- Model purposes opens independently and shows primary order, secondary, vision, and embedding routes with profile source, capability, and context metadata.
+- Switching the conversation model updates the overview model immediately. A zero-message conversation now still renders `0%`, `0 / 1.0M`, and the 60% compaction threshold after selecting `deepseek-v4-flash`.
+- Browser console inspection returned no errors.
+- Computed layout check: outer border `0px`, outer radius `0px`, transparent background, left divider `1px`, and flat right-hand sections.
+
+## Comparison History
+
+- Initial P1: the first implementation wrapped the entire provider/detail workspace in one rounded card and then nested connection/profile cards inside it, creating the heavy box hierarchy called out by the user.
+- Fix: removed the workspace border, radius, background, and shadow; created a true fixed-width provider column; flattened right-hand sections; converted profiles to editable table rows.
+- Post-fix evidence: the combined image shows the reference on the left and the browser-rendered flat two-column implementation on the right. No actionable P0/P1/P2 card-hierarchy mismatch remains.
+
+## Verification
+
+- Focused tests: `61 passed` across model configuration, config migration, Codex selection, model gateway, settings integration, and live context gauge coverage.
+- Frontend production build passed after the final context-gauge correction.
+- Primary interactions and console errors were checked in the in-app browser against the local development server.
+
+## Visual-density follow-up — 2026-08-19
+
+- User feedback evidence: `/var/folders/zm/qgh_rgw903j0b9t01yg2l0mc0000gn/T/codex-clipboard-6f0cc1fb-307a-4152-a066-c8753cb8a634.png`.
+- Browser-rendered refinement: `/Users/syw/Documents/playground/Cyrene/.codex-model-services-redesign.png` (`1261 × 863` CSS viewport).
+- Combined visual review: `/Users/syw/Documents/playground/Cyrene/.codex-model-services-redesign-comparison.png`; the supplied capture and live browser capture were normalized to the same display height because the source came from a different application-window size. The selected provider, populated connection, dark theme, expanded Settings navigation, and model-profile state are otherwise matched.
+- First comparison finding (P1): the provider rows used repeated bordered icon boxes and a full purple selected container, while oversized controls and an unconstrained detail pane made the split layout feel heavy and sparse at the same time.
+- Fix: provider rows are now `50px` lightweight navigation rows with a `2px` selected indicator, `3%` neutral selected fill, unboxed `17px` outline glyphs, and compact text tabs. The detail pane is capped at `800px`; controls are `36px`, buttons `34px`, flat section spacing is `17/19px`, and model rows are `48px`.
+- Action hierarchy: model discovery is the section's emphasized action; connection testing remains secondary; deletion is a separated low-emphasis danger action. No new color tokens, card surfaces, or icon families were introduced.
+- Browser measurements at `1261 × 863`: service workspace `849.125px`, provider rail `280px`, detail pane `569.125px`, zero document horizontal overflow, zero profile-table horizontal overflow, and the selected provider resolves to a neutral `3%` fill plus the accent inset indicator.
+- Post-fix comparison: no actionable P0/P1/P2 visual-density issue remains at the live desktop viewport. The production frontend build and focused model settings verification passed (`22 passed`); `git diff --check` passed.
+
+### Right-pane height follow-up
+
+- User feedback evidence: `/var/folders/zm/qgh_rgw903j0b9t01yg2l0mc0000gn/T/codex-clipboard-1c51dac6-687c-460a-97c5-f5eed0ac8969.png`.
+- Reverted browser capture: `/Users/syw/Documents/playground/Cyrene/.codex-model-services-restored.png`.
+- An attempted `2 × 2` endpoint/secret grid with `32px` controls and reduced section spacing was rejected by the user as visually worse and has been fully reverted.
+- The accepted preceding visual refinement is restored: endpoint and secret each use a full-width labeled row; controls are `36px`, buttons `34px`, profile headers `30px`, rows `48px`, and the established `880px` responsive behavior is back in place.
+- Frontend production build passed after the revert; live browser inspection confirmed the restored full-width fields and original row heights.
+
+### Left-pane visual reversion
+
+- User feedback evidence: `/var/folders/zm/qgh_rgw903j0b9t01yg2l0mc0000gn/T/codex-clipboard-e7f54201-b911-4dba-b532-199b74cdc1c4.png`.
+- Final browser capture: `/Users/syw/Documents/playground/Cyrene/.codex-model-services-left-restored.png`.
+- The later lightweight provider-rail experiment (unboxed glyphs, underline filters, inset-only selection) was explicitly rejected and has been reverted.
+- The accepted initial two-column rail is restored: `42px` search and segmented filter surfaces, `58px` provider rows, `34px` bordered provider marks, full accent selected border/background, and the bordered `44px` add-provider action.
+- Browser-computed measurements at `1261 × 863` confirmed those dimensions and a complete `1px` selected/item border. The right pane and all functional model configuration behavior remain unchanged.
+- Frontend production build and `git diff --check` passed after the reversion.
+
+### No-scroll connection-header removal
+
+- User feedback evidence: `/var/folders/zm/qgh_rgw903j0b9t01yg2l0mc0000gn/T/codex-clipboard-8fa75e17-98e8-44b4-9ee9-fa18f90d3252.png`.
+- Final browser capture: `/Users/syw/Documents/playground/Cyrene/.codex-model-services-no-scroll.png`; combined review: `/Users/syw/Documents/playground/Cyrene/.codex-model-services-no-scroll-comparison.png`.
+- Removed the visible `连接` heading and `Adapter 决定协议；连接只保存认证和 Endpoint。` explanatory copy while retaining the connection region's accessible name and every field label.
+- The connection section's top padding is `10px`; the accepted full-width endpoint/secret layout, `36px` controls, and restored left rail are unchanged.
+- Initial browser verification at `1261 × 863` found equal content/scroll heights, but this was insufficient: the retained `620px` service-workspace minimum still overflowed in the user's shorter effective CSS viewport.
+- Production build, `git diff --check`, and focused model settings verification passed (`22 passed`).
+
+### Short-viewport no-outer-scroll correction
+
+- Final browser capture: `/Users/syw/Documents/playground/Cyrene/.codex-model-services-fixed-no-outer-scroll.png`; combined review: `/Users/syw/Documents/playground/Cyrene/.codex-model-services-fixed-no-outer-scroll-comparison.png`.
+- Root cause: `.wb-mcfg-services { min-height: 620px; }` plus the page header and settings padding exceeded shorter desktop settings viewports, even though it happened to fit at `1261 × 863`.
+- Desktop model services now use a `height: 100%`, `min-height: 0` flex chain from `settings-overlay-content[data-settings-active-tab="models"]` through the model page and service workspace. The outer Settings content is stationary with `overflow: hidden`.
+- Provider overflow is isolated to the provider list, keeping search, filters, and Add provider visible. Detail overflow is isolated to the detail pane so content is never clipped. The `<=700px` stacked mobile layout continues to use ordinary page scrolling.
+- Browser-computed state at `1261 × 863`: outer content `805/805`, service workspace `679/679`, provider list `491/491`, detail pane `679/679` (`clientHeight/scrollHeight`); the outer overflow mode is `hidden` and both pane overflow modes are `auto`.
+- Frontend production build and `git diff --check` passed after the correction.
+
+final result: passed
+
+---
+
 # External Agent Context Information Design QA — 2026-08-14
 
 - Source visual truth: `/Users/syw/Documents/playground/Cyrene/.codex/audits/context-info-qa/source.png` (`318 × 76 px`).
@@ -1105,6 +1273,7 @@ final result: passed
 
 final result: blocked
 
+
 ---
 
 # Composer Unified Tools List Design QA — 2026-08-12
@@ -1289,3 +1458,110 @@ final result: passed
 final result: blocked
 
 ---
+
+# Settings Workspace and Profile Integration Design QA — 2026-08-18
+
+- Source visual truth: `/var/folders/zm/qgh_rgw903j0b9t01yg2l0mc0000gn/T/codex-clipboard-2148c75e-e57f-4017-9fa6-75974cf2ece8.png` (`2400 × 1600 px`, normalized to `1200 × 800` CSS px for comparison).
+- Expanded implementation: `/Users/syw/Documents/playground/Cyrene/output/settings-profile-1200x800.png`.
+- Collapsed implementation: `/Users/syw/Documents/playground/Cyrene/output/settings-profile-collapsed-1200x800.png`.
+- Combined source/implementation comparison: `/Users/syw/Documents/playground/Cyrene/output/settings-profile-comparison.png`.
+- Test state: desktop dark theme, `1200 × 800` CSS viewport at DPR 2, Settings → Personal Profile, both expanded and collapsed navigation states.
+
+## Findings
+
+- Typography: profile title, handle, version, metric hierarchy, heatmap labels, and supporting copy remain aligned with the supplied profile reference and existing Cyrene type tokens.
+- Layout and spacing: the profile content preserves the reference's centered identity block, five-column metrics, activity heatmap, and insight cards while replacing the old profile rail with the grouped Settings navigation requested by the user.
+- Colors and tokens: the dark neutral surfaces, border hierarchy, muted text, and purple activity accents reuse the established Workbench token system.
+- Images and assets: existing product icons and avatar treatment are retained; no raster asset was stretched or substituted.
+- Copy and content: Personal Profile is now a first-class Settings item. The old left-side budget card is intentionally removed, and budget remains accessible as its own Settings item.
+- Collapsed behavior: collapsing the Settings card hides the complete settings-item list, leaving no settings-item icons visible; only the global expand control and persistent module/account dock remain.
+
+## Interaction Verification
+
+- Top-bar avatar opens Settings directly on Personal Profile.
+- The Settings workspace contains 16 searchable items grouped into General, Intelligence, Connections, Extensions, Data, and Other.
+- The profile edit control remains visible and the profile page renders without a nested rail or nested page scrollbar.
+- Collapse/expand works; the collapsed settings navigation reports zero visible settings tabs.
+- Voice/Tools and Budget/Usage render their correctly split content; Zotero renders under Integrations and is absent from General.
+- Browser console inspection returned no errors.
+- Focused verification passed: `uv run pytest tests/test_voice.py tests/test_settings_integrations.py tests/test_desktop_frontend_regressions.py` (`40 passed`).
+- Frontend production build passed, and `git diff --check` passed.
+
+## Comparison History
+
+- Initial state: Settings was a modal overlay and Personal Profile lived in a separate rail containing the budget card.
+- First implementation: Settings became a full-page workspace and Personal Profile moved into its navigation.
+- Latest refinement: the obsolete budget rail was removed and the collapsed Settings card no longer exposes settings-item icons.
+
+## Navigation Naming and Icon Follow-up — 2026-08-18
+
+- Final implementation screenshot: `/Users/syw/Documents/playground/Cyrene/output/settings-specific-names-icons-1200x800.jpg`.
+- Combined source/implementation comparison: `/Users/syw/Documents/playground/Cyrene/output/settings-specific-names-icons-comparison.png`.
+- The profile destination is consistently named `个人信息`, including its navigation label, edit action, and edit-section heading.
+- All 16 destinations now use distinct Tabler outline assets; the former Profile/Agent, Voice/Tools, Extensions/Integrations, and Budget/Usage aliases have been removed.
+- Labels now describe their scope more precisely: `通用设置`, `界面外观`, `键盘快捷键`, `模型配置`, `智能代理`, `语音交互`, `工具管理`, `消息渠道`, `远程连接`, `功能扩展`, `服务集成`, `预算管理`, `用量统计`, `数据管理`, and `关于 Cyrene`.
+- Browser measurement at `1200 × 800` found 16 unique icon URLs, no wrapped labels, and no horizontal navigation overflow.
+- Final production build passed; focused verification passed with `41 passed`; `git diff --check` passed.
+
+## Rich Usage Statistics Follow-up — 2026-08-18
+
+- Source visual truth: `/var/folders/zm/qgh_rgw903j0b9t01yg2l0mc0000gn/T/codex-clipboard-575c5145-0c1b-4a28-9242-5996dde5df5b.png` (`1800 × 1500 px`, normalized to `1200 × 1000` for comparison).
+- Final implementation screenshot: `/Users/syw/Documents/playground/Cyrene/output/settings-usage-rich-final-1200x1000.jpg`.
+- Combined source/implementation comparison: `/Users/syw/Documents/playground/Cyrene/output/settings-usage-rich-comparison.png`.
+- The page now separates two clearly labeled data scopes: a five-metric `近 4 周` snapshot reused from Personal information, and an eight-metric current billing-period summary.
+- The reused Personal information metrics include spend, requests, total tokens, input tokens, and output tokens; values come from the shared Workbench dashboard state rather than duplicated mock data.
+- The billing-period section adds total tokens, input/output tokens, average request cost, monthly limit, and budget utilization alongside spend and requests.
+- The model table now exposes requests, input tokens, output tokens, total tokens, and cost for each model, plus the existing proportional cost bar and a localized empty state.
+- Browser inspection at `1200 × 1000` found 5 profile metrics, 8 billing-period metrics, 3 live model rows, and no horizontal overflow.
+- Typography, borders, spacing, and purple usage accents remain aligned with the supplied reference and the existing Cyrene Settings design system.
+- Final production build passed; focused verification passed with `42 passed`; `git diff --check` passed.
+
+## About Page Flat Sections Follow-up — 2026-08-18
+
+- Current source visual truth: `/var/folders/zm/qgh_rgw903j0b9t01yg2l0mc0000gn/T/codex-clipboard-da637b03-ef2c-4a64-a95a-cd4e8e550e0f.png`.
+- Final implementation screenshot: `/Users/syw/Documents/playground/Cyrene/.codex-about-hero-update.png`.
+- Source/final comparison: `/Users/syw/Documents/playground/Cyrene/.codex-about-hero-comparison.png`.
+- The entire `相关入口` section has been removed from the About page.
+- The existing functional update action now lives inside the product hero; there is exactly one `检查更新` button and no duplicate update footer action.
+- The hero remains the sole summary card at a measured `142px` height. During a download, its full-height background fills from left to right using `--wb-about-download-progress`; the idle fill is hidden and the downloaded state retains a complete fill.
+- Update settings remain below the hero with their toggles, version information, status, and release notes.
+- Browser inspection found zero related-link cards, one hero update action, zero footer update actions, and a full-height progress layer matching the hero interior. The browser console reported no errors.
+- Final production build passed; focused About verification passed with `3 passed`; `git diff --check` passed.
+
+final result: passed
+
+---
+
+# Model Service Rail Context Menu Follow-up — 2026-08-19
+
+- Source visual truth: `/var/folders/zm/qgh_rgw903j0b9t01yg2l0mc0000gn/T/codex-clipboard-ade42bcd-9bf0-47a3-b03e-b706b703a2b6.png` (`554 × 768 px`).
+- Browser-rendered implementation: `/Users/syw/Documents/playground/Cyrene/.codex-model-services-context-menu.png` (`1261 × 863 px`, CSS viewport `1261 × 863`, DPR 1).
+- Focused normalized implementation: `/Users/syw/Documents/playground/Cyrene/.codex-model-services-list-context-focus.png` (`554 × 768 px`).
+- Side-by-side focused comparison: `/Users/syw/Documents/playground/Cyrene/.codex-model-services-list-context-comparison.png` (`1108 × 768 px`).
+- State: desktop dark theme, Settings → 模型服务, 13 temporary unsaved service connections so the rail overflows, first card context menu open.
+
+## Findings
+
+- Fonts and typography: the existing Cyrene type scale, weights, truncation, and muted metadata remain unchanged; the menu uses the same UI font and a compact danger label.
+- Spacing and layout rhythm: the search field is gone, filter tabs remain fixed, the provider list owns the remaining height, and the Add provider action remains fixed below it. Card geometry and two-column proportions are unchanged.
+- Colors and visual tokens: selected, ready, hover, menu surface, focus, and destructive states reuse the existing Workbench tokens in dark mode.
+- Image and icon quality: the existing settings server and trash SVG icons are reused; no new raster, handcrafted SVG, or placeholder asset was introduced.
+- Copy and content: provider names and metadata are unchanged. The context menu contains the requested `删除` action, and the former right-detail delete action is absent.
+- No actionable P0/P1/P2 visual mismatch remains for the requested rail change. The focused implementation contains extra temporary rows and the open menu because those states are required to prove overflow and context-menu behavior.
+
+## Interaction Verification
+
+- The rail contains zero search inputs.
+- With 13 items, the list measured `543px` client height and `814px` scroll height with `overflow-y: auto`; the outer settings page remained `805px / 805px` and did not scroll.
+- The Add provider button remained visible at the bottom of the rail.
+- Right-click opens a viewport-clamped `role=menu` portal and focuses the `删除` menu item.
+- `Shift+F10` opens the same menu; Escape closes it and restores focus to the originating provider card.
+- Pointer-outside, rail/window scroll, and resize close the menu. Deletion retains the existing confirmation and unsaved-change semantics.
+- Frontend production build passed. The focused test command reported `22 passed`; two unrelated pre-existing contract baselines failed because the branch already has four additional OpenAPI operations and an existing `@tabler/icons` dependency.
+
+## Comparison History
+
+- Before: the rail displayed a search input and deletion lived in the right-side connection form.
+- Final: the rail is filter + internally scrollable cards + fixed Add provider action; deletion is exposed by the card context menu with keyboard parity.
+
+final result: passed

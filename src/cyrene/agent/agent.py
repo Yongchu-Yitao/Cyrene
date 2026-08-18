@@ -63,7 +63,6 @@ from cyrene.agent.state import (
 from cyrene.model_runtime.messages import (
     assistant_text,
     parse_tool_arguments,
-    truncate,
 )
 from cyrene.observability.context_trace import attach_context, context_block
 from cyrene.runtime.secret_redaction import redact_value
@@ -74,6 +73,7 @@ from cyrene.tooling import (
     resolve_wire_call,
 )
 from cyrene.tooling.mcp_content import build_mcp_observation_message
+from cyrene.tooling.result_store import project_tool_result_for_model
 from cyrene.workbench.inbox import current_workbench_inbox
 
 logger = logging.getLogger(__name__)
@@ -975,16 +975,26 @@ async def _run_main_agent_impl(
             except Exception as exc:
                 logger.warning("Tool ask_user failed: %s", exc, exc_info=True)
                 result = f"Tool failed: {exc}"
-            truncated_result = truncate(result)
-            tool_entry: dict[str, Any] = {"role": "tool", "tool_call_id": ask_user_call["id"], "content": truncated_result}
+            projected_result = project_tool_result_for_model(
+                result,
+                tool_name="ask_user",
+                tool_call_id=ask_user_call["id"],
+            )
+            tool_entry: dict[str, Any] = {"role": "tool", "tool_call_id": ask_user_call["id"], "content": projected_result.content}
             tool_entry = attach_context(tool_entry, context_block(
                 f"tool.result.ask_user.{ask_user_call['id']}",
                 "tool_result",
                 source="tool:ask_user",
                 reason="ask_user tool output returned to LLM",
-                transforms=["truncate"] if str(truncated_result) != str(result) else [],
-                content=truncated_result,
-                metadata={"tool_name": "ask_user", "tool_call_id": ask_user_call["id"]},
+                transforms=["tool_result_projection"] if projected_result.truncated else [],
+                content=projected_result.content,
+                metadata={
+                    "tool_name": "ask_user",
+                    "tool_call_id": ask_user_call["id"],
+                    "original_tokens": projected_result.original_tokens,
+                    "original_bytes": projected_result.original_bytes,
+                    "content_ref": projected_result.content_ref,
+                },
             ))
             if round_id:
                 tool_entry["round_id"] = round_id
@@ -1328,16 +1338,26 @@ async def _run_main_agent_impl(
                             "Tool %r failed: %s", tool_name, e, exc_info=True
                         )
                         result = f"Tool failed: {e}"
-                    truncated_result = truncate(result)
-                    tool_entry: dict[str, Any] = {"role": "tool", "tool_call_id": t["id"], "content": truncated_result}
+                    projected_result = project_tool_result_for_model(
+                        result,
+                        tool_name=str(tool_name or ""),
+                        tool_call_id=t["id"],
+                    )
+                    tool_entry: dict[str, Any] = {"role": "tool", "tool_call_id": t["id"], "content": projected_result.content}
                     tool_entry = attach_context(tool_entry, context_block(
                         f"tool.result.{tool_name}.{t['id']}",
                         "tool_result",
                         source=f"tool:{tool_name}",
                         reason="tool output returned to LLM",
-                        transforms=["truncate"] if str(truncated_result) != str(result) else [],
-                        content=truncated_result,
-                        metadata={"tool_name": tool_name, "tool_call_id": t["id"]},
+                        transforms=["tool_result_projection"] if projected_result.truncated else [],
+                        content=projected_result.content,
+                        metadata={
+                            "tool_name": tool_name,
+                            "tool_call_id": t["id"],
+                            "original_tokens": projected_result.original_tokens,
+                            "original_bytes": projected_result.original_bytes,
+                            "content_ref": projected_result.content_ref,
+                        },
                     ))
                     if round_id:
                         tool_entry["round_id"] = round_id
@@ -1718,16 +1738,26 @@ async def _run_main_agent_impl(
                 except Exception as exc:
                     logger.warning("Tool ask_user failed (retry): %s", exc, exc_info=True)
                     result = f"Tool failed: {exc}"
-                truncated_result = truncate(result)
-                tool_entry: dict[str, Any] = {"role": "tool", "tool_call_id": ask_user_call["id"], "content": truncated_result}
+                projected_result = project_tool_result_for_model(
+                    result,
+                    tool_name="ask_user",
+                    tool_call_id=ask_user_call["id"],
+                )
+                tool_entry: dict[str, Any] = {"role": "tool", "tool_call_id": ask_user_call["id"], "content": projected_result.content}
                 tool_entry = attach_context(tool_entry, context_block(
                     f"tool.result.ask_user.{ask_user_call['id']}",
                     "tool_result",
                     source="tool:ask_user",
                     reason="ask_user tool output returned to LLM after correction",
-                    transforms=["truncate"] if str(truncated_result) != str(result) else [],
-                    content=truncated_result,
-                    metadata={"tool_name": "ask_user", "tool_call_id": ask_user_call["id"]},
+                    transforms=["tool_result_projection"] if projected_result.truncated else [],
+                    content=projected_result.content,
+                    metadata={
+                        "tool_name": "ask_user",
+                        "tool_call_id": ask_user_call["id"],
+                        "original_tokens": projected_result.original_tokens,
+                        "original_bytes": projected_result.original_bytes,
+                        "content_ref": projected_result.content_ref,
+                    },
                 ))
                 if round_id:
                     tool_entry["round_id"] = round_id

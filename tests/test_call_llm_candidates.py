@@ -126,6 +126,141 @@ def test_generic_model_does_not_receive_deepseek_thinking_extension():
     assert "reasoning_effort" not in payload
 
 
+def test_minimax_request_splits_reasoning_and_replays_tool_turn_details():
+    messages = [
+        {
+            "role": "assistant",
+            "content": "",
+            "reasoning_content": "inspect first",
+            "tool_calls": [{
+                "id": "call_1",
+                "type": "function",
+                "function": {"name": "lookup", "arguments": "{}"},
+            }],
+        },
+        {"role": "tool", "tool_call_id": "call_1", "content": "result"},
+        {
+            "role": "assistant",
+            "content": "ordinary answer",
+            "reasoning_details": [
+                {"type": "reasoning.text", "text": "do not replay"}
+            ],
+        },
+    ]
+
+    payload = cl._build_payload(
+        messages,
+        tools=None,
+        max_tokens=24,
+        stream=True,
+        model="MiniMax-M3",
+        thinking="auto",
+    )
+
+    assert payload["reasoning_split"] is True
+    assert payload["messages"][0]["reasoning_details"] == [
+        {"type": "reasoning.text", "text": "inspect first"}
+    ]
+    assert "reasoning_content" not in payload["messages"][0]
+    assert "reasoning_details" not in payload["messages"][2]
+
+
+def test_minimax_legacy_think_wrapper_is_removed_from_visible_content():
+    message = cl._normalize_minimax_message({
+        "role": "assistant",
+        "content": "<think>private analysis</think> Public answer",
+    })
+
+    assert message["content"] == "Public answer"
+    assert message["reasoning_content"] == "private analysis"
+    assert message["reasoning_details"] == [
+        {"type": "reasoning.text", "text": "private analysis"}
+    ]
+
+
+async def test_minimax_stream_separates_cumulative_reasoning_and_content():
+    events = []
+
+    class FakeResponse:
+        status_code = 200
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return False
+
+        async def aiter_lines(self):
+            yield 'data: {"choices":[{"delta":{"reasoning_details":[{"type":"reasoning.text","text":"plan"}]}}]}'
+            yield 'data: {"choices":[{"delta":{"reasoning_details":[{"type":"reasoning.text","text":"plan more"}]}}]}'
+            yield 'data: {"choices":[{"delta":{"content":"An"}}]}'
+            yield 'data: {"choices":[{"delta":{"content":"Answer"}}]}'
+            yield "data: [DONE]"
+
+    class FakeClient:
+        def stream(self, *args, **kwargs):
+            return FakeResponse()
+
+    async def capture(event):
+        events.append(event)
+
+    message = await cl._handle_stream(
+        FakeClient(),
+        "https://api.minimax.io/v1/chat/completions",
+        {"model": "MiniMax-M3", "messages": []},
+        {},
+        capture,
+    )
+
+    assert message["reasoning_content"] == "plan more"
+    assert message["content"] == "Answer"
+    assert [event["delta"] for event in events if event["type"] == "reply_delta"] == [
+        "An", "swer"
+    ]
+
+
+async def test_minimax_stream_filters_legacy_think_tags_across_chunks():
+    events = []
+
+    class FakeResponse:
+        status_code = 200
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return False
+
+        async def aiter_lines(self):
+            yield 'data: {"choices":[{"delta":{"content":"<thi"}}]}'
+            yield 'data: {"choices":[{"delta":{"content":"nk>secret"}}]}'
+            yield 'data: {"choices":[{"delta":{"content":" plan</think>Final"}}]}'
+            yield "data: [DONE]"
+
+    class FakeClient:
+        def stream(self, *args, **kwargs):
+            return FakeResponse()
+
+    async def capture(event):
+        events.append(event)
+
+    message = await cl._handle_stream(
+        FakeClient(),
+        "https://api.minimax.io/v1/chat/completions",
+        {"model": "MiniMax-M3", "messages": []},
+        {},
+        capture,
+    )
+
+    assert message["reasoning_content"] == "secret plan"
+    assert message["content"] == "Final"
+    assert all(
+        "<think" not in str(event.get("delta") or event.get("response") or "").lower()
+        for event in events
+        if event["type"].startswith("reply_")
+    )
+
+
 def test_openai_final_provider_payload_is_strictly_append_only_across_phases():
     tools = [{
         "type": "function",
@@ -409,6 +544,35 @@ async def test_transient_network_disconnect_stops_after_retry_limit(stub_server_
     assert cl._candidate_cooling(cl._candidate_key(candidate))
 
 
+async def test_auth_failure_is_not_masked_by_a_later_endpoint_disconnect(
+    stub_server_factory, monkeypatch
+):
+    auth_server, auth_candidate = stub_server_factory(401)
+    disconnected_server, disconnected_candidate = stub_server_factory(
+        200, disconnects=cl.NETWORK_RETRY_LIMIT + 1
+    )
+    monkeypatch.setattr(cl, "_NETWORK_RETRY_BASE_DELAY_SECONDS", 0)
+    candidate = {
+        **auth_candidate,
+        "endpoints": [
+            auth_candidate["endpoints"][0],
+            disconnected_candidate["endpoints"][0],
+        ],
+    }
+
+    with pytest.raises(httpx.HTTPStatusError) as captured:
+        await cl.call_llm(
+            [{"role": "user", "content": "hi"}],
+            candidates=[candidate],
+            publish_events=False,
+            record_usage=False,
+        )
+
+    assert captured.value.response.status_code == 401
+    assert auth_server.hits == 1
+    assert disconnected_server.hits == cl.NETWORK_RETRY_LIMIT + 1
+
+
 def test_workbench_network_error_message_requests_resend():
     from cyrene.workbench.chat import _workbench_chat_run_error_message
 
@@ -434,6 +598,20 @@ def test_workbench_model_authentication_error_is_actionable():
         "无法访问模型服务：鉴权失败。请检查 API Key 或登录状态后重试。"
     )
     assert _workbench_chat_error_metadata(exc) == {
+        "code": "model_authentication_failed",
+        "detail_key": "workbenchChat.error.modelAuthenticationFailed",
+    }
+
+    try:
+        raise exc
+    except httpx.HTTPStatusError as cause:
+        wrapped = RuntimeError("all configured model endpoints failed")
+        wrapped.__cause__ = cause
+
+    assert _workbench_chat_run_error_message(wrapped, "zh") == (
+        "无法访问模型服务：鉴权失败。请检查 API Key 或登录状态后重试。"
+    )
+    assert _workbench_chat_error_metadata(wrapped) == {
         "code": "model_authentication_failed",
         "detail_key": "workbenchChat.error.modelAuthenticationFailed",
     }

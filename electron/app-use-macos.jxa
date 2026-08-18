@@ -227,41 +227,78 @@ function safariTab(target) {
   const safari = Application('Safari');
   if (!safari.running()) fail('stale_session', 'Safari is no longer running.');
   const windows = safari.windows();
-  const targetHeight = Number((target.bounds || {}).height || 0);
   let picked = null;
-  if (targetHeight > 0) {
-    // Safari's AppleScript windows() order can differ from the CG listing
-    // order, so verify by height instead of trusting the index: AppleScript
-    // bounds are {left, top, right, bottom}, height = bottom - top, though
-    // the JXA bridge also exposes them as a record {x, y, width, height}.
-    // Among candidates, the nearest height wins; beyond 8px the window must
-    // have been replaced, so fail rather than operate on the wrong window.
-    let bestDistance = Infinity;
-    for (const candidate of windows) {
-      const bounds = safe(() => candidate.bounds(), null);
-      let height = 0;
-      if (Array.isArray(bounds) && bounds.length >= 4) {
-        height = Number(bounds[3] || 0) - Number(bounds[1] || 0);
-      } else if (bounds && typeof bounds === 'object') {
-        height = Number(bounds.height || 0) > 0
-          ? Number(bounds.height || 0)
-          : Number(bounds.bottom || 0) - Number(bounds.top || 0);
+  const wantedId = String(target.windowId || '');
+  let idMatches = [];
+  if (wantedId && wantedId !== '0') {
+    // On Safari versions where the AppleScript id maps to the WindowServer
+    // id, retain that strong signal to disambiguate stacked windows or a
+    // window that moved after it was listed.
+    idMatches = windows.filter(
+      (candidate) => String(safe(() => candidate.id(), '')) === wantedId,
+    );
+  }
+
+  const targetBounds = target.bounds || null;
+  const hasBounds = targetBounds
+    && Number(targetBounds.width || 0) > 0
+    && Number(targetBounds.height || 0) > 0;
+  if (hasBounds) {
+    // AppleScript windows() ordering is independent of CGWindowList ordering.
+    // Match the complete rectangle instead of one dimension; equal-height
+    // windows are common. If stacked windows remain ambiguous, fail safely
+    // rather than navigating or reloading an arbitrary Safari window.
+    const boundsCandidates = windows.filter((candidate) => {
+      const raw = safe(() => candidate.bounds(), null);
+      let normalized = null;
+      if (Array.isArray(raw) && raw.length >= 4) {
+        normalized = {
+          x: Number(raw[0] || 0),
+          y: Number(raw[1] || 0),
+          width: Number(raw[2] || 0) - Number(raw[0] || 0),
+          height: Number(raw[3] || 0) - Number(raw[1] || 0),
+        };
+      } else if (raw && typeof raw === 'object') {
+        const x = Number(raw.x !== undefined ? raw.x : raw.left || 0);
+        const y = Number(raw.y !== undefined ? raw.y : raw.top || 0);
+        normalized = {
+          x,
+          y,
+          width: Number(raw.width || 0) > 0
+            ? Number(raw.width || 0)
+            : Number(raw.right || 0) - x,
+          height: Number(raw.height || 0) > 0
+            ? Number(raw.height || 0)
+            : Number(raw.bottom || 0) - y,
+        };
       }
-      if (!(height > 0)) continue;
-      const distance = Math.abs(height - targetHeight);
-      if (distance < bestDistance) {
-        bestDistance = distance;
-        picked = candidate;
+      return boundsMatch(normalized, targetBounds, 8);
+    });
+    if (boundsCandidates.length === 1) {
+      if (idMatches.length === 1 && idMatches[0] !== boundsCandidates[0]) {
+        fail('stale_session', 'The connected Safari window identity no longer matches its bounds.');
       }
+      picked = boundsCandidates[0];
     }
-    if (!picked || bestDistance > 8) {
-      fail('stale_session', 'The connected Safari window moved or was resized since listing.');
+    else if (boundsCandidates.length > 1) {
+      const identified = boundsCandidates.filter(
+        (candidate) => idMatches.indexOf(candidate) >= 0,
+      );
+      if (identified.length === 1) picked = identified[0];
+      else fail('stale_session', 'The connected Safari window cannot be identified unambiguously.');
+    } else if (idMatches.length === 1) {
+      picked = idMatches[0];
+    } else {
+      fail('stale_session', 'The connected Safari window is no longer available.');
     }
-  } else {
+  }
+
+  if (!picked && !hasBounds) {
     const index = Math.max(0, Number(target.windowIndex || 0));
     if (index >= windows.length) fail('stale_session', 'The connected Safari window is no longer available.');
     picked = windows[index];
   }
+  if (!picked) fail('stale_session', 'The connected Safari window is no longer available.');
   return { safari, window: picked, tab: picked.currentTab };
 }
 

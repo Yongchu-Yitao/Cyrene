@@ -41,6 +41,75 @@ def test_external_agent_frontend_consumes_unified_dynamic_events_and_viewers():
     assert '"workbenchChat.attachmentType.audio": "音频"' in i18n
 
 
+def test_pane_cards_can_detach_into_native_windows_with_browser_view_migration():
+    root = Path(__file__).resolve().parent.parent
+    chat = (root / "src" / "webui" / "frontend" / "workbench-chat.jsx").read_text(
+        encoding="utf-8"
+    )
+    bootstrap = (root / "src" / "webui" / "frontend" / "entry" / "bootstrap.jsx").read_text(
+        encoding="utf-8"
+    )
+    css = (root / "src" / "webui" / "frontend" / "workbench.css").read_text(
+        encoding="utf-8"
+    )
+    main = (root / "electron" / "main.js").read_text(encoding="utf-8")
+    preload = (root / "electron" / "preload.js").read_text(encoding="utf-8")
+
+    assert "paneCardDetachRef" in chat
+    assert "preparePaneCardDetach(event, cardId, paneOverride)" in chat
+    assert "onSplitPointerDown={pointerDown}" in chat
+    assert "detachedBridge.beginDrag(paneCardDetachIpcPayload(pendingDetach))" in chat
+    assert "detachedBridge.finishDrag(paneCardDetachIpcPayload(pendingDetach" in chat
+    assert "target.setPointerCapture(event.pointerId)" in chat
+    assert 'document.addEventListener("pointermove", movePaneCardGhost, true)' in chat
+    assert 'draggable="true"' not in chat.split("function WbcSplitGripBar", 1)[1].split(
+        "function WbcSideAgentSplit", 1
+    )[0]
+    assert "detachedBridge.onCreated" in chat
+    assert "detachedBridge.onReturned" in chat
+    assert "selectAlternateChatAfterDetachment(pendingDetach)" in chat
+    assert "removeDetachedPaneCard(pendingDetach)" in chat
+    assert "closePaneCard(pendingDetach.cardId, pendingDetach.layoutOwnerChatId)" in chat
+    returned_pane = chat.split("function restoreReturnedDetachedPane", 1)[1].split(
+        "useWbcEffect(function ()", 1
+    )[0]
+    assert 'if (descriptor.kind === "chat" && descriptor.payload)' in returned_pane
+    assert "selectChat(String(descriptor.payload))" in returned_pane
+    assert "var singlePane = paneCardCount === 1" in chat
+    assert "menuDisabled={singlePane}" in chat
+    assert "if (!menuDisabled) setMenuOpen" in chat
+    assert "DetachedPaneApp: WbcDetachedPaneApp" in chat
+    assert 'surface === "detached-pane"' in bootstrap
+    assert "wbc-detached-pane-titlebar" in css
+    detached_titlebar_css = css.split(".wbc-detached-pane-titlebar {", 1)[1].split("}", 1)[0]
+    assert "touch-action: none" in detached_titlebar_css
+    assert "-webkit-app-region: drag" not in detached_titlebar_css
+    assert "const detachedPaneWindows = new Map()" in main
+    assert "const detachedPaneDragSessions = new Map()" in main
+    assert "const detachedBrowserSurfaceWindows = new Map()" in main
+    assert "createDetachedPaneWindow" in main
+    assert "pointInsideBounds(session.sourceWindowBounds, screenPoint)" in main
+    assert "crossedSourceBounds || session.boundaryExitIntent" in main
+    assert "pointAtBlockedDisplayEdge(session.sourceWindowBounds, cursorPoint)" in main
+    assert "updateDetachedPaneDrag" in main
+    assert "updateDetachedPaneCursor" in main
+    assert "beginDetachedPaneDrag" in main
+    assert "startDetachedPaneCreation" in main
+    assert "dragSession.detachedWindow = win" in main
+    assert "win.setIgnoreMouseEvents(true)" in main
+    assert "finishDetachedPaneReturnDrag" in main
+    assert "notifyDetachedPaneCreated(session, { ok: true, detached: false, cancelled: true })" in main
+    assert "detachedBrowserSurfaceWindows.get(this.sessionId)" in main
+    assert "closeDetachedPanesForChat" in main
+    assert "detachedPane:" in preload
+    assert "ipcRenderer.sendSync('detached-pane:begin-drag'" in preload
+    assert "ipcRenderer.send('detached-pane:update-drag'" in preload
+    assert "ipcRenderer.invoke('detached-pane:finish-drag'" in preload
+    assert "ipcRenderer.on('detached-pane:created'" in preload
+    assert "ipcRenderer.invoke('detached-pane:return-begin'" in preload
+    assert "ipcRenderer.on('detached-pane:returned'" in preload
+
+
 def test_external_agent_context_uses_report_then_transcript_fallback_copy():
     root = Path(__file__).resolve().parent.parent
     source = (root / "src" / "webui" / "frontend" / "workbench-chat.jsx").read_text(encoding="utf-8")
@@ -95,8 +164,9 @@ def test_chat_files_merge_message_attachments_and_nested_agent_output():
     )
     helper_source = "function wbcChatArtifactFiles(" + source.split(
         "function wbcChatArtifactFiles(", 1
-    )[1].split("function wbcArtifactFileKey", 1)[0]
+    )[1].split("function wbcChatDeliveredArtifacts", 1)[0]
     script = f"""
+function wbcEditableChatFileResource(chat, file) {{ return file; }}
 eval({json.dumps(helper_source)});
 const files = wbcChatArtifactFiles({{
   id: "chat/one",
@@ -119,8 +189,9 @@ def test_chat_artifacts_only_include_assistant_deliveries():
     )
     helper_source = "function wbcChatDeliveredArtifacts(" + source.split(
         "function wbcChatDeliveredArtifacts(", 1
-    )[1].split("function wbcArtifactFileKey", 1)[0]
+    )[1].split("function wbcEditableChatFileResource", 1)[0]
     script = f"""
+function wbcEditableChatFileResource(chat, file) {{ return file; }}
 eval({json.dumps(helper_source)});
 const files = wbcChatDeliveredArtifacts({{
   messages: [
@@ -136,6 +207,65 @@ process.stdout.write(JSON.stringify(files));
     files = json.loads(completed.stdout)
 
     assert [item["file"]["name"] for item in files] == ["result.pdf"]
+
+
+def test_conversation_viewer_is_chat_scoped_and_reuses_project_file_editor_resources():
+    root = Path(__file__).resolve().parent.parent
+    source = (root / "src" / "webui" / "frontend" / "workbench-chat.jsx").read_text(
+        encoding="utf-8"
+    )
+    project_resource = "function wbcProjectFileResource(" + source.split(
+        "function wbcProjectFileResource(", 1
+    )[1].split("function WbcRail", 1)[0]
+    editable_resource = "function wbcEditableChatFileResource(" + source.split(
+        "function wbcEditableChatFileResource(", 1
+    )[1].split("function wbcViewerFileFromItems", 1)[0]
+    viewer_match = "function wbcViewerFileFromItems(" + source.split(
+        "function wbcViewerFileFromItems(", 1
+    )[1].split("function wbcArtifactFileKey", 1)[0]
+    artifact_key = "function wbcArtifactFileKey(" + source.split(
+        "function wbcArtifactFileKey(", 1
+    )[1].split("var WBC_PROJECT_FILE_DRAFTS", 1)[0]
+    edit_url = "function wbcProjectFileEditUrl(" + source.split(
+        "function wbcProjectFileEditUrl(", 1
+    )[1].split("function wbcCanEditProjectTextFile", 1)[0]
+    script = f"""
+function wbcFileViewKind() {{ return "markdown"; }}
+eval({json.dumps(project_resource + editable_resource + viewer_match + artifact_key + edit_url)});
+const generated = {{ id: "made", name: "notes.md", path: "docs/notes.md", source: "agent" }};
+const editable = wbcEditableChatFileResource({{ projectId: "project/one" }}, generated);
+const unrelated = wbcViewerFileFromItems(
+  {{ name: "other.md", path: "other.md", source: "project", projectId: "project/one" }},
+  [{{ file: editable }}]
+);
+const selected = wbcViewerFileFromItems(generated, [{{ file: editable }}]);
+process.stdout.write(JSON.stringify({{
+  editable,
+  editUrl: wbcProjectFileEditUrl(editable),
+  unrelated,
+  selected
+}}));
+"""
+    completed = subprocess.run(["node", "-e", script], check=True, capture_output=True, text=True)
+    result = json.loads(completed.stdout)
+
+    assert result["editable"]["source"] == "project"
+    assert result["editable"]["projectId"] == "project/one"
+    assert result["editable"]["id"] == "made"
+    assert result["editable"]["url"] == "/api/projects/project%2Fone/files/content/docs/notes.md"
+    assert result["editUrl"] == "/api/projects/project%2Fone/files/edit/docs/notes.md"
+    assert result["unrelated"] is None
+    assert result["selected"]["source"] == "project"
+
+    side_panel = source.split("function WbcSide({", 1)[1].split(
+        "function WbcOverviewTab", 1
+    )[0]
+    assert "var chatViewerFile = wbcViewerFileFromItems(viewerFile, viewerItems);" in side_panel
+    assert 'if (chatViewerFile) tabs.push({ id: "viewer"' in side_panel
+    open_pane = source.split("  function openPaneContent(", 1)[1].split(
+        "\n  function updatePaneCard", 1
+    )[0]
+    assert 'payload = wbcEditableChatFileResource({ projectId: projectId }, payload);' in open_pane
 
 
 def test_chat_file_type_labels_do_not_treat_text_formats_as_word_documents():
@@ -800,9 +930,12 @@ def test_workbench_chat_search_and_custom_background_composer_stay_distinct():
     assert "border: 1px solid" in search_css
     assert "box-shadow: none;" in search_css
     assert "border-color:" in search_focus_css
-    assert "border: 1px solid color-mix(in srgb, var(--wb-line-2) 64%, transparent);" in composer_css
-    assert "background: color-mix(in srgb, var(--wb-card-bg) 72%, transparent);" in composer_css
-    assert "backdrop-filter: blur(18px) saturate(120%) contrast(102%);" in composer_css
+    assert "--wbc-composer-glass-border: 1px solid color-mix(in srgb, var(--wb-line-2) 64%, transparent);" in composer_css
+    assert "--wbc-composer-glass-background: color-mix(in srgb, var(--wb-card-bg) 72%, transparent);" in composer_css
+    assert "--wbc-composer-glass-filter: blur(18px) saturate(120%) contrast(102%);" in composer_css
+    assert "border: var(--wbc-composer-glass-border);" in composer_css
+    assert "background: var(--wbc-composer-glass-background);" in composer_css
+    assert "backdrop-filter: var(--wbc-composer-glass-filter);" in composer_css
     assert ".wbc-composer-box:focus-within {" not in styles
 
 
@@ -838,9 +971,9 @@ def test_main_chat_composer_uses_a_solid_canvas_and_readable_input_card():
     assert ".wbc-glass-junction {" not in styles
     assert 'className="wbc-glass-junction"' not in source
     assert ".wbc-main > .wbc-composer::before {" not in styles
-    assert "background: color-mix(in srgb, var(--wb-card-bg) 72%, transparent);" in input_css
-    assert "border: 1px solid color-mix(in srgb, var(--wb-line-2) 64%, transparent);" in input_css
-    assert "backdrop-filter: blur(18px) saturate(120%) contrast(102%);" in input_css
+    assert "background: var(--wbc-composer-glass-background);" in input_css
+    assert "border: var(--wbc-composer-glass-border);" in input_css
+    assert "backdrop-filter: var(--wbc-composer-glass-filter);" in input_css
     assert "border-radius: 14px;" in input_css
     assert "padding: 10px 12px 8px;" in input_css
     assert "bottom: calc(100% + 8px);" in scroll_css
@@ -869,12 +1002,25 @@ def test_split_chat_composers_align_with_the_floating_workspace_rail():
         ".workbench-shell .wbc-pane-layout.split .wbc-pane-card .wbc-main > .wbc-composer {",
         1,
     )[1].split("}", 1)[0]
+    main_composer_css = styles.split(
+        ".workbench-shell .wbc-main > .wbc-composer {", 1
+    )[1].split("}", 1)[0]
 
-    assert "width: calc(100% - var(--wbc-card-gutter));" in rail_css
-    assert "margin: var(--wbc-card-top-inset) 0 var(--wbc-card-gutter) var(--wbc-card-gutter);" in rail_css
+    assert "width:" not in rail_css
+    assert "max-width:" not in rail_css
+    assert "justify-self:" not in rail_css
+    assert (
+        "margin: var(--wbc-card-top-inset) 4px "
+        "var(--wbc-card-gutter) var(--wbc-card-gutter);" in rail_css
+    )
     assert "padding-bottom: 12px;" in composer_css
+    assert "padding: 10px 14px 14px !important;" in main_composer_css
     assert "padding: 10px 14px 14px !important;" in split_main_composer_css
     assert "padding: 10px 14px 14px !important;" in pane_split_main_composer_css
+    assert (
+        'html[data-density="compact"] .workbench-shell '
+        ".workbench-composer.wbc-composer"
+    ) not in styles
 
 
 def test_hidden_chat_sidebar_slightly_widens_and_centers_the_conversation_lane():
@@ -1018,8 +1164,13 @@ def test_workbench_chat_rail_uses_the_shared_physical_card_and_fixed_header():
     )[1].split("}", 1)[0]
     assert "height: calc(100% - var(--wbc-card-top-inset) - var(--wbc-card-gutter));" in shared_chat_rail_css
     assert "max-height: calc(100% - var(--wbc-card-top-inset) - var(--wbc-card-gutter));" in shared_chat_rail_css
-    assert "width: calc(100% - var(--wbc-card-gutter));" in shared_chat_rail_css
-    assert "margin: var(--wbc-card-top-inset) 0 var(--wbc-card-gutter) var(--wbc-card-gutter);" in shared_chat_rail_css
+    assert "width:" not in shared_chat_rail_css
+    assert "max-width:" not in shared_chat_rail_css
+    assert "justify-self:" not in shared_chat_rail_css
+    assert (
+        "margin: var(--wbc-card-top-inset) 4px "
+        "var(--wbc-card-gutter) var(--wbc-card-gutter);" in shared_chat_rail_css
+    )
     assert "padding: 0;" in shared_chat_rail_css
     shared_chat_surface_css = styles.split(
         ".workbench-grid.integrated-sidebars .wbc-rail.workbench-integrated-rail::before {", 1
@@ -1076,6 +1227,7 @@ def test_collapsed_right_sidebar_restore_control_lives_in_the_global_topbar():
         "function WorkbenchNotificationCenter(", 1
     )[0]
     assert 'className="workbench-icon-btn"' in topbar
+    assert 'data-cyrene-node-id="open_settings"' not in topbar
     assert 'data-chat-side-show="true"' in topbar
     assert 'new CustomEvent("workbench:show-chat-side")' in topbar
     assert 'window.addEventListener("workbench:chat-side-visibility"' in topbar
@@ -1116,6 +1268,32 @@ def test_workbench_chat_sidebar_is_a_top_aligned_floating_accordion():
     assert "max-height: min(620px, calc(100vh - 250px));" in side_body_css
     assert "padding: 4px 16px 12px;" in side_body_css
     assert "padding: 0;" in flush_css
+
+
+def test_workbench_chat_primary_cards_share_an_opaque_dark_surface():
+    root = Path(__file__).resolve().parent.parent
+    styles = (root / "src" / "webui" / "frontend" / "workbench.css").read_text(
+        encoding="utf-8"
+    )
+
+    page_css = styles.split(".wbc-page {", 1)[1].split("}", 1)[0]
+    dark_page_css = styles.split('html[data-theme="dark"] .wbc-page {', 1)[1].split("}", 1)[0]
+    rail_card_css = styles.split(".wbc-rail::before {", 1)[1].split("}", 1)[0]
+    pane_card_css = styles.split(".wbc-pane-card {", 1)[1].split("}", 1)[0]
+    side_card_css = styles.split("\n.wbc-side-card {", 1)[1].split("}", 1)[0]
+    dark_side_card_css = styles.split(
+        'html[data-theme="dark"] .wbc-page .wbc-side-card {', 1
+    )[1].split("}", 1)[0]
+
+    assert "--wbc-panel-surface: var(--wb-floating-rail-bg);" in page_css
+    assert "--wbc-panel-surface: #171819;" in dark_page_css
+    assert "background: var(--wbc-panel-surface);" in rail_card_css
+    assert "background: var(--wbc-panel-surface);" in pane_card_css
+    assert "background: var(--wbc-panel-surface);" in side_card_css
+    assert "background: var(--wbc-panel-surface);" in dark_side_card_css
+    assert styles.index('html[data-theme="dark"] .wbc-page .wbc-side-card {') > styles.index(
+        'html[data-theme="dark"] :is(.wbc-composer-box, .wbc-side-card) {'
+    )
 
 
 def test_workbench_chat_sidebar_expanded_lists_share_a_responsive_content_system():
@@ -1219,7 +1397,10 @@ def test_workbench_chat_single_card_uses_independent_hidden_gutter_resize_handle
     assert "--wbc-topbar-clearance: 50px;" in compact_page_css
     assert "--wbc-topbar-tab-bottom: 39px;" in compact_page_css
     assert "inset: var(--wbc-card-top-inset) var(--wbc-card-gutter) var(--wbc-card-gutter);" in rail_card_css
-    assert "padding: var(--wbc-card-top-inset) 0 var(--wbc-card-gutter) var(--wbc-card-gutter);" in pane_layout_css
+    assert (
+        "padding: var(--wbc-card-top-inset) 0 var(--wbc-card-gutter) "
+        "calc(var(--wbc-card-gutter) - 4px);" in pane_layout_css
+    )
     assert "padding: var(--wbc-card-top-inset) var(--wbc-card-gutter) var(--wbc-card-gutter);" in side_css
 
 
@@ -1245,7 +1426,7 @@ def test_workbench_pane_drag_ghost_preserves_current_viewport_and_handle_hotspot
     root = Path(__file__).resolve().parent.parent
     source = (root / "src" / "webui" / "frontend" / "workbench-chat.jsx").read_text(encoding="utf-8")
     styles = (root / "src" / "webui" / "frontend" / "workbench.css").read_text(encoding="utf-8")
-    pane_drag = source.split("  function handlePaneCardDragStart(event, cardId) {", 1)[1].split(
+    pane_drag = source.split("  function handlePaneCardDragStart(event, cardId, paneOverride) {", 1)[1].split(
         "\n  function handlePaneCardDragEnd", 1
     )[0]
     assert "var conversationViewport = wbcCaptureConversationViewport(card);" in pane_drag
@@ -1259,7 +1440,7 @@ def test_workbench_pane_drag_ghost_preserves_current_viewport_and_handle_hotspot
     assert "var handleGrabY" in pane_drag
     assert "var capturedClientX = Number(dragHandle.dataset.wbcDragClientX);" in pane_drag
     assert "var capturedHandleX = Number(dragHandle.dataset.wbcDragHandleX);" in pane_drag
-    assert "movePaneCardGhost({ clientX: initialClientX, clientY: initialClientY });" in pane_drag
+    assert "movePaneCardGhost(event);" in pane_drag
     assert "var grabX = (handleRect.left - cardRect.left) + handleGrabX;" in pane_drag
     assert "var grabY = (handleRect.top - cardRect.top) + handleGrabY;" in pane_drag
     assert 'ghost.style.transform = "translate3d("' in pane_drag
@@ -1272,6 +1453,7 @@ def test_workbench_pane_drag_ghost_preserves_current_viewport_and_handle_hotspot
     assert 'wbcBuildRailCardDragPreview(railCard, "wbc-pane-card-rail-drag-card")' in pane_drag
     assert 'moveEvent.dataTransfer.dropEffect = "move";' in pane_drag
     assert 'moveEvent.preventDefault();' in pane_drag
+    assert "detachedBridge.updateDrag" in pane_drag
     assert 'ghost.classList.toggle("rail-card", overRail);' in pane_drag
     assert 'railCard.classList.toggle("dragging", overRail);' in pane_drag
     assert "function pointerIsOverMatchingRailCard(clientX, clientY)" in pane_drag
@@ -1279,8 +1461,9 @@ def test_workbench_pane_drag_ghost_preserves_current_viewport_and_handle_hotspot
     assert 'railPreview.style.left = (grabX - railGrabX) + "px";' in pane_drag
     assert 'ghost.style.width = (overRail ? railPreviewWidth' not in pane_drag
     assert "function finishPaneCardGhost(dropEvent)" in pane_drag
-    assert "if (droppedOnMatchingCard && draggedChatId) closePaneCard(cardId);" in pane_drag
-    assert "wbcHideNativeDragImage(transfer);" in pane_drag
+    assert "if (droppedOnMatchingCard && draggedChatId)" in pane_drag
+    assert "placeExistingPaneCard(cardId, pointerPaneTarget.cardId, pointerPaneTarget.edge);" in pane_drag
+    assert "wbcHideNativeDragImage(transfer);" not in pane_drag
     assert "event.dataTransfer.setDragImage(" not in pane_drag
     assert ".wbc-pane-card-drag-ghost" in styles
     assert "will-change: transform, opacity;" in styles
@@ -1289,6 +1472,12 @@ def test_workbench_pane_drag_ghost_preserves_current_viewport_and_handle_hotspot
     assert ".wbc-pane-card-drag-ghost.rail-card" in styles
     assert ".wbc-pane-card-rail-drag-card" in styles
     assert ".wbc-pane-card-drag-surface" in styles
+    ghost_composer_css = styles.split(
+        ".wbc-pane-card-drag-surface .wbc-main > .wbc-composer {", 1
+    )[1].split("}", 1)[0]
+    assert "var(--wbc-composer-top-inset)" in ghost_composer_css
+    assert ghost_composer_css.count("var(--wbc-composer-edge-inset)") == 2
+    assert "!important" in ghost_composer_css
     assert ".wbc-rail .wbc-chat-card.wbc-split-return-target" in styles
     grip = source.split("function WbcSplitGripBar(", 1)[1].split("function WbcSplitPickerMenu", 1)[0]
     assert "function captureDragPointer(event)" in grip
@@ -1353,6 +1542,93 @@ def test_workbench_side_question_panel_renders_only_the_question_list():
     list_css = styles.split(".wbc-side-agent-list {", 1)[1].split("}", 1)[0]
     assert "flex-direction: column;" in list_css
     assert "gap: 6px;" in list_css
+
+
+def test_rail_chat_drop_replaces_the_canonical_active_conversation_by_selection():
+    root = Path(__file__).resolve().parent.parent
+    source = (root / "src" / "webui" / "frontend" / "workbench-chat.jsx").read_text(
+        encoding="utf-8"
+    )
+    helper = "var WBC_PANE_CARD_SEQUENCE" + source.split(
+        "var WBC_PANE_CARD_SEQUENCE", 1
+    )[1].split("function wbcSetSplitDrag", 1)[0]
+    script = f"""
+global.localStorage = {{ getItem: () => null }};
+eval({json.dumps(helper)});
+const base = wbcDefaultPaneLayout("main");
+const canonicalMain = wbcPaneCardLocation(base, "chat:main");
+const existingBase = wbcDefaultPaneLayout("existing-chat");
+const canonicalExisting = wbcPaneCardLocation(existingBase, "chat:existing-chat");
+const duplicateMain = wbcPaneCard("chat", "main", {{ freshInstance: true, ownerChatId: "main" }});
+process.stdout.write(JSON.stringify([
+  wbcChatDropReplacesActiveConversation(canonicalMain, "replace", "chat-b", "main"),
+  wbcChatDropReplacesActiveConversation(canonicalExisting, "replace", "chat-b", "existing-chat"),
+  wbcChatDropReplacesActiveConversation(canonicalMain, "bottom", "chat-b", "main"),
+  wbcChatDropReplacesActiveConversation({{ card: duplicateMain }}, "replace", "chat-b", "main"),
+]));
+"""
+    result = subprocess.run(
+        ["node", "-e", script], check=True, capture_output=True, text=True
+    )
+    assert json.loads(result.stdout) == [True, True, False, False]
+
+    pane_drop = source.split(
+        "  function handlePaneDrop(event, targetCardId, edge) {", 1
+    )[1].split("\n  function handleSideLayerDragOver", 1)[0]
+    replacement_branch = pane_drop.split("if (droppedChatSelection) {", 1)[1].split(
+        "    updatePaneLayout(function (current)", 1
+    )[0]
+    assert "wbcChatDropReplacesActiveConversation(" in pane_drop
+    assert "selectChat(droppedChatSelection);" in replacement_branch
+    assert "updatePaneLayout" not in replacement_branch
+    assert "setSideVisible(false)" not in replacement_branch
+
+
+def test_vertical_conversation_split_elastically_reclaims_the_hidden_panel_track():
+    root = Path(__file__).resolve().parent.parent
+    source = (root / "src" / "webui" / "frontend" / "workbench-chat.jsx").read_text(
+        encoding="utf-8"
+    )
+    styles = (root / "src" / "webui" / "frontend" / "workbench.css").read_text(
+        encoding="utf-8"
+    )
+    page_css = styles.split(".wbc-page {", 1)[1].split("}", 1)[0]
+    reclaim_css = styles.split(
+        ".wbc-page.wbc-pane-single-column-open {", 1
+    )[1].split("}", 1)[0]
+    vertical_workspace_css = styles.split(
+        ".wbc-page.side-agent-split-open > .wbc-pane-layout.single {", 1
+    )[1].split("}", 1)[0]
+
+    assert "var singleColumnWorkspaceOpen = splitDetailOpen" in source
+    assert 'singleColumnWorkspaceOpen ? " wbc-pane-single-column-open"' in source
+    inline_width = source.split(
+        '"--wbc-chat-side-preview-width": sideAgentSplitWidth + "px",', 1
+    )[1].split("      }}", 1)[0]
+    assert "!singleColumnWorkspaceOpen" in inline_width
+    assert "--wbc-side-track-width: 0px;" in reclaim_css
+    assert "transition: grid-template-columns 500ms cubic-bezier(.22, 1.16, .36, 1);" in page_css
+    assert "grid-column:" not in vertical_workspace_css
+    assert "padding-right: var(--wbc-card-gutter);" in vertical_workspace_css
+
+
+def test_pane_grip_drag_uses_rendered_position_key_for_drop_feedback():
+    root = Path(__file__).resolve().parent.parent
+    source = (root / "src" / "webui" / "frontend" / "workbench-chat.jsx").read_text(
+        encoding="utf-8"
+    )
+
+    hit_testing = source.split("    function paneTargetAt(clientX, clientY) {", 1)[1].split(
+        "    function movePaneCardGhost", 1
+    )[0]
+    frame = source.split("function WbcPaneCardFrame(", 1)[1].split(
+        "function WbcPaneRowResizer", 1
+    )[0]
+
+    assert 'data-pane-drop-key={dropKey || card.id}' in frame
+    assert 'dropKey: String(targetCard.dataset.paneDropKey || targetId)' in hit_testing
+    assert 'String(dropTarget.dropKey || "") === String(dropKey || "")' in frame
+    assert 'side + ":" + index' in source
 
 
 def test_workbench_two_level_card_panes_share_drag_resize_and_menu_contracts():
@@ -1458,12 +1734,15 @@ process.stdout.write(JSON.stringify({{
     pane_card_css = styles.split(".wbc-pane-card {", 1)[1].split("}", 1)[0]
     assert "border: var(--wb-floating-rail-border);" in pane_card_css
     assert "border-radius: var(--wb-floating-rail-radius);" in pane_card_css
-    assert "background: var(--wb-floating-rail-bg);" in pane_card_css
+    assert "background: var(--wbc-panel-surface);" in pane_card_css
     assert "box-shadow: var(--wb-floating-rail-shadow);" in pane_card_css
     assert "overflow: hidden;" in pane_card_css
     assert "cubic-bezier(.22, 1.16, .36, 1)" in pane_card_css
     pane_layout_css = styles.split("\n.wbc-pane-layout {", 1)[1].split("}", 1)[0]
-    assert "padding: var(--wbc-card-top-inset) 0 var(--wbc-card-gutter) var(--wbc-card-gutter);" in pane_layout_css
+    assert (
+        "padding: var(--wbc-card-top-inset) 0 var(--wbc-card-gutter) "
+        "calc(var(--wbc-card-gutter) - 4px);" in pane_layout_css
+    )
     assert ".wbc-page > .wbc-pane-layout { grid-row: 1; }" in styles
     column_resizer = source.split("function WbcPaneColumnResizer", 1)[1].split(
         "function WbcSideAgentSplitResizer", 1
@@ -1940,9 +2219,10 @@ process.stdout.write(JSON.stringify([
     grip_bar = source.split("function WbcSplitGripBar", 1)[1].split(
         "function WbcSideAgentSplit", 1
     )[0]
-    assert 'draggable="true"' in grip_bar
-    assert "onSplitDragStart(event, dragSource)" in grip_bar
-    assert "onDragEnd" in grip_bar
+    assert 'draggable="true"' not in grip_bar
+    assert "target.setPointerCapture(event.pointerId)" in grip_bar
+    assert "onPointerMove={trackDragPointer}" in grip_bar
+    assert "onPointerCancel={releaseDragPointer}" in grip_bar
     assert "onClick" in grip_bar
     assert "onDragPanel" not in grip_bar
     assert ".wbc-split-drop-zones" in styles
@@ -2034,6 +2314,17 @@ def test_workbench_split_grip_opens_a_centered_floating_conversation_panel():
     assert "if (onClose) onClose();" not in grip_bar.split("function openConversationPanel", 1)[1].split("return (", 1)[0]
     assert "floatingConversationPanelOpen" in source
     assert "renderConversationPanel(true)" in source
+    pane_card = source.split("  function renderPaneCard(", 1)[1].split(
+        "  function renderPaneColumn(", 1
+    )[0]
+    pane_layout = source.split('<div\n        className={"wbc-pane-layout"', 1)[1].split(
+        "      </div>", 1
+    )[0]
+    # The float must be owned by the active conversation card. Centering a
+    # sibling against the full two-column workspace shifts it into the gutter.
+    assert "isActiveConversation && floatingConversationPanelOpen" in pane_card
+    assert 'className="wbc-pane-floating-conversation-panel"' in pane_card
+    assert 'className="wbc-pane-floating-conversation-panel"' not in pane_layout
     assert 'floating ? " wbc-side-floating" : ""' in source
     assert "floating ? WBC_ICONS.x : WBC_ICONS.chevronsRight" in source
     assert 'wbcT("workbenchChat.closeFloatingConversationPanel"' in source
@@ -2063,6 +2354,13 @@ def test_workbench_split_grip_opens_a_centered_floating_conversation_panel():
         ".wbc-split-main-grip > .wbc-side-floating .wbc-side-card {", 1
     )[1].split("}", 1)[0]
     assert "background: var(--wb-card-bg);" in floating_card_css
+    opaque_float_css = styles.split(
+        "html :is(\n  .wbc-pane-floating-conversation-panel,", 1
+    )[1].split("}", 1)[0]
+    assert ".wbc-split-chat-panel," in opaque_float_css
+    assert ".wbc-split-main-grip > .wbc-side-floating" in opaque_float_css
+    assert "background: var(--wb-card-bg-strong);" in opaque_float_css
+    assert "backdrop-filter: none;" in opaque_float_css
 
 
 def _legacy_test_each_conversation_split_grip_closes_its_own_conversation():
@@ -2380,7 +2678,7 @@ def test_project_file_rows_drag_to_viewer_split_and_topbar_resource_shelf():
     project_browser = source.split("function WbcRail", 1)[1].split(
         "function WbcBrowserFloatingSurface", 1
     )[0]
-    split_drop = source.split("  function resourceSplitSideAt", 1)[1].split(
+    split_drop = source.split("  function resourceSplitDropGeometry", 1)[1].split(
         "\n  function revealTopbarResource", 1
     )[0]
 
@@ -2395,15 +2693,22 @@ def test_project_file_rows_drag_to_viewer_split_and_topbar_resource_shelf():
     assert 'resource.kind !== "file"' in split_drop
     assert "setSplitSideDirect(side);" in split_drop
     assert "openViewer(resource.file" in split_drop
+    assert "function resourceSplitDropGeometry()" in source
+    assert "var chatSideRect = wbcChatSideZoneRect();" in split_drop
+    assert "event.clientX < geometry.rightLeft ? \"left\" : \"right\"" in split_drop
     assert 'className="wbc-resource-file-drop-zones"' in source
     assert 'className="wbc-chat-side-drop-hint" role="status"' in source
     assert 'event.target.closest(".wbc-pane-card")' in split_drop
     assert ".wbc-resource-file-drop-zones" in styles
+    resource_zones = styles.split(".wbc-resource-file-drop-zones {", 1)[1].split("}", 1)[0]
     resource_zone = styles.split(".wbc-resource-file-drop-zone {", 1)[1].split("}", 1)[0]
     resource_active = styles.split(".wbc-resource-file-drop-zone.active {", 1)[1].split("}", 1)[0]
     resource_hint = styles.split(
         ".wbc-resource-file-drop-zone .wbc-chat-side-drop-hint {", 1
     )[1].split("}", 1)[0]
+    assert "left: 0;" in resource_zones
+    assert "display: grid;" not in resource_zones
+    assert "position: absolute;" in resource_zone
     assert "border: 2px solid transparent;" in resource_zone
     assert "border-color: color-mix(in srgb, var(--wb-accent) 72%, transparent);" in resource_active
     assert "cubic-bezier(.22, 1.16, .36, 1)" in resource_hint
@@ -2440,6 +2745,23 @@ def test_project_files_open_in_a_project_scoped_pane_without_an_active_chat():
     assert "!projectPaneOnly && !floatingConversationPanelOpen && !splitDetailOpen" in source
     assert 'className="wbc-pane-column left wbc-new-conversation-column"' in source
     assert 'renderPaneCard({ id: "new-conversation", kind: "chat", payload: "", ownerChatId: "" }, "left", 1)' in source
+    pane_card_renderer = source.split("  function renderPaneCard(", 1)[1].split(
+        "\n  function renderPaneColumn", 1
+    )[0]
+    assert 'var isNewConversation = card.kind === "chat"' in pane_card_renderer
+    assert 'String(card.id || "") === "new-conversation"' in pane_card_renderer
+    assert "var isActiveConversation = isNewConversation || (" in pane_card_renderer
+    assert pane_card_renderer.index("if (isActiveConversation)") < pane_card_renderer.index(
+        '} else if (card.kind === "chat")'
+    )
+    split_chat = source.split("function WbcChatSplit({", 1)[1].split(
+        "function WbcSideAgentSplitResizer", 1
+    )[0]
+    empty_id_guard = split_chat.split("function refresh(background)", 1)[1].split(
+        "return WorkbenchChatModel.getChat", 1
+    )[0]
+    assert "if (!requestedId)" in empty_id_guard
+    assert "setLoading(false);" in empty_id_guard
     project_only_styles = styles.split(".wbc-page.wbc-project-pane-only {", 1)[1].split(
         "}", 1
     )[0]
@@ -2639,8 +2961,12 @@ def test_memory_detail_uses_shared_floating_card_and_animated_accordion():
     assert "border-radius: 18px;" in card_css
     assert "backdrop-filter: blur(18px) saturate(112%);" in card_css
     assert "height: auto;" in card_css
-    assert "padding: 12px;" in shell_css
-    assert "padding: 12px;" in detail_css
+    shared_detail_padding = (
+        "padding: var(--wb-floating-card-top-gap) 12px "
+        "var(--wb-floating-card-bottom-gap);"
+    )
+    assert shared_detail_padding in shell_css
+    assert shared_detail_padding in detail_css
     assert "--wb-floating-detail-width: 350px;" in shared_width_css
     assert "flex: 0 0 var(--wb-floating-detail-width);" in detail_css
     assert (
@@ -2962,7 +3288,7 @@ def test_background_chat_completion_updates_detail_cache_before_runtime_is_clear
     )
 
     saved_hook = source.split(
-        "onAssistantSaved: function (chatId, assistantMessages) {", 1
+        "onAssistantSaved: function (chatId, assistantMessages, terminalEvent) {", 1
     )[1].split("onAwaitingUser:", 1)[0]
     settled_hook = source.split("onSettled: function (chatId) {", 1)[1].split(
         "onResync:", 1
@@ -2972,6 +3298,8 @@ def test_background_chat_completion_updates_detail_cache_before_runtime_is_clear
     )[0]
 
     assert "chatCache.details[chatId] = wbcMergeSavedAssistantMessages" in saved_hook
+    assert 'wbcSettleChatListItem(chat, "completed", terminalEvent)' in saved_hook
+    assert "beginChatListRequest(currentProjectId)" in saved_hook
     assert "chatCache.details[chatId] = chat;" in settled_hook
     assert "chatCache.details[chatId] = chat;" in resync_hook
 
@@ -3027,9 +3355,45 @@ process.stdout.write(JSON.stringify({{
         "\n  // The shell-level menu/shortcut", 1
     )[0]
     assert "var selectionAtRequest = String(activeChatIdRef.current || \"\");" in refresh
+    assert "var requestSequence = beginChatListRequest(requestedProjectId);" in refresh
+    assert "isCurrentChatListRequest(requestedProjectId, requestSequence)" in refresh
     assert "wbcResolveRefreshedChatSelection(" in refresh
     assert "if (targetId !== null) selectChat(targetId);" in refresh
     assert "selectChat(chat.id);" in create
+
+
+def test_terminal_event_synchronously_settles_chat_list_summary():
+    root = Path(__file__).resolve().parent.parent
+    source = (root / "src" / "webui" / "frontend" / "workbench-chat.jsx").read_text(
+        encoding="utf-8"
+    )
+    helper = "function wbcSettleChatListItem(" + source.split(
+        "function wbcSettleChatListItem(", 1
+    )[1].split("function WorkbenchChatPage", 1)[0]
+    script = f"""
+eval({json.dumps(helper)});
+const settled = wbcSettleChatListItem({{
+  id: "chat_1",
+  status: "running",
+  runStatus: "running",
+  agentBusy: {{type:"reply"}},
+  lastRun: {{id:"old", status:"running"}}
+}}, "completed", {{runId:"run_1", timestamp:"2026-08-18T12:17:30Z"}});
+process.stdout.write(JSON.stringify(settled));
+"""
+    completed = subprocess.run(
+        ["node", "-e", script], check=True, capture_output=True, text=True
+    )
+    settled = json.loads(completed.stdout)
+
+    assert settled["status"] == "idle"
+    assert settled["runStatus"] == "completed"
+    assert settled["agentBusy"] is None
+    assert settled["lastRun"] == {
+        "id": "run_1",
+        "status": "done",
+        "completedAt": "2026-08-18T12:17:30Z",
+    }
 
 
 def test_workbench_chat_has_long_conversation_navigation_and_bottom_return():
@@ -6216,10 +6580,63 @@ def test_expanded_task_detail_rail_uses_its_own_lane_and_hides_scrollbar():
     )[1].split("}", 1)[0]
     assert "z-index: 21;" in rail_css
     assert "width: calc(var(--wb-rail-w) - 16px);" in rail_css
+    assert (
+        "height: calc(100% - var(--wb-floating-card-top-gap) - "
+        "var(--wb-floating-card-bottom-gap));" in rail_css
+    )
+    assert (
+        "margin: var(--wb-floating-card-top-gap) 4px "
+        "var(--wb-floating-card-bottom-gap) 12px;" in rail_css
+    )
     task_list_css = styles.rsplit(".workbench-task-list {", 1)[1].split("}", 1)[0]
     assert "overflow-y: auto;" in task_list_css
     assert "scrollbar-width: none;" in task_list_css
     assert ".workbench-task-list::-webkit-scrollbar {" in styles
+
+
+def test_non_chat_floating_cards_share_the_chat_topbar_baseline():
+    root = Path(__file__).resolve().parent.parent
+    styles = (root / "src" / "webui" / "frontend" / "workbench.css").read_text(
+        encoding="utf-8"
+    )
+    library_styles = (
+        root / "src" / "webui" / "frontend" / "workbench-library.css"
+    ).read_text(encoding="utf-8")
+
+    shell_css = styles.split(".workbench-shell {", 1)[1].split("}", 1)[0]
+    grid_css = styles.split(".workbench-grid {", 1)[1].split("}", 1)[0]
+    chat_grid_css = styles.split(".workbench-grid.is-chat {", 1)[1].split("}", 1)[0]
+    rail_css = styles.split(
+        ".workbench-grid.integrated-sidebars .workbench-integrated-rail {", 1
+    )[1].split("}", 1)[0]
+    detail_shell_css = styles.split(".wb-floating-detail-shell {", 1)[1].split("}", 1)[0]
+    library_detail_css = library_styles.split(".wb-lib-right {", 1)[1].split("}", 1)[0]
+    compact_shell_css = styles.split(
+        'html[data-density="compact"] .workbench-shell,', 1
+    )[1].split("}", 1)[0]
+
+    assert "--wb-topbar-height: 58px;" in shell_css
+    assert "--wb-floating-card-top-gap: 0px;" in shell_css
+    assert "--wb-floating-card-bottom-gap: 12px;" in shell_css
+    assert "padding-top: var(--wb-topbar-height);" in shell_css
+    assert "height: calc(100vh - var(--wb-topbar-height));" in grid_css
+    assert "margin-top: calc(0px - var(--wb-topbar-height));" in chat_grid_css
+    assert (
+        "height: calc(100% - var(--wb-floating-card-top-gap) - "
+        "var(--wb-floating-card-bottom-gap));" in rail_css
+    )
+    assert (
+        "margin: var(--wb-floating-card-top-gap) 4px "
+        "var(--wb-floating-card-bottom-gap) 12px;" in rail_css
+    )
+    expected_detail_padding = (
+        "padding: var(--wb-floating-card-top-gap) 12px "
+        "var(--wb-floating-card-bottom-gap);"
+    )
+    assert expected_detail_padding in detail_shell_css
+    assert expected_detail_padding in library_detail_css
+    assert "--wb-topbar-height: 50px;" in compact_shell_css
+    assert "--wb-floating-card-top-gap: 1px;" in compact_shell_css
 
 
 def test_task_and_chat_empty_rail_states_center_vertically():
@@ -6340,7 +6757,12 @@ def test_workbench_keeps_one_persistent_module_dock_across_workspace_switches():
         ".workbench-sidebar-dock.is-persistent {", 1
     )[1].split("}", 1)[0]
     assert "position: absolute;" in persistent_dock_css
+    assert "left: 27px;" in persistent_dock_css
     assert "width: calc(var(--wb-rail-w) - 46px);" in persistent_dock_css
+    assert (
+        ".workbench-grid.integrated-sidebars.is-chat > "
+        ".workbench-sidebar-dock.is-persistent {" not in styles
+    )
     assert ".workbench-sidebar-dock.is-persistent:has(.workbench-module-account-menu) {" in styles
     assert ".workbench-sidebar-dock::before {" in styles
     dock_separator = styles.split(".workbench-sidebar-dock::before {", 1)[1].split("}", 1)[0]
@@ -6367,7 +6789,10 @@ def test_workbench_keeps_one_persistent_module_dock_across_workspace_switches():
     assert "--wb-floating-control-shadow:" in integrated_grid_css
     assert "flex: 0 0 calc(var(--wb-rail-w) - 16px);" in integrated_rail_css
     assert "width: calc(var(--wb-rail-w) - 16px);" in integrated_rail_css
-    assert "margin: 12px 4px 12px 12px;" in integrated_rail_css
+    assert (
+        "margin: var(--wb-floating-card-top-gap) 4px "
+        "var(--wb-floating-card-bottom-gap) 12px;" in integrated_rail_css
+    )
     assert "border: var(--wb-floating-rail-border);" in integrated_rail_css
     assert "border-radius: var(--wb-floating-rail-radius);" in integrated_rail_css
     assert "background: var(--wb-floating-rail-bg);" in integrated_rail_css
@@ -6485,10 +6910,13 @@ def test_workbench_keeps_one_persistent_module_dock_across_workspace_switches():
     assert "function WorkbenchRailAccount(" in source
     assert "<WorkbenchRailAccount" in module_dock
     assert 'className="workbench-rail-account-button"' in source
+    account_summary_css = styles.split(".workbench-rail-account-summary {", 1)[1].split("}", 1)[0]
     account_name_css = styles.split(".workbench-rail-account-summary b {", 1)[1].split("}", 1)[0]
-    account_model_css = styles.split(".workbench-rail-account-summary small {", 2)[2].split("}", 1)[0]
+    assert 'className="workbench-rail-account-summary"' in source
+    assert '<small>{codexQuotaState.plan || modelLabel}</small>' not in source
+    assert "align-self: stretch;" in account_summary_css
+    assert "justify-content: center;" in account_summary_css
     assert "font-size: calc(14px * var(--wb-ui-font-scale, 1));" in account_name_css
-    assert "font-size: calc(11.5px * var(--wb-ui-font-scale, 1));" in account_model_css
     assert 'className="workbench-account-menu workbench-module-account-menu"' in source
     assert 't("settings.codexQuota")' in source
     assert 't("rail.settings")' in source
@@ -6977,7 +7405,7 @@ def test_workbench_chat_error_retry_replays_failed_message_instead_of_reloading(
     )
 
     runtime_error = source.split(
-        'onError: function (chatId, err) {', 1
+        'onError: function (chatId, err, failureState) {', 1
     )[1].split("onSettled:", 1)[0]
     main_props = source.split("<WbcMain", 1)[1].split("/>", 1)[0]
 
@@ -6987,6 +7415,40 @@ def test_workbench_chat_error_retry_replays_failed_message_instead_of_reloading(
     assert '<WbcErrorNotice message={error} kind={errorKind} onRetry={onRetry} />' in source
     assert 'wbcT("workbenchChat.error.messageTitle", "Message processing failed")' in source
     assert 'wbcT("workbenchChat.error.messageBody"' in source
+
+
+def test_workbench_chat_waits_for_terminal_failure_and_retains_it_until_retry():
+    root = Path(__file__).resolve().parent.parent
+    source = (root / "src" / "webui" / "frontend" / "workbench-chat.jsx").read_text(
+        encoding="utf-8"
+    )
+
+    stream_failure = source.split("function failRun(chatId, err) {", 1)[1].split(
+        "function appendActivity", 1
+    )[0]
+    stream_owner = source.split("function ownStream(chatId, streamPromise, ac) {", 1)[1].split(
+        "// Begin a streamed send", 1
+    )[0]
+    page_error = source.split(
+        "onError: function (chatId, err, failureState) {", 1
+    )[1].split("onSettled:", 1)[0]
+    selection_load = source.split(
+        "// Load the full transcript when the selection changes.", 1
+    )[1].split("model.getChat(activeChatId", 1)[0]
+    start_run = source.split("function start(chatId, input, model) {", 1)[1].split(
+        "function reconnect", 1
+    )[0]
+
+    assert 'fire("onError", chatId, err, { terminal: false })' in stream_owner
+    assert "failRun(chatId, err);" not in stream_owner
+    assert 'publishLifecycle(chatId, "failed", err || {})' in stream_failure
+    assert 'fire("onError", chatId, failures[chatId], { terminal: true })' in stream_failure
+    assert "if (terminal)" in page_error
+    assert 'runStatus: "failed"' in page_error
+    assert 'wbcSettleChatListItem(chat, "failed", err)' in page_error
+    assert "if (terminal && String(activeChatIdRef.current" in page_error
+    assert "runtimeEngine.getFailure(activeChatId)" in selection_load
+    assert "clearFailure(chatId);" in start_run
 
 
 def test_workbench_chat_errors_keep_i18n_metadata_and_localize_known_codes():
@@ -7091,9 +7553,9 @@ def test_workbench_live_trace_keeps_each_llm_activity_independent():
     assert 'type === "reasoning_delta" && handlers.onReasoningDelta' in chat
     assert 'type === "reasoning_done" && handlers.onReasoningDone' in chat
     assert 'reasoning: String(activity.reasoning || "") + delta' in chat
-    assert "function WbcLiveActivityCard({ activity, active, hasReplyText })" in chat
+    assert "function WbcLiveActivityCard({ activity, active, hasReplyText, live })" in chat
     activity_card = chat.split("function WbcLiveActivityCard", 1)[1].split(
-        "function WbcLiveMessage", 1
+        "function WbcActivityGroup", 1
     )[0]
     live_message = chat.split("function WbcLiveMessage", 1)[1].split(
         "var WBC_DRAFT_PREFIX", 1
@@ -7126,6 +7588,12 @@ def test_workbench_live_trace_keeps_each_llm_activity_independent():
     assert "trace: hasLiveActivities ? []" in chat
     assert 'summaryRunning ? <span className="wb-spinner small" aria-hidden="true" /> : null' in trace_card
     assert 'isRunning ? <span className="wb-spinner small" /> : WBC_ICONS.check' in trace_card
+    assert 'var hasRunningEntries = live && entries.some(function (entry)' in trace_card
+    assert 'var summaryRunning = hasRunningEntries || (activityRunning && entries.length === 0);' in trace_card
+    assert 'var isRunning = live && entryStatus === "running";' in trace_card
+    assert 'aria-busy={summaryRunning ? "true" : undefined}' in trace_card
+    assert 'live={!!msg.runtimeActivity}' in chat
+    assert 'live={true}' in live_message
     assert 'className="wbc-thinking-detail-text"' in trace_card
     assert "wbc-trace-reasoning-toggle" not in trace_card
     assert "wbc-trace-reasoning-toggle" not in css
@@ -7145,6 +7613,114 @@ def test_workbench_live_trace_keeps_each_llm_activity_independent():
     )[1].split("}", 1)[0]
     assert "overflow: visible;" in expanded_detail_text_css
     assert "white-space: pre-wrap;" in expanded_detail_text_css
+
+
+def test_workbench_groups_three_or_more_consecutive_activity_messages():
+    root = Path(__file__).resolve().parent.parent
+    source = (root / "src" / "webui" / "frontend" / "workbench-chat.jsx").read_text(
+        encoding="utf-8"
+    )
+    grouping_source = "var WBC_ACTIVITY_GROUP_MIN_ITEMS" + source.split(
+        "var WBC_ACTIVITY_GROUP_MIN_ITEMS", 1
+    )[1].split("// Read-only tool names", 1)[0]
+    script = f"""
+eval({json.dumps(grouping_source)});
+const durable = [
+  {{ id: "a1", activityCard: true, createdAt: "2026-08-18T10:00:00Z", trace: [{{ kind: "tool", status: "completed" }}] }},
+  {{ id: "a2", activityCard: true, createdAt: "2026-08-18T10:00:01Z", trace: [{{ kind: "tool", status: "completed" }}] }},
+  {{ id: "a3", activityCard: true, createdAt: "2026-08-18T10:00:02Z", trace: [{{ kind: "tool", status: "completed" }}] }},
+  {{ id: "reply", role: "assistant", content: "done", processingDurationMs: 4200 }}
+];
+const shortRun = wbcGroupConsecutiveActivityMessages(durable.slice(0, 2).concat(durable[3]), null);
+const completed = wbcGroupConsecutiveActivityMessages(durable, null);
+const live = wbcGroupConsecutiveActivityMessages([
+  {{ id: "l1", runtimeActivity: {{ progress: [{{ kind: "tool", status: "running" }}] }} }},
+  {{ id: "l2", runtimeActivity: {{ progress: [{{ kind: "tool", status: "completed" }}] }} }},
+  {{ id: "l3", runtimeActivity: {{ reasoning: "thinking", progress: [] }} }}
+], {{ startedAt: 1000, lastEventAt: 5000 }});
+const historicalReasoning = wbcGroupConsecutiveActivityMessages([
+  {{ id: "h1", activityCard: true, reasoning: "historical thought", trace: [] }},
+  {{ id: "h2", activityCard: true, reasoning: "historical thought", trace: [] }},
+  {{ id: "only-command", activityCard: true, trace: [{{ kind: "tool", status: "completed" }}] }},
+  {{ id: "reply-2", role: "assistant", content: "done" }}
+], null);
+process.stdout.write(JSON.stringify({{
+  shortTypes: shortRun.map(item => !!item.activityGroup),
+  completed: {{
+    grouped: completed[0].activityGroup,
+    ids: completed[0].activities.map(item => item.id),
+    active: completed[0].active,
+    durationMs: completed[0].durationMs,
+    nextId: completed[1].id
+  }},
+  live: {{ grouped: live[0].activityGroup, active: live[0].active, durationMs: live[0].durationMs }},
+  historicalReasoning: historicalReasoning.map(item => ({{
+    id: item.id,
+    grouped: !!item.activityGroup,
+    activityIds: item.activityGroup ? item.activities.map(activity => activity.id) : []
+  }}))
+}}));
+"""
+    completed_process = subprocess.run(
+        ["node", "-e", script], check=True, capture_output=True, text=True
+    )
+    result = json.loads(completed_process.stdout)
+    assert result == {
+        "shortTypes": [False, False, False],
+        "completed": {
+            "grouped": True,
+            "ids": ["a1", "a2", "a3"],
+            "active": False,
+            "durationMs": 4200,
+            "nextId": "reply",
+        },
+        "live": {"grouped": True, "active": True, "durationMs": None},
+        "historicalReasoning": [
+            {
+                "id": "activity-group:h1",
+                "grouped": True,
+                "activityIds": ["h1", "h2", "only-command"],
+            },
+            {"id": "reply-2", "grouped": False, "activityIds": []},
+        ],
+    }
+
+
+def test_workbench_activity_group_has_live_and_completed_disclosure_states():
+    root = Path(__file__).resolve().parent.parent
+    chat = (root / "src" / "webui" / "frontend" / "workbench-chat.jsx").read_text(
+        encoding="utf-8"
+    )
+    css = (root / "src" / "webui" / "frontend" / "workbench.css").read_text(
+        encoding="utf-8"
+    )
+    i18n = (root / "src" / "webui" / "frontend" / "workbench-i18n.jsx").read_text(
+        encoding="utf-8"
+    )
+    group_component = chat.split("function WbcActivityGroup", 1)[1].split(
+        "var WBC_LIVE_MARKDOWN_INTERVAL_MS", 1
+    )[0]
+    assert "wbcGroupConsecutiveActivityMessages(messages, runtime)" in chat
+    assert "displayMessages.map(function (msg)" in chat
+    assert "if (msg.activityGroup)" in chat
+    assert 'className="wbc-activity-group-summary"' in group_component
+    assert "aria-expanded={expanded}" in group_component
+    assert 'aria-busy={active ? "true" : undefined}' in group_component
+    assert "if (wasActiveRef.current && !active) setExpanded(false);" in group_component
+    assert 'workbenchChat.activityGroup.completedDuration' in group_component
+    trace_card = chat.split("function WbcTraceCard", 1)[1].split(
+        "function WbcAssistantMessage", 1
+    )[0]
+    assert 'if (!entries.length && !reasoningText.trim() && !live) return null;' in trace_card
+    assert 'visible: active || entries.length > 0 || hasReasoning' in chat
+    assert '"workbenchChat.activityGroup.running.command": "正在运行命令"' in i18n
+    assert '"workbenchChat.activityGroup.running.reply": "正在生成回复"' in i18n
+    assert '"workbenchChat.activityGroup.completedDuration": "已处理（{duration}）"' in i18n
+    assert ".wbc-activity-group-collapse.open" in css
+    assert "@media (prefers-reduced-motion: reduce)" in css
+    group_list_css = css.split(".wbc-activity-group-list {", 1)[1].split("}", 1)[0]
+    assert "border-left" not in group_list_css
+    assert "margin: 3px 0 2px 22px;" in group_list_css
 
 
 def test_codex_reasoning_effort_updates_the_primary_candidate_without_stale_state():
@@ -7428,6 +8004,9 @@ def test_code_blocks_use_declared_language_and_resilient_clipboard_actions():
     assert 'typeof window.cyrene.writeClipboardText === "function"' in actions
     assert 'navigator.clipboard && typeof navigator.clipboard.writeText === "function"' in actions
     assert 'document.execCommand("copy")' in actions
+    assert 'translate("workbenchChat.codeBlock.copy", "Copy")' in actions
+    assert 'translate("workbenchChat.codeBlock.edit", "Edit")' in actions
+    assert 'window.addEventListener("cyrene:i18n-changed", localizeActions)' in actions
     assert "padding-top: 52px;" in styles
     assert "top: 0;" in styles
     assert "bottom: 0;" not in styles.split(".code-block-actions", 1)[1].split("}", 1)[0]
@@ -7585,14 +8164,26 @@ def test_workbench_task_details_reuse_floating_animated_accordion():
         ".workbench-grid.integrated-sidebars.is-task-detail .wb-task-detail-shell {", 1
     )[1].split("}", 1)[0]
     task_card_css = styles.split(".wb-task-detail-card {", 1)[1].split("}", 1)[0]
-    assert "height: calc(100% - 24px);" in task_main_css
-    assert "max-height: calc(100% - 24px);" in task_main_css
-    assert "margin: 12px 8px;" in task_main_css
+    assert (
+        "height: calc(100% - var(--wb-floating-card-top-gap) - "
+        "var(--wb-floating-card-bottom-gap));" in task_main_css
+    )
+    assert (
+        "max-height: calc(100% - var(--wb-floating-card-top-gap) - "
+        "var(--wb-floating-card-bottom-gap));" in task_main_css
+    )
+    assert (
+        "margin: var(--wb-floating-card-top-gap) 8px "
+        "var(--wb-floating-card-bottom-gap);" in task_main_css
+    )
     assert "border: var(--wb-floating-rail-border);" in task_main_css
     assert "border-radius: var(--wb-floating-rail-radius);" in task_main_css
     assert "background: var(--wb-floating-rail-bg);" in task_main_css
     assert "box-shadow: var(--wb-floating-rail-shadow);" in task_main_css
-    assert "padding: 12px 12px 12px 4px;" in task_shell_css
+    assert (
+        "padding: var(--wb-floating-card-top-gap) 12px "
+        "var(--wb-floating-card-bottom-gap) 4px;" in task_shell_css
+    )
     assert "overflow: visible;" in task_shell_css
     assert "height: auto;" in task_card_css
     assert "max-height: 100%;" in task_card_css
@@ -8340,6 +8931,21 @@ def test_warning_toast_has_no_colored_left_accent():
     assert ".workbench-toast.is-warning { border-left-color: var(--wb-amber); }" not in css
 
 
+def test_agent_error_notice_keeps_its_content_inside_a_uniform_border():
+    root = Path(__file__).resolve().parent.parent
+    css = (root / "src" / "webui" / "frontend" / "workbench.css").read_text(encoding="utf-8")
+
+    error_card_css = css.split(".wbc-error-card {", 1)[1].split("}", 1)[0]
+    agent_error_css = css.split(".wbc-error-card.is-agent-error {", 1)[1].split("}", 1)[0]
+    agent_error_tones_css = css.split(
+        ".wbc-error-card.is-agent-error.is-network {", 1
+    )[1].split(".wbc-error-icon {", 1)[0]
+
+    assert "flex: 0 0 auto;" in error_card_css
+    assert "border-left:" not in agent_error_css
+    assert "border-left-color:" not in agent_error_tones_css
+
+
 def test_workbench_subagent_payload_recovers_chat_scoped_snapshot(monkeypatch):
     from cyrene import subagent
     from cyrene.workbench import chat as routes_workbench_chat
@@ -8552,7 +9158,7 @@ def test_workbench_task_composer_includes_model_and_reasoning_picker():
     model = (root / "src" / "webui" / "frontend" / "workbench-model.jsx").read_text(encoding="utf-8")
 
     composer = workbench.split("function TaskComposer(", 1)[1].split(
-        "function ComposerDisclaimer", 1
+        "function RightContextPanel", 1
     )[0]
     assert "wbc-model-button" in composer
     assert 'setModelPanel("models")' in composer
@@ -8589,7 +9195,7 @@ def test_workbench_task_composer_reuses_chat_voice_input_flow():
     chat = (root / "src" / "webui" / "frontend" / "workbench-chat.jsx").read_text(encoding="utf-8")
 
     composer = workbench.split("function TaskComposer(", 1)[1].split(
-        "function ComposerDisclaimer", 1
+        "function RightContextPanel", 1
     )[0]
     assert "WbcVoice.subscribe(setVoiceSnapshot)" in composer
     assert "wbcStartVoiceRecorder" in composer
@@ -8618,24 +9224,28 @@ def test_workbench_task_composer_matches_chat_floating_card_material():
     task_header_right_mask = styles.rsplit(".workbench-task-header-sticky::after {", 1)[1].split("}", 1)[0]
     chat_box = styles.split(".wbc-composer-box {", 1)[1].split("}", 1)[0]
     chat_actions = styles.split("\n.wbc-composer-actions {", 1)[1].split("}", 1)[0]
-    disclaimer = styles.split(".wb-composer-disclaimer {", 1)[1].split("}", 1)[0]
-
+    task_main = styles.split(
+        ".workbench-grid.is-task-detail .workbench-main {", 1
+    )[1].split("}", 1)[0]
     assert ".wbc-conversation-split::after" not in styles
     assert ".workbench-grid.is-task-detail .workbench-main::after" not in styles
     for declaration in (
         "border-radius: 14px;",
-        "background: color-mix(in srgb, var(--wb-card-bg) 72%, transparent);",
-        "blur(18px) saturate(120%) contrast(102%)",
     ):
         assert declaration in task_box
         assert declaration in chat_box
-    assert "width: fit-content;" in disclaimer
-    assert "max-width: calc(100% - 24px);" in disclaimer
-    assert "border: 0;" in disclaimer
-    assert "border-radius: 14px;" in disclaimer
-    assert "background: color-mix(in srgb, var(--wb-card-bg) 72%, transparent);" in disclaimer
-    assert "blur(18px) saturate(120%) contrast(102%)" in disclaimer
+    assert "background: color-mix(in srgb, var(--wb-card-bg) 72%, transparent);" in task_box
+    assert "backdrop-filter: blur(18px) saturate(120%) contrast(102%);" in task_box
+    assert "--wbc-composer-glass-background: color-mix(in srgb, var(--wb-card-bg) 72%, transparent);" in chat_box
+    assert "--wbc-composer-glass-filter: blur(18px) saturate(120%) contrast(102%);" in chat_box
+    assert "wb-composer-disclaimer" not in styles
+    assert "ComposerDisclaimer" not in source
+    assert "workbench.composerDisclaimer" not in (
+        root / "src" / "webui" / "frontend" / "workbench-chat.jsx"
+    ).read_text(encoding="utf-8")
     assert "border-top: 0;" in chat_actions
+    assert "padding: 18px;" in task_main
+    assert "padding-bottom: 4px;" not in task_main
     assert 'className="workbench-composer wbc-composer"' in source
     assert 'className="workbench-composer-box wbc-composer-box"' in source
     assert 'className="workbench-task-header workbench-composer-box"' in task_header
@@ -8678,7 +9288,10 @@ def test_workbench_task_detail_max_height_aligns_with_main_card_bottom():
     detail_card = styles.split(".wb-task-detail-card {", 1)[1].split("}", 1)[0]
     open_panel = styles.split(".wb-task-detail-tab-panel.open {", 1)[1].split("}", 1)[0]
 
-    assert "padding: 12px 12px 12px 4px;" in detail_shell
+    assert (
+        "padding: var(--wb-floating-card-top-gap) 12px "
+        "var(--wb-floating-card-bottom-gap) 4px;" in detail_shell
+    )
     assert "height: 100%;" in detail_shell
     assert "max-height: 100%;" in detail_card
     assert "max-height: calc(100vh" not in detail_card
@@ -8687,14 +9300,53 @@ def test_workbench_task_detail_max_height_aligns_with_main_card_bottom():
     assert "100vh" not in open_panel
 
 
-def test_composer_disclaimer_has_balanced_vertical_clearance():
+def test_composer_disclaimer_is_not_rendered_or_styled():
     root = Path(__file__).resolve().parent.parent
     styles = (root / "src" / "webui" / "frontend" / "workbench.css").read_text(
         encoding="utf-8"
     )
 
-    disclaimer = styles.split(".wb-composer-disclaimer {", 1)[1].split("}", 1)[0]
-    assert "margin: 4px auto;" in disclaimer
+    chat = (root / "src" / "webui" / "frontend" / "workbench-chat.jsx").read_text(
+        encoding="utf-8"
+    )
+    workbench = (root / "src" / "webui" / "frontend" / "workbench.jsx").read_text(
+        encoding="utf-8"
+    )
+
+    assert "wb-composer-disclaimer" not in styles
+    assert "wb-composer-disclaimer" not in chat
+    assert "ComposerDisclaimer" not in workbench
+
+
+def test_pending_question_disables_chat_and_task_composers():
+    root = Path(__file__).resolve().parent.parent
+    chat = (root / "src" / "webui" / "frontend" / "workbench-chat.jsx").read_text(
+        encoding="utf-8"
+    )
+    workbench = (root / "src" / "webui" / "frontend" / "workbench.jsx").read_text(
+        encoding="utf-8"
+    )
+    chat_composer = chat.split("function WbcComposer(", 1)[1].split(
+        "function wbcClearComposerDraft", 1
+    )[0]
+    task_composer = workbench.split("function TaskComposer(", 1)[1].split(
+        "function RightContextPanel", 1
+    )[0]
+
+    assert "var awaitingAnswer = !!(chat && chat.pendingQuestion && chat.pendingQuestion.id);" in chat_composer
+    assert "if (awaitingAnswer) return;" in chat_composer
+    assert "var sendDisabled = awaitingAnswer ||" in chat_composer
+    assert "disabled={awaitingAnswer || !capText" in chat_composer
+    assert "disabled={uploading || running || awaitingAnswer}" in chat_composer
+    assert "disabled={awaitingAnswer || voicePhase" in chat_composer
+    assert "if (awaitingAnswer) return;\n      var detail" in chat_composer
+
+    assert "var awaitingAnswer = !!(session.pendingQuestion && session.pendingQuestion.id);" in task_composer
+    assert "var disabled = controller.busy || running || awaitingAnswer;" in task_composer
+    assert "var sendDisabled = awaitingAnswer ||" in task_composer
+    assert "disabled={disabled}" in task_composer
+    assert "disabled={uploading || disabled}" in task_composer
+    assert "}, [disabled]);" in task_composer
 
 
 def test_workbench_model_picker_compacts_without_overlapping_send_button():
@@ -8814,24 +9466,32 @@ process.stdout.write(JSON.stringify({{
     assert result["listenersAfterCleanup"] == []
 
 
-def test_workbench_settings_overlay_has_shortcuts_tab_and_panel():
+def test_workbench_settings_page_has_shortcuts_tab_and_no_legacy_overlay_mode():
     root = Path(__file__).resolve().parent.parent
     source = (root / "src" / "webui" / "frontend" / "settings-overlay.jsx").read_text(encoding="utf-8")
     translations = (root / "src" / "webui" / "frontend" / "workbench-i18n.jsx").read_text(encoding="utf-8")
     styles = (root / "src" / "webui" / "frontend" / "workbench.css").read_text(encoding="utf-8")
     index = (root / "src" / "webui" / "frontend" / "index.html").read_text(encoding="utf-8")
 
-    assert '{ id: "shortcuts", labelKey: "settings.shortcuts" }' in source
+    assert '{ id: "shortcuts", labelKey: "settings.shortcuts", icon: "keyboard" }' in source
     assert "function ShortcutsPanel" in source
     assert "React.createElement(ShortcutsPanel" in source
+    assert "function SettingsPage(" in source
+    assert "function SettingsOverlay(" not in source
+    assert "Overlay: Settings" not in source
+    assert "pageMode" not in source
+    assert 'parent_id: "settings_page"' in source
+    assert 'role: "region"' in source
+    assert "settings-overlay-fadein" not in styles
+    assert "settings-panel-slide" not in styles
     assert 'window.CyreneUI.require("shortcuts")' in source
     assert "captureEvent" in source
     # The panel groups bindings and offers a reset-all action.
     assert "settings.shortcutGroupGlobal" in source
     assert "settings.resetShortcuts" in source
     # i18n keys for both languages
-    assert '"settings.shortcuts": "Shortcuts"' in translations
-    assert '"settings.shortcuts": "快捷键"' in translations
+    assert '"settings.shortcuts": "Keyboard shortcuts"' in translations
+    assert '"settings.shortcuts": "键盘快捷键"' in translations
     assert '"shortcut.action.search"' in translations
     assert '"shortcut.action.composerSend"' in translations
     # Styles for the panel
@@ -8842,36 +9502,35 @@ def test_workbench_settings_overlay_has_shortcuts_tab_and_panel():
     assert "compiled/workbench-shortcuts.js?v=0.7.10-beta4" in index
 
 
-def test_workbench_about_related_actions_only_click_right_button():
+def test_workbench_about_hero_owns_update_action_and_download_progress():
     root = Path(__file__).resolve().parent.parent
     source = (root / "src" / "webui" / "frontend" / "settings-overlay.jsx").read_text(encoding="utf-8")
     styles = (root / "src" / "webui" / "frontend" / "workbench.css").read_text(encoding="utf-8")
 
-    related_block = source.split('React.createElement("section", { className: "wb-about-related-card" }', 1)[1].split(
-        "changelogOpen && React.createElement", 1
+    about_block = source.split("function UpdateSection({ t, config }) {", 1)[1].split(
+        "// ── Skills Panel", 1
     )[0]
+    hero_index = about_block.index('className: "wb-about-product-card"')
+    action_index = about_block.index('className: "wb-btn primary wb-about-check-btn"')
+    update_index = about_block.index('className: "wb-about-update-card"')
 
-    assert 'React.createElement("div", { key: item.title, className: "wb-about-related-row" }' in related_block
-    assert 'React.createElement("button", { type: "button", className: "wb-about-related-action", onClick: item.onClick }' in related_block
-    assert 'React.createElement("a", { className: "wb-about-related-action", href: item.href, target: "_blank", rel: "noopener noreferrer" }' in related_block
-    assert 'className: "wb-about-related-row", onClick: item.onClick' not in related_block
-    assert 'className: "wb-about-related-row", href: item.href' not in related_block
+    assert hero_index < action_index < update_index
+    assert 'className: "wb-about-hero-progress"' in about_block
+    assert '"--wb-about-download-progress": heroProgress + "%"' in about_block
+    assert 'className: "wb-about-update-footer"' not in about_block
+    assert 'className: "wb-about-related-card"' not in about_block
+    assert "var relatedLinks = [" not in about_block
 
-    related_row_rule = styles.split(".wb-about-related-row {", 1)[1].split("}", 1)[0]
-    assert "cursor: pointer" not in related_row_rule
-    assert ".wb-about-related-row:hover" not in styles
-    assert ".wb-about-related-action:hover" in styles
-    assert ".wb-about-related-action:focus-visible" in styles
+    progress_rule = styles.split(".wb-about-hero-progress {", 1)[1].split("}", 1)[0]
+    assert "position: absolute" in progress_rule
+    assert "inset: 0 auto 0 0" in progress_rule
+    assert "width: var(--wb-about-download-progress)" in progress_rule
+    assert ".wb-about-product-card.is-downloading .wb-about-hero-progress" in styles
+    assert ".wb-about-related-row" not in styles
 
-    final_action_rule = styles.rsplit(".workbench-shell .settings-overlay .wb-about-related-action {", 1)[1].split("}", 1)[0]
-    assert "min-height: calc(30px * var(--wb-ui-density-scale, 1)) !important" in final_action_rule
-    assert "font-family: var(--wb-font) !important" in final_action_rule
-    assert "font-size: calc(13px * var(--wb-ui-font-scale, 1)) !important" in final_action_rule
-    assert "font-weight: 600 !important" in final_action_rule
-    assert "line-height: 1 !important" in final_action_rule
-
-    assert "--wb-settings-panel-height: min(540px, calc(100vh - 48px))" in styles
-    assert styles.count("height: var(--wb-settings-panel-height);") == 3
+    changelog_modal_rule = styles.split(".wb-changelog-modal {", 1)[1].split("}", 1)[0]
+    assert "height: min(540px, calc(100vh - 48px));" in changelog_modal_rule
+    assert "--wb-settings-panel-height" not in styles
 
 
 def test_extension_center_uses_fixed_settings_geometry_and_localized_catalog_copy():
@@ -8884,6 +9543,13 @@ def test_extension_center_uses_fixed_settings_geometry_and_localized_catalog_cop
     assert 'if (props.id === "github-cli") return AboutRelatedIcon("github");' in source
     assert 'className: "wb-extension-expand-button"' in source
     assert source.index('className: "wb-extension-actions"') < source.index('className: "wb-extension-expand-button"')
+    chevron_css = styles.split(".wb-extension-chevron {", 1)[1].split("}", 1)[0]
+    assert "width: 18px;" in chevron_css
+    assert "height: 18px;" in chevron_css
+    assert "display: grid;" in chevron_css
+    assert "place-items: center;" in chevron_css
+    assert "line-height: 0;" in chevron_css
+    assert ".wb-extension-chevron > svg { display: block; }" in styles
     assert 'className: "wb-extension-source-sections"' in source
     assert 't("settings.extensionMcpRegistryHint")' in source
     assert '.wb-extension-source-modal { width: min(820px, calc(100vw - 32px)); padding: 0; overflow: auto; }' in styles
@@ -9284,6 +9950,39 @@ process.stdout.write(JSON.stringify({{
     assert '<a href="http://www.bilibili.com">www.bilibili.com</a>），顶部导航已加载。' in result["bare"]
     assert "%EF%BC%89" not in result["bare"]
     assert '<a href="https://example.com/a%EF%BC%8Cb">示例</a>' in result["explicit"]
+
+
+def test_markdown_temperature_ranges_do_not_form_cross_line_strikethrough():
+    root = Path(__file__).resolve().parent.parent
+    renderer_path = root / "src" / "webui" / "frontend" / "shared" / "markdown" / "renderer.jsx"
+    marked_path = root / "src" / "webui" / "static" / "app" / "marked.min.js"
+    script = f"""
+const fs = require("fs");
+const vm = require("vm");
+const marked = require({json.dumps(str(marked_path))});
+const services = {{}};
+const window = {{
+  marked,
+  DOMPurify: {{ sanitize: (html) => html }},
+  CyreneUI: {{ register: (name, service) => (services[name] = service) }},
+}};
+vm.runInNewContext(fs.readFileSync({json.dumps(str(renderer_path))}, "utf8"), {{ window }});
+const weather = [
+  "**8月22日（周六）**：大雨转中雨，26~30℃",
+  "**8月23日（周日）**：小雨转多云，25~32℃",
+].join("\\n");
+process.stdout.write(JSON.stringify({{
+  weather: services.markdown.renderRich(weather),
+  strike: services.markdown.renderRich("保留 ~~删除线~~ 语法"),
+}}));
+"""
+    completed = subprocess.run(["node", "-e", script], check=True, capture_output=True, text=True)
+    result = json.loads(completed.stdout)
+
+    assert "26~30℃" in result["weather"]
+    assert "25~32℃" in result["weather"]
+    assert "<del>" not in result["weather"]
+    assert "<del>删除线</del>" in result["strike"]
 
 
 def test_markdown_interactive_blocks_render_only_after_streaming_finishes():

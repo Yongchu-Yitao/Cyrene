@@ -9,6 +9,7 @@
 * #56 — update restart exits only after the updater script launches
 """
 
+import hashlib
 import os
 import sys
 from datetime import datetime, timedelta, timezone
@@ -632,6 +633,7 @@ def test_update_restart_spawn_failure_reports_error(tmp_path):
 
     package = tmp_path / "Cyrene-update.dmg"
     package.write_bytes(b"fake update")
+    digest = hashlib.sha256(package.read_bytes()).hexdigest()
     popen = MagicMock(side_effect=OSError("spawn denied"))
 
     ok, message, code, status = routes._launch_update_restart(
@@ -639,8 +641,8 @@ def test_update_restart_spawn_failure_reports_error(tmp_path):
             "done": True,
             "path": str(package),
             "total": package.stat().st_size,
-            "expected_sha256": "0" * 64,
-            "actual_sha256": "0" * 64,
+            "expected_sha256": digest,
+            "actual_sha256": digest,
             "verified": True,
         },
         get_restart_script_fn=lambda _path: "echo ok\n",
@@ -659,6 +661,7 @@ def test_update_restart_success_spawns_detached_script(tmp_path):
 
     package = tmp_path / "Cyrene-update.dmg"
     package.write_bytes(b"fake update")
+    digest = hashlib.sha256(package.read_bytes()).hexdigest()
     popen = MagicMock()
 
     ok, message, code, status = routes._launch_update_restart(
@@ -666,8 +669,8 @@ def test_update_restart_success_spawns_detached_script(tmp_path):
             "done": True,
             "path": str(package),
             "total": package.stat().st_size,
-            "expected_sha256": "0" * 64,
-            "actual_sha256": "0" * 64,
+            "expected_sha256": digest,
+            "actual_sha256": digest,
             "verified": True,
         },
         get_restart_script_fn=lambda _path: "echo ok\n",
@@ -690,6 +693,37 @@ def test_update_restart_success_spawns_detached_script(tmp_path):
         assert argv == ["bash", str(tmp_path / "update.sh")]
         assert kwargs["start_new_session"] is True
         assert os.access(tmp_path / "update.sh", os.X_OK)
+
+
+def test_update_restart_rehashes_package_before_spawn(tmp_path):
+    from cyrene.workbench import runtime as routes
+
+    package = tmp_path / "Cyrene-update.dmg"
+    package.write_bytes(b"original")
+    digest = hashlib.sha256(package.read_bytes()).hexdigest()
+    package.write_bytes(b"modified")
+    popen = MagicMock()
+    progress = {
+        "done": True,
+        "path": str(package),
+        "total": package.stat().st_size,
+        "expected_sha256": digest,
+        "actual_sha256": digest,
+        "verified": True,
+    }
+
+    ok, message, code, status = routes._launch_update_restart(
+        progress,
+        get_restart_script_fn=lambda _path: "echo ok\n",
+        popen_fn=popen,
+    )
+
+    assert ok is False
+    assert status == 409
+    assert code == "update_checksum_mismatch"
+    assert "checksum mismatch" in message.lower()
+    assert progress["verified"] is False
+    popen.assert_not_called()
 
 
 def _update_restart_client(tmp_path):

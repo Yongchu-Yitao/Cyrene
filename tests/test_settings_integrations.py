@@ -1,4 +1,5 @@
 from pathlib import Path
+import re
 import sys
 from unittest.mock import AsyncMock
 
@@ -306,7 +307,7 @@ def test_integration_settings_routes_hide_secrets_and_probe_drafts(monkeypatch, 
     )
 
 
-def test_settings_ui_keeps_zotero_in_general_and_embedding_in_models():
+def test_settings_ui_moves_zotero_to_integrations_and_keeps_embedding_in_models():
     root = Path(__file__).resolve().parent.parent
     source = (root / "src" / "webui" / "frontend" / "settings-overlay.jsx").read_text(encoding="utf-8")
     styles = (root / "src" / "webui" / "frontend" / "workbench.css").read_text(encoding="utf-8")
@@ -326,6 +327,8 @@ def test_settings_ui_keeps_zotero_in_general_and_embedding_in_models():
     general_panel = source.split("function GeneralPanel(p) {", 1)[1].split("// ── Models Panel ──", 1)[0]
     models_panel = source.split("// ── Models Panel ──", 1)[1].split("// ── Channels Panel ──", 1)[0]
     assert 'settings.zoteroIntegration' in general_panel
+    assert 'p.integrationsOnly && React.cloneElement(SectionBlock(t("settings.zoteroIntegration")' in general_panel
+    assert 'tab === "integrations" && React.createElement(GeneralPanel, { integrationsOnly: true' in source
     assert 'settings.embeddingIntegration' not in general_panel
     assert 'function EmbeddingSettingsSection(p)' in models_panel
     assert 'React.createElement(EmbeddingSettingsSection, {' in models_panel
@@ -352,6 +355,114 @@ def test_settings_ui_keeps_zotero_in_general_and_embedding_in_models():
     assert '"/api/workbench/knowledge/reembed?workspace="' in library
     assert 'L("library.vectorizeAll", "Vectorize all")' in library
     assert translations.count('"library.vectorizeAll"') == 2
+
+
+def test_profile_is_a_settings_item_without_a_collapsed_settings_icon_stack():
+    root = Path(__file__).resolve().parent.parent
+    settings = (root / "src/webui/frontend/settings-overlay.jsx").read_text(encoding="utf-8")
+    workbench = (root / "src/webui/frontend/workbench.jsx").read_text(encoding="utf-8")
+    styles = (root / "src/webui/frontend/workbench.css").read_text(encoding="utf-8")
+
+    assert '{ id: "profile", labelKey: "rail.profile", icon: "user" }' in settings
+    assert 'ids: ["profile", "general", "appearance", "shortcuts"]' in settings
+    assert 'ids: ["model-usage", "models", "agents", "voice", "tools"]' in settings
+    icon_names = re.findall(r'\{ id: "[^"]+", labelKey: "[^"]+", icon: "([^"]+)" \}', settings)
+    assert len(icon_names) == 17
+    assert len(set(icon_names)) == len(icon_names)
+    assert 'className: "settings-overlay-tab-glyph"' in settings
+    assert '@tabler/icons/icons/outline' in (root / "src/webui/build-jsx.mjs").read_text(encoding="utf-8")
+    assert 'tab === "profile" && React.createElement("div", { className: "settings-profile-panel" }' in settings
+    assert 'if (page === "profile") {' in workbench
+    assert 'setSettingsTab("profile")' in workbench
+    collapsed_rule = styles.split(
+        ".settings-overlay .settings-overlay-nav.is-collapsed .settings-overlay-nav-scroll {",
+        1,
+    )[1].split("}", 1)[0]
+    assert "display: none" in collapsed_rule
+
+    translations = (root / "src/webui/frontend/workbench-i18n.jsx").read_text(encoding="utf-8")
+    assert '"rail.profile": "个人信息"' in translations
+    assert '"profile.basicInfo": "个人信息"' in translations
+    for label in (
+        "通用设置", "界面外观", "键盘快捷键", "模型配置", "智能代理",
+        "语音交互", "工具管理", "消息渠道", "远程连接", "功能扩展",
+        "服务集成", "预算管理", "用量统计", "数据管理", "关于 Cyrene",
+    ):
+        assert f'": "{label}"' in translations
+
+
+def test_usage_settings_reuses_profile_metrics_and_expands_model_breakdown():
+    root = Path(__file__).resolve().parent.parent
+    settings = (root / "src/webui/frontend/settings-overlay.jsx").read_text(encoding="utf-8")
+    translations = (root / "src/webui/frontend/workbench-i18n.jsx").read_text(encoding="utf-8")
+    styles = (root / "src/webui/frontend/workbench.css").read_text(encoding="utf-8")
+
+    panel = settings.split("function BudgetPanel(p) {", 1)[1].split("// ── Shared UI helpers", 1)[0]
+    assert 'var profileUsage = dashboard.usage || {};' in panel
+    assert 'profileUsage.spend_cny' in panel
+    assert 'profileUsage.requests' in panel
+    assert 'profileUsage.total_tokens' in panel
+    assert 'profileUsage.prompt_tokens' in panel
+    assert 'profileUsage.completion_tokens' in panel
+    assert 't("settings.profileUsageSnapshot")' in panel
+    assert 't("settings.usageBillingPeriod")' in panel
+    assert 't("settings.usageByModel")' in panel
+    assert 'formatTokens(item.prompt_tokens)' in panel
+    assert 'formatTokens(item.completion_tokens)' in panel
+    assert 't("settings.usageNoModelData")' in panel
+
+    for key in (
+        "settings.usageSubtitle",
+        "settings.profileUsageSnapshot",
+        "settings.usageBillingPeriod",
+        "settings.usageInputTokens",
+        "settings.usageOutputTokens",
+        "settings.usageAverageCost",
+        "settings.usageBudgetRate",
+        "settings.usageByModel",
+        "settings.usageNoModelData",
+    ):
+        assert translations.count(f'"{key}"') == 2
+
+    assert ".wb-usage-metrics" in styles
+    assert ".wb-usage-metric" in styles
+    assert "grid-template-columns: minmax(150px, 1fr) 64px 82px 82px 82px 78px" in styles
+
+
+def test_about_settings_matches_the_shared_settings_page_hierarchy():
+    root = Path(__file__).resolve().parent.parent
+    settings = (root / "src/webui/frontend/settings-overlay.jsx").read_text(encoding="utf-8")
+    translations = (root / "src/webui/frontend/workbench-i18n.jsx").read_text(encoding="utf-8")
+    styles = (root / "src/webui/frontend/workbench.css").read_text(encoding="utf-8")
+
+    panel = settings.split("function AboutPanel(p) {", 1)[1].split("// ── Skills Panel", 1)[0]
+    assert 'className: "settings-panel wb-about-settings"' in panel
+    assert 'SectionTitle(t("settings.about"), t("settings.aboutSubtitle"))' in panel
+    assert 'className: "wb-about-product-card"' in panel
+    assert panel.index('className: "wb-about-product-card"') < panel.index('className: "wb-btn primary wb-about-check-btn"')
+    assert 'className: "wb-about-hero-progress"' in panel
+    assert '"--wb-about-download-progress": heroProgress + "%"' in panel
+    assert 'className: "wb-about-update-footer"' not in panel
+    assert 'className: "wb-about-card-head"' in panel
+    assert 'className: "wb-about-related-card"' in panel
+    assert 't("settings.relatedLinksHint"' in panel
+    assert 'className: "wb-about-related-list"' in panel
+    assert 'className: "wb-about-related-row"' in panel
+    assert 'className: "wb-changelog-modal"' in panel
+    assert 'settingsFetch("/api/logs/export"' in panel
+
+    assert translations.count('"settings.aboutSubtitle"') == 2
+    assert translations.count('"settings.relatedLinksHint"') == 2
+    update_rule = styles.split(".wb-about-update-card {", 1)[1].split("}", 1)[0]
+    assert "padding: 4px 0 0" in update_rule
+    assert "border: 0" in update_rule
+    assert "background: transparent" in update_rule
+    hero_rule = styles.split(".wb-about-hero-progress {", 1)[1].split("}", 1)[0]
+    assert "width: var(--wb-about-download-progress)" in hero_rule
+    assert "background: color-mix(in srgb, var(--wb-blue) 15%, var(--wb-card-bg))" in hero_rule
+    assert ".wb-about-related-list" in styles
+    assert ".wb-about-related-row" in styles
+    assert ".wb-about-update-footer" not in styles
 
 
 def test_general_settings_has_opt_in_external_agent_proxy():

@@ -5,6 +5,7 @@ The update flow is: background check finds a newer release → when the user has
 → push a "ready" notification → the user explicitly restarts to install.
 """
 import asyncio
+import hashlib
 import sys
 from pathlib import Path
 
@@ -203,8 +204,13 @@ def test_persist_then_restore_verified_state(fresh_auto_state, monkeypatch, tmp_
 
     pkg = tmp_path / "Cyrene-2.0.0-mac.dmg"
     pkg.write_bytes(b"x")
-    result = updater.DownloadResult(path=pkg, size=1000, sha256=SHA)
-    updater._persist_download_state(_info(), result)
+    digest = hashlib.sha256(pkg.read_bytes()).hexdigest()
+    result = updater.DownloadResult(
+        path=pkg, size=pkg.stat().st_size, sha256=digest
+    )
+    updater._persist_download_state(
+        _info(sha256=digest, size=pkg.stat().st_size), result
+    )
     assert stored[updater._UPDATE_STATE_KEY]["verified"] is True
 
     # 模拟进程重启：内存进度清空，从持久化状态恢复。
@@ -219,7 +225,7 @@ def test_persist_then_restore_verified_state(fresh_auto_state, monkeypatch, tmp_
     assert progress["done"] is True
     assert progress["verified"] is True
     assert progress["path"] == str(pkg)
-    assert progress["actual_sha256"] == SHA
+    assert progress["actual_sha256"] == digest
 
 
 def test_restore_skips_when_package_file_missing(fresh_auto_state, monkeypatch, tmp_path):
@@ -236,17 +242,53 @@ def test_restore_skips_when_package_file_missing(fresh_auto_state, monkeypatch, 
 
 
 async def test_restored_verified_package_skips_redownload(fresh_auto_state, monkeypatch, tmp_path):
-    stored = {updater._UPDATE_STATE_KEY: {"verified": True, "sha256": SHA, "path": str(tmp_path / "pkg.dmg"), "downloaded": 1000, "total": 1000}}
+    package = tmp_path / "pkg.dmg"
+    package.write_bytes(b"x")
+    digest = hashlib.sha256(package.read_bytes()).hexdigest()
+    stored = {updater._UPDATE_STATE_KEY: {"verified": True, "sha256": digest, "path": str(package), "downloaded": 1, "total": 1}}
 
     def fake_get(key, default):
         return stored.get(key, default)
 
     monkeypatch.setattr("cyrene.runtime.settings_store.get", fake_get)
     monkeypatch.setattr(updater, "download_update", lambda *a, **k: pytest.fail("should not re-download"))
-    (tmp_path / "pkg.dmg").write_bytes(b"x")
-
-    updater._maybe_auto_download(_info())
+    updater._maybe_auto_download(_info(sha256=digest, size=1))
     assert updater._auto_download_task is None
+
+
+def test_restore_rejects_same_size_modified_package(
+    fresh_auto_state, monkeypatch, tmp_path,
+):
+    package = tmp_path / "pkg.dmg"
+    package.write_bytes(b"original")
+    expected = hashlib.sha256(package.read_bytes()).hexdigest()
+    package.write_bytes(b"modified")
+    stored = {
+        updater._UPDATE_STATE_KEY: {
+            "verified": True,
+            "sha256": expected,
+            "path": str(package),
+            "downloaded": package.stat().st_size,
+            "total": package.stat().st_size,
+        }
+    }
+
+    monkeypatch.setattr(
+        "cyrene.runtime.settings_store.get",
+        lambda key, default: stored.get(key, default),
+    )
+    monkeypatch.setattr(
+        "cyrene.runtime.settings_store.set_",
+        lambda key, value: stored.__setitem__(key, value),
+    )
+
+    progress = updater.get_download_progress()
+
+    assert progress["done"] is True
+    assert progress["verified"] is False
+    assert progress["expected_sha256"] == expected
+    assert progress["actual_sha256"] != expected
+    assert stored[updater._UPDATE_STATE_KEY] is None
 
 
 class FakeResp:

@@ -25,7 +25,6 @@ class ToolSpec:
     side_effect_class: str
     resource_templates: tuple[str, ...]
     timeout_seconds: float = 180.0
-    max_result_chars: int = 12_000
     external: bool = False
 
 

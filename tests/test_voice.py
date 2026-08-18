@@ -371,10 +371,10 @@ def test_voice_controls_follow_existing_chat_layout():
     assert "wbcStartVoiceRecorder" in settings
     assert "wbcTranscribeVoiceBlob(blob)" in settings
     assert "voiceReferenceSessionRef.current += 1" in settings
-    assert 'if (tab === "capabilities") return;' in settings
+    assert 'if (tab === "voice") return;' in settings
     assert "wbcStartVoiceRecorder().then" in settings
     assert "autoStopOnSilence: true" not in settings.split("function startVoiceReferenceRecording", 1)[1].split("useEffectSt(function ()", 1)[0]
-    capabilities_call = settings.split('tab === "capabilities" && CapabilitiesPanel({', 1)[1].split("}),", 1)[0]
+    capabilities_call = settings.split('(tab === "voice" || tab === "tools") && CapabilitiesPanel({', 1)[1].split("}),", 1)[0]
     capabilities_props = settings.split("function CapabilitiesPanel(p)", 1)[1].split("} = p;", 1)[0]
     assert "voiceReferencePhase, voiceReferenceElapsed" in capabilities_call
     assert "voiceReferencePhase, voiceReferenceElapsed" in capabilities_props
@@ -435,7 +435,7 @@ def test_voice_controls_follow_existing_chat_layout():
     assert 'event.type === "reply_done"' in chat
     assert 'event.type === "awaiting_user"' in chat
     assert 'sc.matches(event, "voice-command")' in shell
-    assert shell.index("workbench-voice-command-btn") < shell.index('data-cyrene-node-id="open_settings"')
+    assert shell.index("workbench-voice-command-btn") < shell.index("workbench-avatar-btn")
     assert 'id: "voice-command"' in shortcuts
     assert 'keys: ["mod", "shift", "M"]' in shortcuts
     assert "function showStatusToast" in chat

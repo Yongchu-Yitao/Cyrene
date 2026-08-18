@@ -17,6 +17,7 @@ import os
 import platform
 import shutil
 import stat
+import subprocess
 import sys
 import zipfile
 from pathlib import Path
@@ -97,7 +98,7 @@ def installed_version() -> str:
 
 
 def installed_cli_path() -> Path | None:
-    """Return the installed CLI binary, or None when it is unavailable."""
+    """Return Cyrene's managed CLI binary, or None when it is unavailable."""
     return _installed_cli_path_for_version(installed_version())
 
 
@@ -112,9 +113,77 @@ def _installed_cli_path_for_version(version: str) -> Path | None:
     return candidate
 
 
+def _system_cli_candidates() -> list[Path]:
+    """Return host CLI candidates, including paths GUI apps commonly miss."""
+
+    candidates: list[Path] = []
+    override = str(os.environ.get("CYRENE_CODEX_CLI") or "").strip()
+    if override:
+        candidates.append(Path(override).expanduser())
+    discovered = shutil.which("codex")
+    if discovered:
+        candidates.append(Path(discovered))
+    if sys.platform == "darwin":
+        candidates.extend([
+            Path("/Applications/ChatGPT.app/Contents/Resources/codex"),
+            Path("/opt/homebrew/bin/codex"),
+            Path("/usr/local/bin/codex"),
+        ])
+    candidates.extend([
+        Path.home() / ".local" / "bin" / _BIN_NAME,
+        Path.home() / ".npm-global" / "bin" / _BIN_NAME,
+        Path.home() / ".bun" / "bin" / _BIN_NAME,
+    ])
+    if sys.platform == "win32":
+        appdata = str(os.environ.get("APPDATA") or "").strip()
+        if appdata:
+            candidates.append(Path(appdata) / "npm" / "codex.cmd")
+    return candidates
+
+
+def system_cli_path() -> Path | None:
+    """Find a usable host-installed Codex CLI without changing the host."""
+
+    seen: set[str] = set()
+    for candidate in _system_cli_candidates():
+        key = str(candidate)
+        if not key or key in seen:
+            continue
+        seen.add(key)
+        try:
+            if candidate.is_file() and (sys.platform == "win32" or os.access(candidate, os.X_OK)):
+                return candidate
+        except OSError:
+            continue
+    return None
+
+
+def _reported_cli_version(candidate: Path) -> str:
+    """Read a system CLI version for display; failure does not make it unusable."""
+
+    try:
+        completed = subprocess.run(
+            [str(candidate), "--version"],
+            capture_output=True,
+            check=False,
+            text=True,
+            timeout=3,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return ""
+    output = str(completed.stdout or completed.stderr or "").strip()
+    return output.rsplit(maxsplit=1)[-1] if output else ""
+
+
+def available_cli_path() -> Path | None:
+    """Prefer Cyrene's managed runtime, then fall back to the host CLI."""
+
+    return installed_cli_path() or system_cli_path()
+
+
 def ensure_cli() -> Path:
     """Return the installed CLI path or raise CodexCliMissingError."""
-    candidate = installed_cli_path()
+    candidate = available_cli_path()
     if candidate is None:
         raise CodexCliMissingError("Codex CLI runtime is not downloaded")
     return candidate
@@ -125,9 +194,14 @@ def status() -> dict[str, Any]:
     progress = _PROGRESS.get("cli", {})
     # One installed.json read per call, shared by both fields below.
     version = installed_version()
+    managed = _installed_cli_path_for_version(version)
+    system = None if managed is not None else system_cli_path()
+    active = managed or system
     return {
-        "installed": _installed_cli_path_for_version(version) is not None,
-        "version": version,
+        "installed": active is not None,
+        "version": version if managed is not None else (_reported_cli_version(system) if system else ""),
+        "source": "managed" if managed is not None else "system" if system is not None else "",
+        "path": str(active or ""),
         "sdk_pinned_version": sdk_pinned_version(),
         "downloading": bool(task and not task.done()),
         "downloaded_bytes": int(progress.get("downloaded_bytes") or 0),
@@ -143,9 +217,16 @@ def _latest_pypi_payload(client: httpx.Client) -> dict[str, Any]:
 
 
 def _wheel_for_version(payload: dict[str, Any], version: str, tag: str) -> dict[str, Any]:
-    releases = payload.get("releases") or {}
+    # PyPI's project endpoint groups files under releases[version], while the
+    # version-specific endpoint returns that version's files directly in urls.
+    urls = payload.get("urls")
+    if isinstance(urls, list) and urls:
+        files = urls
+    else:
+        releases = payload.get("releases") or {}
+        files = releases.get(version) or []
     candidates = [
-        file for file in releases.get(version) or []
+        file for file in files
         if str(file.get("filename") or "").endswith(f"-{tag}.whl")
     ]
     if not candidates:

@@ -920,12 +920,7 @@ def register_workbench_chat_routes(
     async def api_workbench_chat_context(chat_id: str):
         """Live context-window gauge + composition for the overview panel."""
         from cyrene import config
-        from cyrene.runtime.config_store import get_current_ctx_limit
-
-        # Keep the gauge denominator identical to automatic persistence
-        # compaction. The latest assistant call may have used a fallback model,
-        # but that runtime metadata must not move the displayed 60% threshold.
-        compactor_ctx_limit = get_current_ctx_limit()
+        from cyrene.runtime.config_store import effective_ctx_limit_for_model
 
         if chat_id.startswith("legacy:"):
             _prefix, _project_id, session_id = (chat_id.split(":", 2) + ["", ""])[:3]
@@ -936,18 +931,24 @@ def register_workbench_chat_routes(
                 _chat_context_payload,
                 session_id,
                 model_name,
-                ctx_limit=compactor_ctx_limit,
+                ctx_limit=effective_ctx_limit_for_model(model_name),
             )
         payload = await asyncio.to_thread(_read_chats_store)
         chat = _find_chat(payload, chat_id)
         if not chat:
             return JSONResponse({"error": "chat not found"}, status_code=404)
         model_name = str(chat.get("model") or getattr(config, "OPENAI_MODEL", "") or "")
+        # ``modelSelectionId`` is stable even when two connections expose the
+        # same remote model name with different context windows.
+        model_selection = str(chat.get("modelSelectionId") or model_name).strip()
         return await asyncio.to_thread(
             _chat_context_payload,
             chat_id,
             model_name,
-            ctx_limit=compactor_ctx_limit,
+            # The selected conversation model owns the context budget. Using
+            # the process-global primary here made the overview stay stale
+            # after a per-chat model switch.
+            ctx_limit=effective_ctx_limit_for_model(model_selection),
         )
 
     @router.post("/api/workbench/chats/{chat_id}/compact")
@@ -1429,11 +1430,24 @@ def register_workbench_chat_routes(
         if "model" in body:
             selected_key = str(body.get("model") or "").strip()
             if selected_key:
+                from cyrene.runtime.model_configuration import selectable_model_candidates
+
                 from cyrene.runtime.settings_store import get_models
 
-                selected = next((item for item in (get_models() or []) if selected_key in {
-                    str(item.get("id") or ""), str(item.get("model") or ""), str(item.get("name") or "")
-                }), None)
+                selected = next(
+                    (
+                        item
+                        for item in selectable_model_candidates(
+                            legacy_candidates=get_models() or []
+                        )
+                        if selected_key in {
+                            str(item.get("id") or ""),
+                            str(item.get("model") or ""),
+                            str(item.get("name") or ""),
+                        }
+                    ),
+                    None,
+                )
                 chat["modelSelectionId"] = selected_key
                 chat["model"] = str((selected or {}).get("model") or (selected or {}).get("name") or selected_key)
         if "reasoningEffort" in body:
@@ -1926,9 +1940,12 @@ def register_workbench_chat_routes(
         agent_owns_models = is_external_agent and str((chat.get("modelAccess") or {}).get("mode") or "") == "agent_managed"
         selected_key = "" if agent_owns_models else requested_model or str(chat.get("modelSelectionId") or "").strip()
         if selected_key:
+            from cyrene.runtime.model_configuration import selectable_model_candidates
             from cyrene.runtime.settings_store import get_models
 
-            configured_models = get_models() or []
+            configured_models = selectable_model_candidates(
+                legacy_candidates=get_models() or []
+            )
             selected_candidate = next(
                 (
                     candidate
@@ -1953,7 +1970,8 @@ def register_workbench_chat_routes(
                 # A retry has no explicit model field, so recover by selecting
                 # the current configured primary instead of rejecting the run
                 # with a misleading "configured model not found" response.
-                selected_candidate = configured_models[0] if configured_models else None
+                primary_models = get_models() or []
+                selected_candidate = primary_models[0] if primary_models else None
                 if selected_candidate is not None:
                     recovered_stale_selection = True
                     selected_key = str(
@@ -3690,6 +3708,7 @@ def register_workbench_chat_routes(
                 "ok": True,
                 "interrupted": True,
                 "awaitingUser": False,
+                "runId": resume_run_id,
                 "userMessage": _public_message(answer_entry),
             }
         except Exception as exc:
@@ -3763,6 +3782,7 @@ def register_workbench_chat_routes(
             return {
                 "ok": True,
                 "awaitingUser": True,
+                "runId": resume_run_id,
                 "pendingQuestion": new_pending,
                 "userMessage": _public_message(answer_entry),
             }
@@ -3879,6 +3899,7 @@ def register_workbench_chat_routes(
         return {
             "ok": True,
             "awaitingUser": False,
+            "runId": resume_run_id,
             "userMessage": _public_message(answer_entry),
             "assistantMessage": _public_message(assistant_entry),
             "assistantMessages": [_public_message(item) for item in saved_messages],

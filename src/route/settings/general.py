@@ -398,6 +398,34 @@ def register_settings_routes(router: APIRouter, bot: Any, db_path: str) -> None:
             normalized_codex_items[0] if normalized_codex_items else None
         )
         normalized_vision = _normalize_candidates(raw_vision_models, active_api_key, base_url)
+        from cyrene.runtime.model_configuration import selectable_model_candidates
+
+        selectable_models = []
+        # The profile graph is authoritative for composer choices. Legacy
+        # lists are mirrors only and must not resurrect deleted providers.
+        for candidate in selectable_model_candidates():
+            model_identifier = str(candidate.get("model") or "").strip()
+            is_deepseek = "deepseek" in model_identifier.lower()
+            selectable_models.append({
+                "id": str(candidate.get("id") or "").strip(),
+                "profile_id": str(candidate.get("profile_id") or candidate.get("id") or "").strip(),
+                "connection_id": str(candidate.get("connection_id") or "").strip(),
+                "name": str(candidate.get("name") or model_identifier).strip() or model_identifier,
+                "model": model_identifier,
+                "provider": str(candidate.get("provider") or "openai_compatible").strip(),
+                "adapter": str(candidate.get("adapter") or "openai_compatible").strip(),
+                "capabilities": list(candidate.get("capabilities") or []),
+                "reasoning_effort": str(candidate.get("reasoning_effort") or "").strip().lower(),
+                "supported_reasoning_efforts": ["high", "max"] if is_deepseek else [],
+                "default_reasoning_effort": "high" if is_deepseek else "",
+                "desc": str(candidate.get("desc") or "").strip(),
+                "ctx": str(candidate.get("ctx") or "").strip(),
+                "ctx_limit": int(candidate.get("ctx_limit") or candidate.get("context_limit") or 0),
+                "context_limit": int(candidate.get("context_limit") or candidate.get("ctx_limit") or 0),
+                "price": str(candidate.get("price") or "").strip(),
+                "priceHint": _price_hint(model_identifier),
+                "vision_capable": "vision" in (candidate.get("capabilities") or []),
+            })
 
         # Normalize secondary model (single item)
         sec_model = str(raw_secondary.get("model") or "").strip()
@@ -491,6 +519,7 @@ def register_settings_routes(router: APIRouter, bot: Any, db_path: str) -> None:
         )
         return {
             "models": normalized,
+            "selectable_models": selectable_models,
             "primary_candidates": normalized,
             "custom_models": normalized_custom,
             "codex_model": normalized_codex,
@@ -757,6 +786,14 @@ def register_settings_routes(router: APIRouter, bot: Any, db_path: str) -> None:
                 }
             )
         write_env_keys(env_updates)
+        # Keep the normalized adapter/profile graph coherent for older clients
+        # that still save through this compatibility endpoint.
+        from cyrene.runtime import config_store as _config_store
+        from cyrene.runtime.model_configuration import migrate_legacy_model_configuration
+
+        _config_store.set_setting(
+            "model_configuration", migrate_legacy_model_configuration()
+        )
         # Settings are live without a backend restart. Drop affinities and
         # cooldowns derived from the previous configuration before the first
         # conversation uses the newly saved model.

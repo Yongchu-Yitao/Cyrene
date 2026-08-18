@@ -226,8 +226,17 @@ async def _flush_telemetry_batch() -> None:
     )
     # Only drop the batch once the DB write succeeded; on failure the queue
     # keeps the events and the next flush cycle retries (the queue cap bounds
-    # growth under persistent failure).
+    # growth under persistent failure). Remove the exact objects committed by
+    # this snapshot: events appended while the async DB write was in flight
+    # must remain queued for the next batch, even if the queue cap evicted part
+    # of the original prefix in the meantime.
+    committed_ids = {id(event) for event in events}
+    retained = [
+        event for event in _telemetry_pending
+        if id(event) not in committed_ids
+    ]
     _telemetry_pending.clear()
+    _telemetry_pending.extend(retained)
 
 
 async def publish_event(event: dict, session_id: str = "") -> None:

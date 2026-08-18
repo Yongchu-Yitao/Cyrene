@@ -398,12 +398,19 @@ function wbSessionActivityPhase(item, runtime, live) {
   var persistedRaw = String(source.runStatus || source.status || "idle").toLowerCase();
   var sourceRunKey = String(source.lastRun && source.lastRun.id || "").trim();
   var liveRunKey = String(live && live.runKey || "").trim();
-  var liveBelongsToNewerRun = !!liveRunKey && (!sourceRunKey || liveRunKey !== sourceRunKey);
+  // A tool/phase event can use the model runtime's `run_*` id while the
+  // answer-resume endpoint persists a synthetic `resume_*` id. Treat a
+  // different id as a newer run only when a fresh active lifecycle event says
+  // so; id inequality by itself is not chronological evidence.
+  var liveBelongsToNewerRun = !!liveRunKey
+    && (!sourceRunKey || liveRunKey !== sourceRunKey)
+    && liveStatusIsFresh
+    && statusIsActive(live && live.status);
   // Network delivery time can be a few milliseconds later than the durable
   // completion timestamp. A lingering tool/phase event from the SAME run must
   // never resurrect a completed, failed, cancelled, or awaiting conversation.
-  // A different run id is still allowed to become live before the next list
-  // summary arrives, preserving instant background-run feedback.
+  // A fresh active lifecycle for a different run is still allowed to become
+  // live before the next list summary arrives, preserving background feedback.
   var durableTerminalWins = wbActivityStatusIsTerminal(persistedRaw) && !runtime && !liveBelongsToNewerRun;
   var raw = String((liveStatusIsFresh && !durableTerminalWins && live.status) || persistedRaw).toLowerCase();
   var activeSignal = !!runtime || !!source.agentBusy || !!(live && live.active);
@@ -1296,6 +1303,7 @@ function WorkbenchApp({ theme, actualTheme, onToggleTheme, needsOnboarding }) {
       // persisted it here, trapping users on the welcome screen every relaunch —
       // ignore a stale "welcome" value so those installs fall through to the
       // workspace instead of re-opening onboarding's get-started page.
+      if (stored === "profile") return "settings";
       if (stored && stored !== "welcome") return stored;
       // Do not decide from origin-scoped localStorage alone. The desktop may
       // move to a fallback port, which creates a fresh storage origin even for
@@ -1320,8 +1328,10 @@ function WorkbenchApp({ theme, actualTheme, onToggleTheme, needsOnboarding }) {
   });
   var [expandedStepId, setExpandedStepId] = useWorkbenchState("");
   var [searchOpen, setSearchOpen] = useWorkbenchState(false);
-  var [settingsOpen, setSettingsOpen] = useWorkbenchState(false);
-  var [settingsTab, setSettingsTab] = useWorkbenchState("");
+  var [settingsTab, setSettingsTab] = useWorkbenchState(function () {
+    try { return localStorage.getItem("wb-active-page") === "profile" ? "profile" : ""; }
+    catch (e) { return ""; }
+  });
   var [settingsScrollTo, setSettingsScrollTo] = useWorkbenchState(null);
   var pythonPromptCheckedRef = useWorkbenchRef(false);
   var [newProjectOpen, setNewProjectOpen] = useWorkbenchState(false);
@@ -1374,6 +1384,7 @@ function WorkbenchApp({ theme, actualTheme, onToggleTheme, needsOnboarding }) {
   // notification callbacks (interval / SSE closures captured once on mount).
   var activeViewRef = useWorkbenchRef({ page: null, taskView: "board", chatId: "", sessionId: "" });
   var sessionLoadSeqRef = useWorkbenchRef(0);
+  var recentChatsLoadSeqRef = useWorkbenchRef(0);
   var launchReadyRef = useWorkbenchRef(false);
   var menuActionsRef = useWorkbenchRef({ createProject: function () {}, createSession: function () {}, createChat: function () {}, onToggleTheme: function () {} });
 
@@ -1493,6 +1504,8 @@ function WorkbenchApp({ theme, actualTheme, onToggleTheme, needsOnboarding }) {
 
   function reloadRecentChats(projects) {
     var projectList = Array.isArray(projects) ? projects : [];
+    var requestSequence = recentChatsLoadSeqRef.current + 1;
+    recentChatsLoadSeqRef.current = requestSequence;
     if (!projectList.length) {
       setRecentChatsByProject({});
       return Promise.resolve({});
@@ -1512,6 +1525,10 @@ function WorkbenchApp({ theme, actualTheme, onToggleTheme, needsOnboarding }) {
           return { projectId: projectId, chats: [] };
         });
     })).then(function (results) {
+      // Lifecycle and polling refreshes can overlap. Only the newest complete
+      // snapshot may update the topbar; an older response can still contain
+      // `running` and must not resurrect a settled task.
+      if (recentChatsLoadSeqRef.current !== requestSequence) return null;
       var next = {};
       results.forEach(function (result) {
         if (result.projectId) next[result.projectId] = result.chats;
@@ -2048,7 +2065,8 @@ function WorkbenchApp({ theme, actualTheme, onToggleTheme, needsOnboarding }) {
         }).then(function (open) {
           if (open) {
             setSettingsTab("extensions");
-            setSettingsOpen(true);
+            setSettingsScrollTo(null);
+            setFullPage("settings");
           }
         });
       })
@@ -2056,12 +2074,8 @@ function WorkbenchApp({ theme, actualTheme, onToggleTheme, needsOnboarding }) {
     return undefined;
   }, []);
 
-  // Any renderer overlay must temporarily detach the native browser view.
-  // The coordinator also covers topbar popovers, which cannot rely on CSS
-  // z-index to appear above an Electron WebContentsView.
-  useWorkbenchEffect(function () {
-    if (settingsOpen) { wbSetBrowserOverlayObscured(1); return function () { wbSetBrowserOverlayObscured(-1); }; }
-  }, [settingsOpen]);
+  // Renderer overlays temporarily detach the native browser view. Settings is
+  // now a normal workbench module, so only actual overlays need this treatment.
   useWorkbenchEffect(function () {
     if (searchOpen) { wbSetBrowserOverlayObscured(1); return function () { wbSetBrowserOverlayObscured(-1); }; }
   }, [searchOpen]);
@@ -2093,8 +2107,8 @@ function WorkbenchApp({ theme, actualTheme, onToggleTheme, needsOnboarding }) {
     return bridge.onMenuAction(function (action) {
       var acts = menuActionsRef.current;
       var map = {
-        "open-settings":  function () { setSettingsTab(""); setSettingsOpen(true); },
-        "open-about":     function () { setSettingsTab("about"); setSettingsOpen(true); },
+        "open-settings":  function () { setSettingsTab(""); setSettingsScrollTo(null); setFullPage("settings"); },
+        "open-about":     function () { setSettingsTab("about"); setSettingsScrollTo(null); setFullPage("settings"); },
         "new-project":    function () { acts.createProject(); },
         "new-chat":       function () { acts.createChat(); },
         "new-task":       function () { acts.createSession(); },
@@ -2144,7 +2158,7 @@ function WorkbenchApp({ theme, actualTheme, onToggleTheme, needsOnboarding }) {
       var sc = window.CyreneUI.require("shortcuts");
       if (!sc) return;
       // Don't intercept while a modal/overlay that owns its own keys is open.
-      if (searchOpen || settingsOpen || newProjectOpen || newTaskOpen) return;
+      if (searchOpen || newProjectOpen || newTaskOpen) return;
       // Ignore typing inside inputs / textareas / contenteditable so a Cmd+K
       // still fires search but a plain "k" doesn't trigger anything.
       var target = event.target;
@@ -2185,7 +2199,8 @@ function WorkbenchApp({ theme, actualTheme, onToggleTheme, needsOnboarding }) {
       if (sc.matches(event, "settings")) {
         event.preventDefault();
         setSettingsTab("shortcuts");
-        setSettingsOpen(true);
+        setSettingsScrollTo(null);
+        setFullPage("settings");
         return;
       }
       if (sc.matches(event, "toggle-sidebar")) {
@@ -2213,7 +2228,7 @@ function WorkbenchApp({ theme, actualTheme, onToggleTheme, needsOnboarding }) {
     }
     window.addEventListener("keydown", onKey);
     return function () { window.removeEventListener("keydown", onKey); };
-  }, [searchOpen, settingsOpen, newProjectOpen, newTaskOpen, store && store.activeProject, store && store.projects]);
+  }, [searchOpen, newProjectOpen, newTaskOpen, store && store.activeProject, store && store.projects]);
 
   // Auto-refresh the notification center on a timer so new items (agent replies,
   // scheduled-task results, knowledge ingestion…) appear without a page reload —
@@ -2464,7 +2479,8 @@ function WorkbenchApp({ theme, actualTheme, onToggleTheme, needsOnboarding }) {
     var meta = item && item.meta && typeof item.meta === "object" ? item.meta : {};
     if (meta.category === "hook_approval") {
       setSettingsTab("extensions");
-      setSettingsOpen(true);
+      setSettingsScrollTo(null);
+      setFullPage("settings");
       window.setTimeout(function () {
         try { window.dispatchEvent(new CustomEvent("cyrene:open-agent-hooks", { detail: meta })); } catch (e) {}
       }, 80);
@@ -2472,7 +2488,8 @@ function WorkbenchApp({ theme, actualTheme, onToggleTheme, needsOnboarding }) {
     }
     if (meta.category === "app_update" || String(item && item.source || "") === "updater") {
       setSettingsTab("about");
-      setSettingsOpen(true);
+      setSettingsScrollTo(null);
+      setFullPage("settings");
       return true;
     }
     var target = wbNotificationNavigationTarget(item);
@@ -2659,6 +2676,12 @@ function WorkbenchApp({ theme, actualTheme, onToggleTheme, needsOnboarding }) {
       setFullPage(null);
       return;
     }
+    if (page === "profile") {
+      setSettingsTab("profile");
+      setSettingsScrollTo(null);
+      setFullPage("settings");
+      return;
+    }
     if (fullPage === page) return;
     setFullPage(page);
   }
@@ -2700,7 +2723,8 @@ function WorkbenchApp({ theme, actualTheme, onToggleTheme, needsOnboarding }) {
   useWorkbenchEffect(function () {
     if (!window.CyreneUI.has("uiSurface")) return undefined;
     var uiSurface = window.CyreneUI.require("uiSurface");
-    uiSurface.setScope(settingsOpen ? "settings" : "main");
+    var settingsActive = fullPage === "settings";
+    uiSurface.setScope(settingsActive ? "settings" : "main");
     var unregister = [];
     var modules = [
       ["task", t("rail.tasks", "Tasks")],
@@ -2720,7 +2744,7 @@ function WorkbenchApp({ theme, actualTheme, onToggleTheme, needsOnboarding }) {
           return {
             role: "navigation_item",
             name: item[1],
-            state: { selected: page === "task" ? !fullPage : fullPage === page },
+            state: { selected: page === "task" ? !fullPage : (page === "profile" ? fullPage === "settings" && settingsTab === "profile" : fullPage === page) },
           };
         },
         actions: [{
@@ -2758,22 +2782,20 @@ function WorkbenchApp({ theme, actualTheme, onToggleTheme, needsOnboarding }) {
       get_node: function () { return { role: "button", name: t("settings.title", "Settings") }; },
       actions: [{
         action_id: "open", kind: "invoke", risk: "R1", gesture_aliases: ["press", "keyboard"],
-        outcome: { effect: "opens_overlay", target_node_id: "settings_dialog", target_scope: "settings", inspect_after: true },
+        outcome: { effect: "opens_surface", target_node_id: "settings_page", target_scope: "settings", inspect_after: true },
       }],
-      handlers: { open: function () { setSettingsTab(""); setSettingsOpen(true); } },
+      handlers: { open: function () { setSettingsTab(""); setSettingsScrollTo(null); setFullPage("settings"); } },
     }));
-    if (settingsOpen) {
+    if (settingsActive) {
       unregister.push(uiSurface.register({
-        node_id: "settings_dialog",
+        node_id: "settings_page",
         parent_id: "root",
         scope: "settings",
-        get_node: function () { return { role: "dialog", name: t("settings.title", "Settings"), state: { tab: settingsTab || "general" } }; },
-        actions: [{ action_id: "dismiss", kind: "dismiss", risk: "R1", gesture_aliases: ["escape_key", "close_button"] }],
-        handlers: { dismiss: function () { setSettingsOpen(false); setSettingsScrollTo(null); } },
+        get_node: function () { return { role: "region", name: t("settings.title", "Settings"), state: { tab: settingsTab || "general" } }; },
       }));
     }
     return function () { unregister.forEach(function (remove) { remove(); }); };
-  }, [fullPage, settingsOpen, settingsTab, railCollapsed, t]);
+  }, [fullPage, settingsTab, railCollapsed, t]);
 
   function renderSidebarCollapseControl() {
     return <WorkbenchSidebarCollapseControl collapsed={railCollapsed} onToggle={toggleWorkspaceSidebar} />;
@@ -2802,8 +2824,8 @@ function WorkbenchApp({ theme, actualTheme, onToggleTheme, needsOnboarding }) {
   var isMemory = fullPage === "memory";
   var isChat = fullPage === "chat";
   var isWelcome = fullPage === "welcome";
-  var isProfile = fullPage === "profile";
-  var isModulePage = isKnowledge || isSchedule || isMemory || isChat || isWelcome || isProfile;
+  var isSettings = fullPage === "settings";
+  var isModulePage = isKnowledge || isSchedule || isMemory || isChat || isWelcome || isSettings;
   var fullPageConfig = fullPage && !isModulePage ? workbenchFullPageConfig(fullPage, setFullPage, store) : null;
   useWorkbenchEffect(function () {
     if (!isModulePage || !fullPage) return;
@@ -2817,7 +2839,7 @@ function WorkbenchApp({ theme, actualTheme, onToggleTheme, needsOnboarding }) {
   var showSchedulePage = isSchedule || mountedPages.schedule;
   var showMemoryPage = isMemory || mountedPages.memory;
   var showWelcomePage = isWelcome || mountedPages.welcome;
-  var showProfilePage = isProfile || mountedPages.profile;
+  var showSettingsPage = isSettings || mountedPages.settings;
   var activeSessionKey = isChat && activeChatId
     ? "chat:" + activeChatId
     : (!fullPage && taskView === "detail" && store.activeSessionId ? "task:" + store.activeSessionId : "");
@@ -2916,7 +2938,7 @@ function WorkbenchApp({ theme, actualTheme, onToggleTheme, needsOnboarding }) {
         recentSessions={recentSessionTabs}
         overflowSessions={overflowSessionTabs}
         pinnedResources={pinnedResources}
-        keyboardEnabled={!searchOpen && !settingsOpen && !newProjectOpen && !newTaskOpen && !editProject && !editMemoryProject}
+        keyboardEnabled={!searchOpen && !newProjectOpen && !newTaskOpen && !editProject && !editMemoryProject}
         onPinResource={pinTopbarResource}
         onUnpinResource={unpinTopbarResource}
         onOpenPinnedResource={function (resource) {
@@ -3004,7 +3026,7 @@ function WorkbenchApp({ theme, actualTheme, onToggleTheme, needsOnboarding }) {
         onReloadNotifications={reloadNotifications}
         onOpenNotification={navigateFromNotification}
         onSearch={function () { setSearchOpen(true); }}
-        onSettings={function (tab) { setSettingsTab(typeof tab === "string" ? tab : ""); setSettingsOpen(true); }}
+        onSettings={function (tab) { setSettingsTab(typeof tab === "string" ? tab : ""); setSettingsScrollTo(null); setFullPage("settings"); }}
         onNewProject={createProject}
         onSelectProject={selectProject}
         onEditProject={setEditProject}
@@ -3019,13 +3041,13 @@ function WorkbenchApp({ theme, actualTheme, onToggleTheme, needsOnboarding }) {
       {fullPageConfig ? (
         <WorkbenchFullPage config={fullPageConfig} onClose={function () { setFullPage(null); }} />
       ) : (
-        <div ref={wbApplyStoredRightWidth} className={"workbench-grid integrated-sidebars" + (railCollapsed ? " rail-collapsed" : "") + (isKnowledge ? " is-knowledge" : "") + (isSchedule ? " is-schedule" : "") + (isMemory ? " is-memory" : "") + (isChat ? " is-chat" : "") + (isWelcome ? " is-welcome" : "") + (isProfile ? " is-profile" : "") + (!isModulePage ? (taskView === "board" ? " is-task-board" : " is-task-detail") : "")} onWheel={handleSidebarModuleWheel}>
+        <div ref={wbApplyStoredRightWidth} className={"workbench-grid integrated-sidebars" + (railCollapsed ? " rail-collapsed" : "") + (isKnowledge ? " is-knowledge" : "") + (isSchedule ? " is-schedule" : "") + (isMemory ? " is-memory" : "") + (isChat ? " is-chat" : "") + (isWelcome ? " is-welcome" : "") + (isSettings ? " is-settings" : "") + (!isModulePage ? (taskView === "board" ? " is-task-board" : " is-task-detail") : "")} onWheel={handleSidebarModuleWheel}>
           <WorkbenchSidebarDock
             persistent={true}
             collapsed={railCollapsed}
             activePage={fullPage}
             onOpenPage={handleOpenPage}
-            onSettings={function () { setSettingsTab(""); setSettingsOpen(true); }}
+            onSettings={function () { setSettingsTab(""); setSettingsScrollTo(null); setFullPage("settings"); }}
           />
           {showChatPage && (
             <WorkbenchStableSurface active={isChat}>
@@ -3088,21 +3110,27 @@ function WorkbenchApp({ theme, actualTheme, onToggleTheme, needsOnboarding }) {
                 hasProjects: Array.isArray(store.projects) && store.projects.length > 0,
                 onNewProject: createProject,
                 onOpenPage: handleOpenPage,
-                onSettings: function (tab) { setSettingsTab(typeof tab === "string" ? tab : ""); setSettingsOpen(true); },
+                onSettings: function (tab) { setSettingsTab(typeof tab === "string" ? tab : ""); setSettingsScrollTo(null); setFullPage("settings"); },
                 theme: theme,
                 actualTheme: actualTheme,
                 onToggleTheme: onToggleTheme,
               })}
             </WorkbenchStableSurface>
           )}
-          {showProfilePage && (
-            <WorkbenchStableSurface active={isProfile}>
-              <>
-                <WorkbenchProfileRail collapsed={railCollapsed} collapseControl={isProfile ? renderSidebarCollapseControl() : null} moduleDock={isProfile ? renderSidebarDockSlot() : null} />
-                {window.CyreneUI.require("profile").Page
-                  ? React.createElement(window.CyreneUI.require("profile").Page, { active: isProfile })
-                  : <div className="workbench-empty">…</div>}
-              </>
+          {showSettingsPage && (
+            <WorkbenchStableSurface active={isSettings}>
+              {React.createElement(window.CyreneUI.require("settings").Page, {
+                active: isSettings,
+                collapsed: railCollapsed,
+                collapseControl: isSettings ? renderSidebarCollapseControl() : null,
+                moduleDock: isSettings ? renderSidebarDockSlot() : null,
+                initialTab: settingsTab,
+                scrollToId: settingsScrollTo,
+                theme: theme,
+                actualTheme: actualTheme,
+                onToggleTheme: onToggleTheme,
+                project: store.activeProject,
+              })}
             </WorkbenchStableSurface>
           )}
           <WorkbenchStableSurface active={!isModulePage}>
@@ -3205,31 +3233,16 @@ function WorkbenchApp({ theme, actualTheme, onToggleTheme, needsOnboarding }) {
               : id === "open-about" ? "about" : "";
             setSettingsTab(tab);
             setSettingsScrollTo(null);
-            setSettingsOpen(true);
+            setFullPage("settings");
           },
           onOpenSettings: function (tab, anchorId) {
             setSearchOpen(false);
             setSettingsTab(tab || "");
             setSettingsScrollTo(anchorId || null);
-            setSettingsOpen(true);
+            setFullPage("settings");
           },
         }
       ), document.body)}
-      {settingsOpen && React.createElement(
-        window.CyreneUI.require("settings").Overlay,
-        {
-          onClose: function () {
-            setSettingsOpen(false);
-            setSettingsScrollTo(null);
-          },
-          initialTab: settingsTab,
-          scrollToId: settingsScrollTo,
-          theme: theme,
-          actualTheme: actualTheme,
-          onToggleTheme: onToggleTheme,
-          project: store.activeProject,
-        }
-      )}
       {newProjectOpen && window.CyreneUI.require("create").NewProjectModal && React.createElement(
         window.CyreneUI.require("create").NewProjectModal,
         {
@@ -3271,7 +3284,7 @@ function WorkbenchApp({ theme, actualTheme, onToggleTheme, needsOnboarding }) {
         onOpenSettings: function (tab) {
           setSettingsTab(typeof tab === "string" ? tab : "");
           setSettingsScrollTo(null);
-          setSettingsOpen(true);
+          setFullPage("settings");
         },
       })}
     </div>
@@ -4531,9 +4544,6 @@ function WorkbenchTopbar({ projects, activeProject, activePage, taskView, active
             <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><rect x="9" y="3" width="6" height="11" rx="3"/><path d="M5.5 11.5a6.5 6.5 0 0 0 13 0M12 18v3M8.5 21h7"/></svg>
           </button>
         ) : null}
-        <button type="button" data-cyrene-node-id="open_settings" className="workbench-icon-btn" onClick={function () { onSettings(); }} title={t("nav.settings")}>
-          <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2Z"/><circle cx="12" cy="12" r="3"/></svg>
-        </button>
         <button type="button" className={"workbench-avatar-btn" + (activePage === "profile" ? " active" : "")} title={t("rail.profile")} onClick={function () { onOpenPage && onOpenPage("profile"); }}>
           {window.CyreneUI.require("profile").Avatar
             ? React.createElement(window.CyreneUI.require("profile").Avatar, { user: dataState.user, size: 30 })
@@ -5224,7 +5234,6 @@ function WorkbenchRailAccount({ activePage, onOpenPage, onSettings, docked }) {
   }, []);
 
   var user = dataState.user || {};
-  var modelLabel = (dataState.sessions && dataState.sessions[0] && dataState.sessions[0].model) || dataState.appVersion || "model";
   function openProfile() {
     setAccountMenuOpen(false);
     if (onOpenPage) onOpenPage("profile");
@@ -5248,25 +5257,12 @@ function WorkbenchRailAccount({ activePage, onOpenPage, onSettings, docked }) {
         {docked && (
           <span className="workbench-rail-account-summary">
             <b>{user.name || "User"}</b>
-            <small>{codexQuotaState.plan || modelLabel}</small>
           </span>
         )}
         {docked && <svg className="workbench-rail-account-chevron" viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="m9 6 6 6-6 6"/></svg>}
       </button>
       {accountMenuOpen && (
         <div className="workbench-account-menu workbench-module-account-menu" onClick={function (event) { event.stopPropagation(); }}>
-          <button type="button" className="workbench-module-account-profile" onClick={openProfile}>
-            <span className="workbench-account-avatar">
-              {window.CyreneUI.require("profile").Avatar
-                ? React.createElement(window.CyreneUI.require("profile").Avatar, { user: user, size: 38 })
-                : <div className="workbench-avatar photo">{WorkbenchModel.initials(user.name)}</div>}
-            </span>
-            <span className="workbench-module-account-copy">
-              <span><b>{user.name || "User"}</b>{codexQuotaState.plan && <em>{codexQuotaState.plan}</em>}</span>
-              <small>{modelLabel}</small>
-            </span>
-          </button>
-          <div className="wb-account-menu-divider"></div>
           {codexQuotaState.primary && codexQuotaState.connected && codexQuotaState.windows.length > 0 && (
             <>
               <div className="wb-account-menu-codex">
@@ -7322,9 +7318,12 @@ function TaskWorkArea(props) {
   useWorkbenchEffect(function () { setAttachments([]); }, [sid]);
   useWorkbenchEffect(function () {
     var cancelled = false;
-    window.CyreneUI.require("api").json("/api/settings/models", { toast: false })
+    function loadConfiguredModels() {
+      return window.CyreneUI.require("api").json("/api/settings/models", { toast: false })
       .then(function (payload) {
-        var options = Array.isArray(payload.models) ? payload.models : [];
+        var options = Array.isArray(payload.selectable_models)
+          ? payload.selectable_models
+          : (Array.isArray(payload.models) ? payload.models : []);
         function applyInitialModels(items) {
           if (cancelled) return;
           setConfiguredModels(items);
@@ -7380,7 +7379,14 @@ function TaskWorkArea(props) {
       .catch(function () {
         if (!cancelled) setConfiguredModels([]);
       });
-    return function () { cancelled = true; };
+    }
+    function onModelConfigurationChanged() { loadConfiguredModels(); }
+    loadConfiguredModels();
+    window.addEventListener("cyrene:model-configuration-changed", onModelConfigurationChanged);
+    return function () {
+      cancelled = true;
+      window.removeEventListener("cyrene:model-configuration-changed", onModelConfigurationChanged);
+    };
   }, [sid]);
   var controller = useTaskController(session, props.onRefresh, {
     attachments: attachments,
@@ -8943,6 +8949,8 @@ function TaskComposer({
   if (!voiceFeedbackRef.current) voiceFeedbackRef.current = wbcCreateComposerVoiceFeedback();
   var status = String(session.status || "idle");
   var running = status === "running";
+  var awaitingAnswer = !!(session.pendingQuestion && session.pendingQuestion.id);
+  var disabled = controller.busy || running || awaitingAnswer;
   // No plan yet → the composer is a free chat: every send goes through the
   // intent-aware dispatch so the agent itself decides whether to answer, act, or
   // draft a plan. Once a plan exists, the composer refines that plan instead.
@@ -8965,6 +8973,18 @@ function TaskComposer({
       if (recorder && typeof recorder.stop === "function") recorder.stop().catch(function () {});
     };
   }, [session.id]);
+
+  useWorkbenchEffect(function () {
+    if (!awaitingAnswer) return;
+    setModeOpen(false);
+    setModelOpen(false);
+    setModelPanel("root");
+    var recorder = voiceRecorderRef.current;
+    voiceRecorderRef.current = null;
+    setVoicePhase("");
+    voiceFeedbackRef.current.dismiss();
+    if (recorder && typeof recorder.stop === "function") recorder.stop().catch(function () {});
+  }, [awaitingAnswer]);
 
   useWorkbenchEffect(function () {
     function onFocus() { if (taRef.current) taRef.current.focus(); }
@@ -9016,6 +9036,7 @@ function TaskComposer({
   }
 
   function submit(overrideText) {
+    if (awaitingAnswer) return;
     if (running) { controller.interrupt(); return; }
     var text = typeof overrideText === "string" ? overrideText.trim() : draft.trim();
     if ((!text && attachments.length === 0) || controller.busy) return;
@@ -9132,6 +9153,7 @@ function TaskComposer({
   }
 
   function addFiles(files) {
+    if (disabled) return;
     if (!files || !files.length) return;
     uploadCountRef.current += 1;
     setUploading(true);
@@ -9152,7 +9174,7 @@ function TaskComposer({
     addFiles(event.target.files);
   }
   function onPaste(event) {
-    if (running || controller.busy) return;
+    if (disabled) return;
     var clipboard = event && (event.clipboardData || (event.nativeEvent && event.nativeEvent.clipboardData));
     if (!clipboard) return;
     var files = Array.prototype.slice.call(clipboard.files || []).filter(function (file) { return !!file; });
@@ -9173,7 +9195,7 @@ function TaskComposer({
     }
     window.addEventListener("cyrene:add-task-attachments", onDroppedFiles);
     return function () { window.removeEventListener("cyrene:add-task-attachments", onDroppedFiles); };
-  }, []);
+  }, [disabled]);
   function removeAttachment(index) {
     onAttachmentsChange(attachments.filter(function (_a, i) { return i !== index; }));
   }
@@ -9183,9 +9205,7 @@ function TaskComposer({
   // While a run is paused awaiting a permission / clarification answer, the only
   // valid actions are on the question card itself — suppress the composer's
   // status chips so no answer buttons sit above the input box.
-  var awaitingAnswer = !!(session.pendingQuestion && session.pendingQuestion.id);
   var chips = awaitingAnswer ? [] : composerChips(status, controller, onRightTab, session);
-  var disabled = controller.busy || running;
   var current = wbModeMeta(mode || "auto");
   configuredModels = Array.isArray(configuredModels) ? configuredModels : [];
   selectedModelId = String(selectedModelId || "");
@@ -9203,7 +9223,7 @@ function TaskComposer({
   var modelButtonLabel = wbT("workbenchChat.chooseModel", "Choose model")
     + ": " + modelName + (effortLabel ? " · " + effortLabel : "");
   var supportedReasoningEfforts = wbSupportedReasoningEfforts(selectedModel);
-  var sendDisabled = running ? false : (disabled || (!draft.trim() && attachments.length === 0));
+  var sendDisabled = awaitingAnswer || (running ? false : (disabled || (!draft.trim() && attachments.length === 0)));
 
   useWorkbenchEffect(function () {
     if (!window.CyreneUI.has("uiSurface")) return undefined;
@@ -9346,7 +9366,7 @@ function TaskComposer({
                   {isImg && file.url
                     ? <img src={file.url} alt={file.name || "image"} />
                     : <span className="wb-attach-name" title={file.name}>{file.name || "file"}</span>}
-                  <button type="button" className="wb-attach-x" onClick={function () { removeAttachment(i); }} aria-label={wbT("workbenchChat.removeAttachment", "Remove attachment")}>{ICONS.x}</button>
+                  <button type="button" className="wb-attach-x" disabled={disabled} onClick={function () { removeAttachment(i); }} aria-label={wbT("workbenchChat.removeAttachment", "Remove attachment")}>{ICONS.x}</button>
                 </div>
               );
             })}
@@ -9364,11 +9384,11 @@ function TaskComposer({
         />
         <div className="workbench-composer-actions wbc-composer-actions">
           <input ref={fileRef} type="file" multiple style={{ display: "none" }} onChange={onFilePick} />
-          <button type="button" className="wb-composer-icon wbc-composer-icon" title={uploading ? wbT("workbenchChat.uploading", "Uploading...") : wbT("workbenchChat.addAttachment", "Add attachment")} disabled={uploading || running} onClick={pickFiles}>
+          <button type="button" className="wb-composer-icon wbc-composer-icon" title={uploading ? wbT("workbenchChat.uploading", "Uploading...") : wbT("workbenchChat.addAttachment", "Add attachment")} disabled={uploading || disabled} onClick={pickFiles}>
             {uploading ? <span className="wb-spinner" /> : ICONS.attach}
           </button>
           <span className="wb-popover-anchor">
-            <button type="button" className={"wb-composer-icon wbc-composer-icon mode" + (modeOpen ? " active" : "")} title={wbT("workbenchChat.permissionMode", "Permission mode")} onClick={function () {
+            <button type="button" className={"wb-composer-icon wbc-composer-icon mode" + (modeOpen ? " active" : "")} title={wbT("workbenchChat.permissionMode", "Permission mode")} disabled={disabled} onClick={function () {
               setModeOpen(!modeOpen);
               setModelOpen(false);
               setModelPanel("root");
@@ -9376,7 +9396,7 @@ function TaskComposer({
               <span className="wb-mode-ico">{current.icon}</span>
               <span className="wb-mode-label">{current.label}</span>
             </button>
-            {modeOpen && (
+            {modeOpen && !disabled && (
               <div className="wb-popmenu wb-mode-menu">
                 <div className="wb-menu-head">{wbT("workbenchChat.permissionMode", "Permission mode")}</div>
                 {translatedModes.map(function (m) {
@@ -9405,7 +9425,7 @@ function TaskComposer({
                 aria-label={modelButtonLabel}
                 aria-haspopup="menu"
                 aria-expanded={modelOpen}
-                disabled={running}
+                disabled={disabled}
                 onClick={function () {
                   setModelOpen(!modelOpen);
                   setModelPanel("root");
@@ -9417,7 +9437,7 @@ function TaskComposer({
                 {effortLabel ? <span className="wbc-model-button-effort">{effortLabel}</span> : null}
                 <span className="wbc-model-button-chevron">{ICONS.chevronDown}</span>
               </button>
-              {modelOpen && (
+              {modelOpen && !disabled && (
                 <div className="wbc-popmenu wbc-model-menu" role="menu">
                   {modelPanel === "root" && (
                     <>
@@ -9520,15 +9540,8 @@ function TaskComposer({
           </button>
         </div>
       </div>
-      <ComposerDisclaimer />
     </div>
   );
-}
-
-// AI-generated content disclaimer shown under the composer (i18n).
-function ComposerDisclaimer() {
-  var t = window.CyreneUI.require("i18n").use().t;
-  return <div className="wb-composer-disclaimer">{t("workbench.composerDisclaimer")}</div>;
 }
 
 function RightContextPanel({ project, session, expandedStepId, tab, onTabChange, onRefresh }) {

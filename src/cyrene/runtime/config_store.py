@@ -111,6 +111,14 @@ _DEFAULT_SETTINGS: dict = {
     "model_source": "",
     "vision_models": _DEFAULT_VISION_MODELS,
     "secondary_model": {"model": "", "name": "", "api_key": "", "base_url": "", "ctx_limit": 0, "max_concurrency": 0},
+    # Adapter definitions live in code; user-owned connections, model profiles,
+    # and their independent role routes live in this encrypted document.
+    "model_configuration": {
+        "version": 1,
+        "connections": [],
+        "profiles": [],
+        "routes": {"primary": [], "secondary": [], "vision": [], "embedding": []},
+    },
     "enabled_tools": _DEFAULT_ENABLED_TOOLS,
     "enabled_tool_packs": {},
     "workspace_history": [],
@@ -724,6 +732,57 @@ def update_settings_atomic(
     return revision, settings
 
 
+def update_settings_and_env_atomic(
+    settings_updates: dict[str, object],
+    env_updates: dict[str, str],
+    *,
+    expected_revision: int | None = None,
+) -> tuple[int, dict[str, object]]:
+    """Atomically replace settings and their legacy environment mirrors.
+
+    Model configuration needs both namespaces to cross the persistence boundary
+    together: older runtime code still reads ``OPENAI_*`` and ``EMBEDDING_*``
+    while the normalized source of truth is stored under settings.  Validation
+    belongs to the caller; this helper performs one encrypted-file replacement
+    and only then updates the live process environment.
+    """
+
+    if not isinstance(settings_updates, dict) or not settings_updates:
+        raise ValueError("settings patch must be a non-empty object")
+    if not isinstance(env_updates, dict):
+        raise ValueError("environment patch must be an object")
+    removed = sorted(set(env_updates) & _REMOVED_ENV_KEYS)
+    if removed:
+        raise ValueError(
+            "Environment setting(s) have been removed: " + ", ".join(removed)
+        )
+    normalized_env = {str(key): str(value) for key, value in env_updates.items()}
+    with _PERSIST_LOCK:
+        current = _ensure_loaded()
+        actual_revision = int(current.get("settings_revision", 0) or 0)
+        if expected_revision is not None and expected_revision != actual_revision:
+            raise SettingsRevisionConflict(expected_revision, actual_revision)
+        candidate = deepcopy(current)
+        candidate_settings = candidate.setdefault("settings", {})
+        for key, value in settings_updates.items():
+            if not isinstance(key, str) or not key:
+                raise ValueError("settings patch keys must be non-empty strings")
+            candidate_settings[key] = deepcopy(value)
+        candidate.setdefault("env", {}).update(normalized_env)
+        next_revision = actual_revision + 1
+        candidate["settings_revision"] = next_revision
+        _persist(candidate)
+        global _cache
+        _cache = candidate
+        snapshot = deepcopy(candidate_settings)
+    for key, value in normalized_env.items():
+        if value:
+            os.environ[key] = value
+        else:
+            os.environ.pop(key, None)
+    return next_revision, snapshot
+
+
 def patch_settings_atomic(
     updates: dict[str, object],
     *,
@@ -906,15 +965,41 @@ def ctx_limit_for_model(model_name: str) -> int:
     if not model_name:
         return 0
     for model in (get_models() or []):
-        if model.get("model") == model_name or model.get("name") == model_name:
-            limit = _parse_ctx_str(model.get("ctx", ""))
+        if model_name in {
+            str(model.get("model") or ""),
+            str(model.get("name") or ""),
+            str(model.get("id") or ""),
+            str(model.get("profile_id") or ""),
+        }:
+            limit = int(model.get("context_limit") or model.get("ctx_limit") or 0)
+            if not limit:
+                limit = _parse_ctx_str(model.get("ctx", ""))
             if limit:
                 return limit
     for model in (get_vision_models() or []):
-        if model.get("model") == model_name or model.get("name") == model_name:
-            limit = _parse_ctx_str(model.get("ctx", ""))
+        if model_name in {
+            str(model.get("model") or ""),
+            str(model.get("name") or ""),
+            str(model.get("id") or ""),
+            str(model.get("profile_id") or ""),
+        }:
+            limit = int(model.get("context_limit") or model.get("ctx_limit") or 0)
+            if not limit:
+                limit = _parse_ctx_str(model.get("ctx", ""))
             if limit:
                 return limit
+    # Profiles outside the primary/vision routes remain addressable by Agent
+    # bindings and future chat selectors without expanding the legacy lists.
+    try:
+        from cyrene.runtime.model_configuration import candidate_for_profile
+
+        profile = candidate_for_profile(model_name)
+        if profile is not None:
+            limit = int(profile.get("context_limit") or profile.get("ctx_limit") or 0)
+            if limit:
+                return limit
+    except (ImportError, ValueError):
+        pass
     return _known_ctx_limit_for_model(model_name)
 
 
@@ -958,8 +1043,10 @@ def configured_ctx_limit_for_model(
             str(item.get("model") or "").strip(),
             str(item.get("name") or "").strip(),
             str(item.get("id") or "").strip(),
+            str(item.get("profile_id") or "").strip(),
         }:
-            return _parse_ctx_str(item.get("ctx", ""))
+            limit = int(item.get("context_limit") or item.get("ctx_limit") or 0)
+            return limit or _parse_ctx_str(item.get("ctx", ""))
     return 0
 
 
@@ -978,6 +1065,19 @@ def effective_ctx_limit_for_model(
     explicit = configured_ctx_limit_for_model(model_name, configured)
     if explicit > 0:
         return explicit
+    if models is None:
+        try:
+            from cyrene.runtime.model_configuration import candidate_for_profile
+
+            profile = candidate_for_profile(model_name)
+            if profile is not None:
+                profile_limit = int(
+                    profile.get("context_limit") or profile.get("ctx_limit") or 0
+                )
+                if profile_limit > 0:
+                    return profile_limit
+        except (ImportError, ValueError):
+            pass
     # Do not call ctx_limit_for_model() here: it reads the process-global model
     # settings and can override the explicit ``models`` snapshot supplied by
     # the caller (for example while evaluating a pending settings change).

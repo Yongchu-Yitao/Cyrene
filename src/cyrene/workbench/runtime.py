@@ -38,6 +38,11 @@ from fastapi import APIRouter, BackgroundTasks, Request, UploadFile, WebSocket, 
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, StreamingResponse
 
 from cyrene.tooling.backends.claude_code_bridge import get_cc_status
+from cyrene.tooling.result_store import (
+    ToolResultReferenceError,
+    project_tool_result_for_model,
+    read_tool_result,
+)
 from cyrene.learning.claude_code import analyze_session, learn_from_session
 from cyrene.tooling.backends.claude_code_terminal import CCTerminalSession
 from cyrene.observability import debug
@@ -1100,6 +1105,24 @@ _WORKBENCH_EXPLORE_TOOLS = [
     {
         "type": "function",
         "function": {
+            "name": "read_tool_result",
+            "description": "按范围读取或搜索本会话中先前被截断的完整工具结果。",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "content_ref": {"type": "string"},
+                    "offset": {"type": "integer", "minimum": 0, "default": 0},
+                    "limit": {"type": "integer", "minimum": 1, "maximum": 100000, "default": 4000},
+                    "query": {"type": "string"},
+                },
+                "required": ["content_ref"],
+                "additionalProperties": False,
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
             "name": "list_directory",
             "description": "列出工作区指定路径下的文件和目录。返回文件名/目录名列表，不递归。",
             "parameters": {
@@ -1549,6 +1572,7 @@ async def _workbench_exec_explore_tool(
     tc: dict,
     workspace_root: Path | None,
     *,
+    session_id: str = "",
     observation_cache: dict[str, Any] | None = None,
     runtime_cache: dict[str, str] | None = None,
     metrics: dict[str, int] | None = None,
@@ -1561,6 +1585,18 @@ async def _workbench_exec_explore_tool(
         args = json.loads(tc["function"].get("arguments") or "{}")
     except json.JSONDecodeError:
         return "Error: invalid tool arguments"
+
+    if name == "read_tool_result":
+        try:
+            return read_tool_result(
+                str(args.get("content_ref") or ""),
+                offset=int(args.get("offset") or 0),
+                limit=int(args.get("limit") or 4000),
+                query=str(args.get("query") or ""),
+                session_id=session_id,
+            )
+        except (TypeError, ValueError, ToolResultReferenceError) as exc:
+            return f"Error: {exc}"
 
     rel_path = str(args.get("path") or ".").strip()
     if not workspace_root or not workspace_root.is_dir():
@@ -1911,13 +1947,21 @@ async def _workbench_run_explore_agent(
                 result = await _workbench_exec_explore_tool(
                     tc,
                     workspace_root,
+                    session_id=event_sid,
                     observation_cache=observation_cache,
                     runtime_cache=runtime_cache,
                     metrics=call_metrics,
                     workspace_revision=workspace_revision,
                     inspected_resources=inspected_resources,
                 )
-                messages.append({"role": "tool", "tool_call_id": tc["id"], "content": result})
+                projected = project_tool_result_for_model(
+                    result,
+                    tool_name=str((tc.get("function") or {}).get("name") or ""),
+                    tool_call_id=tc["id"],
+                    session_id=event_sid,
+                    secondary=secondary,
+                )
+                messages.append({"role": "tool", "tool_call_id": tc["id"], "content": projected.content})
             if call_metrics["duplicateCallsBlocked"] >= 2:
                 tools = None
 
@@ -3012,6 +3056,33 @@ def _launch_update_restart(
             False,
             str(download_progress.get("verification_error") or "Downloaded update package has not passed verification."),
             "update_package_unverified",
+            409,
+        )
+
+    # The persisted/in-memory digest proves what was downloaded, not what is
+    # on disk now. Rehash immediately before preparing the installer so a
+    # same-size corruption or replacement after download/restart is rejected.
+    try:
+        current_sha256 = importlib.import_module(
+            "cyrene.runtime.updater"
+        )._hash_file(dest).lower()
+    except OSError as exc:
+        return (
+            False,
+            f"Unable to verify downloaded update package: {exc}",
+            "update_package_unreadable",
+            409,
+        )
+    download_progress["actual_sha256"] = current_sha256
+    if current_sha256 != expected_sha256:
+        download_progress["verified"] = False
+        download_progress["verification_error"] = (
+            "Downloaded update package changed after verification."
+        )
+        return (
+            False,
+            "Downloaded update package checksum mismatch.",
+            "update_checksum_mismatch",
             409,
         )
 

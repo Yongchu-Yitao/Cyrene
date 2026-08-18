@@ -146,14 +146,13 @@
     var emojiState = useState(user.avatar_emoji || ""); var emoji = emojiState[0]; var setEmoji = emojiState[1];
     var colorState = useState(user.avatar_color || WBP_COLORS[0]); var color = colorState[0]; var setColor = colorState[1];
     var savingState = useState(false); var saving = savingState[0]; var setSaving = savingState[1];
-    var errState = useState(""); var err = errState[0]; var setErr = errState[1];
     var fileRef = useRef(null);
 
     function beginEdit() {
       setName(user.name || ""); setBio(user.bio || "");
       setAvatarMode(user.avatar ? "image" : (user.avatar_emoji ? "emoji" : "letter"));
       setAvatarData(user.avatar || ""); setEmoji(user.avatar_emoji || "");
-      setColor(user.avatar_color || WBP_COLORS[0]); setErr(""); setEditing(true);
+      setColor(user.avatar_color || WBP_COLORS[0]); setEditing(true);
     }
     function onPickImage(file) {
       if (!file) return;
@@ -173,7 +172,7 @@
       reader.readAsDataURL(file);
     }
     function save() {
-      setSaving(true); setErr("");
+      setSaving(true);
       var payload = { name: name.trim(), bio: bio.trim() };
       if (avatarMode === "image") { payload.avatar = avatarData || ""; payload.avatar_emoji = ""; }
       else if (avatarMode === "emoji") { payload.avatar = ""; payload.avatar_emoji = (emoji || "").trim(); }
@@ -183,8 +182,12 @@
         .then(function (d) {
           if (d.user) { dataStore.state.user = d.user; dataStore.bump(); }
           setSaving(false); setEditing(false);
+          window.CyreneUI.require("feedback").showToast(t("settings.saved"), "success");
         })
-        .catch(function (e) { setSaving(false); setErr(String(e.message || e)); });
+        .catch(function (e) {
+          setSaving(false);
+          window.CyreneUI.require("feedback").showToast(String(e.message || e), "error");
+        });
     }
 
     var previewUser = editing
@@ -255,7 +258,6 @@
                     )}
                   </div>
                 </div>
-                {err ? <div className="wbp-err">{err}</div> : null}
                 <div className="wbp-edit-actions">
                   <button type="button" className="wbp-btn" onClick={function () { setEditing(false); }}>{t("profile.cancel")}</button>
                   <button type="button" className="wbp-btn primary" disabled={saving} onClick={save}>{saving ? "…" : t("profile.save")}</button>

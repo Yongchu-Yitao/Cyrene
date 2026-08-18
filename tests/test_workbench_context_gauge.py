@@ -114,7 +114,7 @@ def test_context_payload_empty_state(monkeypatch):
     assert payload["compaction"]["active"] is False
 
 
-def test_context_payload_uses_actual_model_and_live_usage(monkeypatch):
+def test_context_payload_keeps_selected_model_and_exposes_actual_model(monkeypatch):
     messages = _sample_messages()
     messages[-2]["usage"] = {
         "model": "mimo-v2.5",
@@ -132,8 +132,9 @@ def test_context_payload_uses_actual_model_and_live_usage(monkeypatch):
 
     payload = rwc._chat_context_payload("chat_x", "google/gemma-4-12b-qat")
 
-    assert seen_models == ["mimo-v2.5"]
-    assert payload["model"] == "mimo-v2.5"
+    assert seen_models == ["google/gemma-4-12b-qat"]
+    assert payload["model"] == "google/gemma-4-12b-qat"
+    assert payload["actualModel"] == "mimo-v2.5"
     assert payload["usage"]["prompt_tokens"] == 120
     assert payload["usage"]["completion_tokens"] == 30
     assert payload["usage"]["total_tokens"] == 150

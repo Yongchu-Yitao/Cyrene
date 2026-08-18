@@ -24,9 +24,9 @@ OPENAPI_OPERATION_COUNT = 378
 OPENAPI_BASELINE_FASTAPI = "0.136.1"
 OPENAPI_BASELINE_PYDANTIC = "2.13.4"
 OPENAPI_SHA256 = "c32fa1af16187cc5c2ecb1ccfa89e8f44321a987c0bb0c3a8f6e9982a3cc84b9"
-TOOL_REGISTRY_SHA256 = "2258cab8ec1d999b6bd972158dabf5e47257a3cee4c85807043f8e7122be4b4a"
-MAIN_WIRE_SHA256 = "9219ea2279d8ee4a06f52b36d02489cc993f58c6e28a0b50ea9bf804a1cf5fd7"
-SUBAGENT_WIRE_SHA256 = "f0ce882133fdf13e48eec46b065649b45e55eebb082a6c7ff5990d21366ddcc8"
+TOOL_REGISTRY_SHA256 = "b273e998e8a304c933f1389bd37066f12a08e9dca66c491bbfef0497441fb26c"
+MAIN_WIRE_SHA256 = "7f406fed2cf6c6bc2ddb4828a7498b42a1b4fb31a68d10541469a03e30b3b7db"
+SUBAGENT_WIRE_SHA256 = "8ef3ce7ce2d37cf94cb1253ba155dd46657756660f8249e0d1db005dbc3e2d30"
 
 # CyreneUI owns runtime services. The launch lifecycle is the sole bootstrap
 # global because it must guard fetch before the platform registry is loaded.
@@ -116,14 +116,14 @@ def test_tool_registry_wire_and_actor_policy_contracts_are_unchanged(monkeypatch
         "get_models",
         lambda: [{"provider": "openai_compatible", "model": "custom-model"}],
     )
-    assert len(catalog.TOOL_DEFS) == 136
-    assert len(catalog.TOOL_HANDLERS) == 136
+    assert len(catalog.TOOL_DEFS) == 137
+    assert len(catalog.TOOL_HANDLERS) == 137
     assert len(catalog._MAIN_ONLY_TOOLS) == 72
     assert _sha256_json(catalog.TOOL_DEFS) == TOOL_REGISTRY_SHA256
 
-    assert len(wire.get_main_wire_tool_defs()) == 31
+    assert len(wire.get_main_wire_tool_defs()) == 32
     assert wire.get_wire_bundle_hash("main") == MAIN_WIRE_SHA256
-    assert len(wire.get_subagent_wire_tool_defs()) == 24
+    assert len(wire.get_subagent_wire_tool_defs()) == 25
     assert wire.get_wire_bundle_hash("subagent") == SUBAGENT_WIRE_SHA256
 
 

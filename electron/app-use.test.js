@@ -59,6 +59,16 @@ test('semantic providers use complete native accessibility traversal on macOS an
   assert.doesNotMatch(windowsSource, /\$walker = \[System\.Windows\.Automation\.TreeWalker\]::ControlViewWalker/);
 });
 
+test('Safari Apple Events identify windows by id or complete bounds', () => {
+  const source = fs.readFileSync(path.join(__dirname, 'app-use-macos.jxa'), 'utf8');
+  const safariTabSource = source.split('function safariTab(target) {', 2)[1]
+    .split('\nfunction safariState(target) {', 1)[0];
+  assert.match(safariTabSource, /candidate\.id\(\)/);
+  assert.match(safariTabSource, /boundsMatch\(normalized, targetBounds, 8\)/);
+  assert.match(safariTabSource, /cannot be identified unambiguously/);
+  assert.doesNotMatch(safariTabSource, /targetHeight|bestDistance/);
+});
+
 test('coordinate scroll providers split large amounts into safe wheel events', () => {
   const macSource = fs.readFileSync(path.join(__dirname, 'app-use-macos.jxa'), 'utf8');
   const windowsSource = fs.readFileSync(path.join(__dirname, 'app-use-windows.ps1'), 'utf8');

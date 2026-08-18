@@ -378,7 +378,7 @@ class ChatRunEventStore:
             except Exception:
                 logger.warning(
                     "Corrupt durable event row dropped (run=%s, row=%s)",
-                    str(row["run_id"]), event_row.get("seq") or event_row.get("id") or "?",
+                    str(row["run_id"]), event_row["seq"],
                     exc_info=True,
                 )
                 continue

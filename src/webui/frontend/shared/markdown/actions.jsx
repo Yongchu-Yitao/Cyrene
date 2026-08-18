@@ -4,14 +4,50 @@
 (function () {
   if (typeof document === "undefined") return;
 
-  function createButton(text, title, onClick) {
+  function translate(key, fallback) {
+    try {
+      var i18n = window.CyreneUI.require("i18n");
+      return i18n.t(key, null, fallback);
+    } catch (error) {
+      return fallback;
+    }
+  }
+
+  function localizeButton(btn) {
+    var action = btn.dataset.codeAction;
+    if (action === "copy") {
+      var state = btn.dataset.state;
+      btn.textContent = state === "success"
+        ? translate("workbenchChat.codeBlock.copied", "Copied!")
+        : state === "error"
+          ? translate("workbenchChat.codeBlock.copyFailed", "Failed")
+          : translate("workbenchChat.codeBlock.copy", "Copy");
+      btn.title = translate("workbenchChat.codeBlock.copyTitle", "Copy code");
+    } else if (action === "edit") {
+      btn.textContent = translate("workbenchChat.codeBlock.edit", "Edit");
+      btn.title = translate("workbenchChat.codeBlock.editTitle", "Open in editor");
+    }
+  }
+
+  function createButton(action, onClick) {
     var btn = document.createElement("button");
     btn.className = "code-action-btn";
-    btn.textContent = text;
-    btn.title = title;
+    btn.dataset.codeAction = action;
     btn.type = "button";
     btn.addEventListener("click", onClick);
+    localizeButton(btn);
     return btn;
+  }
+
+  function setCopyButtonState(button, state) {
+    if (state) button.dataset.state = state;
+    else delete button.dataset.state;
+    localizeButton(button);
+  }
+
+  function localizeActions() {
+    var buttons = document.querySelectorAll(".code-action-btn[data-code-action]");
+    for (var i = 0; i < buttons.length; i++) localizeButton(buttons[i]);
   }
 
   function getCodeText(pre) {
@@ -92,23 +128,19 @@
     bar.appendChild(spacer);
 
     bar.appendChild(
-      createButton("Copy", "Copy code", function () {
+      createButton("copy", function () {
         var button = this;
         writeClipboardText(code).then(
           function () {
-            button.textContent = "Copied!";
-            button.dataset.state = "success";
+            setCopyButtonState(button, "success");
             setTimeout(function () {
-              button.textContent = "Copy";
-              delete button.dataset.state;
+              setCopyButtonState(button, "");
             }, 1500);
           },
           function () {
-            button.textContent = "Failed";
-            button.dataset.state = "error";
+            setCopyButtonState(button, "error");
             setTimeout(function () {
-              button.textContent = "Copy";
-              delete button.dataset.state;
+              setCopyButtonState(button, "");
             }, 1800);
           }
         );
@@ -116,7 +148,7 @@
     );
 
     bar.appendChild(
-      createButton("Edit", "Open in editor", function () {
+      createButton("edit", function () {
         var evt = new CustomEvent("cyrene:open-editor", {
           detail: { code: code, language: lang },
           bubbles: true,
@@ -199,6 +231,7 @@
       delete _watched[selector];
     });
     window.removeEventListener("cyrene:page-invalidated", dispose);
+    window.removeEventListener("cyrene:i18n-changed", localizeActions);
   }
 
   if (document.readyState === "loading") {
@@ -206,6 +239,7 @@
   } else {
     init();
   }
+  window.addEventListener("cyrene:i18n-changed", localizeActions);
   window.addEventListener("beforeunload", dispose, { once: true });
   window.addEventListener("cyrene:page-invalidated", dispose, { once: true });
 })();

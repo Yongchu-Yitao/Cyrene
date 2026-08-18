@@ -82,15 +82,25 @@ def _ensure_on_path(version: str) -> bool:
     root = _runtime_root(version)
     if not (root / "cv2").is_dir():
         return False
-    if str(root) not in sys.path:
-        sys.path.insert(0, str(root))
+    root_str = str(root)
+    if root_str not in sys.path:
+        sys.path.insert(0, root_str)
     try:
         import cv2  # noqa: F401
     except Exception:
+        while root_str in sys.path:
+            sys.path.remove(root_str)
+        _drop_imported_cv2()
         return False
     # The import must resolve to the injected directory, not a coincidentally
     # installed system OpenCV.
-    return str(Path(cv2.__file__).resolve()).startswith(str(root.resolve()))
+    try:
+        Path(cv2.__file__).resolve().relative_to(root.resolve())
+    except (AttributeError, ValueError):
+        while root_str in sys.path:
+            sys.path.remove(root_str)
+        return False
+    return True
 
 
 def installed_root() -> Path | None:
@@ -101,7 +111,16 @@ def installed_root() -> Path | None:
     root = _runtime_root(version)
     if not (root / "cv2").is_dir():
         return None
-    if str(root) not in sys.path and not _ensure_on_path(version):
+    loaded = sys.modules.get("cv2")
+    if loaded is not None:
+        try:
+            Path(loaded.__file__).resolve().relative_to(root.resolve())
+            return root
+        except (AttributeError, ValueError):
+            pass
+    # A path entry alone is not proof that cv2 imports. Always validate when
+    # the managed module is not already loaded from this exact runtime.
+    if not _ensure_on_path(version):
         return None
     return root
 
@@ -292,9 +311,12 @@ async def _download(version: str = PINNED_VERSION) -> Path:
         if not wheel.is_file() or not wheel.stat().st_size:
             await _stream_wheel(url, wheel)
         root = await asyncio.to_thread(_install_wheel, wheel, version)
-        _marker().write_text(json.dumps({"version": version}), encoding="utf-8")
+        _drop_imported_cv2()
         if not _ensure_on_path(version):
+            if installed_version() == version:
+                _marker().unlink(missing_ok=True)
             raise RuntimeError("installed OpenCV failed to import")
+        _marker().write_text(json.dumps({"version": version}), encoding="utf-8")
         # Only after the new runtime verifies may older versions be removed;
         # a failed verification keeps the previous runtime usable.
         await asyncio.to_thread(_remove_other_versions, version)

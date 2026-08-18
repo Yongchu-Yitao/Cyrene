@@ -282,6 +282,34 @@ function QuickChatRoot() {
   return <QuickChatApp />;
 }
 
+function DetachedPaneRoot() {
+  useEffectBootstrap(function () {
+    var mode = readWorkbenchTweak("theme", "system");
+    var actual = mode === "system"
+      ? (window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light")
+      : mode;
+    document.documentElement.dataset.theme = actual;
+    document.documentElement.dataset.density = "cozy";
+    document.documentElement.dataset.textSize = readWorkbenchTweak("textSize", "default") || "default";
+    document.body.classList.add("wbc-detached-pane-surface");
+    applyWorkbenchAccent(readWorkbenchTweak("accent", null));
+    applyWorkbenchBackgrounds(
+      readWorkbenchTweak("backgroundLight", null),
+      readWorkbenchTweak("backgroundDark", null),
+    );
+    delete document.documentElement.dataset.booting;
+    Promise.resolve(window.CyreneUI.require("data").ready).catch(function () {}).then(function () {
+      var readiness = window.CyreneUI.has("readiness") ? window.CyreneUI.require("readiness") : null;
+      if (readiness && typeof readiness.markReady === "function") readiness.markReady();
+    });
+    return function () { document.body.classList.remove("wbc-detached-pane-surface"); };
+  }, []);
+  var DetachedPaneApp = window.CyreneUI.require("chat").DetachedPaneApp;
+  return typeof DetachedPaneApp === "function"
+    ? <DetachedPaneApp />
+    : <main className="workbench-bootstrap-error" role="alert">Cyrene pane failed to load.</main>;
+}
+
 var WORKBENCH_REQUIRED_SERVICES = [
   "browser", "chat", "create", "data", "events", "feedback", "i18n",
   "library", "memory", "model", "navigation", "profile", "schedule",
@@ -291,6 +319,8 @@ var WORKBENCH_REQUIRED_SERVICES = [
 function workbenchServicesReady(surface) {
   var required = surface === "quick-chat"
     ? ["chat", "data", "events", "feedback", "i18n", "quickChat", "readiness"]
+    : surface === "detached-pane"
+      ? ["api", "browser", "chat", "data", "events", "feedback", "i18n", "markdown", "readiness"]
     : WORKBENCH_REQUIRED_SERVICES;
   return required.every(function (name) { return window.CyreneUI.has(name); });
 }
@@ -299,6 +329,8 @@ function WorkbenchBootstrap() {
   var surface = readWorkbenchSurface();
   return surface === "quick-chat"
     ? <QuickChatRoot />
+    : surface === "detached-pane"
+      ? <DetachedPaneRoot />
     : <WorkbenchRoot />;
 }
 
@@ -340,10 +372,12 @@ if (window.CyrenePageLifecycle && window.CyrenePageLifecycle.isInvalidated()) {
       window.setTimeout(mountWorkbenchPage, 50);
       return;
     }
-    var missing = (surface === "quick-chat"
+    var required = surface === "quick-chat"
       ? ["chat", "data", "events", "feedback", "i18n", "quickChat", "readiness"]
-      : WORKBENCH_REQUIRED_SERVICES
-    ).filter(function (name) { return !window.CyreneUI.has(name); });
+      : surface === "detached-pane"
+        ? ["api", "browser", "chat", "data", "events", "feedback", "i18n", "markdown", "readiness"]
+        : WORKBENCH_REQUIRED_SERVICES;
+    var missing = required.filter(function (name) { return !window.CyreneUI.has(name); });
     var retries = 0;
     try { retries = Number(sessionStorage.getItem(workbenchMountRetryKey) || 0); } catch (error) {}
     if (retries < 2) {

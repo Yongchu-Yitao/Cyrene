@@ -12,6 +12,7 @@ get_all = _store.get_all_settings
 reset_all = _store.reset_all
 get_revision = _store.get_settings_revision
 update_atomic = _store.update_settings_atomic
+update_settings_and_env_atomic = _store.update_settings_and_env_atomic
 get_spawn_policy = _store.get_spawn_policy
 get_models = _store.get_models
 save_models = _store.save_models

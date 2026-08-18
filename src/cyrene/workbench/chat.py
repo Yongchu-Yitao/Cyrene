@@ -530,10 +530,23 @@ def complete_chat_plan(chat_id: str) -> dict[str, Any] | None:
     return _mutate_chat_plan(chat_id, mutate)
 
 
+def _workbench_http_status_error(exc: Exception) -> httpx.HTTPStatusError | None:
+    """Find an upstream HTTP response even when an integration wrapped it."""
+    current: BaseException | None = exc
+    seen: set[int] = set()
+    while current is not None and id(current) not in seen:
+        seen.add(id(current))
+        if isinstance(current, httpx.HTTPStatusError):
+            return current
+        current = current.__cause__ or current.__context__
+    return None
+
+
 def _workbench_chat_run_error_message(exc: Exception, lang: str = "") -> str:
     """Return a user-facing message after bounded model-network retries."""
-    if isinstance(exc, httpx.HTTPStatusError):
-        status = int(exc.response.status_code)
+    http_error = _workbench_http_status_error(exc)
+    if http_error is not None:
+        status = int(http_error.response.status_code)
         english = str(lang or "").lower() == "en"
         if status in (401, 403):
             if english:
@@ -577,7 +590,8 @@ def _workbench_chat_error_metadata(exc: Exception) -> dict[str, str]:
     if direct_code and direct_key:
         return {"code": direct_code, "detail_key": direct_key}
 
-    if isinstance(exc, httpx.HTTPStatusError) and int(exc.response.status_code) in (401, 403):
+    http_error = _workbench_http_status_error(exc)
+    if http_error is not None and int(http_error.response.status_code) in (401, 403):
         return {
             "code": "model_authentication_failed",
             "detail_key": "workbenchChat.error.modelAuthenticationFailed",
@@ -2175,7 +2189,8 @@ def _chat_context_payload(
         actual_model = str(usage.get("model") or message.get("model") or "").strip()
         if actual_model:
             break
-    effective_model = actual_model or model_name
+    selected_model = str(model_name or "").strip()
+    effective_model = selected_model or actual_model
     seg = _context_segment_tokens(messages)
     used = sum(seg.values())
     limit = (
@@ -2191,7 +2206,11 @@ def _chat_context_payload(
         for m in messages
     )
     return {
+        # ``model`` is the conversation's current selection so the overview
+        # changes immediately, before the first response from the new model.
+        # Keep the last response model separately for fallback diagnostics.
         "model": effective_model,
+        "actualModel": actual_model,
         "usage": _aggregate_usage(messages),
         "ctxLimit": limit,
         "ctxUsed": used,

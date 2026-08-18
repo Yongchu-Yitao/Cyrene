@@ -1,7 +1,7 @@
 import * as esbuild from 'esbuild'
 import { createHash } from 'crypto'
 import { readFileSync, writeFileSync, mkdirSync, readdirSync, statSync, existsSync, copyFileSync, rmSync } from 'fs'
-import { join, relative, dirname, extname, resolve } from 'path'
+import { join, relative, dirname, extname, resolve, basename } from 'path'
 import { fileURLToPath } from 'url'
 
 const __dirname = dirname(fileURLToPath(import.meta.url))
@@ -9,6 +9,40 @@ const APP_DIR = resolve(__dirname, 'static/app')
 const OUT_DIR = resolve(APP_DIR, 'compiled')
 const WORKBENCH_DIR = resolve(__dirname, 'frontend')
 const ASSETS_DIR = resolve(WORKBENCH_DIR, 'assets')
+const TABLER_ICONS_DIR = resolve(__dirname, 'node_modules/@tabler/icons/icons/outline')
+const SIMPLE_ICONS_DIR = resolve(__dirname, 'node_modules/simple-icons/icons')
+const LOBE_ICONS_DIR = resolve(__dirname, 'node_modules/@lobehub/icons-static-svg/icons')
+const SETTINGS_ICON_FILES = [
+  'user.svg',
+  'settings.svg',
+  'palette.svg',
+  'keyboard.svg',
+  'box.svg',
+  'route.svg',
+  'server.svg',
+  'arrow-up.svg',
+  'arrow-down.svg',
+  'robot.svg',
+  'microphone.svg',
+  'tools.svg',
+  'messages.svg',
+  'device-desktop-up.svg',
+  'puzzle.svg',
+  'plug-connected.svg',
+  'wallet.svg',
+  'chart-bar.svg',
+  'database.svg',
+  'info-circle.svg',
+]
+const PROVIDER_ICON_FILES = [
+  [join(TABLER_ICONS_DIR, 'brand-openai.svg'), 'openai.svg'],
+  [join(SIMPLE_ICONS_DIR, 'anthropic.svg'), 'anthropic.svg'],
+  [join(LOBE_ICONS_DIR, 'gemini-color.svg'), 'gemini.svg'],
+  [join(LOBE_ICONS_DIR, 'deepseek-color.svg'), 'deepseek.svg'],
+  [join(LOBE_ICONS_DIR, 'minimax-color.svg'), 'minimax.svg'],
+  [join(SIMPLE_ICONS_DIR, 'ollama.svg'), 'ollama.svg'],
+  [join(SIMPLE_ICONS_DIR, 'onnx.svg'), 'onnx.svg'],
+]
 const VENDOR_DIR = resolve(__dirname, 'vendor')
 const OFFICE_OUT_DIR = resolve(APP_DIR, 'office')
 const OFFICE_ENTRIES = [
@@ -94,6 +128,8 @@ async function build() {
   const workbenchFiles = existsSync(WORKBENCH_DIR) ? collect(WORKBENCH_DIR) : []
   const cssFiles = existsSync(WORKBENCH_DIR) ? collectCss(WORKBENCH_DIR) : []
   const assetFiles = existsSync(ASSETS_DIR) ? collectAssets(ASSETS_DIR) : []
+  const settingsIconFiles = SETTINGS_ICON_FILES.map((name) => join(TABLER_ICONS_DIR, name))
+  const providerIconFiles = PROVIDER_ICON_FILES.map(([source]) => source)
   const files = workbenchFiles
   rmSync(OUT_DIR, { recursive: true, force: true })
   rmSync(OFFICE_OUT_DIR, { recursive: true, force: true })
@@ -156,6 +192,8 @@ async function build() {
   const indexTemplate = readFileSync(INDEX_SOURCE, 'utf8')
   const revisionSources = files.concat(
     OFFICE_ENTRIES.map(([entry]) => entry),
+    settingsIconFiles,
+    providerIconFiles,
     [resolve(__dirname, 'package-lock.json')],
   )
   const revision = frontendRevision(revisionSources, cssFiles, assetFiles, indexTemplate)
@@ -212,6 +250,24 @@ async function build() {
     mkdirSync(dirname(outPath), { recursive: true })
     copyFileSync(srcPath, outPath)
     console.log(`✓ ${rel}`)
+  }
+
+  // Settings navigation uses Tabler's outline set so every destination has a
+  // distinct, maintained icon instead of aliases that repeat another tab.
+  const settingsIconDir = join(APP_DIR, 'settings-icons')
+  mkdirSync(settingsIconDir, { recursive: true })
+  for (const srcPath of settingsIconFiles) {
+    const iconName = basename(srcPath)
+    const target = join(settingsIconDir, iconName)
+    copyFileSync(srcPath, target)
+    console.log(`✓ settings-icons/${iconName}`)
+  }
+
+  const providerIconDir = join(APP_DIR, 'provider-icons')
+  mkdirSync(providerIconDir, { recursive: true })
+  for (const [srcPath, iconName] of PROVIDER_ICON_FILES) {
+    copyFileSync(srcPath, join(providerIconDir, iconName))
+    console.log(`✓ provider-icons/${iconName}`)
   }
 
   // ---- Copy pdfjs-dist assets ------------------------------------------------

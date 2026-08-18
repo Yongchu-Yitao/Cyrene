@@ -33,6 +33,35 @@
     root.marked.__cyreneCjkAutolinkBoundary = true;
   }
 
+  function installStrictStrikethrough() {
+    if (
+      !root.marked
+      || typeof root.marked.use !== "function"
+      || root.marked.__cyreneStrictStrikethrough
+    ) return;
+
+    // GFM strikethrough uses paired `~~` delimiters. Marked also accepts a
+    // single `~`, which makes two unrelated ranges such as `26~30℃` and
+    // `25~32℃` form one cross-line <del>. Consume lone tildes as literal
+    // text before Marked's built-in delimiter tokenizer sees them, while
+    // leaving `~~...~~` untouched.
+    root.marked.use({
+      extensions: [{
+        name: "cyreneSingleTilde",
+        level: "inline",
+        start: function (source) {
+          var index = source.indexOf("~");
+          return index < 0 ? undefined : index;
+        },
+        tokenizer: function (source) {
+          if (!/^~(?!~)/.test(source)) return undefined;
+          return { type: "text", raw: "~", text: "~" };
+        },
+      }],
+    });
+    root.marked.__cyreneStrictStrikethrough = true;
+  }
+
   function installInteractiveBlocks() {
     if (
       !root.marked
@@ -243,6 +272,7 @@
   }
 
   installCjkAutolinkBoundary();
+  installStrictStrikethrough();
   installInteractiveBlocks();
 
   function escapeHtml(value) {

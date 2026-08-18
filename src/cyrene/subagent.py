@@ -2048,7 +2048,8 @@ async def _run_subagent(
         current_run_context,
     )
     from cyrene.agent.model_service import call_agent_model
-    from cyrene.model_runtime.messages import assistant_text, truncate
+    from cyrene.model_runtime.messages import assistant_text
+    from cyrene.tooling.result_store import project_tool_result_for_model
     from cyrene.tooling import (
         execute_wire_tool,
         get_subagent_wire_tool_defs,
@@ -2817,7 +2818,13 @@ You are a **participant** in this discussion. Rules:
                     capability_id = str(name or "")
                     if effective_mode == EXECUTION_MODE:
                         round_had_execution_work = True
-                messages.append({"role": "tool", "tool_call_id": tc["id"], "content": truncate(result)})
+                projected = project_tool_result_for_model(
+                    result,
+                    tool_name=str(name or ""),
+                    tool_call_id=tc["id"],
+                    context_limit_tokens=context_limit,
+                )
+                messages.append({"role": "tool", "tool_call_id": tc["id"], "content": projected.content})
                 # 每执行完一个工具检查 inbox，用户引导时能更快响应
                 inbox_text = _get_inbox(agent_id)
                 if inbox_text:

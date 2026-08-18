@@ -6,17 +6,22 @@
 window.CyreneUI.settingsIndex = window.CyreneUI.register("settings-index", {
   // Tab-level entries let a query jump straight to a settings tab.
   tabs: [
+    { id: "profile", labelKey: "rail.profile" },
     { id: "general", labelKey: "settings.general" },
-    { id: "models", labelKey: "settings.models" },
+    { id: "appearance", labelKey: "settings.appearance" },
+    { id: "shortcuts", labelKey: "settings.shortcuts" },
+    { id: "models", labelKey: "settings.modelServices" },
+    { id: "model-usage", labelKey: "settings.modelUsage" },
+    { id: "agents", labelKey: "settings.agents" },
+    { id: "voice", labelKey: "settings.voiceTab" },
+    { id: "tools", labelKey: "settings.toolsTab" },
     { id: "channels", labelKey: "settings.channels" },
     { id: "remote", labelKey: "settings.remoteTab" },
-    { id: "agents", labelKey: "settings.agents" },
-    { id: "appearance", labelKey: "settings.appearance" },
-    { id: "capabilities", labelKey: "settings.capabilities" },
     { id: "extensions", labelKey: "settings.extensions" },
-    { id: "shortcuts", labelKey: "settings.shortcuts" },
-    { id: "data", labelKey: "settings.data" },
+    { id: "integrations", labelKey: "settings.integrations" },
     { id: "budget", labelKey: "settings.budget" },
+    { id: "usage", labelKey: "settings.usage" },
+    { id: "data", labelKey: "settings.data" },
     { id: "about", labelKey: "settings.about" },
   ],
   // Item-level entries: id doubles as the DOM anchor rendered by the settings
@@ -31,12 +36,13 @@ window.CyreneUI.settingsIndex = window.CyreneUI.register("settings-index", {
     { id: "setting-amap-key", tab: "general", labelKey: "settings.amapKey", hintKey: "settings.amapKeyHint", keywords: ["地图", "amap", "高德", "key", "密钥"] },
     { id: "setting-run-in-background", tab: "general", labelKey: "settings.runInBackground", hintKey: "settings.runInBackgroundHint", keywords: ["后台", "常驻", "resident", "background"] },
     { id: "setting-quick-chat", tab: "general", labelKey: "settings.quickChatAssistant", hintKey: "settings.quickChatAssistantHint", keywords: ["快捷对话", "quick", "chat", "截图"] },
-    { id: "setting-zotero", tab: "general", labelKey: "settings.zoteroIntegration", hintKey: "settings.zoteroIntegrationHint", keywords: ["zotero", "文献", "引用", "集成"] },
+    { id: "setting-zotero", tab: "integrations", labelKey: "settings.zoteroIntegration", hintKey: "settings.zoteroIntegrationHint", keywords: ["zotero", "文献", "引用", "集成"] },
     // ── Models ──
-    { id: "setting-model-source", tab: "models", labelKey: "settings.primaryModelSlot", hintKey: "settings.customModelHint", keywords: ["模型来源", "主模型", "model", "api", "key", "base url", "codex", "自定义"] },
-    { id: "setting-vision-model", tab: "models", labelKey: "settings.visionModelSlot", keywords: ["视觉模型", "vision", "图像"] },
-    { id: "setting-secondary-model", tab: "models", labelKey: "settings.secondaryModelSlot", hintKey: "settings.secondaryModelHint", keywords: ["辅助模型", "secondary", "后备"] },
-    { id: "setting-embedding", tab: "models", labelKey: "settings.embeddingIntegration", hintKey: "settings.embeddingIntegrationHint", keywords: ["嵌入", "embedding", "向量", "vector", "知识库"] },
+    { id: "setting-model-connections", tab: "models", labelKey: "settings.modelServices", keywords: ["模型服务", "provider", "api", "key", "base url", "codex", "ollama", "连接"] },
+    { id: "setting-model-primary-route", tab: "model-usage", labelKey: "settings.primaryModelSlot", keywords: ["默认模型", "主模型", "顺位", "fallback", "model"] },
+    { id: "setting-model-vision-route", tab: "model-usage", labelKey: "settings.visionModelSlot", keywords: ["识图模型", "视觉模型", "vision", "图像"] },
+    { id: "setting-model-secondary-route", tab: "model-usage", labelKey: "settings.secondaryModelSlot", hintKey: "settings.secondaryModelHint", keywords: ["次要模型", "secondary", "后备"] },
+    { id: "setting-model-embedding-route", tab: "model-usage", labelKey: "settings.embeddingIntegration", hintKey: "settings.embeddingIntegrationHint", keywords: ["嵌入", "embedding", "向量", "vector", "知识库"] },
     // ── Channels ──
     { id: "setting-telegram", tab: "channels", labelKey: "settings.telegram", keywords: ["telegram", "电报"] },
     { id: "setting-wechat", tab: "channels", labelKey: "settings.wechat", keywords: ["微信", "wechat", "weixin"] },
@@ -52,12 +58,13 @@ window.CyreneUI.settingsIndex = window.CyreneUI.register("settings-index", {
     { id: "setting-workbench-background", tab: "appearance", labelKey: "settings.workbenchBackground", hintKey: "settings.workbenchBackgroundHint", keywords: ["背景", "background", "壁纸"] },
     { id: "setting-performance-mode", tab: "appearance", labelKey: "settings.performanceMode", hintKey: "settings.performanceModeHint", keywords: ["性能", "performance"] },
     { id: "setting-pulse-animation", tab: "appearance", labelKey: "settings.pulseAnimation", hintKey: "settings.pulseAnimationHint", keywords: ["动画", "animation", "pulse", "呼吸"] },
-    // ── Capabilities ──
-    { id: "setting-tool-packages", tab: "capabilities", labelKey: "settings.toolPackages", hintKey: "settings.toolPackagesHint", keywords: ["工具包", "tool", "工具", "package"] },
-    { id: "setting-voice", tab: "capabilities", labelKey: "settings.voiceCapability", hintKey: "settings.voiceCapabilityHint", keywords: ["语音", "voice", "tts", "asr", "声音"] },
+    // ── Voice & tools ──
+    { id: "setting-tool-packages", tab: "tools", labelKey: "settings.toolPackages", hintKey: "settings.toolPackagesHint", keywords: ["工具包", "tool", "工具", "package"] },
+    { id: "setting-voice", tab: "voice", labelKey: "settings.voiceCapability", hintKey: "settings.voiceCapabilityHint", keywords: ["语音", "voice", "tts", "asr", "声音"] },
     // ── Extensions ──
     { id: "setting-extensions", tab: "extensions", labelKey: "settings.extensions", keywords: ["扩展", "extension", "插件", "market", "mcp", "hooks", "钩子", "hook", "技能", "skill"] },
     // ── Data ──
+    { id: "setting-storage", tab: "data", labelKey: "settings.storageUsage", keywords: ["存储", "storage", "空间", "占用", "缓存"] },
     { id: "setting-paths", tab: "data", labelKey: "settings.pathInfo", keywords: ["路径", "path", "目录", "目录位置"] },
     { id: "setting-backup", tab: "data", labelKey: "settings.backup", hintKey: "settings.backupHint", keywords: ["备份", "backup", "恢复", "restore"] },
     { id: "setting-session-export", tab: "data", labelKey: "settings.sessionExport", hintKey: "settings.sessionExportHint", keywords: ["导出", "export", "会话"] },
@@ -66,6 +73,6 @@ window.CyreneUI.settingsIndex = window.CyreneUI.register("settings-index", {
     { id: "setting-reset-app-data", tab: "data", labelKey: "settings.resetAppData", hintKey: "settings.resetAppDataHint", keywords: ["重置", "reset", "恢复出厂"] },
     // ── Budget ──
     { id: "setting-budget", tab: "budget", labelKey: "settings.budgetConfig", keywords: ["预算", "budget", "限额", "limit"] },
-    { id: "setting-codex-quota", tab: "budget", labelKey: "settings.codexQuota", keywords: ["codex", "quota", "配额"] },
+    { id: "setting-codex-quota", tab: "usage", labelKey: "settings.codexQuota", keywords: ["codex", "quota", "配额"] },
   ],
 });

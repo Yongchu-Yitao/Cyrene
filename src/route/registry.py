@@ -33,6 +33,7 @@ from route.pdf import register_pdf_routes
 from route.remote import register_remote_routes
 from route.search import register_search_routes
 from route.settings.general import register_settings_routes
+from route.settings.model_configuration import register_model_configuration_routes
 from route.skills import register_skill_routes
 from route.system.events import register_event_routes
 from route.system.instance import register_instance_routes
@@ -143,6 +144,7 @@ def register_routes(app: FastAPI, bot: Any, db_path: str) -> None:
     )
     register_pdf_routes(router)
     register_agent_model_gateway_routes(router)
+    register_model_configuration_routes(router)
     register_voice_routes(router)
     router.include_router(code_router)
 

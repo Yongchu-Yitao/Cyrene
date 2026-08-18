@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import builtins
 import json
 import sys
 import zipfile
@@ -88,6 +89,83 @@ def test_installed_root_requires_marker_and_importable_cv2(
     assert opencv_runtime.installed_root() == (
         tmp_path / "versions" / "5.0.0.93"
     )
+
+
+def test_failed_cv2_import_removes_runtime_from_sys_path(
+    monkeypatch, tmp_path,
+) -> None:
+    monkeypatch.setattr(opencv_runtime, "OPENCV_ROOT", tmp_path)
+    runtime = tmp_path / "versions" / "5.0.0.93"
+    (runtime / "cv2").mkdir(parents=True)
+    isolated_path = list(sys.path)
+    isolated_path.insert(0, str(runtime))
+    monkeypatch.setattr(opencv_runtime.sys, "path", isolated_path)
+    original_import = builtins.__import__
+
+    def reject_cv2(name, *args, **kwargs):
+        if name == "cv2":
+            raise ImportError("broken native module")
+        return original_import(name, *args, **kwargs)
+
+    monkeypatch.setattr(builtins, "__import__", reject_cv2)
+
+    assert opencv_runtime._ensure_on_path("5.0.0.93") is False
+    assert str(runtime) not in sys.path
+
+
+def test_installed_root_revalidates_preexisting_runtime_path(
+    monkeypatch, tmp_path,
+) -> None:
+    monkeypatch.setattr(opencv_runtime, "OPENCV_ROOT", tmp_path)
+    runtime = tmp_path / "versions" / "5.0.0.93"
+    (runtime / "cv2").mkdir(parents=True)
+    (tmp_path / "installed.json").write_text(
+        json.dumps({"version": "5.0.0.93"}), encoding="utf-8"
+    )
+    isolated_path = [str(runtime), *sys.path]
+    monkeypatch.setattr(opencv_runtime.sys, "path", isolated_path)
+    checked = []
+    monkeypatch.setattr(
+        opencv_runtime,
+        "_ensure_on_path",
+        lambda version: checked.append(version) or False,
+    )
+
+    assert opencv_runtime.installed_root() is None
+    assert checked == ["5.0.0.93"]
+
+
+async def test_failed_download_validation_does_not_write_installed_marker(
+    monkeypatch, tmp_path,
+) -> None:
+    monkeypatch.setattr(opencv_runtime, "OPENCV_ROOT", tmp_path)
+    version = "5.0.0.93"
+    wheel = tmp_path / ".downloads" / f"opencv-{version}.whl"
+    wheel.parent.mkdir(parents=True)
+    wheel.write_bytes(b"cached wheel")
+    runtime = tmp_path / "versions" / version
+    (tmp_path / "installed.json").write_text(
+        json.dumps({"version": version}), encoding="utf-8"
+    )
+
+    monkeypatch.setattr(
+        opencv_runtime, "_resolve_wheel", lambda _version: ("https://unused", 12)
+    )
+
+    def install(_wheel, _version):
+        (runtime / "cv2").mkdir(parents=True)
+        return runtime
+
+    monkeypatch.setattr(opencv_runtime, "_install_wheel", install)
+    monkeypatch.setattr(opencv_runtime, "_drop_imported_cv2", lambda: None)
+    monkeypatch.setattr(opencv_runtime, "_ensure_on_path", lambda _version: False)
+    try:
+        with pytest.raises(RuntimeError, match="failed to import"):
+            await opencv_runtime._download(version)
+
+        assert not (tmp_path / "installed.json").exists()
+    finally:
+        opencv_runtime._PROGRESS.pop("opencv", None)
 
 
 def test_status_reflects_install_state(monkeypatch, tmp_path) -> None:

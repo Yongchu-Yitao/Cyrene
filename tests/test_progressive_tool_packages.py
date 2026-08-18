@@ -21,7 +21,7 @@ def test_main_wire_bundle_has_stable_progressive_tool_contract(monkeypatch):
     defs = get_main_wire_tool_defs()
     assert _names(defs) == [
         "use_tools", "send_message", "ask_user", "quit", "enter_plan_mode",
-        "update_plan_progress", "DeepReflect", "Read", "Write", "Edit",
+        "update_plan_progress", "DeepReflect", "Read", "read_tool_result", "Write", "Edit",
         "Glob", "Grep", "Bash", "WebSearch", "WebFetch",
         "AnalyzeAttachment", "code_tools", "browser_tools",
         "desktop_tools", "memory_tools", "knowledge_tools", "task_tools",
@@ -53,9 +53,9 @@ def test_renderer_contract_tool_is_exposed_only_for_workbench_surface():
     try:
         workbench_names = _names(get_main_wire_tool_defs())
         assert workbench_names == [
-            *default_names[:16],
+            *default_names[:17],
             "LoadRendererContract",
-            *default_names[16:],
+            *default_names[17:],
         ]
         assert get_wire_bundle_hash("main") != default_hash
         assert "LoadRendererContract" not in _names(

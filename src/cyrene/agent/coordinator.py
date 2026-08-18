@@ -83,8 +83,8 @@ from cyrene.config import PATTERN_DETECTION_INTERVAL
 from cyrene.model_runtime.messages import (
     assistant_text,
     parse_tool_arguments,
-    truncate,
 )
+from cyrene.tooling.result_store import project_tool_result_for_model
 from cyrene.memory import get_memory_context
 from cyrene.runtime.memory.short_term import get_context
 from cyrene.learning.skills import build_skill_prompt_block
@@ -256,7 +256,12 @@ async def _run_execution_agent_locked(task: str, bot: Any, chat_id: int, db_path
                 )
             except Exception as e:
                 result = f"Tool {name} failed: {e}"
-            messages.append({"role": "tool", "tool_call_id": call_id, "content": truncate(result)})
+            projected = project_tool_result_for_model(
+                result,
+                tool_name=str(name or ""),
+                tool_call_id=call_id,
+            )
+            messages.append({"role": "tool", "tool_call_id": call_id, "content": projected.content})
             observation = build_mcp_observation_message(
                 result,
                 tool_name=str(name or ""),

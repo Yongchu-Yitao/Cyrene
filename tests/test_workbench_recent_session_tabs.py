@@ -722,10 +722,11 @@ def test_session_activity_uses_newer_durable_status_and_maps_terminal_variants()
         + """
 const completed = wbSessionActivityPhase({kind:"chat", source:{runStatus:"completed", updatedAt:"2026-08-08T10:00:02Z", messageCount:2}}, null, {status:"failed", statusAt:Date.parse("2026-08-08T10:00:01Z"), lastEventAt:Date.parse("2026-08-08T10:00:01Z"), active:true, activeTools:{old:{label:"shell"}}});
 const sameRunLateEvent = wbSessionActivityPhase({kind:"chat", source:{runStatus:"completed", updatedAt:"2026-08-08T10:00:02Z", lastRun:{id:"r1"}, messageCount:2}}, null, {runKey:"r1", status:"running", statusAt:Date.parse("2026-08-08T10:00:03Z"), lastEventAt:Date.parse("2026-08-08T10:00:03Z"), active:true, activeTools:{old:{label:"shell"}}});
+const mismatchedToolRun = wbSessionActivityPhase({kind:"chat", source:{runStatus:"completed", updatedAt:"2026-08-08T10:00:02Z", lastRun:{id:"resume_1"}, messageCount:2}}, null, {runKey:"run_1", lastEventAt:Date.parse("2026-08-08T10:00:03Z"), active:true, phaseActive:true, activeTools:{old:{label:"shell"}}});
 const newerRun = wbSessionActivityPhase({kind:"chat", source:{runStatus:"completed", updatedAt:"2026-08-08T10:00:02Z", lastRun:{id:"r1"}, messageCount:2}}, null, {runKey:"r2", status:"running", statusAt:Date.parse("2026-08-08T10:00:03Z"), lastEventAt:Date.parse("2026-08-08T10:00:03Z"), active:true, activeTools:{next:{label:"shell"}}});
 const cancelled = wbSessionActivityPhase({kind:"chat", source:{runStatus:"cancelled"}}, null, null);
 const awaiting = wbSessionActivityPhase({kind:"chat", source:{runStatus:"awaiting_user"}}, null, null);
-process.stdout.write(JSON.stringify({completed, sameRunLateEvent, newerRun, cancelled, awaiting}));
+process.stdout.write(JSON.stringify({completed, sameRunLateEvent, mismatchedToolRun, newerRun, cancelled, awaiting}));
 """
     )
     completed = subprocess.run(
@@ -736,6 +737,8 @@ process.stdout.write(JSON.stringify({completed, sameRunLateEvent, newerRun, canc
     assert result["completed"]["phase"] == "completed"
     assert result["sameRunLateEvent"]["phase"] == "completed"
     assert result["sameRunLateEvent"]["active"] is False
+    assert result["mismatchedToolRun"]["phase"] == "completed"
+    assert result["mismatchedToolRun"]["active"] is False
     assert result["newerRun"]["phase"] == "running"
     assert result["newerRun"]["active"] is True
     assert result["cancelled"]["phase"] == "cancelled"
@@ -752,8 +755,11 @@ def test_chat_runtime_broadcasts_terminal_lifecycle_to_topbar():
 
     assert 'new CustomEvent("cyrene:wbc-chat-lifecycle"' in chat
     assert 'publishLifecycle(chatId, "completed", event)' in chat
+    assert 'fire("onAssistantSaved", chatId, savedMessages, event)' in chat
     assert 'publishLifecycle(chatId, "awaiting_user", event)' in chat
     assert 'publishLifecycle(chatId, "cancelled", event)' in chat
+    assert "publishLifecycle: publishLifecycle" in chat
+    assert "runtimeEngine.publishLifecycle(chatId, terminalStatus, result || {})" in chat
     assert 'window.addEventListener("cyrene:wbc-chat-lifecycle", onChatLifecycle)' in shell
     assert 'setInterval(refreshLiveChats, 2500)' in shell
     assert 'reloadRecentChats(store.projects || [])' in shell

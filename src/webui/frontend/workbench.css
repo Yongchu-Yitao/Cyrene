@@ -1,6 +1,9 @@
 /* Project / Task Session workbench */
 
 .workbench-shell {
+  --wb-topbar-height: 58px;
+  --wb-floating-card-top-gap: 0px;
+  --wb-floating-card-bottom-gap: 12px;
   /* Derive the whole palette from the global theme tokens (styles.css) so the
      workbench follows light/dark AND the accent ("主题色") picked in the new-UI
      settings. Base stays neutral grey; only subtle tints pull from --accent. */
@@ -73,6 +76,7 @@
   --wb-amber: var(--warn);
   --wb-red: var(--err);
   --wb-accent-text: var(--accent-text, #fff);
+  --wb-user-message-text: var(--wb-accent-text);
   --wb-sans: var(--sans, "Manrope", "Noto Sans SC", system-ui, sans-serif);
   --wb-font: var(--wb-sans);
   --wb-notif-pop-bg: #ffffff;
@@ -90,11 +94,178 @@
   min-height: 100vh;
   height: 100vh;
   box-sizing: border-box;
-  padding-top: 58px;
+  padding-top: var(--wb-topbar-height);
   overflow: hidden;
   background: var(--wb-main-bg);
   color: var(--wb-text);
   font-family: var(--wb-font);
+}
+
+/* Native window used when a pane card is dragged outside the main workbench.
+   It keeps the same material as an in-app card while the compact title bar is
+   the platform drag region. */
+body.wbc-detached-pane-surface,
+body.wbc-detached-pane-surface #root {
+  width: 100%;
+  height: 100%;
+  margin: 0;
+  overflow: hidden;
+  background: var(--wb-page-bg, var(--wb-surface, #111418));
+}
+
+.wbc-detached-pane-window {
+  width: 100%;
+  height: 100%;
+  padding: 12px;
+  box-sizing: border-box;
+  display: grid;
+  grid-template-rows: 42px minmax(0, 1fr);
+  color: var(--wb-text);
+  background: var(--wb-page-bg, var(--wb-surface, #111418));
+}
+
+.wbc-detached-pane-titlebar {
+  position: relative;
+  z-index: 1200;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 0 7px 0 14px;
+  border: var(--wb-floating-rail-border);
+  border-bottom: 0;
+  border-radius: var(--wb-floating-rail-radius) var(--wb-floating-rail-radius) 0 0;
+  background: var(--wb-floating-rail-bg);
+  -webkit-backdrop-filter: blur(18px) saturate(112%);
+  backdrop-filter: blur(18px) saturate(112%);
+  touch-action: none;
+  cursor: grab;
+  user-select: none;
+}
+
+.wbc-detached-pane-titlebar:active {
+  cursor: grabbing;
+}
+
+.wbc-detached-pane-titlebar.merge-target {
+  background: color-mix(in srgb, var(--wb-accent) 24%, var(--wb-floating-rail-bg));
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--wb-accent) 72%, transparent);
+}
+
+.wbc-detached-pane-title {
+  min-width: 0;
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--wb-muted);
+  font-size: calc(12px * var(--wb-ui-font-scale, 1));
+  font-weight: 650;
+}
+
+.wbc-detached-pane-window-actions {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  -webkit-app-region: no-drag;
+}
+
+.wbc-detached-pane-window-actions button {
+  width: 32px;
+  height: 30px;
+  display: grid;
+  place-items: center;
+  padding: 0;
+  border: 0;
+  border-radius: 9px;
+  background: transparent;
+  color: var(--wb-muted);
+  font: inherit;
+  cursor: pointer;
+  -webkit-app-region: no-drag;
+  transition:
+    color 120ms ease,
+    background-color 120ms ease,
+    transform 160ms cubic-bezier(.22, 1.16, .36, 1);
+}
+
+.wbc-detached-pane-window-actions button:hover {
+  color: var(--wb-text);
+  background: var(--wb-control-hover-bg);
+}
+
+.wbc-detached-pane-window-actions button:active {
+  transform: scale(.9);
+}
+
+.wbc-detached-pane-window-actions button:focus-visible {
+  outline: 2px solid color-mix(in srgb, var(--wb-accent) 72%, transparent);
+  outline-offset: 1px;
+}
+
+.wbc-detached-pane-window-actions button.close:hover {
+  color: #fff;
+  background: #e5484d;
+}
+
+.wbc-detached-pane-window-actions svg {
+  width: 15px;
+  height: 15px;
+  pointer-events: none;
+}
+
+.wbc-detached-pane-content {
+  position: relative;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+  isolation: isolate;
+  border: var(--wb-floating-rail-border);
+  border-top-color: color-mix(in srgb, var(--wb-line) 58%, transparent);
+  border-radius: 0 0 var(--wb-floating-rail-radius) var(--wb-floating-rail-radius);
+  background: var(--wb-floating-rail-bg);
+  box-shadow: var(--wb-floating-rail-shadow);
+  -webkit-backdrop-filter: blur(18px) saturate(112%);
+  backdrop-filter: blur(18px) saturate(112%);
+}
+
+/* A backdrop-filter creates a new backdrop root. Keeping one on the detached
+   chat card prevents the nested composer glass from sampling and blurring the
+   transcript behind it, so identical composer tokens look much clearer than
+   in the main conversation. For chat windows the composer owns the blur;
+   resource/file windows retain the outer card glass above. */
+.wbc-detached-pane-content[data-pane-kind="chat"] {
+  isolation: auto;
+  -webkit-backdrop-filter: none;
+  backdrop-filter: none;
+}
+
+.wbc-detached-pane-content > .wbc-side-agent-split {
+  width: 100%;
+  height: 100%;
+  padding-top: 0;
+  border: 0;
+  background: transparent;
+  box-shadow: none;
+}
+
+.wbc-detached-pane-content .wbc-split-panel-grip {
+  display: none;
+}
+
+.wbc-detached-pane-content > .wbc-side-agent-split.wbc-conversation-split {
+  padding-top: 0;
+}
+
+.wbc-detached-pane-error {
+  height: 100%;
+  display: grid;
+  place-items: center;
+  padding: 24px;
+  box-sizing: border-box;
+  color: var(--wb-muted);
+  text-align: center;
 }
 
 .workbench-shell button,
@@ -103,7 +274,7 @@
 }
 
 .workbench-topbar {
-  height: 58px;
+  height: var(--wb-topbar-height);
   display: grid;
   grid-template-columns: 174px minmax(0, max-content) minmax(34px, 1fr) auto;
   align-items: center;
@@ -2448,7 +2619,7 @@ html[data-theme="dark"] .workbench-top-action-group .workbench-help-anchor.open 
   /* Width the rail expands back to while collapsed + hovered (tracks the
      responsive open width below). */
   --wb-rail-w-open: 290px;
-  height: calc(100vh - 58px);
+  height: calc(100vh - var(--wb-topbar-height));
   display: grid;
   /* The right panel width is user-resizable: --wb-right-w is set inline (from
      localStorage / drag) on this element and inherited by .wbc-page. Until the
@@ -6183,64 +6354,6 @@ html[data-theme="dark"] .wb-goal-loop-number input { color-scheme: dark; }
   backdrop-filter: none;
 }
 
-.workbench-account-menu button.workbench-module-account-profile {
-  min-height: 52px;
-  padding: 6px 8px;
-  gap: 10px;
-}
-
-.workbench-module-account-profile .workbench-account-avatar,
-.workbench-module-account-profile .workbench-account-avatar > *,
-.workbench-module-account-profile .workbench-avatar.photo {
-  width: 38px !important;
-  height: 38px !important;
-}
-
-.workbench-module-account-copy {
-  min-width: 0;
-  flex: 1 1 auto;
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-}
-
-.workbench-module-account-copy > span {
-  min-width: 0;
-  display: flex;
-  align-items: center;
-  gap: 7px;
-}
-
-.workbench-module-account-copy b,
-.workbench-module-account-copy small {
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.workbench-module-account-copy b {
-  color: var(--wb-text);
-  font-size: calc(13px * var(--wb-ui-font-scale, 1));
-}
-
-.workbench-module-account-copy small {
-  color: var(--wb-muted);
-  font-size: calc(10px * var(--wb-ui-font-scale, 1));
-}
-
-.workbench-module-account-copy em {
-  flex: 0 0 auto;
-  padding: 3px 6px;
-  border-radius: 999px;
-  background: var(--wb-purple);
-  color: #fff;
-  font-size: calc(9px * var(--wb-ui-font-scale, 1));
-  font-style: normal;
-  font-weight: 750;
-  line-height: 1;
-}
-
 .workbench-grid.is-chat > .workbench-module-rail {
   padding-top: 70px;
 }
@@ -6541,34 +6654,6 @@ html[data-theme="dark"] .wb-goal-loop-number input { color-scheme: dark; }
 }
 .wb-command-chip-x:hover { background: color-mix(in srgb, var(--wb-accent) 20%, transparent); }
 .wb-command-chip-x svg { width: 13px; height: 13px; }
-
-/* AI-generated content disclaimer under the composer */
-.wb-composer-disclaimer {
-  width: fit-content;
-  max-width: calc(100% - 24px);
-  box-sizing: border-box;
-  /* Match the clearance above and below the pill so it does not sit on the
-     bottom edge of the shared composer plane. */
-  margin: 4px auto;
-  padding: 8px 14px;
-  border: 0;
-  border-radius: 14px;
-  background: color-mix(in srgb, var(--wb-card-bg) 72%, transparent);
-  box-shadow:
-    var(--wbc-control-shadow),
-    inset 0 1px 0 color-mix(in srgb, #fff 10%, transparent);
-  -webkit-backdrop-filter: blur(18px) saturate(120%) contrast(102%);
-  backdrop-filter: blur(18px) saturate(120%) contrast(102%);
-  text-align: center;
-  font-size: calc(10.5px * var(--wb-ui-font-scale, 1));
-  color: #a38428;
-  font-weight: 650;
-  line-height: 1.4;
-}
-
-html[data-theme="dark"] .wb-composer-disclaimer {
-  color: #f0c453;
-}
 
 .workbench-check,
 .workbench-file-row,
@@ -6900,6 +6985,7 @@ html[data-theme="dark"] .wb-composer-disclaimer {
 
 .wbc-error-card {
   margin: 76px 22px 0;
+  flex: 0 0 auto;
   display: grid;
   grid-template-columns: 34px minmax(0, 1fr) auto;
   align-items: center;
@@ -6914,7 +7000,6 @@ html[data-theme="dark"] .wb-composer-disclaimer {
   grid-template-columns: 38px minmax(0, 1fr);
   align-items: start;
   border-color: color-mix(in srgb, var(--wb-red) 34%, var(--wb-line));
-  border-left: 3px solid var(--wb-red);
   padding: 14px 15px;
 }
 
@@ -6924,7 +7009,6 @@ html[data-theme="dark"] .wb-composer-disclaimer {
 
 .wbc-error-card.is-agent-error.is-network {
   border-color: color-mix(in srgb, var(--wb-warning, #d89614) 38%, var(--wb-line));
-  border-left-color: var(--wb-warning, #d89614);
   background: color-mix(in srgb, var(--wb-warning, #d89614) 7%, var(--wb-card-bg));
 }
 
@@ -6938,7 +7022,6 @@ html[data-theme="dark"] .wb-composer-disclaimer {
 .wbc-error-card.is-agent-error.is-request,
 .wbc-error-card.is-agent-error.is-runtime {
   border-color: color-mix(in srgb, var(--wb-warning, #d89614) 34%, var(--wb-line));
-  border-left-color: var(--wb-warning, #d89614);
   background: color-mix(in srgb, var(--wb-warning, #d89614) 6%, var(--wb-card-bg));
 }
 
@@ -7263,6 +7346,10 @@ html[data-theme="dark"] .workbench-shell {
   --wb-accent-strong: #eeeaff;
   --wb-selection-bg: color-mix(in srgb, var(--wb-accent) 48%, #24212e);
   --wb-selection-text: #ffffff;
+  /* Dark mode tones every user bubble into the charcoal panel. Its foreground
+     must therefore stay white across all accent presets instead of following
+     the adaptive text intended for solid, potentially bright controls. */
+  --wb-user-message-text: #fff;
   --wb-link: #8ebcff;
   --wb-link-hover: #b3d2ff;
   --wb-card-bg: #18191e;
@@ -7398,12 +7485,11 @@ html[data-theme="light"] .wb-tool-list .mono {
   z-index: 10050;
 }
 
-/* ── Settings Overlay ── */
+/* ── Settings Page ── */
 
 .settings-overlay {
-  --wb-settings-panel-height: min(540px, calc(100vh - 48px));
   /* Keep every settings form primitive on the same material system as the
-     Memory toolbar.  These aliases intentionally live on the overlay because
+     Memory toolbar. These aliases intentionally live on the settings page because
      it is rendered outside `.workbench-grid.integrated-sidebars`. */
   --wb-settings-control-border: 1px solid color-mix(in srgb, var(--wb-line-2) 70%, transparent);
   --wb-settings-control-radius: 12px;
@@ -7412,22 +7498,14 @@ html[data-theme="light"] .wb-tool-list .mono {
   --wb-settings-control-shadow:
     0 5px 14px rgba(9, 17, 30, .045),
     inset 0 1px 0 color-mix(in srgb, #fff 8%, transparent);
-  position: fixed;
-  inset: 0;
-  z-index: 9999;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  padding: 24px;
-  background: color-mix(in srgb, #08101c 52%, transparent);
-  backdrop-filter: blur(4px) saturate(105%);
-  -webkit-backdrop-filter: blur(4px) saturate(105%);
-  animation: settings-overlay-fadein 0.18s ease-out;
-}
-
-@keyframes settings-overlay-fadein {
-  from { opacity: 0; }
-  to { opacity: 1; }
+  position: relative;
+  width: 100%;
+  height: 100%;
+  min-width: 0;
+  min-height: 0;
+  display: block;
+  padding: 0;
+  background: transparent;
 }
 
 /* Storage usage bar + legend (settings → Data) */
@@ -7488,31 +7566,18 @@ html[data-theme="light"] .wb-tool-list .mono {
 }
 
 .settings-overlay-panel {
-  width: min(920px, calc(100vw - 48px));
-  height: var(--wb-settings-panel-height);
+  width: 100%;
+  height: 100%;
   position: relative;
   display: flex;
   flex-direction: column;
-  background: color-mix(in srgb, var(--wb-panel) 94%, transparent);
-  border: 1px solid color-mix(in srgb, var(--wb-line-2) 76%, transparent);
-  border-radius: 24px;
-  box-shadow: 0 38px 100px rgba(0, 0, 0, 0.42), 0 10px 32px rgba(0, 0, 0, 0.18);
+  border: 0;
+  background: transparent;
   overflow: hidden;
   isolation: isolate;
-  animation: settings-panel-slide 0.24s cubic-bezier(.2, .8, .2, 1);
-}
-
-@keyframes settings-panel-slide {
-  from { opacity: 0; transform: translateY(12px) scale(0.985); }
-  to { opacity: 1; transform: translateY(0) scale(1); }
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .settings-overlay,
-  .settings-overlay-panel {
-    animation: none;
-  }
-
   .wb-toggle,
   .wb-toggle::after {
     transition: none;
@@ -7593,10 +7658,13 @@ html[data-theme="light"] .wb-tool-list .mono {
   color: color-mix(in srgb, var(--wb-muted) 84%, var(--wb-text));
 }
 
-.settings-overlay-tab-icon svg {
-  width: 17px;
-  height: 17px;
-  stroke-width: 1.9;
+.settings-overlay-tab-glyph {
+  display: block;
+  width: 18px;
+  height: 18px;
+  background: currentColor;
+  -webkit-mask: var(--settings-tab-icon) center / contain no-repeat;
+  mask: var(--settings-tab-icon) center / contain no-repeat;
 }
 
 .settings-overlay-tab:hover {
@@ -7751,13 +7819,14 @@ html[data-theme] .settings-overlay :where(.wb-input, .wb-select, .wb-btn) {
 
 html[data-theme] .settings-overlay :where(.wb-input, .wb-select, .wb-textarea):hover:not(:disabled) {
   border-color: color-mix(in srgb, var(--wb-accent) 34%, var(--wb-line-2));
-  background: var(--wb-settings-control-hover-bg);
+  /* Keep a select's chevron background layer intact while changing state. */
+  background-color: var(--wb-settings-control-hover-bg);
 }
 
 html[data-theme] .settings-overlay :where(.wb-input, .wb-select, .wb-textarea):focus {
   outline: 0;
   border-color: color-mix(in srgb, var(--wb-accent) 62%, var(--wb-line-2));
-  background: var(--wb-settings-control-bg);
+  background-color: var(--wb-settings-control-bg);
   box-shadow:
     0 7px 18px rgba(9, 17, 30, .065),
     inset 0 0 0 1px color-mix(in srgb, var(--wb-accent) 18%, transparent);
@@ -8717,7 +8786,16 @@ html[data-theme] .settings-overlay .wb-toggle.on {
 .wb-extension-status.system .wb-extension-status-dot,
 .wb-extension-status.builtin .wb-extension-status-dot { background: var(--wb-green); box-shadow: 0 0 0 3px color-mix(in srgb, var(--wb-green) 12%, transparent); }
 .wb-extension-status.warning .wb-extension-status-dot { background: var(--wb-amber); }
-.wb-extension-chevron { color: var(--wb-faint); transition: transform .16s ease; }
+.wb-extension-chevron {
+  width: 18px;
+  height: 18px;
+  display: grid;
+  place-items: center;
+  color: var(--wb-faint);
+  line-height: 0;
+  transition: transform .16s ease;
+}
+.wb-extension-chevron > svg { display: block; }
 .wb-extension-card.expanded .wb-extension-chevron { transform: rotate(90deg); }
 .wb-extension-actions { flex: 0 0 auto; justify-content: flex-end; gap: 8px; }
 .wb-extension-actions .wb-btn { min-width: 92px; justify-content: center; }
@@ -11972,31 +12050,51 @@ html[data-theme] .settings-overlay .wb-wechat-status-row {
 .wb-about-stack {
   display: flex;
   flex-direction: column;
-  gap: 14px;
+  gap: 12px;
 }
 
-.wb-about-product-card,
-.wb-about-update-card,
-.wb-about-related-card {
-  border: 1px solid var(--wb-line-2);
+.wb-about-product-card {
+  border: 1px solid var(--wb-line);
   border-radius: 8px;
   background: var(--wb-card-bg);
   box-shadow: none;
 }
 
 .wb-about-product-card {
-  min-height: 122px;
+  --wb-about-download-progress: 0%;
+  position: relative;
+  isolation: isolate;
+  overflow: hidden;
+  min-height: 142px;
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 18px;
-  padding: 20px 24px;
+  gap: 24px;
+  padding: 26px 24px;
+}
+
+.wb-about-hero-progress {
+  position: absolute;
+  inset: 0 auto 0 0;
+  z-index: 0;
+  width: var(--wb-about-download-progress);
+  background: color-mix(in srgb, var(--wb-blue) 15%, var(--wb-card-bg));
+  opacity: 0;
+  pointer-events: none;
+  transition: width .3s ease, opacity .2s ease;
+}
+
+.wb-about-product-card.is-downloading .wb-about-hero-progress,
+.wb-about-product-card.is-downloaded .wb-about-hero-progress {
+  opacity: 1;
 }
 
 .wb-about-product-copy {
+  position: relative;
+  z-index: 1;
   display: flex;
   align-items: center;
-  gap: 18px;
+  gap: 16px;
   min-width: 0;
 }
 
@@ -12004,7 +12102,7 @@ html[data-theme] .settings-overlay .wb-wechat-status-row {
   width: 72px;
   height: 72px;
   flex: 0 0 72px;
-  border-radius: 16px;
+  border-radius: 17px;
   overflow: hidden;
   box-shadow: none;
 }
@@ -12038,7 +12136,7 @@ html[data-theme] .settings-overlay .wb-wechat-status-row {
 }
 
 .wb-about-product-text p {
-  max-width: 460px;
+  max-width: 620px;
   margin: 6px 0 0;
   color: var(--wb-muted);
   font-size: calc(13px * var(--wb-ui-font-scale, 1));
@@ -12060,21 +12158,26 @@ html[data-theme] .settings-overlay .wb-wechat-status-row {
 
 .wb-about-check-btn {
   flex: 0 0 auto;
-  min-width: 104px;
-  height: 34px;
+  min-width: 116px;
   justify-content: center;
-  padding: 0 14px;
-  font-size: calc(12.5px * var(--wb-ui-font-scale, 1));
   font-weight: 680;
 }
 
-.wb-about-update-card,
-.wb-about-related-card {
-  padding: 18px 24px;
+.wb-about-hero-action {
+  position: relative;
+  z-index: 1;
+  flex: 0 0 auto;
+  margin-left: auto;
 }
 
-.wb-about-update-card h3,
-.wb-about-related-card h3 {
+.wb-about-update-card {
+  padding: 4px 0 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+}
+
+.wb-about-update-card h3 {
   margin: 0;
   color: var(--wb-text);
   font-size: calc(15px * var(--wb-ui-font-scale, 1));
@@ -12087,11 +12190,13 @@ html[data-theme] .settings-overlay .wb-wechat-status-row {
   align-items: center;
   justify-content: space-between;
   gap: 12px;
-  margin-bottom: 14px;
+  margin-bottom: 12px;
 }
 
-.wb-about-related-card h3 {
-  margin-bottom: 12px;
+.wb-about-card-head small {
+  color: var(--wb-muted);
+  font-size: calc(12px * var(--wb-ui-font-scale, 1));
+  text-align: right;
 }
 
 .wb-about-status-pill {
@@ -12117,7 +12222,7 @@ html[data-theme] .settings-overlay .wb-wechat-status-row {
 }
 
 .wb-about-toggle-row {
-  min-height: 62px;
+  min-height: 58px;
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -12148,19 +12253,23 @@ html[data-theme] .settings-overlay .wb-wechat-status-row {
 .wb-about-version-grid {
   display: grid;
   grid-template-columns: repeat(4, minmax(0, 1fr));
-  gap: 0;
-  padding-top: 18px;
+  gap: 1px;
+  margin-top: 14px;
+  overflow: hidden;
+  border: 1px solid var(--wb-line);
+  border-radius: 8px;
+  background: var(--wb-line);
 }
 
 .wb-about-version-grid > div {
   min-width: 0;
-  padding: 0 16px;
-  border-left: 1px solid var(--wb-line);
+  min-height: 68px;
+  padding: 12px 14px;
+  background: var(--wb-card-bg);
 }
 
 .wb-about-version-grid > div:first-child {
-  padding-left: 0;
-  border-left: 0;
+  padding-left: 14px;
 }
 
 .wb-about-version-grid span {
@@ -12186,6 +12295,93 @@ html[data-theme] .settings-overlay .wb-wechat-status-row {
   color: var(--wb-muted);
   font-size: calc(12px * var(--wb-ui-font-scale, 1));
   line-height: 1.45;
+}
+
+.wb-about-related-card {
+  padding: 18px 0 0;
+  border: 0;
+  background: transparent;
+}
+
+.wb-about-related-card h3 {
+  margin: 0;
+  color: var(--wb-text);
+  font-size: calc(15px * var(--wb-ui-font-scale, 1));
+  font-weight: 700;
+  letter-spacing: 0;
+}
+
+.wb-about-related-list {
+  border-top: 1px solid var(--wb-line);
+}
+
+.wb-about-related-row {
+  width: 100%;
+  min-height: 52px;
+  display: grid;
+  grid-template-columns: 26px minmax(0, 1fr) minmax(62px, auto);
+  align-items: center;
+  gap: 14px;
+  border-bottom: 1px solid var(--wb-line);
+  color: var(--wb-text);
+  background: transparent;
+  font-family: var(--wb-font);
+}
+
+.wb-about-related-icon {
+  display: inline-grid;
+  place-items: center;
+  color: color-mix(in srgb, var(--wb-muted) 90%, var(--wb-text));
+}
+
+.wb-about-related-icon svg {
+  width: 19px;
+  height: 19px;
+}
+
+.wb-about-related-row strong {
+  color: var(--wb-text);
+  font-family: var(--wb-font);
+  font-size: calc(14px * var(--wb-ui-font-scale, 1));
+  font-weight: 650;
+}
+
+.wb-about-related-action {
+  justify-self: end;
+  appearance: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 58px;
+  min-height: 32px;
+  padding: 0 12px;
+  border: 1px solid var(--wb-line-2);
+  border-radius: 8px;
+  color: var(--wb-text);
+  background: var(--wb-control-bg);
+  text-align: center;
+  text-decoration: none;
+  font-family: var(--wb-font);
+  font-size: calc(13px * var(--wb-ui-font-scale, 1));
+  font-weight: 640;
+  line-height: 1;
+  cursor: pointer;
+  transition: background 0.12s, border-color 0.12s, color 0.12s;
+}
+
+.wb-about-related-action:hover:not(:disabled) {
+  border-color: color-mix(in srgb, var(--wb-accent) 30%, var(--wb-line-2));
+  background: var(--wb-control-hover-bg);
+}
+
+.wb-about-related-action:focus-visible {
+  outline: 2px solid color-mix(in srgb, var(--wb-accent) 24%, transparent);
+  outline-offset: 2px;
+}
+
+.wb-about-related-action:disabled {
+  cursor: wait;
+  opacity: 0.6;
 }
 
 .wb-update-notes {
@@ -12289,92 +12485,6 @@ html[data-theme] .settings-overlay .wb-wechat-status-row {
   line-height: 1.3;
 }
 
-.wb-progress-bar {
-  width: 100%;
-  height: 4px;
-  margin-top: 10px;
-  background: var(--wb-line);
-  border-radius: 2px;
-  overflow: hidden;
-}
-
-.wb-about-related-card {
-  padding-bottom: 12px;
-}
-
-.wb-about-related-list {
-  border-top: 1px solid var(--wb-line);
-}
-
-.wb-about-related-row {
-  width: 100%;
-  min-height: 52px;
-  display: grid;
-  grid-template-columns: 26px minmax(0, 1fr) minmax(62px, auto);
-  align-items: center;
-  gap: 14px;
-  border-bottom: 1px solid var(--wb-line);
-  color: var(--wb-text);
-  background: transparent;
-  padding: 0;
-  font-family: var(--wb-font);
-}
-
-.wb-about-related-icon,
-.wb-about-related-chevron {
-  color: color-mix(in srgb, var(--wb-muted) 90%, var(--wb-text));
-  display: inline-grid;
-  place-items: center;
-}
-
-.wb-about-related-icon svg {
-  width: 19px;
-  height: 19px;
-}
-
-.wb-about-related-row strong {
-  color: var(--wb-text);
-  font-family: var(--wb-font);
-  font-size: calc(14px * var(--wb-ui-font-scale, 1));
-  font-weight: 650;
-}
-
-.wb-about-related-action {
-  justify-self: end;
-  appearance: none;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  min-width: 58px;
-  min-height: 32px;
-  padding: 0 12px;
-  border: 1px solid var(--wb-line-2);
-  border-radius: 8px;
-  color: var(--wb-text);
-  background: var(--wb-control-bg);
-  text-align: center;
-  text-decoration: none;
-  font-family: var(--wb-font);
-  font-size: calc(13px * var(--wb-ui-font-scale, 1));
-  font-weight: 640;
-  line-height: 1;
-  -webkit-font-smoothing: antialiased;
-  text-rendering: geometricPrecision;
-  cursor: pointer;
-  transition: background 0.12s, border-color 0.12s, color 0.12s;
-}
-
-.wb-about-related-action:hover {
-  background: var(--wb-control-hover-bg);
-  border-color: color-mix(in srgb, var(--wb-accent) 30%, var(--wb-line-2));
-  color: var(--wb-text);
-}
-
-.wb-about-related-action:focus-visible {
-  outline: 2px solid color-mix(in srgb, var(--wb-accent) 24%, transparent);
-  outline-offset: 2px;
-}
-
 .wb-changelog-modal-scrim {
   position: fixed;
   inset: 0;
@@ -12389,8 +12499,8 @@ html[data-theme] .settings-overlay .wb-wechat-status-row {
 }
 
 .wb-changelog-modal {
-  width: min(920px, calc(100vw - 48px));
-  height: var(--wb-settings-panel-height);
+  width: min(760px, calc(100vw - 48px));
+  height: min(460px, calc(100vh - 48px));
   display: flex;
   flex-direction: column;
   overflow: hidden;
@@ -12490,52 +12600,6 @@ html[data-theme] .settings-overlay .wb-wechat-status-row {
 }
 
 @media (max-width: 920px) {
-  .settings-overlay-panel {
-    width: calc(100vw - 24px);
-    height: var(--wb-settings-panel-height);
-    border-radius: 20px;
-  }
-
-  .settings-overlay-body {
-    flex-direction: column;
-  }
-
-  .settings-overlay-nav {
-    width: 100%;
-    flex: 0 0 auto;
-    flex-direction: row;
-    gap: 8px;
-    padding: 10px 12px;
-    border-right: 0;
-    border-bottom: 1px solid var(--wb-line);
-    overflow-x: auto;
-    overflow-y: hidden;
-  }
-
-  .settings-overlay-nav-section {
-    flex: 0 0 auto;
-    min-height: 0;
-    flex-direction: row;
-    gap: 3px;
-    padding: 0 0 0 8px;
-    border-top: 0;
-    border-left: 1px solid color-mix(in srgb, var(--wb-line) 58%, transparent);
-  }
-
-  .settings-overlay-nav-section.first {
-    padding-left: 0;
-    border-left: 0;
-  }
-
-  .settings-overlay-tab {
-    flex: 0 0 auto;
-    width: auto;
-  }
-
-  .settings-overlay-content {
-    padding: 22px clamp(20px, 5vw, 44px) 40px;
-  }
-
   .wb-model-draft {
     grid-template-columns: 1fr 1fr;
   }
@@ -12549,25 +12613,49 @@ html[data-theme] .settings-overlay .wb-wechat-status-row {
     align-items: flex-start;
   }
 
+  .wb-about-hero-action {
+    width: 100%;
+    margin-left: 0;
+    display: flex;
+    justify-content: flex-end;
+  }
+
   .wb-about-version-grid {
     grid-template-columns: repeat(2, minmax(0, 1fr));
     gap: 16px 0;
   }
 
   .wb-about-version-grid > div:nth-child(odd) {
-    padding-left: 0;
+    padding-left: 14px;
     border-left: 0;
   }
 
   .wb-about-related-row {
-    grid-template-columns: 34px minmax(0, 1fr) minmax(68px, auto);
+    grid-template-columns: 26px minmax(0, 1fr) minmax(68px, auto);
     gap: 12px;
-    padding: 12px 0;
   }
 
 }
 
 @media (max-width: 640px) {
+  .wb-about-card-head {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .wb-about-card-head small {
+    text-align: left;
+  }
+
+  .wb-about-check-btn {
+    width: 100%;
+  }
+
+  .wb-about-hero-action {
+    width: 100%;
+    margin-left: 0;
+  }
+
   .settings-overlay-tab {
     min-width: 44px;
     justify-content: center;
@@ -13842,7 +13930,13 @@ html[data-theme] .settings-overlay .wb-wechat-status-row {
 .wb-sched-detail {
   flex: 0 0 340px; width: 340px;
 }
-.wb-sched-detail-card { width: 100%; height: auto; max-height: calc(100vh - 24px); }
+.wb-sched-detail-card {
+  width: 100%;
+  height: auto;
+  max-height: calc(
+    100vh - var(--wb-topbar-height) - var(--wb-floating-card-top-gap) - var(--wb-floating-card-bottom-gap)
+  );
+}
 .wb-sched-detail-card.empty { align-items: center; justify-content: center; }
 .wb-sched-detail-placeholder { text-align: center; color: var(--wb-faint); display: flex; flex-direction: column; align-items: center; gap: 12px; padding: 24px; }
 .wb-sched-detail-placeholder p { font-size: calc(13px * var(--wb-ui-font-scale, 1)); margin: 0; }
@@ -15618,7 +15712,7 @@ html[data-theme="dark"] .wb-mem-main {
   min-width: 0;
   min-height: 0;
   box-sizing: border-box;
-  padding: 12px;
+  padding: var(--wb-floating-card-top-gap) 12px var(--wb-floating-card-bottom-gap);
   background: transparent;
   overflow: hidden;
 }
@@ -15748,7 +15842,9 @@ html[data-theme="dark"] .wb-mem-main {
     0 5px 14px rgba(15, 23, 42, 0.02);
   position: relative;
   isolation: isolate;
-  padding-bottom: 4px;
+  /* Keep the task composer on the same inset as the card's inline edges.
+     This applies consistently across idle, planning, running, and review. */
+  padding: 18px;
 }
 .workbench-grid.is-task-detail .workbench-main > .workbench-composer {
   position: relative;
@@ -15764,9 +15860,9 @@ html[data-theme="dark"] .wb-mem-main {
   padding: 6px 0 0;
 }
 .workbench-grid.integrated-sidebars.is-task-detail .workbench-main {
-  height: calc(100% - 24px);
-  max-height: calc(100% - 24px);
-  margin: 12px 8px;
+  height: calc(100% - var(--wb-floating-card-top-gap) - var(--wb-floating-card-bottom-gap));
+  max-height: calc(100% - var(--wb-floating-card-top-gap) - var(--wb-floating-card-bottom-gap));
+  margin: var(--wb-floating-card-top-gap) 8px var(--wb-floating-card-bottom-gap);
   box-sizing: border-box;
   border: var(--wb-floating-rail-border);
   border-radius: var(--wb-floating-rail-radius);
@@ -15777,9 +15873,9 @@ html[data-theme="dark"] .wb-mem-main {
 }
 .workbench-grid.integrated-sidebars.is-task-detail .wb-task-detail-shell {
   /* The task rail ends with a 4px track margin. Pair it with the centre
-     card's 8px inset, then mirror the same 8px + 4px seam on the right so
-     every visible card gap and outer edge resolves to exactly 12px. */
-  padding: 12px 12px 12px 4px;
+     card's 8px horizontal inset, then mirror the same 8px + 4px seam on the
+     right. Vertical geometry follows the shared topbar/card baselines. */
+  padding: var(--wb-floating-card-top-gap) 12px var(--wb-floating-card-bottom-gap) 4px;
   height: 100%;
   border-right: 0;
   /* The separator extends 8px beyond the shell's track edge. Clipping here
@@ -16117,17 +16213,23 @@ html[data-theme="dark"] .wb-task-detail-card {
   --wb-mem-detail-tabs-overlay-height: 0px;
   position: relative;
   flex: 0 0 var(--wb-floating-detail-width); width: var(--wb-floating-detail-width); min-width: 0; min-height: 0;
-  padding: 12px;
+  padding: var(--wb-floating-card-top-gap) 12px var(--wb-floating-card-bottom-gap);
   background: transparent;
   overflow: hidden;
 }
-.wb-mem-detail-card { width: 100%; height: auto; max-height: calc(100vh - 82px); }
+.wb-mem-detail-card {
+  width: 100%;
+  height: auto;
+  max-height: calc(
+    100vh - var(--wb-topbar-height) - var(--wb-floating-card-top-gap) - var(--wb-floating-card-bottom-gap)
+  );
+}
 .wb-mem-detail-card.empty { align-items: center; justify-content: center; }
 /* Skill-learning reuses the same floating inspector and accordion motion. */
 .wb-mem-detail.wb-mem-skill-panel {
   display: flex;
   flex-direction: column;
-  padding: 12px;
+  padding: var(--wb-floating-card-top-gap) 12px var(--wb-floating-card-bottom-gap);
   background: transparent;
   overflow: visible;
 }
@@ -17116,12 +17218,13 @@ html[data-theme="dark"] .wb-init-progress-dot { border-color: #46586b; }
 .workbench-grid.is-chat {
   grid-template-columns: minmax(0, 1fr);
   height: 100vh;
-  margin-top: -58px;
+  margin-top: calc(0px - var(--wb-topbar-height));
 }
 
 .wbc-page {
   --wbc-composer-reserve-height: calc(164px * var(--wb-ui-font-scale, 1));
   --wbc-card-gutter: 12px;
+  --wbc-panel-surface: var(--wb-floating-rail-bg);
   --wbc-topbar-clearance: 58px;
   /* The 32px session tabs are vertically centred in the 58px topbar, so their
      visible lower edge is 45px. Keep the card row one shared gutter below it,
@@ -17162,6 +17265,13 @@ html[data-theme="dark"] .wb-init-progress-dot { border-color: #46586b; }
   height: 100%;
   overflow: hidden;
   background: var(--wb-main-bg);
+}
+
+html[data-theme="dark"] .wbc-page {
+  /* Keep the three primary chat cards on one opaque surface. A translucent
+     fill resolves differently over each track and creates a visible tint
+     shift between the rail, conversation, and detail panel. */
+  --wbc-panel-surface: #171819;
 }
 
 .wbc-page.wbc-nav-collapsed {
@@ -17226,7 +17336,7 @@ html[data-theme="dark"] .wb-init-progress-dot { border-color: #46586b; }
   inset: var(--wbc-card-top-inset) var(--wbc-card-gutter) var(--wbc-card-gutter);
   border: var(--wb-floating-rail-border);
   border-radius: var(--wb-floating-rail-radius);
-  background: var(--wb-floating-rail-bg);
+  background: var(--wbc-panel-surface);
   box-shadow: var(--wb-floating-rail-shadow);
   -webkit-backdrop-filter: blur(18px) saturate(112%);
   backdrop-filter: blur(18px) saturate(112%);
@@ -18729,7 +18839,9 @@ span.wbc-chat-group-toggle {
   box-sizing: border-box;
   display: grid;
   gap: 12px;
-  padding: var(--wbc-card-top-inset) 0 var(--wbc-card-gutter) var(--wbc-card-gutter);
+  /* Reclaim 4px from the oversized rail-to-conversation gap while leaving the
+     rail itself on the same position and width as every other module. */
+  padding: var(--wbc-card-top-inset) 0 var(--wbc-card-gutter) calc(var(--wbc-card-gutter) - 4px);
   overflow: hidden;
   /* Track sizing is layout work, so it should converge monotonically. The
      lightweight card transform below carries the visible elastic overshoot
@@ -18763,6 +18875,19 @@ span.wbc-chat-group-toggle {
      the new column in one continuous layout pass. */
   grid-template-columns: minmax(0, 1fr) 0px 0px;
   gap: 0;
+}
+
+/* A single pane column can still contain a top/bottom split. Once that card
+   workspace is active the docked conversation panel is not rendered. Collapse
+   its track to zero so the existing page-level grid-template-columns spring
+   expands the pane into that space (and reverses when the panel returns),
+   rather than jumping the pane discretely across grid columns. */
+.wbc-page.wbc-pane-single-column-open {
+  --wbc-side-track-width: 0px;
+}
+
+.wbc-page.side-agent-split-open > .wbc-pane-layout.single {
+  padding-right: var(--wbc-card-gutter);
 }
 
 /* Files opened without an active conversation are a project workspace, not a
@@ -18821,7 +18946,7 @@ span.wbc-chat-group-toggle {
   isolation: isolate;
   border: var(--wb-floating-rail-border);
   border-radius: var(--wb-floating-rail-radius);
-  background: var(--wb-floating-rail-bg);
+  background: var(--wbc-panel-surface);
   box-shadow: var(--wb-floating-rail-shadow);
   -webkit-backdrop-filter: blur(18px) saturate(112%);
   backdrop-filter: blur(18px) saturate(112%);
@@ -19305,9 +19430,8 @@ body.wbc-resizing-side-agent .wbc-page.wbc-split-left .wbc-side-agent-split-moti
   width: 100%;
   height: 100%;
 }
-/* The horizontal bar: drag to move the split (native drag, like an
-   image/document), click to open the menu. The visible affordance is a small
-   centred pill that stays always on. */
+/* The horizontal bar uses pointer capture so its drag continues beyond the
+   BrowserWindow boundary; click still opens the menu. */
 .wbc-side-split-grip-bar {
   position: absolute;
   inset: 0;
@@ -19315,7 +19439,9 @@ body.wbc-resizing-side-agent .wbc-page.wbc-split-left .wbc-side-agent-split-moti
   align-items: center;
   justify-content: center;
   cursor: grab;
+  touch-action: none;
   user-select: none;
+  -webkit-app-region: no-drag;
   border-radius: 6px;
 }
 .wbc-side-split-grip-bar:active {
@@ -19524,14 +19650,14 @@ body.wbc-resizing-side-agent .wbc-page.wbc-split-left .wbc-side-agent-split-moti
   top: 58px;
   right: 0;
   bottom: 0;
-  left: var(--wbc-rail-width);
-  display: grid;
-  grid-template-columns: 1fr 1fr;
+  left: 0;
   pointer-events: none;
 }
 
 .wbc-resource-file-drop-zone {
-  position: relative;
+  position: absolute;
+  top: 0;
+  bottom: 0;
   box-sizing: border-box;
   border: 2px solid transparent;
   background: transparent;
@@ -19631,6 +19757,34 @@ body.wbc-resizing-side-agent .wbc-page.wbc-split-left .wbc-side-agent-split-moti
   opacity: 0;
 }
 
+.wbc-detached-pane-return-layer {
+  position: absolute;
+  z-index: 2147483646;
+  inset: var(--wbc-card-top-inset) var(--wbc-card-gutter) var(--wbc-card-gutter);
+  display: grid;
+  place-items: center;
+  pointer-events: none;
+  border: 2px solid color-mix(in srgb, var(--wb-accent) 78%, transparent);
+  border-radius: var(--wb-floating-rail-radius);
+  background: color-mix(in srgb, var(--wb-accent) 16%, transparent);
+  backdrop-filter: blur(8px);
+  animation: wbc-pane-return-in 180ms cubic-bezier(.22, 1.12, .36, 1) both;
+}
+
+.wbc-detached-pane-return-layer > span {
+  padding: 11px 16px;
+  border-radius: 999px;
+  color: var(--wb-text);
+  background: var(--wb-floating-rail-bg);
+  box-shadow: var(--wb-floating-rail-shadow);
+  font-weight: 700;
+}
+
+@keyframes wbc-pane-return-in {
+  from { opacity: 0; transform: scale(.985); }
+  to { opacity: 1; transform: scale(1); }
+}
+
 .wbc-pane-card-rail-drag-card {
   position: absolute;
   z-index: 2;
@@ -19660,6 +19814,16 @@ body.wbc-resizing-side-agent .wbc-page.wbc-split-left .wbc-side-agent-split-moti
   transition:
     opacity 90ms ease,
     transform 150ms cubic-bezier(.22, 1, .36, 1);
+}
+
+/* The preview is mounted under document.body, so it cannot match the
+   Workbench-scoped final composer geometry. Reuse the same current tokens
+   locally to keep only the ghost input aligned with its source. */
+.wbc-pane-card-drag-surface .wbc-main > .wbc-composer {
+  padding:
+    var(--wbc-composer-top-inset)
+    var(--wbc-composer-edge-inset)
+    var(--wbc-composer-edge-inset) !important;
 }
 
 .wbc-pane-card-drag-ghost.rail-card > .wbc-pane-card-drag-surface {
@@ -19694,7 +19858,10 @@ body.wbc-resizing-side-agent .wbc-page.wbc-split-left .wbc-side-agent-split-moti
   isolation: isolate;
   /* Keep the split composer evenly inset from the three visible card edges.
      The narrower gutter also gives the controls enough horizontal room. */
-  padding: 10px 14px 14px;
+  padding:
+    var(--wbc-composer-top-inset, 10px)
+    var(--wbc-composer-edge-inset, 14px)
+    var(--wbc-composer-edge-inset, 14px);
 }
 .wbc-chat-split-state {
   display: flex;
@@ -20964,12 +21131,13 @@ html[data-theme="dark"] .wbc-selection-menu {
   display: inline-grid;
   place-items: center;
   padding: 0;
-  border: 1px solid var(--wb-line-2);
+  border: var(--wbc-composer-glass-border);
   border-radius: 999px;
-  background: color-mix(in srgb, var(--wb-card-bg-strong) 96%, transparent);
+  background: var(--wbc-composer-glass-background);
   color: var(--wb-muted);
-  box-shadow: 0 7px 20px rgba(15, 23, 42, 0.14), 0 1px 4px rgba(15, 23, 42, 0.08);
-  backdrop-filter: blur(12px);
+  box-shadow: var(--wbc-composer-glass-shadow);
+  -webkit-backdrop-filter: var(--wbc-composer-glass-filter);
+  backdrop-filter: var(--wbc-composer-glass-filter);
   transform: translateX(-50%);
   cursor: pointer;
   transition: color 120ms ease, border-color 120ms ease, background 120ms ease, transform 120ms ease;
@@ -20987,7 +21155,7 @@ html[data-theme="dark"] .wbc-selection-menu {
 
 .wbc-scroll-to-bottom:hover {
   border-color: color-mix(in srgb, var(--wb-accent) 45%, var(--wb-line));
-  background: color-mix(in srgb, var(--wb-accent) 8%, var(--wb-card-bg-strong));
+  background: color-mix(in srgb, var(--wb-accent) 8%, var(--wbc-composer-glass-background));
   color: var(--wb-accent);
   transform: translateX(-50%) translateY(-1px);
 }
@@ -21003,21 +21171,6 @@ html[data-theme="dark"] .wbc-selection-menu {
 
 html[data-theme="dark"] .wbc-conversation-nav-panel {
   box-shadow: 0 9px 24px rgba(0, 0, 0, 0.34);
-}
-
-html[data-theme="dark"] .wbc-scroll-to-bottom {
-  border-color: color-mix(in srgb, var(--wb-line-2) 64%, transparent);
-  background: var(--wb-conversation-surface);
-  box-shadow:
-    0 10px 28px rgba(0, 0, 0, .24),
-    inset 0 1px 0 color-mix(in srgb, #fff 10%, transparent),
-    inset 0 0 0 1px color-mix(in srgb, #fff 2.5%, transparent);
-  -webkit-backdrop-filter: blur(18px) saturate(120%) contrast(102%);
-  backdrop-filter: blur(18px) saturate(120%) contrast(102%);
-}
-
-html[data-theme="dark"] .wbc-scroll-to-bottom:hover {
-  background: color-mix(in srgb, var(--wb-accent) 8%, var(--wb-conversation-surface));
 }
 
 @media (prefers-reduced-motion: reduce) {
@@ -22171,7 +22324,7 @@ html[data-platform="darwin"] .wbc-browser-window.maximized .wbc-browser-window-b
   border: 0;
   border-radius: 12px;
   background: var(--wb-accent);
-  color: var(--wb-accent-text);
+  color: var(--wb-user-message-text);
   padding: 7px 14px;
   box-shadow: none;
   font-size: calc(13.5px * var(--wb-ui-font-scale, 1));
@@ -23090,6 +23243,135 @@ button.wbc-attach-file:focus-visible {
 
 /* ---- tool trace card ---- */
 
+.wbc-activity-group {
+  width: 100%;
+  max-width: 720px;
+  min-width: 0;
+}
+
+.wbc-activity-group-summary {
+  display: inline-flex;
+  min-width: 0;
+  min-height: 36px;
+  max-width: 100%;
+  align-items: center;
+  gap: 7px;
+  padding: 4px 0;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--wb-faint);
+  text-align: left;
+  cursor: pointer;
+  transition: color 150ms ease, background 150ms ease;
+}
+
+.wbc-activity-group-summary:hover {
+  color: var(--wb-text-strong, var(--wb-text));
+}
+
+.wbc-activity-group-summary:focus-visible {
+  outline: 2px solid color-mix(in srgb, var(--wb-accent) 48%, transparent);
+  outline-offset: 2px;
+}
+
+.wbc-activity-group-state,
+.wbc-activity-group-chevron {
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-items: center;
+  justify-content: center;
+}
+
+.wbc-activity-group-state {
+  width: 16px;
+  color: var(--wb-green);
+}
+
+.wbc-activity-group-state > svg {
+  width: 14px;
+  height: 14px;
+}
+
+.wbc-activity-group-state .wb-spinner.small {
+  width: 12px;
+  height: 12px;
+  border-width: 2px;
+}
+
+.wbc-activity-group-summary b {
+  min-width: 0;
+  overflow: hidden;
+  color: inherit;
+  font-family: var(--mono, "IBM Plex Mono", ui-monospace, monospace);
+  font-size: calc(11px * var(--wb-ui-font-scale, 1));
+  font-weight: 550;
+  letter-spacing: .01em;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.wbc-activity-group-chevron {
+  margin-left: 1px;
+  color: var(--wb-faint);
+  transition: transform 180ms cubic-bezier(.2, .8, .2, 1);
+}
+
+.wbc-activity-group.expanded .wbc-activity-group-chevron {
+  transform: rotate(90deg);
+}
+
+.wbc-activity-group-collapse {
+  display: grid;
+  grid-template-rows: 0fr;
+  min-width: 0;
+  opacity: 0;
+  visibility: hidden;
+  transform: translateY(-3px);
+  pointer-events: none;
+  transition:
+    grid-template-rows 200ms cubic-bezier(.2, .8, .2, 1),
+    opacity 140ms ease,
+    transform 200ms cubic-bezier(.2, .8, .2, 1),
+    visibility 0s linear 200ms;
+}
+
+.wbc-activity-group-collapse.open {
+  grid-template-rows: 1fr;
+  opacity: 1;
+  visibility: visible;
+  transform: translateY(0);
+  pointer-events: auto;
+  transition-delay: 0s;
+}
+
+.wbc-activity-group-collapse-inner {
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.wbc-activity-group-list {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 4px;
+  margin: 3px 0 2px 22px;
+  padding: 2px 0;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .wbc-activity-group-summary,
+  .wbc-activity-group-chevron,
+  .wbc-activity-group-collapse {
+    transition: none;
+  }
+
+  .wbc-activity-group-collapse {
+    transform: none;
+  }
+}
+
 .wbc-trace {
   display: flex;
   flex-direction: column;
@@ -23800,6 +24082,11 @@ button.wbc-attach-file:focus-visible {
 }
 
 .wbc-composer {
+  /* Main conversations, split conversations and detached chat windows share
+     one composer geometry. The three visible card edges must stay optically
+     equal even when a narrower window activates container queries. */
+  --wbc-composer-top-inset: 10px;
+  --wbc-composer-edge-inset: 14px;
   flex: 0 0 auto;
   padding: 10px 22px 8px;
 }
@@ -23846,43 +24133,61 @@ button.wbc-attach-file:focus-visible {
 }
 
 .wbc-composer-box {
-  position: relative;
-  container-name: wbc-composer;
-  container-type: inline-size;
-  border: 1px solid color-mix(in srgb, var(--wb-line-2) 64%, transparent);
-  border-radius: 14px;
-  background: color-mix(in srgb, var(--wb-card-bg) 72%, transparent);
-  padding: 10px 12px 8px;
-  box-shadow:
+  --wbc-composer-glass-border: 1px solid color-mix(in srgb, var(--wb-line-2) 64%, transparent);
+  --wbc-composer-glass-background: color-mix(in srgb, var(--wb-card-bg) 72%, transparent);
+  --wbc-composer-glass-shadow:
     var(--wbc-control-shadow),
     inset 0 1px 0 color-mix(in srgb, #fff 10%, transparent),
     inset 0 0 0 1px color-mix(in srgb, var(--wb-line) 14%, transparent);
-  -webkit-backdrop-filter: blur(18px) saturate(120%) contrast(102%);
-  backdrop-filter: blur(18px) saturate(120%) contrast(102%);
+  --wbc-composer-glass-filter: blur(18px) saturate(120%) contrast(102%);
+  position: relative;
+  container-name: wbc-composer;
+  container-type: inline-size;
+  border: var(--wbc-composer-glass-border);
+  border-radius: 14px;
+  background: var(--wbc-composer-glass-background);
+  padding: 10px 12px 8px;
+  box-shadow: var(--wbc-composer-glass-shadow);
+  -webkit-backdrop-filter: var(--wbc-composer-glass-filter);
+  backdrop-filter: var(--wbc-composer-glass-filter);
 }
 
 /* Match the dark composer's glass construction in light mode. The material
    stays light, but uses the same translucency, blur and three-layer elevation
    instead of falling back to the nearly flat shared control shadow. */
 html[data-theme="light"] .wbc-composer-box {
-  background: color-mix(in srgb, #fff 76%, transparent);
-  box-shadow:
+  --wbc-composer-glass-background: color-mix(in srgb, #fff 76%, transparent);
+  --wbc-composer-glass-shadow:
     0 10px 28px rgba(15, 23, 42, .12),
     inset 0 1px 0 color-mix(in srgb, #fff 90%, transparent),
     inset 0 0 0 1px color-mix(in srgb, #0f172a 3%, transparent);
-  -webkit-backdrop-filter: blur(18px) saturate(120%) contrast(102%);
-  backdrop-filter: blur(18px) saturate(120%) contrast(102%);
 }
 
 /* Resolve the sampled #181818 as translucent glass rather than an opaque
    paint layer. The existing backdrop filters can therefore pick up nearby
    content and the inset highlight remains visible along the top edge. */
 html[data-theme="dark"] :is(.wbc-composer-box, .wbc-side-card) {
-  background: var(--wb-conversation-surface);
-  box-shadow:
+  --wbc-composer-glass-background: var(--wb-conversation-surface);
+  --wbc-composer-glass-shadow:
     0 10px 28px rgba(0, 0, 0, .24),
     inset 0 1px 0 color-mix(in srgb, #fff 10%, transparent),
     inset 0 0 0 1px color-mix(in srgb, #fff 2.5%, transparent);
+  background: var(--wbc-composer-glass-background);
+  box-shadow: var(--wbc-composer-glass-shadow);
+}
+
+/* Conversation panels opened over a split transcript are cards, not glass.
+   Keep their material opaque in both themes and anchor the visual boundary to
+   the panel itself; otherwise transcript text remains visible through the
+   dark-theme conversation surface. */
+html :is(
+  .wbc-pane-floating-conversation-panel,
+  .wbc-split-chat-panel,
+  .wbc-split-main-grip > .wbc-side-floating
+) .wbc-side-card {
+  background: var(--wb-card-bg-strong);
+  -webkit-backdrop-filter: none;
+  backdrop-filter: none;
 }
 
 /* Agent-created chats and Agent-entered drafts get one quiet, moving edge on
@@ -23934,6 +24239,12 @@ html[data-theme="dark"] :is(.wbc-composer-box, .wbc-side-card) {
 
 .wbc-composer-box textarea::placeholder {
   color: var(--wb-faint);
+}
+
+.wbc-composer-box textarea:disabled {
+  color: var(--wb-faint);
+  opacity: .72;
+  cursor: not-allowed;
 }
 
 .wbc-attach-row {
@@ -24899,7 +25210,7 @@ html[data-theme="dark"] .wbc-model-button.active {
   overflow: visible;
   border: 1px solid color-mix(in srgb, var(--wb-line-2) 72%, transparent);
   border-radius: 18px;
-  background: color-mix(in srgb, var(--wb-card-bg) 88%, transparent);
+  background: var(--wbc-panel-surface);
   box-shadow:
     0 8px 22px rgba(9, 17, 30, 0.055),
     inset 0 1px 0 color-mix(in srgb, #fff 9%, transparent),
@@ -24908,6 +25219,12 @@ html[data-theme="dark"] .wbc-model-button.active {
   backdrop-filter: blur(18px) saturate(112%);
   container: wbc-side-card / inline-size;
   pointer-events: auto;
+}
+
+html[data-theme="dark"] .wbc-page .wbc-side-card {
+  /* Win over the older composer-glass and floating/split panel variants so
+     every conversation detail card resolves to the same opaque surface. */
+  background: var(--wbc-panel-surface);
 }
 
 .wbc-side-card > .wb-col-resizer.card-edge,
@@ -30678,10 +30995,6 @@ html[data-theme="dark"] .wbc-map .leaflet-control-zoom a {
   padding: 0;
 }
 
-.wbq-composer-host .wb-composer-disclaimer {
-  margin-top: 6px;
-}
-
 .wbq-send-error {
   flex: 0 0 auto;
   margin-bottom: 10px;
@@ -30712,6 +31025,58 @@ html[data-theme="dark"] .wbc-map .leaflet-control-zoom a {
   display: flex;
   gap: 16px;
   margin-bottom: 14px;
+}
+
+.wb-usage-metrics {
+  display: grid;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  gap: 1px;
+  overflow: hidden;
+  border: 1px solid var(--wb-line);
+  border-radius: 10px;
+  background: var(--wb-line);
+}
+
+.wb-budget-summary .wb-usage-metrics {
+  margin-bottom: 16px;
+}
+
+.wb-usage-metrics.is-period {
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+}
+
+.wb-usage-metric {
+  min-width: 0;
+  min-height: 92px;
+  padding: 16px 12px;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  align-items: center;
+  gap: 5px;
+  text-align: center;
+  background: var(--wb-card-bg);
+}
+
+.wb-usage-metric strong {
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  color: var(--wb-text);
+  font-size: calc(20px * var(--wb-ui-font-scale, 1));
+  font-weight: 720;
+  line-height: 1.1;
+}
+
+.wb-usage-metric span {
+  color: var(--wb-text-secondary);
+  font-size: calc(12px * var(--wb-ui-font-scale, 1));
+  font-weight: 610;
+}
+
+.wb-usage-metric small {
+  color: var(--wb-muted);
+  font-size: calc(10px * var(--wb-ui-font-scale, 1));
 }
 
 .wb-budget-stat {
@@ -30821,7 +31186,7 @@ html[data-theme="dark"] .wbc-map .leaflet-control-zoom a {
 .wb-budget-model-head,
 .wb-budget-model-row {
   display: grid;
-  grid-template-columns: 1fr 70px 80px 80px;
+  grid-template-columns: minmax(150px, 1fr) 64px 82px 82px 82px 78px;
   align-items: center;
   padding: 8px 12px;
   gap: 8px;
@@ -30871,6 +31236,36 @@ html[data-theme="dark"] .wbc-map .leaflet-control-zoom a {
   opacity: 0.5;
 }
 
+.wb-budget-model-empty {
+  padding: 28px 16px;
+  color: var(--wb-muted);
+  text-align: center;
+  font-size: calc(12px * var(--wb-ui-font-scale, 1));
+}
+
+@media (max-width: 980px) {
+  .wb-usage-metrics,
+  .wb-usage-metrics.is-period {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+
+  .wb-budget-model-table {
+    overflow-x: auto;
+  }
+
+  .wb-budget-model-head,
+  .wb-budget-model-row {
+    min-width: 720px;
+  }
+}
+
+@media (max-width: 620px) {
+  .wb-usage-metrics,
+  .wb-usage-metrics.is-period {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
 /* ============================================================
    Global presentation tweaks for Workbench surfaces
    The settings overlay stores text size and density on <html>. These final
@@ -30899,6 +31294,8 @@ html[data-text-size="large"] :where(.workbench-confirm-modal, .workbench-toast-h
 
 html[data-density="compact"] .workbench-shell,
 html[data-density="compact"] :where(.workbench-confirm-modal, .workbench-toast-host, .wbq-shell) {
+  --wb-topbar-height: 50px;
+  --wb-floating-card-top-gap: 1px;
   --wb-ui-density-scale: 0.84;
   --wb-ui-control-py: 6px;
   --wb-ui-control-px: 10px;
@@ -31066,24 +31463,11 @@ html[data-density="compact"] :where(.workbench-confirm-modal, .workbench-toast-h
   font-size: calc(17px * var(--wb-ui-font-scale)) !important;
 }
 
-.workbench-shell :where(.wb-btn, .wb-seg-btn, .wb-about-related-action, .wbp-tiny-btn),
+.workbench-shell :where(.wb-btn, .wb-seg-btn, .wbp-tiny-btn),
 :where(.workbench-confirm-modal, .wbq-shell) :where(.wb-btn, .wb-seg-btn, .wbq-close, .wbq-screenshot-btn) {
   min-height: calc(32px * var(--wb-ui-density-scale, 1)) !important;
   padding-block: var(--wb-ui-control-py) !important;
   padding-inline: var(--wb-ui-control-px) !important;
-}
-
-/* Related links mix anchors with a real button for the in-app changelog.
-   Pin their final control metrics here so the global native-button typography
-   rule cannot make the changelog action taller or use a different font size. */
-.workbench-shell .settings-overlay .wb-about-related-action {
-  min-height: calc(30px * var(--wb-ui-density-scale, 1)) !important;
-  padding-block: calc(5px * var(--wb-ui-density-scale, 1)) !important;
-  padding-inline: 11px !important;
-  font-family: var(--wb-font) !important;
-  font-size: calc(13px * var(--wb-ui-font-scale, 1)) !important;
-  font-weight: 600 !important;
-  line-height: 1 !important;
 }
 
 html[data-density="compact"] .workbench-shell :where(
@@ -31143,7 +31527,7 @@ html[data-density="compact"] .wbc-page {
   --wbc-topbar-tab-bottom: 39px;
 }
 
-html[data-density="compact"] .workbench-shell :where(.wb-budget-model-head, .wb-budget-model-row, .wb-about-related-row) {
+html[data-density="compact"] .workbench-shell :where(.wb-budget-model-head, .wb-budget-model-row) {
   min-height: calc(38px * var(--wb-ui-density-scale, 1)) !important;
   padding-block: var(--wb-ui-row-pad-y) !important;
 }
@@ -32118,15 +32502,22 @@ html[data-theme="dark"] .workbench-grid.integrated-sidebars {
   grid-template-columns: 64px minmax(0, 1fr);
 }
 
+.workbench-grid.integrated-sidebars.is-settings {
+  grid-template-columns: minmax(0, 1fr);
+}
+
 .workbench-grid.integrated-sidebars .workbench-integrated-rail {
   position: relative;
   z-index: 21;
   align-self: stretch;
   flex: 0 0 calc(var(--wb-rail-w) - 16px);
   width: calc(var(--wb-rail-w) - 16px);
-  height: calc(100% - 24px);
-  max-height: calc(100% - 24px);
-  margin: 12px 4px 12px 12px;
+  /* Normal module grids already start below the fixed topbar. Keep their
+     floating cards on the same screen-space baseline as chat, whose full-
+     viewport grid applies the equivalent clearance through its own inset. */
+  height: calc(100% - var(--wb-floating-card-top-gap) - var(--wb-floating-card-bottom-gap));
+  max-height: calc(100% - var(--wb-floating-card-top-gap) - var(--wb-floating-card-bottom-gap));
+  margin: var(--wb-floating-card-top-gap) 4px var(--wb-floating-card-bottom-gap) 12px;
   box-sizing: border-box;
   border: var(--wb-floating-rail-border);
   border-radius: var(--wb-floating-rail-radius);
@@ -32175,10 +32566,12 @@ html[data-theme="dark"] .workbench-grid.integrated-sidebars {
    different box model from every other module.  The chat rail is now the same
    physical floating card as the rest of the Workbench. */
 .workbench-grid.integrated-sidebars .wbc-rail.workbench-integrated-rail {
-  width: calc(100% - var(--wbc-card-gutter));
+  /* Horizontal geometry comes only from the shared integrated-rail rule.
+     Keeping a Chat-specific width here lets the rail drift when the shared
+     card sizing changes. Chat only owns its full-viewport vertical insets. */
   height: calc(100% - var(--wbc-card-top-inset) - var(--wbc-card-gutter));
   max-height: calc(100% - var(--wbc-card-top-inset) - var(--wbc-card-gutter));
-  margin: var(--wbc-card-top-inset) 0 var(--wbc-card-gutter) var(--wbc-card-gutter);
+  margin: var(--wbc-card-top-inset) 4px var(--wbc-card-gutter) var(--wbc-card-gutter);
   padding: 0;
   isolation: isolate;
 }
@@ -32989,29 +33382,21 @@ html[data-theme="dark"] .workbench-grid.integrated-sidebars {
 
 .workbench-rail-account-summary {
   min-width: 0;
+  align-self: stretch;
   display: flex;
   flex-direction: column;
-  gap: 2px;
-}
-
-.workbench-rail-account-summary b,
-.workbench-rail-account-summary small {
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  justify-content: center;
 }
 
 .workbench-rail-account-summary b {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--wb-text);
   font-size: calc(14px * var(--wb-ui-font-scale, 1));
   font-weight: 720;
   line-height: 1.15;
-}
-
-.workbench-rail-account-summary small {
-  color: var(--wb-faint);
-  font-size: calc(11.5px * var(--wb-ui-font-scale, 1));
-  line-height: 1.15;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .workbench-rail-account-chevron {
@@ -33975,12 +34360,15 @@ html[data-performance-mode="on"] .wbc-composer-box {
   background: var(--wb-card-bg) !important;
 }
 
-/* Final composer geometry: the task composer also carries the generic
-   `.workbench-composer` class, which compact density treats like a padded
-   panel with `!important`. Shared chat composers own their own insets, so keep
-   that global panel padding from reopening the space below the disclaimer. */
+/* Final composer geometry: every main-chat state uses the same three-sided
+   inset. Keeping the inline and bottom values equal prevents empty, populated,
+   split, and compact-density conversations from landing on different bottom
+   baselines. */
 .workbench-shell .wbc-main > .wbc-composer {
-  padding-bottom: 0 !important;
+  padding:
+    var(--wbc-composer-top-inset)
+    var(--wbc-composer-edge-inset)
+    var(--wbc-composer-edge-inset) !important;
 }
 
 /* When the workspace is split, the main conversation and the detached chat
@@ -33988,17 +34376,200 @@ html[data-performance-mode="on"] .wbc-composer-box {
    follow the normal main-composer reset above so the left pane is not left
    flush with the bottom edge while the right pane is correctly inset. */
 .workbench-shell .wbc-page.side-agent-split-open > .wbc-main > .wbc-composer {
-  padding: 10px 14px 14px !important;
+  padding:
+    var(--wbc-composer-top-inset)
+    var(--wbc-composer-edge-inset)
+    var(--wbc-composer-edge-inset) !important;
 }
 
 /* The active conversation can also be the left card inside the draggable pane
    layout. Match the detached chat card's inset there as well; this is the DOM
    shape used by the two-column split workspace. */
 .workbench-shell .wbc-pane-layout.split .wbc-pane-card .wbc-main > .wbc-composer {
-  padding: 10px 14px 14px !important;
+  padding:
+    var(--wbc-composer-top-inset)
+    var(--wbc-composer-edge-inset)
+    var(--wbc-composer-edge-inset) !important;
 }
 
-html[data-density="compact"] .workbench-shell .workbench-composer.wbc-composer,
+/* Detached chats use the exact same WbcComposer material as the main chat.
+   Keep this final geometry guard local to the detached surface so narrow
+   split/container rules cannot make its bottom inset differ from its sides. */
+.wbc-detached-pane-content > .wbc-chat-split > .wbc-composer {
+  padding:
+    var(--wbc-composer-top-inset)
+    var(--wbc-composer-edge-inset)
+    var(--wbc-composer-edge-inset) !important;
+}
+
 .workbench-grid.is-task-detail .workbench-main > .workbench-composer.wbc-composer {
   padding: 0 !important;
+}
+
+/* Settings is a first-class workbench module. Its left navigation uses the
+   same floating-card geometry as Profile while the forms keep their existing
+   controls and save behavior in a wider, independently scrolling canvas. */
+
+.settings-overlay .settings-overlay-body {
+  display: grid;
+  grid-template-columns: var(--wb-rail-w) minmax(0, 1fr);
+  min-width: 0;
+  min-height: 0;
+}
+
+.settings-overlay .settings-overlay-nav {
+  padding: 0;
+  gap: 0;
+  border-right: var(--wb-floating-rail-border);
+  background: var(--wb-floating-rail-bg);
+  overflow: hidden;
+}
+
+.settings-overlay-nav-head {
+  flex: 0 0 56px;
+}
+
+.settings-overlay-nav-scroll {
+  min-height: 0;
+  flex: 1 1 auto;
+  overflow-y: auto;
+  padding: 2px 10px 12px;
+  scrollbar-width: none;
+}
+
+.settings-overlay-nav-scroll::-webkit-scrollbar {
+  display: none;
+}
+
+.settings-overlay .settings-overlay-nav-section {
+  min-height: auto;
+  display: flex;
+  flex: none;
+  flex-direction: column;
+  gap: 2px;
+  padding: 10px 0 0;
+  border-top: 0;
+}
+
+.settings-overlay .settings-overlay-nav-section.first {
+  padding-top: 2px;
+}
+
+.settings-overlay-nav-label {
+  padding: 0 10px 5px;
+  color: var(--wb-faint);
+  font-size: calc(10px * var(--wb-ui-font-scale, 1));
+  font-weight: 650;
+  letter-spacing: .06em;
+  line-height: 1.3;
+  text-transform: uppercase;
+}
+
+.settings-overlay .settings-overlay-tab {
+  flex: none;
+  min-height: 38px;
+  padding: 0 10px;
+  border-radius: 10px;
+}
+
+.settings-overlay .settings-overlay-content {
+  padding: 30px clamp(28px, 4vw, 68px) 72px;
+  background: transparent;
+}
+
+.settings-overlay .settings-panel {
+  width: min(100%, 920px);
+}
+
+.settings-overlay .settings-overlay-content[data-settings-active-tab="extensions"] .settings-panel {
+  width: min(100%, 1120px);
+}
+
+.settings-overlay .settings-overlay-content[data-settings-active-tab="profile"] {
+  padding: 0;
+}
+
+.settings-overlay .settings-profile-panel,
+.settings-overlay .settings-profile-panel .wbp-page {
+  min-width: 0;
+  min-height: 100%;
+  overflow: visible;
+  background: transparent;
+}
+
+.settings-overlay .settings-profile-panel .wbp-page {
+  box-sizing: border-box;
+  padding: 40px clamp(24px, 4vw, 64px) 72px;
+}
+
+.settings-overlay .settings-profile-panel .wbp-inner {
+  max-width: 1120px;
+}
+
+.settings-overlay .settings-overlay-nav.is-collapsed .settings-overlay-nav-head > b,
+.settings-overlay .settings-overlay-nav.is-collapsed .settings-overlay-nav-label,
+.settings-overlay .settings-overlay-nav.is-collapsed .settings-overlay-tab > span:not(.settings-overlay-tab-icon) {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+}
+
+.settings-overlay .settings-overlay-nav.is-collapsed .settings-overlay-nav-scroll {
+  display: none;
+}
+
+.settings-overlay .settings-overlay-nav.is-collapsed .settings-overlay-tab {
+  justify-content: center;
+  padding: 0;
+}
+
+@media (max-width: 760px) {
+  .settings-overlay .settings-overlay-body {
+    display: flex;
+    flex-direction: column;
+  }
+
+  .settings-overlay .settings-overlay-nav.workbench-integrated-rail {
+    position: relative;
+    width: calc(100% - 24px);
+    max-width: none;
+    height: auto;
+    min-height: 0;
+    flex: 0 0 auto;
+    margin: 8px 12px 0;
+    border-radius: 16px;
+  }
+
+  .settings-overlay .settings-overlay-nav-head,
+  .settings-overlay .workbench-sidebar-dock-slot,
+  .settings-overlay .settings-overlay-nav-label {
+    display: none;
+  }
+
+  .settings-overlay .settings-overlay-nav-scroll {
+    display: flex;
+    gap: 4px;
+    padding: 8px;
+    overflow-x: auto;
+  }
+
+  .settings-overlay .settings-overlay-nav-section,
+  .settings-overlay .settings-overlay-nav-section.first {
+    display: contents;
+  }
+
+  .settings-overlay .settings-overlay-tab {
+    width: auto;
+    min-width: max-content;
+    padding: 0 12px;
+  }
+
+  .settings-overlay .settings-overlay-content {
+    padding: 22px 16px 56px;
+  }
 }

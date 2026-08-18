@@ -16,6 +16,7 @@ NATIVE_TOOL_MODULES = (
     "cyrene.tool_impl.task.resume_task",
     "cyrene.tool_impl.task.cancel_task",
     "cyrene.tool_impl.core.read",
+    "cyrene.tool_impl.core.read_tool_result",
     "cyrene.tool_impl.core.write",
     "cyrene.tool_impl.core.edit",
     "cyrene.tool_impl.core.analyze_attachment",

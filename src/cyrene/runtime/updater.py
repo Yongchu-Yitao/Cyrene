@@ -623,18 +623,35 @@ def _restore_download_state() -> None:
         if isinstance(state, dict) and state.get("verified"):
             path = Path(str(state.get("path") or ""))
             if path.is_file():
-                sha256 = str(state.get("sha256") or "")
+                expected_sha256 = str(state.get("sha256") or "").strip().lower()
+                actual_sha256 = _hash_file(path).lower()
+                verified = bool(
+                    expected_sha256 and actual_sha256 == expected_sha256
+                )
+                file_size = path.stat().st_size
                 _download_progress.update({
-                    "downloaded": int(state.get("downloaded") or 0),
-                    "total": int(state.get("total") or 0),
+                    "downloaded": file_size,
+                    "total": int(state.get("total") or state.get("size") or file_size),
                     "done": True,
                     "path": str(path),
-                    "expected_sha256": sha256,
-                    "actual_sha256": sha256,
-                    "verified": True,
-                    "verification_error": "",
+                    "expected_sha256": expected_sha256,
+                    "actual_sha256": actual_sha256,
+                    "verified": verified,
+                    "verification_error": "" if verified else (
+                        "Restored update package failed SHA-256 verification."
+                    ),
                 })
-                logger.info("Restored verified update package from previous run: %s", path)
+                if not verified:
+                    settings_store.set_(_UPDATE_STATE_KEY, None)
+                    logger.warning(
+                        "Rejected restored update package with invalid SHA-256: %s",
+                        path,
+                    )
+                    return
+                logger.info(
+                    "Restored and reverified update package from previous run: %s",
+                    path,
+                )
                 return
 
         pending = settings_store.get(_UPDATE_PENDING_KEY, None) or {}

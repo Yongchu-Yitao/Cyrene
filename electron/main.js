@@ -247,6 +247,9 @@ if (isLinux && process.env.CYRENE_DISABLE_HARDWARE_ACCELERATION === '1') {
 
 let mainWindow = null;
 let quickChatWindow = null;
+const detachedPaneWindows = new Map();
+const detachedBrowserSurfaceWindows = new Map();
+const detachedPaneDragSessions = new Map();
 let quickChatWindowReady = null;
 let quickChatOpenPromise = null;
 let pendingQuickChatScreenshot = null;
@@ -1093,6 +1096,9 @@ class BrowserTabManager {
   }
 
   ownerWindow() {
+    const detached = detachedBrowserSurfaceWindows.get(this.sessionId);
+    if (detached && !detached.isDestroyed()) return detached;
+    if (detached) detachedBrowserSurfaceWindows.delete(this.sessionId);
     return mainWindow && !mainWindow.isDestroyed() ? mainWindow : null;
   }
 
@@ -5332,6 +5338,577 @@ async function createQuickChatWindow() {
   return quickChatWindow;
 }
 
+const DETACHED_PANE_KINDS = new Set([
+  'chat', 'file', 'viewer', 'change', 'map', 'browser', 'subagents', 'side-agent',
+]);
+
+function debugDetachedPane(stage, details) {
+  if (process.env.ELECTRON_DEV !== '1') return;
+  try { console.log(`[detached-pane] ${stage}`, details || ''); } catch (_) {}
+}
+
+function detachedPaneContextForSender(sender) {
+  for (const record of detachedPaneWindows.values()) {
+    if (
+      record.window && !record.window.isDestroyed()
+      && record.window.webContents === sender
+    ) return record;
+  }
+  return null;
+}
+
+function normalizeDetachedPaneDescriptor(value) {
+  const source = value && typeof value === 'object' ? value : {};
+  const kind = String(source.kind || '').trim();
+  if (!DETACHED_PANE_KINDS.has(kind)) throw new Error('Unsupported detached pane kind.');
+  const serialized = JSON.stringify({
+    kind,
+    payload: source.payload == null ? null : source.payload,
+    ownerChatId: String(source.ownerChatId || ''),
+    project: source.project && typeof source.project === 'object' ? source.project : null,
+    title: String(source.title || '').slice(0, 300),
+    items: Array.isArray(source.items) ? source.items : [],
+    agent: source.agent && typeof source.agent === 'object' ? source.agent : null,
+    agents: Array.isArray(source.agents) ? source.agents : [],
+    draft: source.draft && typeof source.draft === 'object' ? source.draft : null,
+  });
+  if (Buffer.byteLength(serialized, 'utf8') > 2 * 1024 * 1024) {
+    throw new Error('Detached pane context is too large.');
+  }
+  return JSON.parse(serialized);
+}
+
+function detachedPaneBounds(info = {}) {
+  const requestedPoint = info.dropPoint && typeof info.dropPoint === 'object'
+    ? info.dropPoint
+    : null;
+  const liveCursor = screen.getCursorScreenPoint();
+  const cursor = {
+    x: Number.isFinite(Number(requestedPoint && requestedPoint.x))
+      ? Math.round(Number(requestedPoint.x))
+      : liveCursor.x,
+    y: Number.isFinite(Number(requestedPoint && requestedPoint.y))
+      ? Math.round(Number(requestedPoint.y))
+      : liveCursor.y,
+  };
+  const sourceBounds = info.sourceBounds && typeof info.sourceBounds === 'object'
+    ? info.sourceBounds
+    : {};
+  const width = Math.max(420, Math.min(1400, Math.round(Number(sourceBounds.width) || 720)));
+  const height = Math.max(320, Math.min(1200, Math.round(Number(sourceBounds.height) || 720)));
+  const grab = info.grabOffset && typeof info.grabOffset === 'object' ? info.grabOffset : {};
+  const display = screen.getDisplayNearestPoint(cursor);
+  const workArea = display.workArea;
+  const x = Math.max(
+    workArea.x,
+    Math.min(
+      Math.round(cursor.x - Math.max(0, Math.min(width, Number(grab.x) || width / 2))),
+      workArea.x + workArea.width - width,
+    ),
+  );
+  const y = Math.max(
+    workArea.y,
+    Math.min(
+      Math.round(cursor.y - Math.max(0, Math.min(height, Number(grab.y) || 28))),
+      workArea.y + workArea.height - height,
+    ),
+  );
+  return { x, y, width: Math.min(width, workArea.width), height: Math.min(height, workArea.height) };
+}
+
+function pointInsideBounds(bounds, point) {
+  return !!(bounds && point
+    && point.x >= bounds.x
+    && point.x <= bounds.x + bounds.width
+    && point.y >= bounds.y
+    && point.y <= bounds.y + bounds.height);
+}
+
+function pointAtBlockedDisplayEdge(sourceBounds, point) {
+  if (!sourceBounds || !point) return false;
+  const display = screen.getDisplayNearestPoint(point);
+  const displayBounds = display && display.bounds;
+  if (!displayBounds) return false;
+  const seam = 10;
+  const aligned = 2;
+  const sourceRight = sourceBounds.x + sourceBounds.width;
+  const sourceBottom = sourceBounds.y + sourceBounds.height;
+  const displayRight = displayBounds.x + displayBounds.width;
+  const displayBottom = displayBounds.y + displayBounds.height;
+  return (
+    (sourceBounds.x <= displayBounds.x + aligned && point.x <= displayBounds.x + seam)
+    || (sourceRight >= displayRight - aligned && point.x >= displayRight - seam)
+    || (sourceBounds.y <= displayBounds.y + aligned && point.y <= displayBounds.y + seam)
+    || (sourceBottom >= displayBottom - aligned && point.y >= displayBottom - seam)
+  );
+}
+
+function updateDetachedPaneDrag(sender, rawPoint) {
+  const session = detachedPaneDragSessions.get(sender && sender.id);
+  if (!session) return;
+  const point = rawPoint && typeof rawPoint === 'object' ? rawPoint : {};
+  const screenX = Number(point.screenX != null ? point.screenX : point.x);
+  const screenY = Number(point.screenY != null ? point.screenY : point.y);
+  if (!Number.isFinite(screenX) || !Number.isFinite(screenY)) return;
+  const screenPoint = { x: Math.round(screenX), y: Math.round(screenY) };
+  const clientX = Number(point.clientX);
+  const clientY = Number(point.clientY);
+  const viewportWidth = Number(point.viewportWidth);
+  const viewportHeight = Number(point.viewportHeight);
+  const previous = session.lastRendererPoint;
+  const next = {
+    clientX,
+    clientY,
+    screenX: screenPoint.x,
+    screenY: screenPoint.y,
+    at: Date.now(),
+  };
+  session.lastRendererPoint = next;
+  session.lastCursorPoint = screenPoint;
+  if (!session.loggedFirstMove) {
+    session.loggedFirstMove = true;
+    debugDetachedPane('first pointer move', { senderId: session.senderId, screenPoint });
+  }
+  if (previous) {
+    const dx = next.screenX - previous.screenX;
+    const dy = next.screenY - previous.screenY;
+    if (Math.abs(dx) >= 0.5 || Math.abs(dy) >= 0.5) session.lastRendererVector = { dx, dy };
+  }
+  if (
+    Number.isFinite(clientX) && Number.isFinite(clientY)
+    && Number.isFinite(viewportWidth) && Number.isFinite(viewportHeight)
+  ) {
+    const vector = session.lastRendererVector || { dx: 0, dy: 0 };
+    const seam = 8;
+    session.boundaryExitIntent = (
+      (clientX <= seam && vector.dx < 0)
+      || (clientX >= viewportWidth - seam && vector.dx > 0)
+      || (clientY <= seam && vector.dy < 0)
+      || (clientY >= viewportHeight - seam && vector.dy > 0)
+    );
+  }
+  if (session.detachedWindow && !session.detachedWindow.isDestroyed()) {
+    session.detachedWindow.setBounds(detachedPaneBounds({
+      ...session.info,
+      dropPoint: screenPoint,
+    }), false);
+  }
+  // Pointer capture keeps delivering real screen coordinates beyond the
+  // renderer. Create on the first outside point, exactly like the proven
+  // side demo; the cursor poll below is now only a safety fallback.
+  const crossedSourceBounds = !pointInsideBounds(session.sourceWindowBounds, screenPoint);
+  // A maximized source window can occupy the complete display work area. In
+  // that case macOS clamps the pointer to the physical screen edge, so there
+  // is no coordinate that can ever be outside owner.getBounds(). Treat a
+  // renderer pointer that reaches the outer seam while still moving outward
+  // as the equivalent boundary crossing. This is the only behavioural
+  // difference between the small working demo window and Cyrene at full size.
+  if (!session.creating && (crossedSourceBounds || session.boundaryExitIntent)) {
+    debugDetachedPane(crossedSourceBounds ? 'pointer crossed source bounds' : 'pointer pushed past display edge', {
+      senderId: session.senderId,
+      screenPoint,
+      sourceWindowBounds: session.sourceWindowBounds,
+      boundaryExitIntent: session.boundaryExitIntent,
+    });
+    startDetachedPaneCreation(session, screenPoint);
+  }
+}
+
+function updateDetachedPaneCursor(session) {
+  const point = screen.getCursorScreenPoint();
+  const previous = session && session.lastCursorPoint;
+  if (session && previous) {
+    const dx = point.x - previous.x;
+    const dy = point.y - previous.y;
+    if (Math.abs(dx) >= 0.5 || Math.abs(dy) >= 0.5) session.lastCursorVector = { dx, dy };
+  }
+  if (session) session.lastCursorPoint = point;
+  return point;
+}
+
+function clearDetachedPaneDragSession(senderOrId) {
+  const senderId = typeof senderOrId === 'number'
+    ? senderOrId
+    : senderOrId && senderOrId.id;
+  const session = detachedPaneDragSessions.get(senderId);
+  if (!session) return null;
+  detachedPaneDragSessions.delete(senderId);
+  if (session.timer) clearInterval(session.timer);
+  session.timer = null;
+  if (session.releaseTimer) clearTimeout(session.releaseTimer);
+  session.releaseTimer = null;
+  return session;
+}
+
+function notifyDetachedPaneCreated(session, result) {
+  const sender = session && session.sender;
+  if (!sender || sender.isDestroyed()) return;
+  try {
+    sender.send('detached-pane:created', {
+      ...(result || {}),
+      cardId: String(session.info.cardId || ''),
+      layoutOwnerChatId: String(session.info.layoutOwnerChatId || ''),
+    });
+  } catch (_) {}
+}
+
+function startDetachedPaneCreation(session, dropPoint) {
+  if (!session || session.creating) return;
+  session.creating = true;
+  debugDetachedPane('creating native window', { senderId: session.senderId, dropPoint });
+  session.lastCursorPoint = dropPoint || session.lastCursorPoint || screen.getCursorScreenPoint();
+  const createInfo = {
+    ...session.info,
+    dropPoint: session.lastCursorPoint,
+    dragSession: session,
+    sourceWindow: session.owner,
+    sourceSenderId: session.senderId,
+  };
+  createDetachedPaneWindow(session.descriptor, createInfo).then((result) => {
+    session.creationResult = result;
+    if (session.released) {
+      notifyDetachedPaneCreated(session, result);
+      session.createdNotified = true;
+      finishDetachedPaneDragSession(session, session.releasePoint);
+    }
+  }).catch((error) => {
+    clearDetachedPaneDragSession(session.senderId);
+    notifyDetachedPaneCreated(session, {
+      ok: false,
+      detached: false,
+      error: String(error && error.message || error),
+    });
+  });
+}
+
+function finishDetachedPaneDragSession(session, rawPoint) {
+  if (!session) return { ok: true, detached: false };
+  const fallback = session.lastCursorPoint || screen.getCursorScreenPoint();
+  const point = rawPoint && Number.isFinite(Number(rawPoint.x)) && Number.isFinite(Number(rawPoint.y))
+    ? { x: Math.round(Number(rawPoint.x)), y: Math.round(Number(rawPoint.y)) }
+    : fallback;
+  session.released = true;
+  session.releasePoint = point;
+  if (
+    !session.creating
+    && (!pointInsideBounds(session.sourceWindowBounds, point)
+      || session.boundaryExitIntent
+      || pointAtBlockedDisplayEdge(session.sourceWindowBounds, point))
+  ) {
+    startDetachedPaneCreation(session, point);
+  }
+  const win = session.detachedWindow;
+  if (!win || win.isDestroyed()) {
+    if (session.creating) return { ok: true, detached: false, pending: true };
+    clearDetachedPaneDragSession(session.senderId);
+    notifyDetachedPaneCreated(session, { ok: true, detached: false, cancelled: true });
+    return { ok: true, detached: false };
+  }
+  win.setBounds(detachedPaneBounds({ ...session.info, dropPoint: point }), false);
+  try { win.setIgnoreMouseEvents(false); } catch (_) {}
+  try { win.setAlwaysOnTop(false); } catch (_) {}
+  if (session.windowReady) {
+    win.show();
+    win.focus();
+  }
+  if (session.creating && !session.creationResult) {
+    return { ok: true, detached: false, pending: true };
+  }
+  if (session.creationResult && !session.createdNotified) {
+    notifyDetachedPaneCreated(session, session.creationResult);
+    session.createdNotified = true;
+  }
+  clearDetachedPaneDragSession(session.senderId);
+  return { ok: true, detached: true, id: session.detachedRecord && session.detachedRecord.id };
+}
+
+function beginDetachedPaneDrag(sender, rawInfo) {
+  const owner = BrowserWindow.fromWebContents(sender);
+  if (!owner || owner.isDestroyed()) return { ok: false, error: 'source_window_not_found' };
+  let descriptor;
+  try {
+    descriptor = normalizeDetachedPaneDescriptor(rawInfo && rawInfo.descriptor);
+  } catch (error) {
+    return { ok: false, error: String(error && error.message || error) };
+  }
+  clearDetachedPaneDragSession(sender);
+  const info = rawInfo && typeof rawInfo === 'object' ? rawInfo : {};
+  const session = {
+    sender,
+    senderId: sender.id,
+    owner,
+    sourceWindowBounds: owner.getBounds(),
+    descriptor,
+    info,
+    startedAt: Date.now(),
+    lastRendererPoint: null,
+    lastRendererVector: null,
+    lastCursorPoint: screen.getCursorScreenPoint(),
+    lastCursorVector: null,
+    boundaryExitIntent: false,
+    creating: false,
+    released: false,
+    releasePoint: null,
+    detachedWindow: null,
+    detachedRecord: null,
+    windowReady: false,
+    timer: null,
+  };
+  session.timer = setInterval(() => {
+    if (sender.isDestroyed() || owner.isDestroyed()) {
+      clearDetachedPaneDragSession(session.senderId);
+      return;
+    }
+    if (Date.now() - session.startedAt > 30000) {
+      clearDetachedPaneDragSession(session.senderId);
+      return;
+    }
+    const cursorPoint = updateDetachedPaneCursor(session);
+    if (
+      pointInsideBounds(session.sourceWindowBounds, cursorPoint)
+      && !session.boundaryExitIntent
+      && !pointAtBlockedDisplayEdge(session.sourceWindowBounds, cursorPoint)
+    ) {
+      return;
+    }
+    // Renderer pointer capture is authoritative; this cursor check is only a
+    // fallback for a dropped move event. A latched edge push also counts when
+    // the source fills the display and no outside cursor coordinate exists.
+    startDetachedPaneCreation(session, cursorPoint);
+  }, 32);
+  if (session.timer && typeof session.timer.unref === 'function') session.timer.unref();
+  detachedPaneDragSessions.set(sender.id, session);
+  debugDetachedPane('pointer capture session began', {
+    senderId: sender.id,
+    cardId: String(info.cardId || ''),
+    sourceWindowBounds: session.sourceWindowBounds,
+  });
+  return { ok: true };
+}
+
+function detachBrowserSurface(record) {
+  const descriptor = record && record.descriptor;
+  if (!descriptor || descriptor.kind !== 'browser') return;
+  const sessionId = normalizeBrowserSessionId(descriptor.ownerChatId);
+  if (!sessionId) return;
+  detachedBrowserSurfaceWindows.set(sessionId, record.window);
+  const manager = browserTabManagers.get(sessionId);
+  if (manager) {
+    manager.syncAttachedView();
+    manager.emitState();
+  }
+}
+
+function restoreBrowserSurface(record) {
+  const descriptor = record && record.descriptor;
+  if (!descriptor || descriptor.kind !== 'browser') return;
+  const sessionId = normalizeBrowserSessionId(descriptor.ownerChatId);
+  if (detachedBrowserSurfaceWindows.get(sessionId) !== record.window) return;
+  detachedBrowserSurfaceWindows.delete(sessionId);
+  const manager = browserTabManagers.get(sessionId);
+  if (manager) {
+    manager.setBounds({ visible: false });
+    manager.syncAttachedView();
+    manager.emitState();
+  }
+}
+
+async function createDetachedPaneWindow(rawDescriptor, info = {}) {
+  const descriptor = normalizeDetachedPaneDescriptor(rawDescriptor);
+  const port = await waitForPort();
+  if (!port) throw new Error('Cyrene backend is unavailable.');
+  const id = crypto.randomUUID();
+  const bounds = detachedPaneBounds(info);
+  const win = new BrowserWindow({
+    ...bounds,
+    minWidth: 420,
+    minHeight: 320,
+    title: descriptor.title || 'Cyrene',
+    show: false,
+    frame: false,
+    resizable: true,
+    maximizable: true,
+    fullscreenable: true,
+    backgroundColor: '#111418',
+    webPreferences: {
+      preload: path.join(__dirname, 'preload.js'),
+      contextIsolation: true,
+      nodeIntegration: false,
+      sandbox: false,
+    },
+  });
+  debugDetachedPane('BrowserWindow constructed', { id, bounds, dragging: !!info.dragSession });
+  const dragSession = info.dragSession && typeof info.dragSession === 'object'
+    ? info.dragSession
+    : null;
+  let resolveReady;
+  const readyPromise = new Promise((resolve) => { resolveReady = resolve; });
+  const record = {
+    id,
+    window: win,
+    descriptor,
+    resolveReady,
+    sourceWindow: info.sourceWindow || null,
+    sourceSenderId: Number(info.sourceSenderId) || 0,
+    sourceInfo: {
+      cardId: String(info.cardId || ''),
+      layoutOwnerChatId: String(info.layoutOwnerChatId || ''),
+      sourceSide: info.sourceSide === 'right' ? 'right' : 'left',
+      sourceIndex: Math.max(0, Number(info.sourceIndex) || 0),
+    },
+    returnDrag: null,
+    returning: false,
+  };
+  detachedPaneWindows.set(id, record);
+  if (dragSession) {
+    dragSession.detachedWindow = win;
+    dragSession.detachedRecord = record;
+    try { win.setAlwaysOnTop(true, 'floating'); } catch (_) {}
+    try { win.setIgnoreMouseEvents(true); } catch (_) {}
+  }
+  win.on('closed', () => {
+    restoreBrowserSurface(record);
+    detachedPaneWindows.delete(id);
+    if (mainWindow && !mainWindow.isDestroyed()) {
+      try { mainWindow.webContents.send('detached-pane:closed', { id, descriptor }); } catch (_) {}
+    }
+  });
+  installLocalNavigationGuards(win, port);
+  await win.loadURL(
+    `http://127.0.0.1:${port}/?surface=detached-pane&paneWindowId=${encodeURIComponent(id)}`,
+    { extraHeaders: `X-Cyrene-Token: ${AUTH_TOKEN}\n` },
+  );
+  const ready = await Promise.race([
+    readyPromise.then(() => true),
+    new Promise((resolve) => setTimeout(() => resolve(false), 8000)),
+  ]);
+  if (!ready || win.isDestroyed()) {
+    if (!win.isDestroyed()) win.destroy();
+    throw new Error('The detached pane did not become ready.');
+  }
+  detachBrowserSurface(record);
+  if (dragSession) {
+    dragSession.windowReady = true;
+    if (dragSession.lastCursorPoint) {
+      win.setBounds(detachedPaneBounds({
+        ...info,
+        dropPoint: dragSession.lastCursorPoint,
+      }), false);
+    }
+    if (dragSession.released) {
+      try { win.setIgnoreMouseEvents(false); } catch (_) {}
+      try { win.setAlwaysOnTop(false); } catch (_) {}
+      win.show();
+      win.focus();
+    } else {
+      win.showInactive();
+      // A lost pointerup must never leave the child permanently click-through.
+      dragSession.releaseTimer = setTimeout(() => {
+        if (win.isDestroyed()) return;
+        finishDetachedPaneDragSession(dragSession, dragSession.lastCursorPoint);
+      }, 220);
+    }
+  } else {
+    win.show();
+    win.focus();
+  }
+  return { ok: true, detached: true, id, bounds: win.getBounds() };
+}
+
+function closeDetachedPanesForChat(chatId) {
+  const normalized = String(chatId || '');
+  let closed = 0;
+  for (const record of Array.from(detachedPaneWindows.values())) {
+    const descriptor = record.descriptor || {};
+    const payloadChatId = descriptor.kind === 'chat' ? String(descriptor.payload || '') : '';
+    if (String(descriptor.ownerChatId || '') !== normalized && payloadChatId !== normalized) continue;
+    if (record.window && !record.window.isDestroyed()) {
+      record.window.close();
+      closed += 1;
+    }
+  }
+  return { ok: true, closed };
+}
+
+function detachedPaneReturnBounds(record, point) {
+  const win = record && record.window;
+  if (!win || win.isDestroyed()) return null;
+  const current = win.getBounds();
+  const grab = record.returnDrag && record.returnDrag.grab || {
+    x: current.width / 2,
+    y: 24,
+  };
+  return {
+    x: Math.round(point.x - Math.max(0, Math.min(current.width, Number(grab.x) || 0))),
+    y: Math.round(point.y - Math.max(0, Math.min(current.height, Number(grab.y) || 0))),
+    width: current.width,
+    height: current.height,
+  };
+}
+
+function beginDetachedPaneReturnDrag(sender, info = {}) {
+  const record = detachedPaneContextForSender(sender);
+  if (!record || !record.window || record.window.isDestroyed()) return { ok: false };
+  record.returnDrag = {
+    grab: info.grab && typeof info.grab === 'object' ? info.grab : { x: 190, y: 24 },
+    merge: false,
+  };
+  try { record.window.setAlwaysOnTop(true, 'floating'); } catch (_) {}
+  record.window.moveTop();
+  return { ok: true };
+}
+
+function updateDetachedPaneReturnDrag(sender, rawPoint) {
+  const record = detachedPaneContextForSender(sender);
+  if (!record || !record.returnDrag || !record.window || record.window.isDestroyed()) return;
+  const point = rawPoint && typeof rawPoint === 'object' ? rawPoint : {};
+  const x = Number(point.screenX != null ? point.screenX : point.x);
+  const y = Number(point.screenY != null ? point.screenY : point.y);
+  if (!Number.isFinite(x) || !Number.isFinite(y)) return;
+  const screenPoint = { x: Math.round(x), y: Math.round(y) };
+  const bounds = detachedPaneReturnBounds(record, screenPoint);
+  if (bounds) record.window.setBounds(bounds, false);
+  const source = record.sourceWindow;
+  const merge = !!(source && !source.isDestroyed() && pointInsideBounds(source.getBounds(), screenPoint));
+  if (merge === record.returnDrag.merge) return;
+  record.returnDrag.merge = merge;
+  try { record.window.webContents.send('detached-pane:return-hover', { active: merge }); } catch (_) {}
+  if (source && !source.isDestroyed()) {
+    try { source.webContents.send('detached-pane:return-hover', { active: merge }); } catch (_) {}
+  }
+}
+
+function finishDetachedPaneReturnDrag(sender, rawPoint) {
+  const record = detachedPaneContextForSender(sender);
+  if (!record || !record.returnDrag || !record.window || record.window.isDestroyed()) {
+    return { ok: false };
+  }
+  updateDetachedPaneReturnDrag(sender, rawPoint || screen.getCursorScreenPoint());
+  const merge = !!record.returnDrag.merge;
+  record.returnDrag = null;
+  const source = record.sourceWindow;
+  try { record.window.webContents.send('detached-pane:return-hover', { active: false }); } catch (_) {}
+  if (source && !source.isDestroyed()) {
+    try { source.webContents.send('detached-pane:return-hover', { active: false }); } catch (_) {}
+  }
+  if (!merge || !source || source.isDestroyed()) {
+    try { record.window.setAlwaysOnTop(false); } catch (_) {}
+    return { ok: true, merged: false };
+  }
+  record.returning = true;
+  try {
+    source.webContents.send('detached-pane:returned', {
+      id: record.id,
+      descriptor: record.descriptor,
+      ...record.sourceInfo,
+    });
+  } catch (_) {}
+  record.window.destroy();
+  source.show();
+  source.focus();
+  return { ok: true, merged: true };
+}
+
 async function openQuickChat() {
   if (quickChatOpenPromise) return quickChatOpenPromise;
   quickChatOpenPromise = (async () => {
@@ -6158,6 +6735,103 @@ if (!gotSingleInstanceLock) {
     ipcMain.handle('desktop-settings:update', (_event, updates) => saveDesktopSettings(updates || {}));
     ipcMain.handle('agent-cursor:set-running', (event, info) => (
       updateAgentCursorRunningSource(event.sender, info && info.running === true)
+    ));
+    ipcMain.on('detached-pane:begin-drag', (event, info) => {
+      const result = beginDetachedPaneDrag(event.sender, info);
+      event.returnValue = result;
+      if (!result || result.ok === false) {
+        console.error('[detached-pane] Failed to begin pointer capture session:', result && result.error);
+      }
+    });
+    ipcMain.on('detached-pane:update-drag', (event, point) => {
+      updateDetachedPaneDrag(event.sender, point);
+    });
+    ipcMain.handle('detached-pane:finish-drag', async (event, info) => {
+      const session = detachedPaneDragSessions.get(event.sender.id);
+      if (info && info.cancel === true) {
+        clearDetachedPaneDragSession(event.sender);
+        return { ok: true, detached: false };
+      }
+      if (session) {
+        const suppliedPoint = info && Number.isFinite(Number(info.screenX))
+          && Number.isFinite(Number(info.screenY))
+          ? { x: Number(info.screenX), y: Number(info.screenY) }
+          : session.lastCursorPoint;
+        return finishDetachedPaneDragSession(session, suppliedPoint);
+      }
+      try {
+        return await createDetachedPaneWindow(info && info.descriptor, info || {});
+      } catch (error) {
+        return { ok: false, detached: false, error: String(error && error.message || error) };
+      }
+    });
+    ipcMain.handle('detached-pane:get-context', (event) => {
+      const record = detachedPaneContextForSender(event.sender);
+      return record
+        ? { ok: true, id: record.id, descriptor: record.descriptor }
+        : { ok: false, error: 'detached_pane_not_found' };
+    });
+    ipcMain.handle('detached-pane:ready', (event) => {
+      const record = detachedPaneContextForSender(event.sender);
+      if (!record) return { ok: false, error: 'detached_pane_not_found' };
+      if (record.resolveReady) {
+        record.resolveReady();
+        record.resolveReady = null;
+      }
+      return { ok: true };
+    });
+    ipcMain.handle('detached-pane:update-context', (event, updates) => {
+      const record = detachedPaneContextForSender(event.sender);
+      if (!record) return { ok: false, error: 'detached_pane_not_found' };
+      try {
+        const descriptor = normalizeDetachedPaneDescriptor({
+          ...record.descriptor,
+          ...(updates && typeof updates === 'object' ? updates : {}),
+        });
+        const previous = record.descriptor;
+        if (
+          previous.kind === 'browser'
+          && (descriptor.kind !== 'browser' || descriptor.ownerChatId !== previous.ownerChatId)
+        ) {
+          restoreBrowserSurface(record);
+        }
+        record.descriptor = descriptor;
+        if (descriptor.kind === 'browser') detachBrowserSurface(record);
+        return { ok: true, descriptor };
+      } catch (error) {
+        return { ok: false, error: String(error && error.message || error) };
+      }
+    });
+    ipcMain.handle('detached-pane:close', (event) => {
+      const record = detachedPaneContextForSender(event.sender);
+      if (!record || !record.window || record.window.isDestroyed()) return { ok: false };
+      record.window.close();
+      return { ok: true };
+    });
+    ipcMain.handle('detached-pane:toggle-maximize', (event) => {
+      const record = detachedPaneContextForSender(event.sender);
+      if (!record || !record.window || record.window.isDestroyed()) return { ok: false };
+      if (record.window.isMaximized()) record.window.unmaximize();
+      else record.window.maximize();
+      return { ok: true, maximized: record.window.isMaximized() };
+    });
+    ipcMain.handle('detached-pane:minimize', (event) => {
+      const record = detachedPaneContextForSender(event.sender);
+      if (!record || !record.window || record.window.isDestroyed()) return { ok: false };
+      record.window.minimize();
+      return { ok: true };
+    });
+    ipcMain.handle('detached-pane:return-begin', (event, info) => (
+      beginDetachedPaneReturnDrag(event.sender, info || {})
+    ));
+    ipcMain.on('detached-pane:return-move', (event, point) => {
+      updateDetachedPaneReturnDrag(event.sender, point || {});
+    });
+    ipcMain.handle('detached-pane:return-end', (event, point) => (
+      finishDetachedPaneReturnDrag(event.sender, point || screen.getCursorScreenPoint())
+    ));
+    ipcMain.handle('detached-pane:close-by-chat', (_event, info) => (
+      closeDetachedPanesForChat(info && info.chatId)
     ));
     ipcMain.handle('ui-surface:register', (event, payload) => (
       getHostControl().registerSurface(payload && payload.uiInstanceId, event.sender)

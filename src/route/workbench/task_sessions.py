@@ -47,12 +47,15 @@ def register_task_session_routes(
         if not selected_key:
             return None
 
+        from cyrene.runtime.model_configuration import selectable_model_candidates
         from cyrene.runtime.settings_store import get_models
 
         selected_candidate = next(
             (
                 candidate
-                for candidate in (get_models() or [])
+                for candidate in selectable_model_candidates(
+                    legacy_candidates=get_models() or []
+                )
                 if selected_key
                 in {
                     str(candidate.get("id") or "").strip(),

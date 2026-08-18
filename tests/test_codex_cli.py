@@ -11,6 +11,12 @@ import pytest
 from cyrene.model_runtime import codex_cli
 
 
+@pytest.fixture(autouse=True)
+def _hide_host_codex(monkeypatch) -> None:
+    """Keep host installations from leaking into managed-runtime unit tests."""
+    monkeypatch.setattr(codex_cli, "_system_cli_candidates", lambda: [])
+
+
 @pytest.mark.parametrize(
     ("platform", "machine", "expected"),
     [
@@ -38,25 +44,35 @@ def test_platform_wheel_tag_rejects_unknown_platform(monkeypatch) -> None:
 
 def test_wheel_for_version_matches_platform_tag() -> None:
     payload = {
-        "releases": {
-            "0.144.4": [
-                {"filename": "openai_codex_cli_bin-0.144.4-py3-none-win_amd64.whl", "size": 100},
-                {"filename": "openai_codex_cli_bin-0.144.4-py3-none-macosx_11_0_arm64.whl", "size": 50},
-                {"filename": "openai_codex_cli_bin-0.144.4-py3-none-macosx_10_9_x86_64.whl", "size": 40},
-            ]
-        }
+        "urls": [
+            {"filename": "openai_codex_cli_bin-0.144.4-py3-none-win_amd64.whl", "size": 100},
+            {"filename": "openai_codex_cli_bin-0.144.4-py3-none-macosx_11_0_arm64.whl", "size": 50},
+            {"filename": "openai_codex_cli_bin-0.144.4-py3-none-macosx_10_9_x86_64.whl", "size": 40},
+        ]
     }
     wheel = codex_cli._wheel_for_version(payload, "0.144.4", "macosx_11_0_arm64")
     assert wheel["filename"].endswith("macosx_11_0_arm64.whl")
 
 
-def test_wheel_for_version_missing_tag_raises() -> None:
+def test_wheel_for_version_accepts_project_release_payload() -> None:
     payload = {
         "releases": {
             "0.144.4": [
-                {"filename": "openai_codex_cli_bin-0.144.4-py3-none-win_amd64.whl", "size": 1}
+                {"filename": "openai_codex_cli_bin-0.144.4-py3-none-win_amd64.whl", "size": 100}
             ]
         }
+    }
+
+    wheel = codex_cli._wheel_for_version(payload, "0.144.4", "win_amd64")
+
+    assert wheel["filename"].endswith("win_amd64.whl")
+
+
+def test_wheel_for_version_missing_tag_raises() -> None:
+    payload = {
+        "urls": [
+            {"filename": "openai_codex_cli_bin-0.144.4-py3-none-win_amd64.whl", "size": 1}
+        ]
     }
     with pytest.raises(RuntimeError, match="no macosx_11_0_arm64 wheel"):
         codex_cli._wheel_for_version(payload, "0.144.4", "macosx_11_0_arm64")
@@ -126,6 +142,37 @@ def test_ensure_cli_raises_when_missing(monkeypatch, tmp_path) -> None:
     monkeypatch.setattr(codex_cli, "CODEX_CLI_ROOT", tmp_path)
     with pytest.raises(codex_cli.CodexCliMissingError):
         codex_cli.ensure_cli()
+
+
+def test_ensure_cli_uses_system_binary_when_managed_runtime_is_missing(
+    monkeypatch, tmp_path,
+) -> None:
+    monkeypatch.setattr(codex_cli, "CODEX_CLI_ROOT", tmp_path / "managed")
+    system_binary = tmp_path / "system" / "codex"
+    system_binary.parent.mkdir(parents=True)
+    system_binary.write_text("#!/bin/sh\necho codex-cli 0.148.0\n")
+    system_binary.chmod(0o755)
+    monkeypatch.setattr(codex_cli, "system_cli_path", lambda: system_binary)
+
+    assert codex_cli.available_cli_path() == system_binary
+    assert codex_cli.ensure_cli() == system_binary
+    state = codex_cli.status()
+    assert state["installed"] is True
+    assert state["source"] == "system"
+    assert state["path"] == str(system_binary)
+    assert state["version"] == "0.148.0"
+
+
+def test_system_cli_path_checks_chatgpt_bundle_when_gui_path_is_empty(
+    monkeypatch, tmp_path,
+) -> None:
+    bundled = tmp_path / "ChatGPT.app" / "Contents" / "Resources" / "codex"
+    bundled.parent.mkdir(parents=True)
+    bundled.write_text("#!/bin/sh\n")
+    bundled.chmod(0o755)
+    monkeypatch.setattr(codex_cli, "_system_cli_candidates", lambda: [bundled])
+
+    assert codex_cli.system_cli_path() == bundled
 
 
 def test_status_reflects_install_state(monkeypatch, tmp_path) -> None:

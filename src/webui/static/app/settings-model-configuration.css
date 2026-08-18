@@ -1,0 +1,1304 @@
+/* Plugin-style model settings. Keep visual decisions on the existing workbench
+   surface, text and accent tokens so both light and dark themes stay aligned. */
+.wb-model-config-page {
+  --mcfg-surface: color-mix(in srgb, var(--wb-card-bg) 82%, transparent);
+  --mcfg-surface-strong: color-mix(in srgb, var(--wb-control-bg) 86%, var(--wb-card-bg));
+  --mcfg-border: color-mix(in srgb, var(--wb-line-2, var(--wb-line)) 68%, transparent);
+  --mcfg-muted-border: color-mix(in srgb, var(--wb-line) 62%, transparent);
+  width: 100%;
+  max-width: none;
+  color: var(--wb-text);
+  font-family: var(--wb-font, var(--sans, system-ui, sans-serif));
+}
+
+.wb-model-config-page,
+.wb-model-config-page * {
+  box-sizing: border-box;
+}
+
+.wb-mcfg-glyph {
+  display: inline-block;
+  flex: 0 0 auto;
+  background: currentColor;
+  -webkit-mask: var(--wb-mcfg-glyph) center / contain no-repeat;
+  mask: var(--wb-mcfg-glyph) center / contain no-repeat;
+}
+
+.wb-mcfg-page-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 24px;
+  margin-bottom: 16px;
+}
+
+.wb-mcfg-page-head > div:first-child {
+  min-width: 0;
+}
+
+.wb-mcfg-page-head h2 {
+  margin: 0;
+  color: var(--wb-text);
+  font-size: calc(22px * var(--wb-ui-font-scale, 1));
+  font-weight: 760;
+  letter-spacing: -.035em;
+  line-height: 1.2;
+}
+
+.wb-mcfg-page-head p {
+  max-width: 66ch;
+  margin: 5px 0 0;
+  color: var(--wb-muted);
+  font-size: calc(12.5px * var(--wb-ui-font-scale, 1));
+  line-height: 1.55;
+}
+
+.wb-mcfg-save-cluster {
+  min-height: 38px;
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.wb-mcfg-unsaved {
+  color: var(--wb-muted);
+  font-size: calc(12px * var(--wb-ui-font-scale, 1));
+  white-space: nowrap;
+}
+
+.wb-mcfg-status {
+  min-height: 38px;
+  display: flex;
+  align-items: center;
+  margin: 0 0 12px;
+  padding: 8px 12px;
+  border: 1px solid var(--mcfg-border);
+  border-radius: 10px;
+  color: var(--wb-muted);
+  background: var(--mcfg-surface-strong);
+  font-size: calc(12.5px * var(--wb-ui-font-scale, 1));
+  line-height: 1.45;
+}
+
+.wb-mcfg-status.is-success {
+  border-color: color-mix(in srgb, var(--wb-green, #2ea66d) 42%, var(--mcfg-border));
+  color: var(--wb-green, #2ea66d);
+  background: color-mix(in srgb, var(--wb-green, #2ea66d) 8%, var(--mcfg-surface));
+}
+
+.wb-mcfg-status.is-error {
+  border-color: color-mix(in srgb, var(--wb-red, #dc4c4c) 42%, var(--mcfg-border));
+  color: var(--wb-error-text, var(--wb-red, #dc4c4c));
+  background: var(--wb-error-bg, color-mix(in srgb, var(--wb-red, #dc4c4c) 8%, var(--mcfg-surface)));
+}
+
+.wb-mcfg-state {
+  min-height: 280px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 9px;
+  padding: 32px;
+  border: 1px solid var(--mcfg-border);
+  border-radius: 16px;
+  color: var(--wb-muted);
+  background: var(--mcfg-surface);
+  text-align: center;
+}
+
+.wb-mcfg-state strong {
+  color: var(--wb-text);
+  font-size: calc(15px * var(--wb-ui-font-scale, 1));
+}
+
+.wb-mcfg-state > span:not(.wb-mcfg-spinner) {
+  max-width: 52ch;
+  font-size: calc(12.5px * var(--wb-ui-font-scale, 1));
+  line-height: 1.5;
+}
+
+.wb-mcfg-state .wb-btn {
+  margin-top: 6px;
+}
+
+.wb-mcfg-spinner {
+  width: 26px;
+  height: 26px;
+  display: block;
+  margin-bottom: 5px;
+  border: 2px solid var(--wb-line);
+  border-top-color: var(--wb-accent);
+  border-radius: 50%;
+  animation: wb-mcfg-spin .8s linear infinite;
+}
+
+@keyframes wb-mcfg-spin {
+  to { transform: rotate(360deg); }
+}
+
+.wb-mcfg-services {
+  min-height: 620px;
+  display: grid;
+  grid-template-columns: 280px minmax(0, 1fr);
+  align-items: stretch;
+}
+
+.wb-mcfg-connection-pane {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  padding: 4px 20px 28px 0;
+  border-right: 1px solid var(--mcfg-border);
+}
+
+.wb-mcfg-filter {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 3px;
+  margin: 0 0 8px;
+  padding: 3px;
+  border: 1px solid var(--mcfg-muted-border);
+  border-radius: 10px;
+  background: var(--wb-control-bg);
+}
+
+.wb-mcfg-filter button {
+  min-width: 0;
+  min-height: 34px;
+  padding: 4px 6px;
+  border: 0;
+  border-radius: 7px;
+  color: var(--wb-muted);
+  background: transparent;
+  font: inherit;
+  font-size: calc(11px * var(--wb-ui-font-scale, 1));
+  font-weight: 620;
+  cursor: pointer;
+  transition: color .16s, background .16s, box-shadow .16s;
+}
+
+.wb-mcfg-filter button:hover {
+  color: var(--wb-text);
+  background: var(--wb-control-hover-bg);
+}
+
+.wb-mcfg-filter button.is-active {
+  color: var(--wb-text);
+  background: color-mix(in srgb, var(--wb-accent) 11%, var(--wb-control-bg));
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--wb-accent) 24%, var(--wb-line));
+}
+
+.wb-mcfg-connection-list {
+  min-height: 0;
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  gap: 5px;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  scrollbar-gutter: stable;
+}
+
+.wb-mcfg-list-empty {
+  padding: 24px 12px;
+  color: var(--wb-faint);
+  font-size: calc(12px * var(--wb-ui-font-scale, 1));
+  line-height: 1.5;
+  text-align: center;
+}
+
+.wb-mcfg-connection-item {
+  width: 100%;
+  min-height: 58px;
+  display: grid;
+  grid-template-columns: 34px minmax(0, 1fr) 12px;
+  align-items: center;
+  gap: 10px;
+  padding: 7px 9px;
+  border: 1px solid transparent;
+  border-radius: 11px;
+  color: var(--wb-muted);
+  background: transparent;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+  transition: border-color .16s, color .16s, background .16s;
+}
+
+.wb-mcfg-connection-item:hover {
+  color: var(--wb-text);
+  background: var(--wb-row-hover-bg);
+}
+
+.wb-mcfg-connection-item.is-selected {
+  border-color: color-mix(in srgb, var(--wb-accent) 38%, var(--mcfg-border));
+  color: var(--wb-text);
+  background: color-mix(in srgb, var(--wb-accent) 10%, var(--wb-card-bg));
+}
+
+.wb-mcfg-provider-mark {
+  width: 34px;
+  height: 34px;
+  display: grid;
+  place-items: center;
+  border: 1px solid var(--mcfg-border);
+  border-radius: 9px;
+  color: var(--wb-text);
+  background: var(--wb-control-bg);
+  font-size: calc(13px * var(--wb-ui-font-scale, 1));
+  font-weight: 740;
+}
+
+.wb-mcfg-provider-logo {
+  display: block;
+  flex: 0 0 auto;
+  object-fit: contain;
+  user-select: none;
+}
+
+.wb-mcfg-connection-copy {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.wb-mcfg-connection-copy strong,
+.wb-mcfg-connection-copy small {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.wb-mcfg-connection-copy strong {
+  color: inherit;
+  font-size: calc(13px * var(--wb-ui-font-scale, 1));
+  font-weight: 680;
+}
+
+.wb-mcfg-connection-copy small {
+  color: var(--wb-faint);
+  font-size: calc(10.5px * var(--wb-ui-font-scale, 1));
+}
+
+.wb-mcfg-dot {
+  width: 8px;
+  height: 8px;
+  display: block;
+  border-radius: 50%;
+  background: var(--wb-faint);
+}
+
+.wb-mcfg-dot.is-ready {
+  background: var(--wb-green, #2ea66d);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--wb-green, #2ea66d) 12%, transparent);
+}
+
+.wb-mcfg-add-connection {
+  min-height: 44px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  margin-top: 10px;
+  border: 1px solid var(--mcfg-border);
+  border-radius: 11px;
+  color: var(--wb-muted);
+  background: var(--wb-control-bg);
+  font: inherit;
+  font-size: calc(12.5px * var(--wb-ui-font-scale, 1));
+  font-weight: 650;
+  cursor: pointer;
+  transition: border-color .16s, color .16s, background .16s;
+}
+
+.wb-mcfg-add-connection:hover {
+  border-color: color-mix(in srgb, var(--wb-accent) 42%, var(--mcfg-border));
+  color: var(--wb-text);
+  background: var(--wb-control-hover-bg);
+}
+
+.wb-mcfg-context-menu {
+  width: 176px;
+  max-width: calc(100vw - 16px);
+  max-height: calc(100vh - 16px);
+  position: fixed;
+  z-index: 10000;
+  display: flex;
+  flex-direction: column;
+  padding: 4px;
+  border: 1px solid var(--mcfg-border, var(--wb-line));
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--wb-card-bg) 94%, var(--wb-control-bg));
+  box-shadow: 0 14px 38px rgba(0, 0, 0, .22), 0 2px 8px rgba(0, 0, 0, .12);
+  color: var(--wb-text);
+  overflow: auto;
+  box-sizing: border-box;
+}
+
+.wb-mcfg-context-menu button {
+  width: 100%;
+  min-height: 36px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 7px 10px;
+  border: 0;
+  border-radius: 7px;
+  color: var(--wb-text);
+  background: transparent;
+  font: inherit;
+  font-size: calc(12.5px * var(--wb-ui-font-scale, 1));
+  text-align: left;
+  cursor: pointer;
+  box-sizing: border-box;
+}
+
+.wb-mcfg-context-menu button:hover,
+.wb-mcfg-context-menu button:focus-visible {
+  outline: 0;
+  background: var(--wb-control-hover-bg);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--wb-accent) 36%, transparent);
+}
+
+.wb-mcfg-context-menu button.is-danger {
+  color: var(--wb-error-text, var(--wb-red, #dc4c4c));
+}
+
+.wb-mcfg-context-menu button.is-danger:hover,
+.wb-mcfg-context-menu button.is-danger:focus-visible {
+  background: var(--wb-error-bg, color-mix(in srgb, var(--wb-red, #dc4c4c) 10%, transparent));
+}
+
+.wb-mcfg-detail-pane {
+  width: min(100%, 800px);
+  min-width: 0;
+  padding: 2px 0 30px 28px;
+}
+
+.wb-mcfg-detail-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 18px;
+  padding: 0 0 18px;
+}
+
+.wb-mcfg-detail-head h3 {
+  margin: 0;
+  color: var(--wb-text);
+  font-size: calc(18px * var(--wb-ui-font-scale, 1));
+  font-weight: 740;
+  letter-spacing: -.02em;
+}
+
+.wb-mcfg-detail-head p {
+  margin: 3px 0 0;
+  color: var(--wb-muted);
+  font-size: calc(12px * var(--wb-ui-font-scale, 1));
+  line-height: 1.45;
+}
+
+.wb-mcfg-toggle {
+  width: 44px;
+  height: 26px;
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  padding: 3px;
+  border: 1px solid var(--mcfg-border);
+  border-radius: 999px;
+  background: var(--wb-control-bg);
+  cursor: pointer;
+  transition: border-color .16s, background .16s;
+}
+
+.wb-mcfg-toggle span {
+  width: 18px;
+  height: 18px;
+  display: block;
+  border-radius: 50%;
+  background: var(--wb-faint);
+  transition: transform .18s cubic-bezier(.22, 1, .36, 1), background .16s;
+}
+
+.wb-mcfg-toggle.is-on {
+  border-color: color-mix(in srgb, var(--wb-accent) 58%, var(--mcfg-border));
+  background: color-mix(in srgb, var(--wb-accent) 32%, var(--wb-control-bg));
+}
+
+.wb-mcfg-toggle.is-on span {
+  transform: translateX(18px);
+  background: var(--wb-text);
+}
+
+.wb-mcfg-form-section,
+.wb-mcfg-special,
+.wb-mcfg-route-card {
+  margin-bottom: 14px;
+  padding: 17px;
+  border: 1px solid var(--mcfg-border);
+  border-radius: 15px;
+  background: color-mix(in srgb, var(--wb-card-bg) 72%, transparent);
+}
+
+/* Services is a split settings workspace, not a stack of nested cards. The
+   right pane uses document-like sections separated by a single rule; usage
+   cards retain their separate visual grouping below. */
+.wb-mcfg-services .wb-mcfg-form-section,
+.wb-mcfg-services .wb-mcfg-special {
+  margin: 0;
+  padding: 17px 0 19px;
+  border: 0;
+  border-top: 1px solid var(--mcfg-border);
+  border-radius: 0;
+  background: transparent;
+}
+
+.wb-mcfg-services .wb-mcfg-connection-section {
+  padding-top: 10px;
+}
+
+.wb-mcfg-section-head,
+.wb-mcfg-special-head,
+.wb-mcfg-route-head,
+.wb-mcfg-profile-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.wb-mcfg-section-head {
+  align-items: center;
+  margin-bottom: 11px;
+}
+
+.wb-mcfg-section-head h4,
+.wb-mcfg-special-head strong,
+.wb-mcfg-route-head h3 {
+  margin: 0;
+  color: var(--wb-text);
+  font-size: calc(14px * var(--wb-ui-font-scale, 1));
+  font-weight: 700;
+}
+
+.wb-mcfg-section-head p,
+.wb-mcfg-route-head p {
+  margin: 3px 0 0;
+  color: var(--wb-muted);
+  font-size: calc(11.5px * var(--wb-ui-font-scale, 1));
+  line-height: 1.45;
+}
+
+.wb-mcfg-form-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 11px 12px;
+}
+
+.wb-mcfg-field {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+
+.wb-mcfg-field.is-wide {
+  grid-column: 1 / -1;
+}
+
+.wb-mcfg-field-label {
+  color: var(--wb-muted);
+  font-size: calc(11px * var(--wb-ui-font-scale, 1));
+  font-weight: 650;
+}
+
+.wb-mcfg-field small {
+  color: var(--wb-faint);
+  font-size: calc(10.5px * var(--wb-ui-font-scale, 1));
+  line-height: 1.4;
+}
+
+.wb-model-config-page :where(.wb-input, .wb-select) {
+  width: 100%;
+  min-width: 0;
+  font-family: inherit !important;
+  font-size: calc(13px * var(--wb-ui-font-scale, 1)) !important;
+}
+
+.wb-mcfg-actions {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 11px;
+}
+
+.wb-mcfg-actions .wb-btn,
+.wb-mcfg-section-head .wb-btn {
+  min-height: 34px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+}
+
+html[data-theme] .settings-overlay .wb-mcfg-services :where(.wb-input, .wb-select) {
+  height: 36px;
+  min-height: 36px;
+  border-radius: 9px;
+}
+
+html[data-theme] .settings-overlay .wb-mcfg-services .wb-btn {
+  height: 34px;
+  min-height: 34px;
+  padding-inline: 11px;
+  border-radius: 8px;
+  box-shadow: none;
+  font-size: calc(12px * var(--wb-ui-font-scale, 1));
+}
+
+html[data-theme] .settings-overlay .wb-mcfg-services .wb-btn:not(.primary):not(.danger) {
+  border-color: var(--mcfg-border);
+  background: transparent;
+  box-shadow: none;
+}
+
+html[data-theme] .settings-overlay .wb-mcfg-services .wb-btn:not(.primary):not(.danger):hover:not(:disabled) {
+  transform: none;
+  background: color-mix(in srgb, var(--wb-control-hover-bg) 72%, transparent);
+  box-shadow: none;
+}
+
+html[data-theme] .settings-overlay .wb-mcfg-services .wb-btn.wb-mcfg-action-main {
+  border-color: color-mix(in srgb, var(--wb-accent) 38%, var(--mcfg-border));
+  color: var(--wb-text);
+  background: color-mix(in srgb, var(--wb-accent) 10%, transparent);
+}
+
+html[data-theme] .settings-overlay .wb-mcfg-services .wb-btn.wb-mcfg-action-main:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--wb-accent) 15%, transparent);
+}
+
+.wb-mcfg-special-head > div,
+.wb-mcfg-profile-head > div {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.wb-mcfg-special-head small,
+.wb-mcfg-profile-head small {
+  color: var(--wb-muted);
+  font-size: calc(10.5px * var(--wb-ui-font-scale, 1));
+  line-height: 1.45;
+}
+
+.wb-mcfg-connection-state,
+.wb-mcfg-route-count {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  min-height: 24px;
+  padding: 3px 8px;
+  border: 1px solid var(--mcfg-border);
+  border-radius: 999px;
+  color: var(--wb-muted);
+  background: var(--wb-control-bg);
+  font-size: calc(10.5px * var(--wb-ui-font-scale, 1));
+  font-weight: 650;
+}
+
+.wb-mcfg-connection-state.is-ready {
+  border-color: color-mix(in srgb, var(--wb-green, #2ea66d) 38%, var(--mcfg-border));
+  color: var(--wb-green, #2ea66d);
+  background: color-mix(in srgb, var(--wb-green, #2ea66d) 8%, var(--wb-control-bg));
+}
+
+.wb-mcfg-services .wb-mcfg-connection-state {
+  min-height: 22px;
+  padding: 2px 4px;
+  border-color: transparent;
+  background: transparent;
+}
+
+.wb-mcfg-services .wb-mcfg-connection-state.is-ready {
+  border-color: transparent;
+  background: transparent;
+}
+
+.wb-mcfg-inline-error,
+.wb-mcfg-inline-empty {
+  margin-top: 10px;
+  padding: 8px 10px;
+  border-radius: 9px;
+  font-size: calc(11.5px * var(--wb-ui-font-scale, 1));
+  line-height: 1.45;
+}
+
+.wb-mcfg-oauth-picker {
+  display: grid;
+  grid-template-columns: 88px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 8px;
+  margin-top: 11px;
+}
+
+.wb-mcfg-oauth-picker > span {
+  color: var(--wb-muted);
+  font-size: calc(11.5px * var(--wb-ui-font-scale, 1));
+  font-weight: 650;
+}
+
+.wb-mcfg-oauth-picker .wb-btn {
+  min-height: 38px;
+  white-space: nowrap;
+}
+
+.wb-mcfg-inline-error {
+  color: var(--wb-error-text, var(--wb-red));
+  background: var(--wb-error-bg, color-mix(in srgb, var(--wb-red) 8%, transparent));
+}
+
+.wb-mcfg-inline-empty {
+  color: var(--wb-muted);
+  background: color-mix(in srgb, var(--wb-control-bg) 62%, transparent);
+  text-align: center;
+}
+
+.wb-mcfg-local-list,
+.wb-mcfg-route-list,
+.wb-mcfg-route-stack {
+  display: flex;
+  flex-direction: column;
+  gap: 9px;
+}
+
+.wb-mcfg-services .wb-mcfg-local-list {
+  gap: 0;
+}
+
+.wb-mcfg-profile-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.wb-mcfg-profile-card {
+  overflow: hidden;
+  border: 1px solid var(--mcfg-border);
+  border-radius: 12px;
+  background: color-mix(in srgb, var(--mcfg-surface-strong) 72%, transparent);
+  transition: border-color .18s ease, background-color .18s ease;
+}
+
+.wb-mcfg-profile-card:hover,
+.wb-mcfg-profile-card.is-expanded {
+  border-color: color-mix(in srgb, var(--wb-accent) 38%, var(--mcfg-border));
+  background: var(--mcfg-surface-strong);
+}
+
+.wb-mcfg-profile-summary {
+  width: 100%;
+  min-height: 64px;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 16px;
+  padding: 10px 12px 10px 14px;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.wb-mcfg-profile-summary:focus-visible {
+  outline: 2px solid color-mix(in srgb, var(--wb-accent) 76%, white);
+  outline-offset: -3px;
+}
+
+.wb-mcfg-profile-identity {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.wb-mcfg-profile-identity strong,
+.wb-mcfg-profile-identity code {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.wb-mcfg-profile-identity strong {
+  color: var(--wb-text);
+  font-size: calc(13px * var(--wb-ui-font-scale, 1));
+  font-weight: 700;
+}
+
+.wb-mcfg-profile-identity code {
+  color: var(--wb-muted);
+  font-family: var(--mono, ui-monospace, SFMono-Regular, Menlo, monospace);
+  font-size: calc(10.5px * var(--wb-ui-font-scale, 1));
+}
+
+.wb-mcfg-profile-details-button {
+  min-width: 62px;
+  height: 34px;
+  justify-content: center;
+}
+
+.wb-mcfg-profile-details {
+  padding: 14px;
+  border-top: 1px solid var(--mcfg-muted-border);
+  background: color-mix(in srgb, var(--wb-card-bg) 44%, transparent);
+}
+
+.wb-mcfg-profile-details-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.wb-mcfg-profile-editor-field {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+
+.wb-mcfg-profile-editor-field.is-wide {
+  grid-column: 1 / -1;
+}
+
+.wb-mcfg-profile-editor-field > span {
+  color: var(--wb-muted);
+  font-size: calc(10.5px * var(--wb-ui-font-scale, 1));
+  font-weight: 650;
+}
+
+.wb-mcfg-profile-details-actions {
+  display: flex;
+  justify-content: flex-end;
+  margin-top: 12px;
+  padding-top: 12px;
+  border-top: 1px solid var(--mcfg-muted-border);
+}
+
+.wb-mcfg-icon-btn {
+  width: 32px;
+  height: 32px;
+  flex: 0 0 32px;
+  display: grid;
+  place-items: center;
+  padding: 0;
+  border: 1px solid transparent;
+  border-radius: 9px;
+  color: var(--wb-muted);
+  background: transparent;
+  cursor: pointer;
+  transition: border-color .16s, color .16s, background .16s;
+}
+
+.wb-mcfg-icon-btn:hover {
+  border-color: var(--mcfg-border);
+  color: var(--wb-text);
+  background: var(--wb-control-hover-bg);
+}
+
+.wb-mcfg-icon-btn.is-danger:hover {
+  border-color: color-mix(in srgb, var(--wb-red) 32%, var(--mcfg-border));
+  color: var(--wb-red);
+  background: color-mix(in srgb, var(--wb-red) 8%, transparent);
+}
+
+.wb-mcfg-local-row {
+  min-width: 0;
+  min-height: 62px;
+  display: grid;
+  grid-template-columns: 34px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 10px;
+  padding: 9px 4px;
+  border: 0;
+  border-bottom: 1px solid var(--mcfg-muted-border);
+  border-radius: 0;
+  background: transparent !important;
+  box-shadow: none !important;
+}
+
+/* The legacy local-model content stays intact, but the provider workspace is
+   a flat settings document: remove the shared wb-model-card chrome here. */
+.settings-overlay .wb-mcfg-services .wb-mcfg-local-row {
+  border: 0 !important;
+  border-bottom: 1px solid var(--mcfg-muted-border) !important;
+  border-radius: 0 !important;
+  background: transparent !important;
+  box-shadow: none !important;
+}
+
+.wb-mcfg-local-row:first-child {
+  border-top: 0 !important;
+}
+
+.wb-mcfg-local-copy {
+  min-width: 0;
+  flex: 1 1 auto;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.wb-mcfg-local-copy strong {
+  color: var(--wb-text);
+  font-size: calc(12.5px * var(--wb-ui-font-scale, 1));
+  font-weight: 720;
+}
+
+.wb-mcfg-local-copy small {
+  color: var(--wb-muted);
+  font-size: calc(10.5px * var(--wb-ui-font-scale, 1));
+  line-height: 1.4;
+}
+
+.wb-mcfg-local-actions {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.wb-mcfg-local-actions > .wb-btn.compact {
+  height: 30px !important;
+  min-height: 30px !important;
+  padding-inline: 11px !important;
+}
+
+.wb-mcfg-local-manager {
+  padding-top: 15px !important;
+}
+
+.wb-mcfg-progress {
+  display: grid;
+  grid-template-columns: minmax(80px, 1fr) auto;
+  align-items: center;
+  gap: 8px;
+  margin-top: 4px;
+  color: var(--wb-muted);
+  font-size: 10px;
+}
+
+.wb-mcfg-progress progress {
+  width: 100%;
+  height: 5px;
+  overflow: hidden;
+  border: 0;
+  border-radius: 999px;
+  accent-color: var(--wb-accent);
+}
+
+.wb-mcfg-error-text {
+  color: var(--wb-red) !important;
+}
+
+.wb-mcfg-usage-page {
+  width: min(100%, 900px);
+  padding-bottom: 30px;
+}
+
+.wb-mcfg-route-card {
+  margin-bottom: 0;
+  padding: 18px;
+}
+
+.wb-mcfg-route-head {
+  margin-bottom: 14px;
+}
+
+.wb-mcfg-route-head h3 {
+  font-size: calc(15px * var(--wb-ui-font-scale, 1));
+}
+
+.wb-mcfg-route-row {
+  min-height: 62px;
+  display: grid;
+  grid-template-columns: 30px minmax(140px, 1fr) minmax(140px, auto) auto 36px;
+  align-items: center;
+  gap: 11px;
+  padding: 8px 9px;
+  border: 1px solid var(--mcfg-muted-border);
+  border-radius: 11px;
+  background: color-mix(in srgb, var(--wb-control-bg) 72%, transparent);
+}
+
+.wb-mcfg-route-row.is-missing {
+  grid-template-columns: minmax(0, 1fr) 36px;
+  border-color: color-mix(in srgb, var(--wb-red) 32%, var(--mcfg-border));
+}
+
+.wb-mcfg-rank {
+  width: 28px;
+  height: 28px;
+  display: grid;
+  place-items: center;
+  border: 1px solid var(--mcfg-border);
+  border-radius: 8px;
+  color: var(--wb-muted);
+  background: var(--wb-card-bg);
+  font-size: calc(11px * var(--wb-ui-font-scale, 1));
+  font-variant-numeric: tabular-nums;
+  font-weight: 700;
+}
+
+.wb-mcfg-route-model,
+.wb-mcfg-route-row.is-missing > div {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.wb-mcfg-route-model strong,
+.wb-mcfg-route-row.is-missing strong {
+  overflow: hidden;
+  color: var(--wb-text);
+  font-size: calc(12.5px * var(--wb-ui-font-scale, 1));
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.wb-mcfg-route-model small,
+.wb-mcfg-route-row.is-missing small {
+  overflow: hidden;
+  color: var(--wb-muted);
+  font-size: calc(10.5px * var(--wb-ui-font-scale, 1));
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.wb-mcfg-route-meta {
+  min-width: 0;
+  display: flex;
+  align-items: flex-end;
+  flex-direction: column;
+  gap: 3px;
+  color: var(--wb-muted);
+  font-size: calc(10px * var(--wb-ui-font-scale, 1));
+  line-height: 1.3;
+  text-align: right;
+}
+
+.wb-mcfg-route-meta span:last-child {
+  max-width: 180px;
+  overflow: hidden;
+  color: var(--wb-faint);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.wb-mcfg-order-actions {
+  display: flex;
+  gap: 3px;
+}
+
+.wb-mcfg-order-actions button {
+  width: 34px;
+  height: 34px;
+  display: grid;
+  place-items: center;
+  padding: 0;
+  border: 1px solid var(--mcfg-border);
+  border-radius: 8px;
+  color: var(--wb-muted);
+  background: var(--wb-control-bg);
+  font: inherit;
+  cursor: pointer;
+}
+
+.wb-mcfg-order-actions button:hover:not(:disabled) {
+  color: var(--wb-text);
+  background: var(--wb-control-hover-bg);
+}
+
+.wb-mcfg-order-actions button:disabled {
+  opacity: .36;
+  cursor: default;
+}
+
+.wb-mcfg-route-empty {
+  min-height: 54px;
+  display: grid;
+  place-items: center;
+  border: 1px dashed var(--mcfg-border);
+  border-radius: 10px;
+  color: var(--wb-faint);
+  font-size: calc(11.5px * var(--wb-ui-font-scale, 1));
+}
+
+.wb-mcfg-route-add {
+  display: grid;
+  grid-template-columns: 84px minmax(0, 1fr);
+  align-items: center;
+  gap: 12px;
+  margin-top: 11px;
+}
+
+.wb-mcfg-route-add > span {
+  color: var(--wb-muted);
+  font-size: calc(11.5px * var(--wb-ui-font-scale, 1));
+  font-weight: 650;
+}
+
+.wb-mcfg-sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+
+.wb-model-config-page :where(button, input, select):focus-visible {
+  outline: 2px solid color-mix(in srgb, var(--wb-accent) 68%, transparent);
+  outline-offset: 2px;
+}
+
+.wb-model-config-page button:disabled,
+.wb-model-config-page select:disabled {
+  opacity: .48;
+  cursor: default;
+}
+
+/* The desktop services workspace owns the remaining settings viewport. Keep
+   the outer settings surface stationary and let each pane scroll only when
+   its own content genuinely exceeds that space. */
+@media (min-width: 701px) {
+  .settings-overlay .settings-overlay-content[data-settings-active-tab="models"] {
+    height: 100%;
+    min-height: 0;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+    padding-block: 24px;
+    box-sizing: border-box;
+  }
+
+  .settings-overlay .settings-overlay-content[data-settings-active-tab="models"] > .wb-model-config-page {
+    min-height: 0;
+    flex: 1 1 auto;
+    overflow: hidden;
+  }
+
+  .settings-overlay .settings-overlay-content[data-settings-active-tab="models"] .wb-mcfg-page-head,
+  .settings-overlay .settings-overlay-content[data-settings-active-tab="models"] .wb-mcfg-status {
+    flex: 0 0 auto;
+  }
+
+  .settings-overlay .settings-overlay-content[data-settings-active-tab="models"] .wb-mcfg-services {
+    min-height: 0;
+    flex: 1 1 auto;
+    overflow: hidden;
+  }
+
+  .settings-overlay .settings-overlay-content[data-settings-active-tab="models"] .wb-mcfg-connection-pane {
+    min-height: 0;
+    overflow: hidden;
+  }
+
+  .settings-overlay .settings-overlay-content[data-settings-active-tab="models"] .wb-mcfg-filter,
+  .settings-overlay .settings-overlay-content[data-settings-active-tab="models"] .wb-mcfg-add-connection {
+    flex: 0 0 auto;
+  }
+
+  .settings-overlay .settings-overlay-content[data-settings-active-tab="models"] .wb-mcfg-connection-list {
+    min-height: 0;
+    overflow-y: auto;
+    overscroll-behavior: contain;
+    scrollbar-gutter: stable;
+  }
+
+  .settings-overlay .settings-overlay-content[data-settings-active-tab="models"] .wb-mcfg-detail-pane {
+    min-height: 0;
+    overflow-y: auto;
+    overscroll-behavior: contain;
+    scrollbar-gutter: stable;
+  }
+}
+
+@media (max-width: 880px) {
+  .wb-mcfg-services {
+    grid-template-columns: 224px minmax(0, 1fr);
+  }
+
+  .wb-mcfg-detail-pane {
+    padding-inline: 18px;
+  }
+
+  .wb-mcfg-form-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .wb-mcfg-field.is-wide {
+    grid-column: auto;
+  }
+
+  .wb-mcfg-profile-summary {
+    grid-template-columns: minmax(0, 1fr) auto;
+    gap: 12px;
+  }
+
+  .wb-mcfg-profile-details-button {
+    grid-column: 2;
+  }
+
+  .wb-mcfg-profile-details-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .wb-mcfg-route-row {
+    grid-template-columns: 30px minmax(120px, 1fr) auto 36px;
+  }
+
+  .wb-mcfg-route-meta {
+    grid-column: 2 / -1;
+    grid-row: 2;
+    align-items: flex-start;
+    flex-direction: row;
+    text-align: left;
+  }
+}
+
+@media (max-width: 700px) {
+  .wb-mcfg-page-head {
+    flex-direction: column;
+    gap: 12px;
+  }
+
+  .wb-mcfg-save-cluster {
+    width: 100%;
+    justify-content: space-between;
+  }
+
+  .wb-mcfg-services {
+    min-height: 0;
+    display: flex;
+    flex-direction: column;
+    overflow: visible;
+  }
+
+  .wb-mcfg-connection-pane {
+    padding: 0 0 20px;
+    border-right: 0;
+    border-bottom: 1px solid var(--mcfg-border);
+  }
+
+  .wb-mcfg-connection-list {
+    max-height: 250px;
+    overflow-y: auto;
+  }
+
+  .wb-mcfg-detail-pane {
+    padding: 22px 0 24px;
+  }
+
+  .wb-mcfg-local-row {
+    grid-template-columns: 32px minmax(0, 1fr);
+    align-items: start;
+    gap: 9px;
+  }
+
+  .wb-mcfg-local-actions {
+    grid-column: 1 / -1;
+    justify-content: space-between;
+    padding-left: 41px;
+  }
+
+  .wb-mcfg-oauth-picker {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 6px;
+  }
+
+  .wb-mcfg-route-row {
+    grid-template-columns: 30px minmax(0, 1fr) 36px;
+  }
+
+  .wb-mcfg-route-row > .wb-mcfg-icon-btn {
+    grid-column: 3;
+    grid-row: 1;
+  }
+
+  .wb-mcfg-route-meta {
+    grid-column: 2 / 4;
+  }
+
+  .wb-mcfg-order-actions {
+    grid-column: 2 / 4;
+  }
+}
+
+@media (max-width: 480px) {
+  .wb-mcfg-page-head h2 {
+    font-size: calc(21px * var(--wb-ui-font-scale, 1));
+  }
+
+  .wb-mcfg-form-section,
+  .wb-mcfg-special,
+  .wb-mcfg-route-card {
+    padding: 14px;
+  }
+
+  .wb-mcfg-services .wb-mcfg-form-section,
+  .wb-mcfg-services .wb-mcfg-special {
+    padding: 18px 0 20px;
+  }
+
+  .wb-mcfg-section-head,
+  .wb-mcfg-special-head,
+  .wb-mcfg-route-head {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .wb-mcfg-route-add {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 6px;
+  }
+
+  .wb-mcfg-actions .wb-btn {
+    flex: 1 1 140px;
+  }
+
+  .wb-mcfg-profile-summary {
+    padding: 11px 10px 11px 12px;
+  }
+
+  .wb-mcfg-profile-details {
+    padding: 12px;
+  }
+
+  .wb-mcfg-profile-details-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .wb-mcfg-spinner {
+    animation-duration: 1.8s;
+  }
+
+  .wb-model-config-page *,
+  .wb-model-config-page *::before,
+  .wb-model-config-page *::after {
+    scroll-behavior: auto !important;
+    transition-duration: .01ms !important;
+  }
+}

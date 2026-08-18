@@ -32,19 +32,22 @@ def test_workbench_background_preferences_are_exposed_and_applied_before_paint()
     assert "background: var(--wb-user-bg-dark, #101114);" in index
 
     composer_styles = styles.split(".wbc-composer-box {", 1)[1].split("}", 1)[0]
-    assert "background: color-mix(in srgb, var(--wb-card-bg) 72%, transparent)" in composer_styles
-    assert "backdrop-filter: blur(18px) saturate(120%) contrast(102%)" in composer_styles
-    assert "border: 1px solid color-mix(in srgb, var(--wb-line-2) 64%, transparent)" in composer_styles
+    assert "--wbc-composer-glass-background: color-mix(in srgb, var(--wb-card-bg) 72%, transparent)" in composer_styles
+    assert "--wbc-composer-glass-filter: blur(18px) saturate(120%) contrast(102%)" in composer_styles
+    assert "--wbc-composer-glass-border: 1px solid color-mix(in srgb, var(--wb-line-2) 64%, transparent)" in composer_styles
+    assert "background: var(--wbc-composer-glass-background);" in composer_styles
+    assert "backdrop-filter: var(--wbc-composer-glass-filter);" in composer_styles
+    assert "border: var(--wbc-composer-glass-border);" in composer_styles
     light_composer_styles = styles.split(
         'html[data-theme="light"] .wbc-composer-box {', 1
     )[1].split("}", 1)[0]
-    assert "background: color-mix(in srgb, #fff 76%, transparent);" in light_composer_styles
+    assert "--wbc-composer-glass-background: color-mix(in srgb, #fff 76%, transparent);" in light_composer_styles
     assert "0 10px 28px rgba(15, 23, 42, .12)" in light_composer_styles
-    assert "backdrop-filter: blur(18px) saturate(120%) contrast(102%);" in light_composer_styles
     dark_conversation_styles = styles.split(
         'html[data-theme="dark"] :is(.wbc-composer-box, .wbc-side-card) {', 1
     )[1].split("}", 1)[0]
-    assert "background: var(--wb-conversation-surface);" in dark_conversation_styles
+    assert "--wbc-composer-glass-background: var(--wb-conversation-surface);" in dark_conversation_styles
+    assert "background: var(--wbc-composer-glass-background);" in dark_conversation_styles
     assert "0 10px 28px rgba(0, 0, 0, .24)" in dark_conversation_styles
     assert "color-mix(in srgb, #fff 10%, transparent)" in dark_conversation_styles
     assert "--wb-composer-surface-color: var(" in styles
@@ -56,19 +59,24 @@ def test_workbench_background_preferences_are_exposed_and_applied_before_paint()
 
     user_bubble_styles = styles.split("\n.wbc-bubble {", 1)[1].split("}", 1)[0]
     assert "background: var(--wb-accent);" in user_bubble_styles
-    assert "color: var(--wb-accent-text);" in user_bubble_styles
+    assert "--wb-user-message-text: var(--wb-accent-text);" in styles
+    dark_theme_styles = styles.split(
+        'html[data-theme="dark"] .workbench-shell {', 1
+    )[1].split("}", 1)[0]
+    assert "--wb-user-message-text: #fff;" in dark_theme_styles
+    assert "color: var(--wb-user-message-text);" in user_bubble_styles
     assert "border-radius: 12px;" in user_bubble_styles
     assert "border: 0;" in user_bubble_styles
     assert "padding: 7px 14px;" in user_bubble_styles
     assert "box-shadow: none;" in user_bubble_styles
     assert "font-size: calc(13.5px * var(--wb-ui-font-scale, 1));" in user_bubble_styles
 
-    dark_scroll_styles = styles.split(
-        'html[data-theme="dark"] .wbc-scroll-to-bottom {', 1
-    )[1].split("}", 1)[0]
-    assert "background: var(--wb-conversation-surface);" in dark_scroll_styles
-    assert "0 10px 28px rgba(0, 0, 0, .24)" in dark_scroll_styles
-    assert "backdrop-filter: blur(18px) saturate(120%) contrast(102%);" in dark_scroll_styles
+    scroll_styles = styles.split(".wbc-scroll-to-bottom {", 1)[1].split("}", 1)[0]
+    assert "border: var(--wbc-composer-glass-border);" in scroll_styles
+    assert "background: var(--wbc-composer-glass-background);" in scroll_styles
+    assert "box-shadow: var(--wbc-composer-glass-shadow);" in scroll_styles
+    assert "backdrop-filter: var(--wbc-composer-glass-filter);" in scroll_styles
+    assert 'html[data-theme="dark"] .wbc-scroll-to-bottom {' not in styles
 
     background_styles = styles.split(".wb-workbench-backgrounds", 1)[1].split(".wb-accent-popover-actions", 1)[0]
     assert ".wb-field:has(.wb-workbench-backgrounds)" in styles

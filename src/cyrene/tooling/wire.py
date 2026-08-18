@@ -26,6 +26,7 @@ DIRECT_TOOL_NAMES = (
     "update_plan_progress",
     "DeepReflect",
     "Read",
+    "read_tool_result",
     "Write",
     "Edit",
     "Glob",
@@ -41,6 +42,7 @@ DIRECT_TOOL_NAMES = (
 SUBAGENT_DIRECT_TOOL_NAMES = (
     "quit",
     "Read",
+    "read_tool_result",
     "Write",
     "Edit",
     "Glob",

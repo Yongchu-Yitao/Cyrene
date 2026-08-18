@@ -122,24 +122,32 @@ def issue_model_gateway_binding(_model_access: Any, context: dict[str, Any]) -> 
     expires after an idle window.
     """
     from cyrene.agent_runtime.errors import AgentRuntimeError
-    from cyrene.model_runtime.client import resolve_session_model_candidate
+    from cyrene.model_runtime.client import (
+        resolve_model_profile_candidate,
+        resolve_session_model_candidate,
+    )
 
     profile_id = str(getattr(_model_access, "profile_id", "") or "primary").strip()
-    if profile_id not in {"", "primary"}:
-        raise AgentRuntimeError(
-            "model_binding_unsupported",
-            f"Cyrene model profile {profile_id!r} is not available to external Agents",
-        )
     chat_id = str(context.get("chat_id") or "")
-    candidate = resolve_session_model_candidate(chat_id)
+    candidate = (
+        resolve_session_model_candidate(chat_id)
+        if profile_id in {"", "primary"}
+        else resolve_model_profile_candidate(profile_id)
+    )
     if candidate is None:
         raise AgentRuntimeError(
             "model_gateway_unavailable",
-            "No Cyrene model is configured for this Agent",
+            (
+                "No Cyrene model is configured for this Agent"
+                if profile_id in {"", "primary"}
+                else f"Cyrene model profile {profile_id!r} is unavailable"
+            ),
         )
     installation_id = str(context.get("installation_id") or "")
     model_identity = {
         "candidateId": str(candidate.get("id") or ""),
+        "profileId": str(candidate.get("profile_id") or candidate.get("id") or ""),
+        "adapter": str(candidate.get("adapter") or candidate.get("provider") or ""),
         "provider": str(candidate.get("provider") or "openai_compatible"),
         "model": str(candidate.get("model") or ""),
         "baseUrl": str(candidate.get("base_url") or ""),

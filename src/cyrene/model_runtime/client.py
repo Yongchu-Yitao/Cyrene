@@ -178,6 +178,7 @@ def set_session_model_preference(
         return
     preference = {
         "candidate_id": str(candidate.get("id") or "").strip(),
+        "adapter": str(candidate.get("adapter") or candidate.get("provider") or "").strip(),
         "model": str(candidate.get("model") or candidate.get("name") or "").strip(),
         "base_url": str(candidate.get("base_url") or "").strip(),
         "reasoning_effort": str(
@@ -216,6 +217,11 @@ def _prioritize_last_success(
         candidate["_endpoint_ranks"] = {endpoint: rank for rank, endpoint in enumerate(endpoints)}
         if (
             str(candidate.get("id") or "") == str(affinity.get("candidate_id") or "")
+            and (
+                not str(affinity.get("adapter") or "")
+                or str(candidate.get("adapter") or candidate.get("provider") or "")
+                == str(affinity.get("adapter") or "")
+            )
             and str(candidate.get("model") or "") == str(affinity.get("model") or "")
             and _base_root(candidate.get("base_url") or "") == _base_root(affinity.get("base_url") or "")
         ):
@@ -231,6 +237,11 @@ def _prioritize_last_success(
                 endpoints.insert(0, preferred_endpoint)
         if (
             str(candidate.get("id") or "") == str(preference.get("candidate_id") or "")
+            and (
+                not str(preference.get("adapter") or "")
+                or str(candidate.get("adapter") or candidate.get("provider") or "")
+                == str(preference.get("adapter") or "")
+            )
             and str(candidate.get("model") or "") == str(preference.get("model") or "")
             and _base_root(candidate.get("base_url") or "") == _base_root(preference.get("base_url") or "")
         ):
@@ -241,12 +252,18 @@ def _prioritize_last_success(
         prepared.append(candidate)
     selected = preference or affinity
     preferred_id = str(selected.get("candidate_id") or "")
+    preferred_adapter = str(selected.get("adapter") or "")
     preferred_model = str(selected.get("model") or "")
     preferred_root = _base_root(selected.get("base_url") or "")
     prepared.sort(
         key=lambda candidate: 0
         if (
             str(candidate.get("id") or "") == preferred_id
+            and (
+                not preferred_adapter
+                or str(candidate.get("adapter") or candidate.get("provider") or "")
+                == preferred_adapter
+            )
             and str(candidate.get("model") or "") == preferred_model
             and _base_root(candidate.get("base_url") or "") == preferred_root
         )
@@ -273,6 +290,7 @@ def _remember_success(
         return
     affinity = {
         "candidate_id": str(candidate.get("id") or ""),
+        "adapter": str(candidate.get("adapter") or candidate.get("provider") or ""),
         "model": str(candidate.get("model") or ""),
         "base_url": str(candidate.get("base_url") or ""),
         "endpoint": str(endpoint or ""),
@@ -309,7 +327,7 @@ _secondary_in_flight: int = 0
 # 冷却一段时间，期间在同一对话内直接跳过；新对话使用不同的 session key，
 # 因此仍会从设置中的 primary 重新尝试。无 session 的后台调用共享一个空作用域。
 _CANDIDATE_COOLDOWN_SECONDS = 120.0
-_candidate_cooldowns: dict[tuple[str, str, str], float] = {}
+_candidate_cooldowns: dict[tuple[str, str, str, str], float] = {}
 
 # A Workbench round can call the LLM several times (decision, tool rounds,
 # wrap-up) while the configured primary remains in cooldown.  Remember the
@@ -333,25 +351,52 @@ SERVER_ERROR_RETRY_LIMIT = 2
 _SERVER_ERROR_RETRY_BASE_DELAY_SECONDS = 1.0
 
 
+def _llm_failure_priority(exc: Exception) -> int:
+    """Rank exhausted-candidate failures by how actionable their root is."""
+    if str(getattr(exc, "kind", "") or getattr(exc, "code", "") or "").strip():
+        return 500
+    if isinstance(exc, httpx.HTTPStatusError):
+        try:
+            status = int(exc.response.status_code)
+        except Exception:
+            status = 0
+        if status in (401, 403):
+            return 450
+        if 400 <= status < 500:
+            return 400
+        return 300
+    if isinstance(exc, httpx.TransportError):
+        return 100
+    return 200
+
+
+def _prefer_llm_failure(current: Exception | None, incoming: Exception) -> Exception:
+    """Keep a precise provider response from being masked by a later disconnect."""
+    if current is None or _llm_failure_priority(incoming) >= _llm_failure_priority(current):
+        return incoming
+    return current
+
+
 def _candidate_key(
     candidate: dict[str, Any], session_id: str = ""
-) -> tuple[str, str, str]:
+) -> tuple[str, str, str, str]:
     return (
         str(session_id or "").strip(),
+        str(candidate.get("adapter") or candidate.get("provider") or "openai_compatible"),
         str(candidate.get("model") or ""),
         str(candidate.get("base_url") or ""),
     )
 
 
-def _candidate_cooling(key: tuple[str, str, str]) -> bool:
+def _candidate_cooling(key: tuple[str, str, str, str]) -> bool:
     return _candidate_cooldowns.get(key, 0.0) > _time.monotonic()
 
 
-def _set_candidate_cooldown(key: tuple[str, str, str]) -> None:
+def _set_candidate_cooldown(key: tuple[str, str, str, str]) -> None:
     _candidate_cooldowns[key] = _time.monotonic() + _CANDIDATE_COOLDOWN_SECONDS
 
 
-def _clear_candidate_cooldown(key: tuple[str, str, str]) -> None:
+def _clear_candidate_cooldown(key: tuple[str, str, str, str]) -> None:
     _candidate_cooldowns.pop(key, None)
 
 
@@ -457,6 +502,7 @@ def _normalized_candidate(raw: dict[str, Any], index: int = 0, *, active_model: 
     if not model:
         model = active_model
     provider = str(raw.get("provider") or "openai_compatible").strip()
+    adapter = str(raw.get("adapter") or provider).strip().lower()
     base_url = (
         CODEX_BASE_URL
         if provider == CODEX_PROVIDER
@@ -471,8 +517,34 @@ def _normalized_candidate(raw: dict[str, Any], index: int = 0, *, active_model: 
         api_key = active_api_key
     else:
         api_key = ""
+    explicit_ctx_limit = raw.get("context_limit", raw.get("ctx_limit", 0))
+    try:
+        explicit_ctx_limit = int(explicit_ctx_limit or 0)
+    except (TypeError, ValueError):
+        explicit_ctx_limit = 0
+    if explicit_ctx_limit <= 0:
+        configured_ctx = str(raw.get("ctx") or "").strip().upper()
+        multiplier = 1
+        if configured_ctx.endswith("K"):
+            configured_ctx, multiplier = configured_ctx[:-1], 1_000
+        elif configured_ctx.endswith("M"):
+            configured_ctx, multiplier = configured_ctx[:-1], 1_000_000
+        try:
+            explicit_ctx_limit = int(float(configured_ctx) * multiplier)
+        except (TypeError, ValueError):
+            explicit_ctx_limit = 0
+    if provider == CODEX_PROVIDER:
+        endpoints = [CODEX_BASE_URL]
+    elif adapter in {"anthropic", "openai", "openai_responses", "gemini", "ollama"}:
+        from cyrene.model_runtime.protocol_adapters import protocol_endpoints
+
+        endpoints = protocol_endpoints(adapter, base_url, model)
+    else:
+        endpoints = _normalized_llm_endpoints(base_url)
     return {
         "id": str(raw.get("id") or f"candidate-{index + 1}").strip() or f"candidate-{index + 1}",
+        "profile_id": str(raw.get("profile_id") or raw.get("id") or f"candidate-{index + 1}").strip(),
+        "connection_id": str(raw.get("connection_id") or "").strip(),
         "model": model,
         "name": str(raw.get("name") or model).strip() or model,
         "provider": provider,
@@ -491,11 +563,12 @@ def _normalized_candidate(raw: dict[str, Any], index: int = 0, *, active_model: 
         ),
         "base_url": base_url,
         "api_key": api_key,
-        "endpoints": (
-            [CODEX_BASE_URL]
-            if provider == CODEX_PROVIDER
-            else _normalized_llm_endpoints(base_url)
-        ),
+        "adapter": adapter,
+        "capabilities": list(raw.get("capabilities") or []),
+        "ctx": str(raw.get("ctx") or "").strip(),
+        "ctx_limit": max(0, int(explicit_ctx_limit or 0)),
+        "context_limit": max(0, int(explicit_ctx_limit or 0)),
+        "endpoints": endpoints,
     }
 
 
@@ -543,14 +616,21 @@ def _inherit_sibling_keys(candidates: list[dict[str, Any]]) -> list[dict[str, An
     """Keyless candidates inherit the key of the first same-endpoint candidate
     that has one ("…/v1" 与不带 /v1 视为同端点)。跨提供商不继承；本地端点可以
     始终无 key（请求时不会带 Authorization 头）。"""
-    keyed_roots: dict[str, str] = {}
+    keyed_roots: dict[tuple[str, str], str] = {}
     for candidate in candidates:
-        root = _base_root(candidate.get("base_url") or "")
+        root = (
+            str(candidate.get("adapter") or candidate.get("provider") or ""),
+            _base_root(candidate.get("base_url") or ""),
+        )
         if candidate.get("api_key") and root not in keyed_roots:
             keyed_roots[root] = candidate["api_key"]
     for candidate in candidates:
         if not candidate.get("api_key"):
-            candidate["api_key"] = keyed_roots.get(_base_root(candidate.get("base_url") or ""), "")
+            root = (
+                str(candidate.get("adapter") or candidate.get("provider") or ""),
+                _base_root(candidate.get("base_url") or ""),
+            )
+            candidate["api_key"] = keyed_roots.get(root, "")
     return candidates
 
 
@@ -565,7 +645,7 @@ def _resolve_llm_candidates() -> list[dict[str, Any]]:
     active_api_key = strip_wrapping_quotes(str(os.environ.get("OPENAI_API_KEY", "") or "").strip())
 
     candidates: list[dict[str, Any]] = []
-    seen: set[tuple[str, str, str, str]] = set()
+    seen: set[tuple[str, str, str, str, str]] = set()
     for index, raw in enumerate(get_models() or []):
         candidate = _normalized_candidate(raw, index, active_model=active_model, active_base_url=active_base_url, active_api_key=active_api_key)
         # OAuth credentials are owned by the Codex app-server and the product
@@ -574,7 +654,10 @@ def _resolve_llm_candidates() -> list[dict[str, Any]]:
         # after a custom model fails.
         if index > 0 and candidate["provider"] == "codex_oauth":
             continue
-        key = (candidate["provider"], candidate["model"], candidate["base_url"], candidate["api_key"])
+        key = (
+            candidate["provider"], candidate.get("adapter", ""),
+            candidate["model"], candidate["base_url"], candidate["api_key"],
+        )
         if key in seen:
             continue
         seen.add(key)
@@ -607,9 +690,10 @@ def model_candidate_identity_for_response(
         candidates[0] if candidates and not model else None,
     )
     if match is None:
-        return {"candidateId": "", "provider": "", "model": model, "baseUrl": "", "reasoningEffort": ""}
+        return {"candidateId": "", "adapter": "", "provider": "", "model": model, "baseUrl": "", "reasoningEffort": ""}
     return {
         "candidateId": str(match.get("id") or ""),
+        "adapter": str(match.get("adapter") or match.get("provider") or ""),
         "provider": str(match.get("provider") or "openai_compatible"),
         "model": str(match.get("model") or model),
         "baseUrl": _public_base_url(match.get("base_url") or ""),
@@ -625,15 +709,43 @@ def resolve_session_model_candidate(session_id: str) -> dict[str, Any] | None:
     return dict(candidates[0]) if candidates else None
 
 
+def resolve_model_profile_candidate(profile_id: str) -> dict[str, Any] | None:
+    """Resolve one durable profile id, including profiles outside primary order."""
+
+    from cyrene.runtime.model_configuration import candidate_for_profile
+
+    raw = candidate_for_profile(str(profile_id or "").strip())
+    if raw is None or "chat" not in (raw.get("capabilities") or []):
+        return None
+    candidate = _normalized_candidate(
+        raw,
+        active_model=str(raw.get("model") or ""),
+        active_base_url=str(raw.get("base_url") or DEFAULT_OPENAI_BASE_URL),
+        active_api_key=str(raw.get("api_key") or ""),
+    )
+    return _inherit_sibling_keys([candidate])[0]
+
+
 def resolve_exact_model_candidate(identity: dict[str, Any]) -> dict[str, Any] | None:
     """Resolve one prior candidate identity without allowing model fallback."""
     candidate_id = str(identity.get("candidateId") or "").strip()
+    adapter = str(identity.get("adapter") or "").strip()
     provider = str(identity.get("provider") or "").strip()
     model = str(identity.get("model") or "").strip()
     base_url = str(identity.get("baseUrl") or "").strip()
+    profile_id = str(identity.get("profileId") or identity.get("profile_id") or "").strip()
+    profile_candidate = resolve_model_profile_candidate(profile_id) if profile_id else None
+    search_candidates = _resolve_llm_candidates()
+    if profile_candidate is not None and not any(
+        str(item.get("id") or "") == str(profile_candidate.get("id") or "")
+        for item in search_candidates
+    ):
+        search_candidates.append(profile_candidate)
     matches = []
-    for candidate in _resolve_llm_candidates():
+    for candidate in search_candidates:
         if candidate_id and str(candidate.get("id") or "") != candidate_id:
+            continue
+        if adapter and str(candidate.get("adapter") or candidate.get("provider") or "") != adapter:
             continue
         if provider and str(candidate.get("provider") or "") != provider:
             continue
@@ -657,25 +769,19 @@ def _resolve_secondary_candidates() -> list[dict[str, Any]]:
     model = str(secondary.get("model") or "").strip()
     if not model:
         return []
-    base_url = str(secondary.get("base_url") or "").strip()
-    if not base_url:
-        base_url = str(os.environ.get("OPENAI_BASE_URL", DEFAULT_OPENAI_BASE_URL) or "").strip() or DEFAULT_OPENAI_BASE_URL
-    api_key = strip_wrapping_quotes(str(secondary.get("api_key") or "").strip())
-    if not api_key:
-        primary_base = (os.environ.get("OPENAI_BASE_URL", DEFAULT_OPENAI_BASE_URL) or "").strip().rstrip("/") or DEFAULT_OPENAI_BASE_URL.rstrip("/")
-        if base_url.rstrip("/") == primary_base:
-            api_key = strip_wrapping_quotes(str(os.environ.get("OPENAI_API_KEY", "") or "").strip())
-    ctx_limit = int(secondary.get("ctx_limit") or 0)
-    max_concurrency = int(secondary.get("max_concurrency") or 0)
-    return [{
-        "id": "secondary",
-        "model": model,
-        "base_url": base_url,
-        "api_key": api_key,
-        "endpoints": _normalized_llm_endpoints(base_url),
-        "ctx_limit": ctx_limit,
-        "max_concurrency": max_concurrency,
-    }]
+    active_model = str(os.environ.get("OPENAI_MODEL", model) or model).strip() or model
+    active_base_url = str(os.environ.get("OPENAI_BASE_URL", DEFAULT_OPENAI_BASE_URL) or "").strip() or DEFAULT_OPENAI_BASE_URL
+    active_api_key = strip_wrapping_quotes(str(os.environ.get("OPENAI_API_KEY", "") or "").strip())
+    candidate = _normalized_candidate(
+        secondary,
+        active_model=active_model,
+        active_base_url=active_base_url,
+        active_api_key=active_api_key,
+    )
+    candidate["profile_id"] = str(secondary.get("profile_id") or candidate.get("profile_id") or "")
+    candidate["id"] = "secondary"
+    candidate["max_concurrency"] = int(secondary.get("max_concurrency") or 0)
+    return [candidate]
 
 
 def _resolve_vision_candidates() -> list[dict[str, Any]]:
@@ -693,13 +799,16 @@ def _resolve_vision_candidates() -> list[dict[str, Any]]:
     active_api_key = strip_wrapping_quotes(str(os.environ.get("OPENAI_API_KEY", "") or "").strip())
 
     candidates: list[dict[str, Any]] = []
-    seen: set[tuple[str, str, str, str]] = set()
+    seen: set[tuple[str, str, str, str, str]] = set()
 
     for index, raw in enumerate(get_vision_models() or []):
         candidate = _normalized_candidate(raw, index, active_model=active_model, active_base_url=active_base_url, active_api_key=active_api_key)
         if candidate.get("vision_capable") is False:
             continue
-        key = (candidate["provider"], candidate["model"], candidate["base_url"], candidate["api_key"])
+        key = (
+            candidate["provider"], candidate.get("adapter", ""),
+            candidate["model"], candidate["base_url"], candidate["api_key"],
+        )
         if key not in seen:
             seen.add(key)
             candidates.append(candidate)
@@ -707,7 +816,10 @@ def _resolve_vision_candidates() -> list[dict[str, Any]]:
     for candidate in _resolve_llm_candidates():
         if candidate.get("vision_capable") is False:
             continue
-        key = (candidate["provider"], candidate["model"], candidate["base_url"], candidate["api_key"])
+        key = (
+            candidate["provider"], candidate.get("adapter", ""),
+            candidate["model"], candidate["base_url"], candidate["api_key"],
+        )
         if key not in seen:
             seen.add(key)
             candidates.append(candidate)
@@ -813,16 +925,20 @@ def sanitize_messages_for_llm(
     if not preserve_tool_reasoning:
         for message in messages:
             message.pop("reasoning_content", None)
+            message.pop("reasoning_details", None)
     else:
-        # DeepSeek V4 requires complete reasoning_content replay for assistant
-        # turns that performed tool calls. Reasoning from ordinary assistant
-        # turns remains unnecessary and is omitted to avoid context growth.
+        # Reasoning providers require the complete assistant tool-call turn to
+        # be replayed. DeepSeek uses ``reasoning_content`` while MiniMax's
+        # split-thinking OpenAI format uses ``reasoning_details``. Reasoning
+        # from ordinary assistant turns is unnecessary and is omitted to avoid
+        # context growth and accidental cross-provider leakage.
         for message in messages:
             if not (
                 message.get("role") == "assistant"
                 and message.get("tool_calls")
             ):
                 message.pop("reasoning_content", None)
+                message.pop("reasoning_details", None)
     seen_ids: set[str] = set()
     result: list[dict[str, Any]] = []
     i = 0
@@ -891,6 +1007,12 @@ _sanitize_messages_for_llm = sanitize_messages_for_llm
 # ---------------------------------------------------------------------------
 # Payload building
 # ---------------------------------------------------------------------------
+
+
+def _is_minimax_model(model: str) -> bool:
+    normalized = str(model or "").strip().lower()
+    return "minimax" in normalized or normalized == "m2-her"
+
 
 def _approx_token_count(text: str) -> int:
     """Estimate token count with CJK-aware heuristic.
@@ -966,7 +1088,7 @@ def _request_token_estimate(messages: list[dict], tools: list | None = None) -> 
 
 def _candidate_ctx_limit(candidate: dict[str, Any]) -> int:
     """Resolve the candidate's configured window, falling back only if unset."""
-    explicit = int(candidate.get("ctx_limit") or 0)
+    explicit = int(candidate.get("context_limit") or candidate.get("ctx_limit") or 0)
     if explicit > 0:
         return explicit
     return effective_ctx_limit_for_model(str(candidate.get("model") or ""))
@@ -983,13 +1105,37 @@ def _build_payload(
     reasoning_effort: str = "",
 ) -> dict[str, Any]:
     is_deepseek = "deepseek" in model.lower()
+    is_minimax = _is_minimax_model(model)
+    prepared_messages = sanitize_messages_for_llm(
+        messages,
+        preserve_tool_reasoning=is_deepseek or is_minimax,
+    )
+    for message in prepared_messages:
+        if is_minimax:
+            # MiniMax's OpenAI-compatible API replays split thinking through
+            # reasoning_details, not Cyrene's canonical reasoning_content.
+            # Agent loops intentionally persist the provider-neutral field, so
+            # reconstruct MiniMax's wire shape when the raw provider object is
+            # no longer present.
+            canonical_reasoning = message.get("reasoning_content")
+            if canonical_reasoning and not message.get("reasoning_details"):
+                message["reasoning_details"] = [
+                    {
+                        "type": "reasoning.text",
+                        "text": str(canonical_reasoning),
+                    }
+                ]
+            message.pop("reasoning_content", None)
+        elif is_deepseek:
+            message.pop("reasoning_details", None)
     payload: dict[str, Any] = {
         "model": model,
-        "messages": sanitize_messages_for_llm(
-            messages,
-            preserve_tool_reasoning=is_deepseek,
-        ),
+        "messages": prepared_messages,
     }
+    if is_minimax:
+        # Without this MiniMax embeds hidden thinking in content as
+        # <think>...</think>, which leaks into replies and generated titles.
+        payload["reasoning_split"] = True
     if max_tokens is not None:
         payload["max_tokens"] = max_tokens
     if tools:
@@ -1094,6 +1240,68 @@ def _message_from_upstream_payload(data: dict[str, Any]) -> dict[str, Any]:
         or json.dumps(data, ensure_ascii=False)[:400]
     )
     raise ValueError(f"Upstream response missing choices/message payload: {error_text}")
+
+
+_THINK_BLOCK_RE = re.compile(
+    r"<think\b[^>]*>(?P<reasoning>.*?)</think\s*>",
+    re.IGNORECASE | re.DOTALL,
+)
+
+
+def _reasoning_details_text(details: Any) -> str:
+    if isinstance(details, str):
+        return details
+    parts: list[str] = []
+    for detail in details if isinstance(details, list) else []:
+        if not isinstance(detail, dict):
+            continue
+        text = detail.get("text")
+        if isinstance(text, str):
+            parts.append(text)
+    return "".join(parts)
+
+
+def _split_embedded_thinking(content: str) -> tuple[str, str]:
+    source = str(content or "")
+    reasoning_parts: list[str] = []
+
+    def _capture(match: re.Match[str]) -> str:
+        reasoning_parts.append(match.group("reasoning"))
+        return ""
+
+    visible = _THINK_BLOCK_RE.sub(_capture, source)
+    # A truncated response can end while the model is still inside <think>.
+    # Treat that tail as reasoning instead of ever exposing it as an answer.
+    dangling = re.search(
+        r"<think\b[^>]*>(?P<reasoning>.*)$",
+        visible,
+        re.IGNORECASE | re.DOTALL,
+    )
+    if dangling:
+        reasoning_parts.append(dangling.group("reasoning"))
+        visible = visible[:dangling.start()]
+    return visible.lstrip(), "".join(reasoning_parts)
+
+
+def _normalize_minimax_message(message: dict[str, Any]) -> dict[str, Any]:
+    """Keep MiniMax thinking replayable while exposing only answer content."""
+    normalized = dict(message)
+    content = normalized.get("content")
+    embedded_reasoning = ""
+    if isinstance(content, str):
+        normalized["content"], embedded_reasoning = _split_embedded_thinking(content)
+
+    split_reasoning = _reasoning_details_text(normalized.get("reasoning_details"))
+    reasoning = split_reasoning or embedded_reasoning
+    if reasoning:
+        normalized["reasoning_content"] = reasoning
+        if not normalized.get("reasoning_details"):
+            # Compatibility fallback for gateways that ignored reasoning_split
+            # but still returned MiniMax's legacy <think> wrapper.
+            normalized["reasoning_details"] = [
+                {"type": "reasoning.text", "text": reasoning}
+            ]
+    return normalized
 
 
 _DSML_MARKER = r"(?:｜｜|\|\|)DSML(?:｜｜|\|\|)"
@@ -1877,6 +2085,7 @@ async def call_llm(
             is_secondary = candidate.get("id") == "secondary"
             max_conc = int(candidate.get("max_concurrency") or 0)
             provider = str(candidate.get("provider") or "openai_compatible")
+            adapter = str(candidate.get("adapter") or provider).strip().lower()
 
             # Concurrency guard for secondary model
             if is_secondary and max_conc > 0 and _secondary_in_flight >= max_conc:
@@ -1906,16 +2115,37 @@ async def call_llm(
                 if is_secondary and max_conc > 0:
                     _secondary_in_flight += 1
                 model = str(candidate.get("model") or "").strip()
-                payload = _build_payload(
-                    messages,
-                    tools,
-                    max_tokens,
-                    stream,
-                    model,
-                    thinking,
-                    response_format,
-                    reasoning_effort=str(candidate.get("reasoning_effort") or ""),
+                from cyrene.model_runtime.protocol_adapters import (
+                    NATIVE_PROTOCOL_ADAPTERS,
+                    prepare_request as prepare_protocol_request,
                 )
+
+                native_request = None
+                if adapter in NATIVE_PROTOCOL_ADAPTERS:
+                    native_messages = sanitize_messages_for_llm(messages)
+                    native_request = prepare_protocol_request(
+                        adapter,
+                        api_key=str(candidate.get("api_key") or "").strip(),
+                        messages=native_messages,
+                        tools=tools,
+                        model=model,
+                        max_tokens=max_tokens,
+                        stream=stream,
+                        response_format=response_format,
+                        reasoning_effort=str(candidate.get("reasoning_effort") or ""),
+                    )
+                    payload = native_request.payload
+                else:
+                    payload = _build_payload(
+                        messages,
+                        tools,
+                        max_tokens,
+                        stream,
+                        model,
+                        thinking,
+                        response_format,
+                        reasoning_effort=str(candidate.get("reasoning_effort") or ""),
+                    )
                 codex_request_material: dict[str, Any] | None = None
                 if provider == "codex_oauth":
                     from cyrene.model_runtime.codex_provider import (
@@ -1932,10 +2162,13 @@ async def call_llm(
                         ),
                     )
 
-                headers = {"Content-Type": "application/json"}
-                api_key = str(candidate.get("api_key") or "").strip()
-                if api_key and api_key.lower() not in ("lmstudio", "dummy", ""):
-                    headers["Authorization"] = f"Bearer {api_key}"
+                if native_request is not None:
+                    headers = dict(native_request.headers)
+                else:
+                    headers = {"Content-Type": "application/json"}
+                    api_key = str(candidate.get("api_key") or "").strip()
+                    if api_key and api_key.lower() not in ("lmstudio", "dummy", ""):
+                        headers["Authorization"] = f"Bearer {api_key}"
 
                 endpoints = list(candidate.get("endpoints") or [])
                 candidate_error: Exception | None = None
@@ -1957,6 +2190,7 @@ async def call_llm(
                             stream_event_emitted = False
                             request_identity = {
                                 "candidateId": str(candidate.get("id") or ""),
+                                "adapter": str(candidate.get("adapter") or provider),
                                 "provider": provider,
                                 "model": model,
                                 "endpoint": endpoint,
@@ -1983,7 +2217,11 @@ async def call_llm(
                                 message_units=(
                                     list(codex_request_material["message_units"])
                                     if codex_request_material is not None
-                                    else list(payload.get("messages") or [])
+                                    else (
+                                        list(native_messages)
+                                        if native_request is not None
+                                        else list(payload.get("messages") or [])
+                                    )
                                 ),
                                 tools_material=(
                                     codex_request_material["action_tools"]
@@ -2046,6 +2284,17 @@ async def call_llm(
                                         ),
                                         transport_callback=_tracked_transport_callback,
                                     )
+                                elif adapter in NATIVE_PROTOCOL_ADAPTERS and stream:
+                                    from cyrene.model_runtime.protocol_adapters import handle_stream as handle_protocol_stream
+
+                                    msg = await handle_protocol_stream(
+                                        adapter,
+                                        client,
+                                        endpoint,
+                                        native_request,
+                                        _tracked_stream_callback,
+                                        stream_timing,
+                                    )
                                 elif stream:
                                     msg = await _handle_stream(
                                         client,
@@ -2060,19 +2309,24 @@ async def call_llm(
                                     if resp.status_code != 200:
                                         resp.raise_for_status()
                                     data = resp.json()
-                                    msg = _message_from_upstream_payload(data)
-                                    msg["usage"] = _normalized_usage(data.get("usage"), messages, msg)
-                                    _choices = data.get("choices")
-                                    if isinstance(_choices, list) and _choices and isinstance(_choices[0], dict):
-                                        _finish = _choices[0].get("finish_reason")
-                                        if _finish:
-                                            _finish = str(_finish)
-                                            msg["finish_reason"] = _finish
-                                            if _finish == "length":
-                                                logger.warning(
-                                                    "LLM response truncated by max_tokens (caller=%s, phase=%s)",
-                                                    caller, phase,
-                                                )
+                                    if adapter in NATIVE_PROTOCOL_ADAPTERS:
+                                        from cyrene.model_runtime.protocol_adapters import parse_response as parse_protocol_response
+
+                                        msg = parse_protocol_response(adapter, data)
+                                    else:
+                                        msg = _message_from_upstream_payload(data)
+                                        msg["usage"] = _normalized_usage(data.get("usage"), messages, msg)
+                                        _choices = data.get("choices")
+                                        if isinstance(_choices, list) and _choices and isinstance(_choices[0], dict):
+                                            _finish = _choices[0].get("finish_reason")
+                                            if _finish:
+                                                _finish = str(_finish)
+                                                msg["finish_reason"] = _finish
+                                                if _finish == "length":
+                                                    logger.warning(
+                                                        "LLM response truncated by max_tokens (caller=%s, phase=%s)",
+                                                        caller, phase,
+                                                    )
                                 request_ms = (_time.monotonic() - attempt_started) * 1000
                                 break
                             except httpx.TransportError as exc:
@@ -2178,6 +2432,8 @@ async def call_llm(
                                 )
                                 await asyncio.sleep(delay)
 
+                        if _is_minimax_model(model):
+                            msg = _normalize_minimax_message(msg)
                         msg = _normalize_tool_call_protocol(msg, tools)
                         msg.setdefault("role", "assistant")
                         msg.setdefault("content", "")
@@ -2287,6 +2543,7 @@ async def call_llm(
                         # name shared by several providers/candidates.
                         msg["_candidate_identity"] = {
                             "candidateId": str(candidate.get("id") or ""),
+                            "adapter": str(candidate.get("adapter") or provider),
                             "provider": provider,
                             "model": model,
                             "baseUrl": _public_base_url(candidate.get("base_url") or ""),
@@ -2296,8 +2553,8 @@ async def call_llm(
                         return msg
 
                     except httpx.HTTPError as exc:
-                        candidate_error = exc
-                        last_error = exc
+                        candidate_error = _prefer_llm_failure(candidate_error, exc)
+                        last_error = _prefer_llm_failure(last_error, exc)
                         if endpoint != endpoints[-1]:
                             continue
                         logger.warning(
@@ -2331,7 +2588,7 @@ async def call_llm(
                     if normalized_error is not None:
                         exc = normalized_error
                     should_cooldown = codex_error_should_cooldown(exc)
-                last_error = exc
+                last_error = _prefer_llm_failure(last_error, exc)
                 if should_cooldown:
                     _set_candidate_cooldown(
                         _candidate_key(candidate, session_id)
@@ -2478,6 +2735,56 @@ class _DsmlStreamFilter:
         return "".join(self._emitted)
 
 
+class _ThinkTagStreamFilter:
+    """Split legacy <think> wrappers across arbitrary stream boundaries."""
+
+    _OPEN = "<think>"
+    _CLOSE = "</think>"
+
+    def __init__(self) -> None:
+        self._buf = ""
+        self._thinking = False
+
+    @staticmethod
+    def _partial_marker_length(text: str, marker: str) -> int:
+        lowered = text.lower()
+        for size in range(min(len(text), len(marker) - 1), 0, -1):
+            if marker.startswith(lowered[-size:]):
+                return size
+        return 0
+
+    def feed(self, text: str) -> tuple[str, str]:
+        if text:
+            self._buf += text
+        visible: list[str] = []
+        reasoning: list[str] = []
+        while self._buf:
+            marker = self._CLOSE if self._thinking else self._OPEN
+            index = self._buf.lower().find(marker)
+            target = reasoning if self._thinking else visible
+            if index >= 0:
+                if index:
+                    target.append(self._buf[:index])
+                self._buf = self._buf[index + len(marker):]
+                self._thinking = not self._thinking
+                continue
+            keep = self._partial_marker_length(self._buf, marker)
+            emit_upto = len(self._buf) - keep
+            if emit_upto:
+                target.append(self._buf[:emit_upto])
+            self._buf = self._buf[emit_upto:]
+            break
+        return "".join(visible), "".join(reasoning)
+
+    def flush(self) -> tuple[str, str]:
+        if self._thinking:
+            result = ("", self._buf)
+        else:
+            result = (self._buf, "")
+        self._buf = ""
+        return result
+
+
 def _accumulate_tool_call_deltas(
     deltas: Any, fragments: dict[int, dict[str, Any]]
 ) -> None:
@@ -2542,25 +2849,58 @@ async def _handle_stream(
     stream_callback: Callable[[dict[str, Any]], Awaitable[None]] | None,
     timing: dict[str, float] | None = None,
 ) -> dict[str, Any]:
-    accumulated: list[str] = []  # raw content — kept for tool-call normalization
+    accumulated: list[str] = []  # visible content, before DSML normalization
     reasoning_parts: list[str] = []
     tool_call_fragments: dict[int, dict[str, Any]] = {}
     usage: dict[str, Any] = {}
     finished_reason: str | None = None
     started = False
     reasoning_started = False
+    is_minimax = _is_minimax_model(str(payload.get("model") or ""))
+    content_snapshot = ""
+    reasoning_snapshot = ""
+    reasoning_details: Any = None
+    saw_split_reasoning = False
     dsml_filter = _DsmlStreamFilter()
+    think_filter = _ThinkTagStreamFilter()
     request_started = _time.monotonic()
 
     async def _forward(text: str) -> None:
         nonlocal started
         if not text:
             return
+        accumulated.append(text)
         if not started and stream_callback:
             await stream_callback({"type": "reply_start"})
             started = True
         if stream_callback:
-            await stream_callback({"type": "reply_delta", "delta": text})
+            filtered = dsml_filter.feed(text)
+            if filtered:
+                await stream_callback({"type": "reply_delta", "delta": filtered})
+        else:
+            dsml_filter.feed(text)
+
+    async def _forward_reasoning(text: str) -> None:
+        nonlocal reasoning_started
+        if not text:
+            return
+        reasoning_parts.append(text)
+        if stream_callback and not reasoning_started:
+            await stream_callback({"type": "reasoning_start"})
+            reasoning_started = True
+        if stream_callback:
+            await stream_callback({"type": "reasoning_delta", "delta": text})
+
+    def _snapshot_delta(previous: str, current: str) -> tuple[str, str]:
+        if not current:
+            return "", previous
+        if current.startswith(previous):
+            return current[len(previous):], current
+        if previous.startswith(current):
+            return "", previous
+        # Some OpenAI-compatible gateways convert MiniMax snapshots back to
+        # ordinary deltas. Accept both forms without duplicating snapshots.
+        return current, previous + current
 
     async with client.stream("POST", endpoint, json=payload, headers=headers) as resp:
         if timing is not None:
@@ -2592,12 +2932,18 @@ async def _handle_stream(
                 delta = choice.get("delta") or {}
                 rc = delta.get("reasoning_content")
                 if isinstance(rc, str) and rc.strip():
-                    if stream_callback and not reasoning_started:
-                        await stream_callback({"type": "reasoning_start"})
-                        reasoning_started = True
-                    reasoning_parts.append(rc)
-                    if stream_callback:
-                        await stream_callback({"type": "reasoning_delta", "delta": rc})
+                    await _forward_reasoning(rc)
+                details = delta.get("reasoning_details")
+                if details:
+                    reasoning_details = details
+                    current_reasoning = _reasoning_details_text(details)
+                    reasoning_delta, reasoning_snapshot = _snapshot_delta(
+                        reasoning_snapshot,
+                        current_reasoning,
+                    )
+                    if current_reasoning:
+                        saw_split_reasoning = True
+                    await _forward_reasoning(reasoning_delta)
                 delta_calls = delta.get("tool_calls")
                 if delta_calls is None:
                     legacy_function = delta.get("function_call")
@@ -2624,9 +2970,22 @@ async def _handle_stream(
                 text = _extract_stream_delta_text(delta)
                 if not text:
                     continue
-                accumulated.append(text)
-                await _forward(dsml_filter.feed(text))
-    await _forward(dsml_filter.flush())
+                if is_minimax:
+                    text, content_snapshot = _snapshot_delta(content_snapshot, text)
+                    visible, embedded_reasoning = think_filter.feed(text)
+                    if embedded_reasoning and not saw_split_reasoning:
+                        await _forward_reasoning(embedded_reasoning)
+                    await _forward(visible)
+                else:
+                    await _forward(text)
+    if is_minimax:
+        visible_tail, reasoning_tail = think_filter.flush()
+        if reasoning_tail and not saw_split_reasoning:
+            await _forward_reasoning(reasoning_tail)
+        await _forward(visible_tail)
+    filtered_tail = dsml_filter.flush()
+    if filtered_tail and stream_callback:
+        await stream_callback({"type": "reply_delta", "delta": filtered_tail})
 
     if reasoning_started and stream_callback:
         await stream_callback({
@@ -2645,6 +3004,14 @@ async def _handle_stream(
     msg: dict[str, Any] = {"role": "assistant", "content": full_text}
     if reasoning_parts:
         msg["reasoning_content"] = "".join(reasoning_parts)
+        if is_minimax:
+            complete_reasoning = msg["reasoning_content"]
+            if _reasoning_details_text(reasoning_details) == complete_reasoning:
+                msg["reasoning_details"] = reasoning_details
+            else:
+                msg["reasoning_details"] = [
+                    {"type": "reasoning.text", "text": complete_reasoning}
+                ]
     tool_calls = _finalize_tool_call_fragments(tool_call_fragments)
     if tool_calls:
         msg["tool_calls"] = tool_calls

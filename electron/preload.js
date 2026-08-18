@@ -99,6 +99,54 @@ contextBridge.exposeInMainWorld('cyrene', {
       return () => ipcRenderer.removeListener('browser:tab-picker-action', listener);
     },
   },
+  detachedPane: {
+    // Establish the native drag session before returning to the pointerdown
+    // handler. This keeps the first move from overtaking begin and also gives
+    // the renderer a real rejection result instead of silently retaining a
+    // dead drag session.
+    beginDrag: (info) => {
+      const result = ipcRenderer.sendSync('detached-pane:begin-drag', info || {});
+      return Promise.resolve(result || { ok: false, error: 'detached_drag_not_started' });
+    },
+    updateDrag: (point) => ipcRenderer.send('detached-pane:update-drag', point || {}),
+    finishDrag: (info) => ipcRenderer.invoke('detached-pane:finish-drag', info || {}),
+    getContext: () => ipcRenderer.invoke('detached-pane:get-context'),
+    ready: () => ipcRenderer.invoke('detached-pane:ready'),
+    updateContext: (updates) => ipcRenderer.invoke('detached-pane:update-context', updates || {}),
+    close: () => ipcRenderer.invoke('detached-pane:close'),
+    toggleMaximize: () => ipcRenderer.invoke('detached-pane:toggle-maximize'),
+    minimize: () => ipcRenderer.invoke('detached-pane:minimize'),
+    returnBegin: (info) => ipcRenderer.invoke('detached-pane:return-begin', info || {}),
+    returnMove: (point) => ipcRenderer.send('detached-pane:return-move', point || {}),
+    returnEnd: (point) => ipcRenderer.invoke('detached-pane:return-end', point || {}),
+    closeByChat: (chatId) => ipcRenderer.invoke('detached-pane:close-by-chat', {
+      chatId: String(chatId || ''),
+    }),
+    onClosed: (callback) => {
+      if (typeof callback !== 'function') return () => {};
+      const listener = (_event, info) => callback(info);
+      ipcRenderer.on('detached-pane:closed', listener);
+      return () => ipcRenderer.removeListener('detached-pane:closed', listener);
+    },
+    onCreated: (callback) => {
+      if (typeof callback !== 'function') return () => {};
+      const listener = (_event, info) => callback(info);
+      ipcRenderer.on('detached-pane:created', listener);
+      return () => ipcRenderer.removeListener('detached-pane:created', listener);
+    },
+    onReturned: (callback) => {
+      if (typeof callback !== 'function') return () => {};
+      const listener = (_event, info) => callback(info);
+      ipcRenderer.on('detached-pane:returned', listener);
+      return () => ipcRenderer.removeListener('detached-pane:returned', listener);
+    },
+    onReturnHover: (callback) => {
+      if (typeof callback !== 'function') return () => {};
+      const listener = (_event, info) => callback(!!(info && info.active));
+      ipcRenderer.on('detached-pane:return-hover', listener);
+      return () => ipcRenderer.removeListener('detached-pane:return-hover', listener);
+    },
+  },
   quickChat: {
     getLaunchContext: () => ipcRenderer.invoke('quick-chat:get-launch-context'),
     getScreenshot: () => ipcRenderer.invoke('quick-chat:get-screenshot'),

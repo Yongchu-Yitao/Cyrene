@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import sqlite3
 import threading
 
 
@@ -146,6 +147,26 @@ async def test_finished_run_events_reload_from_sqlite_after_memory_cleanup(
         "reply_done",
     ]
     assert restored.events[-1]["response"] == "durable reply"
+
+
+def test_corrupt_durable_event_is_dropped_without_breaking_replay(tmp_path):
+    from cyrene.workbench.chat_runs import ChatRun, ChatRunEventStore
+
+    db_path = str(tmp_path / "corrupt-durable-event.sqlite3")
+    store = ChatRunEventStore(db_path)
+    run = ChatRun("chat_corrupt", {"type": "ack", "chatId": "chat_corrupt"})
+    store.create(run)
+    store.append(run.run_id, {"_seq": 2, "type": "reply_done", "response": "ok"})
+    with sqlite3.connect(db_path) as conn:
+        conn.execute(
+            "UPDATE workbench_chat_run_events SET event_json = ? WHERE run_id = ? AND seq = 2",
+            ("{not-json", run.run_id),
+        )
+
+    restored = store.load_by_run_id(run.run_id)
+
+    assert restored is not None
+    assert [event["type"] for event in restored.events] == ["ack"]
 
 
 async def test_stream_deltas_are_batched_into_one_sqlite_transaction(

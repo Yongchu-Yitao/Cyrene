@@ -109,7 +109,7 @@ TOOL_HANDLERS: dict[str, Any] = {}
 TOOL_METADATA: dict[str, dict[str, Any]] = {}
 
 _READ_ONLY_TOOLS = {
-    "Read", "AnalyzeAttachment", "Glob", "Grep", "ListMemories", "RecallMemory",
+    "Read", "read_tool_result", "AnalyzeAttachment", "Glob", "Grep", "ListMemories", "RecallMemory",
     "RecallConversation", "ReadChatGroupSessions", "search_project_memory", "ListKnowledgeDocuments",
     "SearchKnowledge", "ListLibraryItems", "SearchLibrary", "ListShells", "WebFetch", "WebSearch", "query_round",
     "CheckClaudeCode", "ListSkills", "SearchSkills", "LoadSkill", "ReadSkillResource", "GetLearnedSkill", "list_tasks",

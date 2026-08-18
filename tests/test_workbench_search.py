@@ -1245,6 +1245,7 @@ def test_workbench_chat_answer_resumes_in_conversation_workspace(
     payload = response.json()
     assert payload["userMessage"]["content"] == "continue"
     stored_chat = json.loads(chats_path.read_text(encoding="utf-8"))["chats"][0]
+    assert payload["runId"] == stored_chat["lastRun"]["id"]
     assert [message["content"] for message in stored_chat["messages"][-2:]] == ["continue", "continued"]
     assert stored_chat["messages"][-2]["answerToQuestionId"] == "question_1"
     assert "pendingQuestion" not in stored_chat
@@ -1290,6 +1291,7 @@ async def test_cancelled_workbench_chat_answer_consumes_question_and_records_int
 
     assert result["interrupted"] is True
     stored = json.loads(chats_path.read_text(encoding="utf-8"))["chats"][0]
+    assert result["runId"] == stored["lastRun"]["id"]
     assert "pendingQuestion" not in stored
     assert stored["lastRun"]["status"] == "cancelled"
     assert stored["lastRun"]["terminationReason"] == "user_interrupted"

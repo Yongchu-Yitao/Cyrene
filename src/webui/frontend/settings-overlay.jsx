@@ -158,6 +158,18 @@ async function settingsFetch(input, init) {
   throw error;
 }
 
+function showSettingsToast(message, type) {
+  if (!message) return false;
+  try {
+    var feedback = window.CyreneUI.require("feedback");
+    if (feedback && typeof feedback.showToast === "function") {
+      feedback.showToast(String(message), type || "info");
+      return true;
+    }
+  } catch (e) {}
+  return false;
+}
+
 function renderSettingsMarkdown(value) {
   return window.CyreneUI.require("markdown").render(value, {
     fallback: "escaped-breaks",
@@ -168,26 +180,32 @@ function renderSettingsMarkdown(value) {
 
 // ── Tab definitions ──
 var TABS = [
-  { id: "general", labelKey: "settings.general" },
-  { id: "models", labelKey: "settings.models" },
-  { id: "channels", labelKey: "settings.channels" },
-  { id: "remote", labelKey: "settings.remoteTab" },
-  { id: "agents", labelKey: "settings.agents" },
-  { id: "appearance", labelKey: "settings.appearance" },
-  { id: "capabilities", labelKey: "settings.capabilities" },
-  { id: "extensions", labelKey: "settings.extensions" },
-  { id: "shortcuts", labelKey: "settings.shortcuts" },
-  { id: "data", labelKey: "settings.data" },
-  { id: "budget", labelKey: "settings.budget" },
-  { id: "about", labelKey: "settings.about" },
+  { id: "profile", labelKey: "rail.profile", icon: "user" },
+  { id: "general", labelKey: "settings.general", icon: "settings" },
+  { id: "appearance", labelKey: "settings.appearance", icon: "palette" },
+  { id: "shortcuts", labelKey: "settings.shortcuts", icon: "keyboard" },
+  { id: "model-usage", labelKey: "settings.modelUsage", icon: "route" },
+  { id: "models", labelKey: "settings.modelServices", icon: "box" },
+  { id: "agents", labelKey: "settings.agents", icon: "robot" },
+  { id: "voice", labelKey: "settings.voiceTab", icon: "microphone" },
+  { id: "tools", labelKey: "settings.toolsTab", icon: "tools" },
+  { id: "channels", labelKey: "settings.channels", icon: "messages" },
+  { id: "remote", labelKey: "settings.remoteTab", icon: "device-desktop-up" },
+  { id: "extensions", labelKey: "settings.extensions", icon: "puzzle" },
+  { id: "integrations", labelKey: "settings.integrations", icon: "plug-connected" },
+  { id: "budget", labelKey: "settings.budget", icon: "wallet" },
+  { id: "usage", labelKey: "settings.usage", icon: "chart-bar" },
+  { id: "data", labelKey: "settings.data", icon: "database" },
+  { id: "about", labelKey: "settings.about", icon: "info-circle" },
 ];
 
 var SETTINGS_TAB_GROUPS = [
-  ["general", "appearance", "shortcuts"],
-  ["models", "capabilities", "extensions"],
-  ["channels", "remote", "agents"],
-  ["data", "budget"],
-  ["about"],
+  { labelKey: "settings.group.general", ids: ["profile", "general", "appearance", "shortcuts"] },
+  { labelKey: "settings.group.intelligence", ids: ["model-usage", "models", "agents", "voice", "tools"] },
+  { labelKey: "settings.group.connections", ids: ["channels", "remote"] },
+  { labelKey: "settings.group.extensionsSystem", ids: ["extensions", "integrations"] },
+  { labelKey: "settings.group.data", ids: ["budget", "usage", "data"] },
+  { labelKey: "settings.group.other", ids: ["about"] },
 ];
 
 var TABS_BY_ID = TABS.reduce(function (acc, item) {
@@ -196,29 +214,12 @@ var TABS_BY_ID = TABS.reduce(function (acc, item) {
 }, {});
 
 function SettingsTabIcon(id) {
-  var common = { width: "18", height: "18", viewBox: "0 0 24 24", fill: "none", stroke: "currentColor", strokeWidth: "2", strokeLinecap: "round", strokeLinejoin: "round", "aria-hidden": "true" };
-  var paths = {
-    general: [
-      React.createElement("path", { key: "p1", d: "M12 15.5A3.5 3.5 0 1 0 12 8.5a3.5 3.5 0 0 0 0 7Z" }),
-      React.createElement("path", { key: "p2", d: "M19.4 15a1.7 1.7 0 0 0 .34 1.88l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06A1.7 1.7 0 0 0 15 19.4a1.7 1.7 0 0 0-1 .92V20a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1-.92 1.7 1.7 0 0 0-1.88.34l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06A1.7 1.7 0 0 0 4.6 15a1.7 1.7 0 0 0-.92-1H3.5a2 2 0 1 1 0-4h.18a1.7 1.7 0 0 0 .92-1 1.7 1.7 0 0 0-.34-1.88l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06A1.7 1.7 0 0 0 9 4.6a1.7 1.7 0 0 0 1-.92V3.5a2 2 0 1 1 4 0v.18a1.7 1.7 0 0 0 1 .92 1.7 1.7 0 0 0 1.88-.34l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06A1.7 1.7 0 0 0 19.4 9c.34.16.66.47.92 1h.18a2 2 0 1 1 0 4h-.18c-.26.53-.58.84-.92 1Z" }),
-    ],
-    models: [React.createElement("path", { key: "p", d: "M12 3 4 7v10l8 4 8-4V7l-8-4Z" }), React.createElement("path", { key: "p2", d: "M4 7l8 4 8-4M12 11v10" })],
-    channels: [React.createElement("path", { key: "p", d: "M21 8a6 6 0 0 1-8.7 5.3L8 16l1.1-4.8A6 6 0 1 1 21 8Z" }), React.createElement("path", { key: "p2", d: "M7.5 12.5A5 5 0 0 0 3 17.5L2 22l4.5-1A5 5 0 0 0 14 17" })],
-    remote: [React.createElement("rect", { key: "r1", x: "3", y: "4", width: "13", height: "10", rx: "2" }), React.createElement("path", { key: "p1", d: "M7 20h8M11 14v6M18 9h3m-1.5-1.5V12" })],
-    agents: [React.createElement("path", { key: "p", d: "M12 3v4M6 8h12a2 2 0 0 1 2 2v7a3 3 0 0 1-3 3H7a3 3 0 0 1-3-3v-7a2 2 0 0 1 2-2Z" }), React.createElement("path", { key: "p2", d: "M9 14h.01M15 14h.01M8 20v2M16 20v2" })],
-    appearance: [React.createElement("path", { key: "p", d: "M12 3a9 9 0 1 0 9 9 4 4 0 0 1-4 4h-1.2a2 2 0 0 1-1.5-3.3l.7-.8A5 5 0 0 0 12 3Z" }), React.createElement("circle", { key: "c1", cx: "7.5", cy: "10.5", r: ".8" }), React.createElement("circle", { key: "c2", cx: "10", cy: "7.5", r: ".8" }), React.createElement("circle", { key: "c3", cx: "14", cy: "7.5", r: ".8" })],
-    capabilities: [React.createElement("path", { key: "p", d: "M7 7h10M7 17h10M9 7a2 2 0 1 1-4 0 2 2 0 0 1 4 0ZM19 17a2 2 0 1 1-4 0 2 2 0 0 1 4 0Z" })],
-    extensions: [React.createElement("path", { key: "p", d: "M12 2 4 6v6c0 5 3.5 8 8 10 4.5-2 8-5 8-10V6l-8-4Z" }), React.createElement("path", { key: "p2", d: "m9 12 2 2 4-5" })],
-    shortcuts: [React.createElement("rect", { key: "r", x: "3", y: "5", width: "18", height: "14", rx: "2" }), React.createElement("path", { key: "p", d: "M7 9h.01M11 9h.01M15 9h.01M7 13h10" })],
-    data: [React.createElement("path", { key: "p", d: "M4 6c0-2 3.6-3 8-3s8 1 8 3-3.6 3-8 3-8-1-8-3Z" }), React.createElement("path", { key: "p2", d: "M4 6v6c0 2 3.6 3 8 3s8-1 8-3V6M4 12v6c0 2 3.6 3 8 3s8-1 8-3v-6" })],
-    budget: [
-      React.createElement("rect", { key: "r", x: "2", y: "5", width: "20", height: "14", rx: "2", fill: "none", stroke: "currentColor", strokeWidth: "2" }),
-      React.createElement("line", { key: "l1", x1: "2", y1: "10", x2: "22", y2: "10", stroke: "currentColor", strokeWidth: "2" }),
-      React.createElement("path", { key: "l2", d: "M7 15h6", fill: "none", stroke: "currentColor", strokeWidth: "2", strokeLinecap: "round" }),
-    ],
-    about: [React.createElement("circle", { key: "c", cx: "12", cy: "12", r: "9" }), React.createElement("path", { key: "p", d: "M12 11v5M12 8h.01" })],
-  };
-  return React.createElement("svg", common, paths[id] || paths.general);
+  var item = TABS_BY_ID[id] || TABS_BY_ID.general;
+  return React.createElement("span", {
+    className: "settings-overlay-tab-glyph",
+    style: { "--settings-tab-icon": 'url("settings-icons/' + item.icon + '.svg")' },
+    "aria-hidden": "true",
+  });
 }
 
 function ExternalChevron() {
@@ -249,9 +250,11 @@ function AboutRelatedIcon(name) {
   );
 }
 
-// ── Settings Overlay ──
-function SettingsOverlay({
-  onClose,
+// ── Settings Page ──
+function SettingsPage({
+  collapsed,
+  collapseControl,
+  moduleDock,
   initialTab,
   theme: initialTheme,
   actualTheme,
@@ -260,7 +263,12 @@ function SettingsOverlay({
   scrollToId,
 }) {
   var { t, lang, setLang } = useWorkbenchI18n();
-  var [tab, setTab] = useStateSt(initialTab === "skills" ? "extensions" : (initialTab || "general"));
+  function normalizeSettingsTab(value) {
+    if (value === "skills") return "extensions";
+    if (value === "capabilities") return "voice";
+    return TABS_BY_ID[value] ? value : "general";
+  }
+  var [tab, setTab] = useStateSt(normalizeSettingsTab(initialTab));
 
   // Deep-link re-sync: React initializes `tab` only once at mount, so when the
   // search overlay sends a new deep-link request while the settings overlay is
@@ -270,7 +278,7 @@ function SettingsOverlay({
   // also re-checks the anchor after the switch).
   useEffectSt(function () {
     if (!initialTab) return; // plain "open settings" — keep the current tab
-    var target = initialTab === "skills" ? "extensions" : initialTab;
+    var target = normalizeSettingsTab(initialTab);
     setTab(function (current) { return current === target ? current : target; });
   }, [initialTab]);
 
@@ -495,7 +503,7 @@ function SettingsOverlay({
   }, []);
 
   useEffectSt(function () {
-    if (tab === "capabilities") return;
+    if (tab === "voice") return;
     voiceReferenceSessionRef.current += 1;
     clearVoiceReferenceTimer();
     var recorder = voiceReferenceRecorderRef.current;
@@ -607,15 +615,6 @@ function SettingsOverlay({
     try { localStorage.setItem("cyrene-tweak-cap-" + key, JSON.stringify(val)); } catch (e) {}
   }
 
-  // ── Keyboard: Escape to close ──
-  useEffectSt(function () {
-    function onKeyDown(e) {
-      if (e.key === "Escape") { e.preventDefault(); onClose && onClose(); }
-    }
-    window.addEventListener("keydown", onKeyDown);
-    return function () { window.removeEventListener("keydown", onKeyDown); };
-  }, [onClose]);
-
   // Persist desktop notifications
   useEffectSt(function () {
     try { localStorage.setItem("cyrene-desktop-notifications", desktopNotifications ? "1" : "0"); } catch (e) {}
@@ -723,11 +722,10 @@ function SettingsOverlay({
   }, []);
 
   function saveSoul() {
-    setSoulStatus(t("settings.saving"));
+    setSoulStatus("");
     settingsFetch("/api/settings/soul", { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ content: soulDraft }) })
-      .then(function (r) { return r.ok ? setSoulStatus(t("settings.saved")) : Promise.reject(); })
-      .catch(function () { setSoulStatus(t("settings.error")); });
-    setTimeout(function () { setSoulStatus(""); }, 1500);
+      .then(function () { setSoulStatus(""); showSettingsToast(t("settings.saved"), "success"); })
+      .catch(function (error) { showSettingsToast(t("settings.error") + ": " + (error.message || ""), "error"); });
   }
 
   function saveModels() {
@@ -787,10 +785,11 @@ function SettingsOverlay({
         };
       });
       if (onEmbeddingSaved) onEmbeddingSaved(integrationPayload.embedding);
-      setModelsSaved(t("settings.saved"));
-      setTimeout(function () { setModelsSaved(""); }, 1500);
+      setModelsSaved("");
+      showSettingsToast(t("settings.saved"), "success");
     }).catch(function (e) {
-      setModelsSaved(t("settings.error") + ": " + (e.message || ""));
+      setModelsSaved("");
+      showSettingsToast(t("settings.error") + ": " + (e.message || ""), "error");
     }).finally(function () {
       setModelsSaving(false);
     });
@@ -816,7 +815,11 @@ function SettingsOverlay({
         subagent_discussion_max_tool_calls: Number(config.subagent_discussion_max_tool_calls) || 50,
         subagent_discussion_no_new_info_rounds: Number(config.subagent_discussion_no_new_info_rounds) || 2,
       }),
-    }).catch(function () {});
+    }).then(function () {
+      showSettingsToast(t("settings.saved"), "success");
+    }).catch(function (error) {
+      showSettingsToast(t("settings.error") + ": " + (error.message || ""), "error");
+    });
   }
 
   function saveToolGroup(groupId, nextEnabled) {
@@ -836,12 +839,13 @@ function SettingsOverlay({
       body: JSON.stringify(payload),
     }).then(function (response) {
       if (!response.ok) return Promise.reject();
-      setToolsSaved(t("settings.saved"));
+      setToolsSaved("");
+      showSettingsToast(t("settings.saved"), "success");
       window.dispatchEvent(new Event("cyrene-tool-packages-change"));
-      setTimeout(function () { setToolsSaved(""); }, 1500);
     }).catch(function () {
       setToolGroups(previousGroups);
-      setToolsSaved(t("settings.error"));
+      setToolsSaved("");
+      showSettingsToast(t("settings.error"), "error");
     });
   }
 
@@ -871,7 +875,7 @@ function SettingsOverlay({
       setVoiceNotice("");
     }).catch(function (error) {
       publishVoiceStatus(previous);
-      setVoiceNotice(t("settings.error") + ": " + (error.message || ""));
+      showSettingsToast(t("settings.error") + ": " + (error.message || ""), "error");
     }).finally(function () { setVoiceBusy(""); });
   }
 
@@ -886,7 +890,7 @@ function SettingsOverlay({
       publishVoiceStatus(payload);
       setVoiceNotice("");
     }).catch(function (error) {
-      setVoiceNotice(t("settings.error") + ": " + (error.message || ""));
+      showSettingsToast(t("settings.error") + ": " + (error.message || ""), "error");
     }).finally(function () { setVoiceBusy(""); });
   }
 
@@ -918,9 +922,11 @@ function SettingsOverlay({
         setVoiceReferenceFile(null);
         setVoiceReferencePhase("idle");
         setVoiceReferenceText(payload.reference_text || voiceReferenceText.trim());
-        setVoiceNotice(t("settings.voiceProfileSaved"));
+        setVoiceNotice("");
+        showSettingsToast(t("settings.voiceProfileSaved"), "success");
       }).catch(function (error) {
-        setVoiceNotice(t("settings.error") + ": " + (error.message || ""));
+        setVoiceNotice("");
+        showSettingsToast(t("settings.error") + ": " + (error.message || ""), "error");
       }).finally(function () { setVoiceBusy(""); });
   }
 
@@ -933,9 +939,10 @@ function SettingsOverlay({
         setVoiceReferenceFile(null);
         setVoiceReferencePhase("idle");
         setVoiceReferenceText("");
-        setVoiceNotice(t("settings.voiceProfileDeleted"));
+        setVoiceNotice("");
+        showSettingsToast(t("settings.voiceProfileDeleted"), "success");
       }).catch(function (error) {
-        setVoiceNotice(t("settings.error") + ": " + (error.message || ""));
+        showSettingsToast(t("settings.error") + ": " + (error.message || ""), "error");
       }).finally(function () { setVoiceBusy(""); });
   }
 
@@ -953,10 +960,10 @@ function SettingsOverlay({
     setMcpSaved(t("settings.saving"));
     settingsFetch("/api/settings/mcp", { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ servers: mcpConfigs }) })
       .then(function () {
-        setMcpSaved(t("settings.saved"));
-        setTimeout(function () { setMcpSaved(""); }, 1500);
+        setMcpSaved("");
+        showSettingsToast(t("settings.saved"), "success");
         settingsFetch("/api/settings/mcp").then(function (r) { return r.json(); }).then(function (p) { setMcpServers(p.servers || []); setMcpConfigs(p.configs || []); }).catch(function () {});
-      }).catch(function () { setMcpSaved(t("settings.error")); });
+      }).catch(function () { setMcpSaved(""); showSettingsToast(t("settings.error"), "error"); });
   }
 
   function toggleDesktopNotifications() {
@@ -982,7 +989,7 @@ function SettingsOverlay({
     var unregister = TABS.map(function (item) {
       return uiSurface.register({
         node_id: "settings_tab_" + item.id,
-        parent_id: "settings_dialog",
+        parent_id: "settings_page",
         scope: "settings",
         get_node: function () {
           return {
@@ -1000,27 +1007,29 @@ function SettingsOverlay({
 
   return React.createElement("div", {
     className: "settings-overlay",
-    onClick: function (e) { if (e.target === e.currentTarget) onClose && onClose(); },
   },
     React.createElement("div", {
       className: "settings-overlay-panel",
       "data-cyrene-surface-root": "true",
-      role: "dialog",
-      "aria-modal": "true",
+      role: "region",
       "aria-label": t("nav.settings"),
-      onClick: function (e) { e.stopPropagation(); },
     },
       // Body: sidebar + content
       React.createElement("div", { className: "settings-overlay-body" },
         // Sidebar tabs
-        React.createElement("nav", { className: "settings-overlay-nav", "aria-label": t("nav.settings") },
-          SETTINGS_TAB_GROUPS.map(function (ids, groupIndex) {
+        React.createElement("nav", { className: "settings-overlay-nav workbench-integrated-rail" + (collapsed ? " is-collapsed" : ""), "aria-label": t("nav.settings") },
+          React.createElement("header", { className: "settings-overlay-nav-head workbench-integrated-rail-head" },
+            React.createElement("b", null, t("nav.settings")),
+            collapseControl || null,
+          ),
+          React.createElement("div", { className: "settings-overlay-nav-scroll" },
+          SETTINGS_TAB_GROUPS.map(function (group, groupIndex) {
             return React.createElement("div", {
-              key: ids.join("-"),
+              key: group.ids.join("-"),
               className: "settings-overlay-nav-section" + (groupIndex === 0 ? " first" : ""),
-              style: { "--settings-tab-count": ids.length },
             },
-              ids.map(function (id) {
+              React.createElement("div", { className: "settings-overlay-nav-label" }, t(group.labelKey)),
+              group.ids.map(function (id) {
                 var item = TABS_BY_ID[id];
                 if (!item) return null;
                 return React.createElement("button", {
@@ -1035,7 +1044,8 @@ function SettingsOverlay({
                 );
               }),
             );
-          }),
+          })),
+          moduleDock || null,
         ),
 
         // Content area
@@ -1045,13 +1055,18 @@ function SettingsOverlay({
           "data-settings-active-tab": tab,
           "data-cyrene-node-id": "settings_content_" + tab,
         },
+          tab === "profile" && React.createElement("div", { className: "settings-profile-panel" },
+            React.createElement(window.CyreneUI.require("profile").Page)
+          ),
           tab === "general" && React.createElement(GeneralPanel, { t, lang, setLang, desktopNotifications, toggleDesktopNotifications, mapProvider, setMapProvider, amapKey, setAmapKey, amapKeySaved, setAmapKeySaved, project }),
-          tab === "models" && React.createElement(ModelsPanel, { t, models, setModels, modelSource, setModelSource, codexCandidate, setCodexCandidate, draftModel, setDraftModel, visionModels, setVisionModels, draftVision, setDraftVision, secondaryModel, setSecondaryModel, modelsSaved, modelsSaving, saveModels, config, project }),
+          tab === "models" && React.createElement(window.CyreneUI.require("model-settings").ServicesPage, { t: t, project: project }),
+          tab === "model-usage" && React.createElement(window.CyreneUI.require("model-settings").UsagePage, { t: t, project: project }),
           tab === "channels" && ChannelsPanel({ t, telegramToken, setTelegramToken, telegramSaved, setTelegramSaved, notifyTelegram, setNotifyTelegram, notifyWechat, setNotifyWechat }),
           tab === "remote" && React.createElement(RemotePanel, { t }),
           tab === "agents" && AgentsPanel({ t, config, setConfig, configLoading, soulDraft, setSoulDraft, soulStatus, saveSoul, agentProactive, setAgentProactive, saveAgents }),
           tab === "appearance" && React.createElement(AppearancePanel, { t, tweaks, setTweak, actualTheme, theme: initialTheme }),
-          tab === "capabilities" && CapabilitiesPanel({
+          (tab === "voice" || tab === "tools") && CapabilitiesPanel({
+            mode: tab,
             t, mcpConfigs, setMcpConfigs, mcpServers, toolGroups, toolsSaved,
             saveToolGroup, newMcpServer, setNewMcpServer, mcpSaved, saveMcp,
             voiceStatus, voiceReferenceText, setVoiceReferenceText,
@@ -1061,9 +1076,10 @@ function SettingsOverlay({
             saveVoiceBooleanSetting, saveVoiceMode, saveVoicePreset, saveVoiceProfile, deleteVoiceProfile,
           }),
           tab === "extensions" && React.createElement(ExtensionsPanel, { t }),
+          tab === "integrations" && React.createElement(GeneralPanel, { integrationsOnly: true, t, lang, setLang, desktopNotifications, toggleDesktopNotifications, mapProvider, setMapProvider, amapKey, setAmapKey, amapKeySaved, setAmapKeySaved, project }),
           tab === "shortcuts" && React.createElement(ShortcutsPanel, { t }),
           tab === "data" && React.createElement(DataPanel, { t, redactSecrets, saveRedactSecrets, config, configLoading, resetStatus, setResetStatus, resetting, setResetting, backupList, backupMsg, setBackupMsg, loadBackups, exportSids, setExportSids, workbenchExportSessions, exportFmt, setExportFmt, exportMsg, setExportMsg, formatBytes, formatDate }),
-          tab === "budget" && React.createElement(BudgetPanel, { t, config }),
+          (tab === "budget" || tab === "usage") && React.createElement(BudgetPanel, { t, config, mode: tab }),
           tab === "about" && AboutPanel({ t, config }),
         ),
       ),
@@ -1820,9 +1836,9 @@ function GeneralPanel(p) {
       if (!s) return;
       setRunInBackground(s.runInBackground === true);
       setQuickChatEnabled(s.quickChatEnabled === true);
-      if (s.shortcutUpdateOk === false) setDesktopNotice(t("settings.quickChatShortcutConflict"));
-    }).catch(function () {
-      setDesktopNotice(t("settings.error"));
+      if (s.shortcutUpdateOk === false) showSettingsToast(t("settings.quickChatShortcutConflict"), "error");
+    }).catch(function (error) {
+      showSettingsToast(t("settings.error") + ": " + (error.message || ""), "error");
     }).finally(function () { setDesktopBusy(false); });
   }
 
@@ -1874,25 +1890,25 @@ function GeneralPanel(p) {
     }).then(readSettingsResponse).then(function () {
       setAgentProxyEnabled(!!nextEnabled);
       setAgentProxyPort(String(port));
-      setAgentProxyStatus(t("settings.agentProxySaved"));
-      setTimeout(function () { setAgentProxyStatus(""); }, 2500);
+      setAgentProxyStatus("");
+      showSettingsToast(t("settings.agentProxySaved"), "success");
     }).catch(function (error) {
-      setAgentProxyStatus(t("settings.error") + ": " + (error.message || ""));
+      setAgentProxyStatus("");
+      showSettingsToast(t("settings.error") + ": " + (error.message || ""), "error");
     });
   }
 
   function saveAmapKey() {
-    if (!amapKey || amapKey.startsWith("••")) { setAmapKeySaved(t("settings.noChanges")); setTimeout(function () { setAmapKeySaved(""); }, 1500); return; }
+    if (!amapKey || amapKey.startsWith("••")) { showSettingsToast(t("settings.noChanges"), "info"); return; }
     setAmapKeySaved(t("settings.saving"));
     settingsFetch("/api/settings/keys", { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ AMAP_API_KEY: amapKey }) })
       .then(function (r) { return r.ok ? r.json() : Promise.reject(); })
       .then(function () {
         settingsFetch("/api/amap/verify").then(function (r) { return r.json(); }).then(function (vd) {
-          if (vd.valid) { setAmapKeySaved(t("settings.amapKeySaved")); localStorage.setItem("cyrene-tweak-map-provider", "amap"); }
-          else { setAmapKeySaved(t("settings.amapKeyVerifyFail") + " " + (vd.error || "")); }
-        }).catch(function () { setAmapKeySaved(t("settings.saved")); });
-        setTimeout(function () { setAmapKeySaved(""); }, 3000);
-      }).catch(function () { setAmapKeySaved(t("settings.error")); setTimeout(function () { setAmapKeySaved(""); }, 3000); });
+          if (vd.valid) { setAmapKeySaved(""); showSettingsToast(t("settings.amapKeySaved"), "success"); localStorage.setItem("cyrene-tweak-map-provider", "amap"); }
+          else { setAmapKeySaved(""); showSettingsToast(t("settings.amapKeyVerifyFail") + " " + (vd.error || ""), "error"); }
+        }).catch(function () { setAmapKeySaved(""); showSettingsToast(t("settings.saved"), "success"); });
+      }).catch(function (error) { setAmapKeySaved(""); showSettingsToast(t("settings.error") + ": " + (error.message || ""), "error"); });
   }
 
   function saveIntegration() {
@@ -1904,33 +1920,35 @@ function GeneralPanel(p) {
       body: JSON.stringify({ zotero: zoteroSettings }),
     }).then(readSettingsResponse).then(function (payload) {
       if (payload.zotero) setZoteroSettings(payload.zotero);
-      setZoteroStatus({ kind: "success", text: t("settings.saved") });
+      setZoteroStatus(null);
+      showSettingsToast(t("settings.saved"), "success");
     }).catch(function (error) {
-      setZoteroStatus({ kind: "error", text: t("settings.error") + ": " + (error.message || "") });
+      setZoteroStatus(null);
+      showSettingsToast(t("settings.error") + ": " + (error.message || ""), "error");
     }).finally(function () { setIntegrationBusy(""); });
   }
 
   function testIntegration() {
     setIntegrationBusy("test-zotero");
-    setZoteroStatus({ kind: "info", text: t("settings.testingConnection") });
+    setZoteroStatus(null);
     settingsFetch("/api/settings/integrations/test", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ service: "zotero", config: zoteroSettings }),
     }).then(readSettingsResponse).then(function (payload) {
-      setZoteroStatus({ kind: "success", text: t("settings.zoteroConnected") });
+      showSettingsToast(t("settings.zoteroConnected"), "success");
     }).catch(function (error) {
-      setZoteroStatus({ kind: "error", text: t("settings.connectionFailed") + ": " + (error.message || "") });
+      showSettingsToast(t("settings.connectionFailed") + ": " + (error.message || ""), "error");
     }).finally(function () { setIntegrationBusy(""); });
   }
 
   function importFromZotero() {
     if (!(p.project && p.project.id)) {
-      setZoteroStatus({ kind: "error", text: t("settings.zoteroImportNoProject") });
+      showSettingsToast(t("settings.zoteroImportNoProject"), "error");
       return;
     }
     setIntegrationBusy("import-zotero");
-    setZoteroStatus({ kind: "info", text: t("settings.zoteroImporting") });
+    setZoteroStatus(null);
     settingsFetch("/api/settings/integrations", {
       method: "PUT",
       headers: { "Content-Type": "application/json" },
@@ -1943,15 +1961,12 @@ function GeneralPanel(p) {
         body: JSON.stringify({ library_id: "0", library_type: "user", collection_key: "" }),
       });
     }).then(readSettingsResponse).then(function (result) {
-      setZoteroStatus({
-        kind: "success",
-        text: t("settings.zoteroImportDone", {
-          created: Number(result.created || result.imported || 0),
-          updated: Number(result.updated || 0),
-        }),
-      });
+      showSettingsToast(t("settings.zoteroImportDone", {
+        created: Number(result.created || result.imported || 0),
+        updated: Number(result.updated || 0),
+      }), "success");
     }).catch(function (error) {
-      setZoteroStatus({ kind: "error", text: t("settings.connectionFailed") + ": " + (error.message || "") });
+      showSettingsToast(t("settings.connectionFailed") + ": " + (error.message || ""), "error");
     }).finally(function () { setIntegrationBusy(""); });
   }
 
@@ -1965,15 +1980,15 @@ function GeneralPanel(p) {
   }
 
   return React.createElement("div", { className: "settings-panel wb-general-settings" },
-    SectionTitle(t("settings.general")),
-    FieldRow(t("settings.language"), t("settings.languageHint"),
+    SectionTitle(t(p.integrationsOnly ? "settings.integrations" : "settings.general")),
+    !p.integrationsOnly && FieldRow(t("settings.language"), t("settings.languageHint"),
       React.createElement("div", { className: "wb-seg" },
         React.createElement("button", { className: "wb-seg-btn" + (lang === "en" ? " active" : ""), onClick: function () { setLang("en"); } }, "English"),
         React.createElement("button", { className: "wb-seg-btn" + (lang === "zh" ? " active" : ""), onClick: function () { setLang("zh"); } }, "中文"),
       ),
       undefined, "setting-language",
     ),
-    FieldRow(t("settings.timezone"), t("settings.timezoneHint"),
+    !p.integrationsOnly && FieldRow(t("settings.timezone"), t("settings.timezoneHint"),
       React.createElement("select", {
         className: "wb-select",
         value: selectedTimezone,
@@ -1986,11 +2001,11 @@ function GeneralPanel(p) {
       ),
       undefined, "setting-timezone",
     ),
-    FieldRow(t("settings.desktopNotifications"), t("settings.desktopNotificationsHint"),
+    !p.integrationsOnly && FieldRow(t("settings.desktopNotifications"), t("settings.desktopNotificationsHint"),
       Toggle(desktopNotifications, toggleDesktopNotifications),
       undefined, "setting-desktop-notifications",
     ),
-    React.cloneElement(SectionBlock(t("settings.agentProxy"), t("settings.agentProxyHint"),
+    !p.integrationsOnly && React.cloneElement(SectionBlock(t("settings.agentProxy"), t("settings.agentProxyHint"),
       FieldRow(t("settings.agentProxyEnabled"), t("settings.agentProxyEnabledHint"),
         Toggle(agentProxyEnabled, function () { saveAgentProxy(!agentProxyEnabled, agentProxyPort); }, false, t("settings.agentProxyEnabled")),
       ),
@@ -2014,14 +2029,14 @@ function GeneralPanel(p) {
         agentProxyStatus && React.createElement("span", { className: "wb-hint saved", role: "status", "aria-live": "polite" }, agentProxyStatus),
       ),
     ), { className: "wb-section-block wb-agent-proxy-settings", id: "setting-agent-proxy" }),
-    FieldRow(t("settings.mapProvider"), t("settings.mapProviderHint"),
+    !p.integrationsOnly && FieldRow(t("settings.mapProvider"), t("settings.mapProviderHint"),
       React.createElement("div", { className: "wb-seg" },
         React.createElement("button", { className: "wb-seg-btn" + (mapProvider === "direct" ? " active" : ""), onClick: function () { setMapProvider("direct"); localStorage.setItem("cyrene-tweak-map-provider", "direct"); } }, t("settings.mapProviderDirect")),
         React.createElement("button", { className: "wb-seg-btn" + (mapProvider === "amap" ? " active" : ""), onClick: function () { setMapProvider("amap"); } }, t("settings.mapProviderAmap")),
       ),
       undefined, "setting-map-provider",
     ),
-    mapProvider === "amap" && FieldRow(t("settings.amapKey"), t("settings.amapKeyHint"),
+    !p.integrationsOnly && mapProvider === "amap" && FieldRow(t("settings.amapKey"), t("settings.amapKeyHint"),
       [
         React.createElement("div", { className: "wb-inline-row" },
           React.createElement("input", { className: "wb-input mono", type: "password", value: amapKey, onChange: function (e) { setAmapKey(e.target.value); }, placeholder: t("settings.amapKeyPlaceholder") }),
@@ -2031,18 +2046,18 @@ function GeneralPanel(p) {
       ],
       undefined, "setting-amap-key",
     ),
-    supportsDesktop && FieldRow(t("settings.runInBackground"), t("settings.runInBackgroundHint"),
+    !p.integrationsOnly && supportsDesktop && FieldRow(t("settings.runInBackground"), t("settings.runInBackgroundHint"),
       Toggle(runInBackground, function () { applyDesktop({ runInBackground: !runInBackground }); }, desktopBusy),
       undefined, "setting-run-in-background",
     ),
-    supportsDesktop && FieldRow(t("settings.quickChatAssistant"),
+    !p.integrationsOnly && supportsDesktop && FieldRow(t("settings.quickChatAssistant"),
       runInBackground ? t("settings.quickChatAssistantHint") : t("settings.quickChatAssistantNeedsResident"),
       Toggle(quickChatEnabled, function () { applyDesktop({ quickChatEnabled: !quickChatEnabled }); }, desktopBusy || !runInBackground),
       undefined, "setting-quick-chat",
     ),
-    supportsDesktop && desktopNotice
+    !p.integrationsOnly && supportsDesktop && desktopNotice
       && React.createElement("div", { className: "wb-hint", style: { color: "var(--wb-error-text)" } }, desktopNotice),
-    React.cloneElement(SectionBlock(t("settings.zoteroIntegration"), t("settings.zoteroIntegrationHint"),
+    p.integrationsOnly && React.cloneElement(SectionBlock(t("settings.zoteroIntegration"), t("settings.zoteroIntegrationHint"),
       FieldRow(t("settings.zoteroLocalApiUrl"), t("settings.zoteroLocalApiUrlHint"),
         React.createElement("div", { className: "wb-integration-control" },
           React.createElement("input", {
@@ -2372,7 +2387,7 @@ function ModelsPanel(p) {
       var nextIdentity = saved ? [saved.provider, saved.model].join(":") : "";
       savedEmbeddingIdentityRef.current = nextIdentity;
       setEmbeddingApiKey("");
-      setEmbeddingStatus({ kind: "success", text: t("settings.saved") });
+      setEmbeddingStatus(null);
       loadCorpusEmbedding().then(function (coverage) {
         if (!coverage || !coverage.configured || !coverage.pending_vectors) return;
         if (nextIdentity !== "local_onnx:qwen3-embedding-0.6b" || previousIdentity === nextIdentity) return;
@@ -3042,11 +3057,11 @@ function ChannelsPanel(p) {
   var { t, telegramToken, setTelegramToken, telegramSaved, setTelegramSaved, notifyTelegram, setNotifyTelegram, notifyWechat, setNotifyWechat } = p;
 
   function saveTelegram() {
-    if (!telegramToken || telegramToken.startsWith("••")) { setTelegramSaved(t("settings.noChanges")); setTimeout(function () { setTelegramSaved(""); }, 1500); return; }
+    if (!telegramToken || telegramToken.startsWith("••")) { showSettingsToast(t("settings.noChanges"), "info"); return; }
     setTelegramSaved(t("settings.saving"));
     settingsFetch("/api/settings/keys", { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ TELEGRAM_BOT_TOKEN: telegramToken }) })
-      .then(function () { setTelegramSaved(t("settings.saved")); setTimeout(function () { setTelegramSaved(""); }, 1500); })
-      .catch(function () { setTelegramSaved(t("settings.error")); });
+      .then(function () { setTelegramSaved(""); showSettingsToast(t("settings.saved"), "success"); })
+      .catch(function (error) { setTelegramSaved(""); showSettingsToast(t("settings.error") + ": " + (error.message || ""), "error"); });
   }
 
   return React.createElement("div", { className: "settings-panel" },
@@ -3730,6 +3745,7 @@ function CapabilitiesPanel(p) {
     voiceBusy, voiceNotice,
     saveVoiceBooleanSetting, saveVoiceMode, saveVoicePreset, saveVoiceProfile, deleteVoiceProfile,
   } = p;
+  var mode = p.mode === "tools" ? "tools" : "voice";
 
   function addMcp() {
     var name = (newMcpServer.name || "").trim();
@@ -3776,9 +3792,9 @@ function CapabilitiesPanel(p) {
   }
 
   return React.createElement("div", { className: "settings-panel" },
-    SectionTitle(t("settings.capabilities"), t("settings.capabilitiesSubtitle")),
+    SectionTitle(t(mode === "tools" ? "settings.toolsTab" : "settings.voiceTab")),
 
-    React.cloneElement(SectionBlock(t("settings.voiceCapability"), t("settings.voiceCapabilityHint"),
+    mode === "voice" && React.cloneElement(SectionBlock(t("settings.voiceCapability"), t("settings.voiceCapabilityHint"),
       React.createElement("div", { className: "wb-voice-settings" },
         FieldRow(
           t("settings.voiceAutoSend"),
@@ -3932,7 +3948,7 @@ function CapabilitiesPanel(p) {
     ), { id: "setting-voice" }),
 
     // Tool packages
-    React.cloneElement(SectionBlock(t("settings.toolPackages"), t("settings.toolPackagesHint"),
+    mode === "tools" && React.cloneElement(SectionBlock(t("settings.toolPackages"), t("settings.toolPackagesHint"),
       React.createElement("div", { className: "wb-tool-package-settings" },
         toolGroups.filter(function (group) {
           return group.kind === "package";
@@ -4052,7 +4068,7 @@ function DataPanel(p) {
     confirmed.then(function (ok) {
       if (!ok) return;
       setResetting(true);
-      setResetStatus(t("settings.resettingData"));
+      setResetStatus("");
       return settingsFetch("/api/settings/reset-data", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -4064,7 +4080,7 @@ function DataPanel(p) {
         window.location.reload();
       });
     }).catch(function (e) {
-      setResetStatus(t("settings.resetAppDataFailed") + ": " + (e.message || String(e)));
+      showSettingsToast(t("settings.resetAppDataFailed") + ": " + (e.message || String(e)), "error");
       setResetting(false);
     });
   }
@@ -4078,27 +4094,28 @@ function DataPanel(p) {
   async function createBackup() {
     var bridge = window.cyrene;
     if (!bridge || typeof bridge.pickBackupSavePath !== "function") {
-      setBackupMsg(t("settings.backupPickerUnavailable"));
+      showSettingsToast(t("settings.backupPickerUnavailable"), "error");
       return;
     }
     try {
       var selection = await bridge.pickBackupSavePath({ title: t("settings.backupChooseSaveTitle"), defaultName: backupDefaultName() });
       if (!selection || selection.cancelled || !selection.path) return;
-      setBackupMsg(t("settings.backupExporting"));
+      setBackupMsg("");
+      showSettingsToast(t("settings.backupExporting"), "info");
       var response = await settingsFetch("/api/backup/export", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ path: selection.path }) });
       var result = await response.json();
       if (!result.ok) throw new Error(result.error || t("settings.failed"));
-      setBackupMsg(t("settings.backupExported", { n: result.entries.length, size: formatBytes(result.size) }));
+      showSettingsToast(t("settings.backupExported", { n: result.entries.length, size: formatBytes(result.size) }), "success");
       loadBackups();
     } catch (e) {
-      setBackupMsg(t("settings.failed") + ": " + e.message);
+      showSettingsToast(t("settings.failed") + ": " + e.message, "error");
     }
   }
 
   async function restoreBackup() {
     var bridge = window.cyrene;
     if (!bridge || typeof bridge.pickBackupFile !== "function") {
-      setBackupMsg(t("settings.backupPickerUnavailable"));
+      showSettingsToast(t("settings.backupPickerUnavailable"), "error");
       return;
     }
     try {
@@ -4107,9 +4124,9 @@ function DataPanel(p) {
       var response = await settingsFetch("/api/backup/restore", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ path: selection.path }) });
       var result = await response.json();
       if (!result.ok) throw new Error(result.error || (result.errors || []).join(";") || t("settings.backupRestoreFailed"));
-      setBackupMsg(t("settings.backupRestored", { n: result.restored.length }) + " " + t("settings.backupRestartRequired"));
+      showSettingsToast(t("settings.backupRestored", { n: result.restored.length }) + " " + t("settings.backupRestartRequired"), "success");
     } catch (e) {
-      setBackupMsg(t("settings.backupRestoreFailed") + ": " + e.message);
+      showSettingsToast(t("settings.backupRestoreFailed") + ": " + e.message, "error");
     }
   }
 
@@ -4131,8 +4148,8 @@ function DataPanel(p) {
       a.click();
       document.body.removeChild(a);
     });
-    setExportMsg(t("settings.sessionExportStarted", { n: exportSids.length }));
-    setTimeout(function () { setExportMsg(""); }, 3000);
+    setExportMsg("");
+    showSettingsToast(t("settings.sessionExportStarted", { n: exportSids.length }), "success");
   }
 
   return React.createElement("div", { className: "settings-panel" },
@@ -4183,7 +4200,6 @@ function DataPanel(p) {
       React.createElement("div", { className: "wb-controls" },
         React.createElement("div", { className: "wb-inline-row wb-inline-row-start" },
           React.createElement("button", { className: "wb-btn danger", onClick: resetData, disabled: resetting }, resetting ? t("settings.resettingData") : t("settings.resetAppDataBtn")),
-          resetStatus && React.createElement("span", { className: "wb-hint" }, resetStatus),
         ),
       ),
     ),
@@ -4202,7 +4218,6 @@ function DataPanel(p) {
         React.createElement("button", { className: "wb-btn primary", onClick: createBackup }, t("settings.backupExportBtn")),
         React.createElement("button", { className: "wb-btn", "data-cyrene-risk": "R3", onClick: restoreBackup }, t("settings.backupRestoreBtn")),
       ),
-      backupMsg && React.createElement("p", { className: "wb-hint" }, backupMsg),
       backupList.map(function (b) {
         return React.createElement("div", { className: "wb-backup-row", key: b.name },
           React.createElement("span", { className: "wb-backup-name" }, b.name),
@@ -4236,7 +4251,6 @@ function DataPanel(p) {
         ),
         React.createElement("div", { className: "wb-inline-row" },
           React.createElement("button", { className: "wb-btn primary", disabled: !exportSids.length, onClick: exportSelectedSessions }, t("settings.sessionExportBtn")),
-          exportMsg && React.createElement("span", { className: "wb-hint" }, exportMsg),
         ),
       ) : React.createElement("p", { className: "wb-hint" }, t("settings.sessionExportNoSessions")),
     ), { id: "setting-session-export" }),
@@ -4247,7 +4261,8 @@ function DataPanel(p) {
 function AboutPanel(p) {
   var { t, config } = p;
 
-  return React.createElement("div", { className: "settings-panel settings-panel-wide" },
+  return React.createElement("div", { className: "settings-panel wb-about-settings" },
+    SectionTitle(t("settings.about"), t("settings.aboutSubtitle")),
     React.createElement(UpdateSection, { t: t, config: config }),
   );
 }
@@ -4444,14 +4459,15 @@ function UpdateSection({ t, config }) {
       : (info && info.update_available ? t("settings.updateToVersion", { version: lv }) : t("settings.checkForUpdates")));
   var actionHandler = downloaded ? confirmInstall : (info && info.update_available ? startDownload : checkUpdate);
   var statusDetail = statusDetailText();
+  var progressTotal = Number(progress.total || (info && info.asset_size) || 0);
+  var heroProgress = progressTotal > 0
+    ? Math.max(0, Math.min(100, Math.round((Number(progress.downloaded || 0) / progressTotal) * 100)))
+    : (downloaded ? 100 : 0);
   function exportLogs() {
     if (exporting) return;
     setExporting(true);
-    var feedback = window.CyreneUI.require("feedback");
     settingsFetch("/api/logs/export", { method: "GET" })
-      .then(function (response) {
-        return response.blob();
-      })
+      .then(function (response) { return response.blob(); })
       .then(function (blob) {
         var url = URL.createObjectURL(blob);
         var link = document.createElement("a");
@@ -4461,14 +4477,10 @@ function UpdateSection({ t, config }) {
         link.click();
         link.remove();
         URL.revokeObjectURL(url);
-        if (feedback && typeof feedback.showToast === "function") {
-          feedback.showToast(t("settings.logExportDone", null, "Logs exported"), "success");
-        }
+        showSettingsToast(t("settings.logExportDone", null, "Logs exported"), "success");
       })
       .catch(function (err) {
-        if (feedback && typeof feedback.showToast === "function") {
-          feedback.showToast(t("settings.logExportFailed", null, "Log export failed") + ": " + String((err && err.message) || err), "error");
-        }
+        showSettingsToast(t("settings.logExportFailed", null, "Log export failed") + ": " + String((err && err.message) || err), "error");
       })
       .finally(function () { setExporting(false); });
   }
@@ -4479,11 +4491,16 @@ function UpdateSection({ t, config }) {
     { icon: "website", title: t("settings.relatedWebsite", null, "Official website"), action: t("settings.view", null, "View"), href: REPO_URL },
     { icon: "github", title: t("settings.relatedGithub", null, "GitHub repository"), action: t("settings.view", null, "View"), href: REPO_URL },
     { icon: "issue", title: t("settings.relatedIssue", null, "Submit Issue"), action: t("settings.feedback", null, "Feedback"), href: REPO_ISSUES_URL },
-    { icon: "log", title: t("settings.exportLogs", null, "Export logs"), action: t("settings.exportLogsAction", null, "Download"), onClick: exportLogs },
+    { icon: "log", title: t("settings.exportLogs", null, "Export logs"), action: exporting ? t("common.loading", null, "Loading...") : t("settings.exportLogsAction", null, "Download"), onClick: exportLogs, disabled: exporting },
   ];
 
   return React.createElement("div", { className: "wb-about-stack" },
-    React.createElement("section", { className: "wb-about-product-card" },
+    React.createElement("section", {
+      className: "wb-about-product-card" + (downloading ? " is-downloading" : "") + (downloaded ? " is-downloaded" : ""),
+      style: { "--wb-about-download-progress": heroProgress + "%" },
+      "aria-busy": downloading ? "true" : undefined,
+    },
+      React.createElement("div", { className: "wb-about-hero-progress", "aria-hidden": "true" }),
       React.createElement("div", { className: "wb-about-product-copy" },
         React.createElement("div", { className: "wb-about-logo", "aria-hidden": "true" },
           React.createElement("div", { className: "brand-mark" }),
@@ -4496,12 +4513,14 @@ function UpdateSection({ t, config }) {
           React.createElement("p", null, t("settings.aboutHeroCopy")),
         ),
       ),
-      React.createElement("button", {
-        className: "wb-btn wb-about-check-btn",
-        "data-cyrene-risk": downloaded ? "R3" : "R2",
-        disabled: actionDisabled,
-        onClick: actionHandler,
-      }, actionLabel),
+      React.createElement("div", { className: "wb-about-hero-action" },
+        React.createElement("button", {
+          className: "wb-btn primary wb-about-check-btn",
+          "data-cyrene-risk": downloaded ? "R3" : "R2",
+          disabled: actionDisabled,
+          onClick: actionHandler,
+        }, actionLabel),
+      ),
     ),
 
     React.createElement("section", { className: "wb-about-update-card" },
@@ -4532,9 +4551,6 @@ function UpdateSection({ t, config }) {
         React.createElement("div", null, React.createElement("span", null, t("settings.updatePublishedAt", null, "Published")), React.createElement("strong", null, fmtDate(info && info.published_at))),
       ),
       statusDetail && React.createElement("p", { className: "wb-about-update-status" }, statusDetail),
-      downloading && React.createElement("div", { className: "wb-progress-bar" },
-        React.createElement("div", { style: { width: progress.total > 0 ? Math.round((progress.downloaded / progress.total) * 100) + "%" : "0%", height: 4, background: "var(--wb-blue)", borderRadius: 2, transition: "width 0.3s" } }),
-      ),
       error && React.createElement("p", { className: "wb-hint", style: { color: "var(--wb-red)" } }, error),
       info && info.update_available && React.createElement("div", { className: "wb-update-notes" },
         React.createElement("span", null, t("settings.updateReleaseNotes", null, "Release notes")),
@@ -4546,11 +4562,14 @@ function UpdateSection({ t, config }) {
     ),
 
     React.createElement("section", { className: "wb-about-related-card" },
-      React.createElement("h3", null, t("settings.relatedLinks", null, "Related links")),
+      React.createElement("div", { className: "wb-about-card-head" },
+        React.createElement("h3", null, t("settings.relatedLinks", null, "Related links")),
+        React.createElement("small", null, t("settings.relatedLinksHint", null, "Documentation, releases, support, and diagnostics.")),
+      ),
       React.createElement("div", { className: "wb-about-related-list" },
         relatedLinks.map(function (item) {
           var action = item.onClick
-            ? React.createElement("button", { type: "button", className: "wb-about-related-action", onClick: item.onClick }, item.action)
+            ? React.createElement("button", { type: "button", className: "wb-about-related-action", disabled: item.disabled, onClick: item.onClick }, item.action)
             : React.createElement("a", { className: "wb-about-related-action", href: item.href, target: "_blank", rel: "noopener noreferrer" }, item.action);
           return React.createElement("div", { key: item.title, className: "wb-about-related-row" },
             React.createElement("span", { className: "wb-about-related-icon" }, AboutRelatedIcon(item.icon)),
@@ -4604,6 +4623,11 @@ function LegacySkillsPanel(p) {
     try { return new Date(iso).toLocaleString(); } catch (e) { return String(iso); }
   }
   function setNotice(text, kind) {
+    if (showSettingsToast(text, kind || "info")) {
+      setMessage("");
+      setMessageKind("");
+      return;
+    }
     setMessage(text);
     setMessageKind(kind || "info");
     setTimeout(function () { setMessage(""); setMessageKind(""); }, 3000);
@@ -5889,6 +5913,10 @@ function ExtensionsPanel(p) {
   var [agentExpandedId, setAgentExpandedId] = useStateSt("");
 
   function tell(text, kind) {
+    if (showSettingsToast(text, kind || "info")) {
+      setNotice("");
+      return;
+    }
     setNotice(text || ""); setNoticeKind(kind || "info");
     if (text) setTimeout(function () { setNotice(""); }, 5000);
   }
@@ -6470,7 +6498,6 @@ function ShortcutsPanel(p) {
   // `withId`. The warning is shown on the rebound row so the user knows which
   // binding they need to clear.
   var [conflict, setConflict] = useStateSt(null);
-  var [notice, setNotice] = useStateSt("");
 
   function conflictLabel(id, list, tt) {
     for (var i = 0; i < list.length; i++) {
@@ -6534,16 +6561,14 @@ function ShortcutsPanel(p) {
         setQuickChatRegistered(settings.quickChatShortcutRegistered === true);
         setQuickChatError(settings.quickChatShortcutError || "");
         if (settings.shortcutUpdateOk === false) {
-          setNotice(t("settings.quickChatShortcutConflict"));
+          showSettingsToast(t("settings.quickChatShortcutConflict"), "error");
         } else {
-          setNotice(t("settings.shortcutSaved"));
+          showSettingsToast(t("settings.shortcutSaved"), "success");
         }
-        setTimeout(function () { setNotice(""); }, 1800);
       })
       .catch(function () {
         setQuickChatError("shortcut_update_failed");
-        setNotice(t("settings.quickChatShortcutFailed"));
-        setTimeout(function () { setNotice(""); }, 1800);
+        showSettingsToast(t("settings.quickChatShortcutFailed"), "error");
       })
       .finally(function () { setQuickChatBusy(false); });
   }
@@ -6551,7 +6576,6 @@ function ShortcutsPanel(p) {
   function startCapture(id) {
     setCapturingId(id);
     setConflict(null);
-    setNotice("");
   }
   function cancelCapture() {
     setCapturingId("");
@@ -6591,8 +6615,7 @@ function ShortcutsPanel(p) {
       setConflict(null);
     }
     setCapturingId("");
-    setNotice(t("settings.shortcutSaved"));
-    setTimeout(function () { setNotice(""); }, 1500);
+    showSettingsToast(t("settings.shortcutSaved"), "success");
   }
 
   // Listen for keydown while capturing. Attached at the panel root so it
@@ -6609,15 +6632,13 @@ function ShortcutsPanel(p) {
     if (!sc) return;
     sc.reset(id);
     setConflict(null);
-    setNotice(t("settings.shortcutReset"));
-    setTimeout(function () { setNotice(""); }, 1500);
+    showSettingsToast(t("settings.shortcutReset"), "success");
   }
   function resetAll() {
     if (!sc) return;
     sc.resetAll();
     setConflict(null);
-    setNotice(t("settings.shortcutResetAll"));
-    setTimeout(function () { setNotice(""); }, 1500);
+    showSettingsToast(t("settings.shortcutResetAll"), "success");
   }
 
   function resetQuickChatShortcut() {
@@ -6737,7 +6758,6 @@ function ShortcutsPanel(p) {
     }),
     React.createElement("div", { className: "wb-save-actions" },
       React.createElement("button", { type: "button", className: "wb-btn", onClick: resetAll }, t("settings.resetShortcuts")),
-      notice && React.createElement("span", { className: "wb-hint saved" }, notice),
     ),
   );
 }
@@ -6745,6 +6765,11 @@ function ShortcutsPanel(p) {
 // ── Budget Panel ──
 function BudgetPanel(p) {
   var { t, config } = p;
+  var mode = p.mode === "usage" ? "usage" : "budget";
+  var dataStore = window.CyreneUI.require("data");
+  dataStore.useVersion();
+  var dashboard = dataStore.state.dashboard || {};
+  var profileUsage = dashboard.usage || {};
 
   // ── Init from config (unified config API) ──
   var [budgetEnabled, setBudgetEnabled] = useStateSt(!!config.budget_enabled);
@@ -6788,15 +6813,18 @@ function BudgetPanel(p) {
       body: JSON.stringify(body),
     }).then(function (r) {
       if (r.ok) {
-        setBudgetSaved(t("settings.saved"));
+        setBudgetSaved("");
+        showSettingsToast(t("settings.saved"), "success");
         syncLocalStorage(body);
         try { window.dispatchEvent(new CustomEvent("budget-saved")); } catch (e) {}
       } else {
-        setBudgetSaved(t("settings.error"));
+        setBudgetSaved("");
+        showSettingsToast(t("settings.error"), "error");
       }
       scheduleClearSaved();
-    }).catch(function () {
-      setBudgetSaved(t("settings.error"));
+    }).catch(function (error) {
+      setBudgetSaved("");
+      showSettingsToast(t("settings.error") + ": " + (error.message || ""), "error");
       scheduleClearSaved();
     });
   }
@@ -6866,6 +6894,16 @@ function BudgetPanel(p) {
   var budgetNum = Number(budgetMonthly) || 0;
   var budgetRatio = budgetNum > 0 ? Math.min(totalCost / budgetNum, 1) : 0;
   var currencySymbol = budgetCurrency === "CNY" ? "¥" : "$";
+  var periodPromptTokens = budgetModels.reduce(function (sum, item) { return sum + (Number(item.prompt_tokens) || 0); }, 0);
+  var periodCompletionTokens = budgetModels.reduce(function (sum, item) { return sum + (Number(item.completion_tokens) || 0); }, 0);
+  var periodTotalTokens = periodPromptTokens + periodCompletionTokens;
+  var averageRequestCost = totalRequests > 0 ? totalCost / totalRequests : 0;
+  var profileSpend = budgetCurrency === "CNY"
+    ? Number(profileUsage.spend_cny || 0)
+    : Number(profileUsage.spend_usd || 0);
+  var profilePromptTokens = Number(profileUsage.prompt_tokens || 0);
+  var profileCompletionTokens = Number(profileUsage.completion_tokens || 0);
+  var profileTotalTokens = Number(profileUsage.total_tokens || (profilePromptTokens + profileCompletionTokens));
   var codexWindows = codexQuotaModel.codexQuotaWindows(codexQuota.limits);
   var codexPlan = codexQuotaModel.codexPlanLabel(
     codexQuota.account,
@@ -6883,59 +6921,42 @@ function BudgetPanel(p) {
     return String(n);
   }
 
-  return React.createElement("div", { className: "settings-panel" },
-    SectionTitle(t("settings.budget"), t("settings.budgetSubtitle")),
+  function usageMetric(value, label, detail) {
+    return React.createElement("div", { className: "wb-usage-metric" },
+      React.createElement("strong", null, value),
+      React.createElement("span", null, label),
+      detail && React.createElement("small", null, detail),
+    );
+  }
 
-    codexQuota.connected && React.cloneElement(SectionBlock(t("settings.codexQuota"), null,
-      FieldRow(t("settings.codexQuotaLimit"), t("settings.codexQuotaLimitHint"),
-        Toggle(codexQuotaEnabled, toggleCodexQuota),
+  return React.createElement("div", { className: "settings-panel" },
+    SectionTitle(
+      t(mode === "usage" ? "settings.usage" : "settings.budget"),
+      t(mode === "usage" ? "settings.usageSubtitle" : "settings.budgetSubtitle")
+    ),
+
+    mode === "usage" && SectionBlock(t("settings.profileUsageSnapshot"), t("settings.profileUsageSnapshotHint"),
+      React.createElement("div", { className: "wb-usage-metrics is-profile" },
+        usageMetric(formatCost(profileSpend), t("profile.spend"), t("settings.usageRecentFourWeeks")),
+        usageMetric(Number(profileUsage.requests || 0).toLocaleString(), t("profile.requests"), t("settings.usageRecentFourWeeks")),
+        usageMetric(formatTokens(profileTotalTokens), t("profile.tokens"), t("settings.usageRecentFourWeeks")),
+        usageMetric(formatTokens(profilePromptTokens), t("settings.usageInputTokens"), t("settings.usageRecentFourWeeks")),
+        usageMetric(formatTokens(profileCompletionTokens), t("settings.usageOutputTokens"), t("settings.usageRecentFourWeeks")),
       ),
-      !codexWindows.length && React.createElement("p", { className: "wb-hint wb-codex-quota-empty" },
-        t("settings.codexQuotaUnavailable")
-      ),
-      codexWindows.length > 0 && React.createElement("div", { className: "wb-codex-quota" },
-          React.createElement("div", { className: "wb-codex-quota-head" },
-            React.createElement("strong", null, "Codex"),
-            React.createElement("span", null, t("settings.codexQuotaPlan", { plan: codexPlan || "—" })),
-          ),
-          codexWindows.map(function (windowData) {
-            var used = windowData.usedPercent;
-            var reset = windowData.resetsAt
-              ? new Date(windowData.resetsAt * 1000).toLocaleString()
-              : "—";
-            return React.createElement("div", { className: "wb-codex-quota-window", key: windowData.kind + "-" + windowData.durationMins },
-              React.createElement("div", { className: "wb-codex-quota-label" },
-                React.createElement("span", null, windowData.label || t("settings.codexQuotaWindow")),
-                React.createElement("span", null, t("settings.codexQuotaRemaining", { pct: windowData.remainingPercent })),
-              ),
-              React.createElement("div", { className: "wb-budget-progress-bar" },
-                React.createElement("div", {
-                  className: "wb-budget-progress-fill" + (used >= 100 ? " over" : used >= 80 ? " high" : ""),
-                  style: { width: Math.round(used) + "%" },
-                }),
-              ),
-              React.createElement("small", null, t("settings.codexQuotaResets", { time: reset })),
-            );
-          }),
-        ),
-    ), { id: "setting-codex-quota" }),
+    ),
 
     // ── Overview section ──
-    SectionBlock(t("settings.budgetOverview"), null,
+    mode === "usage" && SectionBlock(t("settings.usageBillingPeriod"), t("settings.usageBillingPeriodHint"),
       React.createElement("div", { className: "wb-budget-summary" },
-        React.createElement("div", { className: "wb-budget-summary-row" },
-          React.createElement("div", { className: "wb-budget-stat" },
-            React.createElement("span", { className: "wb-budget-stat-value" }, formatCost(totalCost)),
-            React.createElement("span", { className: "wb-budget-stat-label" }, t("settings.budgetSpend")),
-          ),
-          React.createElement("div", { className: "wb-budget-stat" },
-            React.createElement("span", { className: "wb-budget-stat-value" }, totalRequests),
-            React.createElement("span", { className: "wb-budget-stat-label" }, t("settings.budgetRequests")),
-          ),
-          React.createElement("div", { className: "wb-budget-stat" },
-            React.createElement("span", { className: "wb-budget-stat-value" }, budgetEnabled ? formatCost(budgetNum) : "—"),
-            React.createElement("span", { className: "wb-budget-stat-label" }, t("settings.budgetLimit")),
-          ),
+        React.createElement("div", { className: "wb-usage-metrics is-period" },
+          usageMetric(formatCost(totalCost), t("settings.budgetSpend")),
+          usageMetric(totalRequests.toLocaleString(), t("settings.budgetRequests")),
+          usageMetric(formatTokens(periodTotalTokens), t("settings.budgetTokens")),
+          usageMetric(formatTokens(periodPromptTokens), t("settings.usageInputTokens")),
+          usageMetric(formatTokens(periodCompletionTokens), t("settings.usageOutputTokens")),
+          usageMetric(formatCost(averageRequestCost), t("settings.usageAverageCost")),
+          usageMetric(budgetEnabled ? formatCost(budgetNum) : "—", t("settings.budgetLimit")),
+          usageMetric(budgetEnabled && budgetNum > 0 ? Math.round(budgetRatio * 100) + "%" : "—", t("settings.usageBudgetRate")),
         ),
         React.createElement("div", { className: "wb-budget-progress-wrap" },
           React.createElement("div", { className: "wb-budget-progress-bar" },
@@ -6955,7 +6976,7 @@ function BudgetPanel(p) {
     ),
 
     // ── Budget configuration ──
-    React.cloneElement(SectionBlock(t("settings.budgetConfig"), null,
+    mode === "budget" && React.cloneElement(SectionBlock(t("settings.budgetConfig"), null,
       FieldRow(t("settings.budgetEnable"), t("settings.budgetEnableHint"),
         Toggle(budgetEnabled, toggleEnabled),
       ),
@@ -7028,11 +7049,13 @@ function BudgetPanel(p) {
     ), { id: "setting-budget" }),
 
     // ── Cost by model ──
-    SectionBlock(t("settings.budgetByModel"), t("settings.budgetByModelHint"),
+    mode === "usage" && SectionBlock(t("settings.usageByModel"), t("settings.usageByModelHint"),
       React.createElement("div", { className: "wb-budget-model-table" },
         React.createElement("div", { className: "wb-budget-model-head" },
           React.createElement("span", null, t("settings.budgetModel")),
           React.createElement("span", null, t("settings.budgetRequests")),
+          React.createElement("span", null, t("settings.usageInputTokens")),
+          React.createElement("span", null, t("settings.usageOutputTokens")),
           React.createElement("span", null, t("settings.budgetTokens")),
           React.createElement("span", null, t("settings.budgetCost")),
         ),
@@ -7041,6 +7064,8 @@ function BudgetPanel(p) {
           return React.createElement("div", { className: "wb-budget-model-row", key: item.model },
             React.createElement("span", { className: "wb-budget-model-name mono" }, item.model),
             React.createElement("span", null, item.requests),
+            React.createElement("span", null, formatTokens(item.prompt_tokens)),
+            React.createElement("span", null, formatTokens(item.completion_tokens)),
             React.createElement("span", null, formatTokens(item.prompt_tokens + item.completion_tokens)),
             React.createElement("span", { className: "wb-budget-model-cost" }, formatCost(item.cost)),
             modelPct > 0 && React.createElement("div", { className: "wb-budget-model-bar-wrap" },
@@ -7048,8 +7073,45 @@ function BudgetPanel(p) {
             ),
           );
         }),
+        !budgetLoading && !budgetModels.length && React.createElement("div", { className: "wb-budget-model-empty" },
+          t("settings.usageNoModelData")
+        ),
       ),
     ),
+
+    mode === "usage" && codexQuota.connected && React.cloneElement(SectionBlock(t("settings.codexQuota"), null,
+      FieldRow(t("settings.codexQuotaLimit"), t("settings.codexQuotaLimitHint"),
+        Toggle(codexQuotaEnabled, toggleCodexQuota),
+      ),
+      !codexWindows.length && React.createElement("p", { className: "wb-hint wb-codex-quota-empty" },
+        t("settings.codexQuotaUnavailable")
+      ),
+      codexWindows.length > 0 && React.createElement("div", { className: "wb-codex-quota" },
+          React.createElement("div", { className: "wb-codex-quota-head" },
+            React.createElement("strong", null, "Codex"),
+            React.createElement("span", null, t("settings.codexQuotaPlan", { plan: codexPlan || "—" })),
+          ),
+          codexWindows.map(function (windowData) {
+            var used = windowData.usedPercent;
+            var reset = windowData.resetsAt
+              ? new Date(windowData.resetsAt * 1000).toLocaleString()
+              : "—";
+            return React.createElement("div", { className: "wb-codex-quota-window", key: windowData.kind + "-" + windowData.durationMins },
+              React.createElement("div", { className: "wb-codex-quota-label" },
+                React.createElement("span", null, windowData.label || t("settings.codexQuotaWindow")),
+                React.createElement("span", null, t("settings.codexQuotaRemaining", { pct: windowData.remainingPercent })),
+              ),
+              React.createElement("div", { className: "wb-budget-progress-bar" },
+                React.createElement("div", {
+                  className: "wb-budget-progress-fill" + (used >= 100 ? " over" : used >= 80 ? " high" : ""),
+                  style: { width: Math.round(used) + "%" },
+                }),
+              ),
+              React.createElement("small", null, t("settings.codexQuotaResets", { time: reset })),
+            );
+          }),
+        ),
+    ), { id: "setting-codex-quota" }),
   );
 }
 
@@ -7107,5 +7169,5 @@ function ModelField(label, input) {
 
 // ── Export ──
 window.CyreneUI.settings = window.CyreneUI.register("settings", {
-  Overlay: SettingsOverlay,
+  Page: SettingsPage,
 });
