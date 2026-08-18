@@ -640,6 +640,24 @@ def test_non_official_provider_keeps_generic_endpoint_order():
     ]
 
 
+def test_openai_adapter_keeps_official_deepseek_versioned_endpoint_priority(monkeypatch):
+    monkeypatch.setattr(cl, "get_models", lambda: [{
+        "id": "deepseek-chat",
+        "model": "deepseek-v4-flash",
+        "provider": "openai",
+        "adapter": "openai",
+        "api_key": "test-key",
+        "base_url": "https://api.deepseek.com",
+    }])
+
+    candidate = cl._resolve_llm_candidates()[0]
+
+    assert candidate["endpoints"] == [
+        "https://api.deepseek.com/v1/chat/completions",
+        "https://api.deepseek.com/chat/completions",
+    ]
+
+
 def test_stale_deepseek_root_affinity_does_not_override_versioned_priority(monkeypatch):
     candidate = {
         "id": "deepseek",
@@ -662,6 +680,29 @@ def test_stale_deepseek_root_affinity_does_not_override_versioned_priority(monke
     assert prioritized[0]["endpoints"][0] == (
         "https://api.deepseek.com/v1/chat/completions"
     )
+
+
+async def test_streaming_http_error_body_is_preserved_for_diagnostics():
+    async def handler(request):
+        return httpx.Response(
+            400,
+            request=request,
+            json={"error": {"message": "reasoning_content is required"}},
+        )
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        with pytest.raises(httpx.HTTPStatusError) as captured:
+            await cl._handle_stream(
+                client,
+                "https://api.deepseek.com/v1/chat/completions",
+                {"model": "deepseek-v4-flash", "messages": []},
+                {},
+                None,
+            )
+
+    detail = cl._format_httpx_error(captured.value)
+    assert "status=400" in detail
+    assert 'body={"error":{"message":"reasoning_content is required"}}' in detail
 
 
 def test_resolve_llm_candidates_is_the_model_list_in_order(monkeypatch):

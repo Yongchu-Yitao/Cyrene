@@ -535,6 +535,14 @@ def _normalized_candidate(raw: dict[str, Any], index: int = 0, *, active_model: 
             explicit_ctx_limit = 0
     if provider == CODEX_PROVIDER:
         endpoints = [CODEX_BASE_URL]
+    elif adapter in {"openai", "openai_compatible"} and _is_official_deepseek_base_url(base_url):
+        # The generic OpenAI adapter normally owns Chat Completions endpoint
+        # construction.  Official DeepSeek is the exception: its versioned
+        # route is the reliable production path and must retain the fallback
+        # ordering used by the legacy OpenAI-compatible configuration.  Without
+        # this guard, migrating a DeepSeek profile to ``adapter=openai`` silently
+        # collapses the candidate to the unversioned alias only.
+        endpoints = _normalized_llm_endpoints(base_url)
     elif adapter in {"anthropic", "openai", "openai_responses", "gemini", "ollama"}:
         from cyrene.model_runtime.protocol_adapters import protocol_endpoints
 
@@ -2906,6 +2914,15 @@ async def _handle_stream(
         if timing is not None:
             timing["response_headers_ms"] = (_time.monotonic() - request_started) * 1000
         if resp.status_code != 200:
+            # ``httpx`` does not expose ``response.text`` for a streaming
+            # response until the body has been consumed.  Preserve provider
+            # validation details (for example DeepSeek's tool-continuation
+            # reason) before raising so shared diagnostics can report the real
+            # 4xx/5xx cause instead of only "Bad Request".
+            try:
+                await resp.aread()
+            except httpx.HTTPError:
+                pass
             resp.raise_for_status()
         async for raw_line in resp.aiter_lines():
             line = str(raw_line or "").strip()
