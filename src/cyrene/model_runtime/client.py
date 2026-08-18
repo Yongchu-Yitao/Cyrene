@@ -1136,6 +1136,18 @@ def _build_payload(
             message.pop("reasoning_content", None)
         elif is_deepseek:
             message.pop("reasoning_details", None)
+            if (
+                message.get("role") == "assistant"
+                and message.get("tool_calls")
+            ):
+                # DeepSeek thinking mode validates the presence of
+                # ``reasoning_content`` on every replayed assistant tool-call
+                # turn.  A continuation may legitimately emit no additional
+                # reasoning, and the agent's durable representation omits
+                # empty optional values.  Restore the required wire field here
+                # rather than teaching every agent loop about a
+                # provider-specific protocol requirement.
+                message.setdefault("reasoning_content", "")
     payload: dict[str, Any] = {
         "model": model,
         "messages": prepared_messages,

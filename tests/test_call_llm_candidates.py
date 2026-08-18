@@ -86,6 +86,32 @@ def test_deepseek_tool_turn_replays_reasoning_content_only_when_required():
     assert all("reasoning_content" not in message for message in generic_payload["messages"])
 
 
+def test_deepseek_tool_turn_restores_empty_reasoning_content_field():
+    messages = [
+        {
+            "role": "assistant",
+            "content": "",
+            "tool_calls": [{
+                "id": "call_1",
+                "type": "function",
+                "function": {"name": "lookup", "arguments": "{}"},
+            }],
+        },
+        {"role": "tool", "tool_call_id": "call_1", "content": "result"},
+    ]
+
+    payload = cl._build_payload(
+        messages,
+        tools=None,
+        max_tokens=24,
+        stream=False,
+        model="deepseek-v4-flash",
+        thinking="auto",
+    )
+
+    assert payload["messages"][0]["reasoning_content"] == ""
+
+
 @pytest.mark.parametrize(
     ("requested", "expected"),
     [
