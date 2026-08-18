@@ -3,19 +3,31 @@
 [English](CONTEXT_DEV_PROGRESS.md) ·
 [简体中文](CONTEXT_DEV_PROGRESS.zh-CN.md)
 
-Updated: 2026-08-11
+Updated: 2026-08-18
 
-Branch: `feature/project-literature-library`
+Baseline branch: `main`
 
 Package-boundary baseline: `5e9a0044`
 
 UI-consolidation worktree baseline: `17914e697af41c13a3c5da0092f69aa9906644af`
 
-Current audited HEAD: `c1dbc62f24460d123b5bac03dc42ce9411319fb1`
+Current audited HEAD: `9c01fd03`
 
 This file records the completed development checkpoints. Older
 Windows/context debugger command transcripts have been removed because they
 referenced modules that now live under the canonical domain packages.
+
+## 0.7.10-beta4 Maintenance Checkpoint
+
+- The Python package, Electron package, and Electron lockfile root versions are
+  aligned at `0.7.10-beta4`.
+- The new [multi-model provider research](multimodel-provider-research.zh-CN.md)
+  and [provider pluginization design](provider-pluginization-design.zh-CN.md)
+  capture the next implementation direction. They are planning records, not a
+  claim that provider pluginization has shipped.
+- Test counts below remain historical acceptance records for their respective
+  checkpoints; this documentation and lockfile maintenance does not restate a
+  new full-suite baseline.
 
 The completed refactor records are
 [the architecture handoff](COMPLETED-refactor-handoff.md),

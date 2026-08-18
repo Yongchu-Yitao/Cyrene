@@ -3,18 +3,28 @@
 [English](CONTEXT_DEV_PROGRESS.md) ·
 [简体中文](CONTEXT_DEV_PROGRESS.zh-CN.md)
 
-更新时间：2026-08-11
+更新时间：2026-08-18
 
-分支：`feature/project-literature-library`
+基线分支：`main`
 
 包边界基线：`5e9a0044`
 
 UI 合并工作区基线：`17914e697af41c13a3c5da0092f69aa9906644af`
 
-当前复核 HEAD：`c1dbc62f24460d123b5bac03dc42ce9411319fb1`
+当前复核 HEAD：`9c01fd03`
 
 本文记录已完成的开发检查点。旧版 Windows/Context Debugger 命令记录引用了
 已经迁移的模块路径，因此已由当前源码与验证结果替代。
+
+## 0.7.10-beta4 维护检查点
+
+- Python 包、Electron 包和 Electron lockfile 的根版本现统一为
+  `0.7.10-beta4`。
+- 新增 [多模型 Provider 接入研究](multimodel-provider-research.zh-CN.md)与
+  [Provider 插件化重构设计](provider-pluginization-design.zh-CN.md)。两份文档是
+  后续实现依据，不表示 Provider 插件化代码已经落地。
+- 下文测试数字是对应检查点的历史验收记录；本次文档与 lockfile 维护没有重新
+  声明完整测试基线。
 
 已完成的重构记录见
 [架构 Handoff](COMPLETED-refactor-handoff.zh-CN.md)、
