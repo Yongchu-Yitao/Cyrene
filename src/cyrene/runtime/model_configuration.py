@@ -19,7 +19,7 @@ from cyrene.model_runtime.cache_invalidation import invalidate_model_runtime_cac
 from cyrene.runtime import config_store
 
 
-CONFIG_VERSION = 5
+CONFIG_VERSION = 4
 ROUTE_NAMES = ("primary", "secondary", "vision", "embedding")
 _ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$")
 _MINIMAX_DEFAULT_BASE_URL = "https://api.minimaxi.com/v1"
@@ -49,15 +49,6 @@ _DEFAULT_PROVIDER_CONNECTIONS: tuple[dict[str, Any], ...] = (
         "base_url": "https://api.deepseek.com",
         "api_key": "",
         "options": {"provider_preset": "deepseek"},
-    },
-    {
-        "id": "codex_oauth",
-        "name": "OpenAI Codex OAuth",
-        "adapter": "codex_oauth",
-        "enabled": True,
-        "base_url": "codex://oauth",
-        "api_key": "",
-        "options": {"provider_preset": "codex_oauth"},
     },
 )
 
@@ -306,10 +297,6 @@ def _with_default_provider_connections(raw: dict[str, Any]) -> dict[str, Any]:
     if not isinstance(connections, list):
         return upgraded
 
-    default_provider_ids = {
-        str(preset.get("id") or "").strip().lower()
-        for preset in _DEFAULT_PROVIDER_CONNECTIONS
-    }
     recognized: set[str] = set()
     used_ids: set[str] = set()
     hosts_by_connection: dict[str, str] = {}
@@ -323,12 +310,6 @@ def _with_default_provider_connections(raw: dict[str, Any]) -> dict[str, Any]:
         preset = str(
             options.get("provider_preset") if isinstance(options, dict) else ""
         ).strip().lower()
-        adapter = str(
-            connection.get("adapter")
-            or connection.get("adapter_id")
-            or connection.get("provider")
-            or ""
-        ).strip().lower().replace("-", "_")
         connection_name = re.sub(
             r"[^a-z0-9]+", "", str(connection.get("name") or "").lower()
         )
@@ -341,14 +322,12 @@ def _with_default_provider_connections(raw: dict[str, Any]) -> dict[str, Any]:
             and base_url in _MINIMAX_REPLACED_DEFAULT_BASE_URLS
         ):
             connection["base_url"] = _MINIMAX_DEFAULT_BASE_URL
-        if preset in default_provider_ids:
+        if preset in _DEFAULT_PROVIDER_HOSTS:
             recognized.add(preset)
         if connection_id in _DEFAULT_PROVIDER_HOSTS:
             recognized.add(connection_id)
         if connection_name in _DEFAULT_PROVIDER_HOSTS:
             recognized.add(connection_name)
-        if adapter in default_provider_ids:
-            recognized.add(adapter)
         try:
             host = (urlsplit(str(connection.get("base_url") or "")).hostname or "").lower()
         except ValueError:
@@ -364,13 +343,12 @@ def _with_default_provider_connections(raw: dict[str, Any]) -> dict[str, Any]:
         provider_id = str(preset["id"])
         if provider_id in recognized:
             continue
-        provider_hosts = _DEFAULT_PROVIDER_HOSTS.get(provider_id, set())
         host_matches = [
             connection
             for connection in connections
             if isinstance(connection, dict)
             and hosts_by_connection.get(str(connection.get("id") or "").lower())
-            in provider_hosts
+            in _DEFAULT_PROVIDER_HOSTS[provider_id]
         ]
         if host_matches:
             # Prefer the legacy connection that already owns a provider model.
