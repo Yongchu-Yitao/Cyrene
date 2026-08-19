@@ -31715,6 +31715,44 @@ html[data-theme="dark"] .wbc-map .leaflet-control-zoom a {
   font-size: calc(10px * var(--wb-ui-font-scale, 1));
 }
 
+.wb-usage-trend {
+  margin-top: 18px;
+  padding-top: 16px;
+  border-top: 1px solid color-mix(in srgb, var(--wb-line) 68%, transparent);
+}
+
+.wb-usage-trend-head {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  margin-bottom: 10px;
+}
+
+.wb-usage-trend-head strong {
+  color: var(--wb-text);
+  font-size: calc(12px * var(--wb-ui-font-scale, 1));
+}
+
+.wb-usage-trend-head small {
+  color: var(--wb-muted);
+  font-size: calc(10px * var(--wb-ui-font-scale, 1));
+}
+
+.wb-usage-trend-canvas {
+  width: 100%;
+  height: 300px;
+  min-height: 260px;
+}
+
+.wb-usage-trend-empty {
+  display: grid;
+  min-height: 160px;
+  place-items: center;
+  color: var(--wb-muted);
+  font-size: calc(11px * var(--wb-ui-font-scale, 1));
+  text-align: center;
+}
+
 .wb-budget-stat {
   flex: 1;
   display: flex;
@@ -31925,7 +31963,7 @@ html[data-theme="dark"] .wbc-map .leaflet-control-zoom a {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 12px;
-  align-items: stretch;
+  align-items: start;
 }
 
 .wb-provider-usage-column {
@@ -31936,7 +31974,7 @@ html[data-theme="dark"] .wbc-map .leaflet-control-zoom a {
 }
 
 .wb-provider-usage-column > .wb-provider-usage-card {
-  flex: 1 1 0;
+  flex: 0 0 auto;
 }
 
 .wb-provider-usage-card {
@@ -32039,29 +32077,6 @@ html[data-theme="dark"] .wbc-map .leaflet-control-zoom a {
   margin-top: 14px;
 }
 
-.wb-provider-codex-guard {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 14px;
-  margin-top: 14px;
-  padding-bottom: 12px;
-  border-bottom: 1px solid color-mix(in srgb, var(--wb-line) 62%, transparent);
-}
-
-.wb-provider-codex-guard > div {
-  display: flex;
-  min-width: 0;
-  flex-direction: column;
-  gap: 3px;
-}
-
-.wb-provider-codex-guard strong {
-  color: var(--wb-text);
-  font-size: calc(12px * var(--wb-ui-font-scale, 1));
-}
-
-.wb-provider-codex-guard small,
 .wb-provider-quota-warning {
   color: var(--wb-muted);
   font-size: calc(10px * var(--wb-ui-font-scale, 1));
@@ -32123,6 +32138,10 @@ html[data-theme="dark"] .wbc-map .leaflet-control-zoom a {
 
   .wb-budget-model-stats {
     grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .wb-usage-trend-canvas {
+    height: 260px;
   }
 
   .wb-provider-usage-grid,

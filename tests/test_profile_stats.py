@@ -60,6 +60,8 @@ async def test_token_usage_stats_respects_exact_since_boundary(tmp_path):
     assert stats["total"]["prompt_tokens"] == 50
     assert stats["total"]["completion_tokens"] == 5
     assert stats["total"]["total_cost"] == pytest.approx(2.5)
+    assert stats["total"]["max_total_tokens"] == 33
+    assert stats["total"]["max_cost"] == pytest.approx(1.5)
 
 
 @pytest.mark.asyncio

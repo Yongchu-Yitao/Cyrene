@@ -7083,6 +7083,172 @@ function ShortcutsPanel(p) {
   );
 }
 
+function UsageTrendChart(p) {
+  var { t } = p;
+  var items = Array.isArray(p.items) ? p.items : [];
+  var currencySymbol = String(p.currencySymbol || "");
+  var chartRef = useRefSt(null);
+  var signature = JSON.stringify(items.map(function (item) {
+    return [item.day, item.total_tokens, item.requests, item.cost];
+  })) + currencySymbol;
+
+  function compactAxisValue(value) {
+    var number = Number(value) || 0;
+    if (Math.abs(number) >= 1e6) return (number / 1e6).toFixed(number >= 1e7 ? 0 : 1) + "M";
+    if (Math.abs(number) >= 1e3) return (number / 1e3).toFixed(number >= 1e4 ? 0 : 1) + "K";
+    return String(Math.round(number));
+  }
+
+  function compactCostAxisValue(value) {
+    var number = Number(value) || 0;
+    if (Math.abs(number) >= 1e3) return currencySymbol + compactAxisValue(number);
+    if (Math.abs(number) >= 10) return currencySymbol + number.toFixed(0);
+    if (Math.abs(number) >= 1) return currencySymbol + number.toFixed(1);
+    return currencySymbol + number.toFixed(2);
+  }
+
+  useEffectSt(function () {
+    var node = chartRef.current;
+    if (!node || items.length < 2 || !window.echarts || typeof window.echarts.init !== "function") return undefined;
+    var byDay = {};
+    items.forEach(function (item) { byDay[String(item.day || "")] = item; });
+    var now = new Date();
+    var year = now.getFullYear();
+    var month = now.getMonth() + 1;
+    var prefix = String(year) + "-" + String(month).padStart(2, "0") + "-";
+    var days = [];
+    var tokenValues = [];
+    var requestValues = [];
+    var costValues = [];
+    for (var day = 1; day <= now.getDate(); day += 1) {
+      var key = prefix + String(day).padStart(2, "0");
+      var row = byDay[key] || {};
+      days.push(String(month).padStart(2, "0") + "/" + String(day).padStart(2, "0"));
+      tokenValues.push(Number(row.total_tokens || 0));
+      requestValues.push(Number(row.requests || 0));
+      costValues.push(Number(row.cost || 0));
+    }
+
+    var chart = window.echarts.init(node);
+    function renderChart() {
+      var style = getComputedStyle(document.documentElement);
+      var textColor = style.getPropertyValue("--wb-text-secondary").trim() || "#526070";
+      var mutedColor = style.getPropertyValue("--wb-muted").trim() || "#7a8796";
+      var gridColor = style.getPropertyValue("--wb-line").trim() || "#dbe1e8";
+      var tokenColor = style.getPropertyValue("--wb-accent").trim() || "#4f7cff";
+      var requestColor = style.getPropertyValue("--wb-warning-text").trim() || "#9a6700";
+      var costColor = style.getPropertyValue("--wb-purple").trim() || "#b34ca0";
+      function combinedYAxis(position, offset, formatter, color, showSplitLine) {
+        return {
+          type: "value",
+          position: position,
+          offset: offset || 0,
+          min: 0,
+          axisLine: { show: true, lineStyle: { color: color } },
+          axisTick: { show: false },
+          axisLabel: { color: color, fontSize: 10, formatter: formatter },
+          splitLine: showSplitLine
+            ? { show: true, lineStyle: { color: gridColor, type: "dashed" } }
+            : { show: false },
+        };
+      }
+      chart.setOption({
+        animation: false,
+        backgroundColor: "transparent",
+        color: [tokenColor, requestColor, costColor],
+        grid: { left: 58, right: 112, top: 44, bottom: 32 },
+        legend: {
+          type: "scroll",
+          top: 0,
+          left: "center",
+          itemWidth: 24,
+          itemHeight: 8,
+          textStyle: { color: textColor, fontSize: 11 },
+        },
+        tooltip: { trigger: "axis", confine: true },
+        xAxis: {
+          type: "category",
+          boundaryGap: false,
+          data: days,
+          axisLine: { lineStyle: { color: gridColor } },
+          axisTick: { show: false },
+          axisLabel: { color: mutedColor, fontSize: 10, hideOverlap: true },
+          splitLine: { show: false },
+        },
+        yAxis: [
+          combinedYAxis("left", 0, compactAxisValue, tokenColor, true),
+          combinedYAxis("right", 0, compactAxisValue, requestColor, false),
+          combinedYAxis("right", 56, compactCostAxisValue, costColor, false),
+        ],
+        series: [{
+          name: t("settings.usageTrendTokens"),
+          type: "line",
+          yAxisIndex: 0,
+          data: tokenValues,
+          symbol: "circle",
+          showSymbol: days.length <= 16,
+          symbolSize: 6,
+          lineStyle: { width: 2, type: "solid" },
+          itemStyle: { color: tokenColor },
+          emphasis: { focus: "series" },
+          tooltip: { valueFormatter: function (value) { return Number(value || 0).toLocaleString(); } },
+        }, {
+          name: t("settings.usageTrendRequests"),
+          type: "line",
+          yAxisIndex: 1,
+          data: requestValues,
+          symbol: "diamond",
+          showSymbol: days.length <= 16,
+          symbolSize: 7,
+          lineStyle: { width: 2, type: "dashed" },
+          itemStyle: { color: requestColor },
+          emphasis: { focus: "series" },
+          tooltip: { valueFormatter: function (value) { return Number(value || 0).toLocaleString(); } },
+        }, {
+          name: t("settings.usageTrendCost"),
+          type: "line",
+          yAxisIndex: 2,
+          data: costValues,
+          symbol: "triangle",
+          showSymbol: days.length <= 16,
+          symbolSize: 7,
+          lineStyle: { width: 2, type: "dotted" },
+          itemStyle: { color: costColor },
+          emphasis: { focus: "series" },
+          tooltip: { valueFormatter: function (value) { return currencySymbol + Number(value || 0).toFixed(2); } },
+        }],
+      }, true);
+    }
+    renderChart();
+
+    function resizeChart() { chart.resize(); }
+    var resizeObserver = typeof ResizeObserver === "function" ? new ResizeObserver(resizeChart) : null;
+    if (resizeObserver) resizeObserver.observe(node);
+    var themeObserver = typeof MutationObserver === "function" ? new MutationObserver(renderChart) : null;
+    if (themeObserver) themeObserver.observe(document.documentElement, { attributes: true, attributeFilter: ["data-theme"] });
+    return function () {
+      if (resizeObserver) resizeObserver.disconnect();
+      if (themeObserver) themeObserver.disconnect();
+      chart.dispose();
+    };
+  }, [signature]);
+
+  return React.createElement("div", { className: "wb-usage-trend" },
+    React.createElement("div", { className: "wb-usage-trend-head" },
+      React.createElement("strong", null, t("settings.usageTrendTitle")),
+      React.createElement("small", null, t("settings.usageTrendHint")),
+    ),
+    items.length >= 2
+      ? React.createElement("div", {
+          ref: chartRef,
+          className: "wb-usage-trend-canvas",
+          role: "img",
+          "aria-label": t("settings.usageTrendHint"),
+        })
+      : React.createElement("div", { className: "wb-usage-trend-empty" }, t("settings.usageTrendEmpty")),
+  );
+}
+
 // ── Budget Panel ──
 function BudgetPanel(p) {
   var { t, config } = p;
@@ -7101,17 +7267,9 @@ function BudgetPanel(p) {
   var [budgetStartDay, setBudgetStartDay] = useStateSt(String(config.budget_start_day != null ? config.budget_start_day : 1));
   var [budgetSaved, setBudgetSaved] = useStateSt("");
   var codexQuotaModel = window.CyreneUI.require("model");
-  var cachedCodexQuota = codexQuotaModel.readCodexQuotaCache();
-  var [codexQuotaEnabled, setCodexQuotaEnabled] = useStateSt(config.codex_budget_enabled !== false);
-  var [codexQuota, setCodexQuota] = useStateSt(cachedCodexQuota || { connected: false, limits: {} });
-  var PROVIDER_USAGE_CACHE_KEY = "cyrene-provider-usage-v1";
-  var cachedProviderUsage = [];
-  try {
-    var providerUsageCacheValue = JSON.parse(localStorage.getItem(PROVIDER_USAGE_CACHE_KEY) || "[]");
-    if (Array.isArray(providerUsageCacheValue)) cachedProviderUsage = providerUsageCacheValue;
-  } catch (error) {}
-  var [providerUsage, setProviderUsage] = useStateSt(cachedProviderUsage);
-  var [providerUsageLoading, setProviderUsageLoading] = useStateSt(!cachedProviderUsage.length);
+  var [codexQuota, setCodexQuota] = useStateSt({ connected: false, limits: {} });
+  var [providerUsage, setProviderUsage] = useStateSt([]);
+  var [providerUsageLoading, setProviderUsageLoading] = useStateSt(true);
   var providerRefreshTimer = useRefSt(null);
 
   var BUDGET_KEY = "cyrene-budget";
@@ -7165,22 +7323,12 @@ function BudgetPanel(p) {
     saveBudgetConfig({ budget_enabled: next });
   }
 
-  function toggleCodexQuota() {
-    var next = !codexQuotaEnabled;
-    setCodexQuotaEnabled(next);
-    settingsFetch("/api/settings/config", {
-      method: "PUT", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ codex_budget_enabled: next }),
-    }).catch(function () { setCodexQuotaEnabled(!next); });
-  }
-
   function fetchCodexQuota() {
     settingsFetch("/api/settings/openai-oauth/limits")
       .then(readSettingsResponse)
       .then(function (data) {
         setCodexQuota(data);
         codexQuotaModel.writeCodexQuotaCache(data);
-        setCodexQuotaEnabled(data.quota_enabled !== false);
       })
       .catch(function () {});
   }
@@ -7192,7 +7340,6 @@ function BudgetPanel(p) {
       .then(function (data) {
         var items = data && Array.isArray(data.items) ? data.items : [];
         setProviderUsage(items);
-        try { localStorage.setItem(PROVIDER_USAGE_CACHE_KEY, JSON.stringify(items)); } catch (error) {}
         if (items.some(function (item) { return item.refreshing === true; })) {
           if (providerRefreshTimer.current) clearTimeout(providerRefreshTimer.current);
           providerRefreshTimer.current = setTimeout(function () {
@@ -7216,8 +7363,11 @@ function BudgetPanel(p) {
 
   // ── Stats from API ──
   var [budgetModels, setBudgetModels] = useStateSt([]);
+  var [budgetDaily, setBudgetDaily] = useStateSt([]);
   var [totalCost, setTotalCost] = useStateSt(0);
   var [totalRequests, setTotalRequests] = useStateSt(0);
+  var [maxRequestTokens, setMaxRequestTokens] = useStateSt(0);
+  var [maxRequestCost, setMaxRequestCost] = useStateSt(0);
   var [budgetLoading, setBudgetLoading] = useStateSt(true);
 
   function fetchStats() {
@@ -7225,8 +7375,11 @@ function BudgetPanel(p) {
       .then(function (r) { return r.json(); })
       .then(function (d) {
         setBudgetModels(d.models || []);
+        setBudgetDaily(d.by_day || []);
         setTotalCost(d.total_cost || 0);
         setTotalRequests(d.total_requests || 0);
+        setMaxRequestTokens(d.max_request_tokens || 0);
+        setMaxRequestCost(d.max_request_cost || 0);
         setBudgetLoading(false);
       })
       .catch(function () { setBudgetLoading(false); });
@@ -7235,7 +7388,7 @@ function BudgetPanel(p) {
   useEffectSt(function () {
     fetchStats();
     fetchCodexQuota();
-    fetchProviderUsage(false, !!cachedProviderUsage.length);
+    fetchProviderUsage(false, false);
     return function () {
       if (budgetSaveTimer.current) clearTimeout(budgetSaveTimer.current);
       if (providerRefreshTimer.current) clearTimeout(providerRefreshTimer.current);
@@ -7248,7 +7401,14 @@ function BudgetPanel(p) {
   var periodPromptTokens = budgetModels.reduce(function (sum, item) { return sum + (Number(item.prompt_tokens) || 0); }, 0);
   var periodCompletionTokens = budgetModels.reduce(function (sum, item) { return sum + (Number(item.completion_tokens) || 0); }, 0);
   var periodTotalTokens = periodPromptTokens + periodCompletionTokens;
+  var averageRequestTokens = totalRequests > 0 ? periodTotalTokens / totalRequests : 0;
   var averageRequestCost = totalRequests > 0 ? totalCost / totalRequests : 0;
+  var peakUsageDay = budgetDaily.reduce(function (peak, item) {
+    return !peak || Number(item.total_tokens || 0) >= Number(peak.total_tokens || 0) ? item : peak;
+  }, null);
+  var peakCallsDay = budgetDaily.reduce(function (peak, item) {
+    return !peak || Number(item.requests || 0) >= Number(peak.requests || 0) ? item : peak;
+  }, null);
   var profileSpend = budgetCurrency === "CNY"
     ? Number(profileUsage.spend_cny || 0)
     : Number(profileUsage.spend_usd || 0);
@@ -7269,7 +7429,6 @@ function BudgetPanel(p) {
     available: codexQuota.connected === true,
     error: codexQuota.error || "",
     plan: codexPlan || "",
-    quota_enabled: codexQuotaEnabled,
     windows: codexWindows.map(function (windowData) {
       return {
         model: "codex",
@@ -7281,7 +7440,8 @@ function BudgetPanel(p) {
       };
     }),
   };
-  var providerUsageItems = providerUsage.concat([codexUsageItem]);
+  var providerUsageItems = providerUsage.slice();
+  if (codexQuota.connected === true) providerUsageItems.push(codexUsageItem);
   var minimaxUsageItems = providerUsageItems.filter(function (item) {
     return item.provider === "minimax";
   });
@@ -7298,6 +7458,14 @@ function BudgetPanel(p) {
     if (n >= 1e6) return (n / 1e6).toFixed(1) + "M";
     if (n >= 1e3) return (n / 1e3).toFixed(1) + "K";
     return String(n);
+  }
+
+  function formatPeakDate(item) {
+    if (!item || !item.day) return "";
+    var value = new Date(String(item.day) + "T00:00:00");
+    return t("settings.usagePeakDate", {
+      date: isNaN(value.getTime()) ? String(item.day) : value.toLocaleDateString(),
+    });
   }
 
   function usageMetric(value, label, detail) {
@@ -7329,6 +7497,9 @@ function BudgetPanel(p) {
   }
 
   function providerUsageCard(item) {
+    var visibleWindows = (item.windows || []).filter(function (windowData) {
+      return String(windowData.model || "").trim().toLowerCase() !== "video";
+    });
     var stateClass = item.status === "ok" && item.available === false ? "empty" : item.status;
     var stateLabel = item.status === "ok"
       ? item.available === false ? t("settings.providerUsageDepleted") : t("settings.providerUsageConnected")
@@ -7370,15 +7541,8 @@ function BudgetPanel(p) {
         }),
         !(item.balances || []).length && React.createElement("p", { className: "wb-hint" }, t("settings.providerUsageNoBalance")),
       ),
-      item.status === "ok" && item.kind === "codex_quota" && React.createElement("div", { className: "wb-provider-codex-guard" },
-        React.createElement("div", null,
-          React.createElement("strong", null, t("settings.codexQuotaLimit")),
-          React.createElement("small", null, t("settings.codexQuotaLimitHint")),
-        ),
-        Toggle(codexQuotaEnabled, toggleCodexQuota),
-      ),
       item.status === "ok" && (item.kind === "quota" || item.kind === "codex_quota") && React.createElement("div", { className: "wb-provider-quota-list" },
-        (item.windows || []).map(function (windowData, index) {
+        visibleWindows.map(function (windowData, index) {
           var remaining = windowData.remaining_percent == null ? null : Number(windowData.remaining_percent);
           var used = windowData.used_percent == null ? 0 : Number(windowData.used_percent);
           var valueLabel = windowData.unlimited
@@ -7407,7 +7571,7 @@ function BudgetPanel(p) {
             ),
           );
         }),
-        !(item.windows || []).length && React.createElement("p", { className: "wb-hint" }, t("settings.providerUsageNoQuota")),
+        !visibleWindows.length && React.createElement("p", { className: "wb-hint" }, t("settings.providerUsageNoQuota")),
       ),
       item.refreshed_at && React.createElement("footer", null, t("settings.providerUsageUpdated", { time: new Date(item.refreshed_at).toLocaleString() })),
     );
@@ -7439,25 +7603,20 @@ function BudgetPanel(p) {
           usageMetric(totalRequests.toLocaleString(), t("settings.budgetRequests")),
           usageMetric(formatTokens(periodTotalTokens), t("settings.budgetTokens")),
           usageMetric(formatTokens(periodPromptTokens), t("settings.usageInputTokens")),
-          usageMetric(formatTokens(periodCompletionTokens), t("settings.usageOutputTokens")),
-          usageMetric(formatCost(averageRequestCost), t("settings.usageAverageCost")),
-          usageMetric(budgetEnabled ? formatCost(budgetNum) : "—", t("settings.budgetLimit")),
-          usageMetric(budgetEnabled && budgetNum > 0 ? Math.round(budgetRatio * 100) + "%" : "—", t("settings.usageBudgetRate")),
-        ),
-        React.createElement("div", { className: "wb-budget-progress-wrap" },
-          React.createElement("div", { className: "wb-budget-progress-bar" },
-            React.createElement("div", {
-              className: "wb-budget-progress-fill" + (budgetRatio >= 1 ? " over" : budgetRatio >= 0.8 ? " high" : ""),
-              style: { width: Math.round(budgetRatio * 100) + "%" },
-            }),
+          usageMetric(
+            totalRequests > 0 ? formatTokens(Math.round(averageRequestTokens)) : "—",
+            t("settings.usageAverageTokens"),
+            totalRequests > 0 ? t("settings.usageMaxRequestTokens", { tokens: formatTokens(maxRequestTokens) }) : ""
           ),
-          React.createElement("span", { className: "wb-budget-progress-label" },
-            t("settings.budgetUsed", { pct: Math.round(budgetRatio * 100) })
+          usageMetric(
+            formatCost(averageRequestCost),
+            t("settings.usageAverageCost"),
+            totalRequests > 0 ? t("settings.usageMaxRequestCost", { cost: formatCost(maxRequestCost) }) : ""
           ),
+          usageMetric(peakUsageDay ? formatTokens(peakUsageDay.total_tokens) : "—", t("settings.usagePeakUsage"), formatPeakDate(peakUsageDay)),
+          usageMetric(peakCallsDay ? Number(peakCallsDay.requests || 0).toLocaleString() : "—", t("settings.usagePeakCalls"), formatPeakDate(peakCallsDay)),
         ),
-        !budgetEnabled && React.createElement("p", { className: "wb-hint", style: { textAlign: "center", marginTop: 8 } },
-          t("settings.budgetDisabledHint")
-        ),
+        React.createElement(UsageTrendChart, { t: t, items: budgetDaily, currencySymbol: currencySymbol }),
       ),
     ),
 
@@ -7534,6 +7693,29 @@ function BudgetPanel(p) {
       ),
     ), { id: "setting-budget" }),
 
+    mode === "budget" && SectionBlock(t("settings.budgetOverview"), null,
+      React.createElement("div", { className: "wb-budget-summary" },
+        React.createElement("div", { className: "wb-usage-metrics is-period" },
+          usageMetric(budgetEnabled ? formatCost(budgetNum) : "—", t("settings.budgetLimit")),
+          usageMetric(budgetEnabled && budgetNum > 0 ? Math.round(budgetRatio * 100) + "%" : "—", t("settings.usageBudgetRate")),
+        ),
+        React.createElement("div", { className: "wb-budget-progress-wrap" },
+          React.createElement("div", { className: "wb-budget-progress-bar" },
+            React.createElement("div", {
+              className: "wb-budget-progress-fill" + (budgetRatio >= 1 ? " over" : budgetRatio >= 0.8 ? " high" : ""),
+              style: { width: Math.round(budgetRatio * 100) + "%" },
+            }),
+          ),
+          React.createElement("span", { className: "wb-budget-progress-label" },
+            t("settings.budgetUsed", { pct: Math.round(budgetRatio * 100) })
+          ),
+        ),
+        !budgetEnabled && React.createElement("p", { className: "wb-hint", style: { textAlign: "center", marginTop: 8 } },
+          t("settings.budgetDisabledHint")
+        ),
+      ),
+    ),
+
     // ── Cost by model ──
     mode === "usage" && SectionBlock(t("settings.usageByModel"), t("settings.usageByModelHint"),
       React.createElement("div", { className: "wb-budget-model-grid" },
@@ -7577,16 +7759,16 @@ function BudgetPanel(p) {
     ),
 
     mode === "usage" && SectionBlock(t("settings.providerUsage"), t("settings.providerUsageHint"),
-      React.createElement("div", { className: "wb-provider-usage-grid" },
+      providerUsageItems.length > 0 && React.createElement("div", { className: "wb-provider-usage-grid" },
         React.createElement("div", { className: "wb-provider-usage-column is-compact" },
           compactProviderUsageItems.map(providerUsageCard),
         ),
         React.createElement("div", { className: "wb-provider-usage-column is-minimax" },
           minimaxUsageItems.map(providerUsageCard),
-          !providerUsageLoading && !minimaxUsageItems.length && React.createElement("div", { className: "wb-budget-model-empty" },
-            t("settings.providerUsageEmpty")
-          ),
         ),
+      ),
+      !providerUsageLoading && !providerUsageItems.length && React.createElement("div", { className: "wb-budget-model-empty" },
+        t("settings.providerUsageEmpty")
       ),
     ),
 

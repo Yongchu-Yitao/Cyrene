@@ -148,6 +148,7 @@
       delete progress.completedAt;
     }
     writeProgress(guideId, progress);
+    emit();
   }
 
   function catalog() {

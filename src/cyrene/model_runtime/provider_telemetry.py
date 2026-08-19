@@ -330,7 +330,11 @@ async def configured_provider_telemetry(
     selected = [
         connection
         for connection in connections
-        if isinstance(connection, dict) and _provider_preset(connection) in _DEFINITIONS
+        if (
+            isinstance(connection, dict)
+            and _provider_preset(connection) in _DEFINITIONS
+            and str(connection.get("api_key") or "").strip()
+        )
     ]
 
     async def fetch(connection: dict[str, Any]) -> dict[str, Any]:

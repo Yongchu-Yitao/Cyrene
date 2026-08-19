@@ -1727,8 +1727,10 @@ async def get_token_usage_stats(
                       COALESCE(SUM(prompt_tokens), 0) AS prompt_tokens,
                       COALESCE(SUM(completion_tokens), 0) AS completion_tokens,
                       COALESCE(SUM(total_tokens), 0) AS total_tokens,
+                      COALESCE(MAX(total_tokens), 0) AS max_total_tokens,
                       COALESCE(SUM(cache_hit_tokens), 0) AS cache_hit_tokens,
-                      COALESCE(SUM(estimated_cost), 0) AS total_cost
+                      COALESCE(SUM(estimated_cost), 0) AS total_cost,
+                      COALESCE(MAX(estimated_cost), 0) AS max_cost
                FROM token_usage WHERE created_at >= ?""",
             (since_iso,),
         )
@@ -1772,8 +1774,10 @@ async def get_token_usage_stats(
             "prompt_tokens": total.get("prompt_tokens", 0),
             "completion_tokens": total.get("completion_tokens", 0),
             "total_tokens": total.get("total_tokens", 0),
+            "max_total_tokens": total.get("max_total_tokens", 0),
             "cache_hit_tokens": total.get("cache_hit_tokens", 0),
             "total_cost": round(float(total.get("total_cost", 0)), 6),
+            "max_cost": round(float(total.get("max_cost", 0)), 6),
         },
         "by_model": by_model,
         "by_day": by_day,

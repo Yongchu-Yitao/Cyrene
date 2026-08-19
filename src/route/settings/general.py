@@ -1418,35 +1418,28 @@ def register_settings_routes(router: APIRouter, bot: Any, db_path: str) -> None:
 
     @router.get("/api/settings/budget/stats")
     async def api_budget_stats():
-        import calendar
         from datetime import datetime, timezone
         from cyrene.runtime.database import get_token_usage_stats as _usage_stats
         from cyrene.model_runtime.pricing import cost_from_cny as _cost_from_cny
         from cyrene.runtime.settings_store import get_all as _gsett
 
         currency = str(_gsett().get("budget_currency") or "CNY").upper()
-        start_day = int(_gsett().get("budget_start_day") or 1)
         now = datetime.now(timezone.utc)
-        _, days_in_month = calendar.monthrange(now.year, now.month)
-        period_start_day = min(start_day, days_in_month)
-        period_start = datetime(now.year, now.month, period_start_day, tzinfo=timezone.utc)
-        if now < period_start:
-            pm = now.month - 1 if now.month > 1 else 12
-            py = now.year if now.month > 1 else now.year - 1
-            _, days_in_prev = calendar.monthrange(py, pm)
-            period_start = datetime(py, pm, min(start_day, days_in_prev), tzinfo=timezone.utc)
+        month_start = datetime(now.year, now.month, 1, tzinfo=timezone.utc)
         try:
-            # Use the exact billing-period boundary. Converting it to an
-            # integer day count creates a rolling window that can include
-            # usage from before the configured start date.
+            # Usage analytics follow the natural calendar month. The budget
+            # cycle start day remains a budget-control setting and must not
+            # shift the reporting period shown on the Usage page.
             stats = await _usage_stats(
                 str(_db_path or DB_PATH),
-                since=period_start,
+                since=month_start,
             )
             by_model = stats.get("by_model", [])
+            by_day = stats.get("by_day", [])
             total = stats.get("total", {})
         except Exception:
             by_model = []
+            by_day = []
             total = {}
         total_requests = int(total.get("requests", 0))
 
@@ -1466,8 +1459,25 @@ def register_settings_routes(router: APIRouter, bot: Any, db_path: str) -> None:
 
         return {
             "models": rows,
+            "by_day": [
+                {
+                    "day": str(day.get("day") or ""),
+                    "requests": int(day.get("requests") or 0),
+                    "total_tokens": int(day.get("total_tokens") or 0),
+                    "cost": round(
+                        _cost_from_cny(float(day.get("cost") or 0), currency),
+                        4,
+                    ),
+                }
+                for day in by_day
+            ],
             "total_cost": round(sum(r["cost"] for r in rows), 4),
             "total_requests": total_requests,
+            "max_request_tokens": int(total.get("max_total_tokens") or 0),
+            "max_request_cost": round(
+                _cost_from_cny(float(total.get("max_cost") or 0), currency),
+                4,
+            ),
         }
 
     @router.get("/api/budget/status")

@@ -307,6 +307,45 @@ def test_integration_settings_routes_hide_secrets_and_probe_drafts(monkeypatch, 
     )
 
 
+def test_budget_stats_exposes_daily_usage_for_peak_metrics(monkeypatch, tmp_path):
+    from cyrene.runtime import database, settings_store
+
+    usage_stats = AsyncMock(return_value={
+        "by_model": [],
+        "by_day": [
+            {"day": "2026-08-18", "requests": 7, "total_tokens": 1200, "cost": 0.75},
+            {"day": "2026-08-19", "requests": 11, "total_tokens": 3400, "cost": 1.25},
+        ],
+        "total": {
+            "requests": 18,
+            "max_total_tokens": 2400,
+            "max_cost": 1.75,
+        },
+    })
+    monkeypatch.setattr(database, "get_token_usage_stats", usage_stats)
+    monkeypatch.setattr(settings_store, "get_all", lambda: {
+        "budget_currency": "CNY",
+        "budget_start_day": 19,
+    })
+
+    app = FastAPI()
+    register_routes(app, bot=None, db_path=str(tmp_path / "usage.db"))
+
+    response = TestClient(app).get("/api/settings/budget/stats")
+
+    assert response.status_code == 200
+    assert response.json()["by_day"] == [
+        {"day": "2026-08-18", "requests": 7, "total_tokens": 1200, "cost": 0.75},
+        {"day": "2026-08-19", "requests": 11, "total_tokens": 3400, "cost": 1.25},
+    ]
+    assert response.json()["max_request_tokens"] == 2400
+    assert response.json()["max_request_cost"] == pytest.approx(1.75)
+    month_start = usage_stats.await_args.kwargs["since"]
+    assert month_start.day == 1
+    assert month_start.hour == 0
+    assert month_start.minute == 0
+
+
 def test_settings_ui_moves_zotero_to_integrations_and_keeps_embedding_in_models():
     root = Path(__file__).resolve().parent.parent
     source = (root / "src" / "webui" / "frontend" / "settings-overlay.jsx").read_text(encoding="utf-8")
@@ -410,6 +449,36 @@ def test_usage_settings_reuses_profile_metrics_and_expands_model_breakdown():
     assert 't("settings.profileUsageSnapshot")' in panel
     assert 't("settings.usageBillingPeriod")' in panel
     assert 't("settings.usageByModel")' in panel
+    assert '"settings.usageBillingPeriod": "本月统计"' in translations
+    assert '"settings.usageBillingPeriodHint": "统计本自然月的用量与费用。"' in translations
+    assert "从设置的计费起始日开始统计" not in translations
+    assert "当前计费周期" not in translations
+    usage_overview = panel.split('// ── Overview section ──', 1)[1].split('// ── Budget configuration ──', 1)[0]
+    budget_controls = panel.split('// ── Budget configuration ──', 1)[1].split('// ── Cost by model ──', 1)[0]
+    assert 't("settings.budgetLimit")' not in usage_overview
+    assert 'className: "wb-budget-progress-wrap"' not in usage_overview
+    assert 't("settings.usagePeakUsage")' in usage_overview
+    assert 't("settings.usagePeakCalls")' in usage_overview
+    assert 't("settings.usageAverageTokens")' in usage_overview
+    assert 't("settings.usageMaxRequestTokens"' in usage_overview
+    assert 't("settings.usageMaxRequestCost"' in usage_overview
+    assert 't("settings.usageOutputTokens")' not in usage_overview
+    assert 'formatPeakDate(peakUsageDay)' in usage_overview
+    assert 'formatPeakDate(peakCallsDay)' in usage_overview
+    assert 'React.createElement(UsageTrendChart, { t: t, items: budgetDaily, currencySymbol: currencySymbol })' in usage_overview
+    assert 'window.echarts.init(node)' in settings
+    assert 'yAxisIndex: 0' in settings
+    assert 'yAxisIndex: 1' in settings
+    assert 'yAxisIndex: 2' in settings
+    assert 'type: "dashed"' in settings
+    assert 'type: "dotted"' in settings
+    assert 'grid: { left: 58, right: 112, top: 44, bottom: 32 }' in settings
+    assert 'combinedYAxis("right", 56, compactCostAxisValue' in settings
+    assert 'mode === "budget" && SectionBlock(t("settings.budgetOverview")' in budget_controls
+    assert 't("settings.budgetLimit")' in budget_controls
+    assert 't("settings.usageBudgetRate")' in budget_controls
+    assert 'className: "wb-budget-progress-wrap"' in budget_controls
+    assert 't("settings.budgetDisabledHint")' in budget_controls
     assert 'formatTokens(item.prompt_tokens)' in panel
     assert 'formatTokens(item.completion_tokens)' in panel
     assert 't("settings.usageNoModelData")' in panel
@@ -419,14 +488,22 @@ def test_usage_settings_reuses_profile_metrics_and_expands_model_breakdown():
     assert 'className: "wb-budget-model-head"' not in panel
     assert 'settingsFetch("/api/settings/model-config/provider-usage"' in panel
     assert 't("settings.providerUsage")' in panel
+    assert '"settings.providerUsageHint": "显示已配置服务商的实时账户余额与额度"' in translations
     assert 'className: "wb-provider-usage-grid"' in panel
     assert 'item.kind === "balance"' in panel
     assert 'item.kind === "quota"' in panel
     assert 'kind: "codex_quota"' in panel
-    assert 'providerUsage.concat([codexUsageItem])' in panel
+    assert 'if (codexQuota.connected === true) providerUsageItems.push(codexUsageItem)' in panel
+    assert 'var [codexQuota, setCodexQuota] = useStateSt({ connected: false, limits: {} })' in panel
     assert 't("settings.providerUsageStatusUnknown")' in panel
-    assert 'Toggle(codexQuotaEnabled, toggleCodexQuota)' in panel
-    assert 'cyrene-provider-usage-v1' in panel
+    assert 'Toggle(codexQuotaEnabled, toggleCodexQuota)' not in panel
+    assert 'String(windowData.model || "").trim().toLowerCase() !== "video"' in panel
+    assert 'visibleWindows.map' in panel
+    assert '!visibleWindows.length' in panel
+    assert 'cyrene-provider-usage-v1' not in panel
+    assert 'localStorage.setItem(PROVIDER_USAGE_CACHE_KEY' not in panel
+    assert 'providerUsageItems.length > 0 && React.createElement("div", { className: "wb-provider-usage-grid" }' in panel
+    assert '!providerUsageLoading && !providerUsageItems.length' in panel
     assert 'item.refreshing === true' in panel
     assert 'fetchProviderUsage(false, true)' in panel
     assert 'className: "wb-provider-usage-column is-compact"' in panel
@@ -439,8 +516,20 @@ def test_usage_settings_reuses_profile_metrics_and_expands_model_breakdown():
         "settings.usageBillingPeriod",
         "settings.usageInputTokens",
         "settings.usageOutputTokens",
+        "settings.usageAverageTokens",
+        "settings.usageMaxRequestTokens",
         "settings.usageAverageCost",
+        "settings.usageMaxRequestCost",
         "settings.usageBudgetRate",
+        "settings.usagePeakUsage",
+        "settings.usagePeakCalls",
+        "settings.usagePeakDate",
+        "settings.usageTrendTitle",
+        "settings.usageTrendHint",
+        "settings.usageTrendTokens",
+        "settings.usageTrendRequests",
+        "settings.usageTrendCost",
+        "settings.usageTrendEmpty",
         "settings.usageByModel",
         "settings.usageNoModelData",
         "settings.providerUsage",
@@ -451,6 +540,12 @@ def test_usage_settings_reuses_profile_metrics_and_expands_model_breakdown():
 
     assert ".wb-usage-metrics" in styles
     assert ".wb-usage-metric" in styles
+    assert ".wb-usage-trend-canvas" in styles
+    provider_grid_rule = styles.split(".wb-provider-usage-grid {", 1)[1].split("}", 1)[0]
+    provider_card_rule = styles.split(".wb-provider-usage-column > .wb-provider-usage-card {", 1)[1].split("}", 1)[0]
+    assert "align-items: start" in provider_grid_rule
+    assert "align-items: stretch" not in provider_grid_rule
+    assert "flex: 0 0 auto" in provider_card_rule
     assert "min-height: 72px" in styles
     assert ".settings-overlay .wb-usage-settings > .wb-section-block" in styles
     assert ".settings-overlay .wb-usage-settings .wb-budget-summary" in styles

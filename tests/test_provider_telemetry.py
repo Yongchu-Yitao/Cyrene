@@ -214,6 +214,38 @@ async def test_cached_provider_usage_returns_immediately_and_refreshes_in_backgr
     assert updated["refreshing"] is False
 
 
+@pytest.mark.asyncio
+async def test_configured_provider_usage_skips_connections_without_api_keys(monkeypatch):
+    from cyrene.model_runtime import provider_telemetry as telemetry
+
+    monkeypatch.setattr(telemetry, "get_model_configuration", lambda: {
+        "connections": [
+            {
+                "id": "deepseek",
+                "api_key": "",
+                "options": {"provider_preset": "deepseek"},
+            },
+            {
+                "id": "minimax",
+                "api_key": "minimax-secret",
+                "options": {"provider_preset": "minimax"},
+            },
+        ],
+    })
+    fetch = AsyncMock(return_value={
+        "connection_id": "minimax",
+        "provider": "minimax",
+        "status": "ok",
+    })
+    monkeypatch.setattr(telemetry, "provider_telemetry", fetch)
+
+    result = await telemetry.configured_provider_telemetry()
+
+    assert [item["provider"] for item in result] == ["minimax"]
+    fetch.assert_awaited_once()
+    assert fetch.await_args.args[0]["id"] == "minimax"
+
+
 def test_provider_usage_route_forwards_explicit_refresh(monkeypatch):
     from cyrene.model_runtime import provider_telemetry as telemetry
     from route.settings.model_configuration import register_model_configuration_routes
