@@ -75,6 +75,16 @@
   --wb-green: #1f9d57;
   --wb-amber: var(--warn);
   --wb-red: var(--err);
+  --wb-chart-token: #2f6fec;
+  --wb-chart-request: #9d6100;
+  --wb-chart-cost: #a3448f;
+  --wb-chart-legend: #3f4a57;
+  --wb-chart-axis: #687584;
+  --wb-chart-grid: rgba(23, 28, 34, 0.12);
+  --wb-chart-axis-line: rgba(23, 28, 34, 0.22);
+  --wb-chart-tooltip-bg: #ffffff;
+  --wb-chart-tooltip-border: #d2dae2;
+  --wb-chart-tooltip-text: #171c22;
   --wb-accent-text: var(--accent-text, #fff);
   --wb-user-message-text: var(--wb-accent-text);
   --wb-sans: var(--sans, "Manrope", "Noto Sans SC", system-ui, sans-serif);
@@ -7372,6 +7382,16 @@ html[data-theme="dark"] .workbench-shell {
   --wb-notif-link: #8ebcff;
   --wb-notif-active-line: #ff7d7f;
   --wb-notif-item-hover: color-mix(in srgb, var(--accent) 8%, rgba(255, 255, 255, 0.02));
+  --wb-chart-token: #72a7ff;
+  --wb-chart-request: #f4bd50;
+  --wb-chart-cost: #e77bd5;
+  --wb-chart-legend: #d7dae2;
+  --wb-chart-axis: #9ba3b0;
+  --wb-chart-grid: rgba(194, 195, 202, 0.16);
+  --wb-chart-axis-line: rgba(194, 195, 202, 0.28);
+  --wb-chart-tooltip-bg: #202126;
+  --wb-chart-tooltip-border: #454751;
+  --wb-chart-tooltip-text: #f1f1f4;
 }
 
 html[data-theme="light"] .settings-overlay-panel {

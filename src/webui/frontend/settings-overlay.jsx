@@ -4351,22 +4351,50 @@ var STORAGE_COLORS = {
   caches: "#78716c",
 };
 
+// DataPanel is intentionally remounted when the user switches settings tabs.
+// Keep the last successful scan outside the component so returning to Data can
+// paint the table immediately while a stale snapshot refreshes in the
+// background. A shared promise also prevents rapid tab changes from starting
+// overlapping disk scans.
+var DATA_PANEL_STORAGE_TTL_MS = 30000;
+var dataPanelStorageCache = null;
+var dataPanelStorageCachedAt = 0;
+var dataPanelStorageRequest = null;
+
+function requestDataPanelStorage() {
+  var cacheIsFresh = dataPanelStorageCache
+    && Date.now() - dataPanelStorageCachedAt < DATA_PANEL_STORAGE_TTL_MS;
+  if (cacheIsFresh) return Promise.resolve(dataPanelStorageCache);
+  if (dataPanelStorageRequest) return dataPanelStorageRequest;
+  dataPanelStorageRequest = settingsFetch("/api/settings/storage")
+    .then(function (response) { return response.json(); })
+    .then(function (payload) {
+      dataPanelStorageCache = payload;
+      dataPanelStorageCachedAt = Date.now();
+      return payload;
+    })
+    .finally(function () {
+      dataPanelStorageRequest = null;
+    });
+  return dataPanelStorageRequest;
+}
+
 function DataPanel(p) {
   var { t, redactSecrets, saveRedactSecrets, config, configLoading, resetStatus, setResetStatus, resetting, setResetting, backupList, backupMsg, setBackupMsg, loadBackups, exportSids, setExportSids, workbenchExportSessions, exportFmt, setExportFmt, exportMsg, setExportMsg, formatBytes, formatDate } = p;
 
-  var [storage, setStorage] = useStateSt(null);
+  var [storage, setStorage] = useStateSt(dataPanelStorageCache);
   var [storageError, setStorageError] = useStateSt("");
 
-  function loadStorage() {
+  useEffectSt(function () {
+    var mounted = true;
     setStorageError("");
-    settingsFetch("/api/settings/storage").then(function (r) { return r.json(); }).then(function (payload) {
-      setStorage(payload);
+    requestDataPanelStorage().then(function (payload) {
+      if (mounted) setStorage(payload);
     }).catch(function (e) {
-      setStorageError(e.message || String(e));
+      if (mounted) setStorageError(e.message || String(e));
     });
-  }
-
-  useEffectSt(function () { loadStorage(); }, []);
+    return function () { mounted = false; };
+  }, []);
 
   var storageList = (storage ? storage.categories : []).slice().sort(function (a, b) { return b.bytes - a.bytes; });
   var storageNonEmpty = storageList.filter(function (c) { return c.bytes > 0; });
@@ -4496,7 +4524,8 @@ function DataPanel(p) {
       ),
       storageError
         ? React.createElement("p", { className: "wb-hint" }, t("settings.storageError") + ": " + storageError)
-        : storage && React.createElement("div", { className: "wb-storage" },
+        : null,
+      storage && React.createElement("div", { className: "wb-storage" },
             storage.total > 0 && React.createElement("div", { className: "wb-storage-bar", role: "img", "aria-label": t("settings.storageUsage") },
               storageNonEmpty.map(function (c) {
                 return React.createElement("span", {
@@ -7144,20 +7173,24 @@ function UsageTrendChart(p) {
 
     var chart = window.echarts.init(node);
     function renderChart() {
-      var style = getComputedStyle(document.documentElement);
-      var textColor = style.getPropertyValue("--wb-text-secondary").trim() || "#526070";
-      var mutedColor = style.getPropertyValue("--wb-muted").trim() || "#7a8796";
-      var gridColor = style.getPropertyValue("--wb-line").trim() || "#dbe1e8";
-      var tokenColor = style.getPropertyValue("--wb-accent").trim() || "#4f7cff";
-      var requestColor = style.getPropertyValue("--wb-warning-text").trim() || "#9a6700";
-      var costColor = style.getPropertyValue("--wb-purple").trim() || "#b34ca0";
+      var style = getComputedStyle(node);
+      var textColor = style.getPropertyValue("--wb-chart-legend").trim() || "#3f4a57";
+      var mutedColor = style.getPropertyValue("--wb-chart-axis").trim() || "#687584";
+      var gridColor = style.getPropertyValue("--wb-chart-grid").trim() || "rgba(23, 28, 34, 0.12)";
+      var axisLineColor = style.getPropertyValue("--wb-chart-axis-line").trim() || "rgba(23, 28, 34, 0.22)";
+      var tokenColor = style.getPropertyValue("--wb-chart-token").trim() || "#2f6fec";
+      var requestColor = style.getPropertyValue("--wb-chart-request").trim() || "#9d6100";
+      var costColor = style.getPropertyValue("--wb-chart-cost").trim() || "#a3448f";
+      var tooltipBackground = style.getPropertyValue("--wb-chart-tooltip-bg").trim() || "#ffffff";
+      var tooltipBorder = style.getPropertyValue("--wb-chart-tooltip-border").trim() || "#d2dae2";
+      var tooltipText = style.getPropertyValue("--wb-chart-tooltip-text").trim() || "#171c22";
       function combinedYAxis(position, offset, formatter, color, showSplitLine) {
         return {
           type: "value",
           position: position,
           offset: offset || 0,
           min: 0,
-          axisLine: { show: true, lineStyle: { color: color } },
+          axisLine: { show: true, lineStyle: { color: axisLineColor } },
           axisTick: { show: false },
           axisLabel: { color: color, fontSize: 10, formatter: formatter },
           splitLine: showSplitLine
@@ -7176,14 +7209,24 @@ function UsageTrendChart(p) {
           left: "center",
           itemWidth: 24,
           itemHeight: 8,
-          textStyle: { color: textColor, fontSize: 11 },
+          textStyle: { color: textColor, fontSize: 11, fontWeight: 500 },
+          inactiveColor: mutedColor,
         },
-        tooltip: { trigger: "axis", confine: true },
+        tooltip: {
+          trigger: "axis",
+          confine: true,
+          backgroundColor: tooltipBackground,
+          borderColor: tooltipBorder,
+          borderWidth: 1,
+          textStyle: { color: tooltipText },
+          axisPointer: { lineStyle: { color: axisLineColor, type: "dashed" } },
+          extraCssText: "box-shadow: 0 10px 30px rgba(0, 0, 0, 0.24); border-radius: 8px;",
+        },
         xAxis: {
           type: "category",
           boundaryGap: false,
           data: days,
-          axisLine: { lineStyle: { color: gridColor } },
+          axisLine: { lineStyle: { color: axisLineColor } },
           axisTick: { show: false },
           axisLabel: { color: mutedColor, fontSize: 10, hideOverlap: true },
           splitLine: { show: false },

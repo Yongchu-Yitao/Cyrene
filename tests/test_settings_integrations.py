@@ -467,6 +467,12 @@ def test_usage_settings_reuses_profile_metrics_and_expands_model_breakdown():
     assert 'formatPeakDate(peakCallsDay)' in usage_overview
     assert 'React.createElement(UsageTrendChart, { t: t, items: budgetDaily, currencySymbol: currencySymbol })' in usage_overview
     assert 'window.echarts.init(node)' in settings
+    assert 'var style = getComputedStyle(node)' in settings
+    assert 'getComputedStyle(document.documentElement)' not in settings
+    assert 'style.getPropertyValue("--wb-chart-token")' in settings
+    assert 'style.getPropertyValue("--wb-chart-request")' in settings
+    assert 'style.getPropertyValue("--wb-chart-cost")' in settings
+    assert 'backgroundColor: tooltipBackground' in settings
     assert 'yAxisIndex: 0' in settings
     assert 'yAxisIndex: 1' in settings
     assert 'yAxisIndex: 2' in settings
@@ -541,6 +547,10 @@ def test_usage_settings_reuses_profile_metrics_and_expands_model_breakdown():
     assert ".wb-usage-metrics" in styles
     assert ".wb-usage-metric" in styles
     assert ".wb-usage-trend-canvas" in styles
+    assert '--wb-chart-token: #72a7ff' in styles
+    assert '--wb-chart-request: #f4bd50' in styles
+    assert '--wb-chart-cost: #e77bd5' in styles
+    assert '--wb-chart-grid: rgba(194, 195, 202, 0.16)' in styles
     provider_grid_rule = styles.split(".wb-provider-usage-grid {", 1)[1].split("}", 1)[0]
     provider_card_rule = styles.split(".wb-provider-usage-column > .wb-provider-usage-card {", 1)[1].split("}", 1)[0]
     assert "align-items: start" in provider_grid_rule

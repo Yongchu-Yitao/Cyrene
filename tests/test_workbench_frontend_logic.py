@@ -8138,6 +8138,25 @@ def test_profile_top_tools_use_shared_tool_name_i18n():
     assert i18n.count('"toolName.Glob"') == 2
 
 
+def test_settings_storage_keeps_last_snapshot_across_tab_remounts():
+    root = Path(__file__).resolve().parent.parent
+    overlay = (root / "src/webui/frontend/settings-overlay.jsx").read_text(
+        encoding="utf-8"
+    )
+    storage = overlay.split("var DATA_PANEL_STORAGE_TTL_MS", 1)[1].split(
+        "function resetData()", 1
+    )[0]
+
+    assert "var dataPanelStorageCache = null;" in storage
+    assert "var dataPanelStorageRequest = null;" in storage
+    assert "if (cacheIsFresh) return Promise.resolve(dataPanelStorageCache);" in storage
+    assert "if (dataPanelStorageRequest) return dataPanelStorageRequest;" in storage
+    assert "dataPanelStorageCache = payload;" in storage
+    assert "useStateSt(dataPanelStorageCache)" in storage
+    assert "return function () { mounted = false; };" in storage
+    assert 'settingsFetch("/api/settings/storage")' in storage
+
+
 def test_workbench_tool_trace_preview_localizes_protocol_values_only():
     result = _run_workbench_trace_i18n_js(
         """
