@@ -41,6 +41,7 @@ dependencies = [
     "tokenizers>=0.21.0",
     "uvicorn>=0.34.0",
     "websockets>=15.0.1",
+    "pywinpty>=3.0.5; sys_platform == 'win32'",
     "winloop>=0.2.1; sys_platform == 'win32'",
     "openai-codex==0.144.4",
     "mlx-lm>=0.31.3 ; platform_machine == 'arm64' and sys_platform == 'darwin'",

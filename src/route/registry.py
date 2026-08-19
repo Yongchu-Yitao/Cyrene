@@ -40,6 +40,7 @@ from route.system.events import register_event_routes
 from route.system.instance import register_instance_routes
 from route.system.logs import register_log_routes
 from route.system.shell import register_shell_routes
+from route.system.terminal import register_terminal_routes
 from route.system.updates import register_update_routes
 from route.tasks import register_task_routes
 from route.usage import register_usage_routes
@@ -148,6 +149,7 @@ def register_routes(app: FastAPI, bot: Any, db_path: str) -> None:
     register_model_configuration_routes(router)
     register_custom_tool_routes(router, bot, db_path)
     register_voice_routes(router)
+    register_terminal_routes(router)
     router.include_router(code_router)
 
     # Routes split from the former monolithic adapter.

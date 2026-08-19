@@ -1633,3 +1633,17 @@ final result: passed
 - Final: testing is model-specific inside the card, the capability field is a three-option multi-select beside display name, and detail scrolling remains functional with no visible scrollbar.
 
 final result: passed
+
+---
+
+# Split Terminal — 2026-08-19
+
+- Reference: supplied Cyrene rail screenshot, dark theme.
+- Implementation capture: local Workbench with Terminal mode selected and an active split terminal.
+- Combined comparison: `/var/folders/zm/qgh_rgw903j0b9t01yg2l0mc0000gn/T/cyrene-terminal-comparison.png`.
+- Visual match: reused the existing rail header, search, add/collapse controls, section labels, cards, active state, action menu, module dock, spacing, radii, and typography. The implementation respects the user's current accent theme rather than hard-coding the blue accent from the reference.
+- Interaction checks: switched Chat → Files → Terminal, created terminals, opened a terminal split, sent input and observed PTY output, pinned/unpinned, opened the action menu, renamed a terminal, reloaded, and reattached to the surviving session.
+- Console: no warnings or errors during the tested flow.
+- Automated checks: frontend production build, focused PTY tests, and Ruff checks passed.
+
+final result: passed

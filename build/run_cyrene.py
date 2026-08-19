@@ -71,6 +71,8 @@ def _run_smoke_test() -> None:
     import platform
     if os.name == "nt" and platform.machine().lower() in {"arm64", "aarch64"}:
         _smoke_imports["onnxruntime_qnn"] = None
+    if os.name == "nt":
+        _smoke_imports["winpty"] = None
     if sys.platform == "darwin" and platform.machine().lower() in {"arm64", "aarch64"}:
         _smoke_imports["mlx"] = None
         _smoke_imports["mlx_lm"] = None
@@ -179,6 +181,12 @@ if __name__ == "__main__":
         sys.argv.remove("--launch-simplexng")
         from cyrene.tooling.backends.simplexng_child import main as _run_simplexng_child
         _run_simplexng_child()
+        raise SystemExit(0)
+
+    if "--launch-terminal-daemon" in sys.argv:
+        sys.argv.remove("--launch-terminal-daemon")
+        from cyrene.terminal.daemon import main as _run_terminal_daemon
+        _run_terminal_daemon()
         raise SystemExit(0)
 
     if "--launch-web" in sys.argv:

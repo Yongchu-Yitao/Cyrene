@@ -368,6 +368,8 @@ function wbcPaneCard(kind, payload, options) {
     ? "pane:" + (++WBC_PANE_CARD_SEQUENCE)
     : normalizedKind === "chat" && payload
     ? "chat:" + String(payload)
+    : normalizedKind === "terminal" && payload
+    ? "terminal:" + String(payload)
     : "pane:" + (++WBC_PANE_CARD_SEQUENCE);
   return {
     id: opts.id || stableId,
@@ -5694,6 +5696,11 @@ function WorkbenchChatPage({ active, project, newChatRequestId, onOpenTask, onAc
   var isActive = active !== false;
   var model = WorkbenchChatModel;
   var projectId = project ? project.id : "";
+  var terminalModule = window.CyreneUI.require("terminal");
+  var terminalClient = terminalModule.Client;
+  var [terminals, setTerminals] = useWbcState([]);
+  var [terminalsLoading, setTerminalsLoading] = useWbcState(false);
+  var [activeTerminalId, setActiveTerminalId] = useWbcState("");
   var chatCache = wbcChatCache();
   var [chats, setChats] = useWbcState([]);
   var chatsRef = useWbcRef([]);
@@ -5774,6 +5781,148 @@ function WorkbenchChatPage({ active, project, newChatRequestId, onOpenTask, onAc
   var skipNextHydrationChatIdRef = useWbcRef("");
   var chatHydrationSequenceRef = useWbcRef({});
   var handledNewChatRequestIdRef = useWbcRef(0);
+  var pendingTerminalRestoreRef = useWbcRef({ projectId: "", terminalId: "" });
+  var [terminalRestoreRevision, setTerminalRestoreRevision] = useWbcState(0);
+
+  function refreshTerminals() {
+    if (!projectId) {
+      setTerminals([]);
+      return Promise.resolve([]);
+    }
+    setTerminalsLoading(true);
+    return terminalClient.list(projectId).then(function (payload) {
+      var items = Array.isArray(payload && payload.terminals) ? payload.terminals : [];
+      setTerminals(items);
+      var restoredId = String(payload && payload.activeTerminalId || "");
+      if (restoredId && items.some(function (item) { return String(item.id) === restoredId; })) {
+        pendingTerminalRestoreRef.current = {
+          projectId: String(projectId),
+          terminalId: restoredId,
+        };
+        setTerminalRestoreRevision(function (revision) { return revision + 1; });
+      }
+      return items;
+    }).catch(function (err) {
+      window.CyreneUI.require("feedback").showToast(wbcErrorText(err), "error");
+      return [];
+    }).finally(function () { setTerminalsLoading(false); });
+  }
+
+  useWbcEffect(function () {
+    setActiveTerminalId("");
+    pendingTerminalRestoreRef.current = { projectId: "", terminalId: "" };
+    refreshTerminals();
+  }, [projectId]);
+
+  useWbcEffect(function () {
+    var pending = pendingTerminalRestoreRef.current;
+    if (
+      loading
+      || !pending.terminalId
+      || String(pending.projectId) !== String(projectId)
+    ) return;
+    pendingTerminalRestoreRef.current = { projectId: "", terminalId: "" };
+    replaceWithTerminal(pending.terminalId, {
+      skipPersist: true,
+      ownerChatId: String(activeChatId || ""),
+    });
+  }, [projectId, activeChatId, loading, terminalRestoreRevision]);
+
+  function updateTerminalSummary(terminal) {
+    if (!terminal || !terminal.id) return;
+    setTerminals(function (current) {
+      var found = false;
+      var next = current.map(function (item) {
+        if (String(item.id) !== String(terminal.id)) return item;
+        found = true;
+        return Object.assign({}, item, terminal);
+      });
+      return found ? next : [terminal].concat(next);
+    });
+  }
+
+  function openTerminal(terminalId, side) {
+    var id = String(terminalId || "");
+    if (!id) return;
+    if (side !== "left" && side !== "right") {
+      replaceWithTerminal(id);
+      return;
+    }
+    setActiveTerminalId(id);
+    terminalClient.activate(projectId, id).catch(function () {});
+    openPaneContent("terminal", id, { side: side });
+  }
+
+  function replaceWithTerminal(terminalId, options) {
+    var id = String(terminalId || "");
+    if (!id) return;
+    setActiveTerminalId(id);
+    if (!(options && options.skipPersist)) terminalClient.activate(projectId, id).catch(function () {});
+    openPaneContent("terminal", id, {
+      replaceWorkspace: true,
+      ownerChatId: options && options.ownerChatId,
+    });
+  }
+
+  function createTerminal() {
+    setTerminalsLoading(true);
+    return terminalClient.create(projectId).then(function (terminal) {
+      updateTerminalSummary(terminal);
+      replaceWithTerminal(terminal.id);
+      return terminal;
+    }).catch(function (err) {
+      window.CyreneUI.require("feedback").showToast(wbcErrorText(err), "error");
+      return null;
+    }).finally(function () { setTerminalsLoading(false); });
+  }
+
+  function renameTerminal(terminalId, title) {
+    return terminalClient.rename(terminalId, title).then(function (terminal) {
+      updateTerminalSummary(terminal);
+      return terminal;
+    });
+  }
+
+  function updateTerminalLayout(order, pinned) {
+    return terminalClient.layout(projectId, order, pinned).then(function (payload) {
+      if (Array.isArray(payload && payload.terminals)) setTerminals(payload.terminals);
+      return payload;
+    }).catch(function (err) {
+      window.CyreneUI.require("feedback").showToast(wbcErrorText(err), "error");
+      return null;
+    });
+  }
+
+  function deleteTerminal(terminalId) {
+    var terminal = terminals.find(function (item) { return String(item.id) === String(terminalId); });
+    var feedback = window.CyreneUI.require("feedback");
+    var confirmation = feedback.confirmModal ? feedback.confirmModal({
+      title: wbcT("terminal.deleteTitle", "Delete terminal"),
+      body: wbcT("terminal.deleteBody", "This will stop the running process and remove {title}.", { title: terminal && terminal.title || "Terminal" }),
+      confirmLabel: wbcT("terminal.delete", "Delete terminal"),
+      danger: true,
+    }) : Promise.resolve(window.confirm(wbcT("terminal.deleteBody", "This will stop the running process and remove this terminal.")));
+    return confirmation.then(function (confirmed) {
+      if (!confirmed) return null;
+      return terminalClient.remove(terminalId);
+    }).then(function (result) {
+      if (!result) return null;
+      setTerminals(function (current) { return current.filter(function (item) { return String(item.id) !== String(terminalId); }); });
+      setActiveTerminalId(function (current) { return String(current) === String(terminalId) ? "" : current; });
+      setPaneLayoutsByChat(function (current) {
+        var next = {};
+        Object.keys(current).forEach(function (ownerId) {
+          var layout = wbcNormalizePaneLayout(current[ownerId], ownerId.indexOf("project:") === 0 ? "" : ownerId);
+          next[ownerId] = Object.assign({}, layout, {
+            left: layout.left.filter(function (card) { return !(card.kind === "terminal" && String(card.payload) === String(terminalId)); }),
+            right: layout.right.filter(function (card) { return !(card.kind === "terminal" && String(card.payload) === String(terminalId)); }),
+          });
+        });
+        return next;
+      });
+      return result;
+    });
+  }
 
   function beginChatHydration(chatId) {
     var id = String(chatId || "");
@@ -5914,18 +6063,21 @@ function WorkbenchChatPage({ active, project, newChatRequestId, onOpenTask, onAc
     if (normalizedType === "file" || normalizedType === "viewer") {
       payload = wbcEditableChatFileResource({ projectId: projectId }, payload);
     }
-    var canonicalCardId = normalizedType === "chat" && payload
-      ? "chat:" + String(payload)
+    var canonicalCardId = (normalizedType === "chat" || normalizedType === "terminal") && payload
+      ? normalizedType + ":" + String(payload)
       : "";
-    var existingChatCard = canonicalCardId
+    var existingCanonicalCard = canonicalCardId
       ? wbcPaneCardLocation(paneLayoutFor(ownerChatId), canonicalCardId)
       : null;
+    if (normalizedType === "terminal" && existingCanonicalCard && !opts.replaceWorkspace) {
+      return existingCanonicalCard.card;
+    }
     // Opening the conversation that is already visible creates a second view,
     // not a second card with the same DOM/state identity. Drop highlighting is
     // keyed by card id, so duplicate canonical ids made both panes display the
     // same target prompt at once.
-    var card = existingChatCard
-      ? wbcPaneCard("chat", payload, { ownerChatId: ownerId, freshInstance: true })
+    var card = existingCanonicalCard
+      ? wbcPaneCard(normalizedType, payload, { ownerChatId: ownerId, freshInstance: true })
       : paneContentCard(normalizedType, payload, ownerId);
     updatePaneLayout(function (layout) {
       var source = opts.sourceCardId ? wbcPaneCardLocation(layout, opts.sourceCardId) : null;
@@ -5939,6 +6091,11 @@ function WorkbenchChatPage({ active, project, newChatRequestId, onOpenTask, onAc
         leftRatio: layout.leftRatio,
         rightRatio: layout.rightRatio,
       };
+      if (opts.replaceWorkspace) {
+        next.left = [card];
+        next.right = [];
+        return next;
+      }
       if (opts.promoteSourceLeft && source) {
         next.left = [source.card];
         next.right = [card];
@@ -6833,9 +6990,13 @@ function WorkbenchChatPage({ active, project, newChatRequestId, onOpenTask, onAc
     var side = resourceSplitSideAt(event);
     var resource = wbcReadResourceDrag(event);
     setResourceSplitDropSide("");
-    if (!side || !resource || resource.kind !== "file") return;
+    if (!side || !resource || ["file", "terminal"].indexOf(resource.kind) < 0) return;
     event.preventDefault();
     event.stopPropagation();
+    if (resource.kind === "terminal") {
+      openTerminal(resource.terminalId, side);
+      return;
+    }
     setSplitSideDirect(side);
     openViewer(resource.file && Object.keys(resource.file).length ? resource.file : resource, side);
   }
@@ -8377,6 +8538,11 @@ function WorkbenchChatPage({ active, project, newChatRequestId, onOpenTask, onAc
       descriptor.title = browserTab && (browserTab.title || browserTab.url) || wbcT("chat.side.browser", "Browser");
     } else if (pane.kind === "subagents") {
       descriptor.title = wbcT("workbenchChat.subagents", "Subagents");
+    } else if (pane.kind === "terminal") {
+      var detachedTerminal = terminals.find(function (terminal) {
+        return String(terminal && terminal.id || "") === String(pane.payload || "");
+      });
+      descriptor.title = detachedTerminal && detachedTerminal.title || wbcT("terminal.title", "Terminal");
     } else if (pane.kind === "side-agent") {
       descriptor.agent = sideAgents.find(function (agent) {
         return String(agent && agent.id || "") === String(pane.payload || "");
@@ -8888,6 +9054,10 @@ function WorkbenchChatPage({ active, project, newChatRequestId, onOpenTask, onAc
       if (resource && resource.kind === "file") {
         var file = resource.file && Object.keys(resource.file).length ? resource.file : resource;
         card = paneContentCard("file", file, activeChatIdRef.current);
+      } else if (resource && resource.kind === "terminal" && resource.terminalId) {
+        setActiveTerminalId(String(resource.terminalId));
+        terminalClient.activate(projectId, String(resource.terminalId)).catch(function () {});
+        card = paneContentCard("terminal", String(resource.terminalId), activeChatIdRef.current);
       }
     }
     if (!card) return;
@@ -9955,6 +10125,9 @@ function WorkbenchChatPage({ active, project, newChatRequestId, onOpenTask, onAc
           <header className="wbc-side-agent-split-head wbc-static-split-head"><span className="wbc-side-agent-split-title"><span>{wbcT("workbenchChat.subagents", "Subagents")}</span></span><button type="button" className="wbc-side-agent-split-close" onClick={close} aria-label={wbcT("workbenchChat.closeSubagents", "Close subagents")}>{WBC_ICONS.x}</button></header>
           <div className="wbc-resource-split-body wbc-subagents-split-body"><WbcSubagentsTab data={subagentData} loading={subagentLoading} onSelectRound={function (roundId) { loadSubagents(card.ownerChatId || activeChatId, roundId); }} /></div>
         </aside>;
+      } else if (card.kind === "terminal") {
+        var TerminalPane = terminalModule.Pane;
+        content = <TerminalPane terminalId={String(card.payload || "")} onState={updateTerminalSummary} />;
       }
     }
     if (!content) return null;
@@ -10084,6 +10257,9 @@ function WorkbenchChatPage({ active, project, newChatRequestId, onOpenTask, onAc
         projectId={projectId}
         projectName={project && project.name || ""}
         chats={chats}
+        terminals={terminals}
+        terminalsLoading={terminalsLoading}
+        activeTerminalId={activeTerminalId}
         pinnedChatIds={pinnedChatIds}
         activeChatId={activeChatId}
         loading={loading}
@@ -10098,6 +10274,11 @@ function WorkbenchChatPage({ active, project, newChatRequestId, onOpenTask, onAc
         toTaskBusy={toTaskBusy}
         onTogglePinned={onTogglePinnedChat}
         onOpenFile={openProjectFile}
+        onOpenTerminal={openTerminal}
+        onCreateTerminal={createTerminal}
+        onRenameTerminal={renameTerminal}
+        onDeleteTerminal={deleteTerminal}
+        onUpdateTerminalLayout={updateTerminalLayout}
         collapsed={navCollapsed}
         onToggleCollapsed={onToggleNavCollapsed}
         collapseControl={collapseControl}
@@ -10277,6 +10458,7 @@ function WbcRenameDialog({ chat, onClose, onRename, entity }) {
   var nextTitle = String(draft || "").trim();
   var canSave = !!nextTitle && nextTitle !== originalTitle && !saving;
   var isGroup = entity === "group";
+  var isTerminal = entity === "terminal";
 
   useWbcEffect(function () {
     setDraft(originalTitle);
@@ -10303,6 +10485,8 @@ function WbcRenameDialog({ chat, onClose, onRename, entity }) {
       window.CyreneUI.require("feedback").showToast(
         isGroup
           ? wbcT("workbenchChat.groupRenameSuccess", "Chat group renamed")
+          : isTerminal
+            ? wbcT("terminal.renameSuccess", "Terminal renamed")
           : wbcT("workbenchChat.renameSuccess", "Chat renamed"),
         "success"
       );
@@ -10330,6 +10514,8 @@ function WbcRenameDialog({ chat, onClose, onRename, entity }) {
         <div className="wbc-rename-head">
           <strong id="wbc-rename-title">{isGroup
             ? wbcT("workbenchChat.groupRename", "Rename group")
+            : isTerminal
+              ? wbcT("terminal.rename", "Rename terminal")
             : wbcT("workbenchChat.rename", "Rename chat")}</strong>
           <button
             type="button"
@@ -10342,6 +10528,8 @@ function WbcRenameDialog({ chat, onClose, onRename, entity }) {
         <div className="wbc-rename-body">
           <label htmlFor="wbc-rename-input">{isGroup
             ? wbcT("workbenchChat.groupTitleLabel", "Group title")
+            : isTerminal
+              ? wbcT("terminal.titleLabel", "Terminal title")
             : wbcT("workbenchChat.titleLabel", "Chat title")}</label>
           <input
             id="wbc-rename-input"
@@ -10892,7 +11080,7 @@ function wbcProjectFileResource(projectId, entry) {
   };
 }
 
-function WbcRail({ projectId, projectName, chats, pinnedChatIds, activeChatId, loading, runningChatIds, runtimeEngine, onSelect, onAnswer, onCreate, onRename, onDelete, onToTask, toTaskBusy, onTogglePinned, onOpenFile, collapsed, onToggleCollapsed, collapseControl, moduleDock }) {
+function WbcRail({ projectId, projectName, chats, terminals, terminalsLoading, activeTerminalId, pinnedChatIds, activeChatId, loading, runningChatIds, runtimeEngine, onSelect, onAnswer, onCreate, onRename, onDelete, onToTask, toTaskBusy, onTogglePinned, onOpenFile, onOpenTerminal, onCreateTerminal, onRenameTerminal, onDeleteTerminal, onUpdateTerminalLayout, collapsed, onToggleCollapsed, collapseControl, moduleDock }) {
   var [query, setQuery] = useWbcState("");
   var [railMode, setRailMode] = useWbcState("chat");
   var [fileLocation, setFileLocation] = useWbcState(function () {
@@ -10918,6 +11106,13 @@ function WbcRail({ projectId, projectName, chats, pinnedChatIds, activeChatId, l
   var [menuId, setMenuId] = useWbcState("");
   var [renameChat, setRenameChat] = useWbcState(null);
   var [renameGroup, setRenameGroup] = useWbcState(null);
+  var [renameTerminalItem, setRenameTerminalItem] = useWbcState(null);
+  var terminalDefaultOrder = (Array.isArray(terminals) ? terminals : []).slice().sort(function (left, right) {
+    return Number(left && left.orderIndex || 0) - Number(right && right.orderIndex || 0);
+  }).map(function (terminal) { return String(terminal.id); });
+  var [terminalOrder, setTerminalOrder] = useWbcState([]);
+  var [terminalPinnedIds, setTerminalPinnedIds] = useWbcState([]);
+  var [terminalDragId, setTerminalDragId] = useWbcState("");
   var [collapsedGroups, setCollapsedGroups] = useWbcState({});
   var defaultChats = useWbcMemo(function () {
     return wbcOrderChatsByPinned(chats, pinnedChatIds);
@@ -10955,6 +11150,12 @@ function WbcRail({ projectId, projectName, chats, pinnedChatIds, activeChatId, l
     fileDirectionRef.current = "forward";
   }, [projectId]);
   useWbcEffect(function () {
+    setTerminalOrder(terminalDefaultOrder);
+    setTerminalPinnedIds((Array.isArray(terminals) ? terminals : []).filter(function (terminal) {
+      return Boolean(terminal && terminal.pinned);
+    }).map(function (terminal) { return String(terminal.id); }));
+  }, [projectId, terminalDefaultOrder.join("|")]);
+  useWbcEffect(function () {
     if (railMode !== "files" || !projectId) return undefined;
     var cancelled = false;
     setFilesLoading(true);
@@ -10969,7 +11170,7 @@ function WbcRail({ projectId, projectName, chats, pinnedChatIds, activeChatId, l
 
   function toggleRailMode() {
     setQuery("");
-    setRailMode(railMode === "files" ? "chat" : "files");
+    setRailMode(railMode === "chat" ? "files" : railMode === "files" ? "terminal" : "chat");
   }
   var railMotionCollapsedRef = useWbcRef(!!collapsed);
   /* Derive the phase during the first render that sees the new collapsed prop.
@@ -12566,6 +12767,136 @@ function WbcRail({ projectId, projectName, chats, pinnedChatIds, activeChatId, l
     return function () { unregister.forEach(function (remove) { remove(); }); };
   }, [projectId, defaultOrderKey, filtered, query, collapsed, groups, menuId, activeChatId, pinnedChatIds, onSelect, onCreate, onDelete, onToTask, toTaskBusy, onTogglePinned, showAllRecent, recentOverflowCount, uiViewportRevision]);
 
+  var terminalMap = new Map((Array.isArray(terminals) ? terminals : []).map(function (terminal) {
+    return [String(terminal.id), terminal];
+  }));
+  var orderedTerminals = wbcNormalizeChatOrder(terminalDefaultOrder, terminalOrder).map(function (id) {
+    return terminalMap.get(id);
+  }).filter(Boolean).filter(function (terminal) {
+    var normalized = query.trim().toLowerCase();
+    return !normalized
+      || String(terminal.title || "").toLowerCase().indexOf(normalized) >= 0
+      || String(terminal.cwd || "").toLowerCase().indexOf(normalized) >= 0;
+  });
+  var terminalPinnedSet = new Set(terminalPinnedIds.map(String));
+  var pinnedTerminals = orderedTerminals.filter(function (terminal) { return terminalPinnedSet.has(String(terminal.id)); });
+  var recentTerminals = orderedTerminals.filter(function (terminal) { return !terminalPinnedSet.has(String(terminal.id)); });
+
+  function storeTerminalOrder(nextOrder) {
+    var normalized = wbcNormalizeChatOrder(terminalDefaultOrder, nextOrder);
+    setTerminalOrder(normalized);
+    if (onUpdateTerminalLayout) onUpdateTerminalLayout(normalized, terminalPinnedIds);
+  }
+
+  function toggleTerminalPinned(terminalId) {
+    var id = String(terminalId || "");
+    var next = terminalPinnedSet.has(id)
+      ? terminalPinnedIds.filter(function (candidate) { return String(candidate) !== id; })
+      : terminalPinnedIds.concat([id]);
+    setTerminalPinnedIds(next);
+    if (onUpdateTerminalLayout) onUpdateTerminalLayout(terminalOrder, next);
+  }
+
+  function renderTerminalCard(terminal) {
+    var id = String(terminal.id || "");
+    var isMenuOpen = menuId === "terminal:" + id;
+    var isPinned = terminalPinnedSet.has(id);
+    var running = terminal.status === "running" || terminal.status === "starting";
+    return <div
+      key={id}
+      role="button"
+      tabIndex={0}
+      draggable="true"
+      data-terminal-id={id}
+      data-cyrene-context-menu="true"
+      className={"wbc-chat-card wbc-terminal-card"
+        + (String(activeTerminalId || "") === id ? " active" : "")
+        + (isMenuOpen ? " menu-open" : "")
+        + (terminalDragId === id ? " dragging" : "")
+        + (running ? " status-running" : " status-completed")}
+      onClick={function () { setMenuId(""); if (onOpenTerminal) onOpenTerminal(id); }}
+      onKeyDown={function (event) {
+        if (event.key === "Enter" || event.key === " ") {
+          event.preventDefault();
+          if (onOpenTerminal) onOpenTerminal(id);
+        }
+      }}
+      onContextMenu={function (event) {
+        event.preventDefault();
+        event.stopPropagation();
+        setMenuId("terminal:" + id);
+      }}
+      onDragStart={function (event) {
+        if (event.target && event.target.closest && event.target.closest("button")) {
+          event.preventDefault();
+          return;
+        }
+        setMenuId("");
+        setTerminalDragId(id);
+        wbcSetResourceDrag(event, { kind: "terminal", terminalId: id, title: terminal.title || "Terminal" });
+      }}
+      onDragOver={function (event) {
+        if (!terminalDragId || terminalDragId === id) return;
+        event.preventDefault();
+        event.stopPropagation();
+        var rect = event.currentTarget.getBoundingClientRect();
+        var edge = event.clientY < rect.top + rect.height / 2 ? "before" : "after";
+        setTerminalOrder(function (current) { return wbcMoveChatOrder(current, terminalDragId, id, edge); });
+      }}
+      onDrop={function (event) {
+        if (!terminalDragId) return;
+        event.preventDefault();
+        event.stopPropagation();
+        storeTerminalOrder(terminalOrder);
+        setTerminalDragId("");
+      }}
+      onDragEnd={function () { storeTerminalOrder(terminalOrder); setTerminalDragId(""); }}
+    >
+      <span className="wbc-chat-card-top">
+        <span className="wbc-chat-row-icon" aria-hidden="true">{WBC_ICONS.slash}</span>
+        <span className="wbc-chat-card-title">
+          {isPinned && <span className="wbc-chat-card-pin" aria-hidden="true">{WBC_ICONS.pin}</span>}
+          <b><WbcHoverMarquee text={terminal.title || wbcT("terminal.title", "Terminal")} /></b>
+        </span>
+        <span className="wbc-chat-card-right">
+          <time className="wbc-chat-card-time">{wbcFormatTime(terminal.updatedAt || terminal.createdAt)}</time>
+          <span className="wbc-chat-card-actions">
+            <button type="button" className="wb-card-menu-btn wbc-chat-card-menu-btn" onClick={function (event) {
+              event.stopPropagation();
+              setMenuId(isMenuOpen ? "" : "terminal:" + id);
+            }} aria-label={wbcT("common.moreActions", "More actions")}>{WBC_ICONS.dots}</button>
+            {isMenuOpen && <div className="wb-card-menu" role="menu">
+              <button type="button" role="menuitem" onClick={function (event) { event.stopPropagation(); setMenuId(""); toggleTerminalPinned(id); }}>
+                <span className="wbc-chat-menu-icon" aria-hidden="true">{WBC_ICONS.pin}</span>
+                <span>{isPinned ? wbcT("terminal.unpin", "Unpin terminal") : wbcT("terminal.pin", "Pin terminal")}</span>
+              </button>
+              <button type="button" role="menuitem" onClick={function (event) { event.stopPropagation(); setMenuId(""); setRenameTerminalItem(terminal); }}>
+                <span className="wbc-chat-menu-icon" aria-hidden="true">{WBC_ICONS.edit}</span>
+                <span>{wbcT("terminal.rename", "Rename terminal")}</span>
+              </button>
+              <button type="button" role="menuitem" className="danger" onClick={function (event) { event.stopPropagation(); setMenuId(""); if (onDeleteTerminal) onDeleteTerminal(id); }}>
+                <span className="wbc-chat-menu-icon" aria-hidden="true">{WBC_ICONS.trash}</span>
+                <span>{wbcT("terminal.delete", "Delete terminal")}</span>
+              </button>
+            </div>}
+          </span>
+        </span>
+      </span>
+      <span className="wbc-chat-card-preview">
+        {running ? <i className="wbc-running-dot" /> : null}
+        <WbcHoverMarquee text={running ? String(terminal.cwd || "") : wbcT("terminal.exited", "Process exited")} />
+      </span>
+    </div>;
+  }
+
+  function renderTerminalSection(id, label, items) {
+    if (!items.length) return null;
+    return <section className={"wbc-rail-section wbc-rail-section-" + id + " wbc-terminal-section"}>
+      <header className="wbc-rail-section-label">{id === "pinned" ? <span aria-hidden="true">{WBC_ICONS.pin}</span> : null}<b>{label}</b></header>
+      <div className="wbc-rail-section-items">{items.map(renderTerminalCard)}</div>
+    </section>;
+  }
+
   return (
     <aside ref={railRef} className={"wbc-rail workbench-integrated-rail"
       + (collapsed ? " is-collapsed" : "")
@@ -12574,8 +12905,8 @@ function WbcRail({ projectId, projectName, chats, pinnedChatIds, activeChatId, l
         <div className="wbc-nav-card">
           <div className="wbc-nav-card-head workbench-integrated-rail-head workbench-integrated-rail-search-head">
             {!collapsed && (
-              <button type="button" className="workbench-rail-mode-toggle" onClick={toggleRailMode} aria-label={wbcT("rail.toggleChatFiles", "Toggle chats and files")}>
-                {railMode === "files" ? wbcT("rail.files", "Files") : wbcT("workbench.page.chat", "Chats")}
+              <button type="button" className="workbench-rail-mode-toggle" onClick={toggleRailMode} aria-label={wbcT("rail.toggleMode", "Switch rail mode")}>
+                {railMode === "files" ? wbcT("rail.files", "Files") : railMode === "terminal" ? wbcT("terminal.title", "Terminal") : wbcT("workbench.page.chat", "Chats")}
               </button>
             )}
             {!collapsed && (
@@ -12587,7 +12918,7 @@ function WbcRail({ projectId, projectName, chats, pinnedChatIds, activeChatId, l
                   value={query}
                   onChange={function (e) { setQuery(e.target.value); }}
                   placeholder=""
-                  aria-label={railMode === "files" ? wbcT("rail.searchFiles", "Search files") : wbcT("workbenchChat.searchCurrentProject", "Search current project")}
+                  aria-label={railMode === "files" ? wbcT("rail.searchFiles", "Search files") : railMode === "terminal" ? wbcT("terminal.search", "Search terminals") : wbcT("workbenchChat.searchCurrentProject", "Search current project")}
                 />
               </div>
             )}
@@ -12600,6 +12931,15 @@ function WbcRail({ projectId, projectName, chats, pinnedChatIds, activeChatId, l
                 onClick={onCreate}
                 title={wbcT("workbenchChat.newChat", "New chat")}
                 aria-label={wbcT("workbenchChat.newChat", "New chat")}
+              >{WBC_ICONS.plus}</button>
+            )}
+            {!collapsed && railMode === "terminal" && (
+              <button
+                type="button"
+                className="wbc-project-new-chat"
+                onClick={onCreateTerminal}
+                title={wbcT("terminal.new", "New terminal")}
+                aria-label={wbcT("terminal.new", "New terminal")}
               >{WBC_ICONS.plus}</button>
             )}
             {collapseControl || (
@@ -12647,6 +12987,15 @@ function WbcRail({ projectId, projectName, chats, pinnedChatIds, activeChatId, l
             </button>;
           })}
           {!filesLoading && !filesError && visibleFiles.length === 0 && <div className="workbench-muted wbc-rail-empty">{query ? wbcT("rail.noMatchingFiles", "No matching files.") : wbcT("rail.noFiles", "This folder is empty.")}</div>}
+        </div>
+      ) : railMode === "terminal" ? (
+        <div className={"wbc-chat-list workbench-integrated-rail-body wbc-terminal-list" + (terminalsLoading ? " is-loading" : "") + (menuId ? " menu-active" : "")}>
+          <div className="wbc-chat-list-primary">
+            {terminalsLoading && !orderedTerminals.length ? <div className="workbench-muted wbc-rail-loading" role="status">{wbcT("terminal.loading", "Loading terminals...")}</div> : null}
+            {!terminalsLoading && !orderedTerminals.length ? <div className="workbench-muted wbc-rail-empty">{query ? wbcT("terminal.noMatches", "No matching terminals.") : wbcT("terminal.empty", "No terminals yet.")}</div> : null}
+            {renderTerminalSection("pinned", wbcT("workbenchChat.pinnedSection", "Pinned"), pinnedTerminals)}
+            {renderTerminalSection("recent", wbcT("workbenchChat.recent", "Recent"), recentTerminals)}
+          </div>
         </div>
       ) : (
       <div
@@ -12809,6 +13158,12 @@ function WbcRail({ projectId, projectName, chats, pinnedChatIds, activeChatId, l
         entity="group"
         onClose={function () { setRenameGroup(null); }}
         onRename={renameChatGroup}
+      />
+      <WbcRenameDialog
+        chat={renameTerminalItem}
+        entity="terminal"
+        onClose={function () { setRenameTerminalItem(null); }}
+        onRename={onRenameTerminal}
       />
     </aside>
   );
@@ -24302,6 +24657,10 @@ function WbcDetachedPaneApp() {
           />
         </div>
       </aside>;
+    }
+    if (kind === "terminal") {
+      var TerminalPane = window.CyreneUI.require("terminal").Pane;
+      return <TerminalPane terminalId={String(context.payload || "")} />;
     }
     if (kind === "side-agent") {
       var agents = Array.isArray(context.agents) ? context.agents : [];

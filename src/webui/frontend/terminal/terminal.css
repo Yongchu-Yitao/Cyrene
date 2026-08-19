@@ -1,0 +1,55 @@
+.wbc-terminal-pane {
+  --wbc-terminal-background: #171819;
+  --wbc-terminal-muted: #a5a9b1;
+  position: relative;
+  min-width: 0;
+  min-height: 0;
+  height: 100%;
+  overflow: hidden;
+  background: var(--wbc-terminal-background);
+}
+
+html[data-theme="light"] .wbc-terminal-pane {
+  --wbc-terminal-background: #fcfdfd;
+  --wbc-terminal-muted: #717c88;
+}
+
+.wbc-pane-card > .wbc-terminal-pane {
+  box-sizing: border-box;
+  padding-top: 34px;
+  border-radius: inherit;
+}
+
+.wbc-terminal-card .wbc-chat-row-icon svg {
+  stroke-width: 1.8;
+}
+
+.wbc-terminal-host {
+  box-sizing: border-box;
+  width: 100%;
+  height: 100%;
+  padding: 10px 9px 7px 12px;
+  contain: strict;
+  background: var(--wbc-terminal-background);
+}
+
+.wbc-terminal-pane[data-connection="connecting"] .wbc-terminal-host,
+.wbc-terminal-pane[data-connection="replaying"] .wbc-terminal-host {
+  opacity: 0;
+}
+
+.wbc-terminal-host .xterm,
+.wbc-terminal-host .xterm-viewport {
+  height: 100%;
+}
+
+.wbc-terminal-connection {
+  position: absolute;
+  z-index: 3;
+  top: 8px;
+  right: 12px;
+  min-height: 18px;
+  color: var(--wbc-terminal-muted);
+  font-size: 11px;
+  pointer-events: none;
+}

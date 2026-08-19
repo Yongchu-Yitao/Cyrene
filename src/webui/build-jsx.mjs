@@ -162,7 +162,7 @@ async function build() {
     const outFile = join(OUT_DIR, rel)
     mkdirSync(dirname(outFile), { recursive: true })
 
-    if (rel === 'code/editor.js') {
+    if (rel === 'code/editor.js' || rel === 'terminal/entry.js') {
       await esbuild.build({
         entryPoints: [file],
         outfile: outFile,

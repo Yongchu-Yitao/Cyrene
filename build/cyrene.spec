@@ -101,6 +101,9 @@ if _WOA_NATIVE_CORE:
 # pwd stub (exists only in CI; safe to skip on local builds)
 if _IS_WIN:
     _hidden.append("winloop")
+    # Terminal PTYs import pywinpty dynamically so its compiled `winpty`
+    # package must be explicit in frozen Windows builds.
+    _hidden.append("winpty")
     try:
         import pwd  # noqa: F401
         _hidden.append("pwd")

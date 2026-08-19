@@ -4915,7 +4915,15 @@ def test_electron_browser_video_fullscreen_is_platform_aware_and_shared_with_ui(
     assert "permission === 'fullscreen'" in session_guards
     assert "browserSession.setPermissionCheckHandler" in session_guards
     assert "browserSession.setPermissionRequestHandler" in session_guards
-    assert "callback(browserPermissionAllowed(permission))" in session_guards
+    assert "permission !== 'pointerLock'" in session_guards
+    assert "promptForPointerLock(webContents, details)" in session_guards
+    assert "dialog.showMessageBox(pointerLockPromptParent(webContents)" in session_guards
+    assert "defaultId: 1" in session_guards
+    assert "cancelId: 1" in session_guards
+    assert "result.response === 0" in session_guards
+    assert "pendingPointerLockPrompts" in session_guards
+    assert "Press Esc at any time to release it." in main
+    assert "你可随时按 Esc 退出" in main
 
 
 def test_electron_browser_tab_attaches_before_navigation_and_survives_media_load_errors():

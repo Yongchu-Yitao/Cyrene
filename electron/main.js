@@ -427,6 +427,11 @@ const DESKTOP_TRANSLATIONS = Object.freeze({
   en: {
     open: 'Open Cyrene',
     quit: 'Quit Cyrene',
+    pointerLockTitle: 'Allow pointer lock?',
+    pointerLockMessage: '{origin} wants to control your pointer.',
+    pointerLockDetail: 'The site can hide the pointer and read relative mouse movement. Press Esc at any time to release it.',
+    pointerLockAllow: 'Allow',
+    pointerLockBlock: 'Block',
     installQuitTitle: 'Extensions are still installing',
     installQuitMessage: 'One or more extension installations are still running.',
     installQuitDetail: 'Wait to keep the installations running, or cancel them before quitting. Interrupted tasks remain visible for a safe retry on the next launch.',
@@ -436,6 +441,11 @@ const DESKTOP_TRANSLATIONS = Object.freeze({
   zh: {
     open: '打开 Cyrene',
     quit: '退出 Cyrene',
+    pointerLockTitle: '允许锁定鼠标指针？',
+    pointerLockMessage: '{origin} 想要控制你的鼠标指针。',
+    pointerLockDetail: '允许后，网站可以隐藏指针并读取鼠标的相对移动。你可随时按 Esc 退出。',
+    pointerLockAllow: '允许',
+    pointerLockBlock: '阻止',
     installQuitTitle: '扩展仍在安装',
     installQuitMessage: '一个或多个扩展安装任务仍在运行。',
     installQuitDetail: '可以等待安装完成，或取消安装后退出。异常中断的任务会保留记录，下次启动时可安全重试。',
@@ -528,6 +538,7 @@ const MENU_TRANSLATIONS = Object.freeze({
 const BROWSER_PARTITION = 'persist:cyrene-browser';
 const DEFAULT_BROWSER_VERSION = '147.0.0.0';
 const guardedBrowserPartitions = new Set();
+const pendingPointerLockPrompts = new Map();
 const BROWSER_CHAT_OVERLAY_HTML = `<!doctype html>
 <html><head><meta charset="utf-8"><style>
   :root { color-scheme: light dark; }
@@ -974,7 +985,9 @@ function installBrowserSessionGuards(partition = BROWSER_PARTITION) {
     return;
   }
   guardedBrowserPartitions.add(partitionName);
-  // Fullscreen is the only permission granted to arbitrary browser content.
+  // Fullscreen is the only permission pre-granted to arbitrary browser
+  // content. Pointer lock remains denied by the synchronous check so Chromium
+  // proceeds to the request handler, where Cyrene asks the user each time.
   // Electron routes document.requestFullscreen() through the session
   // permission manager before emitting enter-html-full-screen. Denying it here
   // makes player controls (for example Bilibili's fullscreen button) silently
@@ -985,8 +998,19 @@ function installBrowserSessionGuards(partition = BROWSER_PARTITION) {
   browserSession.setPermissionCheckHandler((_webContents, permission) => (
     browserPermissionAllowed(permission)
   ));
-  browserSession.setPermissionRequestHandler((_webContents, permission, callback) => {
-    callback(browserPermissionAllowed(permission));
+  browserSession.setPermissionRequestHandler((webContents, permission, callback, details = {}) => {
+    if (browserPermissionAllowed(permission)) {
+      callback(true);
+      return;
+    }
+    if (permission !== 'pointerLock') {
+      callback(false);
+      return;
+    }
+    void promptForPointerLock(webContents, details).then(
+      (allowed) => callback(allowed),
+      () => callback(false),
+    );
   });
   browserSession.webRequest.onBeforeSendHeaders((details, callback) => {
     details.requestHeaders = {
@@ -996,6 +1020,63 @@ function installBrowserSessionGuards(partition = BROWSER_PARTITION) {
     };
     callback({ requestHeaders: details.requestHeaders });
   });
+}
+
+function pointerLockRequestOrigin(webContents, details = {}) {
+  let rawUrl = String(details.requestingUrl || '');
+  if (!rawUrl && webContents && !webContents.isDestroyed()) {
+    try { rawUrl = String(webContents.getURL() || ''); } catch (_) {}
+  }
+  try {
+    const parsed = new URL(rawUrl);
+    if (parsed.origin && parsed.origin !== 'null') return parsed.origin;
+    return parsed.protocol ? parsed.protocol.replace(/:$/, '') : rawUrl;
+  } catch (_) {
+    return rawUrl || APP_NAME;
+  }
+}
+
+function pointerLockPromptParent(webContents) {
+  for (const manager of browserTabManagers.values()) {
+    const tab = Array.from(manager.tabs.values()).find((candidate) => (
+      candidate && candidate.view && candidate.view.webContents === webContents
+    ));
+    if (!tab) continue;
+    const owner = manager.attachedWindow;
+    if (owner && !owner.isDestroyed()) return owner;
+  }
+  return mainWindow && !mainWindow.isDestroyed() ? mainWindow : undefined;
+}
+
+async function promptForPointerLock(webContents, details = {}) {
+  if (!webContents || webContents.isDestroyed()) return false;
+  const origin = pointerLockRequestOrigin(webContents, details);
+  const promptKey = `${webContents.id}:${origin}`;
+  const pending = pendingPointerLockPrompts.get(promptKey);
+  if (pending) return pending;
+
+  const decision = (async () => {
+    const settings = readDesktopSettings();
+    const result = await dialog.showMessageBox(pointerLockPromptParent(webContents), {
+      type: 'question',
+      title: desktopT('pointerLockTitle', settings),
+      message: desktopT('pointerLockMessage', settings).replace('{origin}', origin),
+      detail: desktopT('pointerLockDetail', settings),
+      buttons: [desktopT('pointerLockAllow', settings), desktopT('pointerLockBlock', settings)],
+      defaultId: 1,
+      cancelId: 1,
+      noLink: true,
+    });
+    return result.response === 0 && !webContents.isDestroyed();
+  })();
+  pendingPointerLockPrompts.set(promptKey, decision);
+  try {
+    return await decision;
+  } finally {
+    if (pendingPointerLockPrompts.get(promptKey) === decision) {
+      pendingPointerLockPrompts.delete(promptKey);
+    }
+  }
 }
 
 class BrowserTabManager {
@@ -5033,7 +5114,7 @@ function restartPythonBackend() {
   quickChatWindowReady = null;
   try {
     if (isWindows) {
-      spawn('taskkill', ['/pid', String(proc.pid), '/f', '/t'], {
+      spawn('taskkill', ['/pid', String(proc.pid), '/f'], {
         stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true,
       });
     } else {
@@ -5056,8 +5137,10 @@ function killPython() {
 
   try {
     if (isWindows) {
-      // On Windows, SIGTERM doesn't exist — use taskkill for the process tree.
-      spawn('taskkill', ['/pid', String(proc.pid), '/f', '/t'], {
+      // On Windows, SIGTERM doesn't exist — terminate the backend directly.
+      // The Terminal Daemon is a detached descendant by design. Killing the
+      // whole tree here would destroy PTYs when the Electron window closes.
+      spawn('taskkill', ['/pid', String(proc.pid), '/f'], {
         stdio: ['ignore', 'pipe', 'pipe'],
         windowsHide: true,
       });
@@ -5372,7 +5455,7 @@ async function createQuickChatWindow() {
 }
 
 const DETACHED_PANE_KINDS = new Set([
-  'chat', 'file', 'viewer', 'change', 'map', 'browser', 'subagents', 'side-agent',
+  'chat', 'file', 'viewer', 'change', 'map', 'browser', 'subagents', 'side-agent', 'terminal',
 ]);
 
 function debugDetachedPane(stage, details) {
