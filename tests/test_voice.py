@@ -6,10 +6,12 @@ from fastapi import APIRouter, FastAPI
 from fastapi.testclient import TestClient
 
 from cyrene.voice import engine
+from cyrene.voice import minimax as minimax_tts
 from route import voice as voice_routes
 
 
 def test_voice_status_uses_bundled_preset_without_custom_profile(monkeypatch):
+    monkeypatch.setattr(engine.minimax_tts, "is_configured", lambda: False)
     monkeypatch.setattr(engine, "_runtime_available", lambda: True)
     monkeypatch.setattr(engine, "_settings", lambda: {
         "auto_read": True,
@@ -74,6 +76,7 @@ def test_zipvoice_generation_uses_balanced_quality_and_slower_natural_pacing():
 
 
 def test_custom_voice_profile_save_status_synthesis_and_delete(monkeypatch, tmp_path):
+    monkeypatch.setattr(engine.minimax_tts, "is_configured", lambda: False)
     voice_root = tmp_path / "voice"
     reference_audio = voice_root / "reference.wav"
     settings = {
@@ -132,6 +135,7 @@ def test_custom_voice_profile_save_status_synthesis_and_delete(monkeypatch, tmp_
 
 
 def test_kokoro_preset_selection_is_saved_and_used_for_generation(monkeypatch):
+    monkeypatch.setattr(engine.minimax_tts, "is_configured", lambda: False)
     settings = {
         "auto_read": False,
         "auto_send_after_asr": False,
@@ -173,6 +177,7 @@ def test_kokoro_preset_selection_is_saved_and_used_for_generation(monkeypatch):
 
 
 def test_zipvoice_default_preset_is_available_and_uses_bundled_reference(monkeypatch, tmp_path):
+    monkeypatch.setattr(engine.minimax_tts, "is_configured", lambda: False)
     model_root = tmp_path / "zipvoice"
     model_root.mkdir()
     preset_audio = np.sin(np.linspace(0, np.pi * 440, 24_000, dtype=np.float32)) * 0.1
@@ -218,6 +223,109 @@ def test_zipvoice_default_preset_is_available_and_uses_bundled_reference(monkeyp
 
     speech = engine.synthesize("你好", num_steps=4)
     assert speech.startswith(b"RIFF")
+
+
+def test_auto_tts_prefers_configured_minimax_without_local_runtime(monkeypatch):
+    monkeypatch.setattr(engine, "_runtime_available", lambda: False)
+    monkeypatch.setattr(engine.local_models, "is_ready", lambda _model_id: False)
+    monkeypatch.setattr(engine.minimax_tts, "is_configured", lambda: True)
+    monkeypatch.setattr(engine, "_settings", lambda: {
+        "auto_read": True,
+        "auto_send_after_asr": False,
+        "auto_stop_on_silence": True,
+        "reference_text": "",
+        "voice_mode": engine.VOICE_MODE_PRESET,
+        "voice_preset": engine.DEFAULT_PRESET_ID,
+        "tts_model": engine.TTS_MODEL_AUTO,
+        "minimax_voice_id": minimax_tts.DEFAULT_VOICE_ID,
+    })
+    monkeypatch.setattr(engine, "_profile_ready", lambda _settings=None: False)
+
+    payload = engine.status()
+
+    assert payload["tts_model_selection"] == engine.TTS_MODEL_AUTO
+    assert payload["tts_model"] == minimax_tts.TURBO_MODEL_ID
+    assert payload["tts_provider"] == "minimax"
+    assert payload["minimax_configured"] is True
+    assert payload["tts_ready"] is True
+    assert payload["local_tts_active"] is False
+    assert payload["voice_presets"] == []
+
+
+def test_explicit_minimax_tts_reuses_model_service_and_returns_wav(monkeypatch):
+    settings = {
+        "auto_read": False,
+        "auto_send_after_asr": False,
+        "auto_stop_on_silence": True,
+        "reference_text": "",
+        "voice_mode": engine.VOICE_MODE_PRESET,
+        "voice_preset": engine.DEFAULT_PRESET_ID,
+        "tts_model": minimax_tts.HD_MODEL_ID,
+        "minimax_voice_id": "voice-from-settings",
+    }
+    calls = []
+    monkeypatch.setattr(engine, "_settings", lambda: dict(settings))
+    monkeypatch.setattr(engine.minimax_tts, "is_configured", lambda: True)
+    monkeypatch.setattr(
+        engine.minimax_tts,
+        "synthesize",
+        lambda text, *, model, voice_id: calls.append((text, model, voice_id)) or b"RIFF-minimax",
+    )
+
+    speech = engine.synthesize("你好")
+
+    assert speech == b"RIFF-minimax"
+    assert calls == [("你好", minimax_tts.HD_MODEL_ID, "voice-from-settings")]
+
+
+def test_minimax_adapter_uses_configured_connection_and_decodes_hex(monkeypatch):
+    requested = {}
+    monkeypatch.setattr(minimax_tts, "get_model_configuration", lambda: {
+        "connections": [{
+            "id": "minimax",
+            "name": "MiniMax",
+            "enabled": True,
+            "base_url": "https://api.minimaxi.com/v1",
+            "api_key": "secret-key",
+            "options": {"provider_preset": "minimax"},
+        }],
+    })
+
+    class FakeResponse:
+        status_code = 200
+
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            return {
+                "data": {"audio": b"RIFF-cloud".hex(), "status": 2},
+                "base_resp": {"status_code": 0, "status_msg": "success"},
+            }
+
+    class FakeClient:
+        def __init__(self, **kwargs):
+            requested["client"] = kwargs
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return None
+
+        def post(self, url, *, headers, json):
+            requested.update(url=url, headers=headers, json=json)
+            return FakeResponse()
+
+    monkeypatch.setattr(minimax_tts.httpx, "Client", FakeClient)
+
+    speech = minimax_tts.synthesize("你好", model=minimax_tts.TURBO_MODEL_ID)
+
+    assert speech == b"RIFF-cloud"
+    assert requested["url"] == "https://api.minimaxi.com/v1/t2a_v2"
+    assert requested["headers"]["Authorization"] == "Bearer secret-key"
+    assert requested["json"]["audio_setting"]["format"] == "wav"
+    assert requested["json"]["model"] == minimax_tts.TURBO_MODEL_ID
 
 
 def test_custom_voice_profile_restores_previous_audio_when_settings_save_fails(monkeypatch, tmp_path):
@@ -309,6 +417,7 @@ def test_voice_routes_reuse_engine_adapters(monkeypatch):
     assert voice_input_settings["auto_send_after_asr"] is True
     assert voice_input_settings["auto_stop_on_silence"] is False
     assert client.put("/api/voice/settings", json={"voice_mode": "preset"}).json()["voice_mode"] == "preset"
+    assert client.put("/api/voice/settings", json={"tts_model": "speech-2.8-turbo"}).json()["tts_model"] == "speech-2.8-turbo"
     transcript = client.post(
         "/api/voice/asr",
         files={"audio": ("voice.wav", b"wave-data", "audio/wav")},
@@ -354,6 +463,8 @@ def test_voice_controls_follow_existing_chat_layout():
     assert "settings.voiceAutoRead" in capabilities
     assert "settings.voiceAutoSend" in capabilities
     assert "settings.voiceAutoStop" in capabilities
+    assert "settings.voiceTtsModel" in capabilities
+    assert "saveVoiceTtsModel(event.target.value)" in capabilities
     assert "settings.voicePresetMode" in capabilities
     assert "settings.voiceCustomMode" in capabilities
     assert "saveVoicePreset(event.target.value)" in capabilities
@@ -427,7 +538,7 @@ def test_voice_controls_follow_existing_chat_layout():
     assert '"question:" + String(pendingQuestion.id' in chat
     assert 'return [text, optionText].filter(Boolean).join("。 ")' in chat
     assert '"可选择："' not in chat
-    assert "var maxChars = 60" in chat
+    assert 'currentStatus.tts_provider === "minimax" ? 240 : 60' in chat
     assert "var WbVoiceCommand = (function ()" in chat
     assert "initialSilenceMs: WBC_TOPBAR_INITIAL_SILENCE_MS" in chat
     assert 'fetch("/api/workbench/voice-command"' in chat

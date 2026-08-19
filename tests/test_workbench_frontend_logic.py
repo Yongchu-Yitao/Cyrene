@@ -8157,6 +8157,59 @@ def test_settings_storage_keeps_last_snapshot_across_tab_remounts():
     assert 'settingsFetch("/api/settings/storage")' in storage
 
 
+def test_session_export_uses_balanced_responsive_action_layout():
+    root = Path(__file__).resolve().parent.parent
+    overlay = (root / "src/webui/frontend/settings-overlay.jsx").read_text(
+        encoding="utf-8"
+    )
+    styles = (root / "src/webui/frontend/workbench.css").read_text(
+        encoding="utf-8"
+    )
+    i18n = (root / "src/webui/frontend/workbench-i18n.jsx").read_text(
+        encoding="utf-8"
+    )
+    session_export = overlay.split("// Session export", 1)[1].split(
+        "// ── About Panel", 1
+    )[0]
+
+    assert 'className: "wb-export-footer"' in session_export
+    assert 'className: "wb-export-format"' in session_export
+    assert 'role: "radiogroup"' in session_export
+    assert '"aria-checked": exportFmt === "markdown"' in session_export
+    assert 'className: "wb-section-block wb-session-export-block"' in session_export
+    assert "var sessionDate = s.updated_at || s.created_at;" in session_export
+    assert ".settings-overlay .wb-export-session-option {\n  min-height: 44px;" in styles
+    assert "@media (max-width: 700px)" in styles
+    assert i18n.count('"settings.sessionExportFormat"') == 2
+
+
+def test_session_export_button_has_distinct_enabled_and_disabled_states():
+    root = Path(__file__).resolve().parent.parent
+    overlay = (root / "src/webui/frontend/settings-overlay.jsx").read_text(
+        encoding="utf-8"
+    )
+    styles = (root / "src/webui/frontend/workbench.css").read_text(
+        encoding="utf-8"
+    )
+    session_export = overlay.split("// Session export", 1)[1].split(
+        "// ── About Panel", 1
+    )[0]
+
+    assert "function SessionExportIcon()" in overlay
+    assert "React.createElement(SessionExportIcon)" in session_export
+    assert 'className: "wb-btn primary wb-export-submit"' in session_export
+    assert ".wb-export-submit {\n  min-width: 104px;\n  min-height: 44px;" in styles
+    assert ".wb-btn.primary.wb-export-submit:not(:disabled)" in styles
+    assert ".wb-btn.primary.wb-export-submit:disabled" in styles
+    disabled = styles.split(
+        ".wb-btn.primary.wb-export-submit:disabled {", 1
+    )[1].split("}", 1)[0]
+    assert "opacity: 1;" in disabled
+    assert "background: color-mix(in srgb, var(--wb-control-bg)" in disabled
+    assert "color: var(--wb-faint);" in disabled
+    assert "@media (prefers-reduced-motion: reduce)" in styles
+
+
 def test_workbench_tool_trace_preview_localizes_protocol_values_only():
     result = _run_workbench_trace_i18n_js(
         """

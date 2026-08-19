@@ -31,7 +31,7 @@ def register_voice_routes(router: APIRouter) -> None:
     @router.put("/api/voice/settings")
     async def api_voice_settings(body: dict[str, Any]):
         boolean_settings = {"auto_read", "auto_send_after_asr", "auto_stop_on_silence"}
-        allowed = boolean_settings | {"voice_mode", "voice_preset"}
+        allowed = boolean_settings | {"voice_mode", "voice_preset", "tts_model"}
         changes = {key: body[key] for key in allowed if key in body}
         if not changes:
             return JSONResponse({"error": "voice setting is required"}, status_code=400)

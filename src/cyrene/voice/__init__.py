@@ -1,4 +1,4 @@
-"""Local speech recognition and synthesis services."""
+"""Speech recognition and synthesis services."""
 
 from cyrene.voice.engine import (
     ASR_MODEL_ID,

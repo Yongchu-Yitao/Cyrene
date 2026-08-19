@@ -1,4 +1,4 @@
-"""FireRedASR2, Kokoro, and ZipVoice adapters backed by local model packs."""
+"""Voice settings and adapters for local models plus MiniMax cloud TTS."""
 
 from __future__ import annotations
 
@@ -18,6 +18,7 @@ import soundfile as sf
 from cyrene.config import CACHE_DIR
 from cyrene.knowledge import local_models
 from cyrene.runtime import config_store
+from cyrene.voice import minimax as minimax_tts
 
 
 ASR_MODEL_ID = "fireredasr2-aed-int8"
@@ -26,6 +27,14 @@ CUSTOM_TTS_MODEL_ID = "zipvoice-zh-en"
 # Compatibility name for callers that treat the default speech model as the
 # single TTS model. Voice status exposes both concrete model ids below.
 TTS_MODEL_ID = PRESET_TTS_MODEL_ID
+TTS_MODEL_AUTO = "auto"
+MINIMAX_TTS_MODEL_IDS = minimax_tts.MODEL_IDS
+TTS_MODEL_SELECTIONS = frozenset({
+    TTS_MODEL_AUTO,
+    PRESET_TTS_MODEL_ID,
+    CUSTOM_TTS_MODEL_ID,
+    *MINIMAX_TTS_MODEL_IDS,
+})
 VOICE_ROOT = Path(CACHE_DIR) / "voice"
 REFERENCE_AUDIO = VOICE_ROOT / "reference.wav"
 VOICE_MODE_PRESET = "preset"
@@ -131,7 +140,13 @@ def _settings() -> dict[str, Any]:
         "reference_text": str(source.get("reference_text") or "").strip(),
         "voice_mode": voice_mode,
         "voice_preset": str(source.get("voice_preset") or DEFAULT_PRESET_ID).strip(),
+        "tts_model": str(source.get("tts_model") or TTS_MODEL_AUTO).strip().lower(),
+        "minimax_voice_id": str(
+            source.get("minimax_voice_id") or minimax_tts.DEFAULT_VOICE_ID
+        ).strip(),
     }
+    if settings["tts_model"] not in TTS_MODEL_SELECTIONS:
+        settings["tts_model"] = TTS_MODEL_AUTO
     if settings["voice_preset"] not in _VOICE_PRESET_BY_ID:
         settings["voice_preset"] = DEFAULT_PRESET_ID
     elif (
@@ -147,6 +162,34 @@ def _settings() -> dict[str, Any]:
     ):
         settings["voice_preset"] = ZIPVOICE_DEFAULT_PRESET_ID
     return settings
+
+
+def _local_tts_model(settings: dict[str, Any]) -> str:
+    custom_selected = settings.get("voice_mode") == VOICE_MODE_CUSTOM
+    zipvoice_preset_selected = (
+        not custom_selected
+        and settings.get("voice_preset") == ZIPVOICE_DEFAULT_PRESET_ID
+    )
+    return CUSTOM_TTS_MODEL_ID if custom_selected or zipvoice_preset_selected else PRESET_TTS_MODEL_ID
+
+
+def _resolved_tts_model(
+    settings: dict[str, Any],
+    *,
+    minimax_configured: bool,
+) -> tuple[str, str]:
+    selection = str(settings.get("tts_model") or "").strip().lower()
+    if not selection:
+        # Compatibility for tests and callers that still provide the pre-model-
+        # selector settings shape.
+        return _local_tts_model(settings), "local"
+    if selection == TTS_MODEL_AUTO:
+        if minimax_configured:
+            return minimax_tts.TURBO_MODEL_ID, "minimax"
+        return _local_tts_model(settings), "local"
+    if selection in MINIMAX_TTS_MODEL_IDS:
+        return selection, "minimax"
+    return selection, "local"
 
 
 def _profile_ready(settings: dict[str, Any] | None = None) -> bool:
@@ -175,26 +218,62 @@ def status() -> dict[str, Any]:
     asr_ready = local_models.is_ready(ASR_MODEL_ID)
     preset_model_ready = local_models.is_ready(PRESET_TTS_MODEL_ID)
     custom_model_ready = local_models.is_ready(CUSTOM_TTS_MODEL_ID)
-    custom_selected = settings["voice_mode"] == VOICE_MODE_CUSTOM and custom_model_ready
-    zipvoice_preset_selected = (
-        not custom_selected and settings["voice_preset"] == ZIPVOICE_DEFAULT_PRESET_ID
+    minimax_configured = minimax_tts.is_configured()
+    selected_model, tts_provider = _resolved_tts_model(
+        settings,
+        minimax_configured=minimax_configured,
     )
-    selected_model = CUSTOM_TTS_MODEL_ID if custom_selected or zipvoice_preset_selected else PRESET_TTS_MODEL_ID
-    selected_model_ready = custom_model_ready if custom_selected else preset_model_ready
-    if zipvoice_preset_selected:
-        selected_model_ready = custom_model_ready
+    local_tts_active = tts_provider == "local"
+    custom_selected = (
+        local_tts_active
+        and selected_model == CUSTOM_TTS_MODEL_ID
+        and settings["voice_mode"] == VOICE_MODE_CUSTOM
+    )
+    selected_model_ready = (
+        minimax_configured
+        if tts_provider == "minimax"
+        else custom_model_ready
+        if selected_model == CUSTOM_TTS_MODEL_ID
+        else preset_model_ready
+    )
     selected_voice_ready = profile_ready if custom_selected else True
     runtime_available = _runtime_available()
-    available_presets = [
-        dict(preset)
-        for preset in VOICE_PRESETS
-        if (
-            preset["id"] == ZIPVOICE_DEFAULT_PRESET_ID
-            and custom_model_ready
-        ) or (
-            preset["id"] != ZIPVOICE_DEFAULT_PRESET_ID
-            and preset_model_ready
-        )
+    available_presets: list[dict[str, Any]] = []
+    if local_tts_active and selected_model == CUSTOM_TTS_MODEL_ID and custom_model_ready:
+        available_presets = [dict(ZIPVOICE_PRESETS[0])]
+    elif local_tts_active and selected_model == PRESET_TTS_MODEL_ID and preset_model_ready:
+        available_presets = [dict(preset) for preset in KOKORO_PRESETS]
+    tts_ready = selected_model_ready and selected_voice_ready and (
+        tts_provider == "minimax" or runtime_available
+    )
+    tts_models = [
+        {
+            "id": TTS_MODEL_AUTO,
+            "provider": "auto",
+            "available": minimax_configured or (
+                runtime_available and (preset_model_ready or custom_model_ready)
+            ),
+        },
+        {
+            "id": minimax_tts.TURBO_MODEL_ID,
+            "provider": "minimax",
+            "available": minimax_configured,
+        },
+        {
+            "id": minimax_tts.HD_MODEL_ID,
+            "provider": "minimax",
+            "available": minimax_configured,
+        },
+        {
+            "id": PRESET_TTS_MODEL_ID,
+            "provider": "local",
+            "available": preset_model_ready and runtime_available,
+        },
+        {
+            "id": CUSTOM_TTS_MODEL_ID,
+            "provider": "local",
+            "available": custom_model_ready and runtime_available,
+        },
     ]
     return {
         "asr_model": ASR_MODEL_ID,
@@ -202,15 +281,21 @@ def status() -> dict[str, Any]:
         "preset_tts_model": PRESET_TTS_MODEL_ID,
         "custom_tts_model": CUSTOM_TTS_MODEL_ID,
         "asr_ready": asr_ready and runtime_available,
-        "tts_model_ready": selected_model_ready and runtime_available,
+        "tts_model_selection": settings.get("tts_model") or selected_model,
+        "tts_models": tts_models,
+        "tts_provider": tts_provider,
+        "minimax_configured": minimax_configured,
+        "minimax_voice_id": settings.get("minimax_voice_id") or minimax_tts.DEFAULT_VOICE_ID,
+        "local_tts_active": local_tts_active,
+        "tts_model_ready": selected_model_ready and (tts_provider == "minimax" or runtime_available),
         "preset_tts_model_ready": preset_model_ready and runtime_available,
         "custom_tts_model_ready": custom_model_ready and runtime_available,
         "voice_profile_ready": profile_ready,
         "voice_preset_ready": bool(available_presets) and runtime_available,
-        "voice_mode": VOICE_MODE_CUSTOM if custom_selected else VOICE_MODE_PRESET,
+        "voice_mode": settings["voice_mode"],
         "voice_preset": settings["voice_preset"],
         "voice_presets": available_presets,
-        "tts_ready": selected_model_ready and selected_voice_ready and runtime_available,
+        "tts_ready": tts_ready,
         "runtime_available": runtime_available,
         "auto_read": settings["auto_read"],
         "auto_send_after_asr": settings["auto_send_after_asr"],
@@ -226,6 +311,7 @@ def update_settings(
     auto_stop_on_silence: bool | None = None,
     voice_mode: str | None = None,
     voice_preset: str | None = None,
+    tts_model: str | None = None,
 ) -> dict[str, Any]:
     with _VOICE_PROFILE_LOCK:
         current = _settings()
@@ -235,6 +321,27 @@ def update_settings(
             current["auto_send_after_asr"] = bool(auto_send_after_asr)
         if auto_stop_on_silence is not None:
             current["auto_stop_on_silence"] = bool(auto_stop_on_silence)
+        if tts_model is not None:
+            normalized_tts_model = str(tts_model).strip().lower()
+            if normalized_tts_model not in TTS_MODEL_SELECTIONS:
+                raise ValueError("unknown TTS model")
+            if (
+                normalized_tts_model in MINIMAX_TTS_MODEL_IDS
+                and not minimax_tts.is_configured()
+            ):
+                raise RuntimeError("Configure MiniMax in Model Services before using MiniMax TTS")
+            if normalized_tts_model == PRESET_TTS_MODEL_ID:
+                if not local_models.is_ready(PRESET_TTS_MODEL_ID):
+                    raise RuntimeError("Kokoro model is not downloaded")
+                current["voice_mode"] = VOICE_MODE_PRESET
+                if current["voice_preset"] == ZIPVOICE_DEFAULT_PRESET_ID:
+                    current["voice_preset"] = DEFAULT_PRESET_ID
+            elif normalized_tts_model == CUSTOM_TTS_MODEL_ID:
+                if not local_models.is_ready(CUSTOM_TTS_MODEL_ID):
+                    raise RuntimeError("ZipVoice model is not downloaded")
+                if current["voice_mode"] != VOICE_MODE_CUSTOM:
+                    current["voice_preset"] = ZIPVOICE_DEFAULT_PRESET_ID
+            current["tts_model"] = normalized_tts_model
         if voice_mode is not None:
             normalized_mode = str(voice_mode).strip().lower()
             if normalized_mode not in {VOICE_MODE_PRESET, VOICE_MODE_CUSTOM}:
@@ -242,6 +349,10 @@ def update_settings(
             if normalized_mode == VOICE_MODE_CUSTOM and not local_models.is_ready(CUSTOM_TTS_MODEL_ID):
                 raise RuntimeError("ZipVoice model is not downloaded")
             current["voice_mode"] = normalized_mode
+            if normalized_mode == VOICE_MODE_CUSTOM:
+                current["tts_model"] = CUSTOM_TTS_MODEL_ID
+            elif current.get("tts_model") == CUSTOM_TTS_MODEL_ID:
+                current["voice_preset"] = ZIPVOICE_DEFAULT_PRESET_ID
         if voice_preset is not None:
             normalized_preset = str(voice_preset).strip()
             if normalized_preset not in _VOICE_PRESET_BY_ID:
@@ -254,7 +365,21 @@ def update_settings(
             if not local_models.is_ready(required_model):
                 raise RuntimeError("selected voice model is not downloaded")
             current["voice_preset"] = normalized_preset
-        if current["voice_mode"] == VOICE_MODE_CUSTOM and not _profile_ready(current):
+            current["tts_model"] = (
+                CUSTOM_TTS_MODEL_ID
+                if normalized_preset == ZIPVOICE_DEFAULT_PRESET_ID
+                else PRESET_TTS_MODEL_ID
+            )
+        resolved_model, resolved_provider = _resolved_tts_model(
+            current,
+            minimax_configured=minimax_tts.is_configured(),
+        )
+        if (
+            resolved_provider == "local"
+            and resolved_model == CUSTOM_TTS_MODEL_ID
+            and current["voice_mode"] == VOICE_MODE_CUSTOM
+            and not _profile_ready(current)
+        ):
             current["auto_read"] = False
         config_store.set_setting("voice", current)
     return status()
@@ -449,6 +574,7 @@ def save_voice_profile(payload: bytes, reference_text: str) -> dict[str, Any]:
             current = _settings()
             current["reference_text"] = text
             current["voice_mode"] = VOICE_MODE_CUSTOM
+            current["tts_model"] = CUSTOM_TTS_MODEL_ID
             config_store.set_setting("voice", current)
         except Exception:
             if reference_replaced:
@@ -474,6 +600,8 @@ def delete_voice_profile() -> dict[str, Any]:
             current = _settings()
             current["reference_text"] = ""
             current["voice_mode"] = VOICE_MODE_PRESET
+            if current.get("tts_model") == CUSTOM_TTS_MODEL_ID:
+                current["voice_preset"] = ZIPVOICE_DEFAULT_PRESET_ID
             config_store.set_setting("voice", current)
         except Exception:
             if had_previous and backup.exists():
@@ -645,11 +773,39 @@ def synthesize(text: str, *, num_steps: int | None = None) -> bytes:
         raise ValueError(f"text must be {MAX_TTS_CHARS} characters or shorter")
     with _VOICE_PROFILE_LOCK:
         settings = _settings()
-        custom_selected = settings["voice_mode"] == VOICE_MODE_CUSTOM
-        zipvoice_preset_selected = (
-            not custom_selected and settings["voice_preset"] == ZIPVOICE_DEFAULT_PRESET_ID
+        selected_model, tts_provider = _resolved_tts_model(
+            settings,
+            minimax_configured=minimax_tts.is_configured(),
         )
-        uses_zipvoice = custom_selected or zipvoice_preset_selected
+    if tts_provider == "minimax":
+        try:
+            return minimax_tts.synthesize(
+                content,
+                model=selected_model,
+                voice_id=settings.get("minimax_voice_id") or minimax_tts.DEFAULT_VOICE_ID,
+            )
+        except RuntimeError:
+            if settings.get("tts_model") != TTS_MODEL_AUTO:
+                raise
+            # Automatic mode prefers MiniMax but keeps the existing local voice
+            # as a transparent availability fallback.
+            fallback_model = _local_tts_model(settings)
+            fallback_ready = _runtime_available() and local_models.is_ready(fallback_model)
+            if (
+                fallback_model == CUSTOM_TTS_MODEL_ID
+                and settings["voice_mode"] == VOICE_MODE_CUSTOM
+            ):
+                fallback_ready = fallback_ready and _profile_ready(settings)
+            if not fallback_ready:
+                raise
+            selected_model = fallback_model
+
+    with _VOICE_PROFILE_LOCK:
+        custom_selected = (
+            selected_model == CUSTOM_TTS_MODEL_ID
+            and settings["voice_mode"] == VOICE_MODE_CUSTOM
+        )
+        uses_zipvoice = selected_model == CUSTOM_TTS_MODEL_ID
         if uses_zipvoice:
             if custom_selected:
                 reference_path, reference_text = _active_reference(settings)
@@ -681,7 +837,10 @@ def synthesize(text: str, *, num_steps: int | None = None) -> bytes:
             generation.silence_scale = TTS_SILENCE_SCALE
             generation.extra["min_char_in_sentence"] = "10"
         else:
-            preset = _VOICE_PRESET_BY_ID[settings["voice_preset"]]
+            preset_id = settings["voice_preset"]
+            if preset_id == ZIPVOICE_DEFAULT_PRESET_ID:
+                preset_id = DEFAULT_PRESET_ID
+            preset = _VOICE_PRESET_BY_ID[preset_id]
             tts = _load_kokoro_tts()
             generation.sid = int(preset["sid"])
             generation.speed = 1.0

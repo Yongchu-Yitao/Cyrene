@@ -2728,6 +2728,7 @@ var WbcVoice = (function () {
     auto_read: false,
     auto_send_after_asr: false,
     auto_stop_on_silence: true,
+    tts_provider: "local",
   };
   var statusPromise = null;
   var listeners = new Set();
@@ -2879,7 +2880,9 @@ var WbcVoice = (function () {
     // Long model sentences are internally divided at natural clause breaks so
     // the first audible result does not wait for an entire paragraph-length
     // sentence. Completed short sentences remain one synthesis request.
-    var maxChars = 60;
+    // Cloud TTS is request-rate limited, so batch more text per synthesis call
+    // while keeping the low-latency local voice chunks unchanged.
+    var maxChars = currentStatus.tts_provider === "minimax" ? 240 : 60;
     sentences.forEach(function (sentence) {
       var remaining = String(sentence || "").trim();
       while (remaining.length > maxChars) {

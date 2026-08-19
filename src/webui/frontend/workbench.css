@@ -7890,7 +7890,7 @@ html[data-theme] .settings-overlay .wb-textarea::placeholder {
 }
 
 .settings-overlay .wb-export-session-toolbar {
-  width: min(640px, 100%);
+  width: 100%;
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -7899,12 +7899,18 @@ html[data-theme] .settings-overlay .wb-textarea::placeholder {
   font-size: calc(12.5px * var(--wb-ui-font-scale, 1));
 }
 
+.settings-overlay .wb-export-session-toolbar > b {
+  color: var(--wb-text);
+  font-size: calc(13px * var(--wb-ui-font-scale, 1));
+  font-weight: 680;
+}
+
 .settings-overlay .wb-export-session-toolbar .wb-inline-row { gap: 7px; }
 .settings-overlay .wb-export-session-toolbar .wb-btn { height: 32px; min-height: 32px; }
 
 .settings-overlay .wb-export-session-list {
-  width: min(640px, 100%);
-  max-height: 220px;
+  width: 100%;
+  max-height: 264px;
   overflow-y: auto;
   display: flex;
   flex-direction: column;
@@ -7917,7 +7923,7 @@ html[data-theme] .settings-overlay .wb-textarea::placeholder {
 }
 
 .settings-overlay .wb-export-session-option {
-  min-height: 38px;
+  min-height: 44px;
   display: grid;
   grid-template-columns: 18px minmax(0, 1fr);
   align-items: center;
@@ -7941,11 +7947,99 @@ html[data-theme] .settings-overlay .wb-textarea::placeholder {
 }
 
 .settings-overlay .wb-export-session-option input { accent-color: var(--wb-accent); }
-.settings-overlay .wb-export-session-option span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.settings-overlay .wb-export-session-copy {
+  min-width: 0;
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 16px;
+}
 
-.settings-overlay .wb-export-area .wb-seg {
+.settings-overlay .wb-export-session-copy > span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--wb-text);
+  font-weight: 580;
+}
+
+.settings-overlay .wb-export-session-copy > small {
+  flex: 0 0 auto;
+  color: var(--wb-faint);
+  font-size: calc(11px * var(--wb-ui-font-scale, 1));
+}
+
+.settings-overlay .wb-export-footer {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 16px;
+  padding-top: 2px;
+}
+
+.settings-overlay .wb-export-format {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.settings-overlay .wb-export-format > span {
+  color: var(--wb-muted);
+  font-size: calc(11.5px * var(--wb-ui-font-scale, 1));
+  font-weight: 620;
+}
+
+.settings-overlay .wb-export-format .wb-seg {
   width: auto;
   align-self: flex-start;
+}
+
+.settings-overlay .wb-export-submit {
+  min-width: 104px;
+  min-height: 44px;
+  padding-inline: 18px;
+  justify-content: center;
+  gap: 8px;
+}
+
+.settings-overlay .wb-export-submit svg {
+  width: 16px;
+  height: 16px;
+  flex: 0 0 16px;
+}
+
+.settings-overlay .wb-session-export-block > .wb-section-block-head {
+  align-items: flex-start;
+  justify-content: flex-start;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.settings-overlay .wb-session-export-block > .wb-section-block-head small {
+  max-width: 70ch;
+  line-height: 1.5;
+}
+
+@media (max-width: 700px) {
+  .settings-overlay .wb-export-session-toolbar,
+  .settings-overlay .wb-export-footer {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .settings-overlay .wb-export-session-toolbar .wb-inline-row {
+    width: 100%;
+  }
+
+  .settings-overlay .wb-export-session-toolbar .wb-btn,
+  .settings-overlay .wb-export-submit {
+    flex: 1 1 0;
+  }
+
+  .settings-overlay .wb-export-session-copy > small {
+    display: none;
+  }
 }
 
 html[data-theme] .settings-overlay .wb-btn {
@@ -7989,6 +8083,47 @@ html[data-theme] .settings-overlay .wb-btn.primary:hover:not(:disabled) {
   box-shadow:
     0 8px 18px rgba(9, 17, 30, .07),
     inset 0 1px 0 color-mix(in srgb, #fff 12%, transparent);
+}
+
+html[data-theme] .settings-overlay .wb-btn.primary.wb-export-submit:not(:disabled) {
+  border-color: color-mix(in srgb, var(--wb-accent) 84%, var(--wb-line-2));
+  background: var(--wb-accent);
+  color: var(--accent-text, #fff);
+  box-shadow:
+    0 8px 20px color-mix(in srgb, var(--wb-accent) 22%, transparent),
+    inset 0 1px 0 color-mix(in srgb, #fff 18%, transparent);
+}
+
+html[data-theme] .settings-overlay .wb-btn.primary.wb-export-submit:hover:not(:disabled) {
+  border-color: color-mix(in srgb, var(--wb-accent) 92%, var(--wb-line-2));
+  background: color-mix(in srgb, var(--wb-accent) 88%, #000);
+  color: var(--accent-text, #fff);
+  box-shadow:
+    0 10px 24px color-mix(in srgb, var(--wb-accent) 28%, transparent),
+    inset 0 1px 0 color-mix(in srgb, #fff 20%, transparent);
+}
+
+html[data-theme] .settings-overlay .wb-btn.primary.wb-export-submit:active:not(:disabled) {
+  transform: translateY(0) scale(.98);
+}
+
+html[data-theme] .settings-overlay .wb-btn.primary.wb-export-submit:disabled {
+  opacity: 1;
+  border-color: color-mix(in srgb, var(--wb-line-2) 66%, transparent);
+  background: color-mix(in srgb, var(--wb-control-bg) 88%, transparent);
+  color: var(--wb-faint);
+  box-shadow: none;
+  cursor: not-allowed;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  html[data-theme] .settings-overlay .wb-btn.primary.wb-export-submit {
+    transition: none;
+  }
+
+  html[data-theme] .settings-overlay .wb-btn.primary.wb-export-submit:active:not(:disabled) {
+    transform: none;
+  }
 }
 
 html[data-theme] .settings-overlay .wb-btn.danger {
@@ -10829,6 +10964,41 @@ html[data-theme] .settings-overlay .wb-toggle.on {
   max-width: 240px;
 }
 
+.wb-voice-model-select {
+  min-width: 220px;
+  max-width: 280px;
+}
+
+.wb-voice-cloud-profile {
+  min-height: 58px;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 12px;
+  padding: 12px 14px;
+  border: 1px solid color-mix(in srgb, var(--wb-line-2) 62%, transparent);
+  border-radius: 11px;
+  background: color-mix(in srgb, var(--wb-accent) 4%, transparent);
+}
+
+.wb-voice-cloud-profile > span:not(.wb-hint) {
+  padding: 4px 8px;
+  border-radius: 999px;
+  color: var(--wb-muted);
+  background: color-mix(in srgb, var(--wb-muted) 9%, transparent);
+  font-size: calc(10.5px * var(--wb-ui-font-scale, 1));
+  font-weight: 650;
+}
+
+.wb-voice-cloud-profile > span.ready {
+  color: var(--wb-green);
+  background: color-mix(in srgb, var(--wb-green) 12%, transparent);
+}
+
+.wb-voice-cloud-profile > .wb-hint {
+  grid-column: 1 / -1;
+}
+
 .wb-voice-custom-fields {
   grid-column: 1 / -1;
   display: grid;
@@ -10942,6 +11112,20 @@ html[data-theme] .settings-overlay .wb-toggle.on {
 }
 
 @media (max-width: 620px) {
+  .wb-voice-model-select {
+    width: 100%;
+    min-width: 0;
+    max-width: none;
+  }
+
+  .wb-voice-cloud-profile {
+    grid-template-columns: 1fr;
+  }
+
+  .wb-voice-cloud-profile > span:not(.wb-hint) {
+    justify-self: start;
+  }
+
   .wb-voice-profile {
     grid-template-columns: 1fr;
   }

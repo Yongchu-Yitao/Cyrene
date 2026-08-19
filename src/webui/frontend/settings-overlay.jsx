@@ -409,6 +409,9 @@ function SettingsPage({
     voice_mode: "preset",
     voice_preset: "kokoro-zm_009",
     voice_presets: [],
+    tts_model_selection: "auto",
+    tts_models: [],
+    tts_provider: "local",
     tts_ready: false,
     auto_read: false,
     auto_send_after_asr: false,
@@ -923,6 +926,24 @@ function SettingsPage({
     }).finally(function () { setVoiceBusy(""); });
   }
 
+  function saveVoiceTtsModel(nextModel) {
+    if (voiceBusy || !nextModel || nextModel === voiceStatus.tts_model_selection) return;
+    var previous = voiceStatus;
+    publishVoiceStatus({ ...voiceStatus, tts_model_selection: nextModel });
+    setVoiceBusy("settings");
+    settingsFetch("/api/voice/settings", {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ tts_model: nextModel }),
+    }).then(readSettingsResponse).then(function (payload) {
+      publishVoiceStatus(payload);
+      setVoiceNotice("");
+    }).catch(function (error) {
+      publishVoiceStatus(previous);
+      showSettingsToast(t("settings.error") + ": " + (error.message || ""), "error");
+    }).finally(function () { setVoiceBusy(""); });
+  }
+
   function saveVoiceProfile() {
     if (!voiceReferenceFile || !voiceReferenceText.trim() || voiceBusy) return;
     var form = new FormData();
@@ -1087,7 +1108,7 @@ function SettingsPage({
             voiceReferenceFile, setVoiceReferenceFile, voiceReferencePhase, voiceReferenceElapsed,
             startVoiceReferenceRecording, finishVoiceReferenceRecording,
             voiceBusy, voiceNotice,
-            saveVoiceBooleanSetting, saveVoiceMode, saveVoicePreset, saveVoiceProfile, deleteVoiceProfile,
+            saveVoiceBooleanSetting, saveVoiceMode, saveVoicePreset, saveVoiceTtsModel, saveVoiceProfile, deleteVoiceProfile,
           }),
           tab === "extensions" && React.createElement(ExtensionsPanel, { t: t }),
           tab === "custom-tools" && React.createElement("div", {
@@ -4077,7 +4098,7 @@ function CapabilitiesPanel(p) {
     voiceReferenceFile, setVoiceReferenceFile, voiceReferencePhase, voiceReferenceElapsed,
     startVoiceReferenceRecording, finishVoiceReferenceRecording,
     voiceBusy, voiceNotice,
-    saveVoiceBooleanSetting, saveVoiceMode, saveVoicePreset, saveVoiceProfile, deleteVoiceProfile,
+    saveVoiceBooleanSetting, saveVoiceMode, saveVoicePreset, saveVoiceTtsModel, saveVoiceProfile, deleteVoiceProfile,
   } = p;
   var mode = p.mode === "tools" ? "tools" : "voice";
 
@@ -4096,7 +4117,8 @@ function CapabilitiesPanel(p) {
 
   function removeMcp(name) { setMcpConfigs(mcpConfigs.filter(function (s) { return s.name !== name; })); }
   function toggleMcp(name) { setMcpConfigs(mcpConfigs.map(function (s) { return s.name === name ? { ...s, enabled: !s.enabled } : s; })); }
-  var customVoiceSelected = voiceStatus.voice_mode === "custom";
+  var localTtsActive = voiceStatus.tts_provider !== "minimax";
+  var customVoiceSelected = localTtsActive && voiceStatus.voice_mode === "custom";
   var voiceReferenceActive = voiceReferencePhase === "starting"
     || voiceReferencePhase === "recording"
     || voiceReferencePhase === "transcribing";
@@ -4123,6 +4145,30 @@ function CapabilitiesPanel(p) {
         return React.createElement("option", { key: preset.id, value: preset.id }, voicePresetLabel(preset));
       }));
     }).filter(Boolean);
+  }
+
+  function voiceTtsModelLabel(model) {
+    var id = String(model && model.id || "");
+    if (id === "auto") return t("settings.voiceTtsModelAuto");
+    if (id === "speech-2.8-turbo") return "MiniMax Speech 2.8 Turbo";
+    if (id === "speech-2.8-hd") return "MiniMax Speech 2.8 HD";
+    if (id === "kokoro-zh-en") return "Kokoro";
+    if (id === "zipvoice-zh-en") return "ZipVoice";
+    return id;
+  }
+
+  function voiceTtsModelOptions() {
+    var models = Array.isArray(voiceStatus.tts_models) ? voiceStatus.tts_models : [];
+    var selection = String(voiceStatus.tts_model_selection || "auto");
+    return models.filter(function (model) {
+      return model && (model.available !== false || model.id === selection || model.id === "auto");
+    }).map(function (model) {
+      return React.createElement("option", {
+        key: model.id,
+        value: model.id,
+        disabled: model.available === false,
+      }, voiceTtsModelLabel(model));
+    });
   }
 
   return React.createElement("div", { className: "settings-panel" },
@@ -4165,7 +4211,21 @@ function CapabilitiesPanel(p) {
           ),
           "voice-auto-read",
         ),
-        React.createElement("div", { className: "wb-voice-profile" },
+        FieldRow(
+          t("settings.voiceTtsModel"),
+          voiceStatus.tts_provider === "minimax"
+            ? t("settings.voiceTtsModelMiniMaxHint", { model: voiceTtsModelLabel({ id: voiceStatus.tts_model }) })
+            : t("settings.voiceTtsModelLocalHint"),
+          React.createElement("select", {
+            className: "wb-select wb-voice-model-select",
+            value: voiceStatus.tts_model_selection || "auto",
+            disabled: voiceBusy === "settings",
+            "aria-label": t("settings.voiceTtsModel"),
+            onChange: function (event) { saveVoiceTtsModel(event.target.value); },
+          }, voiceTtsModelOptions()),
+          "voice-tts-model",
+        ),
+        localTtsActive ? React.createElement("div", { className: "wb-voice-profile" },
           React.createElement("div", { className: "wb-voice-profile-copy" },
             React.createElement("b", null, t("settings.voiceProfile")),
             React.createElement("small", null, t("settings.voiceProfileHint")),
@@ -4269,13 +4329,24 @@ function CapabilitiesPanel(p) {
                   : React.createElement("span", { className: "" }, t("settings.localModelNotDownloaded")),
               ),
           voiceNotice && React.createElement("span", { className: "wb-hint saved" }, voiceNotice),
+        ) : React.createElement("div", { className: "wb-voice-cloud-profile" },
+          React.createElement("div", { className: "wb-voice-profile-copy" },
+            React.createElement("b", null, t("settings.voiceMiniMaxVoice")),
+            React.createElement("small", null, t("settings.voiceMiniMaxVoiceHint")),
+          ),
+          React.createElement("span", { className: voiceStatus.tts_ready ? "ready" : "" },
+            t("settings.voiceMiniMaxDefaultVoice") + " · " + String(voiceStatus.minimax_voice_id || "male-qn-qingse")
+          ),
+          voiceNotice && React.createElement("span", { className: "wb-hint saved" }, voiceNotice),
         ),
         React.createElement("div", { className: "wb-voice-readiness" },
           React.createElement("span", { className: voiceStatus.asr_ready ? "ready" : "" },
             t("settings.voiceAsrStatus") + " · " + t(voiceStatus.asr_ready ? "settings.localModelReady" : "settings.localModelNotDownloaded")
           ),
           React.createElement("span", { className: voiceStatus.tts_ready ? "ready" : "" },
-            t("settings.voiceTtsStatus") + " · " + t(voiceStatus.tts_ready ? "settings.localModelReady" : "settings.voiceTtsNeedsProfile")
+            t("settings.voiceTtsStatus") + " · " + t(voiceStatus.tts_ready
+              ? voiceStatus.tts_provider === "minimax" ? "settings.voiceCloudReady" : "settings.localModelReady"
+              : "settings.voiceTtsNeedsProfile")
           ),
         ),
       ),
@@ -4377,6 +4448,24 @@ function requestDataPanelStorage() {
       dataPanelStorageRequest = null;
     });
   return dataPanelStorageRequest;
+}
+
+function SessionExportIcon() {
+  return React.createElement("svg", {
+    width: "16",
+    height: "16",
+    viewBox: "0 0 24 24",
+    fill: "none",
+    stroke: "currentColor",
+    strokeWidth: "2",
+    strokeLinecap: "round",
+    strokeLinejoin: "round",
+    "aria-hidden": "true",
+  },
+    React.createElement("path", { d: "M12 3v12" }),
+    React.createElement("path", { d: "m7 10 5 5 5-5" }),
+    React.createElement("path", { d: "M5 21h14" }),
+  );
 }
 
 function DataPanel(p) {
@@ -4593,30 +4682,40 @@ function DataPanel(p) {
     React.cloneElement(SectionBlock(t("settings.sessionExport"), t("settings.sessionExportHint"),
       exportSessions.length > 0 ? React.createElement("div", { className: "wb-export-area" },
         React.createElement("div", { className: "wb-export-session-toolbar" },
-          React.createElement("span", null, t("settings.sessionExportSelected", { n: exportSids.length })),
+          React.createElement("b", null, t("settings.sessionExportSelected", { n: exportSids.length })),
           React.createElement("div", { className: "wb-inline-row" },
-            React.createElement("button", { type: "button", className: "wb-btn muted", onClick: function () { setExportSids(exportSessions.map(function (s) { return s.id; })); setExportMsg(""); } }, t("settings.selectAll")),
+            React.createElement("button", { type: "button", className: "wb-btn muted", disabled: exportSids.length === exportSessions.length, onClick: function () { setExportSids(exportSessions.map(function (s) { return s.id; })); setExportMsg(""); } }, t("settings.selectAll")),
             React.createElement("button", { type: "button", className: "wb-btn muted", disabled: !exportSids.length, onClick: function () { setExportSids([]); setExportMsg(""); } }, t("settings.clearSelection")),
           ),
         ),
         React.createElement("div", { className: "wb-export-session-list", role: "group", "aria-label": t("settings.sessionExportSelectLabel") },
           exportSessions.map(function (s) {
             var selected = exportSids.indexOf(s.id) >= 0;
+            var sessionDate = s.updated_at || s.created_at;
             return React.createElement("label", { className: "wb-export-session-option" + (selected ? " selected" : ""), key: s.id },
               React.createElement("input", { type: "checkbox", checked: selected, onChange: function () { toggleExportSession(s.id); } }),
-              React.createElement("span", null, s.title || s.id),
+              React.createElement("span", { className: "wb-export-session-copy" },
+                React.createElement("span", null, s.title || s.id),
+                sessionDate ? React.createElement("small", null, formatDate(sessionDate)) : null,
+              ),
             );
           }),
         ),
-        React.createElement("div", { className: "wb-seg" },
-          React.createElement("button", { className: "wb-seg-btn" + (exportFmt === "markdown" ? " active" : ""), onClick: function () { setExportFmt("markdown"); } }, "Markdown"),
-          React.createElement("button", { className: "wb-seg-btn" + (exportFmt === "json" ? " active" : ""), onClick: function () { setExportFmt("json"); } }, "JSON"),
-        ),
-        React.createElement("div", { className: "wb-inline-row" },
-          React.createElement("button", { className: "wb-btn primary", disabled: !exportSids.length, onClick: exportSelectedSessions }, t("settings.sessionExportBtn")),
+        React.createElement("div", { className: "wb-export-footer" },
+          React.createElement("div", { className: "wb-export-format" },
+            React.createElement("span", null, t("settings.sessionExportFormat")),
+            React.createElement("div", { className: "wb-seg", role: "radiogroup", "aria-label": t("settings.sessionExportFormat") },
+              React.createElement("button", { type: "button", role: "radio", "aria-checked": exportFmt === "markdown", className: "wb-seg-btn" + (exportFmt === "markdown" ? " active" : ""), onClick: function () { setExportFmt("markdown"); } }, "Markdown"),
+              React.createElement("button", { type: "button", role: "radio", "aria-checked": exportFmt === "json", className: "wb-seg-btn" + (exportFmt === "json" ? " active" : ""), onClick: function () { setExportFmt("json"); } }, "JSON"),
+            ),
+          ),
+          React.createElement("button", { type: "button", className: "wb-btn primary wb-export-submit", disabled: !exportSids.length, onClick: exportSelectedSessions },
+            React.createElement(SessionExportIcon),
+            React.createElement("span", null, t("settings.sessionExportBtn")),
+          ),
         ),
       ) : React.createElement("p", { className: "wb-hint" }, t("settings.sessionExportNoSessions")),
-    ), { id: "setting-session-export" }),
+    ), { id: "setting-session-export", className: "wb-section-block wb-session-export-block" }),
   );
 }
 
