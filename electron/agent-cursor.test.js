@@ -47,8 +47,8 @@ test('agent cursor contract uses the rounded triangle with fixed interaction tim
   const stoppedCommand = agentCursorRunningCommand(false);
   assert.match(hideCommand, /opacity 250ms ease-in/);
   assert.match(runningCommand, /state\.running = true/);
-  assert.match(runningCommand, /state\.fading = false/);
-  assert.match(stoppedCommand, /3000 - elapsed/);
+  assert.doesNotMatch(runningCommand, /clearTimeout|state\.fading = false/);
+  assert.doesNotMatch(stoppedCommand, /clearTimeout|3000 - elapsed/);
   assert.doesNotThrow(() => new Function(command));
   assert.doesNotThrow(() => new Function(hideCommand));
   assert.doesNotThrow(() => new Function(runningCommand));
@@ -63,7 +63,7 @@ test('browser page zoom is counter-scaled without enlarging unzoomed cursors', (
   assert.equal(agentCursorVisualScaleForZoom(0), 1);
 });
 
-test('shared browser and App Use cursor defers idle fade while running and animates every later position', () => {
+test('shared browser and App Use cursor fades stale positions during a run and animates every update', () => {
   class FakeElement {
     constructor() {
       this.id = '';
@@ -122,7 +122,7 @@ test('shared browser and App Use cursor defers idle fade while running and anima
   assert.ok(cursor);
   assert.equal(first.first, true);
   assert.equal(first.waitMs, 184);
-  assert.equal([...timers.values()].some((timer) => timer.ms === 3000), false);
+  assert.equal([...timers.values()].some((timer) => timer.ms === 3000), true);
 
   now = 1200;
   const moved = vm.runInNewContext(agentCursorCommand({ x: 220, y: 180, running: true }), context);
@@ -130,7 +130,7 @@ test('shared browser and App Use cursor defers idle fade while running and anima
   assert.equal(moved.waitMs, 180);
   assert.match(cursor.style.transition, /transform 180ms/);
   assert.equal(cursor.style.transform, 'translate3d(214px,174px,0) scale(1)');
-  assert.equal([...timers.values()].some((timer) => timer.ms === 3000), false);
+  assert.equal([...timers.values()].some((timer) => timer.ms === 3000), true);
 
   const zoomCompensated = vm.runInNewContext(agentCursorCommand({
     x: 220, y: 180, running: true, visualScale: 4,
@@ -146,7 +146,7 @@ test('shared browser and App Use cursor defers idle fade while running and anima
   assert.equal(pressed.waitMs, 0);
   assert.equal(pressed.pressMs, 100);
 
-  now = 1300;
+  const timersBeforeLifecycleChange = timers.size;
   vm.runInNewContext(agentCursorRunningCommand(false), context);
-  assert.ok([...timers.values()].some((timer) => timer.ms === 2900));
+  assert.equal(timers.size, timersBeforeLifecycleChange);
 });

@@ -127,6 +127,7 @@ REMOTE_TOOL_PACK_WIRE_NAMES = (
     "delivery_tools",
     "skill_tools",
     "integration_tools",
+    "custom_tools",
 )
 REMOTE_TOOL_PACK_CAPABILITIES = frozenset(
     REMOTE_TOOL_PACK_PREFIX + wire_name

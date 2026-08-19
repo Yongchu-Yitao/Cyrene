@@ -47,7 +47,10 @@ async def _prepare_runtime() -> None:
     logger.info("SOUL.md ready at %s", SOUL_PATH)
     logger.info("Inbox ready at %s", INBOX_DIR)
     logger.info("Short-term memory initialized at %s", DATA_DIR / "short_term.json")
-    await start_external_services()
+    # Telegram owns a different long-lived asyncio loop. Start the custom-tool
+    # watcher from that loop's post-init hook; legacy search and MCP
+    # retain their existing startup path here.
+    await start_external_services(custom_tools=False)
 
     # 人格设置检测（Telegram 模式跳过交互，提示用户先运行 CLI）
     from cyrene.runtime.setup import init_setup_flag, is_setup_done

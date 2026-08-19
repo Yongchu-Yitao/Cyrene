@@ -28,6 +28,7 @@ def test_main_wire_bundle_has_stable_progressive_tool_contract(monkeypatch):
         "entity_tools", "map_tools", "subagent_tools", "delivery_tools",
         "environment_tools", "skill_tools", "remote_tools", "cyrene_tools",
         "integration_tools",
+        "custom_tools",
     ]
     assert json.dumps(defs, sort_keys=True) == json.dumps(
         get_main_wire_tool_defs(),
@@ -925,6 +926,7 @@ def test_prompts_use_new_module_names_and_keep_deep_research_specialized():
         "environment_tools",
         "skill_tools",
         "remote_tools",
+        "custom_tools",
         "integration_tools",
     ):
         assert module_name in combined

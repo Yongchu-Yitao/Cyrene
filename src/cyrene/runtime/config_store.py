@@ -954,6 +954,47 @@ def _parse_ctx_str(ctx_str: str) -> int:
         return 0
 
 
+def _profile_ctx_limit(profile_id: str) -> int:
+    """Read one saved profile window without importing the model service layer."""
+    configuration = get_setting("model_configuration", {})
+    if not isinstance(configuration, dict):
+        return 0
+    profiles = configuration.get("profiles")
+    connections = configuration.get("connections")
+    if not isinstance(profiles, list) or not isinstance(connections, list):
+        return 0
+    profile = next(
+        (
+            item
+            for item in profiles
+            if isinstance(item, dict)
+            and str(item.get("id") or "") == profile_id
+        ),
+        None,
+    )
+    if profile is None or profile.get("enabled") is False:
+        return 0
+    connection_id = str(profile.get("connection_id") or "")
+    connection = next(
+        (
+            item
+            for item in connections
+            if isinstance(item, dict)
+            and str(item.get("id") or "") == connection_id
+        ),
+        None,
+    )
+    if connection is None or connection.get("enabled") is False:
+        return 0
+    try:
+        result = int(
+            profile.get("context_limit") or profile.get("ctx_limit") or 0
+        )
+    except (TypeError, ValueError):
+        result = 0
+    return result or _parse_ctx_str(str(profile.get("ctx") or ""))
+
+
 def ctx_limit_for_model(model_name: str) -> int:
     """Context-window size (in tokens) for a specific model name. 0 if unknown.
 
@@ -990,16 +1031,9 @@ def ctx_limit_for_model(model_name: str) -> int:
                 return limit
     # Profiles outside the primary/vision routes remain addressable by Agent
     # bindings and future chat selectors without expanding the legacy lists.
-    try:
-        from cyrene.runtime.model_configuration import candidate_for_profile
-
-        profile = candidate_for_profile(model_name)
-        if profile is not None:
-            limit = int(profile.get("context_limit") or profile.get("ctx_limit") or 0)
-            if limit:
-                return limit
-    except (ImportError, ValueError):
-        pass
+    profile_limit = _profile_ctx_limit(model_name)
+    if profile_limit > 0:
+        return profile_limit
     return _known_ctx_limit_for_model(model_name)
 
 
@@ -1066,18 +1100,9 @@ def effective_ctx_limit_for_model(
     if explicit > 0:
         return explicit
     if models is None:
-        try:
-            from cyrene.runtime.model_configuration import candidate_for_profile
-
-            profile = candidate_for_profile(model_name)
-            if profile is not None:
-                profile_limit = int(
-                    profile.get("context_limit") or profile.get("ctx_limit") or 0
-                )
-                if profile_limit > 0:
-                    return profile_limit
-        except (ImportError, ValueError):
-            pass
+        profile_limit = _profile_ctx_limit(model_name)
+        if profile_limit > 0:
+            return profile_limit
     # Do not call ctx_limit_for_model() here: it reads the process-global model
     # settings and can override the explicit ``models`` snapshot supplied by
     # the caller (for example while evaluating a pending settings change).

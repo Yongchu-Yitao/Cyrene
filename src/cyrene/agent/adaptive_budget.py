@@ -99,9 +99,13 @@ def _remaining_hours_in_month(now: datetime, start_day: int = 1) -> float:
         py = y if m > 1 else y - 1
         _, days_in_prev = calendar.monthrange(py, pm)
         period_start = datetime(py, pm, min(start_day, days_in_prev), tzinfo=timezone.utc)
-    # Period end = start_day of next month
-    nm = m + 1 if m < 12 else 1
-    ny = y if m < 12 else y + 1
+    # Before this month's start day, the current period ends this month.
+    # Otherwise it ends on the configured day next month.
+    if now < datetime(y, m, period_start_day, tzinfo=timezone.utc):
+        nm, ny = m, y
+    else:
+        nm = m + 1 if m < 12 else 1
+        ny = y if m < 12 else y + 1
     _, days_in_next = calendar.monthrange(ny, nm)
     period_end = datetime(ny, nm, min(start_day, days_in_next), tzinfo=timezone.utc)
     delta = period_end - now

@@ -11,7 +11,7 @@ from cyrene.runtime.bootstrap import (
     initialize_runtime,
     start_external_services,
     start_update_check,
-    stop_external_services,
+    stop_external_services_async,
     stop_runtime_tasks,
 )
 from cyrene.runtime.scheduler import setup_scheduler
@@ -48,10 +48,8 @@ async def main() -> None:
     finally:
         await stop_runtime_tasks(update_check_task)
         scheduler.shutdown()
+        await stop_external_services_async(mcp=False)
 
 
 if __name__ == "__main__":
-    try:
-        asyncio.run(main())
-    finally:
-        stop_external_services(mcp=False)
+    asyncio.run(main())

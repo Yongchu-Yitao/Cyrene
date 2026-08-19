@@ -191,7 +191,8 @@ var TABS = [
   { id: "tools", labelKey: "settings.toolsTab", icon: "tools" },
   { id: "channels", labelKey: "settings.channels", icon: "messages" },
   { id: "remote", labelKey: "settings.remoteTab", icon: "device-desktop-up" },
-  { id: "extensions", labelKey: "settings.extensions", icon: "puzzle" },
+  { id: "extensions", labelKey: "settings.extensionCenter", icon: "puzzle" },
+  { id: "custom-tools", labelKey: "settings.customTools", icon: "code" },
   { id: "integrations", labelKey: "settings.integrations", icon: "plug-connected" },
   { id: "budget", labelKey: "settings.budget", icon: "wallet" },
   { id: "usage", labelKey: "settings.usage", icon: "chart-bar" },
@@ -203,7 +204,7 @@ var SETTINGS_TAB_GROUPS = [
   { labelKey: "settings.group.general", ids: ["profile", "general", "appearance", "shortcuts"] },
   { labelKey: "settings.group.intelligence", ids: ["model-usage", "models", "agents", "voice", "tools"] },
   { labelKey: "settings.group.connections", ids: ["channels", "remote"] },
-  { labelKey: "settings.group.extensionsSystem", ids: ["extensions", "integrations"] },
+  { labelKey: "settings.group.extensionsSystem", ids: ["extensions", "custom-tools", "integrations"] },
   { labelKey: "settings.group.data", ids: ["budget", "usage", "data"] },
   { labelKey: "settings.group.other", ids: ["about"] },
 ];
@@ -1075,7 +1076,14 @@ function SettingsPage({
             voiceBusy, voiceNotice,
             saveVoiceBooleanSetting, saveVoiceMode, saveVoicePreset, saveVoiceProfile, deleteVoiceProfile,
           }),
-          tab === "extensions" && React.createElement(ExtensionsPanel, { t }),
+          tab === "extensions" && React.createElement(ExtensionsPanel, { t: t }),
+          tab === "custom-tools" && React.createElement("div", {
+            className: "settings-panel wb-custom-tools-page",
+            id: "setting-custom-tools",
+          },
+            SectionTitle(t("settings.customTools"), t("settings.customToolsHint")),
+            React.createElement(CustomToolsPanel, { t: t }),
+          ),
           tab === "integrations" && React.createElement(GeneralPanel, { integrationsOnly: true, t, lang, setLang, desktopNotifications, toggleDesktopNotifications, mapProvider, setMapProvider, amapKey, setAmapKey, amapKeySaved, setAmapKeySaved, project }),
           tab === "shortcuts" && React.createElement(ShortcutsPanel, { t }),
           tab === "data" && React.createElement(DataPanel, { t, redactSecrets, saveRedactSecrets, config, configLoading, resetStatus, setResetStatus, resetting, setResetting, backupList, backupMsg, setBackupMsg, loadBackups, exportSids, setExportSids, workbenchExportSessions, exportFmt, setExportFmt, exportMsg, setExportMsg, formatBytes, formatDate }),
@@ -3734,6 +3742,319 @@ function AppearancePanel(p) {
   );
 }
 
+function CustomToolsPanel(p) {
+  var t = p.t;
+  var [status, setStatus] = useStateSt({
+    root: "",
+    enabled: true,
+    running: false,
+    packages: [],
+    files: [],
+    tools: [],
+    errors: [],
+  });
+  var [loading, setLoading] = useStateSt(true);
+  var [reloading, setReloading] = useStateSt(false);
+  var [toggleBusy, setToggleBusy] = useStateSt("");
+  var [expandedToolId, setExpandedToolId] = useStateSt("");
+  var [requestError, setRequestError] = useStateSt("");
+  var requestGenerationRef = useRefSt(0);
+  var reloadPendingRef = useRefSt(false);
+  var mountedRef = useRefSt(false);
+
+  function request(path, options) {
+    return settingsFetch(path, options).then(readSettingsResponse).then(function (payload) {
+      if (payload && payload.ok === false) {
+        throw new Error(String(payload.error || t("settings.customToolsLoadError")));
+      }
+      return payload;
+    });
+  }
+
+  function normalizeStatus(payload) {
+    payload = payload || {};
+    var packages = Array.isArray(payload.packages) ? payload.packages : [];
+    var files = Array.isArray(payload.files) ? payload.files : [];
+    var tools = Array.isArray(payload.tools) ? payload.tools : [];
+    var errors = Array.isArray(payload.errors) ? payload.errors : [];
+    return {
+      root: String(payload.root || ""),
+      enabled: payload.enabled !== false && payload.pack_enabled !== false,
+      running: payload.running === true,
+      packages: packages.filter(function (item) {
+        return item && typeof item === "object" && item.id;
+      }).map(function (item) {
+        return {
+          ...item,
+          id: String(item.id),
+          configured_enabled: item.configured_enabled !== false,
+          enabled: item.effective_enabled !== false && item.enabled !== false,
+          source_count: Number(item.source_count || 0),
+          tool_count: Number(item.tool_count || 0),
+          error_count: Number(item.error_count || 0),
+          tools: Array.isArray(item.tools) ? item.tools : [],
+          errors: Array.isArray(item.errors) ? item.errors : [],
+        };
+      }),
+      files: files,
+      tools: tools,
+      errors: errors,
+    };
+  }
+
+  function load() {
+    var requestGeneration = ++requestGenerationRef.current;
+    setLoading(true);
+    setRequestError("");
+    return request("/api/custom-tools/status").then(function (payload) {
+      if (requestGeneration !== requestGenerationRef.current) return;
+      setStatus(normalizeStatus(payload));
+    }).catch(function (caught) {
+      if (requestGeneration !== requestGenerationRef.current) return;
+      setRequestError(caught && caught.message || String(caught));
+    }).finally(function () {
+      if (requestGeneration === requestGenerationRef.current) setLoading(false);
+    });
+  }
+
+  function reloadTools() {
+    if (reloadPendingRef.current) return;
+    reloadPendingRef.current = true;
+    setReloading(true);
+    setRequestError("");
+    request("/api/custom-tools/reload", { method: "POST" })
+      .then(function (payload) {
+        if (mountedRef.current) setStatus(normalizeStatus(payload));
+      })
+      .catch(function (caught) {
+        if (mountedRef.current) setRequestError(caught && caught.message || String(caught));
+      })
+      .finally(function () {
+        reloadPendingRef.current = false;
+        if (mountedRef.current) setReloading(false);
+      });
+  }
+
+  function togglePackage(item) {
+    var packageId = String(item && item.id || "");
+    if (!packageId || toggleBusy) return;
+    var nextEnabled = item.configured_enabled === false;
+    setToggleBusy(packageId);
+    setRequestError("");
+    request("/api/custom-tools/packages/" + encodeURIComponent(packageId) + "/enabled", {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ enabled: nextEnabled }),
+    }).then(function (payload) {
+      if (mountedRef.current) setStatus(normalizeStatus(payload));
+    }).catch(function (caught) {
+      if (!mountedRef.current) return;
+      setRequestError(caught && caught.message || String(caught));
+    }).finally(function () {
+      if (mountedRef.current) setToggleBusy("");
+    });
+  }
+
+  useEffectSt(function () {
+    mountedRef.current = true;
+    load();
+    return function () {
+      mountedRef.current = false;
+      requestGenerationRef.current += 1;
+    };
+  }, []);
+
+  useEffectSt(function () {
+    if (!window.CyreneUI.has("events")) return undefined;
+    return window.CyreneUI.require("events").subscribe(function (event) {
+      if (event && event.type === "custom_tools_changed") load();
+    });
+  }, []);
+
+  var stateLabel = !status.enabled
+    ? t("settings.customToolsState.disabled")
+    : status.running
+      ? t("settings.customToolsState.running")
+      : t("settings.customToolsState.stopped");
+  var stateClass = !status.enabled ? "is-disabled" : status.running ? "is-running" : "is-stopped";
+  return React.createElement("div", { className: "wb-custom-tools-status", "aria-busy": loading || reloading ? "true" : "false" },
+    React.createElement("section", { className: "wb-section-block wb-custom-tools-overview", "aria-labelledby": "custom-tools-directory-title" },
+      React.createElement("div", { className: "wb-section-block-head" },
+        React.createElement("b", { id: "custom-tools-directory-title" }, t("settings.customToolsDirectory")),
+        React.createElement("div", { className: "wb-custom-tools-actions" },
+          React.createElement("span", {
+            className: "wb-custom-tools-status-label " + stateClass,
+            role: "status",
+            "aria-live": "polite",
+          },
+            React.createElement("span", { className: "wb-custom-tools-status-dot", "aria-hidden": "true" }),
+            stateLabel,
+          ),
+          React.createElement("button", {
+            type: "button",
+            className: "wb-btn",
+            disabled: loading || reloading,
+            onClick: reloadTools,
+          }, reloading ? t("settings.customToolsReloading") : t("settings.customToolsReload")),
+        ),
+      ),
+      React.createElement("code", {
+        className: "wb-custom-tools-path",
+        title: status.root || undefined,
+      }, status.root || "—"),
+    ),
+    requestError && React.createElement("div", { className: "wb-custom-tools-error", role: "alert" }, requestError),
+    React.createElement("section", { className: "wb-custom-tools-packages", "aria-labelledby": "custom-tools-packages-title" },
+      React.createElement("div", { className: "wb-custom-tools-section-heading" },
+        React.createElement("b", { id: "custom-tools-packages-title" }, t("settings.customToolsPackages", { n: status.packages.length })),
+        React.createElement("small", null, t("settings.customToolsPackagesHint")),
+      ),
+      loading && !status.packages.length
+        ? React.createElement("p", { className: "wb-hint" }, t("settings.loading"))
+        : status.packages.length
+        ? React.createElement("div", { className: "wb-custom-tools-package-list" }, status.packages.map(function (item, packageIndex) {
+            var packageId = String(item.id || "");
+            var configuredEnabled = item.configured_enabled !== false;
+            var effectiveEnabled = item.enabled !== false;
+            var packageTools = Array.isArray(item.tools) ? item.tools : [];
+            var packageErrors = Array.isArray(item.errors) ? item.errors : [];
+            var packageFiles = status.files.filter(function (file) {
+              return file && String(file.package_id || "") === packageId;
+            });
+            var displayTools = packageTools.slice();
+            if (!displayTools.length && !effectiveEnabled) {
+              displayTools = packageFiles.filter(function (file) {
+                var filename = String(file && file.path || "").split("/").pop() || "";
+                return filename && filename !== "__init__.py" && filename.charAt(0) !== "_";
+              }).map(function (file) {
+                var path = String(file.path || "");
+                var filename = path.split("/").pop() || path;
+                return {
+                  _source_only: true,
+                  name: filename.replace(/\.py$/i, ""),
+                  path: path,
+                  description: t("settings.customToolsDisabledSourceDescription"),
+                };
+              });
+            }
+            var summary = !configuredEnabled
+              ? t("settings.customToolsPackageDisabledSummary", { files: item.source_count })
+              : !status.enabled
+                ? t("settings.customToolsPackageGloballyDisabledSummary", { files: item.source_count })
+                : t("settings.customToolsPackageSummary", { tools: item.tool_count, files: item.source_count });
+            if (item.error_count) {
+              summary += " · " + t("settings.customToolsPackageErrorCount", { n: item.error_count });
+            }
+            var packageTitleId = "custom-tool-package-title-" + packageIndex;
+            return React.createElement("section", {
+              className: "wb-section-block wb-custom-tools-package-group" + (!effectiveEnabled ? " disabled" : ""),
+              key: packageId,
+              "aria-labelledby": packageTitleId,
+            },
+              React.createElement("div", { className: "wb-field wb-custom-tools-package-heading" },
+                React.createElement("div", { className: "wb-label" },
+                  React.createElement("span", { className: "wb-custom-tools-package-name", id: packageTitleId }, packageId),
+                  React.createElement("small", null, summary),
+                ),
+                React.createElement("div", { className: "wb-controls wb-custom-tools-package-control" },
+                  Toggle(
+                    configuredEnabled,
+                    function () { togglePackage(item); },
+                    !!toggleBusy,
+                    t("settings.customToolsPackageToggleLabel", { name: packageId }),
+                  ),
+                ),
+              ),
+              displayTools.length
+                ? React.createElement("div", { className: "wb-extension-list wb-custom-tools-tool-card-list" }, displayTools.map(function (tool, toolIndex) {
+                    var sourceOnly = tool && tool._source_only === true;
+                    var toolName = tool && (tool.name || tool.stable_name || tool.concrete_name) || String(tool || "");
+                    var toolPath = String(tool && tool.path || "");
+                    var toolKey = packageId + ":" + (tool && (tool.concrete_name || tool.capability_id || toolPath) || toolName + ":" + toolIndex);
+                    var toolExpanded = expandedToolId === toolKey;
+                    var toolSummaryId = "custom-tool-summary-" + packageIndex + "-" + toolIndex;
+                    var toolDetailsId = "custom-tool-details-" + packageIndex + "-" + toolIndex;
+                    var toggleToolDetails = function () {
+                      setExpandedToolId(toolExpanded ? "" : toolKey);
+                    };
+                    return React.createElement("article", {
+                      className: "wb-extension-card wb-custom-tool-card" + (toolExpanded ? " expanded" : "") + (sourceOnly ? " source-only" : ""),
+                      key: toolKey,
+                    },
+                      React.createElement("div", { className: "wb-extension-card-main" },
+                        React.createElement("button", {
+                          type: "button",
+                          className: "wb-extension-card-summary",
+                          id: toolSummaryId,
+                          onClick: toggleToolDetails,
+                          "aria-expanded": toolExpanded ? "true" : "false",
+                          "aria-controls": toolDetailsId,
+                          "aria-label": t("settings.customToolsDetailsFor", { name: toolName }),
+                        },
+                          React.createElement("span", { className: "wb-extension-glyph custom-tool" }, React.createElement(ExtensionGlyph, { kind: "toolchain", label: toolName })),
+                          React.createElement("span", { className: "wb-extension-copy" },
+                            React.createElement("span", { className: "wb-extension-title-row" },
+                              React.createElement("strong", null, toolName),
+                              React.createElement("span", { className: "wb-extension-type" }, t(sourceOnly ? "settings.customToolsSourceType" : "settings.customToolsToolType")),
+                            ),
+                            React.createElement("span", { className: "wb-extension-description" }, String(tool && tool.description || t("settings.customToolsNoToolDescription"))),
+                            React.createElement("span", { className: "wb-extension-meta" },
+                              React.createElement("span", { className: "wb-extension-status " + (sourceOnly ? "warning" : "managed") },
+                                React.createElement("span", { className: "wb-extension-status-dot", "aria-hidden": "true" }),
+                                t(sourceOnly ? "settings.customToolsToolNotLoaded" : "settings.customToolsToolLoaded"),
+                              ),
+                              toolPath && React.createElement("span", { className: "mono" }, toolPath),
+                            ),
+                          ),
+                          React.createElement("span", { className: "wb-extension-chevron", "aria-hidden": "true" }, ExternalChevron()),
+                        ),
+                      ),
+                      toolExpanded && React.createElement("div", {
+                        className: "wb-extension-details wb-custom-tool-details",
+                        id: toolDetailsId,
+                        role: "region",
+                        "aria-labelledby": toolSummaryId,
+                      },
+                        React.createElement("dl", null,
+                          React.createElement("div", null, React.createElement("dt", null, t("settings.customToolsDetailPackage")), React.createElement("dd", { className: "mono" }, packageId)),
+                          React.createElement("div", null, React.createElement("dt", null, t("settings.customToolsDetailPath")), React.createElement("dd", { className: "mono" }, toolPath || "—")),
+                          !sourceOnly && React.createElement("div", null, React.createElement("dt", null, t("settings.customToolsDetailCapability")), React.createElement("dd", { className: "mono" }, tool.capability_id || "—")),
+                          !sourceOnly && React.createElement("div", null, React.createElement("dt", null, t("settings.customToolsDetailIdentity")), React.createElement("dd", { className: "mono" }, tool.stable_name || "—")),
+                        ),
+                        !sourceOnly && React.createElement("div", { className: "wb-custom-tools-code-detail" },
+                          React.createElement("b", null, t("settings.customToolsDetailSchema")),
+                          React.createElement("pre", null, JSON.stringify(tool.input_schema || {}, null, 2)),
+                        ),
+                        !sourceOnly && tool.metadata && React.createElement("div", { className: "wb-custom-tools-code-detail" },
+                          React.createElement("b", null, t("settings.customToolsDetailMetadata")),
+                          React.createElement("pre", null, JSON.stringify(tool.metadata, null, 2)),
+                        ),
+                      ),
+                    );
+                  }))
+                : React.createElement("p", { className: "wb-hint wb-custom-tools-package-empty" }, configuredEnabled
+                    ? t("settings.customToolsNoPackageTools")
+                    : t("settings.customToolsDisabledPackageTools")),
+              packageErrors.length > 0 && React.createElement("div", { className: "wb-custom-tools-detail-group wb-custom-tools-errors" },
+                React.createElement("b", null, t("settings.customToolsPackageErrors", { n: packageErrors.length })),
+                React.createElement("ul", null, packageErrors.map(function (errorItem, errorIndex) {
+                  var details = errorItem && typeof errorItem === "object" ? errorItem : { error: String(errorItem || "") };
+                  return React.createElement("li", { key: String(details.path || "") + ":" + errorIndex },
+                    React.createElement("div", { className: "wb-custom-tools-error-head" },
+                      details.path && React.createElement("code", null, details.path),
+                      details.error_type && React.createElement("b", null, details.error_type),
+                    ),
+                    React.createElement("pre", null, String(details.error || details.message || "")),
+                  );
+                })),
+              ),
+            );
+          }))
+        : React.createElement("p", { className: "wb-hint" }, t("settings.customToolsNoPackages")),
+    ),
+  );
+}
+
 // ── Capabilities Panel ──
 function CapabilitiesPanel(p) {
   var {
@@ -6261,7 +6582,7 @@ function ExtensionsPanel(p) {
 
   return React.createElement("div", { className: "wb-extensions-page", id: "setting-extensions" },
     React.createElement("header", { className: "wb-extensions-header" },
-      SectionTitle(t("settings.extensions"), t("settings.extensionsSubtitle")),
+      SectionTitle(t("settings.extensionCenter"), t("settings.extensionsSubtitle")),
       React.createElement("div", { className: "wb-extension-header-actions" },
         React.createElement("button", { type: "button", className: "wb-btn", onClick: function () { loadHooks(true); } }, t("settings.agentHooks")),
         React.createElement("button", { type: "button", className: "wb-btn", onClick: openSources }, t("settings.extensionSources")),
@@ -6273,7 +6594,7 @@ function ExtensionsPanel(p) {
       React.createElement("span", null, t("settings.extensionPythonMissingBody")),
       React.createElement("span", { className: "wb-extension-callout-action" }, t("settings.extensionViewInstall"))
     ),
-    React.createElement("div", { className: "wb-extension-tabs", role: "tablist", "aria-label": t("settings.extensions") },
+    React.createElement("div", { className: "wb-extension-tabs", role: "tablist", "aria-label": t("settings.extensionCenter") },
       categories.map(function (id) { return React.createElement("button", { key: id, type: "button", role: "tab", "aria-selected": category === id ? "true" : "false", className: category === id ? "active" : "", onClick: function () { setCategory(id); setQuery(""); } }, t("settings.extensionTab." + id)); })
     ),
     category !== "agent" && React.createElement("div", { className: "wb-extension-filter" },
@@ -6783,6 +7104,15 @@ function BudgetPanel(p) {
   var cachedCodexQuota = codexQuotaModel.readCodexQuotaCache();
   var [codexQuotaEnabled, setCodexQuotaEnabled] = useStateSt(config.codex_budget_enabled !== false);
   var [codexQuota, setCodexQuota] = useStateSt(cachedCodexQuota || { connected: false, limits: {} });
+  var PROVIDER_USAGE_CACHE_KEY = "cyrene-provider-usage-v1";
+  var cachedProviderUsage = [];
+  try {
+    var providerUsageCacheValue = JSON.parse(localStorage.getItem(PROVIDER_USAGE_CACHE_KEY) || "[]");
+    if (Array.isArray(providerUsageCacheValue)) cachedProviderUsage = providerUsageCacheValue;
+  } catch (error) {}
+  var [providerUsage, setProviderUsage] = useStateSt(cachedProviderUsage);
+  var [providerUsageLoading, setProviderUsageLoading] = useStateSt(!cachedProviderUsage.length);
+  var providerRefreshTimer = useRefSt(null);
 
   var BUDGET_KEY = "cyrene-budget";
 
@@ -6855,6 +7185,25 @@ function BudgetPanel(p) {
       .catch(function () {});
   }
 
+  function fetchProviderUsage(forceRefresh, quiet) {
+    if (!quiet) setProviderUsageLoading(true);
+    settingsFetch("/api/settings/model-config/provider-usage" + (forceRefresh ? "?refresh=true" : ""))
+      .then(readSettingsResponse)
+      .then(function (data) {
+        var items = data && Array.isArray(data.items) ? data.items : [];
+        setProviderUsage(items);
+        try { localStorage.setItem(PROVIDER_USAGE_CACHE_KEY, JSON.stringify(items)); } catch (error) {}
+        if (items.some(function (item) { return item.refreshing === true; })) {
+          if (providerRefreshTimer.current) clearTimeout(providerRefreshTimer.current);
+          providerRefreshTimer.current = setTimeout(function () {
+            fetchProviderUsage(false, true);
+          }, 750);
+        }
+      })
+      .catch(function () {})
+      .finally(function () { if (!quiet) setProviderUsageLoading(false); });
+  }
+
   function saveBudget() {
     saveBudgetConfig({
       budget_monthly: Number(budgetMonthly) || 0,
@@ -6886,8 +7235,10 @@ function BudgetPanel(p) {
   useEffectSt(function () {
     fetchStats();
     fetchCodexQuota();
+    fetchProviderUsage(false, !!cachedProviderUsage.length);
     return function () {
       if (budgetSaveTimer.current) clearTimeout(budgetSaveTimer.current);
+      if (providerRefreshTimer.current) clearTimeout(providerRefreshTimer.current);
     };
   }, []);
 
@@ -6909,6 +7260,34 @@ function BudgetPanel(p) {
     codexQuota.account,
     codexQuota.limits
   );
+  var codexUsageItem = {
+    connection_id: "codex_oauth",
+    provider: "codex_oauth",
+    label: "Codex",
+    kind: "codex_quota",
+    status: codexQuota.connected ? "ok" : codexQuota.error ? "error" : "unconfigured",
+    available: codexQuota.connected === true,
+    error: codexQuota.error || "",
+    plan: codexPlan || "",
+    quota_enabled: codexQuotaEnabled,
+    windows: codexWindows.map(function (windowData) {
+      return {
+        model: "codex",
+        kind: windowData.kind,
+        label: windowData.label,
+        remaining_percent: windowData.remainingPercent,
+        used_percent: windowData.usedPercent,
+        reset_at: windowData.resetsAt ? new Date(windowData.resetsAt * 1000).toISOString() : null,
+      };
+    }),
+  };
+  var providerUsageItems = providerUsage.concat([codexUsageItem]);
+  var minimaxUsageItems = providerUsageItems.filter(function (item) {
+    return item.provider === "minimax";
+  });
+  var compactProviderUsageItems = providerUsageItems.filter(function (item) {
+    return item.provider !== "minimax";
+  });
 
   function formatCost(val) {
     return currencySymbol + val.toFixed(2);
@@ -6929,7 +7308,114 @@ function BudgetPanel(p) {
     );
   }
 
-  return React.createElement("div", { className: "settings-panel" },
+  function providerAmount(value, currency) {
+    var number = Number(value);
+    if (!isFinite(number)) return String(value || "0") + " " + currency;
+    try {
+      return new Intl.NumberFormat(undefined, {
+        style: "currency", currency: currency || "CNY", minimumFractionDigits: 2,
+      }).format(number);
+    } catch (error) {
+      return number.toFixed(2) + " " + currency;
+    }
+  }
+
+  function providerWindowLabel(windowData) {
+    if (windowData.label) return windowData.label;
+    var windowLabel = windowData.kind === "weekly"
+      ? t("settings.providerUsageWeekly")
+      : t("settings.providerUsageInterval");
+    return (windowData.model && windowData.model !== "general" ? windowData.model + " · " : "") + windowLabel;
+  }
+
+  function providerUsageCard(item) {
+    var stateClass = item.status === "ok" && item.available === false ? "empty" : item.status;
+    var stateLabel = item.status === "ok"
+      ? item.available === false ? t("settings.providerUsageDepleted") : t("settings.providerUsageConnected")
+      : item.status === "unconfigured"
+        ? t("settings.providerUsageUnconfigured")
+        : t("settings.providerUsageUnavailable");
+    return React.createElement("article", {
+      className: "wb-provider-usage-card",
+      id: item.kind === "codex_quota" ? "setting-codex-quota" : undefined,
+      key: item.connection_id || item.provider,
+    },
+      React.createElement("header", { className: "wb-provider-usage-card-head" },
+        React.createElement("div", null,
+          React.createElement("strong", null, item.label || item.provider),
+          React.createElement("small", null, item.kind === "balance"
+            ? t("settings.providerUsageBalance")
+            : item.kind === "codex_quota"
+              ? t("settings.codexQuotaPlan", { plan: item.plan || "—" })
+              : t("settings.providerUsageQuota")),
+        ),
+        React.createElement("span", { className: "wb-provider-usage-state is-" + stateClass }, stateLabel),
+      ),
+      item.status === "unconfigured" && React.createElement("p", { className: "wb-hint" },
+        t(item.kind === "codex_quota" ? "settings.codexQuotaLoginHint" : "settings.providerUsageConfigureKey")
+      ),
+      item.status === "error" && React.createElement("p", { className: "wb-provider-usage-error" }, item.error || t("settings.providerUsageUnavailable")),
+      item.status === "ok" && item.kind === "balance" && React.createElement("div", { className: "wb-provider-balance-list" },
+        (item.balances || []).map(function (balance) {
+          return React.createElement("div", { className: "wb-provider-balance", key: balance.currency },
+            React.createElement("strong", null, providerAmount(balance.total, balance.currency)),
+            React.createElement("span", null, t("settings.providerUsageTotalBalance")),
+            React.createElement("small", null,
+              t("settings.providerUsageBalanceBreakdown", {
+                toppedUp: providerAmount(balance.topped_up, balance.currency),
+                granted: providerAmount(balance.granted, balance.currency),
+              })
+            ),
+          );
+        }),
+        !(item.balances || []).length && React.createElement("p", { className: "wb-hint" }, t("settings.providerUsageNoBalance")),
+      ),
+      item.status === "ok" && item.kind === "codex_quota" && React.createElement("div", { className: "wb-provider-codex-guard" },
+        React.createElement("div", null,
+          React.createElement("strong", null, t("settings.codexQuotaLimit")),
+          React.createElement("small", null, t("settings.codexQuotaLimitHint")),
+        ),
+        Toggle(codexQuotaEnabled, toggleCodexQuota),
+      ),
+      item.status === "ok" && (item.kind === "quota" || item.kind === "codex_quota") && React.createElement("div", { className: "wb-provider-quota-list" },
+        (item.windows || []).map(function (windowData, index) {
+          var remaining = windowData.remaining_percent == null ? null : Number(windowData.remaining_percent);
+          var used = windowData.used_percent == null ? 0 : Number(windowData.used_percent);
+          var valueLabel = windowData.unlimited
+            ? t("settings.providerUsageUnlimited")
+            : windowData.ambiguous
+              ? t("settings.providerUsageStatusUnknown")
+            : remaining == null
+              ? "—"
+              : t("settings.providerUsageRemaining", { pct: Math.round(remaining) });
+          return React.createElement("div", { className: "wb-provider-quota-window", key: windowData.model + "-" + windowData.kind + "-" + index },
+            React.createElement("div", { className: "wb-provider-quota-label" },
+              React.createElement("span", null, providerWindowLabel(windowData)),
+              React.createElement("strong", null, valueLabel),
+            ),
+            !windowData.unlimited && !windowData.ambiguous && React.createElement("div", { className: "wb-budget-progress-bar" },
+              React.createElement("div", {
+                className: "wb-budget-progress-fill" + (used >= 100 ? " over" : used >= 80 ? " high" : ""),
+                style: { width: Math.max(0, Math.min(100, used)) + "%" },
+              }),
+            ),
+            React.createElement("small", null, windowData.reset_at
+              ? t("settings.providerUsageResets", { time: new Date(windowData.reset_at).toLocaleString() })
+              : t("settings.providerUsageResetUnknown")),
+            windowData.ambiguous && React.createElement("small", { className: "wb-provider-quota-warning" },
+              t("settings.providerUsageStatusUnknownHint")
+            ),
+          );
+        }),
+        !(item.windows || []).length && React.createElement("p", { className: "wb-hint" }, t("settings.providerUsageNoQuota")),
+      ),
+      item.refreshed_at && React.createElement("footer", null, t("settings.providerUsageUpdated", { time: new Date(item.refreshed_at).toLocaleString() })),
+    );
+  }
+
+  return React.createElement("div", {
+    className: "settings-panel" + (mode === "usage" ? " wb-usage-settings" : ""),
+  },
     SectionTitle(
       t(mode === "usage" ? "settings.usage" : "settings.budget"),
       t(mode === "usage" ? "settings.usageSubtitle" : "settings.budgetSubtitle")
@@ -6937,11 +7423,11 @@ function BudgetPanel(p) {
 
     mode === "usage" && SectionBlock(t("settings.profileUsageSnapshot"), t("settings.profileUsageSnapshotHint"),
       React.createElement("div", { className: "wb-usage-metrics is-profile" },
-        usageMetric(formatCost(profileSpend), t("profile.spend"), t("settings.usageRecentFourWeeks")),
-        usageMetric(Number(profileUsage.requests || 0).toLocaleString(), t("profile.requests"), t("settings.usageRecentFourWeeks")),
-        usageMetric(formatTokens(profileTotalTokens), t("profile.tokens"), t("settings.usageRecentFourWeeks")),
-        usageMetric(formatTokens(profilePromptTokens), t("settings.usageInputTokens"), t("settings.usageRecentFourWeeks")),
-        usageMetric(formatTokens(profileCompletionTokens), t("settings.usageOutputTokens"), t("settings.usageRecentFourWeeks")),
+        usageMetric(formatCost(profileSpend), t("profile.spend")),
+        usageMetric(Number(profileUsage.requests || 0).toLocaleString(), t("profile.requests")),
+        usageMetric(formatTokens(profileTotalTokens), t("profile.tokens")),
+        usageMetric(formatTokens(profilePromptTokens), t("settings.usageInputTokens")),
+        usageMetric(formatTokens(profileCompletionTokens), t("settings.usageOutputTokens")),
       ),
     ),
 
@@ -7050,26 +7536,37 @@ function BudgetPanel(p) {
 
     // ── Cost by model ──
     mode === "usage" && SectionBlock(t("settings.usageByModel"), t("settings.usageByModelHint"),
-      React.createElement("div", { className: "wb-budget-model-table" },
-        React.createElement("div", { className: "wb-budget-model-head" },
-          React.createElement("span", null, t("settings.budgetModel")),
-          React.createElement("span", null, t("settings.budgetRequests")),
-          React.createElement("span", null, t("settings.usageInputTokens")),
-          React.createElement("span", null, t("settings.usageOutputTokens")),
-          React.createElement("span", null, t("settings.budgetTokens")),
-          React.createElement("span", null, t("settings.budgetCost")),
-        ),
+      React.createElement("div", { className: "wb-budget-model-grid" },
         budgetModels.map(function (item) {
           var modelPct = totalCost > 0 ? (item.cost / totalCost * 100) : 0;
-          return React.createElement("div", { className: "wb-budget-model-row", key: item.model },
-            React.createElement("span", { className: "wb-budget-model-name mono" }, item.model),
-            React.createElement("span", null, item.requests),
-            React.createElement("span", null, formatTokens(item.prompt_tokens)),
-            React.createElement("span", null, formatTokens(item.completion_tokens)),
-            React.createElement("span", null, formatTokens(item.prompt_tokens + item.completion_tokens)),
-            React.createElement("span", { className: "wb-budget-model-cost" }, formatCost(item.cost)),
+          return React.createElement("article", { className: "wb-budget-model-card", key: item.model },
+            React.createElement("header", { className: "wb-budget-model-card-head" },
+              React.createElement("strong", { className: "wb-budget-model-name mono", title: item.model }, item.model),
+              React.createElement("div", { className: "wb-budget-model-cost" },
+                React.createElement("small", null, t("settings.budgetCost")),
+                React.createElement("strong", null, formatCost(item.cost)),
+              ),
+            ),
+            React.createElement("dl", { className: "wb-budget-model-stats" },
+              React.createElement("div", null,
+                React.createElement("dt", null, t("settings.budgetRequests")),
+                React.createElement("dd", null, Number(item.requests || 0).toLocaleString()),
+              ),
+              React.createElement("div", null,
+                React.createElement("dt", null, t("settings.usageInputTokens")),
+                React.createElement("dd", null, formatTokens(item.prompt_tokens)),
+              ),
+              React.createElement("div", null,
+                React.createElement("dt", null, t("settings.usageOutputTokens")),
+                React.createElement("dd", null, formatTokens(item.completion_tokens)),
+              ),
+              React.createElement("div", null,
+                React.createElement("dt", null, t("settings.budgetTokens")),
+                React.createElement("dd", null, formatTokens(item.prompt_tokens + item.completion_tokens)),
+              ),
+            ),
             modelPct > 0 && React.createElement("div", { className: "wb-budget-model-bar-wrap" },
-              React.createElement("div", { className: "wb-budget-model-bar", style: { width: modelPct + "%" } }),
+              React.createElement("div", { className: "wb-budget-model-bar", style: { width: modelPct + "%" }, "aria-hidden": "true" }),
             ),
           );
         }),
@@ -7079,39 +7576,20 @@ function BudgetPanel(p) {
       ),
     ),
 
-    mode === "usage" && codexQuota.connected && React.cloneElement(SectionBlock(t("settings.codexQuota"), null,
-      FieldRow(t("settings.codexQuotaLimit"), t("settings.codexQuotaLimitHint"),
-        Toggle(codexQuotaEnabled, toggleCodexQuota),
-      ),
-      !codexWindows.length && React.createElement("p", { className: "wb-hint wb-codex-quota-empty" },
-        t("settings.codexQuotaUnavailable")
-      ),
-      codexWindows.length > 0 && React.createElement("div", { className: "wb-codex-quota" },
-          React.createElement("div", { className: "wb-codex-quota-head" },
-            React.createElement("strong", null, "Codex"),
-            React.createElement("span", null, t("settings.codexQuotaPlan", { plan: codexPlan || "—" })),
-          ),
-          codexWindows.map(function (windowData) {
-            var used = windowData.usedPercent;
-            var reset = windowData.resetsAt
-              ? new Date(windowData.resetsAt * 1000).toLocaleString()
-              : "—";
-            return React.createElement("div", { className: "wb-codex-quota-window", key: windowData.kind + "-" + windowData.durationMins },
-              React.createElement("div", { className: "wb-codex-quota-label" },
-                React.createElement("span", null, windowData.label || t("settings.codexQuotaWindow")),
-                React.createElement("span", null, t("settings.codexQuotaRemaining", { pct: windowData.remainingPercent })),
-              ),
-              React.createElement("div", { className: "wb-budget-progress-bar" },
-                React.createElement("div", {
-                  className: "wb-budget-progress-fill" + (used >= 100 ? " over" : used >= 80 ? " high" : ""),
-                  style: { width: Math.round(used) + "%" },
-                }),
-              ),
-              React.createElement("small", null, t("settings.codexQuotaResets", { time: reset })),
-            );
-          }),
+    mode === "usage" && SectionBlock(t("settings.providerUsage"), t("settings.providerUsageHint"),
+      React.createElement("div", { className: "wb-provider-usage-grid" },
+        React.createElement("div", { className: "wb-provider-usage-column is-compact" },
+          compactProviderUsageItems.map(providerUsageCard),
         ),
-    ), { id: "setting-codex-quota" }),
+        React.createElement("div", { className: "wb-provider-usage-column is-minimax" },
+          minimaxUsageItems.map(providerUsageCard),
+          !providerUsageLoading && !minimaxUsageItems.length && React.createElement("div", { className: "wb-budget-model-empty" },
+            t("settings.providerUsageEmpty")
+          ),
+        ),
+      ),
+    ),
+
   );
 }
 

@@ -95,6 +95,7 @@ uv run cyrene stop
 - [安装指南](docs/installation.zh-CN.md)
 - [使用指南](docs/usage.zh-CN.md)
 - [配置说明](docs/configuration.zh-CN.md)
+- [自定义工具](docs/custom-tools.zh-CN.md)
 - [架构说明](docs/architecture.zh-CN.md)
 - [开发指南](docs/development.zh-CN.md)
 - [当前限制](docs/limitations.zh-CN.md)

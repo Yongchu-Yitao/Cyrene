@@ -164,6 +164,38 @@ final result: passed
 
 ---
 
+# Model Service Detail Copy Removal — 2026-08-19
+
+- Source visual truth: `/var/folders/zm/qgh_rgw903j0b9t01yg2l0mc0000gn/T/codex-clipboard-56bdd211-78cb-47d6-9dad-fc2f34b19fe2.png` (`530 × 148 px`, before state identifying the line to remove).
+- Browser-rendered implementation: `/Users/syw/Documents/playground/Cyrene/.codex/audits/model-services-detail-copy/implementation.png` (`1280 × 720 px`, CSS viewport `1280 × 720`, DPR 1).
+- Focused implementation crop: `/Users/syw/Documents/playground/Cyrene/.codex/audits/model-services-detail-copy/implementation-header.png` (`590 × 105 px`).
+- Combined comparison evidence: `/Users/syw/Documents/playground/Cyrene/.codex/audits/model-services-detail-copy/comparison.png` (`590 × 261 px`).
+- State: desktop light theme, Settings → 模型服务, OpenAI Compatible selected.
+
+## Findings
+
+- No actionable P0/P1/P2 mismatch remains for the requested copy removal.
+- Fonts and typography: the existing service-title font, weight, and size are unchanged.
+- Spacing and layout rhythm: removing the optional paragraph lets the detail header collapse naturally while preserving the title and toggle alignment.
+- Colors and visual tokens: the existing light-theme text, border, background, and toggle tokens are unchanged.
+- Image and icon fidelity: no image or icon assets were changed.
+- Copy and content: `连接配置与模型档案` is absent from both the rendered header and frontend source; local-model guidance remains available only on the local-model service.
+- Focused evidence was used because the requested change is confined to the detail-header text; the full-page capture confirms the surrounding form and provider rail remain intact.
+
+## Interaction Verification
+
+- Selecting 模型服务 renders the OpenAI Compatible detail header with only `OpenAI Compatible` before the form.
+- Production frontend build passed and the focused model-configuration suite reported `14 passed`.
+
+## Comparison History
+
+- Before: the remote service title was followed by the fallback copy `连接配置与模型档案`.
+- Final: the fallback is removed; explicitly supplied adapter descriptions and the local-model guidance remain conditional.
+
+final result: passed
+
+---
+
 # Model Provider Brand Icons Follow-up — 2026-08-19
 
 - Source visual truth: `/var/folders/zm/qgh_rgw903j0b9t01yg2l0mc0000gn/T/codex-clipboard-241a83e1-d12a-4265-9597-226fb15ffe3c.png` (`537 × 824 px`, approximately 2× density).
@@ -1563,5 +1595,41 @@ final result: passed
 
 - Before: the rail displayed a search input and deletion lived in the right-side connection form.
 - Final: the rail is filter + internally scrollable cards + fixed Add provider action; deletion is exposed by the card context menu with keyboard parity.
+
+final result: passed
+
+---
+
+# Per-Model Testing and Capability Picker — 2026-08-19
+
+- Source visual truths:
+  - `/var/folders/zm/qgh_rgw903j0b9t01yg2l0mc0000gn/T/codex-clipboard-d5a50225-3397-40f4-89c5-8f879092efba.png` (`1044 × 1074 px`, before state for test-action placement and the visible detail scrollbar).
+  - `/var/folders/zm/qgh_rgw903j0b9t01yg2l0mc0000gn/T/codex-clipboard-afb82332-4f84-4146-966a-73584c40f9b6.png` (`954 × 147 px`, display-name row targeted for the capability control).
+- Browser-rendered implementation: `/Users/syw/Documents/playground/Cyrene/.codex/audits/model-profile-controls/implementation.png` (`1280 × 720 px`, CSS viewport `1280 × 720`, DPR 1).
+- Focused implementation: `/Users/syw/Documents/playground/Cyrene/.codex/audits/model-profile-controls/implementation-focus.png` (`610 × 637 px`).
+- Combined comparison evidence: `/Users/syw/Documents/playground/Cyrene/.codex/audits/model-profile-controls/comparison.png` (`1132 × 637 px`).
+- State: desktop light theme, Settings → 模型服务, OpenAI Compatible selected, first model card expanded and detail pane scrolled to the card.
+
+## Findings
+
+- No actionable P0/P1/P2 mismatch remains for the requested model-card controls.
+- Fonts and typography: existing labels, inputs, model identity, and button typography remain aligned with the settings design system.
+- Spacing and layout rhythm: display name and capability selection share one row at desktop width; the model test and delete actions balance opposite sides of the card footer. Narrow layouts stack the two half-width fields.
+- Colors and visual tokens: selected capability styling uses the existing accent, control background, border, and text tokens; unselected capabilities retain normal control contrast.
+- Image and icon fidelity: no image or icon assets were added or changed.
+- Copy and content: the provider-level test action is removed, each model card contains `测试连接`, and the capability choices are exactly `对话`, `视觉`, and `嵌入`.
+- The detail pane remains wheel-scrollable but renders with `scrollbar-width: none` and a zero-size WebKit scrollbar, removing the right-hand bar without clipping the model form.
+
+## Interaction Verification
+
+- The expanded model card exposes all three multi-select controls with correct `aria-pressed` state; the current chat capability renders selected.
+- The model test action sends the card's profile and model ID with the connection draft. The backend targets exactly that model, suppresses normal usage/event recording, and uses exact discovery matching for embedding-only profiles.
+- Capability changes update the profile's persisted `capabilities`, which is already consumed by the Model Configuration route filters.
+- Browser console reported no errors. Production frontend build passed and the focused model-configuration suite reported `16 passed`.
+
+## Comparison History
+
+- Before: connection testing was provider-level, the card had no capability editor, and the detail pane displayed a dedicated right scrollbar.
+- Final: testing is model-specific inside the card, the capability field is a three-option multi-select beside display name, and detail scrolling remains functional with no visible scrollbar.
 
 final result: passed

@@ -928,6 +928,75 @@ async def test_ui_inspect_uses_target_node_lease_across_unrelated_revision_chang
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("module_name", "operation_family", "action_kind"),
+    [
+        ("ui_type", "cyrene.ui.type", "set_value"),
+        ("ui_scroll", "cyrene.ui.scroll", "scroll"),
+    ],
+)
+async def test_non_pointer_ui_actions_still_move_cursor_to_their_target(
+    monkeypatch, tmp_path, module_name, operation_family, action_kind,
+):
+    from importlib import import_module
+
+    from cyrene.agent.context import bind_run_context
+    from cyrene.tool_impl.application import _ui_action
+    from cyrene.workbench import app_control
+
+    module = import_module(f"cyrene.tool_impl.application.{module_name}")
+    monkeypatch.setattr(app_control, "_AUDIT_PATH", tmp_path / "audit.jsonl")
+    monkeypatch.setattr(app_control, "_IDEMPOTENCY_PATH", tmp_path / "idempotency.json")
+    calls = []
+
+    async def fake_host(method, args):
+        calls.append((method, dict(args)))
+        if method == "ui.snapshot.current":
+            return {
+                "ok": True,
+                "snapshot_id": f"tree-{module_name}",
+                "revision": 3,
+                "root": {
+                    "node_id": "target",
+                    "actions": [{
+                        "action_id": "perform",
+                        "kind": action_kind,
+                        "risk": "R1",
+                    }],
+                    "children": [],
+                },
+            }
+        return {"ok": True, "revision": 4}
+
+    monkeypatch.setattr(_ui_action, "call_host", fake_host)
+    binding = bind_run_context(
+        agent_id="main", caller="main_agent", session_id="origin",
+        round_id=f"round-{module_name}", client_request_id=f"request-{module_name}",
+        conversation_source="desktop_local", ui_instance_id="surface-main",
+    )
+    try:
+        result = json.loads(await module.handler({
+            "snapshot_id": f"tree-{module_name}",
+            "revision": 3,
+            "node_id": "target",
+            "action_id": "perform",
+            "input": {},
+            "reason": "Perform the requested visible action.",
+            "idempotency_key": f"cursor-{module_name}",
+        }, None, 0, "", None))
+    finally:
+        binding.reset()
+
+    assert result["status"] == "success"
+    assert operation_family in result["operation_id"]
+    execute_args = next(
+        args for method, args in calls
+        if method == "ui.gesture.execute_current"
+    )
+    assert execute_args["_agent_cursor_mode"] == "target"
+
+
+@pytest.mark.asyncio
 async def test_ui_snapshot_exposes_visible_and_calling_session_mismatch(monkeypatch):
     from cyrene.agent.context import bind_run_context
     from cyrene.tool_impl.application import _ui_snapshot, ui_snapshot

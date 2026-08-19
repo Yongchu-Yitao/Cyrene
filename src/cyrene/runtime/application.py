@@ -39,11 +39,13 @@ class ApplicationLifecycle:
         *,
         search: bool = True,
         mcp: bool = True,
+        custom_tools: bool = True,
     ) -> RuntimeContext:
         return await bootstrap.start_external_services(
             context=self.context,
             search=search,
             mcp=mcp,
+            custom_tools=custom_tools,
         )
 
     def create_task(

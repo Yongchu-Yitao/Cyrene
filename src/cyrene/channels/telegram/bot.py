@@ -127,15 +127,34 @@ async def _handle_message(update: Update, context) -> None:
 
 
 async def _post_init(application: Application) -> None:
+    from cyrene.runtime.bootstrap import start_external_services
+
+    await start_external_services(search=False, mcp=False, custom_tools=True)
     scheduler = setup_scheduler(application.bot, str(DB_PATH))
     scheduler.start()
     logger.info("Scheduler started")
 
 
+async def _post_shutdown(_application: Application) -> None:
+    from cyrene.runtime.bootstrap import stop_external_services_async
+
+    await stop_external_services_async(
+        search=False,
+        mcp=False,
+        custom_tools=True,
+    )
+
+
 def setup_bot() -> Application:
     if not TELEGRAM_BOT_TOKEN or OWNER_ID is None:
         raise RuntimeError("TELEGRAM_BOT_TOKEN and OWNER_ID must be set to run the Telegram bot.")
-    app = Application.builder().token(TELEGRAM_BOT_TOKEN).post_init(_post_init).build()
+    app = (
+        Application.builder()
+        .token(TELEGRAM_BOT_TOKEN)
+        .post_init(_post_init)
+        .post_shutdown(_post_shutdown)
+        .build()
+    )
     app.add_handler(CommandHandler("start", _start))
     app.add_handler(CommandHandler("clear", _clear))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, _handle_message))

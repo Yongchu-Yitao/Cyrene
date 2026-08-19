@@ -15,12 +15,18 @@ from typing import Any
 from urllib.parse import urlsplit
 
 from cyrene.model_runtime.adapter_registry import list_adapters, require_adapter
+from cyrene.model_runtime.cache_invalidation import invalidate_model_runtime_caches
 from cyrene.runtime import config_store
 
 
-CONFIG_VERSION = 3
+CONFIG_VERSION = 4
 ROUTE_NAMES = ("primary", "secondary", "vision", "embedding")
 _ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$")
+_MINIMAX_DEFAULT_BASE_URL = "https://api.minimaxi.com/v1"
+_MINIMAX_REPLACED_DEFAULT_BASE_URLS = {
+    "https://api.minimax.io/v1",
+    "https://api.minimax.com/v1",
+}
 
 # Built-in providers are connection presets, not protocol adapters. This keeps
 # the adapter picker focused on wire formats while still giving new and
@@ -31,7 +37,7 @@ _DEFAULT_PROVIDER_CONNECTIONS: tuple[dict[str, Any], ...] = (
         "name": "MiniMax",
         "adapter": "openai",
         "enabled": True,
-        "base_url": "https://api.minimax.io/v1",
+        "base_url": _MINIMAX_DEFAULT_BASE_URL,
         "api_key": "",
         "options": {"provider_preset": "minimax"},
     },
@@ -304,13 +310,24 @@ def _with_default_provider_connections(raw: dict[str, Any]) -> dict[str, Any]:
         preset = str(
             options.get("provider_preset") if isinstance(options, dict) else ""
         ).strip().lower()
+        connection_name = re.sub(
+            r"[^a-z0-9]+", "", str(connection.get("name") or "").lower()
+        )
+        base_url = str(connection.get("base_url") or "").strip().rstrip("/")
+        if (
+            (
+                preset == "minimax"
+                or (connection_id == "minimax" and connection_name == "minimax")
+            )
+            and base_url in _MINIMAX_REPLACED_DEFAULT_BASE_URLS
+        ):
+            connection["base_url"] = _MINIMAX_DEFAULT_BASE_URL
         if preset in _DEFAULT_PROVIDER_HOSTS:
             recognized.add(preset)
         if connection_id in _DEFAULT_PROVIDER_HOSTS:
             recognized.add(connection_id)
-        name = re.sub(r"[^a-z0-9]+", "", str(connection.get("name") or "").lower())
-        if name in _DEFAULT_PROVIDER_HOSTS:
-            recognized.add(name)
+        if connection_name in _DEFAULT_PROVIDER_HOSTS:
+            recognized.add(connection_name)
         try:
             host = (urlsplit(str(connection.get("base_url") or "")).hostname or "").lower()
         except ValueError:
@@ -759,12 +776,7 @@ def save_model_configuration(
         env_updates,
         expected_revision=expected_revision,
     )
-    try:
-        from cyrene.model_runtime.client import invalidate_model_configuration
-
-        invalidate_model_configuration()
-    except ImportError:
-        pass
+    invalidate_model_runtime_caches()
     return normalized, revision
 
 

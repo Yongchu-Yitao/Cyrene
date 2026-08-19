@@ -1132,6 +1132,9 @@ var WorkbenchChatModel = (function () {
         err.detailKey = payload.detail_key || payload.detailKey || "";
         err.detailParams = payload.detail_params || payload.detailParams || {};
         err.status = response.status;
+        if (String(err.code || "").startsWith("budget_")) {
+          window.CyreneUI.require("feedback").showToast(wbcErrorText(err), "error");
+        }
         throw err;
       });
     }
@@ -2568,6 +2571,7 @@ var WORKBENCH_BUDGET_CODES = {
   budget_monthly_exhausted: "monthly",
   budget_weekly_exhausted: "weekly",
   budget_5h_exhausted: "5h",
+  budget_usage_unavailable: "unavailable",
 };
 
 var WORKBENCH_ERROR_I18N_KEYS = {
@@ -5362,7 +5366,15 @@ var WorkbenchChatRuntimes = (function () {
   function onSseEvent(event) {
     if (!event) return;
     var chatId = String(event.session_id || "");
+    // The event bridge is process-wide. Ignore warnings and progress for
+    // sessions this client is not currently tracking.
     if (!chatId || !runtimes[chatId]) return;
+    if (event.type === "budget_warning") {
+      var warningError = new Error(String(event.message || ""));
+      warningError.code = String(event.code || "");
+      window.CyreneUI.require("feedback").showToast(wbcErrorText(warningError), "warning");
+      return;
+    }
     var eventAt = Date.parse(String(event.timestamp || event.createdAt || event.created_at || ""));
     if (!Number.isFinite(eventAt)) eventAt = Date.now();
     if (event.type === "llm_call") {
@@ -7624,6 +7636,12 @@ function WorkbenchChatPage({ active, project, newChatRequestId, onOpenTask, onAc
       },
       onError: function (chatId, err, failureState) {
         var terminal = !!(failureState && failureState.terminal);
+        var errorCode = String(err && err.code || "");
+        var budgetError = errorCode.startsWith("budget_");
+        if (budgetError && String(activeChatIdRef.current || "") === String(chatId || "")) {
+          setErrorKind("message");
+          setError(err);
+        }
         if (terminal) {
           var cachedChat = chatCache.details[chatId];
           if (cachedChat) {
@@ -14227,6 +14245,34 @@ function WbcConversationNavigator({ threadRef, chatId }) {
   );
 }
 
+function wbcSelectionTextRect(range) {
+  if (!range) return null;
+  var rects = typeof range.getClientRects === "function" ? range.getClientRects() : null;
+  var fragments = [];
+  for (var i = 0; rects && i < rects.length; i += 1) {
+    var fragment = rects[i];
+    if (!fragment || fragment.width <= 0 || fragment.height <= 0) continue;
+    fragments.push(fragment);
+  }
+  if (!fragments.length && typeof range.getBoundingClientRect === "function") {
+    var fallback = range.getBoundingClientRect();
+    if (fallback && (fallback.width > 0 || fallback.height > 0)) fragments.push(fallback);
+  }
+  if (!fragments.length) return null;
+
+  var left = fragments[0].left;
+  var top = fragments[0].top;
+  var right = fragments[0].right;
+  var bottom = fragments[0].bottom;
+  for (var j = 1; j < fragments.length; j += 1) {
+    left = Math.min(left, fragments[j].left);
+    top = Math.min(top, fragments[j].top);
+    right = Math.max(right, fragments[j].right);
+    bottom = Math.max(bottom, fragments[j].bottom);
+  }
+  return { left: left, top: top, right: right, bottom: bottom, width: right - left, height: bottom - top };
+}
+
 function WbcMain({ project, chat, chatSummary, loading, runtime, error, errorKind, onRetry, running, onSend, onGuidance, onInterrupt, onAnswer, onRetryMessage, onRetryClearAnimationEnd, retryClearingMessageIds, retrySuppressedMessageIds, onEditMessage, onAskSelection, sideAgentCreating, onConversationContextMenu, onRename, onDelete, onToTask, toTaskBusy, onOpenFile, onOpenDroppedChat, sideVisible, sidePanelTabExpanded, onToggleSide, browserState, browserSessionId, browserVisible, browserWindowMode, onBrowserMaximize, onBrowserRestore, onBrowserTakeoverComplete, splitOpen, draftAgent, onDraftAgentChange, onSwitchAgent, onOpenAgentDetail }) {
   // The lightweight list item already contains every Composer preference.
   // Keep using it while the full transcript hydrates so switching chats never
@@ -14797,22 +14843,16 @@ function WbcMain({ project, chat, chatSummary, loading, runtime, error, errorKin
         setSelectionMenu(null);
         return;
       }
-      var range = selection.getRangeAt(0);
-      var rect = range.getBoundingClientRect();
-      if (!rect || (!rect.width && !rect.height)) {
-        var rects = range.getClientRects();
-        rect = rects && rects.length ? rects[rects.length - 1] : null;
-      }
+      var rect = wbcSelectionTextRect(selection.getRangeAt(0));
       if (!rect) {
         setSelectionMenu(null);
         return;
       }
-      var placeBelow = rect.top < 64;
       setSelectionMenu({
         text: text,
         left: Math.max(92, Math.min(window.innerWidth - 92, rect.left + rect.width / 2)),
-        top: placeBelow ? Math.min(window.innerHeight - 12, rect.bottom + 10) : Math.max(12, rect.top - 10),
-        placement: placeBelow ? "below" : "above",
+        top: rect.bottom + 10,
+        placement: "below",
       });
     }
 
@@ -14906,6 +14946,30 @@ function WbcMain({ project, chat, chatSummary, loading, runtime, error, errorKin
       wbcCycleTopbarSessionTab
     );
   }
+
+  var selectionMenuPortal = selectionMenu && typeof ReactDOM !== "undefined" && document.body
+    ? ReactDOM.createPortal((
+      <div
+        ref={selectionMenuRef}
+        className={"wbc-selection-menu " + selectionMenu.placement}
+        style={{ left: selectionMenu.left + "px", top: selectionMenu.top + "px" }}
+        role="toolbar"
+        aria-label={wbcT("workbenchChat.selection.actions", "Selection actions")}
+      >
+        <button
+          type="button"
+          onMouseDown={function (event) { event.preventDefault(); }}
+          onClick={askAboutSelection}
+          disabled={sideAgentCreating}
+        >
+          <span aria-hidden="true">{WBC_ICONS.chat}</span>
+          <span>{sideAgentCreating
+            ? wbcT("workbenchChat.sideAgent.creating", "Creating…")
+            : wbcT("workbenchChat.selection.askInSidebar", "Ask in sidebar")}</span>
+        </button>
+      </div>
+    ), document.body)
+    : null;
 
   if (!project) {
     return <main className="wbc-main"><div className="workbench-empty">{wbcT("workbenchChat.noProject", "Select a project first.")}</div></main>;
@@ -15036,27 +15100,7 @@ function WbcMain({ project, chat, chatSummary, loading, runtime, error, errorKin
         )}
       </div>
       <WbcConversationNavigator threadRef={scrollRef} chatId={chat && chat.id} />
-      {selectionMenu && (
-        <div
-          ref={selectionMenuRef}
-          className={"wbc-selection-menu " + selectionMenu.placement}
-          style={{ left: selectionMenu.left + "px", top: selectionMenu.top + "px" }}
-          role="toolbar"
-          aria-label={wbcT("workbenchChat.selection.actions", "Selection actions")}
-        >
-          <button
-            type="button"
-            onMouseDown={function (event) { event.preventDefault(); }}
-            onClick={askAboutSelection}
-            disabled={sideAgentCreating}
-          >
-            <span aria-hidden="true">{WBC_ICONS.chat}</span>
-            <span>{sideAgentCreating
-              ? wbcT("workbenchChat.sideAgent.creating", "Creating…")
-              : wbcT("workbenchChat.selection.askInSidebar", "Ask in sidebar")}</span>
-          </button>
-        </div>
-      )}
+      {selectionMenuPortal}
       <div className="wbc-browser-movement-region">
         <WbcBrowserFloatingSurface
           browserState={browserState}

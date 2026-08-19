@@ -8,7 +8,7 @@ import logging
 import re
 from typing import Any
 
-from cyrene.config import ASSISTANT_NAME, WORKSPACE_DIR
+from cyrene.config import ASSISTANT_NAME, USER_DATA_DIR, WORKSPACE_DIR
 
 logger = logging.getLogger(__name__)
 
@@ -109,6 +109,7 @@ _TOOL_PACK_PROMPT_TERMS: dict[str, tuple[str, ...]] = {
     ),
     "remote_tools": ("remote_tools", "remote."),
     "cyrene_tools": ("cyrene_tools", "cyrene.app.", "cyrene.ui.", "cyrene.settings."),
+    "custom_tools": ("custom_tools", "custom."),
     "integration_tools": ("integration_tools", "mcp"),
 }
 
@@ -293,6 +294,14 @@ _MAIN_ENVIRONMENT_PROMPT = _tool_pack_prompt_block(
 When a task may require a local runtime, CLI, MCP server, or plugin whose availability is uncertain, use `environment.list` to inspect enabled installed or system-detected capabilities and `environment.search` to find enabled installable candidates. Both operations intentionally hide extensions disabled in the Extension Center and are read-only. Do not claim a candidate is installed from search results alone. Skills are excluded and must be discovered through `skill_tools`. If installation is needed, pass only the selected result's exact kind, ID, and install_request to `skill.manage_extensions` through `skill_tools`; that separate mutation must pass extension review. Never invent or guess install request fields. When installable=false, use the exact fallback_request if one is returned; otherwise stop and report reason_code. After one failed request, refresh discovery once and retry only if it returns a different exact request. Do not try alternate payload shapes, UI control, shell commands, or config-file edits when the typed extension capability exists. Verify success with environment.list or MCP connection health before claiming installation.""",
 )
 
+_MAIN_CUSTOM_TOOLS_PROMPT = _tool_pack_prompt_block(
+    "custom_tools",
+    f"""## User Custom Tools
+When the user asks to create, change, replace, or delete a custom tool, manage the Python source files under `{USER_DATA_DIR / 'custom-tools'}` with the existing direct Read, Write, Edit, Glob, and Grep file tools (and Bash only when its normal file-operation policy permits the requested action). Inspect the directory before editing. A public tool module uses the same contract as a built-in Cyrene tool: export one OpenAI function-shaped `TOOL_DEF`, an async five-argument `handler(args, bot, chat_id, db_path, notify_state)`, and optional `TOOL_METADATA`. A directory groups multiple tool modules; helper files should start with `_`.
+
+Do not create a manifest, SDK, runtime declaration, subprocess protocol, review artifact, or publication record. Cyrene watches the directory and reloads valid modules. After editing, verify that discovery exposes the intended custom capability before claiming it is active. File access and mutation remain governed by the normal file-tool permissions.""",
+)
+
 _MAIN_ENTITY_PROMPT = _tool_pack_prompt_block(
     "entity_tools",
     """## User Database
@@ -359,6 +368,8 @@ _MAIN_AGENT_PROMPT_TEMPLATE = f"""You are {ASSISTANT_NAME}.
 
 {_MAIN_ENVIRONMENT_PROMPT}
 
+{_MAIN_CUSTOM_TOOLS_PROMPT}
+
 {_MAIN_SKILL_PROMPT}
 
 {_MAIN_ENTITY_PROMPT}
@@ -409,6 +420,7 @@ Rules:
 - Desktop control has exactly two independent schemes: visual-only `desktop.use`, and accessibility-tree-only `desktop.semantic.*`; Linux is semantic-only. Choose either based on the UI. On a definite pre-action failure, unavailable provider, or semantic `visual_recommended:true`, disconnect and try the other scheme once; never guess the meaning of generic Group/Application nodes. Never switch after an uncertain result until state verification rules out a duplicate action. Neither tool may invoke the other scheme internally. Semantic writes require current session/snapshot/revision/node/action leases, reason, idempotency key, and post-action verification. Never bypass either scheme with Bash, osascript, PowerShell, or direct file edits.
 - Use `skill_tools` with progressive disclosure: discover, describe only plausible matches, call `skill.get_learned` for the selected learned skill, and invoke `skill.run_learned` only when its disclosed contract fits the task. When creating a reusable external Skill, finish its complete workspace directory first, then invoke `skill.install` with that directory; writing `SKILL.md` alone does not register or enable it.
 {_MAIN_ENVIRONMENT_PROMPT}
+{_MAIN_CUSTOM_TOOLS_PROMPT}
 {_MAIN_CYRENE_PROMPT}
 - For a visible macOS text field omitted from accessibility, prefer disclosed `visual_type` so localization, coordinate mapping, targeted delivery, and a fresh exact-text check are atomic. Never describe PID event delivery alone as verified text entry, and never retry an uncertain type result because text may have been inserted. `isolation_required:true` means the only policy-compliant fallback is a separately configured desktop/VM worker; never ask to interrupt the user's active desktop.
 - If a webpage remains behind login, CAPTCHA, or 2FA after one recovery attempt, invoke `browser.request_takeover`. Never loop or use private APIs.

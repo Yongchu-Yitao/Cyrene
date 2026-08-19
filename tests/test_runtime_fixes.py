@@ -165,6 +165,7 @@ def test_agent_module_reexports_memory_helpers():
 
 
 async def test_execute_tool_awaits_event_publish(monkeypatch):
+    from cyrene.tooling import catalog
     from cyrene.tooling import executor as tools
 
     seen = {"published": False}
@@ -176,7 +177,7 @@ async def test_execute_tool_awaits_event_publish(monkeypatch):
         seen["published"] = True
         seen["event"] = event
 
-    monkeypatch.setitem(tools.TOOL_HANDLERS, "__test_tool__", fake_handler)
+    monkeypatch.setitem(catalog.TOOL_HANDLERS, "__test_tool__", fake_handler)
 
     from cyrene.observability import debug
 
@@ -187,11 +188,10 @@ async def test_execute_tool_awaits_event_publish(monkeypatch):
     assert seen["published"] is True
     assert seen["event"]["type"] == "tool_call"
 
-    tools.TOOL_HANDLERS.pop("__test_tool__", None)
-
 
 async def test_execute_tool_completion_carries_active_tool_call_id(monkeypatch):
     from cyrene.observability import debug
+    from cyrene.tooling import catalog
     from cyrene.tooling import executor as tool_executor
 
     published = []
@@ -202,7 +202,7 @@ async def test_execute_tool_completion_carries_active_tool_call_id(monkeypatch):
     async def fake_publish_event(event, **kwargs):
         published.append(event)
 
-    monkeypatch.setitem(tool_executor.TOOL_HANDLERS, "__identified_tool__", fake_handler)
+    monkeypatch.setitem(catalog.TOOL_HANDLERS, "__identified_tool__", fake_handler)
     monkeypatch.setattr(debug, "publish_event", fake_publish_event)
     token = tool_executor._active_tool_call_id.set("call_live_1")
     try:
@@ -385,6 +385,7 @@ def test_main_agent_inbox_metadata_includes_visible_tool_arguments():
 
 async def test_execute_tool_timeout_becomes_a_structured_tool_result(monkeypatch):
     from cyrene.observability import debug
+    from cyrene.tooling import catalog
     from cyrene.tooling import executor as tool_executor
 
     async def never_returns(*_args, **_kwargs):
@@ -393,7 +394,7 @@ async def test_execute_tool_timeout_becomes_a_structured_tool_result(monkeypatch
     async def fake_publish_event(*_args, **_kwargs):
         return None
 
-    monkeypatch.setitem(tool_executor.TOOL_HANDLERS, "__timeout_tool__", never_returns)
+    monkeypatch.setitem(catalog.TOOL_HANDLERS, "__timeout_tool__", never_returns)
     monkeypatch.setattr(tool_executor, "_tool_timeout_seconds", lambda *_args: 0.01)
     monkeypatch.setattr(debug, "publish_event", fake_publish_event)
 
@@ -1214,6 +1215,11 @@ async def test_call_llm_stream_falls_back_to_next_model_candidate(monkeypatch):
             for line in self._lines:
                 yield line
 
+        async def aread(self):
+            # Match the httpx streaming-response contract used by production
+            # to retain an upstream error body before raise_for_status().
+            return b""
+
         def raise_for_status(self):
             raise httpx.HTTPStatusError("upstream failure", request=self.request, response=httpx.Response(self.status_code, request=self.request))
 
@@ -1884,11 +1890,12 @@ async def test_system_initiated_round_cannot_use_ask_user(tmp_path, monkeypatch)
 
 
 async def test_tool_executor_rejects_ask_user_for_system_initiated_round(monkeypatch):
+    from cyrene.tooling import catalog
     from cyrene.tooling import executor as tool_executor
     from cyrene.agent import state as _agent_state
 
     handler = AsyncMock(return_value="should not run")
-    monkeypatch.setitem(tool_executor.TOOL_HANDLERS, "ask_user", handler)
+    monkeypatch.setitem(catalog.TOOL_HANDLERS, "ask_user", handler)
     token = _agent_state._ui_round_assistant_meta.set({
         "proactive": True,
         "system_initiated": True,

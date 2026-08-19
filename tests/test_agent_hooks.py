@@ -115,6 +115,7 @@ async def test_hook_subprocess_protocol_and_session_context(tmp_path, monkeypatc
 async def test_tool_executor_uses_hook_modified_arguments(monkeypatch):
     import cyrene.hooks as hooks_package
     from cyrene.observability import debug
+    from cyrene.tooling import catalog
     from cyrene.tooling import executor
 
     received = {}
@@ -133,7 +134,7 @@ async def test_tool_executor_uses_hook_modified_arguments(monkeypatch):
     async def publish(*_args, **_kwargs):
         return None
 
-    monkeypatch.setitem(executor.TOOL_HANDLERS, "__hook_test__", handler)
+    monkeypatch.setitem(catalog.TOOL_HANDLERS, "__hook_test__", handler)
     monkeypatch.setattr(hooks_package, "run_pre_tool_hooks", pre)
     monkeypatch.setattr(hooks_package, "run_post_tool_hooks", after)
     monkeypatch.setattr(debug, "publish_event", publish)

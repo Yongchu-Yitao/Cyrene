@@ -20,13 +20,13 @@ WEBUI_ROOT = ROOT / "src" / "webui"
 WORKBENCH_ROOT = WEBUI_ROOT / "frontend"
 INDEX = WORKBENCH_ROOT / "index.html"
 
-OPENAPI_OPERATION_COUNT = 378
+OPENAPI_OPERATION_COUNT = 386
 OPENAPI_BASELINE_FASTAPI = "0.136.1"
 OPENAPI_BASELINE_PYDANTIC = "2.13.4"
-OPENAPI_SHA256 = "c32fa1af16187cc5c2ecb1ccfa89e8f44321a987c0bb0c3a8f6e9982a3cc84b9"
+OPENAPI_SHA256 = "0238c1558e2805b9e228ff76b6feed8799931bd892d97724da838d11742582df"
 TOOL_REGISTRY_SHA256 = "b273e998e8a304c933f1389bd37066f12a08e9dca66c491bbfef0497441fb26c"
-MAIN_WIRE_SHA256 = "7f406fed2cf6c6bc2ddb4828a7498b42a1b4fb31a68d10541469a03e30b3b7db"
-SUBAGENT_WIRE_SHA256 = "8ef3ce7ce2d37cf94cb1253ba155dd46657756660f8249e0d1db005dbc3e2d30"
+MAIN_WIRE_SHA256 = "65cb29372ffbd995e5c2db946df33e726a97db6093f12ab436c1d83f94fce315"
+SUBAGENT_WIRE_SHA256 = "84c1b37fd89fc1847a389b21b675272cc485706c80edb30722d66818634a7e31"
 
 # CyreneUI owns runtime services. The launch lifecycle is the sole bootstrap
 # global because it must guard fetch before the platform registry is loaded.
@@ -121,9 +121,9 @@ def test_tool_registry_wire_and_actor_policy_contracts_are_unchanged(monkeypatch
     assert len(catalog._MAIN_ONLY_TOOLS) == 72
     assert _sha256_json(catalog.TOOL_DEFS) == TOOL_REGISTRY_SHA256
 
-    assert len(wire.get_main_wire_tool_defs()) == 32
+    assert len(wire.get_main_wire_tool_defs()) == 33
     assert wire.get_wire_bundle_hash("main") == MAIN_WIRE_SHA256
-    assert len(wire.get_subagent_wire_tool_defs()) == 25
+    assert len(wire.get_subagent_wire_tool_defs()) == 26
     assert wire.get_wire_bundle_hash("subagent") == SUBAGENT_WIRE_SHA256
 
 
@@ -227,6 +227,8 @@ def test_single_webui_source_build_and_entrypoint_shape():
         "@codemirror/state",
         "@codemirror/view",
         "@aiden0z/pptx-renderer",
+        "@lobehub/icons-static-svg",
+        "@tabler/icons",
         "docx-preview",
         "esbuild",
         "echarts",
@@ -234,6 +236,7 @@ def test_single_webui_source_build_and_entrypoint_shape():
         "pdfjs-dist",
         "react",
         "react-dom",
+        "simple-icons",
         "turndown",
         "turndown-plugin-gfm",
     }

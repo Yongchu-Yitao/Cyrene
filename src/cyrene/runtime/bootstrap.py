@@ -140,8 +140,9 @@ async def start_external_services(
     context: RuntimeContext | None = None,
     search: bool = True,
     mcp: bool = True,
+    custom_tools: bool = True,
 ) -> RuntimeContext:
-    """Start optional local integration services without failing the host."""
+    """Start optional local services and source watchers without failing the host."""
     context = context or create_runtime_context()
     async with context.lifecycle_lock():
         if context.closed:
@@ -172,6 +173,16 @@ async def start_external_services(
                 logger.info("MCP manager started")
             except Exception as exc:
                 logger.warning("MCP manager start failed: %s", exc)
+
+        if custom_tools and "custom_tools" not in context.started_services:
+            from cyrene.custom_tools import start_custom_tools
+
+            try:
+                await start_custom_tools()
+                context.started_services.add("custom_tools")
+                logger.info("Custom tool manager started")
+            except Exception as exc:
+                logger.warning("Custom tool manager start failed: %s", exc)
     return context
 
 
@@ -180,8 +191,9 @@ def stop_external_services(
     context: RuntimeContext | None = None,
     search: bool = True,
     mcp: bool = True,
+    custom_tools: bool = True,
 ) -> None:
-    """Stop the integration services selected by the owning host."""
+    """Stop the selected local services and source watchers."""
     if search and (context is None or "search" in context.started_services):
         from cyrene.tooling.backends.searxng_manager import stop_searxng
 
@@ -196,6 +208,15 @@ def stop_external_services(
         if context is not None:
             context.started_services.discard("mcp")
         logger.info("Stopped MCP service")
+    if custom_tools and (
+        context is None or "custom_tools" in context.started_services
+    ):
+        from cyrene.custom_tools.manager import stop_custom_tools_sync
+
+        stop_custom_tools_sync()
+        if context is not None:
+            context.started_services.discard("custom_tools")
+        logger.info("Stopped custom tool service")
 
 
 async def stop_external_services_async(
@@ -203,8 +224,9 @@ async def stop_external_services_async(
     context: RuntimeContext | None = None,
     search: bool = True,
     mcp: bool = True,
+    custom_tools: bool = True,
 ) -> None:
-    """Stop integration services while the application loop is still alive."""
+    """Stop local services while the application loop is still alive."""
     if search and (context is None or "search" in context.started_services):
         from cyrene.tooling.backends.searxng_manager import stop_searxng
 
@@ -219,6 +241,15 @@ async def stop_external_services_async(
         if context is not None:
             context.started_services.discard("mcp")
         logger.info("Stopped MCP service")
+    if custom_tools and (
+        context is None or "custom_tools" in context.started_services
+    ):
+        from cyrene.custom_tools import stop_custom_tools
+
+        await stop_custom_tools()
+        if context is not None:
+            context.started_services.discard("custom_tools")
+        logger.info("Stopped custom tool service")
 
 
 def start_update_check() -> asyncio.Task[Any] | None:

@@ -134,7 +134,7 @@
   function scheduleAgentCursorIdle() {
     if (agentCursorState.idleTimer && root.clearTimeout) root.clearTimeout(agentCursorState.idleTimer);
     agentCursorState.idleTimer = null;
-    if (agentCursorState.running || !agentCursorState.visible) return;
+    if (!agentCursorState.visible) return;
     var elapsed = Math.max(0, Date.now() - Number(agentCursorState.lastActivityAt || 0));
     var remaining = Math.max(0, AGENT_CURSOR_IDLE_MS - elapsed);
     var sequence = agentCursorState.sequence;
@@ -144,35 +144,29 @@
     }
     if (root.setTimeout) {
       agentCursorState.idleTimer = root.setTimeout(function () {
-        if (!agentCursorState.running) hideAgentCursor(sequence);
+        hideAgentCursor(sequence);
       }, remaining);
     }
   }
 
   function setAgentRunning(running) {
     agentCursorState.running = running === true;
-    if (agentCursorState.idleTimer && root.clearTimeout) root.clearTimeout(agentCursorState.idleTimer);
-    if (agentCursorState.fadeTimer && root.clearTimeout) root.clearTimeout(agentCursorState.fadeTimer);
-    agentCursorState.idleTimer = null;
-    agentCursorState.fadeTimer = null;
-    var cursor = root.document && root.document.getElementById
-      ? root.document.getElementById("cyrene-ui-agent-cursor")
-      : null;
-    if (agentCursorState.running) {
-      if (cursor && agentCursorState.visible && agentCursorState.fading) {
-        cursor.style.transition = "none";
-        cursor.style.opacity = "1";
-        void cursor.offsetWidth;
-      }
-      agentCursorState.fading = false;
-    } else {
-      scheduleAgentCursorIdle();
-    }
+    // A run can spend a long time reasoning or using a different surface.
+    // Only a real cursor update may refresh visibility; lifecycle changes must
+    // not pin or resurrect the previous target.
     return agentCursorState.running;
+  }
+
+  function claimAgentCursorOwner() {
+    var bridge = root.cyrene && root.cyrene.agentCursor;
+    if (bridge && typeof bridge.claim === "function") {
+      bridge.claim("ui").catch(function () {});
+    }
   }
 
   function showAgentCursor(point, options) {
     if (!point) return null;
+    claimAgentCursorOwner();
     var cursor = agentCursorElement();
     if (!cursor) return null;
     var config = options || {};
@@ -1487,6 +1481,13 @@
             await delayCursor(AGENT_CURSOR_DRAG_MS);
           }
         }
+      } else if (cursorMode === "target") {
+        var actionPoint = entryCenter(item);
+        if (actionPoint) {
+          var actionMove = showAgentCursor(actionPoint, { element: entryElement(item) });
+          cursorSequence = actionMove && actionMove.sequence;
+          await delayCursor(actionMove ? actionMove.waitMs : 0);
+        }
       }
       var handler = entry.handlers[actionId];
       var result = await handler(input);
@@ -1527,6 +1528,12 @@
     });
     root.addEventListener("resize", refreshAgentControlHighlight);
     root.addEventListener("scroll", refreshAgentControlHighlight, true);
+  }
+  var cursorOwnerBridge = root.cyrene && root.cyrene.agentCursor;
+  if (cursorOwnerBridge && typeof cursorOwnerBridge.onOwnerChanged === "function") {
+    cursorOwnerBridge.onOwnerChanged(function (owner) {
+      if (String(owner || "") !== "ui") hideAgentCursor();
+    });
   }
   if (typeof root.MutationObserver === "function" && cursorDocument) {
     var cursorTargetObserver = new root.MutationObserver(function () {

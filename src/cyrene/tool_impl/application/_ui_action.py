@@ -129,6 +129,8 @@ async def execute_action(
             host_args["_agent_cursor_mode"] = "click"
         elif operation_family == "cyrene.ui.drag":
             host_args["_agent_cursor_mode"] = "drag"
+        elif operation_family in {"cyrene.ui.type", "cyrene.ui.scroll"}:
+            host_args["_agent_cursor_mode"] = "target"
         response = await call_host("ui.gesture.execute_current", host_args)
         ok = response.get("ok") is not False
         result = envelope("success" if ok else "error", operation_id, "Current UI action completed." if ok else "Current UI action was rejected.", revision=response.get("revision"), ui=response, error_code="" if ok else response.get("error", "surface_error"))

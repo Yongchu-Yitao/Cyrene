@@ -85,6 +85,22 @@ def test_discovery_uses_provider_native_auth_and_normalizes_gemini_models() -> N
     ]
 
 
+def test_minimax_openai_discovery_uses_models_endpoint_and_bearer_auth() -> None:
+    assert discovery_request("openai", "https://api.minimaxi.com/v1", "mini-key") == (
+        "https://api.minimaxi.com/v1/models",
+        {"Authorization": "Bearer mini-key"},
+    )
+    assert parse_discovery_response(
+        "openai",
+        {"object": "list", "data": [{"id": "MiniMax-M2.7", "owned_by": "minimax"}]},
+    ) == [{
+        "id": "MiniMax-M2.7",
+        "model": "MiniMax-M2.7",
+        "name": "MiniMax-M2.7",
+        "capabilities": ["chat"],
+    }]
+
+
 def test_prepare_anthropic_request_converts_system_images_tools_and_auth() -> None:
     request = prepare_request(
         "anthropic",

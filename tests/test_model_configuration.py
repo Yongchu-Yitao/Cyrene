@@ -129,6 +129,68 @@ def test_blank_secret_is_retained_and_clear_is_explicit(isolated_model_store):
     assert isolated_model_store.get_env("OPENAI_API_KEY") == ""
 
 
+@pytest.mark.asyncio
+async def test_profile_test_targets_only_the_selected_chat_model(monkeypatch):
+    from cyrene.model_runtime import client
+    from route.settings.model_configuration import _test_model
+
+    captured = {}
+
+    async def fake_call_llm(messages, **kwargs):
+        captured["messages"] = messages
+        captured.update(kwargs)
+        return {"role": "assistant", "content": "OK"}
+
+    monkeypatch.setattr(client, "call_llm", fake_call_llm)
+    result = await _test_model(
+        {
+            "id": "provider",
+            "adapter": "openai",
+            "base_url": "https://example.test/v1",
+            "api_key": "sk-test",
+        },
+        {
+            "id": "profile-b",
+            "name": "Model B",
+            "model": "model-b",
+            "capabilities": ["chat", "vision"],
+        },
+    )
+
+    assert result == {"connected": True, "adapter": "openai", "model": "model-b"}
+    assert captured["candidates"] == [{
+        "id": "profile-b",
+        "profile_id": "profile-b",
+        "connection_id": "provider",
+        "model": "model-b",
+        "name": "Model B",
+        "provider": "openai",
+        "adapter": "openai",
+        "base_url": "https://example.test/v1",
+        "api_key": "sk-test",
+        "capabilities": ["chat", "vision"],
+        "reasoning_effort": "",
+    }]
+    assert captured["publish_events"] is False
+    assert captured["record_usage"] is False
+
+
+@pytest.mark.asyncio
+async def test_embedding_profile_test_checks_the_exact_discovered_model(monkeypatch):
+    import route.settings.model_configuration as model_routes
+
+    async def fake_discover(_connection):
+        return [{"id": "embed-a", "model": "embed-a"}, {"id": "embed-b", "model": "embed-b"}]
+
+    monkeypatch.setattr(model_routes, "_discover", fake_discover)
+    result = await model_routes._test_model(
+        {"id": "provider", "adapter": "openai"},
+        {"id": "embedding", "model": "embed-b", "capabilities": ["embedding"]},
+    )
+
+    assert result == {"connected": True, "adapter": "openai", "model": "embed-b"}
+
+
 def test_legacy_models_migrate_to_profiles_and_routes(isolated_model_store):
     from cyrene.runtime.model_configuration import get_model_configuration
 
@@ -180,7 +242,7 @@ def test_default_provider_connections_are_added_once_and_can_be_deleted(
         "name": "MiniMax",
         "adapter": "openai",
         "enabled": True,
-        "base_url": "https://api.minimax.io/v1",
+        "base_url": "https://api.minimaxi.com/v1",
         "api_key": "",
         "options": {"provider_preset": "minimax"},
     }
@@ -207,6 +269,39 @@ def test_default_provider_connections_are_added_once_and_can_be_deleted(
 
     assert reloaded["version"] == CONFIG_VERSION
     assert [item["id"] for item in reloaded["connections"]] == ["deepseek"]
+
+
+@pytest.mark.parametrize(
+    "legacy_base_url",
+    ["https://api.minimax.io/v1", "https://api.minimax.com/v1"],
+)
+def test_provider_upgrade_replaces_legacy_minimax_default_address(
+    isolated_model_store,
+    legacy_base_url,
+):
+    from cyrene.runtime.model_configuration import get_model_configuration
+
+    isolated_model_store.update_settings_atomic({
+        "model_configuration": {
+            "version": 3,
+            "connections": [{
+                "id": "minimax",
+                "name": "MiniMax",
+                "adapter": "openai",
+                "enabled": True,
+                "base_url": legacy_base_url,
+                "api_key": "sk-minimax",
+                "options": {"provider_preset": "minimax"},
+            }],
+            "profiles": [],
+            "routes": {name: [] for name in ("primary", "secondary", "vision", "embedding")},
+        },
+    })
+
+    upgraded = get_model_configuration(persist_migration=False)
+
+    assert upgraded["connections"][0]["base_url"] == "https://api.minimaxi.com/v1"
+    assert upgraded["connections"][0]["api_key"] == "sk-minimax"
 
 
 def test_provider_upgrade_recognizes_existing_custom_connections(
@@ -399,6 +494,7 @@ def test_frontend_registers_split_pages_and_live_context_contract():
     overlay = (root / "src/webui/frontend/settings-overlay.jsx").read_text()
     chat = (root / "src/webui/frontend/workbench-chat.jsx").read_text()
     i18n = (root / "src/webui/frontend/workbench-i18n.jsx").read_text()
+    styles = (root / "src/webui/frontend/settings-model-configuration.css").read_text()
 
     assert 'register("model-settings"' in settings
     assert "ServicesPage: ServicesPage" in settings
@@ -411,23 +507,61 @@ def test_frontend_registers_split_pages_and_live_context_contract():
     assert 'label(props, "settings.adapter", "协议")' in settings
     assert '"settings.adapter": "Adapter"' in i18n
     assert '"settings.adapter": "协议"' in i18n
+    assert '"settings.modelConnectionFailed": "Model connection failed."' in i18n
+    assert '"settings.modelConnectionFailed": "模型连接失败。"' in i18n
+    assert '"settings.modelDiscoveryFailed": "Model discovery failed."' in i18n
+    assert '"settings.modelDiscoveryFailed": "获取模型列表失败。"' in i18n
+    assert "localizedModelConfigurationError(error, props)" in settings
     assert 'h("h4", { id: "wb-mcfg-profiles-heading" }, "模型列表")' in settings
     assert "档案描述一个可被多个用途引用的远端模型。" not in settings
+    assert "连接配置与模型档案" not in settings
+    assert 'selectedDescription ? h("p", null, selectedDescription) : null' in settings
+    assert 'className: "wb-mcfg-capability-picker"' in settings
+    assert 'var capabilityOptions = ["chat", "vision", "embedding"];' in settings
+    assert 'capabilityLabel(capability, props)' in settings
+    assert 'props.onChange("capabilities", next);' in settings
+    assert 'body: JSON.stringify({ connection: connectionDraftPayload(selected), profile: profile })' in settings
+    assert 'onTest: function () { testProfile(profile); }' in settings
+    assert 'onClick: testConnection' not in settings
+    assert 'onClick: discoverConnection' not in settings
+    assert '"获取模型列表"' not in settings
     assert 'label(props, "settings.inputPrice", "输入价格")' in settings
     assert 'label(props, "settings.outputPrice", "输出价格")' in settings
     assert 'label(props, "settings.cachePrice", "缓存价格")' in settings
     assert 'props.onChange("price", updateProfilePriceField' in settings
-    assert 'h("span", null, "能力")' not in settings
+    assert 'h("span", null, "能力")' in settings
     assert 'h("button", {' in settings
     assert 'className: "wb-mcfg-profile-summary"' in settings
     assert '"aria-expanded": expanded' in settings
     assert 'h("span", { className: "wb-btn wb-mcfg-profile-details-button"' in settings
+    assert 'className: "wb-workbench-searchbox wb-mcfg-searchbox"' in settings
+    assert 'placeholder: "搜索模型服务…"' in settings
+    assert "config.connections.filter(matchesConnectionQuery)" in settings
+    assert 'className: "wb-mcfg-filter"' not in settings
+    assert 'genericName === "openai_compatible"' in settings
+    assert 'settingsGlyph("server", 17)' in settings
+    assert ".wb-mcfg-toggle.is-on span {\n  transform: translateX(18px);\n  background: #fff;\n}" in styles
     assert 'label: "Adapter"' not in settings
     assert 'return "本地模型"' in settings
+    assert 'var serviceLabel = local ? "Local"' in settings
+    assert 'localModels.filter(function (model) { return model.ready === true; }).length' in settings
+    assert 'if (!localConnectionSignature) return;' in settings
     assert 'className: "wb-model-card wb-local-model wb-mcfg-local-row"' in settings
     assert 'label(props, "settings.localModelActive"' in settings
     assert '!isLocalConnection(selected) ? h("section", { className: "wb-mcfg-form-section"' in settings
     assert 'hideHeader: true' in settings
+    assert 'title: "嵌入模型", titleKey: "settings.embeddingRouteTitle"' in settings
+    assert 'label(props, "settings.selectModelProfile", "Select model profile…")' in settings
+    assert 'capabilityText(profile, props)' in settings
+    for key in (
+        "settings.modelCapability.chat",
+        "settings.modelCapability.vision",
+        "settings.modelCapability.embedding",
+        "settings.selectModelProfile",
+        "settings.localProvider",
+        "settings.embeddingRouteTitle",
+    ):
+        assert i18n.count(f'"{key}"') == 2
     assert 'WBC_CHAT_MODEL_CHANGED_EVENT = "cyrene:wbc-chat-model-changed"' in chat
     assert 'window.addEventListener("cyrene:model-configuration-changed"' in chat
     assert "payload.selectable_models" in chat
@@ -439,9 +573,72 @@ def test_frontend_registers_split_pages_and_live_context_contract():
     assert '"selectable_models": selectable_models,' in settings_route
     assert "selectable_models or normalized" not in settings_route
     assert 'setSelectedModelId("");' in chat
-    assert "store.save(nextConfig, true).then" in settings
+    assert "persistQueuedConfig();" in settings
+    assert "store.save(snapshot, true, {" in settings
+    assert "saveQueueInFlight.current" in settings
+    assert '"保存配置"' not in settings
     assert "并立即保存。" in settings
     assert chat.index("var liveModel = String(liveData") < chat.index(
         "var activeModel = String(runtime"
     )
     assert "segTotal <= 0 && used <= 0 && limit <= 0" in chat
+
+
+def test_services_autosave_is_single_flight_retryable_and_current_only():
+    root = Path(__file__).resolve().parents[1]
+    settings = (root / "src/webui/frontend/settings-model-configuration.jsx").read_text()
+    styles = (root / "src/webui/frontend/settings-model-configuration.css").read_text()
+
+    hook = settings.split("function useModelConfiguration(props) {", 1)[1].split(
+        "function LoadingState(props) {", 1
+    )[0]
+    services = settings.split("function ServicesPage(props) {", 1)[1].split(
+        "var ROUTE_META =", 1
+    )[0]
+
+    assert "var queuedSnapshot = useRef(null);" in services
+    assert "var queuedVersion = useRef(0);" in services
+    assert "var saveQueueInFlight = useRef(false);" in services
+    assert "if (!saveQueueMounted.current || saveQueueInFlight.current" in services
+    assert services.count("store.save(snapshot, true, {") == 1
+    assert services.count("store.setConfig(snapshot);") == 1
+    assert "queuedSnapshot.current = Object.assign({}, queuedSnapshot.current || {}," in services
+    assert "scheduleQueuedSave(0);" in services
+
+    assert "updateConfig(nextConfig, { immediate: true });" in services
+    assert "persistConfig(" not in services
+    assert "saveQueueBlockedVersion.current = failedVersion;" in services
+    assert "saveQueueBlockedVersion.current = -1;" in services
+    assert "function retryQueuedSave()" in services
+    retry = services.split("function retryQueuedSave()", 1)[1].split(
+        "function updateConnection", 1
+    )[0]
+    assert "saveQueueBlockedVersion.current = -1;" in retry
+    assert "editVersion.current" not in retry
+    assert '"立即保存"' not in services
+    assert 'onClick: retryQueuedSave }, "重试保存"' in services
+    assert 'className: "wb-mcfg-status is-error wb-mcfg-save-error"' in services
+    assert ".wb-mcfg-save-error" in styles
+
+    conflict_reload = services.split("store.load({", 1)[1].split(
+        ").catch(function (reloadError)", 1
+    )[0]
+    assert ").then(function (reloaded)" in conflict_reload
+    assert "setQueueDirty(false);" in conflict_reload
+    assert "setQueueDirty(false);" not in services.split("store.load({", 1)[0].split(
+        "function handleQueuedSaveFailure(error) {", 1
+    )[1]
+    reload_failure = services.split(").catch(function (reloadError)", 1)[1].split(
+        "function persistQueuedConfig()", 1
+    )[0]
+    assert "setQueueDirty(true);" in reload_failure
+
+    current_completion = hook.split("if (isCurrent) {", 1)[1].split(
+        "return saved;", 1
+    )[0]
+    assert "setConfig(saved);" in current_completion
+    assert "props.onConfigChange(saved)" in current_completion
+    assert 'CustomEvent("cyrene:model-configuration-changed"' in current_completion
+    assert "return function () { mounted.current = false; };" in hook
+    assert "saveQueueMounted.current = false;" in services
+    assert "clearTimeout(saveQueueTimer.current)" in services

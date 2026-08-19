@@ -93,6 +93,20 @@
   background: var(--wb-error-bg, color-mix(in srgb, var(--wb-red, #dc4c4c) 8%, var(--mcfg-surface)));
 }
 
+.wb-mcfg-save-error {
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.wb-mcfg-save-error > span {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.wb-mcfg-save-error .wb-btn {
+  flex: 0 0 auto;
+}
+
 .wb-mcfg-state {
   min-height: 280px;
   display: flex;
@@ -153,41 +167,18 @@
   border-right: 1px solid var(--mcfg-border);
 }
 
-.wb-mcfg-filter {
-  display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
-  gap: 3px;
+.wb-mcfg-searchbar {
+  min-height: 0;
   margin: 0 0 8px;
-  padding: 3px;
-  border: 1px solid var(--mcfg-muted-border);
-  border-radius: 10px;
-  background: var(--wb-control-bg);
+  padding: 0;
 }
 
-.wb-mcfg-filter button {
-  min-width: 0;
-  min-height: 34px;
-  padding: 4px 6px;
-  border: 0;
-  border-radius: 7px;
-  color: var(--wb-muted);
-  background: transparent;
-  font: inherit;
-  font-size: calc(11px * var(--wb-ui-font-scale, 1));
-  font-weight: 620;
-  cursor: pointer;
-  transition: color .16s, background .16s, box-shadow .16s;
+.wb-mcfg-searchbar::before {
+  display: none;
 }
 
-.wb-mcfg-filter button:hover {
-  color: var(--wb-text);
-  background: var(--wb-control-hover-bg);
-}
-
-.wb-mcfg-filter button.is-active {
-  color: var(--wb-text);
-  background: color-mix(in srgb, var(--wb-accent) 11%, var(--wb-control-bg));
-  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--wb-accent) 24%, var(--wb-line));
+.wb-mcfg-searchbar .wb-mcfg-searchbox {
+  width: 100%;
 }
 
 .wb-mcfg-connection-list {
@@ -431,7 +422,7 @@
 
 .wb-mcfg-toggle.is-on span {
   transform: translateX(18px);
-  background: var(--wb-text);
+  background: #fff;
 }
 
 .wb-mcfg-form-section,
@@ -778,15 +769,52 @@ html[data-theme] .settings-overlay .wb-mcfg-services .wb-btn.wb-mcfg-action-main
   grid-column: 1 / -1;
 }
 
+.wb-mcfg-profile-editor-field.is-half {
+  grid-column: span 2;
+}
+
 .wb-mcfg-profile-editor-field > span {
   color: var(--wb-muted);
   font-size: calc(10.5px * var(--wb-ui-font-scale, 1));
   font-weight: 650;
 }
 
+.wb-mcfg-capability-picker {
+  min-height: 36px;
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  align-items: stretch;
+  gap: 6px;
+}
+
+.wb-mcfg-capability-chip {
+  min-width: 0;
+  padding: 0 8px;
+  border: 1px solid var(--mcfg-border);
+  border-radius: 9px;
+  color: var(--wb-muted);
+  background: var(--wb-control-bg);
+  font: inherit;
+  font-size: calc(11px * var(--wb-ui-font-scale, 1));
+  font-weight: 650;
+  cursor: pointer;
+}
+
+.wb-mcfg-capability-chip:hover {
+  color: var(--wb-text);
+  background: var(--wb-control-hover-bg);
+}
+
+.wb-mcfg-capability-chip.is-selected {
+  border-color: color-mix(in srgb, var(--wb-accent) 52%, var(--mcfg-border));
+  color: var(--wb-text);
+  background: color-mix(in srgb, var(--wb-accent) 13%, var(--wb-control-bg));
+}
+
 .wb-mcfg-profile-details-actions {
   display: flex;
-  justify-content: flex-end;
+  justify-content: space-between;
+  gap: 10px;
   margin-top: 12px;
   padding-top: 12px;
   border-top: 1px solid var(--mcfg-muted-border);
@@ -1114,7 +1142,7 @@ html[data-theme] .settings-overlay .wb-mcfg-services .wb-btn.wb-mcfg-action-main
     overflow: hidden;
   }
 
-  .settings-overlay .settings-overlay-content[data-settings-active-tab="models"] .wb-mcfg-filter,
+  .settings-overlay .settings-overlay-content[data-settings-active-tab="models"] .wb-mcfg-searchbar,
   .settings-overlay .settings-overlay-content[data-settings-active-tab="models"] .wb-mcfg-add-connection {
     flex: 0 0 auto;
   }
@@ -1130,7 +1158,13 @@ html[data-theme] .settings-overlay .wb-mcfg-services .wb-btn.wb-mcfg-action-main
     min-height: 0;
     overflow-y: auto;
     overscroll-behavior: contain;
-    scrollbar-gutter: stable;
+    scrollbar-width: none;
+    scrollbar-gutter: auto;
+  }
+
+  .settings-overlay .settings-overlay-content[data-settings-active-tab="models"] .wb-mcfg-detail-pane::-webkit-scrollbar {
+    width: 0;
+    height: 0;
   }
 }
 
@@ -1162,6 +1196,10 @@ html[data-theme] .settings-overlay .wb-mcfg-services .wb-btn.wb-mcfg-action-main
 
   .wb-mcfg-profile-details-grid {
     grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .wb-mcfg-profile-editor-field.is-half {
+    grid-column: 1 / -1;
   }
 
   .wb-mcfg-route-row {

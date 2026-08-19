@@ -9,7 +9,14 @@ def test_macos_traffic_lights_are_centered_in_workbench_topbar():
         encoding="utf-8"
     )
 
-    topbar = re.search(r"\.workbench-topbar\s*\{[^}]*height:\s*(\d+)px", css_source)
+    topbar = re.search(
+        r"\.workbench-topbar\s*\{[^}]*height:\s*var\(--wb-topbar-height\)",
+        css_source,
+    )
+    topbar_height_value = re.search(
+        r"--wb-topbar-height:\s*(\d+)px",
+        css_source,
+    )
     traffic_lights = re.search(
         r"trafficLightPosition\s*=\s*\{\s*x:\s*\d+,\s*y:\s*(\d+)\s*\}",
         main_source,
@@ -19,9 +26,10 @@ def test_macos_traffic_lights_are_centered_in_workbench_topbar():
     )
 
     assert topbar is not None
+    assert topbar_height_value is not None
     assert traffic_lights is not None
     assert brand_wordmark is not None
-    topbar_height = int(topbar.group(1))
+    topbar_height = int(topbar_height_value.group(1))
     traffic_light_y = int(traffic_lights.group(1))
     # Electron's rendered traffic-light image needs a 1px optical correction.
     assert traffic_light_y == (topbar_height - 14) // 2 - 1

@@ -367,10 +367,13 @@ def test_profile_is_a_settings_item_without_a_collapsed_settings_icon_stack():
     assert 'ids: ["profile", "general", "appearance", "shortcuts"]' in settings
     assert 'ids: ["model-usage", "models", "agents", "voice", "tools"]' in settings
     icon_names = re.findall(r'\{ id: "[^"]+", labelKey: "[^"]+", icon: "([^"]+)" \}', settings)
-    assert len(icon_names) == 17
+    assert len(icon_names) == 18
     assert len(set(icon_names)) == len(icon_names)
     assert 'className: "settings-overlay-tab-glyph"' in settings
-    assert '@tabler/icons/icons/outline' in (root / "src/webui/build-jsx.mjs").read_text(encoding="utf-8")
+    build_source = (root / "src/webui/build-jsx.mjs").read_text(encoding="utf-8")
+    assert '@tabler/icons/icons/outline' in build_source
+    assert "'code.svg'," in build_source
+    assert (root / "src/webui/static/app/settings-icons/code.svg").is_file()
     assert 'tab === "profile" && React.createElement("div", { className: "settings-profile-panel" }' in settings
     assert 'if (page === "profile") {' in workbench
     assert 'setSettingsTab("profile")' in workbench
@@ -385,7 +388,7 @@ def test_profile_is_a_settings_item_without_a_collapsed_settings_icon_stack():
     assert '"profile.basicInfo": "个人信息"' in translations
     for label in (
         "通用设置", "界面外观", "键盘快捷键", "模型配置", "智能代理",
-        "语音交互", "工具管理", "消息渠道", "远程连接", "功能扩展",
+        "语音交互", "工具管理", "消息渠道", "远程连接", "扩展与系统", "扩展中心", "自定义工具",
         "服务集成", "预算管理", "用量统计", "数据管理", "关于 Cyrene",
     ):
         assert f'": "{label}"' in translations
@@ -410,6 +413,25 @@ def test_usage_settings_reuses_profile_metrics_and_expands_model_breakdown():
     assert 'formatTokens(item.prompt_tokens)' in panel
     assert 'formatTokens(item.completion_tokens)' in panel
     assert 't("settings.usageNoModelData")' in panel
+    assert 'mode === "usage" ? " wb-usage-settings" : ""' in panel
+    assert 'React.createElement("article", { className: "wb-budget-model-card"' in panel
+    assert 'React.createElement("dl", { className: "wb-budget-model-stats" }' in panel
+    assert 'className: "wb-budget-model-head"' not in panel
+    assert 'settingsFetch("/api/settings/model-config/provider-usage"' in panel
+    assert 't("settings.providerUsage")' in panel
+    assert 'className: "wb-provider-usage-grid"' in panel
+    assert 'item.kind === "balance"' in panel
+    assert 'item.kind === "quota"' in panel
+    assert 'kind: "codex_quota"' in panel
+    assert 'providerUsage.concat([codexUsageItem])' in panel
+    assert 't("settings.providerUsageStatusUnknown")' in panel
+    assert 'Toggle(codexQuotaEnabled, toggleCodexQuota)' in panel
+    assert 'cyrene-provider-usage-v1' in panel
+    assert 'item.refreshing === true' in panel
+    assert 'fetchProviderUsage(false, true)' in panel
+    assert 'className: "wb-provider-usage-column is-compact"' in panel
+    assert 'className: "wb-provider-usage-column is-minimax"' in panel
+    assert 'onClick: function () { fetchProviderUsage(true' not in panel
 
     for key in (
         "settings.usageSubtitle",
@@ -421,12 +443,23 @@ def test_usage_settings_reuses_profile_metrics_and_expands_model_breakdown():
         "settings.usageBudgetRate",
         "settings.usageByModel",
         "settings.usageNoModelData",
+        "settings.providerUsage",
+        "settings.providerUsageRemaining",
+        "settings.providerUsageBalanceBreakdown",
     ):
         assert translations.count(f'"{key}"') == 2
 
     assert ".wb-usage-metrics" in styles
     assert ".wb-usage-metric" in styles
-    assert "grid-template-columns: minmax(150px, 1fr) 64px 82px 82px 82px 78px" in styles
+    assert "min-height: 72px" in styles
+    assert ".settings-overlay .wb-usage-settings > .wb-section-block" in styles
+    assert ".settings-overlay .wb-usage-settings .wb-budget-summary" in styles
+    assert ".wb-budget-model-grid" in styles
+    assert ".wb-budget-model-card" in styles
+    assert ".wb-budget-model-stats" in styles
+    assert ".wb-provider-usage-grid" in styles
+    assert ".wb-provider-usage-card" in styles
+    assert ".wb-provider-quota-window" in styles
 
 
 def test_about_settings_matches_the_shared_settings_page_hierarchy():

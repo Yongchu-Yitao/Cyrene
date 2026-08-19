@@ -1014,9 +1014,13 @@ def test_split_chat_composers_align_with_the_floating_workspace_rail():
         "var(--wbc-card-gutter) var(--wbc-card-gutter);" in rail_css
     )
     assert "padding-bottom: 12px;" in composer_css
-    assert "padding: 10px 14px 14px !important;" in main_composer_css
-    assert "padding: 10px 14px 14px !important;" in split_main_composer_css
-    assert "padding: 10px 14px 14px !important;" in pane_split_main_composer_css
+    for scoped_composer_css in (
+        main_composer_css,
+        split_main_composer_css,
+        pane_split_main_composer_css,
+    ):
+        assert "var(--wbc-composer-top-inset)" in scoped_composer_css
+        assert scoped_composer_css.count("var(--wbc-composer-edge-inset)") == 2
     assert (
         'html[data-density="compact"] .workbench-shell '
         ".workbench-composer.wbc-composer"
@@ -1503,7 +1507,7 @@ def test_workbench_chat_sidebar_keeps_only_overview_and_context_unconditional():
     assert 'if (artifactItems.length) tabs.push({ id: "artifacts"' in tabs
     assert "if (hasWorkspaceChanges)" in tabs
     assert 'if (hasBranches) tabs.push({ id: "branches"' in tabs
-    assert 'if (viewerFile) tabs.push({ id: "viewer"' in tabs
+    assert 'if (chatViewerFile) tabs.push({ id: "viewer"' in tabs
     assert 'if (hasMap) tabs.push({ id: "map"' in tabs
     assert 'if (hasBrowser) tabs.push({ id: "browser"' in tabs
     assert "if (sideAgents && sideAgents.length)" in tabs
@@ -1695,8 +1699,9 @@ process.stdout.write(JSON.stringify({{
     }
 
     assert "function WbcPaneCardFrame" in source
-    assert "var showActiveConversationGrip = paneCardCount > 1 || !sideVisible;" in source
-    assert "grip = showActiveConversationGrip ? <WbcSplitGripBar" in source
+    assert "var singlePane = paneCardCount === 1;" in source
+    assert "grip = <WbcSplitGripBar" in source
+    assert "menuDisabled={singlePane}" in source
     assert "function WbcPaneRowResizer" in source
     assert "function WbcPaneColumnResizer" in source
     assert 'edge === "replace"' in source
@@ -4370,7 +4375,7 @@ def test_workbench_chat_opens_bounded_browser_window_from_live_browser_events():
     assert ".wbc-browser-window.pip .browser-tabs-strip," in styles
     assert ".wbc-browser-window.pip .browser-nav-bar" in styles
     assert "WBC_ICONS.windowMaximize" in surface
-    assert "WBC_ICONS.windowMinimize" not in source
+    assert "WBC_ICONS.windowMinimize" not in surface
     assert 'Array.isArray(displayBrowserState.tabs) && displayBrowserState.tabs.length === 0' in source
     assert 'hasNoBrowserTabs && effectiveMode === "pip"' in source
     assert 'action_id: "set_frame"' not in surface
@@ -5540,7 +5545,7 @@ def test_workbench_guidance_is_optimistic_and_completed_tools_do_not_spin():
     assert 'status: (toolStarted || toolProgress) ? "running" : "completed"' in source
     assert 'event.type === "tool_call_progress"' in source
     assert 'className="wbc-transfer-progress"' in trace_card
-    assert 'entry.status === "running"' in trace_card
+    assert 'entryStatus === "running"' in trace_card
 
 
 def test_workbench_tool_start_is_rendered_then_completed_in_place():
@@ -6305,6 +6310,7 @@ def test_tool_package_settings_are_scoped_and_context_shows_agent_disclosure():
         "environment_tools",
         "skill_tools",
         "remote_tools",
+        "custom_tools",
         "integration_tools",
     ):
         assert i18n.count(f'"toolPackageDesc.{package_id}"') == 2
@@ -6317,6 +6323,108 @@ def test_tool_package_settings_are_scoped_and_context_shows_agent_disclosure():
     assert '"workbenchChat.usedToolPackages": "Used tool packages"' in i18n
     assert '"workbenchChat.usedToolPackages": "已使用的工具包"' in i18n
     assert '"workbenchChat.inbox.live"' not in i18n
+
+
+def test_custom_tool_status_is_located_under_extensions_and_system():
+    root = Path(__file__).resolve().parents[1]
+    settings = (
+        root / "src" / "webui" / "frontend" / "settings-overlay.jsx"
+    ).read_text(encoding="utf-8")
+    settings_index = (
+        root / "src" / "webui" / "frontend" / "shared" / "settings-index.jsx"
+    ).read_text(encoding="utf-8")
+    i18n = (
+        root / "src" / "webui" / "frontend" / "workbench-i18n.jsx"
+    ).read_text(encoding="utf-8")
+    compiled_settings = (
+        root / "src" / "webui" / "static" / "app" / "compiled" / "settings-overlay.js"
+    ).read_text(encoding="utf-8")
+    compiled_settings_index = (
+        root
+        / "src"
+        / "webui"
+        / "static"
+        / "app"
+        / "compiled"
+        / "shared"
+        / "settings-index.js"
+    ).read_text(encoding="utf-8")
+    css = (root / "src" / "webui" / "frontend" / "workbench.css").read_text(
+        encoding="utf-8"
+    )
+    static_css = (
+        root / "src" / "webui" / "static" / "app" / "workbench.css"
+    ).read_text(encoding="utf-8")
+
+    assert "function CustomToolsPanel" in settings
+    assert 'request("/api/custom-tools/status")' in settings
+    assert '{ id: "custom-tools", labelKey: "settings.customTools", icon: "code" }' in settings
+    assert '{ labelKey: "settings.group.extensionsSystem", ids: ["extensions", "custom-tools", "integrations"] }' in settings
+    assert 'tab === "custom-tools" && React.createElement(' in settings
+    assert 'className: "settings-panel wb-custom-tools-page"' in settings
+    assert 'var categories = ["recommended", "skills", "mcp", "cli", "toolchains", "agent"]' in settings
+    assert 'category === "customTools"' not in settings
+    assert '{ id: "custom-tools", labelKey: "settings.customTools" }' in settings_index
+    assert '{ id: "setting-custom-tools", tab: "custom-tools",' in settings_index
+    assert '"settings.group.extensionsSystem": "扩展与系统"' in i18n
+
+    extensions_panel = settings.split("function ExtensionsPanel(p) {", 1)[1].split(
+        "function ShortcutsPanel(p) {", 1
+    )[0]
+    assert '"customTools"' not in extensions_panel
+    assert "React.createElement(CustomToolsPanel" not in extensions_panel
+
+    custom_panel = settings.split("function CustomToolsPanel(p) {", 1)[1].split(
+        "function CapabilitiesPanel(p) {", 1
+    )[0]
+    assert 'request("/api/custom-tools/reload", { method: "POST" })' in custom_panel
+    assert '"/api/custom-tools/packages/" + encodeURIComponent(packageId) + "/enabled"' in custom_panel
+    assert 'request("/api/custom-tools")' not in custom_panel
+    assert "/restart" not in custom_panel
+    assert 'tool.name || tool.stable_name || tool.concrete_name' in custom_panel
+    assert 'className: "wb-custom-tools-code-detail"' in custom_panel
+    assert 'className: "wb-field wb-custom-tools-package-heading"' in custom_panel
+    assert 'className: "wb-extension-card wb-custom-tool-card"' in custom_panel
+    assert 'className: "wb-extension-card-summary"' in custom_panel
+    assert 'className: "wb-extension-expand-button"' not in custom_panel
+    assert '"aria-labelledby": packageTitleId' in custom_panel
+    assert '"aria-expanded": toolExpanded ? "true" : "false"' in custom_panel
+    assert 'role: "region"' in custom_panel
+    assert 'className: "wb-controls wb-custom-tools-package-control"' in custom_panel
+    assert 'setExpandedToolId(toolExpanded ? "" : toolKey)' in custom_panel
+    assert 'className: "wb-extension-details wb-custom-tool-details"' in custom_panel
+    assert 't("settings.customToolsDetailSchema")' in custom_panel
+    assert ".wb-custom-tool-card .wb-extension-card-summary" in css
+    assert 'onClick: function () { load(); }' not in custom_panel
+    for legacy_management in (
+        "createPackage",
+        "beginEdit",
+        "openPublicationReview",
+        "publishReviewed",
+        "deletePackage",
+        "customToolUiUrl",
+    ):
+        assert legacy_management not in custom_panel
+
+    compiled_custom_panel = compiled_settings.split(
+        "function CustomToolsPanel(p) {", 1
+    )[1].split("function CapabilitiesPanel(p) {", 1)[0]
+    assert 'request("/api/custom-tools/status")' in compiled_custom_panel
+    assert 'request("/api/custom-tools/reload", { method: "POST" })' in compiled_custom_panel
+    assert '"/api/custom-tools/packages/" + encodeURIComponent(packageId) + "/enabled"' in compiled_custom_panel
+    assert 'request("/api/custom-tools")' not in compiled_custom_panel
+    assert "/restart" not in compiled_custom_panel
+    assert 'className: "wb-extension-expand-button"' not in compiled_custom_panel
+    assert '{ id: "custom-tools", labelKey: "settings.customTools", icon: "code" }' in compiled_settings
+    assert 'ids: ["extensions", "custom-tools", "integrations"]' in compiled_settings
+    assert 'tab === "custom-tools" && React.createElement(' in compiled_settings
+    assert 'className: "settings-panel wb-custom-tools-page"' in compiled_settings
+    assert '"customTools"' not in compiled_settings.split(
+        "function ExtensionsPanel(p) {", 1
+    )[1].split("function ShortcutsPanel(p) {", 1)[0]
+    assert '{ id: "custom-tools", labelKey: "settings.customTools" }' in compiled_settings_index
+    assert '{ id: "setting-custom-tools", tab: "custom-tools",' in compiled_settings_index
+    assert css == static_css
 
 
 def test_workbench_inbox_cleanup_aborts_and_ignores_a_late_response():
@@ -6691,6 +6799,23 @@ def test_sidebar_account_menu_keeps_codex_and_custom_model_limits_independent():
     assert '"budget_enabled": False' in config_store
     assert '"budget_monthly": 50.0' in config_store
     assert '"codex_budget_enabled": True' in config_store
+
+
+def test_budget_limits_use_existing_toast_and_inline_error_surfaces():
+    root = Path(__file__).resolve().parent.parent
+    chat = (root / "src" / "webui" / "frontend" / "workbench-chat.jsx").read_text(
+        encoding="utf-8"
+    )
+    events = (root / "src" / "webui" / "frontend" / "platform" / "events.jsx").read_text(
+        encoding="utf-8"
+    )
+
+    assert 'String(err.code || "").startsWith("budget_")' in chat
+    assert 'showToast(wbcErrorText(err), "error")' in chat
+    assert 'event.type === "budget_warning"' in chat
+    assert 'showToast(wbcErrorText(warningError), "warning")' in chat
+    assert 'var budgetError = errorCode.startsWith("budget_");' in chat
+    assert '"budget_warning"' in events
 
 
 def test_workbench_keeps_one_persistent_module_dock_across_workspace_switches():
@@ -8030,7 +8155,7 @@ def test_workbench_side_viewer_keeps_html_sandboxed_and_uses_pdfjs_text_layer():
     assert 'pdf.installSelectionSanitizer(container, viewer, eventBus)' in source
     assert 'selectionSanitizer.abort();' in source
     assert '"/api/workbench/library/read?workspace="' in source
-    assert '<WbcViewerList files={viewerItems} selectedFile={viewerFile} onSelect={onSelectViewer} />' in source
+    assert '<WbcViewerList files={viewerItems} selectedFile={chatViewerFile} onSelect={onSelectViewer} />' in source
     assert 'selectResourceSplit("viewer", wbcArtifactFileKey(file))' in source
     assert 'onLoad={confirmViewed}' in source
     assert 'onError={function () { setFailed(true); }}' in source
@@ -9518,18 +9643,18 @@ def test_workbench_about_hero_owns_update_action_and_download_progress():
     assert 'className: "wb-about-hero-progress"' in about_block
     assert '"--wb-about-download-progress": heroProgress + "%"' in about_block
     assert 'className: "wb-about-update-footer"' not in about_block
-    assert 'className: "wb-about-related-card"' not in about_block
-    assert "var relatedLinks = [" not in about_block
+    assert 'className: "wb-about-related-card"' in about_block
+    assert "var relatedLinks = [" in about_block
 
     progress_rule = styles.split(".wb-about-hero-progress {", 1)[1].split("}", 1)[0]
     assert "position: absolute" in progress_rule
     assert "inset: 0 auto 0 0" in progress_rule
     assert "width: var(--wb-about-download-progress)" in progress_rule
     assert ".wb-about-product-card.is-downloading .wb-about-hero-progress" in styles
-    assert ".wb-about-related-row" not in styles
+    assert ".wb-about-related-row" in styles
 
     changelog_modal_rule = styles.split(".wb-changelog-modal {", 1)[1].split("}", 1)[0]
-    assert "height: min(540px, calc(100vh - 48px));" in changelog_modal_rule
+    assert "height: min(460px, calc(100vh - 48px));" in changelog_modal_rule
     assert "--wb-settings-panel-height" not in styles
 
 

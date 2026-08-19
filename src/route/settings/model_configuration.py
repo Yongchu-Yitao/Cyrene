@@ -114,6 +114,73 @@ async def _test_connection(connection: dict[str, Any]) -> dict[str, Any]:
     return {"connected": True, "adapter": adapter, "model_count": len(models)}
 
 
+async def _test_model(connection: dict[str, Any], profile: Any) -> dict[str, Any]:
+    if not isinstance(profile, dict):
+        raise ValueError("model profile is required")
+    model = str(profile.get("model") or profile.get("model_id") or "").strip()
+    if not model:
+        raise ValueError("model id is required")
+    capabilities = {
+        str(item or "").strip().lower()
+        for item in (profile.get("capabilities") or [])
+        if str(item or "").strip()
+    }
+    adapter = str(connection.get("adapter") or "openai_compatible").strip().lower()
+
+    # Embedding-only profiles do not accept a chat probe. Confirm that the
+    # exact configured model is currently advertised by the provider instead.
+    if "embedding" in capabilities and not ({"chat", "vision"} & capabilities):
+        discovered = await _discover(connection)
+        available = {
+            str(item.get("model") or item.get("id") or "").strip()
+            for item in discovered
+            if isinstance(item, dict)
+        }
+        if model not in available:
+            raise ValueError("configured model is not available")
+        return {"connected": True, "adapter": adapter, "model": model}
+
+    runtime_provider = (
+        "codex_oauth"
+        if adapter == "codex_oauth"
+        else adapter
+        if adapter in {"anthropic", "openai", "openai_responses", "gemini"}
+        else "openai_compatible"
+    )
+    base_url = str(connection.get("base_url") or "").strip().rstrip("/")
+    if adapter == "ollama" and base_url and not base_url.endswith("/v1"):
+        base_url = f"{base_url}/v1"
+    candidate = {
+        "id": str(profile.get("id") or model),
+        "profile_id": str(profile.get("id") or model),
+        "connection_id": str(connection.get("id") or ""),
+        "model": model,
+        "name": str(profile.get("name") or model),
+        "provider": runtime_provider,
+        "adapter": adapter,
+        "base_url": base_url,
+        "api_key": str(connection.get("api_key") or ""),
+        "capabilities": sorted(capabilities),
+        "reasoning_effort": str(profile.get("reasoning_effort") or ""),
+    }
+    from cyrene.model_runtime.client import call_llm
+
+    response = await call_llm(
+        [{"role": "user", "content": "Reply with OK."}],
+        candidates=[candidate],
+        max_tokens=8,
+        timeout=20.0,
+        caller="settings_model_test",
+        phase="connectivity",
+        publish_events=False,
+        record_usage=False,
+        record_latency=False,
+    )
+    if not isinstance(response, dict):
+        raise RuntimeError("model returned an invalid response")
+    return {"connected": True, "adapter": adapter, "model": model}
+
+
 def register_model_configuration_routes(router: APIRouter) -> None:
     @router.get("/api/settings/model-config")
     async def api_get_model_configuration():
@@ -155,6 +222,18 @@ def register_model_configuration_routes(router: APIRouter) -> None:
         payload["revision"] = revision
         return {"ok": True, **payload}
 
+    @router.get("/api/settings/model-config/provider-usage")
+    async def api_get_provider_usage(request: Request):
+        from cyrene.model_runtime.provider_telemetry import (
+            configured_provider_telemetry,
+        )
+
+        force_refresh = str(request.query_params.get("refresh") or "").lower() in {
+            "1", "true", "yes",
+        }
+        items = await configured_provider_telemetry(force_refresh=force_refresh)
+        return {"items": items}
+
     @router.post("/api/settings/model-config/connections/{connection_id}/test")
     async def api_test_model_connection(connection_id: str, request: Request):
         try:
@@ -163,7 +242,12 @@ def register_model_configuration_routes(router: APIRouter) -> None:
             body = {}
         try:
             connection = _connection_draft(connection_id, body)
-            result = await _test_connection(connection)
+            profile = body.get("profile") if isinstance(body, dict) else None
+            result = (
+                await _test_model(connection, profile)
+                if profile is not None
+                else await _test_connection(connection)
+            )
         except httpx.TimeoutException as exc:
             return _error("model connection timed out", 504, detail=str(exc))
         except httpx.HTTPStatusError as exc:

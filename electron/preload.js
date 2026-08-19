@@ -29,6 +29,13 @@ contextBridge.exposeInMainWorld('cyrene', {
   updateDesktopSettings: (updates) => ipcRenderer.invoke('desktop-settings:update', updates),
   agentCursor: {
     setRunning: (running) => ipcRenderer.invoke('agent-cursor:set-running', { running: running === true }),
+    claim: (owner) => ipcRenderer.invoke('agent-cursor:claim-owner', { owner: String(owner || '') }),
+    onOwnerChanged: (callback) => {
+      if (typeof callback !== 'function') return () => {};
+      const listener = (_event, info) => callback(String(info && info.owner || ''));
+      ipcRenderer.on('agent-cursor:owner-changed', listener);
+      return () => ipcRenderer.removeListener('agent-cursor:owner-changed', listener);
+    },
   },
   uiSurface: {
     register: (uiInstanceId, handler) => {

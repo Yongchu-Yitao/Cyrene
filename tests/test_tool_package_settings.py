@@ -89,9 +89,10 @@ def test_settings_api_exposes_stable_package_groups(monkeypatch):
         "remote_tools",
         "cyrene_tools",
         "integration_tools",
+        "custom_tools",
     ]
     groups = payload["tool_groups"]
-    assert len(groups) == 15
+    assert len(groups) == 16
     assert all(item["kind"] == "package" for item in groups)
     browser = next(
         item for item in payload["packages"]
@@ -99,6 +100,14 @@ def test_settings_api_exposes_stable_package_groups(monkeypatch):
     )
     assert browser["enabled"] is False
     assert browser["enabled_count"] == 0
+    custom = next(
+        item for item in payload["packages"]
+        if item["id"] == "custom_tools"
+    )
+    # Existing settings files predate this package key. Missing means enabled,
+    # preserving the global default during migration.
+    assert custom["enabled"] is True
+    assert custom["source"] == "custom"
 
     tools = {item["name"]: item for item in payload["tools"]}
     assert tools["AnalyzeAttachment"]["package_id"] == "direct_tools"

@@ -253,7 +253,22 @@ def get_tool_execution_metadata(
 ) -> dict[str, Any]:
     """Resolve internal scheduling metadata without exposing it to the model API."""
     tool_name = str(name or "")
-    metadata = dict(TOOL_METADATA.get(tool_name) or _default_tool_metadata(tool_name))
+    metadata_name = tool_name.removeprefix("system:")
+    if tool_name.startswith("custom:") and is_tool_pack_enabled("custom_tools"):
+        try:
+            from cyrene.custom_tools.manager import get_custom_tool_manager
+
+            metadata = get_custom_tool_manager().get_tool_metadata(tool_name)
+        except (KeyError, ValueError):
+            metadata = dict(
+                TOOL_METADATA.get(metadata_name)
+                or _default_tool_metadata(metadata_name)
+            )
+    else:
+        metadata = dict(
+            TOOL_METADATA.get(metadata_name)
+            or _default_tool_metadata(metadata_name)
+        )
     args = dict(arguments or {})
     resolved_keys: list[str] = []
     for template in metadata.get("resource_keys") or ():
@@ -266,7 +281,7 @@ def get_tool_execution_metadata(
                 break
             rendered = rendered.replace("{" + field + "}", str(raw))
         resolved_keys.append(
-            _normalize_resource_key(rendered if not missing else f"tool:{tool_name}")
+            _normalize_resource_key(rendered if not missing else f"tool:{metadata_name}")
         )
     return {
         "read_only": bool(metadata.get("read_only")),
@@ -366,7 +381,17 @@ def _tool_blocklist_for_actor(actor: str) -> set[str]:
 
 
 def is_tool_allowed_for_actor(name: str, actor: str = "main") -> bool:
-    return str(name or "") not in _tool_blocklist_for_actor(actor)
+    identity = str(name or "").strip()
+    # Qualified identities select an implementation; they must not bypass the
+    # governance attached to the public tool name (main-only tools in
+    # particular). Custom execution identities append ``@<source-revision>``.
+    if identity.startswith("custom:") and "/" in identity:
+        governed_name = identity.split("/", 1)[1].split("@", 1)[0]
+    elif identity.startswith("system:"):
+        governed_name = identity.split(":", 1)[1]
+    else:
+        governed_name = identity
+    return governed_name not in _tool_blocklist_for_actor(actor)
 
 
 def get_active_tool_defs_for_actor(actor: str = "main") -> list[dict[str, Any]]:
@@ -436,6 +461,7 @@ class Capability:
     description: str
     input_schema: dict[str, Any]
     external: bool = False
+    source: str = "native"
 
     def summary(self) -> dict[str, Any]:
         return {
@@ -448,7 +474,7 @@ class Capability:
             "id": self.capability_id,
             "description": self.description,
             "input_schema": deepcopy(self.input_schema),
-            "source": "integration" if self.external else "native",
+            "source": self.source,
         }
 
 
@@ -469,6 +495,53 @@ def _mcp_definitions() -> dict[str, dict[str, Any]]:
         }
     except Exception:
         return {}
+
+
+def _custom_definitions() -> list[Any]:
+    try:
+        from cyrene.custom_tools.manager import get_custom_tool_manager
+
+        return list(get_custom_tool_manager().get_tool_definitions())
+    except Exception:
+        return []
+
+
+def get_effective_function_definitions() -> dict[str, dict[str, Any]]:
+    """Return native definitions with enabled, unique custom overrides applied."""
+    definitions = dict(_function_definitions())
+    if not is_tool_pack_enabled("custom_tools"):
+        return definitions
+    try:
+        from cyrene.custom_tools.manager import get_custom_tool_manager
+
+        for tool_def in get_custom_tool_manager().get_public_tool_defs():
+            name = str((tool_def.get("function") or {}).get("name") or "")
+            if name:
+                definitions[name] = tool_def
+    except Exception:
+        logger.debug("unable to build effective custom tool definitions", exc_info=True)
+    return definitions
+
+
+def _custom_override_map() -> dict[str, Any]:
+    """Return only unambiguous public custom implementations by tool name."""
+    if not is_tool_pack_enabled("custom_tools"):
+        return {}
+    grouped: dict[str, list[Any]] = {}
+    for tool in _custom_definitions():
+        grouped.setdefault(str(tool.name), []).append(tool)
+    return {
+        name: tools[0]
+        for name, tools in grouped.items()
+        if name and len(tools) == 1
+    }
+
+
+def _custom_declared_names() -> set[str]:
+    """Return every active custom name, including ambiguous collisions."""
+    if not is_tool_pack_enabled("custom_tools"):
+        return set()
+    return {str(tool.name) for tool in _custom_definitions() if str(tool.name)}
 
 
 def module_wire_names() -> tuple[str, ...]:
@@ -507,11 +580,24 @@ def _native_capabilities(wire_name: str) -> list[Capability]:
         return []
     definitions = _function_definitions()
     result: list[Capability] = []
+    custom_overrides = _custom_override_map()
     for capability_id, concrete_name in CAPABILITY_BINDINGS.get(wire_name, ()):
-        tool_def = definitions.get(concrete_name)
-        if not tool_def:
+        native_tool_def = definitions.get(concrete_name)
+        if not native_tool_def:
             continue
-        function = tool_def.get("function") or {}
+        custom_tool = custom_overrides.get(concrete_name)
+        if custom_tool is not None:
+            result.append(Capability(
+                capability_id=str(capability_id),
+                pack_id=pack.pack_id,
+                wire_name=wire_name,
+                concrete_name=custom_tool.concrete_name,
+                description=str(custom_tool.description),
+                input_schema=deepcopy(custom_tool.input_schema),
+                source="custom",
+            ))
+            continue
+        function = native_tool_def.get("function") or {}
         result.append(Capability(
             capability_id=str(capability_id),
             pack_id=pack.pack_id,
@@ -521,6 +607,56 @@ def _native_capabilities(wire_name: str) -> list[Capability]:
             input_schema=dict(_model_facing_value(
                 function.get("parameters") or {"type": "object"}
             )),
+        ))
+    return result
+
+
+def _custom_capabilities() -> list[Capability]:
+    result: list[Capability] = []
+    custom_tools = _custom_definitions()
+    for tool in sorted(
+        custom_tools,
+        key=lambda item: (item.package_id, item.name),
+    ):
+        result.append(Capability(
+            capability_id=tool.capability_id,
+            pack_id="custom",
+            wire_name="custom_tools",
+            concrete_name=tool.concrete_name,
+            description=tool.description,
+            input_schema=deepcopy(tool.input_schema),
+            source="custom",
+        ))
+
+    # Every custom/native name collision gets a stable system identity.  This
+    # remains true when multiple custom packages make the public name
+    # ambiguous; ambiguity must never make Cyrene's original implementation
+    # unreachable.
+    native_definitions = _function_definitions()
+    for name in sorted(_custom_declared_names() & set(native_definitions)):
+        native_wire_name = WIRE_NAME_BY_CONCRETE_TOOL.get(name, "")
+        if native_wire_name and not is_tool_pack_enabled(native_wire_name):
+            # A custom collision must not re-enable the original implementation
+            # through the custom gateway when its owning native pack is off.
+            continue
+        tool_def = native_definitions.get(name)
+        if not tool_def:
+            continue
+        function = tool_def.get("function") or {}
+        result.append(Capability(
+            capability_id=f"system.{name}",
+            pack_id="custom",
+            wire_name="custom_tools",
+            concrete_name=f"system:{name}",
+            description=(
+                "Original Cyrene system implementation, bypassing the active "
+                f"custom override for {name}. "
+                + str(function.get("description") or "")
+            ),
+            input_schema=deepcopy(
+                function.get("parameters") or {"type": "object"}
+            ),
+            source="native",
         ))
     return result
 
@@ -542,6 +678,7 @@ def _integration_capabilities() -> list[Capability]:
             description=str(_model_facing_value(normalized["description"])),
             input_schema=dict(_model_facing_value(normalized["input_schema"])),
             external=True,
+            source="integration",
         ))
     return result
 
@@ -554,11 +691,12 @@ def capabilities_for_pack(
 ) -> list[Capability]:
     if not include_disabled and not is_tool_pack_enabled(wire_name):
         return []
-    capabilities = (
-        _integration_capabilities()
-        if wire_name == "integration_tools"
-        else _native_capabilities(wire_name)
-    )
+    if wire_name == "integration_tools":
+        capabilities = _integration_capabilities()
+    elif wire_name == "custom_tools":
+        capabilities = _custom_capabilities()
+    else:
+        capabilities = _native_capabilities(wire_name)
     return [
         capability
         for capability in capabilities

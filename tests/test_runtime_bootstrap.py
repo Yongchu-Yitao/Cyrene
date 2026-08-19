@@ -61,14 +61,17 @@ async def test_initialize_runtime_owns_shared_host_setup(monkeypatch, tmp_path):
 
 @pytest.mark.asyncio
 async def test_external_services_share_one_startup_policy(monkeypatch):
+    import cyrene.custom_tools as custom_tools
     from cyrene.runtime import bootstrap
     from cyrene.tooling.backends import mcp_manager, searxng_manager
 
     start_search = AsyncMock(return_value="http://127.0.0.1:8888")
     start_mcp = AsyncMock()
+    start_custom = AsyncMock()
     monkeypatch.setattr(bootstrap, "SEARXNG_AUTO_START", True)
     monkeypatch.setattr(searxng_manager, "start_searxng", start_search)
     monkeypatch.setattr(mcp_manager, "start_mcp", start_mcp)
+    monkeypatch.setattr(custom_tools, "start_custom_tools", start_custom)
 
     await bootstrap.start_external_services()
 
@@ -77,6 +80,7 @@ async def test_external_services_share_one_startup_policy(monkeypatch):
         bootstrap.SEARXNG_HOST,
     )
     start_mcp.assert_awaited_once_with()
+    start_custom.assert_awaited_once_with()
 
 
 @pytest.mark.asyncio

@@ -5545,7 +5545,10 @@ function ProjectRail({ projects, activeProjectId, activePage, collapsed, onToggl
   // Fetch budget status from API (also pinged when the account menu opens)
   function fetchBudget() {
     fetch("/api/budget/status")
-      .then(function (r) { return r.json(); })
+      .then(function (r) {
+        if (!r.ok) throw new Error("budget status unavailable");
+        return r.json();
+      })
       .then(function (d) { setBudgetState(d); })
       .catch(function () {});
   }

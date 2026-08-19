@@ -10,6 +10,15 @@ import asyncio
 from route.registry import register_routes
 
 
+def _allow_dispatch_budget(monkeypatch, routes):
+    """Keep dispatch tests independent from the desktop user's budget state."""
+
+    async def allow(_session_id):
+        return None
+
+    monkeypatch.setattr(routes, "_check_budget_gate", allow)
+
+
 def test_classify_intent_maps_done_to_finalize(monkeypatch):
     from cyrene.workbench import runtime as routes
 
@@ -102,6 +111,7 @@ def test_dispatch_finalize_summarizes_without_replanning(monkeypatch, tmp_path):
     monkeypatch.setattr(routes, "_workbench_archive_run_knowledge", no_archive)
     monkeypatch.setattr(routes, "schedule_capture", lambda *_a, **_k: None)
     monkeypatch.setattr(routes, "append_notification", lambda **_kwargs: {})
+    _allow_dispatch_budget(monkeypatch, routes)
 
     app = FastAPI()
     register_routes(app, bot=None, db_path=str(tmp_path / "test.db"))
@@ -160,6 +170,7 @@ def test_dispatch_answer_uses_task_reply_mode_and_reply_card(monkeypatch, tmp_pa
     monkeypatch.setattr(routes, "_workbench_archive_run_knowledge", no_archive)
     monkeypatch.setattr(routes, "schedule_capture", lambda *_a, **_k: None)
     monkeypatch.setattr(routes, "append_notification", lambda **_kwargs: {})
+    _allow_dispatch_budget(monkeypatch, routes)
 
     app = FastAPI()
     register_routes(app, bot=None, db_path=str(tmp_path / "test.db"))
@@ -210,6 +221,7 @@ def test_dispatch_acceptance_repair_does_not_return_500(monkeypatch, tmp_path):
     monkeypatch.setattr(routes, "_workbench_archive_run_knowledge", no_archive)
     monkeypatch.setattr(routes, "schedule_capture", lambda *_a, **_k: None)
     monkeypatch.setattr(routes, "append_notification", lambda **_kwargs: {})
+    _allow_dispatch_budget(monkeypatch, routes)
 
     app = FastAPI()
     register_routes(app, bot=None, db_path=str(tmp_path / "test.db"))
@@ -231,7 +243,7 @@ def test_task_dispatch_persists_selected_model_and_reasoning_effort(
     from fastapi import FastAPI
     from fastapi.testclient import TestClient
     from cyrene.model_runtime import client as model_client
-    from cyrene.runtime import settings_store
+    from cyrene.runtime import model_configuration, settings_store
     from cyrene.workbench import runtime as routes
 
     data_dir = tmp_path / "data"
@@ -264,7 +276,13 @@ def test_task_dispatch_persists_selected_model_and_reasoning_effort(
     monkeypatch.setattr(routes, "_workbench_agent_reply", fake_reply)
     monkeypatch.setattr(routes, "schedule_capture", lambda *_a, **_k: None)
     monkeypatch.setattr(routes, "append_notification", lambda **_kwargs: {})
+    _allow_dispatch_budget(monkeypatch, routes)
     monkeypatch.setattr(settings_store, "get_models", lambda: [selected])
+    monkeypatch.setattr(
+        model_configuration,
+        "selectable_model_candidates",
+        lambda *_args, **_kwargs: [selected],
+    )
     monkeypatch.setattr(
         model_client,
         "set_session_model_preference",

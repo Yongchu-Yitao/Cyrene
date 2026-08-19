@@ -10,12 +10,12 @@ from dataclasses import dataclass
 from typing import Any
 
 from cyrene.tooling.catalog import (
-    TOOL_DEFS,
     describe_capabilities,
     discover_capabilities,
     get_capability,
     get_capability_by_concrete_name,
     get_tool_execution_metadata,
+    get_effective_function_definitions,
     module_wire_names,
 )
 from cyrene.runtime.settings_store import is_tool_pack_enabled
@@ -286,6 +286,7 @@ def resolve_wire_call(
         else set(DIRECT_TOOL_NAMES)
     )
     if name in direct_names:
+        concrete_name = name
         if name != "use_tools":
             selected = _effective_snapshot(actor, catalog_snapshot)
             spec = (
@@ -310,17 +311,9 @@ def resolve_wire_call(
                 )
             if spec is not None:
                 validate_schema(args, spec.input_schema)
+                concrete_name = spec.concrete_name
             else:
-                definition = next(
-                    (
-                        tool_def
-                        for tool_def in TOOL_DEFS
-                        if str(
-                            (tool_def.get("function") or {}).get("name") or ""
-                        ) == name
-                    ),
-                    None,
-                )
+                definition = get_effective_function_definitions().get(name)
                 if definition is not None:
                     validate_schema(
                         args,
@@ -333,7 +326,7 @@ def resolve_wire_call(
             wire_name=name,
             operation="invoke",
             capability_id=name,
-            concrete_name=name,
+            concrete_name=concrete_name,
             concrete_arguments=args,
         )
 
@@ -929,11 +922,7 @@ async def execute_wire_tool(
                         "id": available[capability_id].capability_id,
                         "description": available[capability_id].description,
                         "input_schema": available[capability_id].input_schema,
-                        "source": (
-                            "integration"
-                            if available[capability_id].external
-                            else "native"
-                        ),
+                        "source": available[capability_id].source,
                     }
                     for capability_id in capability_ids[:20]
                     if capability_id in available

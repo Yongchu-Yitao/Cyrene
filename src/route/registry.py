@@ -19,6 +19,7 @@ from route.backup import register_backup_routes
 from route.channels.wechat import register_wechat_routes
 from route.code import router as code_router
 from route.control import register_control_routes
+from route.custom_tools import register_custom_tool_routes
 from route.entities import register_entity_routes
 from route.extensions import register_extension_routes
 from route.hooks import register_hook_routes
@@ -145,6 +146,7 @@ def register_routes(app: FastAPI, bot: Any, db_path: str) -> None:
     register_pdf_routes(router)
     register_agent_model_gateway_routes(router)
     register_model_configuration_routes(router)
+    register_custom_tool_routes(router, bot, db_path)
     register_voice_routes(router)
     router.include_router(code_router)
 
@@ -175,6 +177,5 @@ def register_routes(app: FastAPI, bot: Any, db_path: str) -> None:
         _register_shared_adapter(factory, router, bot, db_path)
 
     app.include_router(router)
-
 
 __all__ = ["register_routes"]

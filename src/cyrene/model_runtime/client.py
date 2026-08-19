@@ -20,6 +20,7 @@ from urllib.parse import urlsplit, urlunsplit
 
 import httpx
 
+from cyrene.model_runtime.cache_invalidation import register_model_cache_invalidator
 from cyrene.model_runtime.errors import format_httpx_error as _format_httpx_error
 from cyrene.model_runtime.messages import (
     canonical_tool_arguments,
@@ -335,6 +336,13 @@ _candidate_cooldowns: dict[tuple[str, str, str, str], float] = {}
 # user-facing notice instead of one notice per internal LLM call.
 _MAX_FALLBACK_NOTICE_KEYS = 4096
 _published_fallback_notices: dict[tuple[str, str, str, str], None] = {}
+
+
+def _invalidate_registered_model_cache() -> None:
+    invalidate_model_configuration()
+
+
+register_model_cache_invalidator(_invalidate_registered_model_cache)
 
 # httpx 连接超时与读超时分开：对不可达主机快速失败，而不是吃满整个调用超时。
 _CONNECT_TIMEOUT_SECONDS = 5.0

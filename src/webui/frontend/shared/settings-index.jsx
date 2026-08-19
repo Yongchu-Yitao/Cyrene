@@ -17,7 +17,8 @@ window.CyreneUI.settingsIndex = window.CyreneUI.register("settings-index", {
     { id: "tools", labelKey: "settings.toolsTab" },
     { id: "channels", labelKey: "settings.channels" },
     { id: "remote", labelKey: "settings.remoteTab" },
-    { id: "extensions", labelKey: "settings.extensions" },
+    { id: "extensions", labelKey: "settings.extensionCenter" },
+    { id: "custom-tools", labelKey: "settings.customTools" },
     { id: "integrations", labelKey: "settings.integrations" },
     { id: "budget", labelKey: "settings.budget" },
     { id: "usage", labelKey: "settings.usage" },
@@ -60,9 +61,10 @@ window.CyreneUI.settingsIndex = window.CyreneUI.register("settings-index", {
     { id: "setting-pulse-animation", tab: "appearance", labelKey: "settings.pulseAnimation", hintKey: "settings.pulseAnimationHint", keywords: ["动画", "animation", "pulse", "呼吸"] },
     // ── Voice & tools ──
     { id: "setting-tool-packages", tab: "tools", labelKey: "settings.toolPackages", hintKey: "settings.toolPackagesHint", keywords: ["工具包", "tool", "工具", "package"] },
+    { id: "setting-custom-tools", tab: "custom-tools", labelKey: "settings.customTools", hintKey: "settings.customToolsHint", keywords: ["自定义工具", "custom tool", "文件", "Python", "TOOL_DEF"] },
     { id: "setting-voice", tab: "voice", labelKey: "settings.voiceCapability", hintKey: "settings.voiceCapabilityHint", keywords: ["语音", "voice", "tts", "asr", "声音"] },
     // ── Extensions ──
-    { id: "setting-extensions", tab: "extensions", labelKey: "settings.extensions", keywords: ["扩展", "extension", "插件", "market", "mcp", "hooks", "钩子", "hook", "技能", "skill"] },
+    { id: "setting-extensions", tab: "extensions", labelKey: "settings.extensionCenter", keywords: ["扩展", "extension", "插件", "market", "mcp", "hooks", "钩子", "hook", "技能", "skill"] },
     // ── Data ──
     { id: "setting-storage", tab: "data", labelKey: "settings.storageUsage", keywords: ["存储", "storage", "空间", "占用", "缓存"] },
     { id: "setting-paths", tab: "data", labelKey: "settings.pathInfo", keywords: ["路径", "path", "目录", "目录位置"] },

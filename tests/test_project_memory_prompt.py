@@ -128,6 +128,7 @@ def test_actual_model_identity_is_secret_free_and_resolves_one_candidate(monkeyp
     )
     assert identity == {
         "candidateId": "candidate-a",
+        "adapter": "openai_compatible",
         "provider": "openai_compatible",
         "model": "same-model",
         "baseUrl": "https://example.test",

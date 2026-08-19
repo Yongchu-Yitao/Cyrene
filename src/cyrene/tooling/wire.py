@@ -9,7 +9,7 @@ from functools import lru_cache
 from typing import Any
 
 from cyrene.runtime.settings_store import is_tool_pack_enabled
-from cyrene.tooling.catalog import TOOL_DEFS
+from cyrene.tooling.cache_invalidation import register_tool_cache_invalidator
 from cyrene.tooling.packs import (
     MAIN_ONLY_MODULE_TOOL_NAMES,
     MODULE_TOOL_NAMES,
@@ -132,10 +132,9 @@ def _module_def(wire_name: str, description: str) -> dict[str, Any]:
 
 
 def _concrete_defs() -> dict[str, dict[str, Any]]:
-    return {
-        str((tool_def.get("function") or {}).get("name") or ""): tool_def
-        for tool_def in TOOL_DEFS
-    }
+    from cyrene.tooling.catalog import get_effective_function_definitions
+
+    return get_effective_function_definitions()
 
 
 def _direct_def(
@@ -284,3 +283,12 @@ def get_wire_bundle_hash(actor: str = "main") -> str:
 
 def get_wire_bundle_version(actor: str = "main") -> str:
     return get_wire_tool_bundle(actor).version
+
+
+def invalidate_wire_tool_cache() -> None:
+    """Invalidate both definition and hashed-bundle caches after file changes."""
+    _wire_bundle.cache_clear()
+    _get_wire_tool_bundle.cache_clear()
+
+
+register_tool_cache_invalidator(invalidate_wire_tool_cache)

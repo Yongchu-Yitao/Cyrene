@@ -13,7 +13,6 @@ from pathlib import Path
 from typing import Any
 
 from cyrene.agent.context import current_assistant_meta, current_run_context
-from cyrene.tooling.catalog import TOOL_HANDLERS
 from cyrene.tooling.execution_context import (
     is_system_initiated_round as _is_system_initiated_round,
 )
@@ -390,42 +389,82 @@ def _proactive_tool_refusal(name: str, arguments: dict[str, Any]) -> str | None:
 async def _execute_tool(name: str, arguments: dict[str, Any], bot: Any, chat_id: int, db_path: str, notify_state: dict[str, bool] | None) -> str:
     from cyrene.hooks import HookBlocked, run_post_tool_hooks, run_pre_tool_hooks
 
+    requested_name = str(name or "").strip()
+    force_system = requested_name.startswith("system:")
+    force_custom = requested_name.startswith("custom:")
+    native_name = requested_name.removeprefix("system:")
+    governance_name = native_name if force_system else requested_name
+    custom_manager = None
+    custom_tool = None
+    if force_custom:
+        from cyrene.custom_tools.manager import get_custom_tool_manager
+        from cyrene.runtime.settings_store import is_tool_pack_enabled
+
+        if not is_tool_pack_enabled("custom_tools"):
+            return "Tool unavailable: custom tools are disabled in settings."
+
+        candidate_manager = get_custom_tool_manager()
+        try:
+            _custom_package, custom_tool = candidate_manager.resolve_declared_tool(
+                requested_name
+            )
+        except (KeyError, ValueError):
+            return (
+                f"Tool unavailable: custom tool {requested_name!r} is stale, "
+                "missing, or no longer active. Start a new Agent round to use "
+                "the current source revision."
+            )
+        else:
+            custom_manager = candidate_manager
+            governance_name = custom_tool.name
+
     try:
         # Hooks transform the concrete call before every policy gate below, so
-        # Cyrene's reviewer always evaluates the final arguments.
-        arguments = await run_pre_tool_hooks(name, arguments)
+        # Cyrene's reviewer always evaluates the final arguments. Qualified
+        # system identities deliberately use the native governance name.
+        arguments = await run_pre_tool_hooks(governance_name, arguments)
     except HookBlocked as exc:
         return f"Tool blocked by Agent Hook: {exc}"
-    proactive_refusal = _proactive_tool_refusal(name, arguments)
+    proactive_refusal = _proactive_tool_refusal(governance_name, arguments)
     if proactive_refusal is not None:
         return proactive_refusal
-    if name == "ask_user":
+    if governance_name == "ask_user":
         assistant_meta = current_assistant_meta()
         if isinstance(assistant_meta, dict) and assistant_meta.get("system_initiated"):
             return (
                 "Tool unavailable: proactive system-initiated rounds cannot ask "
                 "the user to clarify or pause for an answer."
             )
-    if name == "spawn_subagent":
+    if custom_manager is None and native_name == "spawn_subagent":
         from cyrene.runtime.settings_store import get_spawn_policy
         if get_spawn_policy() == "off":
             return "Subagent spawning is disabled by the current spawn policy (`off`). Stay in single-agent mode unless the user explicitly changes this setting."
-    if name in _BROWSER_TOOL_NAMES:
+    if custom_manager is None and native_name in _BROWSER_TOOL_NAMES:
         from cyrene.runtime.settings_store import is_tool_pack_enabled
+
         if not is_tool_pack_enabled("browser_tools"):
             return "Browser automation tools are disabled in settings. Re-enable browser tools before using this action."
-    handler = TOOL_HANDLERS.get(name)
+    from cyrene.tooling.catalog import TOOL_HANDLERS
+
+    handler = (
+        custom_tool.handler
+        if custom_manager is not None
+        else TOOL_HANDLERS.get(native_name)
+    )
     run_context = current_run_context()
     if (
-        name in _PROCESS_EXECUTION_TOOLS
+        governance_name in _PROCESS_EXECUTION_TOOLS
         and run_context.permission_mode != "full_access"
-        and (name != "Bash" or _shell_command_needs_explicit_review(arguments))
+        and (
+            governance_name != "Bash"
+            or _shell_command_needs_explicit_review(arguments)
+        )
     ):
         from cyrene.tooling.runtime_api import request_scope_elevation
 
         command_preview = str(arguments.get("command") or "").strip()[:500]
         permission_result = await request_scope_elevation(
-            tool_name=name,
+            tool_name=requested_name,
             path_hint=str(arguments.get("cwd") or ""),
             operation="执行本地进程或 Shell 命令",
             reason=f"命令：{command_preview or '[启动交互式 shell]'}",
@@ -436,6 +475,8 @@ async def _execute_tool(name: str, arguments: dict[str, Any], bot: Any, chat_id:
         if permission_result is not None:
             return permission_result
     if handler is None:
+        if force_system or force_custom:
+            raise ValueError(f"Unknown tool: {requested_name}")
         from cyrene.observability import debug as _debug
         from cyrene.tooling.backends.mcp_manager import get_manager as _get_mcp_mgr
 
@@ -443,11 +484,11 @@ async def _execute_tool(name: str, arguments: dict[str, Any], bot: Any, chat_id:
 
         manager = _get_mcp_mgr()
         has_tool = getattr(manager, "has_tool", None)
-        if callable(has_tool) and not has_tool(name):
-            raise ValueError(f"Unknown tool: {name}")
+        if callable(has_tool) and not has_tool(native_name):
+            raise ValueError(f"Unknown tool: {native_name}")
         safe_arguments = redact_value(arguments)
         permission_result = await request_scope_elevation(
-            tool_name=name,
+            tool_name=native_name,
             path_hint="",
             operation="调用外部 MCP/集成工具",
             reason=(
@@ -464,17 +505,19 @@ async def _execute_tool(name: str, arguments: dict[str, Any], bot: Any, chat_id:
         _t0 = time.monotonic()
         try:
             result = await _run_with_tool_timeout(
-                name, arguments, manager.execute_tool(name, arguments)
+                native_name,
+                arguments,
+                manager.execute_tool(native_name, arguments),
             )
             if _debug.VERBOSE:
-                _debug.log_tool_call(run_context.caller, name, redact_value(arguments), redact_text(result), (time.monotonic() - _t0) * 1000)
+                _debug.log_tool_call(run_context.caller, native_name, redact_value(arguments), redact_text(result), (time.monotonic() - _t0) * 1000)
             await _debug.publish_event(
-                _tool_call_event(name, arguments, result),
+                _tool_call_event(native_name, arguments, result),
                 session_id=run_context.session_id,
             )
             tool_success = not str(result).lower().startswith("tool failed:")
             _record_action_background(
-                name,
+                native_name,
                 redact_value(arguments),
                 run_context.caller,
                 run_context.round_id,
@@ -484,7 +527,7 @@ async def _execute_tool(name: str, arguments: dict[str, Any], bot: Any, chat_id:
                 error="" if tool_success else redact_text(str(result)),
             )
             await run_post_tool_hooks(
-                name,
+                native_name,
                 arguments,
                 result,
                 success=tool_success,
@@ -492,32 +535,48 @@ async def _execute_tool(name: str, arguments: dict[str, Any], bot: Any, chat_id:
             )
             return result
         except ValueError:
-            raise ValueError(f"Unknown tool: {name}")
+            raise ValueError(f"Unknown tool: {native_name}")
         except Exception as e:
             run_context = current_run_context()
+            failed = f"Tool {native_name} failed: {e}"
             _record_action_background(
-                name,
+                native_name,
                 redact_value(arguments),
                 run_context.caller,
                 run_context.round_id,
                 (time.monotonic() - _t0) * 1000,
-                result=redact_text(f"Tool {name} failed: {e}"),
+                result=redact_text(failed),
                 success=False,
                 error=redact_text(str(e)),
             )
             await run_post_tool_hooks(
-                name,
+                native_name,
                 arguments,
-                f"Tool {name} failed: {e}",
+                failed,
                 success=False,
                 error=str(e),
             )
-            return f"Tool {name} failed: {e}"
+            return failed
 
     _t0 = time.monotonic()
     try:
+        if custom_manager is not None:
+            # Hooks and approval requests above can yield long enough for the
+            # package to be disabled or its source to change. Re-resolve at the
+            # final admission point so a cached handler cannot cross that gate.
+            try:
+                _custom_package, current_custom_tool = (
+                    custom_manager.resolve_declared_tool(requested_name)
+                )
+            except (KeyError, ValueError):
+                return (
+                    f"Tool unavailable: custom tool {requested_name!r} is stale, "
+                    "missing, or no longer active. Start a new Agent round to use "
+                    "the current source revision."
+                )
+            handler = current_custom_tool.handler
         result = await _run_with_tool_timeout(
-            name,
+            requested_name if custom_manager is not None else governance_name,
             arguments,
             handler(arguments, bot, chat_id, db_path, notify_state),
         )
@@ -525,11 +584,11 @@ async def _execute_tool(name: str, arguments: dict[str, Any], bot: Any, chat_id:
         from cyrene.observability import debug
         run_context = current_run_context()
         await debug.publish_event(
-            _tool_call_event(name, arguments, f"Tool failed: {e}"),
+            _tool_call_event(requested_name, arguments, f"Tool failed: {e}"),
             session_id=run_context.session_id,
         )
         _record_action_background(
-            name,
+            requested_name,
             redact_value(arguments),
             run_context.caller,
             run_context.round_id,
@@ -539,7 +598,7 @@ async def _execute_tool(name: str, arguments: dict[str, Any], bot: Any, chat_id:
             error=redact_text(str(e)),
         )
         await run_post_tool_hooks(
-            name,
+            governance_name,
             arguments,
             f"Tool failed: {e}",
             success=False,
@@ -549,14 +608,14 @@ async def _execute_tool(name: str, arguments: dict[str, Any], bot: Any, chat_id:
     from cyrene.observability import debug
     run_context = current_run_context()
     if debug.VERBOSE:
-        debug.log_tool_call(run_context.caller, name, redact_value(arguments), redact_text(result), (time.monotonic() - _t0) * 1000)
+        debug.log_tool_call(run_context.caller, requested_name, redact_value(arguments), redact_text(result), (time.monotonic() - _t0) * 1000)
     await debug.publish_event(
-        _tool_call_event(name, arguments, result),
+        _tool_call_event(requested_name, arguments, result),
         session_id=run_context.session_id,
     )
     tool_success = not str(result).lower().startswith("tool failed:")
     _record_action_background(
-        name,
+        requested_name,
         redact_value(arguments),
         run_context.caller,
         run_context.round_id,
@@ -566,7 +625,7 @@ async def _execute_tool(name: str, arguments: dict[str, Any], bot: Any, chat_id:
         error="" if tool_success else redact_text(str(result)),
     )
     await run_post_tool_hooks(
-        name,
+        governance_name,
         arguments,
         result,
         success=tool_success,

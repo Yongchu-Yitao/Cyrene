@@ -26,6 +26,7 @@ class ToolSpec:
     resource_templates: tuple[str, ...]
     timeout_seconds: float = 180.0
     external: bool = False
+    source: str = "native"
 
 
 @dataclass(frozen=True)

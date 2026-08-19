@@ -273,6 +273,7 @@ let appUseManager = null;
 let appUsePointerWindow = null;
 let appUsePointerOwnerTargetId = '';
 let agentCursorRunning = false;
+let agentCursorOwner = '';
 const agentCursorRunningSources = new Map();
 let electronRpcServer = null;
 let electronRpcPort = null;
@@ -1068,6 +1069,7 @@ class BrowserTabManager {
       tab.id !== this.activeTabId || !this.visible || this.obscured
       || tab.view.webContents.isDestroyed()
     ) return null;
+    await setAgentCursorOwner('browser');
     // The cursor lives in the page DOM, so Chromium's page zoom would also
     // shrink it in a narrow browser pane. Counter-scale only the cursor art;
     // its CSS target coordinates and the trusted click coordinates stay intact.
@@ -1092,7 +1094,9 @@ class BrowserTabManager {
   }
 
   hideAllAgentCursors() {
-    for (const tab of this.tabs.values()) this.hideAgentCursor(tab).catch(() => {});
+    return Promise.all(Array.from(this.tabs.values()).map((tab) => (
+      this.hideAgentCursor(tab).catch(() => false)
+    )));
   }
 
   ownerWindow() {
@@ -4039,6 +4043,34 @@ async function setAgentCursorRunning(running) {
   return { ok: true, running: agentCursorRunning };
 }
 
+function publishAgentCursorOwner() {
+  for (const win of BrowserWindow.getAllWindows()) {
+    if (!win || win.isDestroyed() || !win.webContents || win.webContents.isDestroyed()) continue;
+    try { win.webContents.send('agent-cursor:owner-changed', { owner: agentCursorOwner }); } catch (_) {}
+  }
+}
+
+async function setAgentCursorOwner(owner) {
+  const nextOwner = ['ui', 'browser', 'app'].includes(String(owner || ''))
+    ? String(owner)
+    : '';
+  if (agentCursorOwner === nextOwner) return { ok: true, owner: agentCursorOwner };
+  agentCursorOwner = nextOwner;
+  publishAgentCursorOwner();
+
+  const updates = [];
+  if (nextOwner !== 'browser') {
+    for (const manager of browserTabManagers.values()) {
+      updates.push(manager.hideAllAgentCursors());
+    }
+  }
+  if (nextOwner !== 'app' && appUsePointerWindow && !appUsePointerWindow.isDestroyed()) {
+    updates.push(Promise.resolve(hideAppUseVirtualPointer({})).catch(() => false));
+  }
+  await Promise.all(updates);
+  return { ok: true, owner: agentCursorOwner };
+}
+
 function updateAgentCursorRunningSource(webContents, running) {
   const sourceId = Number(webContents && webContents.id);
   if (!Number.isFinite(sourceId)) return setAgentCursorRunning(running);
@@ -4134,6 +4166,7 @@ async function showAppUseVirtualPointer({
     appUsePointerWindow.setBounds(desktopBounds, false);
   }
   appUsePointerOwnerTargetId = String(target && (target.target_id || target.targetId) || '');
+  await setAgentCursorOwner('app');
   appUsePointerWindow.showInactive();
   return appUsePointerWindow.webContents.executeJavaScript(agentCursorCommand({
     x: (Number(x) || 0) - desktopBounds.x,
@@ -6735,6 +6768,9 @@ if (!gotSingleInstanceLock) {
     ipcMain.handle('desktop-settings:update', (_event, updates) => saveDesktopSettings(updates || {}));
     ipcMain.handle('agent-cursor:set-running', (event, info) => (
       updateAgentCursorRunningSource(event.sender, info && info.running === true)
+    ));
+    ipcMain.handle('agent-cursor:claim-owner', (_event, info) => (
+      setAgentCursorOwner(info && info.owner)
     ));
     ipcMain.on('detached-pane:begin-drag', (event, info) => {
       const result = beginDetachedPaneDrag(event.sender, info);

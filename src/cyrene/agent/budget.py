@@ -35,6 +35,10 @@ _BUDGET_RESPONSE_KEYS = [
 ]
 
 
+class BudgetUsageQueryError(RuntimeError):
+    """Usage data could not be read reliably enough to enforce a budget."""
+
+
 # ---------------------------------------------------------------------------
 # Currency helpers
 # ---------------------------------------------------------------------------
@@ -66,6 +70,7 @@ async def _query_sum(db_path: str, since: datetime) -> float:
     """Sum canonical CNY ``estimated_cost`` values since *since*."""
     import aiosqlite
 
+    last_error: Exception | None = None
     for attempt in range(2):
         try:
             async with aiosqlite.connect(db_path) as db:
@@ -75,10 +80,11 @@ async def _query_sum(db_path: str, since: datetime) -> float:
                 ) as cur:
                     row = await cur.fetchone()
                     return float(row[0]) if row else 0.0
-        except Exception:
+        except Exception as exc:
+            last_error = exc
             if attempt:
                 break
-    return 0.0
+    raise BudgetUsageQueryError("failed to read budget usage totals") from last_error
 
 
 async def _query_records(
@@ -89,6 +95,7 @@ async def _query_records(
     import aiosqlite
 
     since = (datetime.now(timezone.utc) - timedelta(hours=hours)).isoformat()
+    last_error: Exception | None = None
     for attempt in range(2):
         try:
             async with aiosqlite.connect(db_path) as db:
@@ -111,10 +118,11 @@ async def _query_records(
                         except (ValueError, TypeError):
                             continue
                     return records
-        except Exception:
+        except Exception as exc:
+            last_error = exc
             if attempt:
                 break
-    return []
+    raise BudgetUsageQueryError("failed to read budget usage records") from last_error
 
 
 def _calendar_month_start(now: datetime, start_day: int = 1) -> datetime:
@@ -257,6 +265,7 @@ async def get_budget_state(
     *,
     monthly: float = 0.0,
     enabled: bool = False,
+    start_windows: bool = False,
 ) -> dict[str, Any]:
     """Return current adaptive budget state in the user's configured currency.
 
@@ -277,10 +286,29 @@ async def get_budget_state(
     prev = _load_state()
     monthly_start = _calendar_month_start(now, start_day)
 
+    # Persisted monetary values and window boundaries are meaningful only in
+    # the currency and billing-cycle configuration that created them.  A
+    # configuration change forces recalculation and starts fresh sub-windows
+    # instead of carrying timestamps (and therefore spend) across units or
+    # billing periods.
+    compatible_prev = (
+        prev
+        if prev is not None
+        and prev.currency == currency
+        and getattr(prev, "start_day", 1) == start_day
+        else None
+    )
+
     # Hard-reset windows: spent is sum since window_start, not rolling window.
     # Window expires at window_start + window_hours → spent resets to 0.
-    five_hour_ws = _parse_ws(prev.five_hour_window_start) if prev else None
-    weekly_ws = _parse_ws(prev.weekly_window_start) if prev else None
+    five_hour_ws = (
+        _parse_ws(compatible_prev.five_hour_window_start)
+        if compatible_prev else None
+    )
+    weekly_ws = (
+        _parse_ws(compatible_prev.weekly_window_start)
+        if compatible_prev else None
+    )
 
     # Check window expiry — treat spent as 0 if window has timed out.
     if five_hour_ws and now >= five_hour_ws + timedelta(hours=5):
@@ -296,13 +324,10 @@ async def get_budget_state(
         weekly_spent = await _query_sum(db_path, weekly_ws) if weekly_ws else 0.0
         five_hour_spent = await _query_sum(db_path, five_hour_ws) if five_hour_ws else 0.0
 
-        prev.monthly_spent = conv(monthly_spent, currency) if monthly_spent > 0 else prev.monthly_spent
-        prev.weekly_spent = conv(weekly_spent, currency) if weekly_spent > 0 else prev.weekly_spent
-        prev.five_hour_spent = conv(five_hour_spent, currency) if five_hour_spent > 0 else prev.five_hour_spent
+        prev.monthly_spent = conv(monthly_spent, currency)
+        prev.weekly_spent = conv(weekly_spent, currency)
+        prev.five_hour_spent = conv(five_hour_spent, currency)
         prev.currency = currency
-        # Override refresh_at: window_end = window_start + duration (hard reset)
-        prev.five_hour_next_refresh_at = _window_refresh_at(five_hour_ws, 5)
-        prev.weekly_next_refresh_at = _window_refresh_at(weekly_ws, 168)
         # Recalculate sub-window budgets ONLY when no active window (i.e.
         # setting the budget for the NEXT window).  The current window's
         # budget is fixed when the window starts — recalculating it on every
@@ -319,6 +344,23 @@ async def get_budget_state(
                 remaining * 0.40,
                 max(prev.weekly_budget - prev.weekly_spent, 0.0) * 0.70,
             )
+        changed = False
+        if start_windows and remaining > 0:
+            if not five_hour_ws and prev.five_hour_budget > 0:
+                prev.five_hour_window_start = now.isoformat()
+                five_hour_ws = now
+                changed = True
+            if not weekly_ws and prev.weekly_budget > 0:
+                prev.weekly_window_start = now.isoformat()
+                weekly_ws = now
+                changed = True
+        # Keep the derived timestamps consistent with any windows started by
+        # this call.  Otherwise the first admitted request persists active
+        # window_start values alongside empty refresh_at values.
+        prev.five_hour_next_refresh_at = _window_refresh_at(five_hour_ws, 5)
+        prev.weekly_next_refresh_at = _window_refresh_at(weekly_ws, 168)
+        if changed:
+            _save_state(prev)
         return _build_response(prev)
 
     # Full recalculation — fetch records (CNY from DB), cap to billing period,
@@ -338,33 +380,31 @@ async def get_budget_state(
             monthly_budget=monthly,
             monthly_spent=monthly_spent,
             usage_records=records,
-            previous_state=prev,
+            previous_state=compatible_prev,
             now=now,
             start_day=start_day,
         )
         state.currency = currency
         # Carry over hard-reset window_start from prev (controller creates a
         # fresh BudgetState that doesn't know about window_start).
-        if prev:
-            state.five_hour_window_start = prev.five_hour_window_start
-            state.weekly_window_start = prev.weekly_window_start
+        if compatible_prev:
+            state.five_hour_window_start = compatible_prev.five_hour_window_start
+            state.weekly_window_start = compatible_prev.weekly_window_start
         # Override sub-window spent & refresh_at with hard-reset window values
         state.weekly_spent = weekly_spent
         state.five_hour_spent = five_hour_spent
-        state.five_hour_next_refresh_at = _window_refresh_at(five_hour_ws, 5)
-        state.weekly_next_refresh_at = _window_refresh_at(weekly_ws, 168)
         # Freeze the current 5‑hour window budget — it was set when the
         # window started and must not drift on each ~60s recalculation
         # (the controller's EWMA + active-limit floor would otherwise
         # inflate it).  Weekly is intentionally NOT frozen so it adapts
         # continuously.
-        if five_hour_ws and prev:
-            state.five_hour_budget = prev.five_hour_budget
+        if five_hour_ws and compatible_prev:
+            state.five_hour_budget = compatible_prev.five_hour_budget
         # Recalculate budgets for INACTIVE windows (next window's budget).
         remaining = monthly - monthly_spent
         if not weekly_ws and state.weekly_target_raw > 0:
             state.weekly_budget = _smooth_window_budget(
-                prev.weekly_budget if prev else 0.0,
+                compatible_prev.weekly_budget if compatible_prev else 0.0,
                 state.weekly_target_raw,
                 remaining,
             )
@@ -374,8 +414,11 @@ async def get_budget_state(
                 remaining * 0.40,
                 max(state.weekly_budget - weekly_spent, 0.0) * 0.70,
             )
-    except Exception:
-        if prev is not None:
+    except Exception as exc:
+        # A cached fallback is safe only for the exact configured limit.  If
+        # the user just lowered the monthly budget, returning the old state's
+        # larger limit could admit spending that should now be blocked.
+        if compatible_prev is not None and compatible_prev.monthly_budget == monthly:
             prev.monthly_spent = conv(
                 await _query_sum(db_path, monthly_start), currency,
             )
@@ -389,29 +432,31 @@ async def get_budget_state(
             prev.five_hour_next_refresh_at = _window_refresh_at(five_hour_ws, 5)
             prev.weekly_next_refresh_at = _window_refresh_at(weekly_ws, 168)
             return _build_response(prev)
-        return _disabled_response()
+        raise BudgetUsageQueryError("failed to calculate budget state") from exc
 
-    # Start inactive hard‑reset windows inside get_budget_state to
-    # eliminate the TOCTOU race between computing the budget and setting
-    # window_start (previously done in a separate _start_budget_windows
-    # call from check_budget_and_block).
-    if monthly - monthly_spent > 0:
+    # Only a request passing through the budget gate starts a hard-reset
+    # window. Status reads calculate and persist the state without consuming
+    # wall-clock time from either window.
+    if start_windows and monthly - monthly_spent > 0:
         if not five_hour_ws and state.five_hour_budget > 0:
             state.five_hour_window_start = now.isoformat()
+            five_hour_ws = now
         if not weekly_ws and state.weekly_budget > 0:
             state.weekly_window_start = now.isoformat()
+            weekly_ws = now
+
+    state.five_hour_next_refresh_at = _window_refresh_at(five_hour_ws, 5)
+    state.weekly_next_refresh_at = _window_refresh_at(weekly_ws, 168)
 
     _save_state(state)
     return _build_response(state)
 
 
 async def check_budget_and_block(db_path: str, monthly: float, enabled: bool) -> dict | None:
-    """Check budget.  Return ``None`` if OK, or a dict ``{"code": str, "message": str}``
-    describing what was exhausted.
+    """Check budget and describe an exhausted or unavailable limit.
 
-    Consults ``budget_action`` setting: ``"warn"`` always returns ``None``
-    (monitoring-only), ``"block"`` (default) returns an error when a window is
-    exhausted.
+    ``"block"`` results stop the request. ``"warn"`` results carry
+    ``warning=True`` so the caller can notify the user while allowing it.
 
     When a request passes, hard-reset windows that aren't yet active are
     started (window_start = now) so the first request after a reset begins
@@ -421,23 +466,33 @@ async def check_budget_and_block(db_path: str, monthly: float, enabled: bool) ->
         return None
     settings = _get_all_settings()
     action = str(settings.get("budget_action") or "block").strip().lower()
+    try:
+        state = await get_budget_state(
+            db_path,
+            monthly=monthly,
+            enabled=enabled,
+            start_windows=True,
+        )
+    except BudgetUsageQueryError:
+        result = {
+            "code": "budget_usage_unavailable",
+            "message": "Budget usage could not be verified. Please retry shortly.",
+        }
+    else:
+        weekly_remaining = max(state.get("weekly_remaining", 0), 0)
+        five_hour_remaining = max(state.get("five_hour_remaining", 0), 0)
+        monthly_remaining = max(state.get("monthly_remaining", 0), 0)
+        if monthly_remaining <= 0:
+            result = {"code": "budget_monthly_exhausted", "message": "Monthly budget exhausted — reduce spending or increase your monthly limit."}
+        elif weekly_remaining <= 0:
+            result = {"code": "budget_weekly_exhausted", "message": "Weekly budget exhausted — reduce spending or increase your monthly limit."}
+        elif five_hour_remaining <= 0:
+            result = {"code": "budget_5h_exhausted", "message": "5-hour budget exhausted — usage is too concentrated, please wait before sending more requests."}
+        else:
+            return None
     if action == "warn":
-        _start_budget_windows()
-        return None
-    state = await get_budget_state(db_path, monthly=monthly, enabled=enabled)
-    weekly_remaining = max(state.get("weekly_remaining", 0), 0)
-    five_hour_remaining = max(state.get("five_hour_remaining", 0), 0)
-    monthly_remaining = max(state.get("monthly_remaining", 0), 0)
-    if monthly_remaining <= 0:
-        return {"code": "budget_monthly_exhausted", "message": "Monthly budget exhausted — reduce spending or increase your monthly limit."}
-    if weekly_remaining > 0 and five_hour_remaining > 0:
-        # Passed — start hard-reset windows if this is the first request
-        # after a window reset/expiry.
-        _start_budget_windows()
-        return None
-    if weekly_remaining <= 0:
-        return {"code": "budget_weekly_exhausted", "message": "Weekly budget exhausted — reduce spending or increase your monthly limit."}
-    return {"code": "budget_5h_exhausted", "message": "5-hour budget exhausted — usage is too concentrated, please wait before sending more requests."}
+        result["warning"] = True
+    return result
 
 
 # ---------------------------------------------------------------------------
@@ -448,45 +503,6 @@ def _disabled_response() -> dict[str, Any]:
     resp = {k: 0 for k in _BUDGET_RESPONSE_KEYS}
     resp["last_recalculated_at"] = ""
     return resp
-
-
-def _start_budget_windows() -> None:
-    """Set window_start to now for any inactive or expired window.
-
-    Called when a request passes the budget gate.  Clears expired windows
-    first, then starts any that are not yet active.
-    """
-    prev = _load_state()
-    if prev is None:
-        return
-    now = datetime.now(timezone.utc)
-    changed = False
-
-    # Clear expired windows
-    five_hour_ws = _parse_ws(prev.five_hour_window_start)
-    if five_hour_ws and now >= five_hour_ws + timedelta(hours=5):
-        prev.five_hour_window_start = ""
-        changed = True
-    weekly_ws = _parse_ws(prev.weekly_window_start)
-    if weekly_ws and now >= weekly_ws + timedelta(days=7):
-        prev.weekly_window_start = ""
-        changed = True
-
-    # Start inactive windows (first request after reset)
-    if not prev.five_hour_window_start:
-        prev.five_hour_window_start = now.isoformat()
-        changed = True
-    if not prev.weekly_window_start:
-        prev.weekly_window_start = now.isoformat()
-        changed = True
-
-    if changed:
-        _save_state(prev)
-
-
-def start_budget_windows() -> None:
-    """Public Workbench hook for beginning configured budget windows."""
-    _start_budget_windows()
 
 
 def _needs_recalculation(

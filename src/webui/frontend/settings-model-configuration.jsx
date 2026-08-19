@@ -25,6 +25,23 @@
     } catch (error) {}
   }
 
+  var MODEL_CONFIGURATION_ERROR_KEYS = {
+    "model connection timed out": ["settings.modelConnectionTimedOut", "Model connection timed out."],
+    "model connection was rejected": ["settings.modelConnectionRejected", "The model service rejected the connection."],
+    "model connection failed": ["settings.modelConnectionFailed", "Model connection failed."],
+    "model connection is unavailable": ["settings.modelConnectionUnavailable", "The model service is currently unavailable."],
+    "model discovery timed out": ["settings.modelDiscoveryTimedOut", "Model discovery timed out."],
+    "model discovery was rejected": ["settings.modelDiscoveryRejected", "The model service rejected model discovery."],
+    "model discovery failed": ["settings.modelDiscoveryFailed", "Model discovery failed."],
+    "model discovery is unavailable": ["settings.modelDiscoveryUnavailable", "Model discovery is currently unavailable."],
+  };
+
+  function localizedModelConfigurationError(error, props) {
+    var summary = String(error && (error.summary || error.message) || error || "").trim();
+    var translation = MODEL_CONFIGURATION_ERROR_KEYS[summary.toLowerCase()];
+    return translation ? label(props, translation[0], translation[1]) : summary;
+  }
+
   function browserIcon(name, size) {
     try {
       var Icon = window.CyreneUI.require("browser").Icon;
@@ -32,6 +49,20 @@
     } catch (error) {
       return null;
     }
+  }
+
+  function searchIcon(size) {
+    return h("svg", {
+      viewBox: "0 0 24 24",
+      width: size || 16,
+      height: size || 16,
+      fill: "none",
+      stroke: "currentColor",
+      strokeWidth: "1.9",
+      strokeLinecap: "round",
+      strokeLinejoin: "round",
+      "aria-hidden": "true",
+    }, h("circle", { cx: "11", cy: "11", r: "7" }), h("path", { d: "m20 20-3.2-3.2" }));
   }
 
   function settingsGlyph(name, size) {
@@ -364,6 +395,8 @@
       var requestError = new Error(String(payload.detail || payload.error || payload.message || ("HTTP " + response.status)));
       requestError.status = response.status;
       requestError.code = String(payload.code || "");
+      requestError.summary = String(payload.error || payload.message || "");
+      requestError.detail = String(payload.detail || "");
       throw requestError;
     }
     return payload;
@@ -376,55 +409,84 @@
     var [loading, setLoading] = useState(!(props && props.initialConfig));
     var [error, setError] = useState("");
     var [saveState, setSaveState] = useState("idle");
+    var mounted = useRef(true);
 
-    function load() {
-      setLoading(true);
-      setError("");
+    function operationIsCurrent(options) {
+      if (!mounted.current) return false;
+      if (!options || typeof options.isCurrent !== "function") return true;
+      try { return !!options.isCurrent(); } catch (currentError) { return false; }
+    }
+
+    function load(options) {
+      options = options || {};
+      if (mounted.current) {
+        setLoading(true);
+        setError("");
+      }
       return requestJson("/api/settings/model-config").then(function (payload) {
         var next = normalizeConfig(payload);
-        setConfig(next);
-        setLoading(false);
+        if (mounted.current) {
+          if (operationIsCurrent(options)) setConfig(next);
+          setLoading(false);
+        }
         return next;
       }).catch(function (loadError) {
-        setError(loadError.message || String(loadError));
-        setLoading(false);
+        if (mounted.current) {
+          if (operationIsCurrent(options)) setError(loadError.message || String(loadError));
+          setLoading(false);
+        }
         throw loadError;
       });
     }
 
     useEffect(function () {
+      mounted.current = true;
       if (!(props && props.initialConfig)) load().catch(function () {});
+      return function () { mounted.current = false; };
     }, []);
 
-    function save(nextConfig, dispatchRoutes) {
+    function save(nextConfig, dispatchRoutes, options) {
+      options = options || {};
       var draft = normalizeConfig(nextConfig || config || {});
-      setSaveState("saving");
-      setError("");
+      if (mounted.current) {
+        setSaveState("saving");
+        if (operationIsCurrent(options)) setError("");
+      }
       return requestJson("/api/settings/model-config", {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(configPayload(draft)),
       }).then(function (payload) {
         var saved = normalizeConfig(payload && (payload.connections || payload.profiles || payload.routes || payload.config) ? payload : draft);
-        setConfig(saved);
-        setSaveState("idle");
-        showSettingsToast(label(props, "settings.modelConfigSaved", "已保存"), "success");
-        if (props && typeof props.onConfigChange === "function") props.onConfigChange(saved);
-        if (dispatchRoutes) {
-          try {
-            window.dispatchEvent(new CustomEvent("cyrene:model-configuration-changed", {
-              detail: { profiles: saved.profiles, routes: saved.routes },
-            }));
-          } catch (eventError) {}
+        var isCurrent = operationIsCurrent(options);
+        if (mounted.current) setSaveState("idle");
+        if (isCurrent) {
+          setConfig(saved);
+          if (!options.silentSuccess) showSettingsToast(label(props, "settings.modelConfigSaved", "已保存"), "success");
+          if (props && typeof props.onConfigChange === "function") props.onConfigChange(saved);
+          if (dispatchRoutes) {
+            try {
+              window.dispatchEvent(new CustomEvent("cyrene:model-configuration-changed", {
+                detail: { profiles: saved.profiles, routes: saved.routes },
+              }));
+            } catch (eventError) {}
+          }
         }
         return saved;
       }).catch(function (saveError) {
+        if (!mounted.current) throw saveError;
         setSaveState("idle");
+        if (!operationIsCurrent(options) || options.surfaceErrors === false) throw saveError;
         if (saveError.status === 409) {
           setError("模型配置已在其他位置更新，请重新加载后再修改。" );
-          if (window.confirm("模型配置已被其他页面更新。是否立即重新加载最新配置？当前未保存更改将丢失。")) {
-            saveError.reloaded = true;
-            load().catch(function () {});
+          if (options.handleConflict !== false && window.confirm("模型配置已被其他页面更新。是否立即重新加载最新配置？当前未保存更改将丢失。")) {
+            return load({ isCurrent: options.isCurrent }).then(function () {
+              saveError.reloaded = true;
+              throw saveError;
+            }).catch(function (reloadError) {
+              if (reloadError !== saveError) saveError.reloadError = reloadError;
+              throw saveError;
+            });
           }
         } else {
           setError(saveError.message || String(saveError));
@@ -473,9 +535,22 @@
     );
   }
 
-  function capabilityText(profile) {
+  function capabilityLabel(capability, props) {
+    var normalized = String(capability || "").trim().toLowerCase();
+    if (["chat", "completion", "text"].indexOf(normalized) >= 0) return label(props, "settings.modelCapability.chat", "Chat");
+    if (["vision", "image", "multimodal"].indexOf(normalized) >= 0) return label(props, "settings.modelCapability.vision", "Vision");
+    if (["embedding", "embeddings"].indexOf(normalized) >= 0) return label(props, "settings.modelCapability.embedding", "Embedding");
+    if (normalized === "tools") return label(props, "settings.modelCapability.tools", "Tools");
+    if (normalized === "reasoning") return label(props, "settings.modelCapability.reasoning", "Reasoning");
+    return String(capability || "");
+  }
+
+  function capabilityText(profile, props) {
     var values = normalizedCapabilities(profile && profile.capabilities);
-    return values.length ? values.join(" · ") : "chat";
+    var translated = (values.length ? values : ["chat"]).map(function (capability) {
+      return capabilityLabel(capability, props);
+    });
+    return translated.filter(function (value, index) { return translated.indexOf(value) === index; }).join(" · ");
   }
 
   function formatContext(profile) {
@@ -506,6 +581,8 @@
     var preset = adapterKey(connection && connection.options && connection.options.provider_preset);
     if (["deepseek", "minimax"].indexOf(preset) >= 0) return preset;
     var adapter = connectionAdapter(connection);
+    var genericName = adapterKey(connection && connection.name);
+    if (adapter === "openai_compatible" || genericName === "openai_compatible" || genericName === "openai_compatible_legacy") return "";
     if (adapter === "anthropic" || adapter === "anthropic_messages") return "anthropic";
     if (adapter === "gemini" || adapter === "gemini_api" || adapter === "google_gemini") return "gemini";
     if (adapter === "openai" || adapter === "openai_chat" || adapter === "openai_responses"
@@ -685,8 +762,16 @@
     var profile = props.profile;
     var pricing = profilePriceFields(profile.price);
     var displayName = profile.name || profile.model || "未命名模型";
+    var capabilities = normalizedCapabilities(profile.capabilities);
+    var capabilityOptions = ["chat", "vision", "embedding"];
     var [expanded, setExpanded] = useState(false);
     var detailsId = "wb-mcfg-profile-details-" + String(profile.id || "model").replace(/[^a-zA-Z0-9_-]/g, "-");
+    function toggleCapability(capability) {
+      var next = capabilities.indexOf(capability) >= 0
+        ? capabilities.filter(function (item) { return item !== capability; })
+        : capabilities.concat([capability]);
+      props.onChange("capabilities", next);
+    }
     return h("article", { className: "wb-mcfg-profile-card" + (expanded ? " is-expanded" : "") },
       h("button", {
         type: "button",
@@ -703,9 +788,22 @@
       ),
       expanded ? h("div", { id: detailsId, className: "wb-mcfg-profile-details" },
         h("div", { className: "wb-mcfg-profile-details-grid" },
-          h("label", { className: "wb-mcfg-profile-editor-field is-wide" },
+          h("label", { className: "wb-mcfg-profile-editor-field is-half" },
             h("span", null, "显示名称"),
             h("input", { className: "wb-input", value: profile.name || "", onChange: function (event) { props.onChange("name", event.target.value); } })
+          ),
+          h("div", { className: "wb-mcfg-profile-editor-field is-half" },
+            h("span", null, "能力"),
+            h("div", { className: "wb-mcfg-capability-picker", role: "group", "aria-label": label(props, "settings.modelCapabilities", "Model capabilities") }, capabilityOptions.map(function (capability) {
+              var selected = capabilities.indexOf(capability) >= 0;
+              return h("button", {
+                type: "button",
+                key: capability,
+                className: "wb-mcfg-capability-chip" + (selected ? " is-selected" : ""),
+                "aria-pressed": selected,
+                onClick: function () { toggleCapability(capability); },
+              }, capabilityLabel(capability, props));
+            }))
           ),
           h("label", { className: "wb-mcfg-profile-editor-field is-wide" },
             h("span", null, "模型 ID"),
@@ -729,6 +827,7 @@
           )
         ),
         h("div", { className: "wb-mcfg-profile-details-actions" },
+          h("button", { type: "button", className: "wb-btn", disabled: !!props.testing || !String(profile.model || "").trim(), onClick: props.onTest }, props.testing ? "正在测试…" : "测试连接"),
           h("button", { type: "button", className: "wb-btn danger", onClick: props.onRemove }, "删除模型")
         )
       ) : null
@@ -740,8 +839,18 @@
     var store = useModelConfiguration(props);
     var config = store.config;
     var [selectedId, setSelectedId] = useState("");
-    var [filter, setFilter] = useState("all");
+    var [query, setQuery] = useState("");
     var [dirty, setDirty] = useState(false);
+    var [saveError, setSaveError] = useState("");
+    var editVersion = useRef(0);
+    var dirtyRef = useRef(false);
+    var queuedSnapshot = useRef(null);
+    var queuedVersion = useRef(0);
+    var knownRevision = useRef(null);
+    var saveQueueTimer = useRef(null);
+    var saveQueueInFlight = useRef(false);
+    var saveQueueBlockedVersion = useRef(-1);
+    var saveQueueMounted = useRef(true);
     var [busy, setBusy] = useState("");
     var [connectionMenu, setConnectionMenu] = useState(null);
     var connectionMenuRef = useRef(null);
@@ -755,6 +864,9 @@
     var [localBusy, setLocalBusy] = useState("");
 
     var selected = config && (config.connections || []).find(function (item) { return item.id === selectedId; });
+    var localConnectionSignature = config ? (config.connections || []).filter(isLocalConnection).map(function (connection) {
+      return connection.id + ":" + connection.adapter;
+    }).join("|") : "";
 
     useEffect(function () {
       if (!config || !(config.connections || []).length) return;
@@ -764,6 +876,21 @@
     useEffect(function () {
       return function () { if (oauthPoll.current) clearInterval(oauthPoll.current); };
     }, []);
+
+    useEffect(function () {
+      saveQueueMounted.current = true;
+      return function () {
+        saveQueueMounted.current = false;
+        if (saveQueueTimer.current) clearTimeout(saveQueueTimer.current);
+        saveQueueTimer.current = null;
+      };
+    }, []);
+
+    useEffect(function () {
+      if (!config || dirtyRef.current) return;
+      queuedSnapshot.current = config;
+      if (Number.isInteger(config.revision)) knownRevision.current = config.revision;
+    }, [config]);
 
     useEffect(function () {
       if (!connectionMenu) return;
@@ -807,9 +934,117 @@
       };
     }, [connectionMenu && connectionMenu.connectionId]);
 
-    function updateConfig(next) {
-      store.setConfig(next);
-      setDirty(true);
+    function setQueueDirty(value) {
+      dirtyRef.current = !!value;
+      if (saveQueueMounted.current) setDirty(!!value);
+    }
+
+    function scheduleQueuedSave(delay) {
+      if (!saveQueueMounted.current) return;
+      if (saveQueueTimer.current) clearTimeout(saveQueueTimer.current);
+      saveQueueTimer.current = null;
+      if (saveQueueInFlight.current || !dirtyRef.current) return;
+      if (saveQueueBlockedVersion.current === queuedVersion.current) return;
+      saveQueueTimer.current = setTimeout(function () {
+        saveQueueTimer.current = null;
+        persistQueuedConfig();
+      }, Math.max(0, Number(delay) || 0));
+    }
+
+    function queueErrorMessage(error) {
+      if (error && error.status === 409) return "模型配置已在其他位置更新，请重新加载后再修改。";
+      return localizedModelConfigurationError(error, props) || "保存模型配置失败。";
+    }
+
+    function handleQueuedSaveFailure(error) {
+      if (!saveQueueMounted.current) return;
+      var failedVersion = queuedVersion.current;
+      saveQueueBlockedVersion.current = failedVersion;
+      setQueueDirty(true);
+      var message = queueErrorMessage(error);
+      setSaveError(message);
+      store.setError(message);
+      showSettingsToast(message, "error");
+      if (!error || error.status !== 409) return;
+      if (!window.confirm("模型配置已被其他页面更新。是否立即重新加载最新配置？当前未保存更改将丢失。")) return;
+      store.load({
+        isCurrent: function () {
+          return saveQueueMounted.current && queuedVersion.current === failedVersion;
+        },
+      }).then(function (reloaded) {
+        if (!saveQueueMounted.current || queuedVersion.current !== failedVersion) return;
+        queuedSnapshot.current = reloaded;
+        if (Number.isInteger(reloaded.revision)) knownRevision.current = reloaded.revision;
+        saveQueueBlockedVersion.current = -1;
+        setQueueDirty(false);
+        setSaveError("");
+        store.setError("");
+      }).catch(function (reloadError) {
+        if (!saveQueueMounted.current || queuedVersion.current !== failedVersion) return;
+        saveQueueBlockedVersion.current = failedVersion;
+        setQueueDirty(true);
+        var reloadMessage = reloadError.message || String(reloadError);
+        setSaveError(reloadMessage);
+        store.setError(reloadMessage);
+      });
+    }
+
+    function persistQueuedConfig() {
+      if (!saveQueueMounted.current || saveQueueInFlight.current || !dirtyRef.current) return;
+      if (saveQueueBlockedVersion.current === queuedVersion.current) return;
+      var snapshot = queuedSnapshot.current;
+      var version = queuedVersion.current;
+      if (!snapshot) return;
+      saveQueueInFlight.current = true;
+      store.save(snapshot, true, {
+        silentSuccess: true,
+        surfaceErrors: false,
+        handleConflict: false,
+        isCurrent: function () {
+          return saveQueueMounted.current && queuedVersion.current === version;
+        },
+      }).then(function (saved) {
+        saveQueueInFlight.current = false;
+        if (!saveQueueMounted.current) return;
+        if (Number.isInteger(saved.revision)) knownRevision.current = saved.revision;
+        if (queuedVersion.current === version) {
+          queuedSnapshot.current = saved;
+          saveQueueBlockedVersion.current = -1;
+          setQueueDirty(false);
+          setSaveError("");
+          store.setError("");
+          return;
+        }
+        queuedSnapshot.current = Object.assign({}, queuedSnapshot.current || {}, {
+          revision: knownRevision.current,
+        });
+        scheduleQueuedSave(0);
+      }).catch(function (error) {
+        saveQueueInFlight.current = false;
+        handleQueuedSaveFailure(error);
+      });
+    }
+
+    function updateConfig(next, options) {
+      options = options || {};
+      var snapshot = next;
+      if (Number.isInteger(knownRevision.current)) {
+        snapshot = Object.assign({}, next, { revision: knownRevision.current });
+      }
+      editVersion.current += 1;
+      queuedVersion.current = editVersion.current;
+      queuedSnapshot.current = snapshot;
+      saveQueueBlockedVersion.current = -1;
+      setQueueDirty(true);
+      store.setConfig(snapshot);
+      scheduleQueuedSave(options.immediate ? 0 : 600);
+      return queuedVersion.current;
+    }
+
+    function retryQueuedSave() {
+      if (!dirtyRef.current || saveQueueInFlight.current) return;
+      saveQueueBlockedVersion.current = -1;
+      scheduleQueuedSave(0);
     }
 
     function updateConnection(key, value) {
@@ -837,6 +1072,21 @@
           return next;
         }),
       }));
+    }
+
+    function matchesConnectionQuery(connection) {
+      var needle = String(query || "").trim().toLowerCase();
+      if (!needle) return true;
+      var adapter = (config.adapters || []).find(function (item) { return item.id === connection.adapter; }) || {};
+      var modelTerms = (config.profiles || []).filter(function (profile) {
+        return profile.connection_id === connection.id;
+      }).map(function (profile) {
+        return [profile.name, profile.model].filter(Boolean).join(" ");
+      });
+      return [
+        connectionDisplayName(connection), connection.name, connection.id,
+        connection.adapter, adapter.name, connection.base_url,
+      ].concat(modelTerms).filter(Boolean).join(" ").toLowerCase().indexOf(needle) >= 0;
     }
 
     function addConnection() {
@@ -868,7 +1118,6 @@
         if (returnFocus && returnFocus.isConnected) window.requestAnimationFrame(function () { returnFocus.focus(); });
         return;
       }
-      var profileIds = config.profiles.filter(function (profile) { return profile.connection_id === target.id; }).map(function (profile) { return profile.id; });
       var feedback = window.CyreneUI && window.CyreneUI.require
         ? window.CyreneUI.require("feedback")
         : null;
@@ -888,36 +1137,27 @@
           if (returnFocus && returnFocus.isConnected) window.requestAnimationFrame(function () { returnFocus.focus(); });
           return;
         }
+        var baseConfig = queuedSnapshot.current || config;
+        var currentTargetIndex = baseConfig.connections.findIndex(function (connection) { return connection.id === target.id; });
+        if (currentTargetIndex < 0) return;
+        var profileIds = baseConfig.profiles.filter(function (profile) { return profile.connection_id === target.id; }).map(function (profile) { return profile.id; });
         var nextRoutes = {};
-        Object.keys(config.routes).forEach(function (route) {
-          nextRoutes[route] = config.routes[route].filter(function (id) { return profileIds.indexOf(id) < 0; });
+        Object.keys(baseConfig.routes).forEach(function (route) {
+          nextRoutes[route] = baseConfig.routes[route].filter(function (id) { return profileIds.indexOf(id) < 0; });
         });
-        var remaining = config.connections.filter(function (connection) { return connection.id !== target.id; });
-        var nextConfig = Object.assign({}, config, {
+        var remaining = baseConfig.connections.filter(function (connection) { return connection.id !== target.id; });
+        var nextConfig = Object.assign({}, baseConfig, {
           connections: remaining,
-          profiles: config.profiles.filter(function (profile) { return profile.connection_id !== target.id; }),
+          profiles: baseConfig.profiles.filter(function (profile) { return profile.connection_id !== target.id; }),
           routes: nextRoutes,
         });
-        updateConfig(nextConfig);
-        store.save(nextConfig, true).then(function () {
-          setDirty(false);
-        }).catch(function (error) {
-          if (error && error.reloaded) setDirty(false);
-        });
+        updateConfig(nextConfig, { immediate: true });
         if (selectedId === target.id) {
-          var visibleBefore = config.connections.filter(function (connection) {
-            if (filter === "enabled") return connection.enabled;
-            if (filter === "disabled") return !connection.enabled;
-            return true;
-          });
+          var visibleBefore = baseConfig.connections.filter(matchesConnectionQuery);
           var visibleIndex = visibleBefore.findIndex(function (connection) { return connection.id === target.id; });
-          var visibleRemaining = remaining.filter(function (connection) {
-            if (filter === "enabled") return connection.enabled;
-            if (filter === "disabled") return !connection.enabled;
-            return true;
-          });
+          var visibleRemaining = remaining.filter(matchesConnectionQuery);
           var adjacent = visibleRemaining[Math.min(Math.max(visibleIndex, 0), visibleRemaining.length - 1)]
-            || remaining[Math.min(targetIndex, remaining.length - 1)] || remaining[0];
+            || remaining[Math.min(currentTargetIndex, remaining.length - 1)] || remaining[0];
           setSelectedId(adjacent ? adjacent.id : "");
         }
       });
@@ -993,59 +1233,22 @@
       }));
     }
 
-    function saveConnections() {
-      store.save(config, true).then(function () {
-        setDirty(false);
-      }).catch(function (error) { if (error && error.reloaded) setDirty(false); });
-    }
-
-    function testConnection() {
-      if (!selected) return;
-      setBusy("test");
+    function testProfile(profile) {
+      if (!selected || !profile) return;
+      var busyKey = "test:" + profile.id;
+      setBusy(busyKey);
       store.setError("");
       requestJson("/api/settings/model-config/connections/" + encodeURIComponent(selected.id) + "/test", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ connection: connectionDraftPayload(selected) }),
+        body: JSON.stringify({ connection: connectionDraftPayload(selected), profile: profile }),
       }).then(function (payload) {
-        showSettingsToast(String(payload.message || payload.detail || "连接测试成功。"), "success");
+        showSettingsToast(String(payload.message || payload.detail || "模型测试成功。"), "success");
       }).catch(function (error) {
-        store.setError(error.message || String(error));
-        showSettingsToast(error.message || String(error), "error");
-      }).finally(function () { setBusy(""); });
-    }
-
-    function discoverConnection() {
-      if (!selected) return;
-      setBusy("discover");
-      store.setError("");
-      if (isCodexConnection(selected) && oauth.models && oauth.models.length) {
-        var oauthConfig = mergeDiscoveredProfiles(config, selected.id, oauth.models);
-        updateConfig(oauthConfig);
-        showSettingsToast("已导入 " + oauth.models.length + " 个 Codex 模型，保存后生效。", "success");
-        setBusy("");
-        return;
-      }
-      requestJson("/api/settings/model-config/connections/" + encodeURIComponent(selected.id) + "/discover", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ connection: connectionDraftPayload(selected) }),
-      }).then(function (payload) {
-        if (payload.connections || payload.config) {
-          var discovered = normalizeConfig(payload);
-          store.setConfig(discovered);
-          setDirty(true);
-          showSettingsToast("模型目录已更新，保存后生效。", "success");
-          return;
-        }
-        var items = payload.profiles || payload.models || payload.items || [];
-        var next = mergeDiscoveredProfiles(config, selected.id, items);
-        updateConfig(next);
-        showSettingsToast("发现 " + listFrom(items).length + " 个模型，保存后生效。", "success");
-      }).catch(function (error) {
-        store.setError(error.message || String(error));
-        showSettingsToast(error.message || String(error), "error");
-      }).finally(function () { setBusy(""); });
+        var message = localizedModelConfigurationError(error, props);
+        store.setError(message);
+        showSettingsToast(message, "error");
+      }).finally(function () { setBusy(function (current) { return current === busyKey ? "" : current; }); });
     }
 
     function refreshOauth() {
@@ -1093,12 +1296,12 @@
 
     function importOauthModels() {
       updateConfig(mergeDiscoveredProfiles(config, selected.id, oauth.models || []));
-      showSettingsToast("已导入 " + (oauth.models || []).length + " 个 Codex 模型，保存后生效。", "success");
+      showSettingsToast("已导入 " + (oauth.models || []).length + " 个 Codex 模型，正在自动保存。", "success");
     }
 
     function importOauthModel(model) {
       updateConfig(mergeDiscoveredProfiles(config, selected.id, model ? [model] : []));
-      showSettingsToast("已添加 Codex 模型档案，保存后生效。", "success");
+      showSettingsToast("已添加 Codex 模型档案，正在自动保存。", "success");
     }
 
     function refreshLocalModels() {
@@ -1126,9 +1329,9 @@
     }, [selectedId, selected && selected.adapter]);
 
     useEffect(function () {
-      if (!selected || !isLocalConnection(selected)) return;
+      if (!localConnectionSignature) return;
       refreshLocalModels();
-    }, [selectedId, selected && selected.adapter]);
+    }, [localConnectionSignature]);
 
     useEffect(function () {
       if (!selected || !isLocalConnection(selected) || !localModels.some(function (model) { return model.downloading; })) return;
@@ -1139,11 +1342,7 @@
     if (store.loading) return h("div", { className: "settings-panel settings-panel-wide wb-model-config-page" }, h(LoadingState, props));
     if (!config) return h("div", { className: "settings-panel settings-panel-wide wb-model-config-page" }, h(ErrorState, Object.assign({}, props, { error: store.error, onRetry: store.load })));
 
-    var filtered = config.connections.filter(function (connection) {
-      if (filter === "enabled" && !connection.enabled) return false;
-      if (filter === "disabled" && connection.enabled) return false;
-      return true;
-    });
+    var filtered = config.connections.filter(matchesConnectionQuery);
     var profiles = selected ? config.profiles.filter(function (profile) { return profile.connection_id === selected.id; }) : [];
     var adapters = config.adapters || [];
     var selectableAdapters = adapters.filter(isUserSelectableAdapter);
@@ -1153,6 +1352,11 @@
     if (currentAdapter && !editorAdapters.some(function (adapter) { return adapter.id === currentAdapter.id; })) {
       editorAdapters.unshift(currentAdapter);
     }
+    var selectedDescription = selected
+      ? (isLocalConnection(selected)
+        ? label(props, "settings.localModelsHint", "可选的本机增强能力，数据无需离开设备；下载需手动触发并支持断点续传。")
+        : String(currentAdapter && currentAdapter.description || "").trim())
+      : "";
     var menuConnection = connectionMenu && config.connections.find(function (connection) { return connection.id === connectionMenu.connectionId; });
     var connectionMenuNode = menuConnection && !isCodexConnection(menuConnection) ? h("div", {
       ref: connectionMenuRef,
@@ -1184,24 +1388,37 @@
         h("div", null,
           h("h2", null, label(props, "settings.modelServices", "模型服务")),
           h("p", null, label(props, "settings.modelServicesHint", "配置模型平台、认证信息和可复用的模型档案。模型配置在独立页面设置。"))
-        ),
-        h("div", { className: "wb-mcfg-save-cluster" },
-          dirty ? h("span", { className: "wb-mcfg-unsaved" }, "有未保存更改") : null,
-          h("button", { type: "button", className: "wb-btn primary", disabled: !dirty || store.saveState === "saving", onClick: saveConnections }, store.saveState === "saving" ? "正在保存…" : "保存配置")
         )
       ),
+      saveError ? h("div", { className: "wb-mcfg-status is-error wb-mcfg-save-error", role: "alert" },
+        h("span", null, saveError),
+        dirty ? h("button", { type: "button", className: "wb-btn", disabled: store.saveState === "saving", onClick: retryQueuedSave }, "重试保存") : null
+      ) : null,
       h("div", { id: "setting-model-connections", className: "wb-mcfg-services" },
         h("aside", { className: "wb-mcfg-connection-pane", "aria-label": "模型服务商" },
-          h("div", { className: "wb-mcfg-filter", role: "group", "aria-label": "筛选服务商" }, [
-            ["all", "全部"], ["enabled", "已启用"], ["disabled", "已停用"],
-          ].map(function (item) {
-            return h("button", { type: "button", key: item[0], className: filter === item[0] ? "is-active" : "", "aria-pressed": filter === item[0], onClick: function () { setFilter(item[0]); } }, item[1]);
-          })),
+          h("div", { className: "wb-workbench-filterbar wb-mcfg-searchbar" },
+            h("label", { className: "wb-workbench-searchbox wb-mcfg-searchbox" },
+              searchIcon(16),
+              h("input", {
+                type: "search",
+                value: query,
+                onChange: function (event) { setQuery(event.target.value); },
+                placeholder: "搜索模型服务…",
+                "aria-label": "搜索模型服务",
+                autoComplete: "off",
+                spellCheck: false,
+              })
+            )
+          ),
           h("div", { className: "wb-mcfg-connection-list", role: "listbox", "aria-label": "服务商连接" },
-            !filtered.length ? h("div", { className: "wb-mcfg-list-empty" }, filter !== "all" ? "没有匹配的服务商。" : "还没有服务商连接。") : null,
+            !filtered.length ? h("div", { className: "wb-mcfg-list-empty" }, String(query || "").trim() ? "没有匹配的服务商。" : "还没有服务商连接。") : null,
             filtered.map(function (connection) {
               var adapter = adapters.find(function (item) { return item.id === connection.adapter; });
-              var count = config.profiles.filter(function (profile) { return profile.connection_id === connection.id; }).length;
+              var local = isLocalConnection(connection);
+              var count = local
+                ? localModels.filter(function (model) { return model.ready === true; }).length
+                : config.profiles.filter(function (profile) { return profile.connection_id === connection.id; }).length;
+              var serviceLabel = local ? "Local" : (adapter && adapter.name || connection.adapter);
               var canDelete = !isCodexConnection(connection);
               return h("button", {
                 type: "button", role: "option", key: connection.id,
@@ -1222,7 +1439,7 @@
                 h("span", { className: "wb-mcfg-provider-mark", "aria-hidden": "true" }, connectionProviderMark(connection)),
                 h("span", { className: "wb-mcfg-connection-copy" },
                   h("strong", null, connectionDisplayName(connection)),
-                  h("small", null, (adapter && adapter.name || connection.adapter) + " · " + count + " 个模型")
+                  h("small", null, serviceLabel + " · " + count + " 个模型")
                 ),
                 h("span", { className: "wb-mcfg-dot " + (connection.enabled ? "is-ready" : "is-off"), title: connection.enabled ? "已启用" : "已停用" }, h("span", { className: "wb-mcfg-sr-only" }, connection.enabled ? "已启用" : "已停用"))
               );
@@ -1234,9 +1451,7 @@
           h("div", { className: "wb-mcfg-detail-head" },
             h("div", null,
               h("h3", null, connectionDisplayName(selected)),
-              h("p", null, isLocalConnection(selected)
-                ? label(props, "settings.localModelsHint", "可选的本机增强能力，数据无需离开设备；下载需手动触发并支持断点续传。")
-                : (adapters.find(function (item) { return item.id === selected.adapter; }) || {}).description || "连接配置与模型档案")
+              selectedDescription ? h("p", null, selectedDescription) : null
             ),
             isLocalConnection(selected)
               ? h("button", { type: "button", className: "wb-mcfg-icon-btn", onClick: refreshLocalModels, "aria-label": "刷新本地模型" }, browserIcon("reload", 16))
@@ -1250,10 +1465,6 @@
               }))),
               !isCodexConnection(selected) && !isLocalConnection(selected) ? h(Field, { label: "API 地址", wide: true }, h("input", { className: "wb-input", type: "url", value: selected.base_url, onChange: function (event) { updateConnection("base_url", event.target.value); }, placeholder: "https://api.example.com/v1", autoComplete: "url" })) : null,
               !isCodexConnection(selected) && !isLocalConnection(selected) ? h(Field, { label: "API 密钥", wide: true, hint: selected.secret_configured && !selected.secret ? "已保存密钥；留空不会覆盖。" : "密钥只发送给本机配置 API。" }, h("input", { className: "wb-input", type: "password", value: selected.secret, onChange: function (event) { updateConnection("secret", event.target.value); }, placeholder: selected.secret_configured ? "已配置" : "sk-…", autoComplete: "new-password" })) : null
-            ),
-            h("div", { className: "wb-mcfg-actions" },
-              !isLocalConnection(selected) ? h("button", { type: "button", className: "wb-btn wb-mcfg-action-secondary", disabled: !!busy, onClick: testConnection }, busy === "test" ? "正在测试…" : "测试连接") : null,
-              !isLocalConnection(selected) ? h("button", { type: "button", className: "wb-btn wb-mcfg-action-main", disabled: !!busy, onClick: discoverConnection }, busy === "discover" ? "正在获取…" : "获取模型列表") : null
             )
           ) : null,
           isCodexConnection(selected) ? h(OAuthSection, { state: oauth, busy: oauthBusy, onLogin: startOauthLogin, onLogout: logoutOauth, onImportModels: importOauthModels, onImportModel: importOauthModel }) : null,
@@ -1263,13 +1474,15 @@
               h("h4", { id: "wb-mcfg-profiles-heading" }, "模型列表"),
               h("button", { type: "button", className: "wb-btn", onClick: function () { addProfile(); } }, browserIcon("plus", 15), "添加模型")
             ),
-            !profiles.length ? h("div", { className: "wb-mcfg-inline-empty" }, "还没有模型档案。可获取模型列表或手动添加。") : null,
+            !profiles.length ? h("div", { className: "wb-mcfg-inline-empty" }, "还没有模型档案。请手动添加模型。") : null,
             profiles.length ? h("div", { className: "wb-mcfg-profile-list", "aria-label": "模型列表" },
               profiles.map(function (profile) {
                 return h(ProfileEditor, {
                   key: profile.id, profile: profile, t: props.t,
                   onChange: function (key, value) { updateProfile(profile.id, key, value); },
                   onRemove: function () { removeProfile(profile.id); },
+                  onTest: function () { testProfile(profile); },
+                  testing: busy === "test:" + profile.id,
                 });
               })
             ) : null
@@ -1288,7 +1501,7 @@
     primary: { title: "默认模型顺位", description: "对话与 Agent 的主要模型，按顺序自动回退。", capability: "chat", ordered: true },
     secondary: { title: "次要模型", description: "用于摘要、标题和低成本辅助任务。", capability: "chat", ordered: false },
     vision: { title: "识图模型", description: "处理图片和视觉内容，按顺序自动回退。", capability: "vision", ordered: true },
-    embedding: { title: "Embedding", description: "为知识库和语义检索生成向量。", capability: "embedding", ordered: false },
+    embedding: { title: "嵌入模型", titleKey: "settings.embeddingRouteTitle", description: "为知识库和语义检索生成向量。", descriptionKey: "settings.embeddingRouteHint", capability: "embedding", ordered: false },
   };
 
   function supportsRoute(profile, route) {
@@ -1303,13 +1516,15 @@
   function RouteCard(props) {
     var route = props.route;
     var meta = ROUTE_META[route];
+    var metaTitle = meta.titleKey ? label(props, meta.titleKey, meta.title) : meta.title;
+    var metaDescription = meta.descriptionKey ? label(props, meta.descriptionKey, meta.description) : meta.description;
     var selected = props.ids || [];
     var available = props.profiles.filter(function (profile) { return selected.indexOf(profile.id) < 0; });
     return h("section", { id: "setting-model-" + route + "-route", className: "wb-mcfg-route-card", "aria-labelledby": "wb-mcfg-route-" + route },
       h("div", { className: "wb-mcfg-route-head" },
         h("div", null,
-          h("h3", { id: "wb-mcfg-route-" + route }, meta.title),
-          h("p", null, meta.description)
+          h("h3", { id: "wb-mcfg-route-" + route }, metaTitle),
+          h("p", null, metaDescription)
         ),
         h("span", { className: "wb-mcfg-route-count" }, selected.length + " 个模型")
       ),
@@ -1332,7 +1547,7 @@
             ),
             h("div", { className: "wb-mcfg-route-meta" },
               h("span", null, "上下文 " + formatContext(profile)),
-              h("span", null, capabilityText(profile))
+              h("span", null, capabilityText(profile, props))
             ),
             meta.ordered ? h("div", { className: "wb-mcfg-order-actions", role: "group", "aria-label": "调整 " + (profile.name || profile.model) + " 顺位" },
               h("button", { type: "button", disabled: index === 0, onClick: function () { props.onMove(id, -1); }, "aria-label": "上移 " + (profile.name || profile.model) }, settingsGlyph("arrow-up", 16)),
@@ -1347,12 +1562,17 @@
         h("select", {
           className: "wb-select", value: "", disabled: !available.length,
           onChange: function (event) { if (event.target.value) props.onAdd(event.target.value); },
-          "aria-label": "为" + meta.title + "添加模型",
+          "aria-label": label(props, "settings.addModelForRoute", "Add model for {route}", { route: metaTitle }),
         },
-          h("option", { value: "" }, available.length ? "选择模型档案…" : "没有符合能力要求的模型"),
+          h("option", { value: "" }, available.length
+            ? label(props, "settings.selectModelProfile", "Select model profile…")
+            : label(props, "settings.noEligibleModelProfiles", "No models match this capability")),
           available.map(function (profile) {
             var connection = props.connectionById[profile.connection_id] || {};
-            return h("option", { key: profile.id, value: profile.id }, (profile.name || profile.model) + " — " + (connection.name || "未知服务商") + " · " + formatContext(profile) + " · " + capabilityText(profile));
+            var providerName = isLocalConnection(connection)
+              ? label(props, "settings.localProvider", "Local")
+              : (connection.name || label(props, "settings.unknownProvider", "Unknown provider"));
+            return h("option", { key: profile.id, value: profile.id }, (profile.name || profile.model) + " — " + providerName + " · " + formatContext(profile) + " · " + capabilityText(profile, props));
           })
         )
       )
@@ -1364,6 +1584,12 @@
     var store = useModelConfiguration(props);
     var config = store.config;
     var [dirty, setDirty] = useState(false);
+    var usageMounted = useRef(true);
+
+    useEffect(function () {
+      usageMounted.current = true;
+      return function () { usageMounted.current = false; };
+    }, []);
 
     function updateRoute(route, nextIds) {
       store.setConfig(Object.assign({}, config, { routes: Object.assign({}, config.routes, { [route]: nextIds }) }));
@@ -1372,7 +1598,11 @@
     }
 
     function saveRoutes() {
-      store.save(config, true).then(function () { setDirty(false); }).catch(function (error) { if (error && error.reloaded) setDirty(false); });
+      store.save(config, true).then(function () {
+        if (usageMounted.current) setDirty(false);
+      }).catch(function (error) {
+        if (usageMounted.current && error && error.reloaded) setDirty(false);
+      });
     }
 
     if (store.loading) return h("div", { className: "settings-panel wb-model-config-page wb-mcfg-usage-page" }, h(LoadingState, props));
@@ -1404,6 +1634,7 @@
         });
         return h(RouteCard, {
           key: route, route: route, ids: config.routes[route] || [], profiles: candidates,
+          t: props.t,
           profileById: profileById, connectionById: connectionById,
           onAdd: function (id) { updateRoute(route, (config.routes[route] || []).concat([id])); },
           onRemove: function (id) { updateRoute(route, (config.routes[route] || []).filter(function (value) { return value !== id; })); },

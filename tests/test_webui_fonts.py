@@ -80,7 +80,9 @@ def test_low_dpi_windows_uses_native_hinted_fonts_and_quantized_weights():
 
     low_dpi = workbench_css.split(
         "/* Windows 1080p / low-DPI typography", 1
-    )[1]
+    )[1].split(
+        "/* Performance mode is deliberately renderer-wide", 1
+    )[0]
     assert 'html[data-platform="win32"]' in low_dpi
     assert "font-weight: 400 !important;" in low_dpi
     assert "font-weight: 600 !important;" in low_dpi

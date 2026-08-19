@@ -38,6 +38,7 @@ CYRENE_TOP_LEVEL_DIRECTORIES = {
     "agent",
     "agent_runtime",
     "channels",
+    "custom_tools",
     "extensions",
     "hooks",
     "knowledge",
@@ -212,6 +213,22 @@ def _multi_module_cycles(graph: dict[str, set[str]]) -> list[list[str]]:
 
 def test_source_tree_has_no_static_import_cycles() -> None:
     assert _multi_module_cycles(_static_import_graph()) == []
+
+
+def test_tool_executor_import_does_not_require_registry_import_order() -> None:
+    """Remote tool registration imports progress reporting during catalog init."""
+    code = (
+        "from cyrene.tooling.executor import _execute_tool, publish_tool_progress\n"
+        "print(_execute_tool.__name__, publish_tool_progress.__name__)\n"
+    )
+
+    output = subprocess.check_output(
+        [sys.executable, "-c", code],
+        cwd=SRC_ROOT.parent,
+        text=True,
+    )
+
+    assert output.strip() == "_execute_tool publish_tool_progress"
 
 
 def _private_import_counts() -> Counter[str]:

@@ -923,6 +923,28 @@ def register_settings_routes(router: APIRouter, bot: Any, db_path: str) -> None:
         except Exception:
             pass
 
+        # Custom tools are trusted native-style Python modules. Stable
+        # qualified names keep package-local tools unambiguous in settings.
+        try:
+            from cyrene.custom_tools.manager import get_custom_tool_manager
+
+            custom_manager = get_custom_tool_manager()
+            for custom_tool in custom_manager.get_tool_definitions():
+                tools.append({
+                    "name": custom_tool.stable_name,
+                    "execution_name": custom_tool.concrete_name,
+                    "public_name": custom_tool.name,
+                    "desc": custom_tool.description,
+                    "enabled": True,
+                    "configured_enabled": True,
+                    "effective_enabled": is_tool_pack_enabled("custom_tools"),
+                    "package_id": "custom_tools",
+                    "custom_package_id": custom_tool.package_id,
+                    "source": "custom",
+                })
+        except Exception:
+            pass
+
         package_tools = {
             wire_name: [
                 concrete_name
@@ -934,6 +956,11 @@ def register_settings_routes(router: APIRouter, bot: Any, db_path: str) -> None:
             item["name"]
             for item in tools
             if item.get("package_id") == "integration_tools"
+        ]
+        package_tools["custom_tools"] = [
+            item["name"]
+            for item in tools
+            if item.get("package_id") == "custom_tools"
         ]
         packages = []
         for pack in PACKS:
@@ -958,9 +985,13 @@ def register_settings_routes(router: APIRouter, bot: Any, db_path: str) -> None:
                     1 for item in members if item["enabled"]
                 ),
                 "tool_count": len(members),
-                "source": "integration"
-                if pack.wire_name == "integration_tools"
-                else "native",
+                "source": (
+                    "integration"
+                    if pack.wire_name == "integration_tools"
+                    else "custom"
+                    if pack.wire_name == "custom_tools"
+                    else "native"
+                ),
             })
         tool_groups = [
             {**package, "kind": "package"}
@@ -1088,6 +1119,10 @@ def register_settings_routes(router: APIRouter, bot: Any, db_path: str) -> None:
         await _publish_settings_changed(
             "runtime", result["revision"], list(changes),
         )
+        if isinstance(package_updates, dict) and "custom_tools" in package_updates:
+            from cyrene.custom_tools.manager import get_custom_tool_manager
+
+            await get_custom_tool_manager().rescan()
         return {
             "ok": True,
             "updated": list(tool_updates or {}),
@@ -1439,14 +1474,23 @@ def register_settings_routes(router: APIRouter, bot: Any, db_path: str) -> None:
     async def api_budget_status():
         """Return current budget state (weekly + 5-hour block)."""
         from cyrene.runtime.settings_store import get_all as _get_sett
-        from cyrene.agent.budget import get_budget_state as _budget_state
+        from cyrene.agent.budget import (
+            BudgetUsageQueryError,
+            get_budget_state as _budget_state,
+        )
 
         sett = _get_sett()
-        state = await _budget_state(
-            str(_db_path or DB_PATH),
-            monthly=float(sett.get("budget_monthly") or 0),
-            enabled=bool(sett.get("budget_enabled", False)),
-        )
+        try:
+            state = await _budget_state(
+                str(_db_path or DB_PATH),
+                monthly=float(sett.get("budget_monthly") or 0),
+                enabled=bool(sett.get("budget_enabled", False)),
+            )
+        except BudgetUsageQueryError:
+            return JSONResponse(
+                {"error": "budget usage is temporarily unavailable"},
+                status_code=503,
+            )
         return state
 
     # ---- MCP Servers API ----

@@ -5,6 +5,10 @@ from __future__ import annotations
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
+import pytest
+
+import cyrene.agent.budget as budget_module
+
 from cyrene.agent.adaptive_budget import (
     DEFAULT_ACTIVITY_DENSITY,
     AdaptiveBudgetController,
@@ -568,7 +572,184 @@ def test_remaining_hours_in_month():
 
     feb_mid = datetime(2026, 2, 15, 0, 0, 0, tzinfo=timezone.utc)
     assert abs(_remaining_hours_in_month(feb_mid) - 336.0) < 0.01  # 14 days
+
+    before_custom_start = datetime(2026, 8, 10, 0, 0, 0, tzinfo=timezone.utc)
+    assert _remaining_hours_in_month(before_custom_start, 15) == 120.0
     print("  PASS: test_remaining_hours_in_month")
+
+
+@pytest.mark.asyncio
+async def test_status_read_does_not_start_windows_but_gate_does(monkeypatch, tmp_path):
+    import sqlite3
+
+    db_path = tmp_path / "budget.db"
+    with sqlite3.connect(db_path) as db:
+        db.execute(
+            "CREATE TABLE token_usage (created_at TEXT NOT NULL, estimated_cost REAL NOT NULL)"
+        )
+
+    saved: list[BudgetState] = []
+    monkeypatch.setattr(
+        budget_module,
+        "_get_all_settings",
+        lambda: {
+            "budget_currency": "CNY",
+            "budget_start_day": 1,
+            "budget_action": "block",
+        },
+    )
+    monkeypatch.setattr(budget_module, "_load_state", lambda: saved[-1] if saved else None)
+    monkeypatch.setattr(budget_module, "_save_state", lambda state: saved.append(state))
+
+    await budget_module.get_budget_state(str(db_path), monthly=50, enabled=True)
+    assert saved[-1].five_hour_window_start == ""
+    assert saved[-1].weekly_window_start == ""
+
+    result = await budget_module.check_budget_and_block(
+        str(db_path), monthly=50, enabled=True
+    )
+    assert result is None
+    assert saved[-1].five_hour_window_start
+    assert saved[-1].weekly_window_start
+    assert saved[-1].five_hour_next_refresh_at
+    assert saved[-1].weekly_next_refresh_at
+
+
+@pytest.mark.asyncio
+async def test_currency_change_does_not_reuse_old_currency_state(monkeypatch):
+    now = datetime.now(timezone.utc)
+    previous = BudgetState(
+        monthly_budget=50,
+        weekly_budget=20,
+        five_hour_budget=9,
+        weekly_target_raw=20,
+        five_hour_target_raw=9,
+        last_recalculated_at=now.isoformat(),
+        currency="CNY",
+        five_hour_window_start=now.isoformat(),
+        weekly_window_start=now.isoformat(),
+    )
+    seen_previous: list[BudgetState | None] = []
+    saved: list[BudgetState] = []
+
+    class FakeController:
+        def calculate(self, **kwargs):
+            seen_previous.append(kwargs["previous_state"])
+            return BudgetState(
+                monthly_budget=kwargs["monthly_budget"],
+                monthly_spent=kwargs["monthly_spent"],
+                weekly_budget=4,
+                five_hour_budget=1.25,
+                weekly_target_raw=4,
+                five_hour_target_raw=1.25,
+                last_recalculated_at=kwargs["now"].isoformat(),
+            )
+
+    async def no_records(_db_path):
+        return []
+
+    monkeypatch.setattr(
+        budget_module,
+        "_get_all_settings",
+        lambda: {"budget_currency": "USD", "budget_start_day": 1},
+    )
+    monkeypatch.setattr(budget_module, "_load_state", lambda: previous)
+    monkeypatch.setattr(budget_module, "_query_records", no_records)
+    monkeypatch.setattr(budget_module, "_save_state", saved.append)
+    monkeypatch.setattr(budget_module, "_CONTROLLER", FakeController())
+
+    state = await budget_module.get_budget_state("unused.db", monthly=50, enabled=True)
+    assert seen_previous == [None]
+    assert state["five_hour_budget"] == 1.25
+    assert state["currency"] == "USD"
+    assert state["five_hour_next_refresh_at"] == ""
+    assert state["weekly_next_refresh_at"] == ""
+    assert saved[-1].five_hour_window_start == ""
+    assert saved[-1].weekly_window_start == ""
+
+
+@pytest.mark.asyncio
+async def test_block_mode_fails_closed_when_usage_query_fails(monkeypatch):
+    async def failed_records(_db_path):
+        raise budget_module.BudgetUsageQueryError("database unavailable")
+
+    monkeypatch.setattr(
+        budget_module,
+        "_get_all_settings",
+        lambda: {
+            "budget_currency": "CNY",
+            "budget_start_day": 1,
+            "budget_action": "block",
+        },
+    )
+    monkeypatch.setattr(budget_module, "_load_state", lambda: None)
+    monkeypatch.setattr(budget_module, "_query_records", failed_records)
+
+    result = await budget_module.check_budget_and_block(
+        "unavailable.db", monthly=50, enabled=True
+    )
+    assert result is not None
+    assert result["code"] == "budget_usage_unavailable"
+
+
+@pytest.mark.asyncio
+async def test_failed_recalculation_does_not_fall_back_across_limit_change(monkeypatch):
+    now = datetime.now(timezone.utc)
+    previous = BudgetState(
+        monthly_budget=100,
+        monthly_spent=10,
+        weekly_budget=25,
+        five_hour_budget=5,
+        last_recalculated_at=now.isoformat(),
+        currency="CNY",
+    )
+
+    class FailedController:
+        def calculate(self, **_kwargs):
+            raise RuntimeError("calculation failed")
+
+    async def no_records(_db_path):
+        return []
+
+    monkeypatch.setattr(
+        budget_module,
+        "_get_all_settings",
+        lambda: {"budget_currency": "CNY", "budget_start_day": 1},
+    )
+    monkeypatch.setattr(budget_module, "_load_state", lambda: previous)
+    monkeypatch.setattr(budget_module, "_query_records", no_records)
+    monkeypatch.setattr(budget_module, "_CONTROLLER", FailedController())
+
+    with pytest.raises(budget_module.BudgetUsageQueryError):
+        await budget_module.get_budget_state(
+            "unused.db",
+            monthly=20,
+            enabled=True,
+        )
+
+
+@pytest.mark.asyncio
+async def test_warn_mode_reports_exhausted_budget_without_blocking(monkeypatch):
+    async def exhausted_state(*_args, **_kwargs):
+        return {
+            "monthly_remaining": 10,
+            "weekly_remaining": 2,
+            "five_hour_remaining": 0,
+        }
+
+    monkeypatch.setattr(
+        budget_module,
+        "_get_all_settings",
+        lambda: {"budget_action": "warn"},
+    )
+    monkeypatch.setattr(budget_module, "get_budget_state", exhausted_state)
+
+    result = await budget_module.check_budget_and_block(
+        "unused.db", monthly=50, enabled=True
+    )
+    assert result is not None
+    assert result["code"] == "budget_5h_exhausted"
+    assert result["warning"] is True
 
 
 def test_calculate_rates():

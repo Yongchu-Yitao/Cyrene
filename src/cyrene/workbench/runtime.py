@@ -6587,7 +6587,6 @@ async def _check_budget_gate(session_id: str) -> dict | None:
     ``{"error": str, "code": str}`` describing why the request is blocked."""
     from cyrene.runtime.settings_store import get_all as _get_all_settings
     from cyrene.agent.budget import check_budget_and_block as _check_budget
-    from cyrene.agent.budget import _start_budget_windows
 
     settings = _get_all_settings()
     monthly = float(settings.get("budget_monthly") or 0)
@@ -6598,12 +6597,18 @@ async def _check_budget_gate(session_id: str) -> dict | None:
     )
     blocked = None
     if result:
-        blocked = {"error": result["message"], "code": result["code"]}
-        logger.warning("Budget block for %s: %s", session_id, result["code"])
-    elif monthly > 0:
-        # Start hard-reset windows for any request that passes the gate,
-        # regardless of budget action (warn/block) or enabled state.
-        _start_budget_windows()
+        if result.get("warning"):
+            from cyrene.observability import debug
+
+            await debug.publish_event({
+                "type": "budget_warning",
+                "code": result["code"],
+                "message": result["message"],
+            }, session_id=session_id)
+            logger.warning("Budget warning for %s: %s", session_id, result["code"])
+        else:
+            blocked = {"error": result["message"], "code": result["code"]}
+            logger.warning("Budget block for %s: %s", session_id, result["code"])
     return blocked
 
 

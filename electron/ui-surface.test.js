@@ -399,8 +399,8 @@ test('current accessibility projection supports visible press, value, select, co
   assert.equal(highlight.style.height, '36px');
 });
 
-test('inspect, click, and drag render the private agent cursor at semantic element centers', async () => {
-  const { surface, button, container, document, cursorTimers, FakeElement, setElements } = loadSurfaceWithDocument();
+test('inspect, click, type, scroll, and drag render the private agent cursor at semantic element centers', async () => {
+  const { surface, button, input, scroller, container, document, cursorTimers, FakeElement, setElements } = loadSurfaceWithDocument();
   let tree = surface.snapshot({ max_depth: 12 });
   let run = findTreeNode(tree.root, (node) => node.name === 'Run action');
   const inspected = surface.snapshot({
@@ -436,11 +436,39 @@ test('inspect, click, and drag render the private agent cursor at semantic eleme
   assert.ok(cursorTimers.includes(180));
   assert.ok(cursorTimers.includes(100));
 
+  input.rect = { left: 300, top: 120, width: 120, height: 40 };
+  tree = surface.snapshot({ max_depth: 12 });
+  let target = findTreeNode(tree.root, (node) => node.name === 'Name');
+  const typed = await surface.act({
+    snapshot_id: tree.snapshot_id,
+    revision: tree.revision,
+    node_id: target.node_id,
+    action_id: 'set_value',
+    input: { value: 'moving target' },
+    _agent_cursor_mode: 'target',
+  });
+  assert.equal(typed.ok, true);
+  assert.equal(cursor.style.transform, 'translate3d(354px,134px,0)');
+
+  scroller.rect = { left: 420, top: 220, width: 160, height: 120 };
+  tree = surface.snapshot({ max_depth: 12 });
+  target = findTreeNode(tree.root, (node) => node.name === 'Scrollable list');
+  const scrolled = await surface.act({
+    snapshot_id: tree.snapshot_id,
+    revision: tree.revision,
+    node_id: target.node_id,
+    action_id: 'scroll_page',
+    input: { delta: 100 },
+    _agent_cursor_mode: 'target',
+  });
+  assert.equal(scrolled.ok, true);
+  assert.equal(cursor.style.transform, 'translate3d(494px,274px,0)');
+
   const source = new FakeElement('button', { text: 'Source', rect: { left: 20, top: 80, width: 80, height: 30 } });
-  const target = new FakeElement('button', { text: 'Target', rect: { left: 220, top: 180, width: 100, height: 40 } });
+  const targetElement = new FakeElement('button', { text: 'Target', rect: { left: 220, top: 180, width: 100, height: 40 } });
   source.parentElement = container;
-  target.parentElement = container;
-  setElements([source, target]);
+  targetElement.parentElement = container;
+  setElements([source, targetElement]);
   surface.register({
     node_id: 'source', parent_id: 'root', scope: 'main', order: 1,
     get_element: () => source,
@@ -450,7 +478,7 @@ test('inspect, click, and drag render the private agent cursor at semantic eleme
   });
   surface.register({
     node_id: 'target', parent_id: 'root', scope: 'main', order: 2,
-    get_element: () => target,
+    get_element: () => targetElement,
     get_node: () => ({ role: 'button', name: 'Target' }),
     actions: [{ action_id: 'invoke', kind: 'invoke' }], handlers: { invoke: () => {} },
   });
@@ -468,7 +496,7 @@ test('inspect, click, and drag render the private agent cursor at semantic eleme
   assert.ok(cursorTimers.includes(350));
 });
 
-test('agent cursor stays visible while the agent runs and keeps animated movement', () => {
+test('agent cursor keeps animated movement but still schedules stale-position fade while running', () => {
   const { surface, document, cursorTimers } = loadSurfaceWithDocument();
   surface.setAgentRunning(true);
   let tree = surface.snapshot({ max_depth: 12 });
@@ -481,7 +509,7 @@ test('agent cursor stays visible while the agent runs and keeps animated movemen
   });
   const cursor = document.getElementById('cyrene-ui-agent-cursor');
   assert.ok(cursor);
-  assert.equal(cursorTimers.includes(3000), false);
+  assert.equal(cursorTimers.includes(3000), true);
 
   document.body.rect = { left: 0, top: 0, width: 500, height: 400 };
   tree = surface.snapshot({ max_depth: 12 });
@@ -492,10 +520,10 @@ test('agent cursor stays visible while the agent runs and keeps animated movemen
     _agent_cursor_mode: 'inspect',
   });
   assert.match(cursor.style.transition, /transform 180ms/);
-  assert.equal(cursorTimers.includes(3000), false);
+  assert.equal(cursorTimers.includes(3000), true);
 
   surface.setAgentRunning(false);
-  assert.ok(cursorTimers.some((ms) => ms > 0 && ms <= 3000));
+  assert.equal(cursorTimers.includes(3000), true);
 });
 
 test('projection keeps only the current layer and deduplicates explicitly registered elements', () => {

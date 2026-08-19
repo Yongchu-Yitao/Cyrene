@@ -191,11 +191,13 @@ function agentCursorCommand(config = {}) {
       }
     }
 
-    if (!state.running) {
-      state.idleTimer = setTimeout(() => {
-        if (!state.running && state.fadeNow) state.fadeNow(sequence);
-      }, config.idleMs);
-    }
+    // Running describes the agent lifecycle, not cursor activity. Keeping
+    // the last pointer visible for an entire run makes an old target look like
+    // the current operation whenever the agent switches tools or surfaces.
+    // Every actual cursor update refreshes this timer instead.
+    state.idleTimer = setTimeout(() => {
+      if (state.fadeNow) state.fadeNow(sequence);
+    }, config.idleMs);
     return {
       sequence,
       first: !wasVisible,
@@ -210,30 +212,10 @@ function agentCursorRunningCommand(running) {
   const nextRunning = running === true;
   return `(() => {
     const state = window.__cyreneAgentCursorState;
-    const cursor = document.getElementById('cyrene-agent-cursor');
     if (!state) return false;
     state.running = ${JSON.stringify(nextRunning)};
-    if (state.idleTimer) clearTimeout(state.idleTimer);
-    if (state.fadeTimer) clearTimeout(state.fadeTimer);
-    state.idleTimer = null;
-    state.fadeTimer = null;
-    if (state.running) {
-      if (cursor && state.visible && state.fading) {
-        cursor.style.transition = 'none';
-        cursor.style.opacity = '1';
-        void cursor.offsetWidth;
-      }
-      state.fading = false;
-      return true;
-    }
-    if (!cursor || !state.visible || !state.fadeNow) return true;
-    const elapsed = Math.max(0, Date.now() - Number(state.lastActivityAt || 0));
-    const remaining = Math.max(0, ${AGENT_CURSOR_IDLE_MS} - elapsed);
-    if (remaining === 0) return state.fadeNow(state.sequence);
-    const current = state.sequence;
-    state.idleTimer = setTimeout(() => {
-      if (!state.running && state.fadeNow) state.fadeNow(current);
-    }, remaining);
+    // Do not cancel, restart, or resurrect cursor activity when a run starts
+    // or stops. Cursor visibility is owned by real pointer updates.
     return true;
   })()`;
 }

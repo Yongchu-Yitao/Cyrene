@@ -20,6 +20,7 @@ PACKS = (
     PackSpec("remote", "remote_tools", "Operate paired Cyrene devices explicitly selected in the current chat.", ("remote.",), 1300),
     PackSpec("application", "cyrene_tools", "Snapshot and inspect the current Cyrene UI, then control declared components with focus-independent click, double-click, type, scroll, and drag gestures.", ("cyrene.",), 1400),
     PackSpec("integration", "integration_tools", "Dynamically connected MCP and external integration capabilities.", ("integration.",), 1500),
+    PackSpec("custom", "custom_tools", "Trusted user Python modules loaded from the global custom-tools directory.", ("custom.", "system."), 1600),
 )
 
 CAPABILITY_BINDINGS: dict[str, tuple[tuple[str, str], ...]] = {
@@ -164,6 +165,7 @@ CAPABILITY_BINDINGS: dict[str, tuple[tuple[str, str], ...]] = {
         ("cyrene.settings.read", "CyreneSettingsRead"),
         ("cyrene.settings.update", "CyreneSettingsUpdate"),
     ),
+    "custom_tools": (),
     "integration_tools": (),
 }
 
