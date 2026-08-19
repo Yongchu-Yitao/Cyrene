@@ -284,6 +284,13 @@ function SettingsPage({
   }
   var [tab, setTab] = useStateSt(normalizeSettingsTab(initialTab));
 
+  // Warm the comparatively expensive storage scan as soon as Settings is
+  // mounted. DataPanel shares this request, so opening Data while the scan is
+  // in flight never starts a second disk walk.
+  useEffectSt(function () {
+    requestDataPanelStorage().catch(function () {});
+  }, []);
+
   // Deep-link re-sync: React initializes `tab` only once at mount, so when the
   // search overlay sends a new deep-link request while the settings overlay is
   // already open, the initialTab prop changes but the tab state would not.
@@ -4428,8 +4435,45 @@ var STORAGE_COLORS = {
 // background. A shared promise also prevents rapid tab changes from starting
 // overlapping disk scans.
 var DATA_PANEL_STORAGE_TTL_MS = 30000;
-var dataPanelStorageCache = null;
-var dataPanelStorageCachedAt = 0;
+var DATA_PANEL_STORAGE_CACHE_KEY = "cyrene.settings.storageSnapshot.v1";
+
+function isDataPanelStorageSnapshot(payload) {
+  return !!(payload
+    && typeof payload.total === "number"
+    && Array.isArray(payload.categories)
+    && payload.categories.every(function (category) {
+      return category
+        && typeof category.key === "string"
+        && typeof category.bytes === "number"
+        && typeof category.files === "number";
+    }));
+}
+
+function readDataPanelStorageCache() {
+  try {
+    var cached = JSON.parse(localStorage.getItem(DATA_PANEL_STORAGE_CACHE_KEY) || "null");
+    if (!cached || !isDataPanelStorageSnapshot(cached.payload)) return null;
+    return {
+      payload: cached.payload,
+      cachedAt: Number(cached.cachedAt) || 0,
+    };
+  } catch (e) {
+    return null;
+  }
+}
+
+function persistDataPanelStorageCache(payload, cachedAt) {
+  try {
+    localStorage.setItem(DATA_PANEL_STORAGE_CACHE_KEY, JSON.stringify({
+      payload: payload,
+      cachedAt: cachedAt,
+    }));
+  } catch (e) {}
+}
+
+var persistedDataPanelStorage = readDataPanelStorageCache();
+var dataPanelStorageCache = persistedDataPanelStorage ? persistedDataPanelStorage.payload : null;
+var dataPanelStorageCachedAt = persistedDataPanelStorage ? persistedDataPanelStorage.cachedAt : 0;
 var dataPanelStorageRequest = null;
 
 function requestDataPanelStorage() {
@@ -4440,8 +4484,10 @@ function requestDataPanelStorage() {
   dataPanelStorageRequest = settingsFetch("/api/settings/storage")
     .then(function (response) { return response.json(); })
     .then(function (payload) {
+      if (!isDataPanelStorageSnapshot(payload)) throw new Error("Invalid storage snapshot");
       dataPanelStorageCache = payload;
       dataPanelStorageCachedAt = Date.now();
+      persistDataPanelStorageCache(payload, dataPanelStorageCachedAt);
       return payload;
     })
     .finally(function () {
@@ -4480,7 +4526,9 @@ function DataPanel(p) {
     requestDataPanelStorage().then(function (payload) {
       if (mounted) setStorage(payload);
     }).catch(function (e) {
-      if (mounted) setStorageError(e.message || String(e));
+      // A stale snapshot remains useful. Do not replace or visually disturb it
+      // just because a background refresh failed.
+      if (mounted && !dataPanelStorageCache) setStorageError(e.message || String(e));
     });
     return function () { mounted = false; };
   }, []);

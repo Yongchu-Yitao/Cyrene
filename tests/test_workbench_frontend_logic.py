@@ -8147,14 +8147,27 @@ def test_settings_storage_keeps_last_snapshot_across_tab_remounts():
         "function resetData()", 1
     )[0]
 
-    assert "var dataPanelStorageCache = null;" in storage
+    assert 'var DATA_PANEL_STORAGE_CACHE_KEY = "cyrene.settings.storageSnapshot.v1";' in storage
+    assert "function isDataPanelStorageSnapshot(payload)" in storage
+    assert "function readDataPanelStorageCache()" in storage
+    assert "localStorage.getItem(DATA_PANEL_STORAGE_CACHE_KEY)" in storage
+    assert "localStorage.setItem(DATA_PANEL_STORAGE_CACHE_KEY" in storage
+    assert "var persistedDataPanelStorage = readDataPanelStorageCache();" in storage
+    assert "persistedDataPanelStorage ? persistedDataPanelStorage.payload : null" in storage
     assert "var dataPanelStorageRequest = null;" in storage
     assert "if (cacheIsFresh) return Promise.resolve(dataPanelStorageCache);" in storage
     assert "if (dataPanelStorageRequest) return dataPanelStorageRequest;" in storage
     assert "dataPanelStorageCache = payload;" in storage
+    assert "persistDataPanelStorageCache(payload, dataPanelStorageCachedAt);" in storage
     assert "useStateSt(dataPanelStorageCache)" in storage
+    assert "if (mounted && !dataPanelStorageCache) setStorageError" in storage
     assert "return function () { mounted = false; };" in storage
     assert 'settingsFetch("/api/settings/storage")' in storage
+
+    settings_page = overlay.split("function SettingsPage(", 1)[1].split(
+        "// ── Remote Control Panel", 1
+    )[0]
+    assert "requestDataPanelStorage().catch(function () {});" in settings_page
 
 
 def test_session_export_uses_balanced_responsive_action_layout():
