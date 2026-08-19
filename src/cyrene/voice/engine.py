@@ -18,7 +18,7 @@ import soundfile as sf
 from cyrene.config import CACHE_DIR
 from cyrene.knowledge import local_models
 from cyrene.runtime import config_store
-from cyrene.voice import minimax as minimax_tts
+import cyrene.voice.minimax as minimax_tts
 
 
 ASR_MODEL_ID = "fireredasr2-aed-int8"

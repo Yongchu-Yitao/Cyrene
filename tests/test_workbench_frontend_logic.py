@@ -4150,10 +4150,10 @@ def test_workbench_module_pages_are_kept_alive_without_hidden_file_drop():
     assert "var WorkbenchStableSurface = React.memo(" in shell
     assert "return !prev.active && !next.active;" in shell
     assert "<WorkbenchStableSurface active={isChat}>" in shell
-    assert "<WorkbenchStableSurface active={isKnowledge}>" in shell
-    assert "<WorkbenchStableSurface active={isSchedule}>" in shell
-    assert "<WorkbenchStableSurface active={isMemory}>" in shell
-    assert "<WorkbenchStableSurface active={!isModulePage}>" in shell
+    assert '<WorkbenchStableSurface active={isKnowledge} enterMotion={true}>' in shell
+    assert '<WorkbenchStableSurface active={isSchedule} enterMotion={true}>' in shell
+    assert '<WorkbenchStableSurface active={isMemory} enterMotion={true}>' in shell
+    assert '<WorkbenchStableSurface active={!isModulePage} enterMotion={true}>' in shell
     assert "active={!isModulePage}" in shell
     assert "var taskDropEnabled = !!(active && project && session && session.kind !== \"init\")" in shell
     assert "function WorkbenchChatPage({ active, project" in chat
@@ -6367,7 +6367,7 @@ def test_tool_package_settings_are_scoped_and_context_shows_agent_disclosure():
         "function saveVoiceProfile", 1
     )[0]
     assert 'setVoiceNotice(t("settings.saved"))' not in voice_setting_helpers
-    assert voice_setting_helpers.count('setVoiceNotice("");') == 3
+    assert voice_setting_helpers.count('setVoiceNotice("");') == 4
     voice_save_actions_css = css.split(
         ".wb-voice-custom-fields > .wb-save-actions {", 1
     )[1].split("}", 1)[0]
@@ -11439,7 +11439,7 @@ def test_settings_controls_share_memory_floating_material():
     assert "background: color-mix(in srgb, var(--wb-accent) 26%, var(--wb-floating-control-bg))" in styles
     assert ".settings-overlay .wb-path-display" in styles
     assert "width: min(460px, 48vw)" in styles
-    assert ".settings-overlay .wb-export-area .wb-seg" in styles
+    assert ".settings-overlay .wb-export-format .wb-seg" in styles
     assert "function escapeHtml(" not in source
     assert ".remote-pairing-result" not in styles
     assert ".remote-bundle" not in styles
