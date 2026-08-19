@@ -5,6 +5,56 @@
 This English edition preserves the release history of the Chinese changelog.
 The Chinese edition remains the most detailed record for older releases.
 
+## [0.7.11] - 2026-08-19
+
+`0.7.11` brings together every feature and interface change since `0.7.10`, with major improvements to spoken replies, skill learning, usage analytics, guided tours, model settings, and the speed and clarity of Settings. This section contains user-visible capabilities and experience changes only.
+
+### Spoken replies and conversation export
+
+- Spoken replies now support MiniMax cloud speech. Voice Settings can select MiniMax Speech 2.8 Turbo or Speech 2.8 HD while continuing to support local Kokoro and ZipVoice models.
+- A new Automatic option prefers MiniMax when a configured MiniMax model service is available, then falls back to a ready local voice if the cloud service is temporarily unavailable so playback can continue.
+- Voice Settings clearly show the speech model actually in use, its provider, readiness, and the MiniMax system voice. When cloud speech is selected, the interface explains that reply text is sent to MiniMax and billed under that account.
+- Local reference voices, voice profiles, and custom-voice controls appear and apply only to local speech models. MiniMax instead shows its cloud voice information, removing controls that do not affect the selected provider.
+- Automatic-reading availability now considers both local models and the MiniMax connection. Long replies use more continuous grouping with cloud speech to reduce pauses caused by overly frequent requests.
+- Conversation export has been reorganized with a clear selected-session count, session update dates, select-all state, a dedicated Markdown / JSON format selector, and an icon-labeled export action.
+- The export layout remains readable in narrow windows and long lists, keeping selection, format, and the primary action from crowding one another.
+
+### Skill learning, conversations, and Workbench
+
+- Skill Learning is now a unified list-and-detail workspace. Candidate skills, learned skills, and tool-call rounds use consistent cards, status chips, counts, and selection feedback for easier navigation.
+- Candidate skills can open a complete detail view showing purpose, occurrence count, parameter count, risk, the user's decision, linked skill, related conversation rounds, the recommended next step, and the reusable workflow before choosing Learn now, Learn on third, or Ignore.
+- Tool-call round details now show the topic, learning state, every tool and parameter, success state, the Agent answer, screenshots, and file results. Long parameters, complete step lists, trigger examples, and file lists are no longer prematurely shortened.
+- Learned-skill details consolidate status, type, usage count, trigger examples, and steps. Delete moves to the detail header, while errors and action results remain visible at the bottom of the detail panel.
+- The conversation composer grows naturally with its contents and reserves the correct amount of space in the main conversation, split conversations, and detached windows, so multiline drafts no longer cover the latest message.
+- Draft retention is more reliable without making continuous typing feel heavy. Current text is preserved when switching conversations, losing window focus, hiding the page, or recovering from a failed send.
+- Dragging a detached conversation back to the main window now shows a clear “Release to merge back into the main window” cue, making the merge action easier to predict.
+- Knowledge, Schedule, Memory, and the main module area now share a restrained entry transition while retaining their page state, making navigation feel more continuous.
+
+### Usage, budgets, and provider quotas
+
+- The current Usage period is now the natural calendar month and is presented separately from the configurable budget cycle, preventing analytics dates from being confused with budget-control dates.
+- A new daily trend chart shows tokens, requests, and cost for every day in the current month. Legends, axes, tooltips, and colors remain legible in both light and dark themes.
+- The monthly overview adds average tokens per request, maximum tokens in one request, average cost per request, highest single-request cost, peak usage date, and peak request-volume date, alongside totals and per-model details.
+- Budget limit, budget-used percentage, and progress are grouped into a dedicated budget overview instead of being mixed into usage metrics, giving analytics and budget control clearer visual hierarchy.
+- Provider balance and quota cards now appear only for fully configured services that can report account data. Disconnected Codex no longer occupies an empty card, and unrelated MiniMax video quota is omitted from the model-usage view.
+- DeepSeek, MiniMax, and Codex balance or quota data are refreshed when the page opens, and the empty state now describes every supported provider instead of naming only a subset.
+
+### Tour Center and accessibility
+
+- Tour Center adds overall completion progress with completed and total guide counts plus a percentage bar. Completing or resetting a guide updates it immediately.
+- Tour details have been reorganized around title, description, estimated time, step count, completion state, and the start action. Steps use an ordered list, and completed guides can be reset in the same area.
+- Mobile and narrow layouts gain a module-grouped guide picker. The detail, action, and guide-list areas adapt independently to available height instead of relying on a wide two-column layout.
+- The tour dialog adds modal semantics, an accessible close label, current-guide selection state, and screen-reader information for progress, improving keyboard and assistive-technology use.
+
+### Model settings, Agent control, and Settings UI
+
+- Within authorization and risk-confirmation boundaries, the Agent can now inspect model connections, profiles, and routes and assist with model credentials and OpenAI sign-in. Model Settings is no longer an opaque area of the interface.
+- Model API keys use a write-only interaction: the Agent can enter or replace a key when requested but cannot read a saved value from the interface. These actions are presented as high risk and sensitive values remain hidden in records.
+- Model name, model ID, context limit, pricing, connection URL, protocol, and credential fields now have explicit accessible names for more reliable semantic and keyboard control.
+- Settings navigation and model-provider marks use crisp, consistent inline icons. Gemini, DeepSeek, MiniMax, Ollama, and other providers render more reliably across installations with more consistent size and color.
+- The Data page starts preparing storage usage when Settings opens. Returning to Data or reopening the interface can show the most recent valid result immediately while it refreshes, and a temporary refresh failure no longer clears useful information.
+- Rapid Settings tab changes no longer repeat the same storage scan, substantially reducing Data-page waiting and visual flicker.
+
 ## [0.7.10] - 2026-08-19
 
 `0.7.10` brings together every feature and interface change since `0.7.9`, including all four beta releases and final stabilization work. This section describes user-visible capabilities and experience changes only; the original beta notes remain below.
