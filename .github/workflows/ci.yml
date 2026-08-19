@@ -77,7 +77,13 @@ jobs:
         with:
           node-version: "22.12"
           cache: npm
-          cache-dependency-path: src/webui/package-lock.json
+          cache-dependency-path: |
+            electron/package-lock.json
+            src/webui/package-lock.json
+
+      - name: Install Electron dependencies
+        working-directory: electron
+        run: npm ci
 
       - name: Install WebUI dependencies
         working-directory: src/webui
