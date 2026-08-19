@@ -128,6 +128,7 @@ function loadSurfaceWithDocument() {
   container.querySelectorAll = (selector) => selector === '*' ? elements : elements;
   const head = new FakeElement('head');
   let surfaces = [];
+  let settingsPanel = null;
   const findById = (element, id) => {
     if (!element) return null;
     if (element.id === id) return element;
@@ -143,7 +144,7 @@ function loadSurfaceWithDocument() {
     documentElement: container,
     createElement: (tagName) => new FakeElement(tagName),
     getElementById: (id) => id === 'root' ? container : findById(container, id) || findById(head, id),
-    querySelector: () => null,
+    querySelector: (selector) => selector === '.settings-overlay-panel' ? settingsPanel : null,
     querySelectorAll: () => surfaces,
   };
   class FakeEvent { constructor(type) { this.type = type; } }
@@ -179,10 +180,11 @@ function loadSurfaceWithDocument() {
     vm.runInContext(fs.readFileSync(path.join(__dirname, relative), 'utf8'), context, { filename: relative });
   }
   return {
-    surface: window.CyreneUI.require('uiSurface'), button, input, select, menuTarget, scroller,
+    surface: window.CyreneUI.require('uiSurface'), button, input, secret, select, menuTarget, scroller,
     container, document, cursorTimers, FakeElement,
     setSurfaces: (next) => { surfaces = next; },
     setElements: (next) => { elements = next; },
+    setSettingsPanel: (next) => { settingsPanel = next; },
   };
 }
 
@@ -397,6 +399,54 @@ test('current accessibility projection supports visible press, value, select, co
   assert.equal(highlight.getAttribute('data-node-id'), 'semantic_input');
   assert.equal(highlight.style.width, '106px');
   assert.equal(highlight.style.height, '36px');
+});
+
+test('model settings projection exposes controls and keeps agent-entered credentials write-only', async () => {
+  const { surface, secret, FakeElement, setElements, setSettingsPanel } = loadSurfaceWithDocument();
+  const settingsPanel = new FakeElement('main', { class: 'settings-overlay-panel' });
+  settingsPanel.setAttribute('data-settings-active-tab', 'models');
+  settingsPanel.querySelectorAll = () => [secret];
+  secret.setAttribute('aria-label', 'API key (write only)');
+  secret.setAttribute('data-cyrene-agent-secret-input', 'true');
+  secret.setAttribute('data-cyrene-risk', 'R3');
+  secret.parentElement = settingsPanel;
+  setElements([secret]);
+  setSettingsPanel(settingsPanel);
+  surface.setScope('settings');
+
+  let tree = surface.snapshot({ max_depth: 12 });
+  let node = findTreeNode(tree.root, (item) => item.name === 'API key (write only)');
+  assert.ok(node);
+  assert.equal(node.value_summary, '');
+  assert.equal(node.state.input_type, 'password');
+  assert.equal(node.actions.length, 1);
+  assert.equal(node.actions[0].action_id, 'set_secret');
+  assert.equal(node.actions[0].risk, 'R3');
+  assert.deepEqual(JSON.parse(JSON.stringify(node.actions[0].input_schema)), { secret_value: 'text<=4000' });
+  assert.equal(JSON.stringify(tree).includes('never-expose'), false);
+
+  const rejected = await surface.act({
+    snapshot_id: tree.snapshot_id,
+    revision: tree.revision,
+    node_id: node.node_id,
+    action_id: 'set_secret',
+    input: { value: 'wrong-field' },
+  });
+  assert.equal(rejected.error, 'action_failed');
+  assert.equal(secret.value, 'never-expose');
+
+  tree = surface.snapshot({ max_depth: 12 });
+  node = findTreeNode(tree.root, (item) => item.name === 'API key (write only)');
+  const changed = await surface.act({
+    snapshot_id: tree.snapshot_id,
+    revision: tree.revision,
+    node_id: node.node_id,
+    action_id: 'set_secret',
+    input: { secret_value: 'replacement-key' },
+  });
+  assert.equal(changed.ok, true);
+  assert.equal(secret.value, 'replacement-key');
+  assert.equal(JSON.stringify(surface.snapshot({ max_depth: 12 })).includes('replacement-key'), false);
 });
 
 test('inspect, click, type, scroll, and drag render the private agent cursor at semantic element centers', async () => {

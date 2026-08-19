@@ -16,6 +16,7 @@ NON_MODEL_SETTINGS_TABS = (
     "general", "channels", "remote", "agents", "appearance", "capabilities",
     "skills", "shortcuts", "data", "budget", "about",
 )
+AGENT_VISIBLE_SETTINGS_TABS = ("models",) + NON_MODEL_SETTINGS_TABS
 
 SHORTCUT_DEFAULTS: dict[str, tuple[str, ...]] = {
     "search": ("mod", "K"),
@@ -175,6 +176,11 @@ SPEC_BY_KEY = {item.key: item for item in SETTING_SPECS}
 
 
 SETTING_CONTROL_SPECS: tuple[SettingControlSpec, ...] = (
+    SettingControlSpec("models.connections", "models", "current_ui", "cyrene.ui.inspect", "R2"),
+    SettingControlSpec("models.credentials", "models", "current_ui", "cyrene.ui.type", "R3", secret=True),
+    SettingControlSpec("models.profiles", "models", "current_ui", "cyrene.ui.inspect", "R2"),
+    SettingControlSpec("models.routes", "models", "current_ui", "cyrene.ui.inspect", "R2", "next_run"),
+    SettingControlSpec("models.oauth", "models", "user_ceremony", "cyrene.oauth", "R3"),
     SettingControlSpec("general.desktop_notifications", "general", "current_ui", "cyrene.ui.inspect", "R2"),
     SettingControlSpec("general.map_provider", "general", "current_ui", "cyrene.ui.inspect", "R1"),
     SettingControlSpec("general.amap_api_key", "general", "user_ceremony", "cyrene.secret.input", "R3", secret=True),
@@ -212,10 +218,10 @@ CONTROL_BY_ID = {item.setting_id: item for item in SETTING_CONTROL_SPECS}
 
 if len(SPEC_BY_KEY) != len(SETTING_SPECS) or len(CONTROL_BY_ID) != len(SETTING_CONTROL_SPECS):
     raise RuntimeError("settings registry identifiers must be unique")
-if any(item.tab not in NON_MODEL_SETTINGS_TABS for item in SETTING_SPECS + SETTING_CONTROL_SPECS):
-    raise RuntimeError("every settings registry entry must belong to a non-model tab")
-if {item.tab for item in SETTING_SPECS + SETTING_CONTROL_SPECS} != set(NON_MODEL_SETTINGS_TABS):
-    raise RuntimeError("settings registry must cover every non-model tab")
+if any(item.tab not in AGENT_VISIBLE_SETTINGS_TABS for item in SETTING_SPECS + SETTING_CONTROL_SPECS):
+    raise RuntimeError("every settings registry entry must belong to an agent-visible tab")
+if {item.tab for item in SETTING_SPECS + SETTING_CONTROL_SPECS} != set(AGENT_VISIBLE_SETTINGS_TABS):
+    raise RuntimeError("settings registry must cover every agent-visible tab")
 
 
 def _normalize(spec: SettingSpec, value: Any) -> Any:
@@ -356,14 +362,14 @@ def describe(namespace: Namespace | None = None) -> dict[str, Any]:
             row["default"] = None
         rows.append(row)
     controls = [asdict(item) for item in SETTING_CONTROL_SPECS] if namespace is None else []
-    covered_tabs = NON_MODEL_SETTINGS_TABS if namespace is None else tuple(sorted({item.tab for item in specs}))
+    covered_tabs = AGENT_VISIBLE_SETTINGS_TABS if namespace is None else tuple(sorted({item.tab for item in specs}))
     return {
         "schema_version": 2,
         "revision": config_store.get_settings_revision(),
         "settings": rows,
         "controls": controls,
         "covered_tabs": list(covered_tabs),
-        "excluded_tabs": ["models"],
+        "excluded_tabs": [],
         "shortcut_defaults": {
             action: list(keys) for action, keys in SHORTCUT_DEFAULTS.items()
         } if namespace in {None, "shortcuts"} else {},
@@ -492,7 +498,7 @@ def update(
 
 __all__ = [
     "SETTING_SPECS", "SPEC_BY_KEY", "SETTING_CONTROL_SPECS", "CONTROL_BY_ID",
-    "NON_MODEL_SETTINGS_TABS", "SHORTCUT_DEFAULTS", "SettingSpec", "SettingControlSpec", "SettingsForbiddenError",
+    "AGENT_VISIBLE_SETTINGS_TABS", "NON_MODEL_SETTINGS_TABS", "SHORTCUT_DEFAULTS", "SettingSpec", "SettingControlSpec", "SettingsForbiddenError",
     "SettingsServiceError", "SettingsValidationError", "describe", "read_public", "update",
     "validate_changes",
 ]

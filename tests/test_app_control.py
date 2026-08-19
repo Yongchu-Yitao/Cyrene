@@ -46,7 +46,20 @@ def test_operation_and_ui_action_manifests_are_classified():
     assert OPERATION_BY_ID["cyrene.approval.answer"].risk == "R3"
     assert OPERATION_BY_ID["cyrene.approval.answer"].exposure == "ui_surface"
     assert OPERATION_BY_ID["cyrene.approval.unprompted_self_answer"].risk == "R4"
-    assert "cyrene.settings.model" not in OPERATION_BY_ID
+    assert OPERATION_BY_ID["cyrene.permission.elevate"].exposure == "forbidden"
+
+
+def test_agent_model_secret_input_is_redacted_from_self_control_audit_payloads():
+    from cyrene.workbench.app_control import _redact
+
+    payload = {
+        "node_id": "model_api_key",
+        "input": {"secret_value": "sk-private-model-key"},
+    }
+    redacted = _redact(payload)
+
+    assert redacted["input"]["secret_value"] == "[REDACTED]"
+    assert "sk-private-model-key" not in json.dumps(redacted)
 
 
 def test_background_business_controls_are_internal_only():
@@ -251,7 +264,7 @@ def test_settings_patch_is_atomic_revisioned_and_self_pack_is_protected(monkeypa
     assert settings_service.read_public("runtime")["values"]["app_language"] == "en"
 
 
-def test_non_model_settings_registry_covers_every_tab_and_shortcuts_are_versioned(monkeypatch, tmp_path):
+def test_agent_visible_settings_registry_covers_models_and_shortcuts_are_versioned(monkeypatch, tmp_path):
     from cyrene.runtime import config_store, settings_service
 
     monkeypatch.setattr(config_store, "DATA_DIR", tmp_path)
@@ -264,11 +277,21 @@ def test_non_model_settings_registry_covers_every_tab_and_shortcuts_are_versione
     monkeypatch.setattr(config_store, "_fernet", None)
 
     schema = settings_service.describe()
-    assert schema["excluded_tabs"] == ["models"]
-    assert set(schema["covered_tabs"]) == set(settings_service.NON_MODEL_SETTINGS_TABS)
-    assert {item["tab"] for item in schema["controls"]} == set(settings_service.NON_MODEL_SETTINGS_TABS)
+    assert schema["excluded_tabs"] == []
+    assert set(schema["covered_tabs"]) == set(settings_service.AGENT_VISIBLE_SETTINGS_TABS)
+    assert {item["tab"] for item in schema["controls"]} == set(settings_service.AGENT_VISIBLE_SETTINGS_TABS)
     assert all(item["tab"] in settings_service.NON_MODEL_SETTINGS_TABS for item in schema["settings"])
-    assert "models" not in {item["tab"] for item in schema["settings"] + schema["controls"]}
+    model_controls = {
+        item["setting_id"]: item
+        for item in schema["controls"]
+        if item["tab"] == "models"
+    }
+    assert set(model_controls) == {
+        "models.connections", "models.credentials", "models.profiles",
+        "models.routes", "models.oauth",
+    }
+    assert model_controls["models.credentials"]["risk"] == "R3"
+    assert model_controls["models.credentials"]["secret"] is True
     serialized_schema = json.dumps(schema, sort_keys=True)
     assert "cyrene.data.manage" not in serialized_schema
     assert "cyrene.update.manage" not in serialized_schema

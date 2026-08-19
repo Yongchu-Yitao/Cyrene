@@ -683,7 +683,10 @@
   function projectedRisk(element) {
     var declared = String(element.getAttribute("data-cyrene-risk") || "");
     if (declared === "R1" || declared === "R2" || declared === "R3") return declared;
-    if (element.classList && element.classList.contains("danger")) return "R3";
+    if (element.classList && (
+      element.classList.contains("danger")
+      || element.classList.contains("is-danger")
+    )) return "R3";
     return activeScope === "settings" ? "R2" : "R1";
   }
 
@@ -734,6 +737,12 @@
         gesture_aliases: ["selection", "keyboard"],
         input_schema: { value: "text<=400" },
       }));
+    } else if (tag === "input" && type === "password" && element.getAttribute("data-cyrene-agent-secret-input") === "true") {
+      actions.push(normalizeAction({
+        action_id: "set_secret", kind: "set_value", risk: risk,
+        gesture_aliases: ["text_input"],
+        input_schema: { secret_value: "text<=4000" },
+      }));
     } else if (tag === "input" || tag === "textarea") {
       actions.push(normalizeAction({
         action_id: "set_value", kind: "set_value", risk: risk,
@@ -767,6 +776,8 @@
         if (!exists) throw new Error("unknown option");
         setProjectedValue(element, value);
       };
+    } else if (tag === "input" && type === "password" && element.getAttribute("data-cyrene-agent-secret-input") === "true") {
+      handlers.set_secret = function (input) { setProjectedValue(element, String(input.secret_value || "")); };
     } else if (tag === "input" || tag === "textarea") {
       handlers.set_value = function (input) { setProjectedValue(element, String(input.value || "")); };
     }
@@ -894,15 +905,14 @@
       if (explicitOwnerId && nodes.has(explicitOwnerId)) return;
       var tag = String(element.tagName || "").toLowerCase();
       var inputType = String(element.getAttribute("type") || "").toLowerCase();
-      if (tag === "input" && (inputType === "password" || inputType === "file" || inputType === "hidden")) return;
+      var agentSecretInput = tag === "input"
+        && inputType === "password"
+        && element.getAttribute("data-cyrene-agent-secret-input") === "true";
+      if (tag === "input" && ((inputType === "password" && !agentSecretInput) || inputType === "file" || inputType === "hidden")) return;
       if (
         element.getAttribute("data-cyrene-secret") === "true"
         || element.getAttribute("data-cyrene-user-ceremony") === "true"
       ) return;
-      var modelPanel = typeof element.closest === "function"
-        ? element.closest('main[data-settings-active-tab="models"]')
-        : null;
-      if (modelPanel) return;
       var isScrollable = Number(element.scrollHeight || 0) > Number(element.clientHeight || 0) + 2
         || Number(element.scrollWidth || 0) > Number(element.clientWidth || 0) + 2;
       var role = projectedRole(element);

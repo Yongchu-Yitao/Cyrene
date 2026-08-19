@@ -214,8 +214,21 @@ var TABS_BY_ID = TABS.reduce(function (acc, item) {
   return acc;
 }, {});
 
+function settingsIconMarkup(name) {
+  var assets = window.CyreneIconAssets;
+  return assets && assets.settings && assets.settings[name] || "";
+}
+
 function SettingsTabIcon(id) {
   var item = TABS_BY_ID[id] || TABS_BY_ID.general;
+  var markup = settingsIconMarkup(item.icon);
+  if (markup) {
+    return React.createElement("span", {
+      className: "settings-overlay-tab-glyph is-inline",
+      dangerouslySetInnerHTML: { __html: markup },
+      "aria-hidden": "true",
+    });
+  }
   return React.createElement("span", {
     className: "settings-overlay-tab-glyph",
     style: { "--settings-tab-icon": 'url("settings-icons/' + item.icon + '.svg")' },

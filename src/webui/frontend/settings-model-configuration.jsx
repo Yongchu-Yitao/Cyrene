@@ -65,7 +65,26 @@
     }, h("circle", { cx: "11", cy: "11", r: "7" }), h("path", { d: "m20 20-3.2-3.2" }));
   }
 
+  function iconMarkup(group, name) {
+    var assets = window.CyreneIconAssets;
+    return assets && assets[group] && assets[group][name]
+      ? assets[group][name]
+      : "";
+  }
+
   function settingsGlyph(name, size) {
+    var markup = iconMarkup("settings", name);
+    if (markup) {
+      return h("span", {
+        className: "wb-mcfg-glyph is-inline",
+        style: {
+          width: (size || 16) + "px",
+          height: (size || 16) + "px",
+        },
+        dangerouslySetInnerHTML: { __html: markup },
+        "aria-hidden": "true",
+      });
+    }
     return h("span", {
       className: "wb-mcfg-glyph",
       style: {
@@ -79,22 +98,25 @@
 
   function providerGlyph(name, size) {
     var dimension = (size || 19) + "px";
-    if (["gemini", "deepseek", "minimax"].indexOf(name) >= 0) {
-      return h("img", {
-        className: "wb-mcfg-provider-logo is-" + name,
-        src: "provider-icons/" + name + ".svg",
-        width: size || 19,
-        height: size || 19,
-        draggable: false,
-        alt: "",
-        "aria-hidden": "true",
-      });
-    }
+    var markup = iconMarkup("providers", name);
     var brandColors = {
       openai: "#10a37f",
       anthropic: "#d97757",
+      ollama: "currentColor",
       onnx: "#005ced",
     };
+    if (markup) {
+      return h("span", {
+        className: "wb-mcfg-provider-logo is-inline is-" + name,
+        style: {
+          width: dimension,
+          height: dimension,
+          color: brandColors[name] || "currentColor",
+        },
+        dangerouslySetInnerHTML: { __html: markup },
+        "aria-hidden": "true",
+      });
+    }
     return h("span", {
       className: "wb-mcfg-glyph wb-mcfg-provider-glyph is-" + name,
       style: {
@@ -661,7 +683,7 @@
       state.error ? h("div", { className: "wb-mcfg-inline-error", role: "alert" }, state.error) : null,
       state.connected && models.length ? h("label", { className: "wb-mcfg-oauth-picker" },
         h("span", null, "可用模型"),
-        h("select", { className: "wb-select", value: selectedModelId, onChange: function (event) { setSelectedModelId(event.target.value); } }, models.map(function (item) {
+        h("select", { className: "wb-select", value: selectedModelId, "aria-label": "OpenAI 可用模型", onChange: function (event) { setSelectedModelId(event.target.value); } }, models.map(function (item) {
           var id = String(item.model || item.id || item.slug || "");
           return h("option", { key: id, value: id }, item.displayName || item.display_name || item.name || id);
         })),
@@ -669,8 +691,8 @@
       ) : null,
       h("div", { className: "wb-mcfg-actions" },
         state.connected
-          ? h("button", { type: "button", className: "wb-btn danger", disabled: !!props.busy, onClick: props.onLogout }, props.busy === "logout" ? "正在退出…" : "退出登录")
-          : h("button", { type: "button", className: "wb-btn primary", disabled: !!props.busy || state.checking, onClick: props.onLogin }, props.busy === "login" ? "等待授权…" : "登录 OpenAI"),
+          ? h("button", { type: "button", className: "wb-btn danger", "data-cyrene-risk": "R3", disabled: !!props.busy, onClick: props.onLogout }, props.busy === "logout" ? "正在退出…" : "退出登录")
+          : h("button", { type: "button", className: "wb-btn primary", "data-cyrene-risk": "R3", disabled: !!props.busy || state.checking, onClick: props.onLogin }, props.busy === "login" ? "等待授权…" : "登录 OpenAI"),
         state.connected && models.length
           ? h("button", { type: "button", className: "wb-btn", disabled: !!props.busy, onClick: props.onImportModels }, "导入 " + models.length + " 个可用模型")
           : null
@@ -790,7 +812,7 @@
         h("div", { className: "wb-mcfg-profile-details-grid" },
           h("label", { className: "wb-mcfg-profile-editor-field is-half" },
             h("span", null, "显示名称"),
-            h("input", { className: "wb-input", value: profile.name || "", onChange: function (event) { props.onChange("name", event.target.value); } })
+            h("input", { className: "wb-input", value: profile.name || "", "aria-label": "模型显示名称", onChange: function (event) { props.onChange("name", event.target.value); } })
           ),
           h("div", { className: "wb-mcfg-profile-editor-field is-half" },
             h("span", null, "能力"),
@@ -807,23 +829,23 @@
           ),
           h("label", { className: "wb-mcfg-profile-editor-field is-wide" },
             h("span", null, "模型 ID"),
-            h("input", { className: "wb-input", value: profile.model || "", onChange: function (event) { props.onChange("model", event.target.value); }, placeholder: "例如 gpt-5" })
+            h("input", { className: "wb-input", value: profile.model || "", "aria-label": "模型 ID", onChange: function (event) { props.onChange("model", event.target.value); }, placeholder: "例如 gpt-5" })
           ),
           h("label", { className: "wb-mcfg-profile-editor-field" },
             h("span", null, "上下文（Token）"),
-            h("input", { className: "wb-input", type: "number", min: 0, inputMode: "numeric", value: profile.context_limit == null ? "" : profile.context_limit, onChange: function (event) { props.onChange("context_limit", event.target.value); }, placeholder: "自动", title: label(props, "settings.adapterAutoDetectHint", "Token 数；留空表示由协议自动判断。") })
+            h("input", { className: "wb-input", type: "number", min: 0, inputMode: "numeric", value: profile.context_limit == null ? "" : profile.context_limit, "aria-label": "上下文 Token 上限", onChange: function (event) { props.onChange("context_limit", event.target.value); }, placeholder: "自动", title: label(props, "settings.adapterAutoDetectHint", "Token 数；留空表示由协议自动判断。") })
           ),
           h("label", { className: "wb-mcfg-profile-editor-field" },
             h("span", null, label(props, "settings.inputPrice", "输入价格")),
-            h("input", { className: "wb-input", type: "number", min: 0, step: "any", inputMode: "decimal", value: pricing.input, onChange: function (event) { props.onChange("price", updateProfilePriceField(profile.price, "input", event.target.value)); }, placeholder: "0", title: label(props, "settings.pricePerMillionHint", "每百万 Token 的价格，默认人民币。") })
+            h("input", { className: "wb-input", type: "number", min: 0, step: "any", inputMode: "decimal", value: pricing.input, "aria-label": "模型输入价格", onChange: function (event) { props.onChange("price", updateProfilePriceField(profile.price, "input", event.target.value)); }, placeholder: "0", title: label(props, "settings.pricePerMillionHint", "每百万 Token 的价格，默认人民币。") })
           ),
           h("label", { className: "wb-mcfg-profile-editor-field" },
             h("span", null, label(props, "settings.outputPrice", "输出价格")),
-            h("input", { className: "wb-input", type: "number", min: 0, step: "any", inputMode: "decimal", value: pricing.output, onChange: function (event) { props.onChange("price", updateProfilePriceField(profile.price, "output", event.target.value)); }, placeholder: "0", title: label(props, "settings.pricePerMillionHint", "每百万 Token 的价格，默认人民币。") })
+            h("input", { className: "wb-input", type: "number", min: 0, step: "any", inputMode: "decimal", value: pricing.output, "aria-label": "模型输出价格", onChange: function (event) { props.onChange("price", updateProfilePriceField(profile.price, "output", event.target.value)); }, placeholder: "0", title: label(props, "settings.pricePerMillionHint", "每百万 Token 的价格，默认人民币。") })
           ),
           h("label", { className: "wb-mcfg-profile-editor-field" },
             h("span", null, label(props, "settings.cachePrice", "缓存价格")),
-            h("input", { className: "wb-input", type: "number", min: 0, step: "any", inputMode: "decimal", value: pricing.cache, onChange: function (event) { props.onChange("price", updateProfilePriceField(profile.price, "cache", event.target.value)); }, placeholder: "0", title: label(props, "settings.pricePerMillionHint", "每百万 Token 的价格，默认人民币。") })
+            h("input", { className: "wb-input", type: "number", min: 0, step: "any", inputMode: "decimal", value: pricing.cache, "aria-label": "模型缓存价格", onChange: function (event) { props.onChange("price", updateProfilePriceField(profile.price, "cache", event.target.value)); }, placeholder: "0", title: label(props, "settings.pricePerMillionHint", "每百万 Token 的价格，默认人民币。") })
           )
         ),
         h("div", { className: "wb-mcfg-profile-details-actions" },
@@ -1459,12 +1481,22 @@
           ),
           !isLocalConnection(selected) ? h("section", { className: "wb-mcfg-form-section wb-mcfg-connection-section", "aria-label": "连接设置" },
             h("div", { className: "wb-mcfg-form-grid" },
-              h(Field, { label: "连接名称" }, h("input", { className: "wb-input", value: selected.name, onChange: function (event) { updateConnection("name", event.target.value); } })),
-              h(Field, { label: label(props, "settings.adapter", "协议") }, h("select", { className: "wb-select", value: selected.adapter, disabled: !selectableAdapters.length, onChange: function (event) { updateConnection("adapter", event.target.value); } }, editorAdapters.map(function (adapter) {
+              h(Field, { label: "连接名称" }, h("input", { className: "wb-input", value: selected.name, "aria-label": "连接名称", onChange: function (event) { updateConnection("name", event.target.value); } })),
+              h(Field, { label: label(props, "settings.adapter", "协议") }, h("select", { className: "wb-select", value: selected.adapter, "aria-label": "模型服务协议", disabled: !selectableAdapters.length, onChange: function (event) { updateConnection("adapter", event.target.value); } }, editorAdapters.map(function (adapter) {
                 return h("option", { key: adapter.id, value: adapter.id, disabled: !isUserSelectableAdapter(adapter) }, adapterOptionName(adapter));
               }))),
-              !isCodexConnection(selected) && !isLocalConnection(selected) ? h(Field, { label: "API 地址", wide: true }, h("input", { className: "wb-input", type: "url", value: selected.base_url, onChange: function (event) { updateConnection("base_url", event.target.value); }, placeholder: "https://api.example.com/v1", autoComplete: "url" })) : null,
-              !isCodexConnection(selected) && !isLocalConnection(selected) ? h(Field, { label: "API 密钥", wide: true, hint: selected.secret_configured && !selected.secret ? "已保存密钥；留空不会覆盖。" : "密钥只发送给本机配置 API。" }, h("input", { className: "wb-input", type: "password", value: selected.secret, onChange: function (event) { updateConnection("secret", event.target.value); }, placeholder: selected.secret_configured ? "已配置" : "sk-…", autoComplete: "new-password" })) : null
+              !isCodexConnection(selected) && !isLocalConnection(selected) ? h(Field, { label: "API 地址", wide: true }, h("input", { className: "wb-input", type: "url", value: selected.base_url, "aria-label": "模型服务 API 地址", onChange: function (event) { updateConnection("base_url", event.target.value); }, placeholder: "https://api.example.com/v1", autoComplete: "url" })) : null,
+              !isCodexConnection(selected) && !isLocalConnection(selected) ? h(Field, { label: "API 密钥", wide: true, hint: selected.secret_configured && !selected.secret ? "已保存密钥；留空不会覆盖。" : "密钥只发送给本机配置 API。" }, h("input", {
+                className: "wb-input",
+                type: "password",
+                value: selected.secret,
+                onChange: function (event) { updateConnection("secret", event.target.value); },
+                placeholder: selected.secret_configured ? "已配置" : "sk-…",
+                autoComplete: "new-password",
+                "aria-label": "API 密钥（只写）",
+                "data-cyrene-agent-secret-input": "true",
+                "data-cyrene-risk": "R3",
+              })) : null
             )
           ) : null,
           isCodexConnection(selected) ? h(OAuthSection, { state: oauth, busy: oauthBusy, onLogin: startOauthLogin, onLogout: logoutOauth, onImportModels: importOauthModels, onImportModel: importOauthModel }) : null,

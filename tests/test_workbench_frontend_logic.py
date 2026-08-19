@@ -8090,6 +8090,9 @@ def test_tool_i18n_fallbacks_do_not_leak_internal_keys_after_classic_removal():
   planProgress: window.WorkbenchI18n.toolName("update_plan_progress", "zh"),
   browserSubmit: window.WorkbenchI18n.toolName("browser.user.submit", "zh"),
   browserNavigateEn: window.WorkbenchI18n.toolName("browser.navigate", "en"),
+  askUserZh: window.WorkbenchI18n.toolName("Ask User", "zh"),
+  askUserEn: window.WorkbenchI18n.toolName("Ask User", "en"),
+  globZh: window.WorkbenchI18n.toolName("Glob", "zh"),
   appSnapshot: window.WorkbenchI18n.toolName("AppUISnapshot", "zh"),
   showSidebar: window.WorkbenchI18n.t("workbenchChat.showSidebar"),
   hideSidebar: window.WorkbenchI18n.t("workbenchChat.hideSidebar"),
@@ -8104,6 +8107,9 @@ def test_tool_i18n_fallbacks_do_not_leak_internal_keys_after_classic_removal():
         "planProgress": "更新计划进度",
         "browserSubmit": "用户提交表单",
         "browserNavigateEn": "Navigate",
+        "askUserZh": "询问用户",
+        "askUserEn": "Ask user",
+        "globZh": "查找文件",
         "appSnapshot": "快照应用界面",
         "showSidebar": "显示侧边栏",
         "hideSidebar": "隐藏侧边栏",
@@ -8115,6 +8121,21 @@ def test_tool_i18n_fallbacks_do_not_leak_internal_keys_after_classic_removal():
     assert not (classic_root / "chat.jsx").exists()
     assert not (classic_root / "chat-surface.jsx").exists()
     assert not (classic_root / "evolution.jsx").exists()
+
+
+def test_profile_top_tools_use_shared_tool_name_i18n():
+    root = Path(__file__).resolve().parent.parent
+    profile = (root / "src/webui/frontend/workbench-profile.jsx").read_text(
+        encoding="utf-8"
+    )
+    i18n = (root / "src/webui/frontend/workbench-i18n.jsx").read_text(
+        encoding="utf-8"
+    )
+
+    assert 'require("i18n").toolName(tool, lang)' in profile
+    assert '"Ask User": "ask_user"' in i18n
+    assert i18n.count('"toolName.ask_user"') == 2
+    assert i18n.count('"toolName.Glob"') == 2
 
 
 def test_workbench_tool_trace_preview_localizes_protocol_values_only():

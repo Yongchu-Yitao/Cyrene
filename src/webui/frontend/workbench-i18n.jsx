@@ -7706,6 +7706,9 @@ var WORKBENCH_TRANSLATIONS = {
 // compatibility names. Keep the protocol IDs visible to telemetry and route
 // them to the established localized labels only at the presentation boundary.
 var WORKBENCH_TOOL_NAME_ALIASES = {
+  "Ask User": "ask_user",
+  "AskUser": "ask_user",
+  "ask-user": "ask_user",
   "code.prompt_claude_code": "PromptClaudeCode",
   "code.check_claude_code": "CheckClaudeCode",
   "code.start_claude_code": "StartClaudeCode",

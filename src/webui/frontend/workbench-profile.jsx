@@ -73,6 +73,10 @@
     var hit = WBP_FEATURE_LABELS[tool];
     if (hit) return hit[lang] || hit.en;
     if (tool.indexOf("browser") === 0) return lang === "zh" ? "浏览器" : "Browser";
+    try {
+      var localized = window.CyreneUI.require("i18n").toolName(tool, lang);
+      if (localized && localized !== tool) return localized;
+    } catch (error) {}
     return tool.replace(/[_-]+/g, " ").replace(/\b\w/g, function (c) { return c.toUpperCase(); });
   }
   function wbpSpend(usage, lang) {

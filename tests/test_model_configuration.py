@@ -584,6 +584,43 @@ def test_frontend_registers_split_pages_and_live_context_contract():
     assert "segTotal <= 0 && used <= 0 && limit <= 0" in chat
 
 
+def test_settings_and_provider_icons_are_inlined_before_first_render():
+    root = Path(__file__).resolve().parents[1]
+    build = (root / "src/webui/build-jsx.mjs").read_text()
+    index = (root / "src/webui/frontend/index.html").read_text()
+    overlay = (root / "src/webui/frontend/settings-overlay.jsx").read_text()
+    settings = (root / "src/webui/frontend/settings-model-configuration.jsx").read_text()
+
+    assert "<!-- CYRENE_ICON_ASSETS -->" in index
+    assert "function inlineIconAssets(" in build
+    assert "function svgMarkup(" in build
+    assert "inlineIconAssets(settingsIconFiles, PROVIDER_ICON_FILES)" in build
+    assert "window.CyreneIconAssets" in overlay
+    assert "settingsIconMarkup(item.icon)" in overlay
+    assert 'className: "settings-overlay-tab-glyph is-inline"' in overlay
+    assert "window.CyreneIconAssets" in settings
+    assert 'iconMarkup("providers", name)' in settings
+    assert 'className: "wb-mcfg-provider-logo is-inline is-" + name' in settings
+
+
+def test_model_service_credentials_are_agent_write_only_and_r3():
+    root = Path(__file__).resolve().parents[1]
+    settings = (root / "src/webui/frontend/settings-model-configuration.jsx").read_text()
+    surface = (root / "src/webui/frontend/platform/ui-surface.jsx").read_text()
+
+    assert '"data-cyrene-agent-secret-input": "true"' in settings
+    assert '"data-cyrene-risk": "R3"' in settings
+    assert '"aria-label": "API 密钥（只写）"' in settings
+    assert "if (modelPanel) return;" not in surface
+    assert 'action_id: "set_secret", kind: "set_value", risk: risk' in surface
+    assert 'input_schema: { secret_value: "text<=4000" }' in surface
+    assert 'String(input.secret_value || "")' in surface
+    assert 'element.classList.contains("is-danger")' in surface
+    assert '"aria-label": "连接名称"' in settings
+    assert '"aria-label": "模型 ID"' in settings
+    assert '"aria-label": "模型服务 API 地址"' in settings
+
+
 def test_services_autosave_is_single_flight_retryable_and_current_only():
     root = Path(__file__).resolve().parents[1]
     settings = (root / "src/webui/frontend/settings-model-configuration.jsx").read_text()

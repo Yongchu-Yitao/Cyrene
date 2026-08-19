@@ -115,6 +115,25 @@ function frontendRevision(files, cssFiles, assetFiles, indexTemplate) {
   return `${projectVersion()}-${hash.digest('hex').slice(0, 10)}`
 }
 
+function svgMarkup(file) {
+  return readFileSync(file, 'utf8').trim()
+}
+
+function inlineIconAssets(settingsIconFiles, providerIconFiles) {
+  const settings = Object.fromEntries(settingsIconFiles.map((file) => [
+    basename(file, extname(file)),
+    svgMarkup(file),
+  ]))
+  const providers = Object.fromEntries(providerIconFiles.map(([file, outputName]) => [
+    basename(outputName, extname(outputName)),
+    svgMarkup(file),
+  ]))
+  // Escape '<' so trusted local SVG markup cannot accidentally terminate the
+  // inline script. JavaScript restores the original character at parse time.
+  const payload = JSON.stringify({ settings, providers }).replace(/</g, '\\u003c')
+  return `<script>window.CyreneIconAssets=Object.freeze(${payload});</script>`
+}
+
 function electronOverlayTemplate(electronSource, constantName) {
   const marker = `const ${constantName} = \``
   const start = electronSource.indexOf(marker)
@@ -198,10 +217,15 @@ async function build() {
     [resolve(__dirname, 'package-lock.json')],
   )
   const revision = frontendRevision(revisionSources, cssFiles, assetFiles, indexTemplate)
-  const indexHtml = indexTemplate.replace(
-    /(\?v=)[A-Za-z0-9.+-]+/g,
-    `$1${revision}`,
-  )
+  const indexHtml = indexTemplate
+    .replace(
+      '<!-- CYRENE_ICON_ASSETS -->',
+      inlineIconAssets(settingsIconFiles, PROVIDER_ICON_FILES),
+    )
+    .replace(
+      /(\?v=)[A-Za-z0-9.+-]+/g,
+      `$1${revision}`,
+    )
   writeFileSync(join(APP_DIR, 'index.html'), indexHtml)
   console.log(`✓ index.html (${revision})`)
 

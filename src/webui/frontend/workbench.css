@@ -7667,6 +7667,18 @@ html[data-theme="light"] .wb-tool-list .mono {
   mask: var(--settings-tab-icon) center / contain no-repeat;
 }
 
+.settings-overlay-tab-glyph.is-inline {
+  background: none;
+  -webkit-mask: none;
+  mask: none;
+}
+
+.settings-overlay-tab-glyph.is-inline svg {
+  display: block;
+  width: 100%;
+  height: 100%;
+}
+
 .settings-overlay-tab:hover {
   background: color-mix(in srgb, var(--wb-accent) 6%, transparent);
   color: var(--wb-text);
