@@ -53,6 +53,8 @@ def test_release_publishes_each_verified_platform_independently():
     release_job = workflow.split("\n  release:\n", 1)[1]
     assert "needs: [build-macos, build-windows, build-windows-arm, build-linux]" not in release_job
     assert "Create or update Release" in release_job
+    assert "draft: false" in release_job
+    assert "Verify tag, version, main ancestry, and CI" in release_job
     assert "Publish macOS DMG" in workflow
     assert "Publish Windows x64 packages" in workflow
     assert "Publish Windows ARM64 packages" in workflow

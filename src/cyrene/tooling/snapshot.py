@@ -8,7 +8,6 @@ from types import MappingProxyType
 
 from cyrene.runtime.settings_store import is_tool_pack_enabled
 from cyrene.tooling.catalog import (
-    TOOL_DEFS,
     TOOL_HANDLERS,
     TOOL_METADATA,
     all_capabilities,

@@ -16,10 +16,10 @@ UI 合并工作区基线：`17914e697af41c13a3c5da0092f69aa9906644af`
 本文记录已完成的开发检查点。旧版 Windows/Context Debugger 命令记录引用了
 已经迁移的模块路径，因此已由当前源码与验证结果替代。
 
-## 0.7.10-beta4 维护检查点
+## 0.7.10 维护检查点
 
 - Python 包、Electron 包和 Electron lockfile 的根版本现统一为
-  `0.7.10-beta4`。
+  `0.7.10`。
 - 新增 [多模型 Provider 接入研究](multimodel-provider-research.zh-CN.md)与
   [Provider 插件化重构设计](provider-pluginization-design.zh-CN.md)。两份文档是
   后续实现依据，不表示 Provider 插件化代码已经落地。

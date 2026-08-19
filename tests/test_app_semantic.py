@@ -179,7 +179,7 @@ async def test_find_forwards_parameters_and_leases_matched_nodes(monkeypatch):
             return {
                 "status": "success", "snapshot_revision": 4,
                 "semantic_profile": {"status": "available"},
-                "nodes": [{"ref": "e7", "role": "link", "name": "Cyrene-0.7.10-beta4-win-arm64.exe", "actions": ["press"]}],
+                "nodes": [{"ref": "e7", "role": "link", "name": "Cyrene-0.7.10-win-arm64.exe", "actions": ["press"]}],
             }
         if operation == "call" and arguments.get("capability") == "press":
             return {"status": "success", "verification": {"nodes": [{"ref": "e7", "role": "link", "actions": []}]}}
@@ -194,7 +194,7 @@ async def test_find_forwards_parameters_and_leases_matched_nodes(monkeypatch):
     find_call = next(args for operation, args in calls if operation == "call" and args.get("capability") == "find")
     assert find_call["parameters"] == {"contains": "arm64", "max_results": 20}
     node = found["nodes"][0]
-    assert node["name"] == "Cyrene-0.7.10-beta4-win-arm64.exe"
+    assert node["name"] == "Cyrene-0.7.10-win-arm64.exe"
     clicked = await app_semantic.execute_action("click", {
         "session_id": "app_session_find", "snapshot_id": found["snapshot_id"],
         "revision": found["revision"], "node_id": node["node_id"], "action_id": node["actions"][0]["action_id"],

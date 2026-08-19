@@ -5,6 +5,89 @@
 This English edition preserves the release history of the Chinese changelog.
 The Chinese edition remains the most detailed record for older releases.
 
+## [0.7.10] - 2026-08-19
+
+`0.7.10` brings together every feature and interface change since `0.7.9`, including all four beta releases and final stabilization work. This section describes user-visible capabilities and experience changes only; the original beta notes remain below.
+
+### Model services, routing, and usage
+
+- Model Settings is split into complete Model Services and Model Configuration workspaces: one manages connections, authentication, and profiles, while the other assigns default, fallback, vision, and embedding roles.
+- Primary, fallback, vision, and embedding models can have independent ordered candidates, so Cyrene can continue with the next configured model without repeatedly changing one global selection.
+- Model profiles can define their own name, capabilities, context size, reasoning effort, concurrency, and input, output, and cache pricing.
+- OpenAI Compatible, OpenAI, Anthropic, Gemini, DeepSeek, MiniMax, Ollama, Codex account models, and local models share one configuration experience while retaining their provider-specific options.
+- Custom connections can explicitly choose OpenAI, OpenAI Responses, Anthropic, or Gemini compatibility instead of forcing different services through one request format.
+- Model Services adds provider brand icons, connection state, model counts, search, filtering, and clearer messages for connection tests, discovery, timeouts, rejection, and unavailable services.
+- Model configuration now saves automatically. Rapid edits and deletes are coalesced in order, failed saves preserve the pending work, and a visible Retry action prevents temporary network errors from losing changes.
+- Concurrent edits from another window prompt a reload of the latest configuration. Delete actions remain available through a mouse- and keyboard-accessible menu to reduce accidental removal.
+- Local models restore their complete type, name, description, runtime state, download progress, retry, and delete actions in a simpler flat list.
+- DeepSeek and MiniMax are available as ready-to-configure services. Configured accounts using official provider endpoints can show DeepSeek balance or MiniMax interval and weekly quotas with reset times; existing data stays visible while it refreshes in the background.
+- Usage now compares the last four weeks with the current billing period, including requests, input/output tokens, total and average cost, budget use, and per-model cards.
+- Conversation model choices react to configuration changes, while names, capabilities, and context limits are more accurate. DeepSeek versioned endpoints, web search, tool calls, and empty reasoning fragments are handled more reliably.
+- Switching models refreshes conversation context use and limits immediately, and an empty chat also shows the selected model's capacity and automatic-compression threshold.
+- MiniMax reasoning is separated from the final answer, legacy reasoning tags no longer leak into visible replies, continued tool calls preserve the preceding reasoning correctly, and an authentication failure is no longer hidden by a later connection error.
+
+### Custom tools and Agent capabilities
+
+- Added fully file-based custom tools. Users can create individual tools or multi-tool packages in the system user-data directory, with the same location rules for installed and portable editions.
+- Custom tools behave like Cyrene's built-in tools and inherit the current Agent round's context, permissions, confirmations, timeouts, progress, and result presentation.
+- The Agent can create, modify, or delete custom tool files with its existing read, write, edit, search, and command capabilities; there is no separate publishing screen or protocol.
+- Custom tools are discovered and hot-reloaded automatically after files are added, edited, renamed, or removed, while older conversations cannot invoke a changed or deleted implementation.
+- Every custom tool package has an independent switch. Disabled packages disappear from Agent discovery and do not run code merely to populate Settings; enabling a package loads its latest files.
+- A uniquely named custom tool can replace a built-in tool while the original system tool remains explicitly available. Names in different packages remain isolated and never take over MCP or integration tools.
+- Custom tools are fully trusted local capabilities with the same system access as Cyrene. Cyrene does not sandbox them, install their dependencies, review their code, or add another publishing confirmation.
+- Large tool results are retained in full and can be read again on demand, reducing context pressure without losing the original output needed by later steps.
+
+### Workbench, conversations, and multi-window workflows
+
+- Chat, Tasks, Knowledge, Schedule, Memory, and Settings now share the same floating sidebar, module Dock, account entry, and collapsed state, so switching modules no longer feels like changing layouts.
+- Project selection is centralized in the top Cyrene entry. The chat navigator uses clearer grouped and flat rows with recent-chat overview, Show all, group expand/collapse, drag operations, and existing menus.
+- Sidebars now share width, color, radius, shadow, header geometry, and the bottom Dock. Expanded and collapsed motion is consistent, and the collapsed rail still supports module switching and account access.
+- The account entry keeps personal information available everywhere and shows quota or budget state when available, with direct Settings and Profile access from every major module.
+- Chats, files, Browser, Maps, Changes, and side Agents can still form split layouts. A content card can now be dragged into a separate desktop window and returned to the original window later.
+- File drops can choose a clear left or right position. Split cards support swap, replace, close, and restore with clearer drag previews, return targets, and edge-placement feedback.
+- Consecutive thinking, command, permission, search, file, browser, subagent, and tool activity is grouped into expandable execution summaries with running/completed state and duration.
+- Code blocks add Copy and Open in editor actions. Selected answer text can be sent directly to “Ask in sidebar” without manually copying it into another conversation.
+- Multi-line selection actions follow the complete selection and appear below it, while a single tilde used in a numeric range is no longer misread as strikethrough.
+- When a chat or task is waiting for the user's answer, its composer is temporarily disabled to prevent an unrelated message from being sent first.
+- Conversation model state, context usage, errors, and budget notices update live. Background completions update only their own chat and no longer replace the currently viewed session or leak notices into another chat.
+- Questions, attachments, tool calls, reasoning, and final replies retain their real order when saved and reopened, keeping the restored execution timeline consistent with the live run.
+
+### External Agents, desktop control, and runtime components
+
+- Codex model and OCR runtime components now download on first use. Settings exposes download, verification, failure, and retry state, while installers no longer bundle unnecessary large runtimes.
+- External coding Agent installation, startup, connection, recovery, and failure guidance are more reliable. Pi ACP can discover common Node environments and keeps model-specific configuration and login state separate.
+- External Agents no longer stop unexpectedly when local extensions or runtime discovery changes, and dependency, login, protocol, model, and recovery problems provide clearer next steps.
+- Desktop semantic snapshots can find controls by role, name, and text. When semantic information is unavailable, control falls back to visual operation instead of repeatedly attempting an invalid action.
+- The Agent pointer transfers correctly among Browser, desktop apps, and Cyrene, and fades after pointer activity ends instead of leaving an old target visible throughout a run.
+- macOS app control discovers windows much faster and recognizes minimized, cross-desktop, and changed windows more accurately. Multiple same-sized Safari windows can also be matched to the correct target.
+
+### Knowledge, memory, search, and data reliability
+
+- Documents, images, and other chat uploads are automatically registered in the current project Knowledge base with content deduplication, making them available to later questions.
+- Long-term project memory is more concise and keeps goals, stable conclusions, important habits, explicit requirements, and personal information instead of code-level implementation notes or temporary steps.
+- Backup restore places conversations, plans, personality, project data, and workspace state back in the correct locations, reducing loss or mismatch after migration.
+- Web search avoids repeated internal decisions and page opens, and fetched source content flows directly into the answer. Chinese pages without an explicit character encoding now decode correctly.
+- An already available local OCR runtime is used immediately rather than downloaded again, while model and runtime readiness can still be inspected and retried independently.
+- A newly downloaded OCR runtime is verified before activation, and an unusable newer component does not replace an existing working version.
+- Usage accounting, post-reply bookkeeping, and context data refresh sooner, and user-requested extension installs are no longer blocked by the normal weekly download limit.
+
+### Settings, budget, updates, and interface changes
+
+- Settings is reorganized into General, Intelligence, Connections, Extensions & system, Data, and Other groups, with dedicated destinations for Model Services, Custom tools, Extension Center, Integrations, Budget, and Usage.
+- Settings is now a full Workbench page instead of a temporary overlay, Personal information is a first-class destination, and the Settings sidebar can expand or collapse like other modules.
+- Model Services uses a clear list-and-detail layout with independent scrolling in short windows and a single-column narrow layout. Personal information retains identity, usage, activity heatmap, and insights without duplicating the old budget rail.
+- Extensions & system → Custom tools shows one section per package with an independent switch. Each tool uses an Extension Center-style card that expands to show its source, input requirements, and execution properties, while load errors stay with their package.
+- Extension Center and Custom tools are now distinct destinations with dedicated navigation icons, titles, search indexing, and clearer English and Chinese labels.
+- Budget calculations reset correctly when currency or billing-cycle start day changes. Monthly, weekly, and five-hour remaining amounts and refresh times no longer reuse an incompatible previous limit.
+- Budget Warning mode explains an exhausted limit but allows the request to continue, while Block mode stops new model requests. Codex quotas remain separate from currency budgets for API models.
+- When budget usage cannot be verified, Cyrene gives a clear message. Budget notices remain scoped to the relevant chat instead of appearing in unrelated conversations.
+- Update downloads now share progress between background and manual actions. A verified download moves directly to Restart to update without concurrent downloads or stale failure messages.
+- A downloaded update is verified again after application restart, so damaged, replaced, or incomplete files are not treated as installable.
+- An already available system Codex CLI is used directly instead of downloaded again, while Settings still shows its source, version, path, and download state.
+- Added diagnostic log export. About now brings version, update status, documentation, releases, support, and diagnostics into one destination.
+- Added guided tours accessible from Welcome and Help for Chat, Tasks, Knowledge, Memory, Schedule, and Browser, with more consistent spotlight rounding, narrow-screen behavior, keyboard focus, and reduced motion.
+- Settings, Model Services, Usage, Budget, activity cards, sidebar Dock, and menus now share more consistent typography, spacing, state colors, and responsive behavior, with clearer bilingual labels and execution summaries.
+
 ## [0.7.10-beta4] - 2026-08-17
 
 ### Features and interface changes

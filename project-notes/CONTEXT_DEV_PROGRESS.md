@@ -17,10 +17,10 @@ This file records the completed development checkpoints. Older
 Windows/context debugger command transcripts have been removed because they
 referenced modules that now live under the canonical domain packages.
 
-## 0.7.10-beta4 Maintenance Checkpoint
+## 0.7.10 Maintenance Checkpoint
 
 - The Python package, Electron package, and Electron lockfile root versions are
-  aligned at `0.7.10-beta4`.
+  aligned at `0.7.10`.
 - The new [multi-model provider research](multimodel-provider-research.zh-CN.md)
   and [provider pluginization design](provider-pluginization-design.zh-CN.md)
   capture the next implementation direction. They are planning records, not a

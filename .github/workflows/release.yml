@@ -15,6 +15,7 @@ on:
           - agent
 
 permissions:
+  actions: read
   contents: write
 
 env:
@@ -546,6 +547,36 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - name: Verify tag, version, main ancestry, and CI
+        if: startsWith(github.ref, 'refs/tags/')
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          version="${GITHUB_REF_NAME#v}"
+          python_version="$(sed -n 's/^version = "\([^"]*\)"/\1/p' pyproject.toml | head -n 1)"
+          electron_version="$(node -p "require('./electron/package.json').version")"
+          changelog_version="$(sed -n 's/^## \[\([^]]*\)\].*/\1/p' CHANGELOG.md | head -n 1)"
+          test "$version" = "$python_version"
+          test "$version" = "$electron_version"
+          test "$version" = "$changelog_version"
+
+          git fetch origin main
+          git merge-base --is-ancestor "$GITHUB_SHA" origin/main
+
+          ci_conclusion="$(
+            gh api --method GET \
+              "repos/${GITHUB_REPOSITORY}/actions/workflows/ci.yml/runs" \
+              -f branch=main \
+              -f event=push \
+              -f per_page=50 \
+            | jq -r --arg sha "$GITHUB_SHA" \
+              '[.workflow_runs[] | select(.head_sha == $sha)] | first | .conclusion // ""'
+          )"
+          test "$ci_conclusion" = "success"
 
       - name: Detect pre-release
         if: startsWith(github.ref, 'refs/tags/')
@@ -573,4 +604,5 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           body: ${{ steps.notes.outputs.body }}
+          draft: false
           prerelease: ${{ steps.pre.outputs.is_pre == 'true' }}

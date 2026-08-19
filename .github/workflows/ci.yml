@@ -90,8 +90,8 @@ jobs:
       - name: Verify generated WebUI is current
         run: git diff --exit-code -- src/webui/static/app
 
-      - name: Run Electron App Use tests
-        run: node --test electron/app-use.test.js
+      - name: Run Electron tests
+        run: node --test electron/*.test.js
 
       - name: Check patch formatting
         run: git diff --check
