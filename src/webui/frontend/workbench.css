@@ -14856,6 +14856,200 @@ html[data-theme="dark"] .wb-mem-main {
 .wb-mem-learning-main {
   background: var(--wb-surface);
 }
+.wb-learning-toolbar {
+  justify-content: space-between;
+}
+.wb-learning-toolbar-title {
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.wb-learning-toolbar-title .wb-mem-iconbtn {
+  flex: 0 0 38px;
+  width: 38px;
+  height: 38px;
+  color: var(--wb-muted);
+}
+.wb-learning-toolbar-title .wb-mem-iconbtn:hover,
+.wb-learning-toolbar-title .wb-mem-iconbtn:focus-visible {
+  outline: none;
+  background: var(--wb-row-hover-bg);
+  color: var(--wb-accent);
+}
+.wb-learning-toolbar-title b {
+  overflow: hidden;
+  color: var(--wb-text);
+  font-size: calc(15px * var(--wb-ui-font-scale, 1));
+  font-weight: 760;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.wb-learning-session-filter {
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--wb-faint);
+  font-size: calc(11.5px * var(--wb-ui-font-scale, 1));
+  font-weight: 650;
+}
+.wb-learning-session-filter > span { white-space: nowrap; }
+.wb-learning-session-filter select {
+  width: min(310px, 31vw);
+  min-width: 150px;
+  height: 38px;
+  border: 1px solid var(--wb-line);
+  border-radius: 10px;
+  outline: none;
+  background: var(--wb-control-bg);
+  color: var(--wb-text);
+  padding: 0 34px 0 11px;
+  font: inherit;
+  font-size: calc(12px * var(--wb-ui-font-scale, 1));
+  cursor: pointer;
+}
+.wb-learning-session-filter select:hover { background: var(--wb-control-hover-bg); }
+.wb-learning-session-filter select:focus-visible {
+  border-color: var(--wb-accent);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--wb-accent) 12%, transparent);
+}
+.wb-learning-session-filter select:disabled { opacity: .55; cursor: default; }
+.wb-learning-list-scroll {
+  display: flex;
+  flex-direction: column;
+  gap: 24px;
+}
+.wb-learning-list-scroll > .wb-mem-error,
+.wb-learning-list-scroll > .wb-mem-skill-note { flex: 0 0 auto; }
+.wb-learning-list-section {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.wb-learning-list-section.candidates {
+  padding: 14px;
+  border: 1px solid color-mix(in srgb, var(--wb-accent) 32%, var(--wb-line));
+  border-radius: 14px;
+  background: color-mix(in srgb, var(--wb-accent) 4%, transparent);
+}
+.wb-learning-list-section .wb-learning-side-head {
+  min-height: 24px;
+  padding: 0 2px;
+}
+.wb-learning-list-section .wb-learning-side-head b {
+  font-size: calc(14px * var(--wb-ui-font-scale, 1));
+}
+.wb-learning-list-section .wb-learning-side-head span {
+  font-variant-numeric: tabular-nums;
+}
+.wb-learning-list-section .wb-learning-skill-list,
+.wb-learning-list-section .wb-learning-chain-list {
+  flex: none;
+  min-height: 0;
+  overflow: visible;
+}
+.wb-learning-list-item {
+  min-height: 92px;
+  color: inherit;
+}
+.wb-learning-list-item .wb-mem-item-top { align-items: center; }
+.wb-learning-list-item .wb-mem-item-top .wb-mem-chip { flex: 0 0 auto; }
+.wb-learning-list-description {
+  color: var(--wb-muted);
+  font-size: calc(12.5px * var(--wb-ui-font-scale, 1));
+  line-height: 1.5;
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  overflow: hidden;
+  overflow-wrap: anywhere;
+}
+.wb-learning-list-index {
+  flex: 0 0 32px !important;
+  width: 32px;
+  height: 32px;
+  display: grid;
+  place-items: center;
+  border-radius: 9px;
+  background: color-mix(in srgb, var(--wb-muted) 10%, transparent);
+  color: var(--wb-muted) !important;
+  padding: 0 !important;
+  font-size: calc(12px * var(--wb-ui-font-scale, 1)) !important;
+  font-weight: 740;
+  font-variant-numeric: tabular-nums;
+}
+.wb-mem-item.wb-learning-candidate-card {
+  display: block;
+  padding: 0;
+  cursor: default;
+  box-shadow: none;
+  overflow: hidden;
+}
+.wb-mem-item.wb-learning-candidate-card:hover {
+  border-color: color-mix(in srgb, var(--wb-accent) 25%, var(--wb-line));
+}
+.wb-learning-candidate-detail-hit {
+  box-sizing: border-box;
+  width: 100%;
+  display: grid;
+  grid-template-columns: 34px minmax(0, 1fr);
+  align-items: start;
+  gap: 12px;
+  padding: 14px 15px 7px;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+  transition: background 150ms ease;
+}
+.wb-learning-candidate-detail-hit:hover {
+  background: color-mix(in srgb, var(--wb-accent) 3%, transparent);
+}
+.wb-learning-candidate-detail-hit:focus-visible {
+  outline: 2px solid color-mix(in srgb, var(--wb-accent) 48%, transparent);
+  outline-offset: -3px;
+}
+.wb-learning-candidate-card .wb-learning-candidate-actions {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin: 0;
+  padding: 3px 15px 14px 61px;
+}
+.wb-learning-candidate-card .wb-learning-candidate-copy b {
+  font-size: calc(13.5px * var(--wb-ui-font-scale, 1));
+}
+.wb-learning-candidate-card .wb-learning-candidate-copy p {
+  margin: 5px 0;
+  font-size: calc(12.5px * var(--wb-ui-font-scale, 1));
+}
+.wb-learning-candidate-card .wb-learning-candidate-copy small {
+  font-size: calc(11.5px * var(--wb-ui-font-scale, 1));
+}
+.wb-learning-candidate-actions button {
+  min-height: 34px;
+  padding: 6px 10px;
+  font-size: calc(11.5px * var(--wb-ui-font-scale, 1));
+}
+.wb-learning-list-count {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+}
+.wb-learning-list-count span + span::before {
+  content: "";
+  display: inline-block;
+  width: 3px;
+  height: 3px;
+  margin: 0 9px 2px 0;
+  border-radius: 999px;
+  background: currentColor;
+}
 .wb-mem-learning-head {
   flex: 0 0 auto;
   display: flex;
@@ -15541,6 +15735,7 @@ html[data-theme="dark"] .wb-mem-main {
   background: color-mix(in srgb, #6a5cff 14%, transparent);
   color: #6a5cff;
 }
+.wb-learning-step-content { min-width: 0; }
 .wb-learning-step b,
 .wb-learning-step p {
   display: block;
@@ -15667,8 +15862,73 @@ html[data-theme="dark"] .wb-mem-main {
   font-weight: 650;
 }
 .wb-mem-replay-panel {
-  flex-basis: 390px;
-  width: 390px;
+  flex: 0 1 520px;
+  width: 520px;
+  min-width: 380px;
+  container: wb-learning-inspector / inline-size;
+}
+
+@container wb-learning-inspector (max-width: 520px) {
+  .wb-mem-replay-panel .wb-learning-step {
+    grid-template-columns: 28px 32px minmax(0, 1fr) 22px;
+    grid-template-areas:
+      "number icon title status"
+      "details details details details";
+    align-items: center;
+    column-gap: 8px;
+    row-gap: 8px;
+    padding: 10px 11px;
+  }
+  .wb-mem-replay-panel .wb-learning-step-no {
+    grid-area: number;
+    justify-self: center;
+  }
+  .wb-mem-replay-panel .wb-learning-step-icon {
+    grid-area: icon;
+    width: 30px;
+    height: 30px;
+    justify-self: center;
+  }
+  .wb-mem-replay-panel .wb-learning-step-content {
+    display: contents;
+  }
+  .wb-mem-replay-panel .wb-learning-step-content > b {
+    grid-area: title;
+    min-width: 0;
+  }
+  .wb-mem-replay-panel .wb-learning-step-content > p,
+  .wb-mem-replay-panel .wb-learning-step-content > .wb-learning-step-params {
+    grid-area: details;
+    min-width: 0;
+  }
+  .wb-mem-replay-panel .wb-learning-step > i {
+    grid-area: status;
+    align-self: center;
+  }
+  .wb-mem-replay-panel .wb-learning-step b,
+  .wb-mem-replay-panel .wb-learning-step p {
+    overflow: visible;
+    text-overflow: clip;
+    white-space: normal;
+    overflow-wrap: anywhere;
+  }
+  .wb-mem-replay-panel .wb-learning-step b { line-height: 1.4; }
+  .wb-mem-replay-panel .wb-learning-step-params {
+    margin-top: 0;
+    overflow: visible;
+  }
+  .wb-mem-replay-panel .wb-learning-step-params span {
+    width: 100%;
+    display: grid;
+    grid-template-columns: minmax(62px, auto) minmax(0, 1fr);
+    align-items: baseline;
+  }
+  .wb-mem-replay-panel .wb-learning-step code {
+    overflow: visible;
+    text-overflow: clip;
+    white-space: normal;
+    overflow-wrap: anywhere;
+  }
 }
 .wb-detail-shot {
   margin: 0;
@@ -15814,14 +16074,15 @@ html[data-theme="dark"] .wb-mem-main {
 }
 .wb-replay-metrics {
   display: grid;
-  grid-template-columns: repeat(4, 1fr);
+  grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: 8px;
 }
 .wb-replay-metrics > div {
   min-width: 0;
-  border-radius: 8px;
-  background: color-mix(in srgb, var(--wb-muted) 7%, transparent);
-  padding: 10px 8px;
+  border: 1px solid var(--wb-line);
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--wb-card-bg) 96%, var(--wb-muted) 4%);
+  padding: 10px 7px 11px;
 }
 .wb-replay-metrics span,
 .wb-replay-metrics b {
@@ -15831,11 +16092,15 @@ html[data-theme="dark"] .wb-mem-main {
 .wb-replay-metrics span {
   color: var(--wb-faint);
   font-size: calc(11px * var(--wb-ui-font-scale, 1));
+  line-height: 1.35;
+  white-space: nowrap;
 }
 .wb-replay-metrics b {
-  margin-top: 6px;
+  margin-top: 5px;
   color: var(--wb-text);
   font-size: calc(15px * var(--wb-ui-font-scale, 1));
+  font-variant-numeric: tabular-nums;
+  line-height: 1.2;
 }
 .wb-replay-duplicates {
   border-radius: 8px;
@@ -15854,6 +16119,46 @@ html[data-theme="dark"] .wb-mem-main {
   color: var(--wb-muted);
   font-size: calc(12.5px * var(--wb-ui-font-scale, 1));
   line-height: 1.55;
+}
+.wb-learning-duplicate-status {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 8px 12px;
+  border: 1px solid var(--wb-line);
+  background: var(--wb-card-bg);
+  padding: 11px 12px;
+}
+.wb-learning-duplicate-status b {
+  margin: 0;
+}
+.wb-learning-duplicate-status p {
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--wb-muted) 9%, transparent);
+  padding: 4px 9px;
+  font-size: calc(11.5px * var(--wb-ui-font-scale, 1));
+  font-weight: 650;
+  line-height: 1.35;
+}
+
+@container wb-learning-inspector (max-width: 380px) {
+  .wb-mem-replay-panel .wb-replay-metrics {
+    grid-template-columns: 1fr;
+    gap: 6px;
+  }
+  .wb-mem-replay-panel .wb-replay-metrics > div {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    padding: 8px 11px;
+  }
+  .wb-mem-replay-panel .wb-replay-metrics span,
+  .wb-mem-replay-panel .wb-replay-metrics b {
+    margin: 0;
+    text-align: left;
+  }
 }
 
 .wb-mem-item {
@@ -16018,7 +16323,7 @@ html[data-theme="dark"] .wb-mem-main {
   outline: 2px solid color-mix(in srgb, var(--wb-red) 54%, transparent);
   outline-offset: 1px;
 }
-.wb-detail-card-delete:disabled { display: none; }
+.wb-detail-card-delete:disabled { opacity: .45; cursor: default; }
 .wb-detail-accordion-list {
   flex: 1 1 auto;
   min-height: 0;
@@ -16641,6 +16946,19 @@ html[data-theme="dark"] .wb-task-detail-card {
   gap: 8px;
   background: var(--wb-surface);
 }
+.wb-mem-detail-action-bar {
+  flex: 0 0 auto;
+  padding: 12px 16px 16px;
+  border-top: 1px solid var(--wb-line);
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  background: var(--wb-surface);
+}
+.wb-mem-detail-action-bar .wb-learning-primary {
+  width: 100%;
+  justify-content: center;
+}
 .wb-mem-skill-delete-bottom .wb-btn {
   justify-content: center;
 }
@@ -16658,6 +16976,14 @@ html[data-theme="dark"] .wb-task-detail-card {
   color: var(--wb-muted);
   font-size: calc(12.5px * var(--wb-ui-font-scale, 1));
   line-height: 1.5;
+}
+.wb-mem-chain-hero {
+  padding-bottom: 14px;
+  border-bottom: 1px solid var(--wb-line);
+}
+.wb-mem-chain-hero .wb-learning-theme {
+  color: var(--wb-text) !important;
+  font-weight: 650;
 }
 .wb-mem-skill-actions {
   display: grid;
@@ -16966,59 +17292,41 @@ html[data-theme="dark"] .wb-task-detail-card {
   .wb-mem-detail { display: none; }
 }
 @media (min-width: 761px) and (max-width: 980px) {
-  .wb-mem-page.learning-active .wb-learning-layout {
-    grid-template-columns: 220px minmax(280px, 1fr);
+  .wb-mem-page.learning-active > .wb-mem-detail {
+    display: flex;
+    flex: 0 1 360px;
+    width: 360px;
+    min-width: 300px;
+  }
+  .wb-mem-page.learning-active > .wb-mem-learning-main { min-width: 280px; }
+  .wb-learning-session-filter > span { display: none; }
+  .wb-learning-session-filter select { width: min(260px, 28vw); }
+}
+@media (max-width: 760px) {
+  .wb-mem-page.learning-active > .wb-mem-learning-main {
+    flex: 0 1 46%;
+    min-width: 260px;
+    border-right: 0;
   }
   .wb-mem-page.learning-active > .wb-mem-detail {
     display: flex;
-    flex: 0 0 280px;
-    width: 280px;
+    flex: 1 1 54%;
+    width: auto;
+    min-width: 300px;
   }
-  .wb-mem-page.learning-active .wb-learning-session-list {
-    padding: 10px;
-  }
-  .wb-mem-page.learning-active .wb-learning-hero,
-  .wb-mem-page.learning-active .wb-learning-content {
-    padding-left: 14px;
-    padding-right: 14px;
-  }
-}
-@media (max-width: 760px) {
-  .wb-mem-page.learning-active > .wb-mem-detail { display: none; }
-  .wb-mem-page.learning-active > .wb-mem-learning-main { border-right: none; }
-  .wb-learning-layout {
-    grid-template-columns: minmax(0, 1fr);
-    grid-template-rows: minmax(220px, 38%) minmax(0, 1fr);
-  }
-  .wb-learning-session-list {
-    display: grid;
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-    align-content: start;
-    overflow-y: auto;
-    border-right: none;
-    border-bottom: 1px solid var(--wb-line);
-  }
-  .wb-learning-nav-head,
-  .wb-learning-side-section.candidates,
-  .wb-learning-side-section.sessions { grid-column: 1 / -1; }
-  .wb-learning-side-section.skills { max-height: 180px; }
-  .wb-learning-side-section.sessions { min-height: 190px; }
-  .wb-learning-hero { padding: 16px; }
-  .wb-learning-content { padding: 14px 16px 20px; }
+  .wb-learning-toolbar { padding-inline: 12px; }
+  .wb-learning-toolbar-title b,
+  .wb-learning-session-filter > span { display: none; }
+  .wb-learning-session-filter select { width: min(220px, 31vw); min-width: 120px; }
+  .wb-learning-list-scroll { padding-inline: 12px; gap: 18px; }
+  .wb-learning-list-section.candidates { padding: 10px; }
   .wb-learning-step { grid-template-columns: 28px 34px minmax(0, 1fr) 18px; padding: 8px; }
   .wb-learning-step-params span { max-width: 100%; }
 }
 
 @media (max-height: 760px) {
-  .wb-learning-session-list {
-    gap: 10px;
-    padding-top: 10px;
-    padding-bottom: 10px;
-  }
-  .wb-learning-side-section.candidates { max-height: 280px; }
-  .wb-learning-side-section.skills { max-height: 220px; }
-  .wb-learning-side-section.sessions { min-height: 180px; }
-  .wb-learning-chain-list { max-height: 220px; }
+  .wb-learning-list-scroll { gap: 18px; }
+  .wb-mem-replay-panel .wb-mem-detail-scroll { padding-top: 12px; padding-bottom: 16px; }
 }
 
 /* Keep every memory surface scrollable without exposing scrollbar chrome. */
@@ -20100,6 +20408,12 @@ body.wbc-resizing-side-agent .wbc-page.wbc-split-left .wbc-side-agent-split-moti
 /* ── Chat split (rail chat dragged onto the side) ──────────────────────────
    Uses the same thread-stage + thread structure as the main conversation so
    the transcript reads identically. */
+.wbc-chat-split {
+  /* Detached chat windows have no `.wbc-page` ancestor. Keep the transcript's
+     bottom runway valid before JS measures the actual composer height. */
+  --wbc-composer-reserve-height: calc(164px * var(--wb-ui-font-scale, 1));
+}
+
 .wbc-chat-split-stage {
   flex: 1 1 auto;
   min-height: 0;
@@ -21397,7 +21711,7 @@ html[data-theme="dark"] .wbc-selection-menu {
   backdrop-filter: var(--wbc-composer-glass-filter);
   transform: translateX(-50%);
   cursor: pointer;
-  transition: color 120ms ease, border-color 120ms ease, background 120ms ease, transform 120ms ease;
+  transition: color 120ms ease, transform 120ms ease;
 }
 
 .wbc-scroll-to-bottom > span {
@@ -21411,9 +21725,9 @@ html[data-theme="dark"] .wbc-selection-menu {
 }
 
 .wbc-scroll-to-bottom:hover {
-  border-color: color-mix(in srgb, var(--wb-accent) 45%, var(--wb-line));
-  background: color-mix(in srgb, var(--wb-accent) 8%, var(--wbc-composer-glass-background));
-  color: var(--wb-accent);
+  /* Match the neutral hover treatment of the composer's icon controls. The
+     glass background, edge and elevation remain exactly those of the input. */
+  color: var(--wb-text);
   transform: translateX(-50%) translateY(-1px);
 }
 
@@ -24392,10 +24706,13 @@ button.wbc-attach-file:focus-visible {
 .wbc-composer-box {
   --wbc-composer-glass-border: 1px solid color-mix(in srgb, var(--wb-line-2) 64%, transparent);
   --wbc-composer-glass-background: color-mix(in srgb, var(--wb-card-bg) 72%, transparent);
+  --wbc-composer-glass-drop-shadow: var(--wbc-control-shadow);
+  --wbc-composer-glass-top-highlight: color-mix(in srgb, #fff 10%, transparent);
+  --wbc-composer-glass-inner-edge: color-mix(in srgb, var(--wb-line) 14%, transparent);
   --wbc-composer-glass-shadow:
-    var(--wbc-control-shadow),
-    inset 0 1px 0 color-mix(in srgb, #fff 10%, transparent),
-    inset 0 0 0 1px color-mix(in srgb, var(--wb-line) 14%, transparent);
+    var(--wbc-composer-glass-drop-shadow),
+    inset 0 1px 0 var(--wbc-composer-glass-top-highlight),
+    inset 0 0 0 1px var(--wbc-composer-glass-inner-edge);
   --wbc-composer-glass-filter: blur(18px) saturate(120%) contrast(102%);
   position: relative;
   container-name: wbc-composer;
@@ -24414,21 +24731,21 @@ button.wbc-attach-file:focus-visible {
    instead of falling back to the nearly flat shared control shadow. */
 html[data-theme="light"] .wbc-composer-box {
   --wbc-composer-glass-background: color-mix(in srgb, #fff 76%, transparent);
-  --wbc-composer-glass-shadow:
-    0 10px 28px rgba(15, 23, 42, .12),
-    inset 0 1px 0 color-mix(in srgb, #fff 90%, transparent),
-    inset 0 0 0 1px color-mix(in srgb, #0f172a 3%, transparent);
+  --wbc-composer-glass-drop-shadow: 0 10px 28px rgba(15, 23, 42, .12);
+  --wbc-composer-glass-top-highlight: color-mix(in srgb, #fff 90%, transparent);
+  --wbc-composer-glass-inner-edge: color-mix(in srgb, #0f172a 3%, transparent);
 }
 
-/* Resolve the sampled #181818 as translucent glass rather than an opaque
-   paint layer. The existing backdrop filters can therefore pick up nearby
-   content and the inset highlight remains visible along the top edge. */
+/* Keep the light composer as the optical reference. Bright surfaces and their
+   shadow halos expand perceptually, while black shadows recede into a dark
+   canvas, so dark mode needs stronger edge contrast to carry the same visual
+   weight. Only material colours change here: both themes retain the base
+   three-layer shadow and the exact same compositor filter. */
 html[data-theme="dark"] :is(.wbc-composer-box, .wbc-side-card) {
   --wbc-composer-glass-background: var(--wb-conversation-surface);
-  --wbc-composer-glass-shadow:
-    0 10px 28px rgba(0, 0, 0, .24),
-    inset 0 1px 0 color-mix(in srgb, #fff 10%, transparent),
-    inset 0 0 0 1px color-mix(in srgb, #fff 2.5%, transparent);
+  --wbc-composer-glass-drop-shadow: 0 10px 28px rgba(0, 0, 0, .42);
+  --wbc-composer-glass-top-highlight: color-mix(in srgb, #fff 14%, transparent);
+  --wbc-composer-glass-inner-edge: color-mix(in srgb, #fff 4%, transparent);
   background: var(--wbc-composer-glass-background);
   box-shadow: var(--wbc-composer-glass-shadow);
 }
@@ -24492,6 +24809,25 @@ html :is(
   line-height: 1.6;
   max-height: 180px;
   box-sizing: border-box;
+}
+
+/* Chromium sizes the chat textarea from its content without the synchronous
+   style-write / scrollHeight-read loop previously used by WbcComposer. Keep
+   the exact resting and capped geometry so the glass surface only changes
+   bounds when the visible line count actually changes. */
+.wbc-composer-box textarea.wbc-composer-textarea {
+  field-sizing: content;
+  min-height: 44px;
+  max-height: 180px;
+  overflow-y: auto;
+}
+
+/* field-sizing treats placeholder text as content. Pin the empty state to the
+   existing resting height so long localized placeholders cannot change the
+   composer's geometry in narrow panes. */
+.wbc-composer-box textarea.wbc-composer-textarea:placeholder-shown {
+  field-sizing: fixed;
+  height: 44px;
 }
 
 .wbc-composer-box textarea::placeholder {
@@ -32831,6 +33167,23 @@ html[data-density="compact"] .wbc-page {
   transition: grid-template-columns var(--wb-sidebar-motion-duration) var(--wb-sidebar-motion-ease);
 }
 
+/* Match the conversation card entrance exactly. Animate only the primary
+   content surface, not the page/grid wrapper or the rails: transforming those
+   large layout owners forces extra compositing work and makes module switches
+   feel heavier than opening a conversation. */
+.workbench-stable-surface.has-page-enter-motion.is-active :is(
+  .wb-sched-main,
+  .wb-lib-main,
+  .wb-mem-main
+),
+.workbench-stable-surface.has-page-enter-motion.is-active > :is(
+  .workbench-task-board,
+  .workbench-main
+) {
+  animation: wbc-pane-card-settle 360ms cubic-bezier(.22, 1.16, .36, 1) both;
+  backface-visibility: hidden;
+}
+
 html[data-theme="dark"] .workbench-grid.integrated-sidebars {
   --wb-floating-rail-border: 1px solid color-mix(in srgb, #fff 9%, transparent);
   --wb-floating-rail-shadow:
@@ -34662,11 +35015,32 @@ html[data-theme="dark"] .workbench-grid.integrated-sidebars {
   .wbc-conversation-status-dot,
   .wbc-conversation-status-preview,
   .workbench-grid.integrated-sidebars .workbench-sidebar-dock,
-  .workbench-grid.integrated-sidebars .workbench-sidebar-dock-nav {
+  .workbench-grid.integrated-sidebars .workbench-sidebar-dock-nav,
+  .workbench-stable-surface.has-page-enter-motion.is-active :is(
+    .wb-sched-main,
+    .wb-lib-main,
+    .wb-mem-main
+  ),
+  .workbench-stable-surface.has-page-enter-motion.is-active > :is(
+    .workbench-task-board,
+    .workbench-main
+  ) {
     transition-duration: 1ms !important;
     transition-delay: 0ms !important;
     animation-duration: 1ms !important;
     animation-delay: 0ms !important;
+  }
+
+  .workbench-stable-surface.has-page-enter-motion.is-active :is(
+    .wb-sched-main,
+    .wb-lib-main,
+    .wb-mem-main
+  ),
+  .workbench-stable-surface.has-page-enter-motion.is-active > :is(
+    .workbench-task-board,
+    .workbench-main
+  ) {
+    animation: none !important;
   }
 }
 

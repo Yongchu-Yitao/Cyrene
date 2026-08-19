@@ -14384,19 +14384,29 @@ function WbcMain({ project, chat, chatSummary, loading, runtime, error, errorKin
     var page = main.closest(".wbc-page");
     var composer = main.querySelector(":scope > .wbc-composer");
     if (!page || !composer) return undefined;
-    function syncComposerReserveHeight() {
+    var resizeRaf = 0;
+    var lastHeight = 0;
+    function commitComposerReserveHeight() {
+      resizeRaf = 0;
       var height = Math.ceil(composer.getBoundingClientRect().height);
-      if (height > 0) page.style.setProperty("--wbc-composer-reserve-height", height + "px");
+      if (height <= 0 || height === lastHeight) return;
+      lastHeight = height;
+      page.style.setProperty("--wbc-composer-reserve-height", height + "px");
     }
-    syncComposerReserveHeight();
+    function scheduleComposerReserveHeight() {
+      if (resizeRaf) return;
+      resizeRaf = requestAnimationFrame(commitComposerReserveHeight);
+    }
+    commitComposerReserveHeight();
     var observer = typeof ResizeObserver === "function"
-      ? new ResizeObserver(syncComposerReserveHeight)
+      ? new ResizeObserver(scheduleComposerReserveHeight)
       : null;
     if (observer) observer.observe(composer);
-    window.addEventListener("resize", syncComposerReserveHeight);
+    window.addEventListener("resize", scheduleComposerReserveHeight);
     return function () {
       if (observer) observer.disconnect();
-      window.removeEventListener("resize", syncComposerReserveHeight);
+      window.removeEventListener("resize", scheduleComposerReserveHeight);
+      if (resizeRaf) cancelAnimationFrame(resizeRaf);
       page.style.removeProperty("--wbc-composer-reserve-height");
     };
   }, [chat && chat.id]);
@@ -16732,6 +16742,10 @@ function WbcRuntimeTranscript({ runtime, onOpenFile }) {
 var WBC_DRAFT_PREFIX = "cyrene-wbc-draft-";
 var WBC_ATTACH_PREFIX = "cyrene-wbc-attach-";
 var WBC_WORKSPACE_PREFIX = "cyrene-wbc-workspace-";
+var WBC_DRAFT_SAVE_DELAY_MS = 300;
+var WBC_NATIVE_FIELD_SIZING = typeof CSS !== "undefined"
+  && typeof CSS.supports === "function"
+  && CSS.supports("field-sizing", "content");
 
 function wbcIsPersistableChatId(id) {
   return !!(id && String(id).indexOf("legacy:") !== 0);
@@ -16753,6 +16767,16 @@ function wbcSaveDraft(id, text, ns) {
     if (text) localStorage.setItem(WBC_DRAFT_PREFIX + (ns || "") + id, text);
     else localStorage.removeItem(WBC_DRAFT_PREFIX + (ns || "") + id);
   } catch (e) {}
+}
+
+function wbcSyncLegacyComposerHeight(textarea, text, compact) {
+  if (!textarea) return;
+  if (!String(text || "")) {
+    textarea.style.height = compact ? "32px" : "44px";
+    return;
+  }
+  textarea.style.height = "auto";
+  textarea.style.height = Math.min(textarea.scrollHeight, 180) + "px";
 }
 
 function wbcLoadAttachments(id, ns) {
@@ -16945,6 +16969,8 @@ function WbcComposer({ chat, project, runtime, running, onSend, onGuidance, onIn
   var remoteDeviceIdsRef = useWbcRef(remoteDeviceIds);
   var pendingRemoteContextRef = useWbcRef({});
   var prevWorkspaceContextKeyRef = useWbcRef(workspaceContextKey);
+  var draftSaveTimerRef = useWbcRef(0);
+  var pendingDraftSaveRef = useWbcRef(null);
   // Last payload snapshot for optimistic clear with restore on error
   var lastSentRef = useWbcRef(null);
   var prevRunningRef = useWbcRef(running);
@@ -17115,8 +17141,24 @@ function WbcComposer({ chat, project, runtime, running, onSend, onGuidance, onIn
   }, [modelOpen]);
 
   useWbcEffect(function () {
-    if (prevChatIdRef.current === chatId) wbcSaveDraft(chatId, draft, draftNs);
-  }, [draft]);
+    if (prevChatIdRef.current !== chatId) return;
+    if (draftSaveTimerRef.current) window.clearTimeout(draftSaveTimerRef.current);
+    pendingDraftSaveRef.current = { id: chatId, text: draft, ns: draftNs };
+    draftSaveTimerRef.current = window.setTimeout(flushPendingDraftSave, WBC_DRAFT_SAVE_DELAY_MS);
+  }, [draft, chatId, draftNs]);
+
+  useWbcEffect(function () {
+    function flushHiddenDraft() {
+      if (document.visibilityState === "hidden") flushPendingDraftSave();
+    }
+    window.addEventListener("pagehide", flushPendingDraftSave);
+    document.addEventListener("visibilitychange", flushHiddenDraft);
+    return function () {
+      window.removeEventListener("pagehide", flushPendingDraftSave);
+      document.removeEventListener("visibilitychange", flushHiddenDraft);
+      flushPendingDraftSave();
+    };
+  }, []);
 
   useWbcEffect(function () {
     if (prevChatIdRef.current === chatId) wbcSaveAttachments(chatId, attachments, draftNs);
@@ -17128,7 +17170,11 @@ function WbcComposer({ chat, project, runtime, running, onSend, onGuidance, onIn
     }
   }, [workspaceOverride]);
 
-  useWbcEffect(function () { syncHeight(); }, [draft]);
+  useWbcEffect(function () {
+    if (!WBC_NATIVE_FIELD_SIZING) {
+      wbcSyncLegacyComposerHeight(taRef.current, draft, compact);
+    }
+  }, [draft, compact]);
 
   // Focus the textarea on mount when the host surface asks for it (the quick
   // chat window opens straight into typing).
@@ -17265,6 +17311,7 @@ function WbcComposer({ chat, project, runtime, running, onSend, onGuidance, onIn
   useWbcEffect(function () {
     var prev = prevChatIdRef.current;
     if (prev !== chatId) {
+      flushPendingDraftSave();
       wbcSaveDraft(prev, draftRef.current, draftNs);
       wbcSaveAttachments(prev, attachRef.current, draftNs);
       setDraft(wbcLoadDraft(chatId, draftNs));
@@ -17382,18 +17429,23 @@ function WbcComposer({ chat, project, runtime, running, onSend, onGuidance, onIn
     return undefined;
   }, [chatId]);
 
-  function syncHeight() {
-    var ta = taRef.current;
-    if (!ta) return;
-    // An empty textarea can report the height of an animating/overlaid parent
-    // as its scrollHeight in Chromium. Keep the resting composer deterministic
-    // and only measure content once there is an actual draft.
-    if (!String(draftRef.current || "")) {
-      ta.style.height = compact ? "32px" : "44px";
-      return;
+  function flushPendingDraftSave() {
+    if (draftSaveTimerRef.current) {
+      window.clearTimeout(draftSaveTimerRef.current);
+      draftSaveTimerRef.current = 0;
     }
-    ta.style.height = "auto";
-    ta.style.height = Math.min(ta.scrollHeight, 180) + "px";
+    var pending = pendingDraftSaveRef.current;
+    pendingDraftSaveRef.current = null;
+    if (pending) wbcSaveDraft(pending.id, pending.text, pending.ns);
+  }
+
+  function persistCurrentDraft() {
+    pendingDraftSaveRef.current = {
+      id: chatId,
+      text: String(draftRef.current || ""),
+      ns: draftNs,
+    };
+    flushPendingDraftSave();
   }
 
   function submit(messageOverride) {
@@ -17401,8 +17453,13 @@ function WbcComposer({ chat, project, runtime, running, onSend, onGuidance, onIn
     var text = String(typeof messageOverride === "string" ? messageOverride : draft).trim();
     if (running) {
       if (!text || !onGuidance) return;
+      draftRef.current = "";
       setDraft("");
-      onGuidance(text).catch(function () { setDraft(text); });
+      persistCurrentDraft();
+      onGuidance(text).catch(function () {
+        draftRef.current = text;
+        setDraft(text);
+      });
       return;
     }
     if (!text && attachments.length === 0) return;
@@ -17422,7 +17479,9 @@ function WbcComposer({ chat, project, runtime, running, onSend, onGuidance, onIn
     // and manages its own draft lifecycle.
     if (shouldClearOnSend) {
       lastSentRef.current = payload;
+      draftRef.current = "";
       setDraft("");
+      persistCurrentDraft();
       setAttachments([]);
       setCommand("");
     }
@@ -17479,7 +17538,6 @@ function WbcComposer({ chat, project, runtime, running, onSend, onGuidance, onIn
           return;
         }
         requestAnimationFrame(function () {
-          syncHeight();
           if (taRef.current) taRef.current.focus();
         });
       });
@@ -18023,6 +18081,7 @@ function WbcComposer({ chat, project, runtime, running, onSend, onGuidance, onIn
         )}
         <textarea
           ref={taRef}
+          className="wbc-composer-textarea"
           aria-label={capText ? (running
             ? (runningPlaceholder || wbcT("workbenchChat.placeholderRunning", "Send guidance to the running agent..."))
             : (placeholder || wbcT("workbenchChat.placeholder", "Message Cyrene...")))
@@ -18030,7 +18089,11 @@ function WbcComposer({ chat, project, runtime, running, onSend, onGuidance, onIn
           value={draft}
           rows={compact ? 1 : 2}
           disabled={awaitingAnswer || !capText || (running && !capSteer) || cancelUnsupported}
-          onChange={function (e) { setDraft(e.target.value); syncHeight(); }}
+          onChange={function (e) {
+            draftRef.current = e.target.value;
+            setDraft(e.target.value);
+          }}
+          onBlur={persistCurrentDraft}
           onKeyDown={onKeyDown}
           onPaste={onPaste}
           placeholder={!capText
@@ -19416,6 +19479,7 @@ function WbcChatSplit({ chatId, project, onOpenContent, browserActiveByChat, onC
   var [splitPanelOpen, setSplitPanelOpen] = useWbcState(false);
   var [splitPanelTab, setSplitPanelTab] = useWbcState("");
   var splitPanelRef = useWbcRef(null);
+  var splitRef = useWbcRef(null);
   var scrollRef = useWbcRef(null);
   var chatIdRef = useWbcRef(chatId);
   var pollTimerRef = useWbcRef(null);
@@ -19485,6 +19549,41 @@ function WbcChatSplit({ chatId, project, onOpenContent, browserActiveByChat, onC
     var el = scrollRef.current;
     if (el) el.scrollTop = el.scrollHeight;
   }, [chat && chat.messages && chat.messages.length, loading, running, streamText]);
+
+  // Split conversations own an absolutely positioned composer. Measure it on
+  // the split itself instead of relying on the main page's reserve variable:
+  // detached windows do not have a `.wbc-page` ancestor, and an invalid/missing
+  // reserve would leave the end of the transcript underneath the composer.
+  useWbcLayoutEffect(function () {
+    var split = splitRef.current;
+    var composer = split && split.querySelector(":scope > .wbc-composer");
+    if (!split || !composer) return undefined;
+    var resizeRaf = 0;
+    var lastHeight = 0;
+    function commitComposerReserveHeight() {
+      resizeRaf = 0;
+      var height = Math.ceil(composer.getBoundingClientRect().height);
+      if (height <= 0 || height === lastHeight) return;
+      lastHeight = height;
+      split.style.setProperty("--wbc-composer-reserve-height", height + "px");
+    }
+    function scheduleComposerReserveHeight() {
+      if (resizeRaf) return;
+      resizeRaf = requestAnimationFrame(commitComposerReserveHeight);
+    }
+    commitComposerReserveHeight();
+    var observer = typeof ResizeObserver === "function"
+      ? new ResizeObserver(scheduleComposerReserveHeight)
+      : null;
+    if (observer) observer.observe(composer);
+    window.addEventListener("resize", scheduleComposerReserveHeight);
+    return function () {
+      if (observer) observer.disconnect();
+      window.removeEventListener("resize", scheduleComposerReserveHeight);
+      if (resizeRaf) cancelAnimationFrame(resizeRaf);
+      split.style.removeProperty("--wbc-composer-reserve-height");
+    };
+  }, [chatId]);
 
   // Dismiss the panel when the user interacts with the split conversation
   // around it (transcript, composer, grip); clicks inside the panel keep it.
@@ -19751,7 +19850,7 @@ function WbcChatSplit({ chatId, project, onOpenContent, browserActiveByChat, onC
   var messages = chat && Array.isArray(chat.messages) ? chat.messages : [];
   var errorText = error;
   return (
-    <aside className="wbc-side-agent-split wbc-chat-split wbc-conversation-split" data-tour="chat_split_pane" aria-label={wbcT("workbenchChat.chatSplitLabel", "Chat")}>
+    <aside ref={splitRef} className="wbc-side-agent-split wbc-chat-split wbc-conversation-split" data-tour="chat_split_pane" aria-label={wbcT("workbenchChat.chatSplitLabel", "Chat")}>
       <div className="wbc-split-panel-grip">
         <WbcSplitGripBar
           dragSource="split"

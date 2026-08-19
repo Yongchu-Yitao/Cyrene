@@ -52,6 +52,9 @@ def test_pane_cards_can_detach_into_native_windows_with_browser_view_migration()
     css = (root / "src" / "webui" / "frontend" / "workbench.css").read_text(
         encoding="utf-8"
     )
+    i18n = (root / "src" / "webui" / "frontend" / "workbench-i18n.jsx").read_text(
+        encoding="utf-8"
+    )
     main = (root / "electron" / "main.js").read_text(encoding="utf-8")
     preload = (root / "electron" / "preload.js").read_text(encoding="utf-8")
 
@@ -84,6 +87,17 @@ def test_pane_cards_can_detach_into_native_windows_with_browser_view_migration()
     detached_titlebar_css = css.split(".wbc-detached-pane-titlebar {", 1)[1].split("}", 1)[0]
     assert "touch-action: none" in detached_titlebar_css
     assert "-webkit-app-region: drag" not in detached_titlebar_css
+    split_chat = chat.split("function WbcChatSplit(", 1)[1].split(
+        "function WbcPaneCardFrame", 1
+    )[0]
+    split_chat_css = css.split(".wbc-chat-split {", 1)[1].split("}", 1)[0]
+    assert "var splitRef = useWbcRef(null);" in split_chat
+    assert '<aside ref={splitRef} className="wbc-side-agent-split wbc-chat-split' in split_chat
+    assert 'split.style.setProperty("--wbc-composer-reserve-height", height + "px")' in split_chat
+    assert "new ResizeObserver(scheduleComposerReserveHeight)" in split_chat
+    assert "--wbc-composer-reserve-height:" in split_chat_css
+    assert i18n.count('"workbenchChat.detachedReturn"') == 2
+    assert '"workbenchChat.detachedReturn": "松手合并回主窗口"' in i18n
     assert "const detachedPaneWindows = new Map()" in main
     assert "const detachedPaneDragSessions = new Map()" in main
     assert "const detachedBrowserSurfaceWindows = new Map()" in main
@@ -954,6 +968,9 @@ def test_main_chat_composer_uses_a_solid_canvas_and_readable_input_card():
     topbar_css = styles.split(".workbench-topbar {", 1)[1].split("}", 1)[0]
     input_css = styles.split(".wbc-composer-box {", 1)[1].split("}", 1)[0]
     scroll_css = styles.split(".wbc-scroll-to-bottom {", 1)[1].split("}", 1)[0]
+    scroll_hover_css = styles.split(".wbc-scroll-to-bottom:hover {", 1)[1].split(
+        "}", 1
+    )[0]
 
     assert (
         "--wbc-thread-inset-bottom: calc(var(--wbc-composer-reserve-height) + "
@@ -977,6 +994,15 @@ def test_main_chat_composer_uses_a_solid_canvas_and_readable_input_card():
     assert "border-radius: 14px;" in input_css
     assert "padding: 10px 12px 8px;" in input_css
     assert "bottom: calc(100% + 8px);" in scroll_css
+    assert "border: var(--wbc-composer-glass-border);" in scroll_css
+    assert "background: var(--wbc-composer-glass-background);" in scroll_css
+    assert "box-shadow: var(--wbc-composer-glass-shadow);" in scroll_css
+    assert "backdrop-filter: var(--wbc-composer-glass-filter);" in scroll_css
+    assert "transition: color 120ms ease, transform 120ms ease;" in scroll_css
+    assert "color: var(--wb-text);" in scroll_hover_css
+    assert "var(--wb-accent)" not in scroll_hover_css
+    assert "border-color:" not in scroll_hover_css
+    assert "background:" not in scroll_hover_css
     assert "position: relative;" in input_css
     assert "topOverlay={showScrollToBottom ? (" in source
     assert "{topOverlay}" in source
@@ -2913,17 +2939,88 @@ def test_workbench_resource_tabs_use_lists_and_shared_splits_while_branches_expa
     assert "position: relative;" in resource_picker_css
 
 
-def test_workbench_empty_composer_does_not_expand_from_parent_scroll_height():
+def test_workbench_chat_composer_uses_native_content_sizing_without_forced_layout():
+    root = Path(__file__).resolve().parent.parent
+    source = (root / "src" / "webui" / "frontend" / "workbench-chat.jsx").read_text(
+        encoding="utf-8"
+    )
+    styles = (root / "src" / "webui" / "frontend" / "workbench.css").read_text(
+        encoding="utf-8"
+    )
+
+    composer = source.split("function WbcComposer({", 1)[1].split(
+        "function wbcClearComposerDraft", 1
+    )[0]
+    textarea_css = styles.split(
+        ".wbc-composer-box textarea.wbc-composer-textarea {", 1
+    )[1].split("}", 1)[0]
+    empty_textarea_css = styles.split(
+        ".wbc-composer-box textarea.wbc-composer-textarea:placeholder-shown {", 1
+    )[1].split("}", 1)[0]
+
+    assert "function syncHeight()" not in composer
+    assert "scrollHeight" not in composer
+    assert 'CSS.supports("field-sizing", "content")' in source
+    assert "wbcSyncLegacyComposerHeight(taRef.current, draft, compact);" in composer
+    assert 'className="wbc-composer-textarea"' in composer
+    assert "field-sizing: content;" in textarea_css
+    assert "min-height: 44px;" in textarea_css
+    assert "max-height: 180px;" in textarea_css
+    assert "overflow-y: auto;" in textarea_css
+    assert "field-sizing: fixed;" in empty_textarea_css
+    assert "height: 44px;" in empty_textarea_css
+
+
+def test_workbench_chat_composer_batches_draft_storage_and_reserve_height_updates():
     root = Path(__file__).resolve().parent.parent
     source = (root / "src" / "webui" / "frontend" / "workbench-chat.jsx").read_text(
         encoding="utf-8"
     )
 
-    sync_height = source.split("function syncHeight()", 1)[1].split(
-        "function submit()", 1
+    assert "var WBC_DRAFT_SAVE_DELAY_MS = 300;" in source
+    assert "pendingDraftSaveRef.current = { id: chatId, text: draft, ns: draftNs };" in source
+    assert "window.setTimeout(flushPendingDraftSave, WBC_DRAFT_SAVE_DELAY_MS)" in source
+    assert 'window.addEventListener("pagehide", flushPendingDraftSave);' in source
+    assert "var lastHeight = 0;" in source
+    assert "if (height <= 0 || height === lastHeight) return;" in source
+    assert "new ResizeObserver(scheduleComposerReserveHeight)" in source
+
+
+def test_workbench_chat_composer_themes_share_one_optimized_glass_pipeline():
+    root = Path(__file__).resolve().parent.parent
+    styles = (root / "src" / "webui" / "frontend" / "workbench.css").read_text(
+        encoding="utf-8"
+    )
+
+    base = styles.split("\n.wbc-composer-box {", 1)[1].split("}", 1)[0]
+    light = styles.split('html[data-theme="light"] .wbc-composer-box {', 1)[1].split(
+        "}", 1
     )[0]
-    assert 'if (!String(draftRef.current || ""))' in sync_height
-    assert 'ta.style.height = compact ? "32px" : "44px";' in sync_height
+    dark = styles.split(
+        'html[data-theme="dark"] :is(.wbc-composer-box, .wbc-side-card) {', 1
+    )[1].split("}", 1)[0]
+    dark_palette = styles.split(
+        'html[data-theme="dark"] .workbench-shell {', 1
+    )[1].split("}", 1)[0]
+    performance = styles.split(
+        'html[data-performance-mode="on"] *,', 1
+    )[1].split("}", 1)[0]
+
+    assert "--wbc-composer-glass-filter: blur(18px) saturate(120%) contrast(102%);" in base
+    assert "backdrop-filter: var(--wbc-composer-glass-filter);" in base
+    assert "var(--wbc-composer-glass-drop-shadow)" in base
+    assert "var(--wbc-composer-glass-top-highlight)" in base
+    assert "var(--wbc-composer-glass-inner-edge)" in base
+    assert "#fff 76%" in light
+    assert "#1a1a1a 76%" in dark_palette
+    assert "rgba(15, 23, 42, .12)" in light
+    assert "rgba(0, 0, 0, .42)" in dark
+    assert "#fff 14%" in dark
+    assert "#fff 4%" in dark
+    assert "backdrop-filter" not in light
+    assert "backdrop-filter" not in dark
+    assert "backdrop-filter: none !important;" in performance
+    assert "box-shadow: none !important;" in performance
 
 
 def test_memory_detail_uses_shared_floating_card_and_animated_accordion():
@@ -7139,6 +7236,47 @@ def test_active_module_dock_item_is_not_a_toggle_back_to_tasks():
     assert "prev === page ? null : page" not in handler
 
 
+def test_primary_workspace_pages_replay_the_conversation_style_enter_motion():
+    root = Path(__file__).resolve().parent.parent
+    source = (root / "src" / "webui" / "frontend" / "workbench.jsx").read_text(
+        encoding="utf-8"
+    )
+    styles = (root / "src" / "webui" / "frontend" / "workbench.css").read_text(
+        encoding="utf-8"
+    )
+
+    assert "function WorkbenchStableSurface({ active, enterMotion, children })" in source
+    assert source.count("enterMotion={true}") == 4
+    assert '<WorkbenchStableSurface active={isChat}>' in source
+    assert '<WorkbenchStableSurface active={isKnowledge} enterMotion={true}>' in source
+    assert '<WorkbenchStableSurface active={isSchedule} enterMotion={true}>' in source
+    assert '<WorkbenchStableSurface active={isMemory} enterMotion={true}>' in source
+    assert '<WorkbenchStableSurface active={!isModulePage} enterMotion={true}>' in source
+    enter_css = styles.split(
+        ".workbench-stable-surface.has-page-enter-motion.is-active :is(", 1
+    )[1].split("}", 1)[0]
+    for primary_surface in (
+        ".wb-sched-main",
+        ".wb-lib-main",
+        ".wb-mem-main",
+        ".workbench-task-board",
+        ".workbench-main",
+    ):
+        assert primary_surface in enter_css
+    assert "wbc-pane-card-settle 360ms cubic-bezier(.22, 1.16, .36, 1)" in enter_css
+    assert "backface-visibility: hidden;" in enter_css
+    assert "@keyframes wb-workbench-page-enter" not in styles
+    assert (
+        ".workbench-grid.integrated-sidebars .workbench-sidebar-dock-nav,\n"
+        "  .workbench-stable-surface.has-page-enter-motion.is-active :is("
+    ) in styles
+    reduced_motion = styles.split(
+        ".workbench-stable-surface.has-page-enter-motion.is-active :is(\n"
+        "    .wb-sched-main,", 1
+    )[1]
+    assert "animation: none !important;" in reduced_motion
+
+
 def test_knowledge_sidebar_is_persistent_at_compact_desktop_widths():
     root = Path(__file__).resolve().parent.parent
     source = (root / "src" / "webui" / "frontend" / "workbench-library.jsx").read_text(
@@ -9948,31 +10086,183 @@ def test_workbench_skill_learning_uses_actionable_candidate_status_only():
     source = (root / "src" / "webui" / "frontend" / "workbench-memory.jsx").read_text(encoding="utf-8")
     translations = (root / "src" / "webui" / "frontend" / "workbench-i18n.jsx").read_text(encoding="utf-8")
 
-    assert 'activeCandidate ? h("div", { className: "wb-learning-review-pill "' in source
-    assert "candidateNextStepText(activeCandidate, t)" in source
+    assert 'chainCandidate ? h("div", { className: "wb-learning-review-pill "' in source
+    assert "candidateNextStepText(chainCandidate, t)" in source
     assert '\n      rail,\n      main,' in source
     assert 'onExit: function () { setActivePanel(""); }' in source
     assert "不是可复用的多工具流程" not in translations
     assert '"memory.learning.noRepeatYet": "尚未发现重复"' in translations
 
 
-def test_workbench_skill_learning_has_small_screen_progressive_disclosure():
+def test_workbench_skill_learning_moves_full_content_into_right_inspector():
+    root = Path(__file__).resolve().parent.parent
+    source = (root / "src" / "webui" / "frontend" / "workbench-memory.jsx").read_text(encoding="utf-8")
+
+    panel = source.split("function SkillLearningPanel", 1)[1].split("function SkillLearningMain", 1)[0]
+    main = source.split("function SkillLearningMain", 1)[1].split("// ── main page", 1)[0]
+
+    # The centre surface is now a memory-style list rather than a second,
+    # duplicated detail column.
+    assert 'className: "wb-mem-scroll wb-learning-list-scroll"' in main
+    assert 'className: "wb-mem-item wb-learning-list-item"' in main
+    assert 'className: "wb-learning-detail"' not in main
+    # Every information group that used to live in that middle column remains
+    # available in the right inspector alongside its existing media/analysis.
+    assert 't("memory.learning.topic"' in panel
+    assert 't("memory.learning.learningState"' in panel
+    assert 't("memory.learning.stepTitle"' in panel
+    assert "translatedToolParamName(item.key, t)" in panel
+    assert 't("memory.learning.agentAnswer"' in panel
+    assert 't("memory.learning.behaviorAnalysis"' in panel
+    assert 't("memory.learning.duplicateCheck"' in panel
+    assert 't("memory.learning.nextStep"' in panel
+    assert 'examples.map(function (example, index)' in panel
+    assert "activeSession.chains.slice" not in main
+    assert "learnedSkills.slice" not in main
+
+
+def test_workbench_skill_delete_matches_memory_detail_header_action():
+    root = Path(__file__).resolve().parent.parent
+    source = (root / "src" / "webui" / "frontend" / "workbench-memory.jsx").read_text(encoding="utf-8")
+    css = (root / "src" / "webui" / "frontend" / "workbench.css").read_text(encoding="utf-8")
+
+    panel = source.split("function SkillLearningPanel", 1)[1].split("function SkillLearningMain", 1)[0]
+    header = panel.split('className: "wb-detail-accordion-head wb-mem-detail-nav-head"', 1)[1].split(
+        'className: "wb-detail-accordion-list"', 1
+    )[0]
+    assert 'className: "wb-detail-card-delete"' in header
+    assert "onClick: deleteLearnedSkill" in header
+    assert 'disabled: learning.busy === "delete"' in header
+    assert 'className: "wb-detail-card-primary"' not in panel
+    assert 't("memory.learning.learnAsSkill"' not in header
+    assert 'learning.runAction("learn"' not in header
+    assert 'className: "wb-btn danger"' not in panel
+    disabled_rule = css.split(".wb-detail-card-delete:disabled {", 1)[1].split("}", 1)[0]
+    assert "opacity: .45" in disabled_rule
+    assert "display: none" not in disabled_rule
+
+
+def test_workbench_skill_candidates_open_complete_keyboard_accessible_details():
+    root = Path(__file__).resolve().parent.parent
+    source = (root / "src" / "webui" / "frontend" / "workbench-memory.jsx").read_text(encoding="utf-8")
+    i18n = (root / "src" / "webui" / "frontend" / "workbench-i18n.jsx").read_text(encoding="utf-8")
+    css = (root / "src" / "webui" / "frontend" / "workbench.css").read_text(encoding="utf-8")
+
+    panel = source.split("function SkillLearningPanel", 1)[1].split("function SkillLearningMain", 1)[0]
+    main = source.split("function SkillLearningMain", 1)[1].split("// ── main page", 1)[0]
+    assert 'className: "wb-learning-candidate-detail-hit"' in main
+    assert '"aria-pressed": detailKind === "candidate"' in main
+    assert "onSelectCandidate(candidate.id)" in main
+    assert 'setSelectedLearningDetailKind("candidate")' in source
+    assert "selectedLearningCandidateId" in source
+    assert 'if (detailKind === "candidate")' in panel
+    for detail_key in (
+        "candidateDetails",
+        "candidateOverview",
+        "occurrences",
+        "parameters",
+        "riskLevel",
+        "relatedRounds",
+        "parameterizedScript",
+    ):
+        assert f'memory.learning.{detail_key}' in panel
+    assert "JSON.stringify(candidateScript, null, 2)" in panel
+    assert '"memory.learning.candidateDetails": "候选技能详情"' in i18n
+
+    candidate_card = css.split(".wb-mem-item.wb-learning-candidate-card {", 1)[1].split("}", 1)[0]
+    assert "display: block;" in candidate_card
+    assert "padding: 0;" in candidate_card
+    candidate_actions = css.split(".wb-learning-candidate-card .wb-learning-candidate-actions {", 1)[1].split("}", 1)[0]
+    assert "display: flex;" in candidate_actions
+    assert "align-items: center;" in candidate_actions
+    assert "flex-wrap: wrap;" in candidate_actions
+
+
+def test_workbench_skill_learning_keeps_right_inspector_on_compact_widths():
     root = Path(__file__).resolve().parent.parent
     css = (root / "src" / "webui" / "frontend" / "workbench.css").read_text(encoding="utf-8")
 
-    compact_three_column = css.split("@media (min-width: 761px) and (max-width: 980px)", 1)[1].split("@media", 1)[0]
-    assert ".wb-mem-page.learning-active > .wb-mem-detail" in compact_three_column
-    assert "display: flex;" in compact_three_column
-    assert "grid-template-columns: 220px minmax(280px, 1fr);" in compact_three_column
-    narrow_rule = ".wb-mem-page.learning-active > .wb-mem-detail { display: none; }"
-    narrow_rule_index = css.index(narrow_rule)
-    narrow_media_index = css.rfind("@media (max-width: 760px)", 0, narrow_rule_index)
-    assert narrow_media_index >= 0
-    assert css.find("@media", narrow_media_index + 1, narrow_rule_index) < 0
+    learning_responsive = css.split("@media (min-width: 761px) and (max-width: 980px)", 1)[1]
+    compact = learning_responsive.split("@media", 1)[0]
+    narrow = learning_responsive.split("@media (max-width: 760px)", 1)[1].split("@media", 1)[0]
+    assert ".wb-mem-page.learning-active > .wb-mem-detail" in compact
+    assert "display: flex;" in compact
+    assert "width: 360px;" in compact
+    assert ".wb-mem-page.learning-active > .wb-mem-detail" in narrow
+    narrow_detail = narrow.split(".wb-mem-page.learning-active > .wb-mem-detail", 1)[1].split("}", 1)[0]
+    assert "display: flex;" in narrow_detail
+    assert "display: none;" not in narrow_detail
     assert "@media (max-width: 1500px)" not in css
     assert "@media (max-width: 1080px)" in css
     assert "@media (max-width: 760px)" in css
-    assert "grid-template-rows: minmax(220px, 38%) minmax(0, 1fr);" in css
+
+
+def test_workbench_skill_steps_adapt_to_narrow_inspector_without_omitting_content():
+    root = Path(__file__).resolve().parent.parent
+    source = (root / "src" / "webui" / "frontend" / "workbench-memory.jsx").read_text(encoding="utf-8")
+    css = (root / "src" / "webui" / "frontend" / "workbench.css").read_text(encoding="utf-8")
+
+    assert 'className: "wb-learning-step-content"' in source
+    assert 'h("code", { title: String(item.value) }, item.value)' in source
+    inspector = css.split(".wb-mem-replay-panel {", 1)[1].split("}", 1)[0]
+    assert "container: wb-learning-inspector / inline-size;" in inspector
+    compact = css.split("@container wb-learning-inspector (max-width: 520px) {", 1)[1].split(".wb-detail-shot {", 1)[0]
+    assert ".wb-mem-replay-panel .wb-learning-step" in compact
+    assert '"number icon title status"' in compact
+    assert '"details details details details"' in compact
+    assert ".wb-learning-step-content > .wb-learning-step-params" in compact
+    assert "grid-area: details;" in compact
+    assert "display: contents;" in compact
+    assert "white-space: normal;" in compact
+    assert "overflow-wrap: anywhere;" in compact
+
+
+def test_workbench_behavior_analysis_stays_compact_in_narrow_inspector():
+    root = Path(__file__).resolve().parent.parent
+    source = (root / "src" / "webui" / "frontend" / "workbench-memory.jsx").read_text(encoding="utf-8")
+    css = (root / "src" / "webui" / "frontend" / "workbench.css").read_text(encoding="utf-8")
+
+    assert 'className: "wb-replay-duplicates wb-learning-duplicate-status"' in source
+    metrics = css.split(".wb-replay-metrics {", 1)[1].split("}", 1)[0]
+    assert "repeat(3, minmax(0, 1fr))" in metrics
+    assert "repeat(4" not in metrics
+    duplicate_status = css.split(".wb-learning-duplicate-status {", 1)[1].split("}", 1)[0]
+    assert "justify-content: space-between;" in duplicate_status
+    assert "flex-wrap: wrap;" in duplicate_status
+    narrow = css.split("@container wb-learning-inspector (max-width: 380px) {", 1)[1]
+    assert "grid-template-columns: 1fr;" in narrow
+
+
+def test_workbench_skill_learning_i18n_covers_visible_labels_and_tool_parameters():
+    root = Path(__file__).resolve().parent.parent
+    source = (root / "src" / "webui" / "frontend" / "workbench-memory.jsx").read_text(encoding="utf-8")
+    i18n = (root / "src" / "webui" / "frontend" / "workbench-i18n.jsx").read_text(encoding="utf-8")
+
+    learning = source.split("function SkillLearningPanel", 1)[1].split("// ── main page", 1)[0]
+    used_keys = set(re.findall(r't\("(memory\.learning\.[^"]+)"', learning))
+    translations = i18n.split("var WORKBENCH_TRANSLATIONS = {", 1)[1]
+    en_block, zh_block = translations.split("  zh: {", 1)
+    en_keys = set(re.findall(r'"(memory\.learning\.[^"]+)"\s*:', en_block))
+    zh_keys = set(re.findall(r'"(memory\.learning\.[^"]+)"\s*:', zh_block))
+    assert used_keys <= en_keys
+    assert used_keys <= zh_keys
+    assert en_keys == zh_keys
+
+    assert 'raw.replace(/([a-z0-9])([A-Z])/g, "$1_$2").toLowerCase()' in source
+    labels = _run_workbench_i18n_js(
+        "({ "
+        'namespaceEn: window.WorkbenchI18n.tForLang("memory.learning.toolParam.namespace", "en"), '
+        'namespaceZh: window.WorkbenchI18n.tForLang("memory.learning.toolParam.namespace", "zh"), '
+        'filePathEn: window.WorkbenchI18n.tForLang("memory.learning.toolParam.file_path", "en"), '
+        'filePathZh: window.WorkbenchI18n.tForLang("memory.learning.toolParam.file_path", "zh")'
+        " })"
+    )
+    assert labels == {
+        "namespaceEn": "Namespace",
+        "namespaceZh": "命名空间",
+        "filePathEn": "File path",
+        "filePathZh": "文件路径",
+    }
 
 
 def test_workbench_skill_learning_remains_operable_in_short_windows():
@@ -9981,13 +10271,11 @@ def test_workbench_skill_learning_remains_operable_in_short_windows():
     css = (root / "src" / "webui" / "frontend" / "workbench.css").read_text(encoding="utf-8")
     translations = (root / "src" / "webui" / "frontend" / "workbench-i18n.jsx").read_text(encoding="utf-8")
 
-    sidebar_block = css.split(".wb-learning-session-list {", 1)[1].split("}", 1)[0]
-    sessions_block = css.split(".wb-learning-side-section.sessions {", 1)[1].split("}", 1)[0]
-    assert "overflow-y: auto;" in sidebar_block
-    assert "scrollbar-width: none;" in sidebar_block
-    assert ".wb-learning-session-list::-webkit-scrollbar" in css
-    assert "flex: 1 0 200px;" in sessions_block
-    assert "min-height: 200px;" in sessions_block
+    scroll_block = css.split(".wb-mem-scroll {", 1)[1].split("}", 1)[0]
+    assert "overflow-y: auto;" in scroll_block
+    assert 'className: "wb-mem-scroll wb-learning-list-scroll"' in source
+    assert ".wb-learning-list-scroll" in css
+    assert ".wb-mem-replay-panel .wb-mem-detail-scroll" in css
     assert "@media (max-height: 760px)" in css
 
     assert "translatedToolParamName(item.key, t)" in source

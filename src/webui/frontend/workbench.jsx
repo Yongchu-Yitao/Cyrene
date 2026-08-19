@@ -685,8 +685,17 @@ function WorkbenchSessionMenuFileName({ name }) {
 // next time `active` becomes true; child-owned state updates still work because
 // React.memo only filters parent-driven renders.
 var WorkbenchStableSurface = React.memo(
-  function WorkbenchStableSurface({ active, children }) {
-    return <div style={{ display: active ? "contents" : "none" }}>{children}</div>;
+  function WorkbenchStableSurface({ active, enterMotion, children }) {
+    return (
+      <div
+        className={"workbench-stable-surface"
+          + (active ? " is-active" : " is-hidden")
+          + (enterMotion ? " has-page-enter-motion" : "")}
+        style={{ display: active ? "contents" : "none" }}
+      >
+        {children}
+      </div>
+    );
   },
   function keepHiddenSurfaceStable(prev, next) {
     return !prev.active && !next.active;
@@ -3080,7 +3089,7 @@ function WorkbenchApp({ theme, actualTheme, onToggleTheme, needsOnboarding }) {
             </WorkbenchStableSurface>
           )}
           {showKnowledgePage && (
-            <WorkbenchStableSurface active={isKnowledge}>
+            <WorkbenchStableSurface active={isKnowledge} enterMotion={true}>
               {React.createElement(window.CyreneUI.require("library").Page || function () { return <div className="workbench-empty">{t("workbench.knowledgeLoading")}</div>; }, {
                 active: isKnowledge,
                 project: store.activeProject,
@@ -3093,12 +3102,12 @@ function WorkbenchApp({ theme, actualTheme, onToggleTheme, needsOnboarding }) {
             </WorkbenchStableSurface>
           )}
           {showSchedulePage && (
-            <WorkbenchStableSurface active={isSchedule}>
+            <WorkbenchStableSurface active={isSchedule} enterMotion={true}>
               {React.createElement(window.CyreneUI.require("schedule").Page || function () { return <div className="workbench-empty">{t("workbench.scheduleLoading")}</div>; }, { active: isSchedule, project: store.activeProject, onBack: function () { setFullPage(null); }, sidebarCollapsed: railCollapsed, collapseControl: isSchedule ? renderSidebarCollapseControl() : null, moduleDock: isSchedule ? renderSidebarDockSlot() : null })}
             </WorkbenchStableSurface>
           )}
           {showMemoryPage && (
-            <WorkbenchStableSurface active={isMemory}>
+            <WorkbenchStableSurface active={isMemory} enterMotion={true}>
               {React.createElement(window.CyreneUI.require("memory").Page || function () { return <div className="workbench-empty">{t("workbench.memoryLoading")}</div>; }, { active: isMemory, project: store.activeProject, onBack: function () { setFullPage(null); }, onEditProjectMemory: function () { if (store.activeProject) setEditMemoryProject(store.activeProject); }, sidebarCollapsed: railCollapsed, collapseControl: isMemory ? renderSidebarCollapseControl() : null, moduleDock: isMemory ? renderSidebarDockSlot() : null })}
             </WorkbenchStableSurface>
           )}
@@ -3133,7 +3142,7 @@ function WorkbenchApp({ theme, actualTheme, onToggleTheme, needsOnboarding }) {
               })}
             </WorkbenchStableSurface>
           )}
-          <WorkbenchStableSurface active={!isModulePage}>
+          <WorkbenchStableSurface active={!isModulePage} enterMotion={true}>
           <>
           <TaskRail
             project={store.activeProject}
