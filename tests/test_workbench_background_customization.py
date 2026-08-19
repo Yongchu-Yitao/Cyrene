@@ -49,7 +49,7 @@ def test_workbench_background_preferences_are_exposed_and_applied_before_paint()
     assert "--wbc-composer-glass-background: var(--wb-conversation-surface);" in dark_conversation_styles
     assert "background: var(--wbc-composer-glass-background);" in dark_conversation_styles
     assert "0 10px 28px rgba(0, 0, 0, .42)" in dark_conversation_styles
-    assert "color-mix(in srgb, #fff 10%, transparent)" in dark_conversation_styles
+    assert "color-mix(in srgb, #fff 14%, transparent)" in dark_conversation_styles
     assert "--wb-composer-surface-color: var(" in styles
     assert "--wb-conversation-surface," in styles
     dark_integrated_styles = styles.split(
