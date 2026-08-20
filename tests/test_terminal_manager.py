@@ -89,6 +89,93 @@ async def test_terminal_manager_keeps_a_resizable_replayable_pty(
 
 @pytest.mark.asyncio
 @pytest.mark.skipif(sys.platform == "win32", reason="POSIX PTY behavior")
+async def test_terminal_default_titles_are_unique_after_gaps_and_concurrent_creation(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    manager = TerminalManager(output_limit=64 * 1024)
+
+    async def fake_spawn(session):
+        session.status = "running"
+
+    monkeypatch.setattr(manager, "_spawn_posix", fake_spawn)
+    first = await manager.create_resolved(
+        "project-1", cwd=str(tmp_path), shell="sh", argv=["/bin/sh"]
+    )
+    custom = await manager.create_resolved(
+        "project-1", cwd=str(tmp_path), shell="sh", argv=["/bin/sh"],
+        title="E2E-Alpha-Dev",
+    )
+    second = await manager.create_resolved(
+        "project-1", cwd=str(tmp_path), shell="sh", argv=["/bin/sh"]
+    )
+    manager.rename(second["id"], "Terminal 5")
+
+    created = await asyncio.gather(*[
+        manager.create_resolved(
+            "project-1", cwd=str(tmp_path), shell="sh", argv=["/bin/sh"]
+        )
+        for _ in range(4)
+    ])
+    titles = [item["title"] for item in manager.list("project-1")]
+
+    assert first["title"] == "Terminal 1"
+    assert custom["title"] == "E2E-Alpha-Dev"
+    assert [item["title"] for item in created] == [
+        "Terminal 6", "Terminal 7", "Terminal 8", "Terminal 9",
+    ]
+    assert len({title.casefold() for title in titles}) == len(titles)
+    with pytest.raises(ValueError, match="title already exists"):
+        await manager.create_resolved(
+            "project-1", cwd=str(tmp_path), shell="sh", argv=["/bin/sh"],
+            title="terminal 1",
+        )
+    with pytest.raises(ValueError, match="title already exists"):
+        manager.rename(custom["id"], "Terminal 1")
+
+
+@pytest.mark.asyncio
+@pytest.mark.skipif(sys.platform == "win32", reason="POSIX PTY behavior")
+async def test_terminal_manager_repairs_historical_duplicate_titles(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    state_dir = tmp_path / "state"
+    manager = TerminalManager(output_limit=64 * 1024, state_dir=state_dir)
+
+    async def fake_spawn(session):
+        session.status = "running"
+
+    monkeypatch.setattr(manager, "_spawn_posix", fake_spawn)
+    first = await manager.create_resolved(
+        "project-1", cwd=str(tmp_path), shell="sh", argv=["/bin/sh"],
+        title="Terminal 5",
+    )
+    second = await manager.create_resolved(
+        "project-1", cwd=str(tmp_path), shell="sh", argv=["/bin/sh"],
+        title="Temporary",
+    )
+    assert manager._db is not None
+    manager._db.execute(
+        "UPDATE terminal_sessions SET title = ? WHERE id = ?",
+        ("Terminal 5", second["id"]),
+    )
+    manager._db.commit()
+
+    restored = TerminalManager(output_limit=64 * 1024, state_dir=state_dir)
+    titles = [item["title"] for item in restored.list("project-1")]
+
+    assert first["title"] == "Terminal 5"
+    assert titles == ["Terminal 5", "Terminal 6"]
+    rows = restored._db.execute(
+        "SELECT title FROM terminal_sessions WHERE project_id = ? ORDER BY order_index",
+        ("project-1",),
+    ).fetchall()
+    assert [str(row[0]) for row in rows] == titles
+
+
+@pytest.mark.asyncio
+@pytest.mark.skipif(sys.platform == "win32", reason="POSIX PTY behavior")
 async def test_terminal_metadata_and_scrollback_survive_manager_restart(
     tmp_path: Path,
 ) -> None:

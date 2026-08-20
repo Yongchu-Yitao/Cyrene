@@ -164,6 +164,69 @@ final result: passed
 
 ---
 
+# Collapsed Project Tool Card Spacing — 2026-08-21
+
+- Reference: `/var/folders/zm/qgh_rgw903j0b9t01yg2l0mc0000gn/T/codex-clipboard-ba69b29d-4766-4810-b700-538956a75ffb.png`.
+- Rendered evidence: `/Users/syw/Documents/playground/Cyrene/.codex/audits/project-tool-card-spacing.png`.
+- The hidden File and Terminal expansion panels now resolve to `0 px` height while collapsed. The visible launcher-card gap was reduced from `15 px` to a single intentional `3 px` interval.
+- Card size, typography, icons, colors, hover states, and the expanded layout remain unchanged. Browser interaction verified that Terminal still expands to a visible `416.11 px` panel and collapses normally.
+- The reference and final rendered state were inspected together. No new browser errors were introduced; the existing `/api/ui-data` fallback warning remains unrelated to this layout change.
+- Production build completed (`43` JSX entries), focused regression passed (`4 passed`), and `git diff --check` passed.
+
+final result: passed
+
+---
+
+# Board Create Menu — 2026-08-21
+
+- Reference: `/var/folders/zm/qgh_rgw903j0b9t01yg2l0mc0000gn/T/codex-clipboard-25953d00-6869-484e-8703-029ea4a55d86.png`.
+- Rendered evidence: `/Users/syw/Documents/playground/Cyrene/.codex/audits/work-board/board-create-menu.png`.
+- The board header action now reads “新建” and keeps the existing rounded accent-button treatment, with a chevron that reflects the expanded state.
+- Clicking the button opens a compact menu containing “新对话” and “新建任务”. Each item invokes the existing creation flow and closes the menu; the established outside-click dismissal remains intact.
+- Browser verification covered opening the menu, launching and cancelling the task dialog, launching a new conversation, and checking the console. No console errors were observed.
+- Production Web UI build completed successfully (`43` JSX entries), the focused regression selection passed (`2 passed`), and `git diff --check` passed.
+
+final result: passed
+
+---
+
+# Board Rail / Work Rail Parity — 2026-08-21
+
+- Reference: `/var/folders/zm/qgh_rgw903j0b9t01yg2l0mc0000gn/T/codex-clipboard-3929686e-fc62-4ff9-b4ab-4bdbab8471fd.png`.
+- Final rendered evidence: `/Users/syw/Documents/playground/Cyrene/.codex/audits/work-board/board-rail-matches-work.png`.
+- The Board task directory now uses the Work rail's compact card structure and shared toolbar, status, timestamp, selection, and more-menu styles while retaining Board task selection and deletion behavior.
+- The first implementation exposed an existing absolute-layout mismatch and allowed the rail to shrink to its task rows. The corrected Board override anchors the rail at all relevant canvas edges; browser measurements now resolve to `x = 12 px`, `y = 58 px`, `height = 650 px`, and `bottom = 708 px` in a `720 px` viewport, matching the Work rail's full-height card geometry.
+- Board rendered three compact task rows at `44 px` each. The browser console contained no errors, and reference/final images were inspected together.
+
+final result: passed
+
+---
+
+# Unified Work Rail Search — 2026-08-20
+
+## Result
+
+- Reference state: `/var/folders/zm/qgh_rgw903j0b9t01yg2l0mc0000gn/T/codex-clipboard-3c1416a4-1750-4faf-a870-38b1ea867818.png`.
+- Rendered evidence: `/Users/syw/Documents/playground/Cyrene/.codex/audits/work-board/unified-search-four-resources.png`.
+- The top rail search is now the only search control and returns grouped matches from chats, tasks, project files, and terminals without depending on the active Chat/Task mode.
+
+## Interaction and visual QA
+
+- The toolbar preserves the existing mode toggle, search field, create action, and collapse action geometry.
+- A non-empty query replaces the ordinary recent list with grouped search results that reuse the existing chat, task, terminal, and file row styles.
+- File lookup covers nested workspace paths, skips ignored dependency/cache trees, and is capped to a bounded result set. Client-side filtering also protects compatibility with a server that has not yet restarted onto the new query endpoint.
+- Expanding Files or Terminal no longer creates a second search box. The expanded header contains only its icon, title/context, relevant action, and collapse control.
+- Typing in the unified search while a project tool is expanded closes the expanded tool naturally and reveals the grouped results.
+- Browser checks confirmed Chat + File groups for `test`, Chat + Task groups for `B站`, and Chat + Terminal groups for `Terminal`. No browser console errors were observed.
+
+## Verification
+
+- Production Web UI build completed successfully (`43` JSX entry files compiled).
+- Focused frontend/API regressions passed (`358 passed`), followed by the final changed-area check (`25 passed`).
+- `git diff --check` passed.
+
+final result: passed
+
 # Model Service Detail Copy Removal — 2026-08-19
 
 - Source visual truth: `/var/folders/zm/qgh_rgw903j0b9t01yg2l0mc0000gn/T/codex-clipboard-56bdd211-78cb-47d6-9dad-fc2f34b19fe2.png` (`530 × 148 px`, before state identifying the line to remove).
@@ -1645,5 +1708,597 @@ final result: passed
 - Interaction checks: switched Chat → Files → Terminal, created terminals, opened a terminal split, sent input and observed PTY output, pinned/unpinned, opened the action menu, renamed a terminal, reloaded, and reattached to the surviving session.
 - Console: no warnings or errors during the tested flow.
 - Automated checks: frontend production build, focused PTY tests, and Ruff checks passed.
+
+final result: passed
+
+---
+
+# Browser Manager Design QA
+
+## Result
+
+Final result: **passed**
+
+No actionable P0, P1, or P2 visual defects remain in the browser-manager scope.
+
+## Visual source of truth
+
+- Full reference: `/var/folders/zm/qgh_rgw903j0b9t01yg2l0mc0000gn/T/codex-clipboard-fb663b7f-3110-45a5-9ea5-5cf07f1464d6.png`
+- Fixed-resource hint reference: `/var/folders/zm/qgh_rgw903j0b9t01yg2l0mc0000gn/T/codex-clipboard-c7f8cd31-f918-4e26-b17b-984b8631486a.png`
+- Collapsed implementation: `project-notes/browser-manager-collapsed.png`
+- Expanded implementation: `project-notes/browser-manager-expanded-final.png`
+- Full-view comparison: `project-notes/browser-manager-comparison-full.png`
+- Focused topbar comparison: `project-notes/browser-manager-comparison-topbar.png`
+
+The underlying workbench body intentionally differs from the reference because the QA fixture has no user project data. The judged scope is the topbar browser entry, fixed-resource hint, expanded manager, and download state.
+
+## Test state
+
+- Viewport: 1536 × 1024 CSS pixels
+- Screenshot output: 1536 × 1024 pixels
+- Device scale factor: 1; no normalization required
+- Theme/platform: light, desktop/macOS layout
+- Manager data: 23 pages, one active 200 MB download at 35%
+- Captured states: manager collapsed and expanded
+
+## Fidelity review
+
+- Typography: uses the existing Manrope/Noto Sans SC product stack and existing topbar weights.
+- Spacing and geometry: browser entry uses the current 32 px Cyrene topbar control scale; the adjacent dashed fixed-resource hint remains present.
+- Color and elevation: existing semantic tokens and shadows are reused; no gradients were introduced.
+- Icons and assets: official packaged Tabler outline icons and real page favicons are used rather than approximate drawings.
+- Information density: global page count remains visible while collapsed; project/page grouping and the active download are visible in the expanded menu.
+- Copy: English and Simplified Chinese labels are present, including download state and fallback grouping.
+
+## Interaction checks
+
+- Initial global manager state is requested and subsequent state events are subscribed to.
+- The manager opens from the topbar button.
+- The manager closes and reopens from the same button.
+- A downloading page is sorted to the first visible page and shows filename, progress, and transferred/total bytes.
+- Page activate, reload, mute/unmute, and close controls are present; their Electron command paths are covered by the focused code tests.
+- The fixed-resource empty hint remains visible next to the manager entry.
+
+## Console and runtime checks
+
+- No application console errors were observed.
+- The static visual-QA fixture emitted only the expected fallback warning for the unavailable `/api/ui-data` endpoint; this does not occur as an implementation error in the packaged Electron runtime.
+
+## Iteration history
+
+- P2 found on the first expanded capture: the active download could appear below the initial scroll viewport. Fixed by sorting pages with active downloads first and then the globally active page.
+- P3 found on the first topbar pass: the disclosure glyph had an arrow stem. Fixed by using the official Tabler `chevron-down` asset.
+- Re-captured both full-view and focused comparisons after the fixes; no remaining blocking fidelity issues were found.
+
+---
+
+# Browser Manager Favicon Follow-up — 2026-08-20
+
+## Result
+
+No actionable P0, P1, or P2 visual defects remain in this follow-up scope.
+
+## Source visual truth
+
+- Counter-button reference: `/var/folders/zm/qgh_rgw903j0b9t01yg2l0mc0000gn/T/codex-clipboard-5ae8cc67-b528-4262-b3cd-d38ca983919d.png` (`180 × 88 px`, treated as approximately 2× and normalized to `90 × 44 px`).
+- Opaque expanded-menu reference: `/var/folders/zm/qgh_rgw903j0b9t01yg2l0mc0000gn/T/codex-clipboard-1234ee60-6f91-42e2-8587-955cac78b26c.png` (`836 × 312 px`, normalized to `418 × 156 px`).
+- Favicon-pill target: `/var/folders/zm/qgh_rgw903j0b9t01yg2l0mc0000gn/T/codex-clipboard-537c5803-377b-41aa-b799-40b693f0b44c.png` (`382 × 160 px`, normalized to `191 × 80 px`).
+
+## Rendered implementation evidence
+
+- Collapsed full view: `project-notes/browser-manager-favicons-collapsed.png` (`1536 × 1024 px`).
+- Expanded full view: `project-notes/browser-manager-favicons-expanded.png` (`1536 × 1024 px`).
+- Full-view combined comparison: `project-notes/browser-manager-full-view-comparison.png`.
+- Focused topbar comparison: `project-notes/browser-manager-full-comparison.png`.
+- Focused expanded-menu comparison: `project-notes/browser-manager-menu-comparison.png`.
+- Browser viewport: `1536 × 1024` CSS pixels, device scale factor `1`.
+- State: desktop light theme, four different page favicons, one active download, manager expanded and collapsed.
+
+The references are component crops rather than a complete application viewport. The full-view comparison therefore places the complete rendered Workbench next to a board containing every normalized source fragment; the focused comparisons are used for precise component judgment.
+
+## Fidelity findings
+
+- Typography: existing Manrope/Noto Sans SC typography is retained. Header, project label, page title, domain, count badge, and download metadata preserve the reference hierarchy without wrapping.
+- Spacing and layout: the favicon pill is immediately left of Search, uses a 40 px rounded capsule, and displays up to four unique websites with 26 px icon slots. The dashed fixed-resource hint remains in its original resource-shelf position.
+- Colors and tokens: the pill and the session-overflow hover now share the same blue-tinted border, background, foreground, and elevation declarations. The manager flyout uses the opaque strong-card token and the same flyout border/shadow family as the session list menu.
+- Image quality: the pill and menu consume the real `page-favicon-updated` URL supplied by Electron. The packaged Tabler browser asset is used only as the fallback when a site does not publish a favicon.
+- Copy and content: the expanded menu retains browser-page count, project grouping, page title/domain, page controls, and inline download filename/progress/bytes.
+
+## Primary interaction and runtime checks
+
+- The manager opened from the favicon pill, closed through the outside scrim, and reopened successfully.
+- DOM order confirmed the favicon pill appears after the pinned-resource shelf and immediately before the Search/Help group.
+- The expanded menu remained visually opaque over Workbench content.
+- The active download remained first and visible without scrolling.
+- The browser surface did not expose pointer-hover forcing; hover parity is enforced by the shared CSS values and covered by the focused source test.
+- No application errors were logged. The static QA fixture produced only the expected `/api/ui-data` fallback warning.
+- Frontend production build passed; focused regression command reported `29 passed`.
+
+## Comparison history
+
+- P1 from the supplied screenshot: the manager menu inherited no flyout variables after being portaled and could render transparent. Fixed by carrying the flyout background/border/shadow tokens into the portal and adding an opaque strong-card fallback.
+- P2 from the supplied target: the manager used a counter-and-chevron button and sat before the resource shelf. Fixed by replacing it with the four-favicon pill and moving it between the resource shelf and Search.
+- P2 from the first revised capture: the 36 px pill and 24 px slots were visibly smaller than the favicon target. Fixed by increasing the capsule to 40 px and icon slots to 26 px, then re-capturing both comparison states.
+- P2 consistency issue: the session-overflow hover used a separate neutral surface. Fixed by matching the browser pill's blue-tinted hover border, fill, foreground, and shadow.
+
+final result: passed
+
+---
+
+# Browser Manager Compact Size And Pin Recovery — 2026-08-20
+
+## Result
+
+No actionable P0, P1, or P2 defects remain in this follow-up scope.
+
+## Source visual truth
+
+- Oversized single-favicon report: `/var/folders/zm/qgh_rgw903j0b9t01yg2l0mc0000gn/T/codex-clipboard-2f0494d6-c6b1-462c-9177-edcb62d1849e.png` (`216 × 136 px`, treated as approximately 2× and normalized to `108 × 68 px`).
+- Rendered empty-pin state: `project-notes/browser-manager-compact-single.png` (`1280 × 720 px`).
+- Pin/unpin interaction evidence before the final alignment adjustment: `project-notes/browser-manager-compact-pinned.png` (`1280 × 720 px`).
+- Rendered left-aligned fixed-hint state: `project-notes/browser-manager-compact-left-aligned.png` (`1280 × 720 px`).
+- Focused reference / compact / pinned comparison: `project-notes/browser-manager-compact-comparison.png`.
+- Browser viewport: `1280 × 720` CSS pixels, device scale factor `1`.
+- State: desktop light theme, one Google page, before and after pinning.
+
+## Fidelity findings
+
+- P2 oversized control: the one-page manager is now `36 × 34 px`, closely matching the adjacent Search control at `36 × 32 px`; its favicon slot is `22 × 22 px` with an `18 × 18 px` site icon.
+- The fixed-resource hint is preserved at the left edge of the flexible resource shelf. Its measured inset is 4 px from the shelf's `x = 190 px` edge; the manager remains immediately before Search on the right.
+- The manager continues to use the real page favicon. The pinned resource chip also renders that favicon, with the packaged browser asset retained only as fallback.
+- Typography, semantic colors, border radius, and elevation reuse the existing Workbench topbar tokens; no new gradients or approximate icons were introduced.
+
+## Pin recovery and interaction checks
+
+- P1 pin regression root cause: after the resource shelf and manager were reordered, the topbar grid still assigned the flexible column to the manager. The shelf collapsed to approximately 38 px, leaving an impractically small drop/fixed-resource target.
+- The resource shelf now owns the flexible third grid track again, measured `834 × 40 px`, and left-aligns its hint/pinned resources; the manager and Search retain automatic-width tracks.
+- Pinning from the manager produced one browser resource chip labelled `Google`, using `https://www.google.com/favicon.ico`.
+- The pinned chip measured `30 × 30 px`; the final shelf alignment places pinned resources at the same left edge as the empty fixed-resource hint.
+- Reopening the manager exposed `从顶栏移除`; activating it removed the chip, confirming both pin and unpin paths.
+- Pinned browsers from sessions outside the recent-session strip now resolve through all session tab candidates, so activating a global pinned page is no longer limited to visible recent tabs.
+
+## Console and runtime checks
+
+- No application errors were observed.
+- The static QA fixture emitted only the expected `/api/ui-data` fallback warning because no application backend was attached.
+
+final result: passed
+
+---
+
+# Browser Tab Picker Flat-Chrome Follow-up — 2026-08-20
+
+## Result
+
+No actionable P0, P1, or P2 visual defects remain in this follow-up scope.
+
+## Source and rendered evidence
+
+- Reference: `/var/folders/zm/qgh_rgw903j0b9t01yg2l0mc0000gn/T/codex-clipboard-7d68eaf5-6f6f-4e9c-aec0-3226c10a8876.png`.
+- The exact packaged `browser-tab-picker.html` was rendered beside the reference in one in-app Browser comparison at the default desktop viewport.
+- The overflow fixture used eight rows inside a 196 px client area (`scrollHeight: 394`), so hidden scrollbar chrome was judged under real overflow rather than an empty/non-scrolling state.
+
+## Fidelity and behavior checks
+
+- The picker surface computes to `box-shadow: none`; the lower drop shadow visible in the reference is gone.
+- The picker remains vertically scrollable with `overflow-y: auto`, while its computed `scrollbar-width` is `none` and the WebKit scrollbar rule suppresses the right-side chrome.
+- Borders, radii, background, selection state, row actions, animation, focus handling, and scrolling behavior are unchanged.
+- Split and maximized browser hosts both use the same native picker document; the existing variant-specific bounds remain intact, so the visual correction applies to both modes without changing host logic.
+- The embedded fallback HTML and packaged static HTML contain the same CSS correction.
+- Focused regression command: `uv run pytest tests/test_workbench_context_menus.py` (`25 passed`).
+
+final result: passed
+
+---
+
+# Global Browser Download Center — 2026-08-20
+
+## Result
+
+No actionable P0, P1, or P2 defects remain in this scope.
+
+## Source and rendered evidence
+
+- Source visual truth: `/var/folders/zm/qgh_rgw903j0b9t01yg2l0mc0000gn/T/codex-clipboard-e78add5c-9a7d-4d7a-bdcd-9c2ff85f24e4.png` (`780 × 292 px`, treated as 2× and normalized to `390 × 146 px`).
+- Browser-rendered implementation: `project-notes/browser-download-center-expanded.png` (`1280 × 720 px`).
+- Focused implementation crop: `project-notes/browser-download-center-crop.png` (`390 × 255 px`).
+- Side-by-side focused comparison: `project-notes/browser-download-center-comparison.png` (`780 × 255 px`).
+- Browser viewport: `1280 × 720` CSS pixels, device scale factor `1`.
+- State: desktop light theme, one Google Scholar browser page and one active `200 MB` download at `35%`.
+
+The source defines the browser-page portion of the manager but does not depict a download. The implementation preserves that `390 px` browser manager geometry and adds the requested separated download region below it. The static fixture cannot resolve the real project owner, so its group label is `其他页面`; packaged application data continues to provide the actual project name such as `Cyrene`.
+
+## Fidelity surfaces
+
+- Fonts and typography: existing Manrope/Noto Sans SC families, compact UI weights, ellipsis behavior, and browser-page hierarchy are preserved. Download filename and metadata use the same optical scale as the page title/detail pair.
+- Spacing and layout: the source's header, group, and page row remain unchanged. A 1 px divider creates a distinct download region below the page list; the rendered manager is `390 × 255 px`, with a `109 px` download center.
+- Colors and tokens: the new region uses the existing strong-card, row-hover, line, accent, muted, and amber semantic tokens. No gradient or one-off palette was introduced.
+- Image and icon quality: the browser row continues to use its real favicon. Download, pause, resume, and cancel controls use packaged Tabler outline assets rather than approximate drawings.
+- Copy and content: the download region exposes its count, filename, percentage, transferred/total bytes, source page, paused state, and localized Chinese/English action labels.
+
+## Interaction and accessibility checks
+
+- Pausing changed the row copy to `已暂停 · 35% · 70 MB / 200 MB · Google 学术搜索` and replaced the action with `继续下载`.
+- Resuming restored the `暂停下载` action.
+- Cancelling removed the download region when no downloads remained.
+- The progress indicator exposes `role="progressbar"` with min/max/current values for determinate downloads; unknown totals retain an indeterminate animation that respects reduced-motion preferences.
+- The Electron bridge aggregates downloads from every managed browser session and routes pause, resume, and cancel to the originating `DownloadItem`.
+
+## Console and comparison history
+
+- No application errors were observed. The static fixture emitted only the expected `/api/ui-data` fallback warning because no Cyrene backend was attached.
+- Frontend production build and Electron syntax check passed. The focused browser-manager suite passed (`7 passed`); the adjacent pinned-resource and recent-session coverage also passed in the consolidated run.
+- The first focused comparison showed no actionable P0/P1/P2 mismatch in the source-defined browser-page region or the requested download section, so no visual correction pass was required.
+
+final result: passed
+
+---
+
+# Browser Tab Picker Native-Cache Correction — 2026-08-20
+
+## Result
+
+No actionable P0, P1, or P2 visual defects remain in this corrected implementation.
+
+## Source and rendered evidence
+
+- Source visual truth: `/var/folders/zm/qgh_rgw903j0b9t01yg2l0mc0000gn/T/codex-clipboard-88a0cb5c-9e5e-4a33-bc7b-b1b9ec13fd91.png` (`954 × 290 px`).
+- Focused side-by-side comparison: `project-notes/browser-tab-flat-comparison.png` (`1280 × 720 px`).
+- The comparison uses the exact generated `browser-tab-picker.html`, one active Google Scholar tab, desktop light theme, and the same open-picker state as the source.
+- The focused source crop and rendered picker are displayed at matching widths and approximately matching CSS density; unrelated outer browser chrome is excluded from judgment.
+
+## Findings and correction history
+
+- P1 found in the new application screenshot: the previous source-only CSS correction had not reached the already-created native `WebContentsView`, so its cached generated picker page still rendered the old bottom shadow and native scrollbar.
+- Fix: keep the flat rules in the generated picker source, insert the same rules directly into the native picker WebContents before it becomes ready, and add a style revision to the same-origin picker URL so a new view cannot reuse the stale page response.
+- Post-fix evidence: the focused comparison shows neither the lower shadow nor the right-side scrollbar. Computed picker values are `box-shadow: none` and `scrollbar-width: none`.
+- The one-row picker is genuinely overflowed (`scrollHeight: 58`, `clientHeight: 56`) while retaining `overflow-y: auto`; therefore scrolling behavior remains available and the missing bar is not a non-overflow false positive.
+
+## Required fidelity surfaces
+
+- Fonts and typography: unchanged Manrope/Noto Sans SC stack, weights, truncation, and title hierarchy.
+- Spacing and layout: unchanged native picker bounds, row height, padding, border radius, and split/maximized variant geometry.
+- Colors and tokens: unchanged surface, border, active-row, foreground, and icon tokens; only the outer elevation is flattened.
+- Image and icon quality: favicon and packaged picker action icons are unchanged.
+- Copy and content: browser title and action labels are unchanged.
+
+## Interaction and verification
+
+- Split and maximized browser hosts continue to share the same native picker implementation and preserve their existing variant-specific bounds.
+- Selection, refresh, mute, close, focus, keyboard navigation, animation, and vertical scrolling code paths were not changed.
+- Production Web UI build passed and regenerated the packaged picker page.
+- Focused regression command passed: `uv run pytest tests/test_workbench_context_menus.py` (`25 passed`).
+
+final result: passed
+
+---
+
+# Unified Work Menu and Mixed Board — 2026-08-20
+
+## Result
+
+No actionable P0, P1, or P2 visual or interaction defects remain for the requested Work / Board redesign.
+
+## Source and rendered evidence
+
+- Source visual truth: `/var/folders/zm/qgh_rgw903j0b9t01yg2l0mc0000gn/T/codex-clipboard-ee887ebe-21ee-47f8-bd7a-50e30eda8142.png` (`564 × 1080 px`, approximately 2× desktop density).
+- Work-list implementation: `/Users/syw/Documents/playground/Cyrene/.codex/audits/work-board/work-list-implementation.jpg`.
+- Mixed-board implementation: `/Users/syw/Documents/playground/Cyrene/.codex/audits/work-board/board-implementation.jpg`.
+- State: desktop light theme, Cyrene selected, expanded sidebar; the Work comparison uses the active `hi` row and the Board capture uses the default five-column state.
+- The source and Work-list screenshot were inspected together in one comparison input. The source-defined row hierarchy, status icon column, active blush surface, titles, timestamps, failure treatment, and `查看全部` affordance remain aligned. The new header, project-tools shelf, and five-item Dock are outside the source crop and follow the user's additional requirements.
+
+## Findings
+
+- Fonts and typography: existing Manrope/Noto Sans SC families and current conversation-row sizes are reused for tasks, so Task / Chat switching does not change density or hierarchy.
+- Spacing and layout: the Account footer row is no longer rendered. The existing five-item rounded Dock now occupies one 72 px footer contract, while the Files / Terminal shelf sits above it and leaves the list as the flexible scroll region.
+- Colors and tokens: selected rows, board stages, semantic status colors, borders, radii, and shadows all reuse Workbench tokens. No one-off palette was introduced.
+- Image and icon quality: the existing packaged icon set is reused for Board, Work, task status, Files, Terminal, and split controls. No emoji, placeholder, or improvised asset was added.
+- Copy and content: the primary destinations read `日程 / 看板 / 工作 / 知识库 / 记忆`; the Work rail switches directly between `对话` and `任务`; Files and Terminal expand through the existing full rail views.
+
+## Interaction verification
+
+- In the local app, Work opened the unified rail; its mode button switched `对话 → 任务 → 对话` without a dropdown.
+- Task rows rendered with the same `wbc-chat-card` structure as conversations. Selecting a task replaced the workspace with a task pane inside the existing pane frame and retained the shared move/split grip.
+- Files expanded to the existing project-file browser and the Terminal surface restored the existing terminal list and pane.
+- Board rendered both task and conversation cards. Deterministic layout tests verify manual task placement persists while status is unchanged, a later system-status change remaps the task to the system column, and conversation placement remains user-controlled.
+- Task drag payloads are accepted by the same right-side and per-pane drop targets used by conversation/resource splits; task panes also participate in resize, move, close, detach, and return paths.
+- No browser console errors or warnings were observed during Work, Task pane, Files, Terminal, and Board navigation.
+
+## Verification
+
+- Production Web UI build completed successfully (`43` JSX entry files compiled).
+- Focused frontend regression run passed: `uv run pytest tests/test_workbench_mixed_board.py tests/test_workbench_frontend_logic.py` (`335 passed`).
+- `git diff --check` passed.
+
+final result: passed
+
+---
+
+# Bottom Dock Equal Insets — 2026-08-20
+
+## Result
+
+- Source visual truth: `/var/folders/zm/qgh_rgw903j0b9t01yg2l0mc0000gn/T/codex-clipboard-3f450ff5-eba4-4423-aa6d-cd7b28ca3a3b.png`.
+- Rendered evidence: `/Users/syw/Documents/playground/Cyrene/.codex/audits/work-board/dock-equal-insets.jpg`.
+- Measured against the visible integrated-rail border, the navigation card now has exactly `15 px` left, right, and bottom insets.
+- The dark-theme implementation and reference were inspected together; no console errors were present.
+- Production build passed, `uv run pytest tests/test_workbench_mixed_board.py` passed (`3 passed`), and `git diff --check` passed.
+
+final result: passed
+
+---
+
+# Task Right Panel and Split Parity — 2026-08-20
+
+## Result
+
+- Source issue capture: `/var/folders/zm/qgh_rgw903j0b9t01yg2l0mc0000gn/T/codex-clipboard-f733f1f5-b307-4666-9d43-996ecc8d493a.png`.
+- Rendered evidence: `/Users/syw/Documents/playground/Cyrene/.codex/audits/work-board/task-right-panel-restored.jpg`.
+- A single task now mounts the existing `RightContextPanel` in the same resizable fourth track used by the conversation panel, including the matching hide control and topbar restore control.
+- Browser interaction verification passed: hide produced `wbc-side-hidden`, removed the visible panel, and exposed one restore button; restore reversed all three states.
+- When a task participates in a split, its docked inspector yields to the shared pane layout. The task grip menu opens that task's own floating details panel; outside click and its close control dismiss it without moving the split.
+- Task drag, move, close, detach, return, horizontal split, vertical split, and column/row resize continue through the existing pane-card implementation.
+- Production build passed. Focused regressions passed (`5 passed`), `git diff --check` passed, and no browser console errors were observed.
+
+final result: passed
+
+---
+
+# Files and Terminals Under Project Tools — 2026-08-20
+
+## Result
+
+- Source terminal list: `/var/folders/zm/qgh_rgw903j0b9t01yg2l0mc0000gn/T/codex-clipboard-1b699b0a-ae87-4276-b261-35badd895bf0.png`.
+- Source project-tools placement: `/var/folders/zm/qgh_rgw903j0b9t01yg2l0mc0000gn/T/codex-clipboard-a07b6d47-dfbe-4a44-8a91-101593a05ef8.png`.
+- Rendered terminal evidence: `/Users/syw/Documents/playground/Cyrene/.codex/audits/work-board/terminal-list-under-project-tools.jpg`.
+- Rendered file evidence: `/Users/syw/Documents/playground/Cyrene/.codex/audits/work-board/file-list-under-project-tools.jpg`.
+- Both project tools now expand directly below their own button. Opening one closes the other, keeping the sidebar hierarchy unambiguous and bounded.
+
+## Fidelity and interaction verification
+
+- The terminal expansion retains the existing search, new-terminal action, pinned/recent grouping, status, active selection, drag ordering, timestamps, and more-actions menu.
+- Selecting `Terminal 3` kept the rail in `对话`, marked that terminal row active, and opened it through the existing terminal-pane logic.
+- The file expansion retains search, current-path/back navigation, folders, files, type icons, drag payloads, and the existing file viewer/split opening behavior.
+- The original Workbench typography, tokens, icons, row density, active backgrounds, borders, and radii are reused in both compact lists.
+- The two reference images and both rendered states were inspected together. No actionable P0, P1, or P2 visual mismatch remains.
+- No browser console errors were observed.
+
+## Verification
+
+- Production Web UI build completed successfully (`43` JSX entry files compiled).
+- The focused frontend regression run completed with `336 passed`; its one stale full-rail static expectation was updated for the requested inline placement, after which the focused rerun passed (`5 passed`).
+- `git diff --check` passed.
+
+final result: passed
+
+---
+
+# Project Tool Search Transition and Terminal Card Parity — 2026-08-20
+
+## Result
+
+- Search transformation reference: `/var/folders/zm/qgh_rgw903j0b9t01yg2l0mc0000gn/T/codex-clipboard-4fde12ba-6bcd-4b7e-a58f-b81e12245dc3.png`.
+- Terminal-card reference: `/var/folders/zm/qgh_rgw903j0b9t01yg2l0mc0000gn/T/codex-clipboard-08e8c665-c487-4887-912a-090be8918aa8.png`.
+- Auto-position references: `/var/folders/zm/qgh_rgw903j0b9t01yg2l0mc0000gn/T/codex-clipboard-ddf7ac74-669f-4d8f-aef0-e85f2f4c64b4.png` and `/var/folders/zm/qgh_rgw903j0b9t01yg2l0mc0000gn/T/codex-clipboard-bc40a80c-a549-4b90-b6eb-3e832d90c765.png`.
+- Neutral-search correction reference: `/var/folders/zm/qgh_rgw903j0b9t01yg2l0mc0000gn/T/codex-clipboard-e9706d58-545c-4ecc-9427-099b78c1773e.png`.
+- Rendered evidence: `/Users/syw/Documents/playground/Cyrene/.codex/audits/work-board/project-tools-search-terminal-card-parity.jpg`.
+
+## Fidelity and interaction verification
+
+- Opening Files or Terminal replaces that tool row with its focused search field; search is no longer duplicated inside the expanded panel.
+- The expansion uses an animated grid-row/min-height/opacity transition. The project-tools shelf scrolls smoothly and pins the active search row directly below its sticky section label.
+- Measured terminal and conversation cards match exactly at `44 px` height, `0 10 px` padding, `6 px` gap, and `11 px` radius. Their non-hover active background and shadow values also match exactly.
+- The search row no longer uses the accent surface. Its wrapper resolves to the neutral panel surface, while the input and both action controls use neutral control surfaces and border tokens.
+- Search remains pinned and visible after selecting a terminal, while the terminal list continues to scroll beneath it.
+- The references and final rendered state were inspected together. No actionable P0, P1, or P2 visual mismatch remains, and no browser console errors were observed.
+
+## Verification
+
+- Production Web UI build completed successfully (`43` JSX entry files compiled).
+- Focused frontend regressions passed (`337 passed`), followed by the final project-tools regression check (`4 passed`).
+- `git diff --check` passed.
+
+final result: passed
+
+---
+
+# Project Tool Promotion to Whole Rail Content Top — 2026-08-20
+
+## Result
+
+- Source clarification: `/var/folders/zm/qgh_rgw903j0b9t01yg2l0mc0000gn/T/codex-clipboard-3c1416a4-1750-4faf-a870-38b1ea867818.png`.
+- Rendered evidence: `/Users/syw/Documents/playground/Cyrene/.codex/audits/work-board/project-tools-whole-card-top.jpg`.
+- Expanding Files or Terminal now promotes the complete project-tool surface to the top of the rail content area, rather than scrolling only inside the former footer shelf.
+
+## Interaction and measurement
+
+- The rail toolbar ends at `y = 115 px`; after expansion, the project-tools surface begins at exactly `y = 115 px`.
+- The conversation/task list resolves to `0 px` height, `0` opacity, hidden visibility, and no padding while the tool surface is open.
+- The tool surface fills the full space between the rail toolbar and the persistent bottom dock. Its search row and list remain independently usable.
+- The inactive project tool and its collapsed panel are removed from the promoted layout, so the selected tool receives a clean three-row grid: section label, search controls, and flexible content.
+- Closing the tool restored the recent list to `585.37 px` in the measured viewport, returned project tools to `y = 700.37 px`, and restored full opacity/visibility.
+- Promotion and restoration use the shared 320 ms sidebar easing; terminal card selection, neutral search controls, and the five-item dock remain unchanged.
+- The reference and final rendered state were inspected together. No actionable P0, P1, or P2 visual mismatch remains, and no browser console errors were observed.
+
+## Verification
+
+- Production Web UI build completed successfully (`43` JSX entry files compiled).
+- Focused frontend regressions passed (`337 passed`), and the final project-tools regression check passed (`4 passed`).
+- `git diff --check` passed.
+
+final result: passed
+
+---
+
+# Unified Search Final Addendum — 2026-08-20
+
+- Final rendered evidence: `/Users/syw/Documents/playground/Cyrene/.codex/audits/work-board/unified-search-four-resources.png`.
+- The single toolbar search now returns grouped Chat, Task, File, and Terminal results. Files and Terminals have no nested search inputs in either collapsed or expanded states.
+- Browser checks covered Chat + File (`test`), Chat + Task (`B站`), and Chat + Terminal (`Terminal`) result combinations; the console remained error-free.
+- Build and focused regressions passed (`358 passed`; final changed-area check `25 passed`), and `git diff --check` passed.
+
+final result: passed
+
+---
+
+# File Back Button Alignment — 2026-08-21
+
+- Reference: `/var/folders/zm/qgh_rgw903j0b9t01yg2l0mc0000gn/T/codex-clipboard-18c09bfe-acd2-4d9b-998c-4fab3d167fba.png`.
+- Nested-directory evidence: `/Users/syw/Documents/playground/Cyrene/.codex/audits/work-board/file-back-button-aligned.png`.
+- Root-directory evidence: `/Users/syw/Documents/playground/Cyrene/.codex/audits/work-board/file-root-without-back-button.png`.
+- The back control is not rendered at the project root. In a child directory it appears with an accessible label and its chevron center resolves to `x = 42.5 px`, exactly matching the first file-row icon center at `x = 42.5 px`.
+- The existing file expansion, path label, folder navigation, animation, and dock layout remain unchanged. No browser console errors were observed.
+- Production Web UI build completed successfully (`43` JSX entries), the focused regression passed (`4 passed`), and `git diff --check` passed.
+
+final result: passed
+
+---
+
+# Board Conversation and Task Search — 2026-08-21
+
+## Evidence and normalization
+
+- Source visual truth: `/var/folders/zm/qgh_rgw903j0b9t01yg2l0mc0000gn/T/codex-clipboard-c79b9d42-19f0-4391-90e3-90f6a1bc4c3d.png` (`1096 × 308` px), showing the intended board header and toolbar location.
+- Browser-rendered implementation: `/Users/syw/Documents/playground/Cyrene/.codex/audits/work-board/board-search.png` (`1280 × 720` px) at a `1280 × 720` CSS viewport and device pixel ratio `2`.
+- State: dark theme, Board page, search populated with `hi`, showing matching conversation cards and per-column filtered counts.
+- The reference is a focused light-theme crop rather than a full matching viewport. It was compared with the implementation in the same visual input for toolbar hierarchy, control height, ordering, gaps, radius, typography, tokens, and copy. Density normalization was unnecessary because the comparison used CSS geometry and visible proportions rather than pixel-for-pixel color sampling.
+- A separate focused crop was not needed: the reference itself is already limited to the board header and toolbar, and that region remains clearly readable in the implementation capture.
+
+## Findings
+
+- No actionable P0, P1, or P2 mismatch remains. The search field sits directly between Sort and New, all three controls resolve to `38 px` height, and adjacent gaps resolve to `8 px`.
+- Fonts and typography reuse the established board control scale and weight; the search placeholder and entered text remain legible without changing the heading hierarchy.
+- Spacing and layout rhythm preserve the original header composition. The search uses a responsive `190–280 px` width (`256 px` in the verified viewport), the same `9 px` radius, and the same border family as Sort.
+- Colors and tokens use the existing neutral control surface, muted search icon, and accent focus ring; no new theme-specific color was introduced.
+- Image and asset fidelity is unaffected. The search icon reuses Cyrene's existing search icon asset already used elsewhere in the interface.
+- Copy is explicit in both locales: “Search conversations and tasks” / “搜索对话和任务”. Filtered empty columns explain that there are no matching results instead of claiming the stage has no items.
+
+## Primary interaction verification
+
+- Searching `澳大利亚租车旅游攻略` returned exactly one task card and column counts `1, 0, 0, 0, 0`.
+- Searching `hi` returned matching conversation cards and column counts `6, 0, 0, 0, 0`.
+- Clearing the field restores the unfiltered board. Existing sorting, creation menu, card drag layout, and completed-task layout data remain independent of the filter.
+- Production Web UI build completed successfully (`43` JSX entries), the focused regression selection passed (`2 passed`), and `git diff --check` passed. No browser-rendering failure was observed.
+
+## Comparison history
+
+- Initial comparison: no actionable P0/P1/P2 findings; no visual-fix iteration was required.
+
+## Implementation checklist
+
+- [x] Search field placed beside the board actions.
+- [x] Conversation and task metadata are both searchable.
+- [x] Counts and empty states reflect the filtered result set.
+- [x] Keyboard-accessible native search input and localized accessible name are present.
+
+final result: passed
+
+---
+
+# File Header Directory Navigation — 2026-08-21
+
+- References: `/var/folders/zm/qgh_rgw903j0b9t01yg2l0mc0000gn/T/codex-clipboard-1fb16bfc-52d7-46ab-953a-b297fe5d95cd.png` and `/var/folders/zm/qgh_rgw903j0b9t01yg2l0mc0000gn/T/codex-clipboard-75c6d108-c658-4021-a388-2a1e76f57fd5.png`.
+- Root evidence: `/Users/syw/Documents/playground/Cyrene/.codex/audits/work-board/file-header-root-folder-icon.png`.
+- Nested evidence: `/Users/syw/Documents/playground/Cyrene/.codex/audits/work-board/file-header-nested-back-icon.png`.
+- The standalone directory/path row was removed from the expanded content. The file header now owns the current path and navigation state.
+- At the project root, the header shows the normal folder icon and project name. In a child directory, the same leading slot becomes an accessible back button and the subtitle changes to the child path. Activating it returns to the parent and restores the folder icon at root.
+- Existing file rows, folder navigation animation, collapse control, and dock geometry remain unchanged. Browser verification found no console errors.
+- Production build completed (`43` JSX entries), focused regression passed (`4 passed`), and `git diff --check` passed.
+
+final result: passed
+
+---
+
+# Neutral Project Tool Icon Backgrounds — 2026-08-21
+
+- Visual reference: `/var/folders/zm/qgh_rgw903j0b9t01yg2l0mc0000gn/T/codex-clipboard-ba69b29d-4766-4810-b700-538956a75ffb.png`.
+- Rendered evidence: `/Users/syw/Documents/playground/Cyrene/.codex/audits/project-tool-neutral-icon-backgrounds.png`.
+- File and Terminal now share a neutral muted-gray icon surface (`10%` opacity) instead of an accent-derived background. In the verified dark theme, both icons resolve to `color(srgb 0.760784 0.764706 0.792157 / 0.1)` while the active accent remains `#E8796B`, confirming the surfaces no longer inherit the theme color.
+- Card layout, the compact `3 px` gap, labels, chevrons, hover treatment, and expand/collapse behavior remain unchanged. Terminal expansion was exercised successfully in the browser.
+- No browser errors were introduced; the two existing `/api/ui-data` fallback warnings are unrelated to this visual change.
+- Production build completed (`43` JSX entries), focused regression passed (`4 passed`), and `git diff --check` passed.
+
+final result: passed
+
+---
+
+# Board Uses the Work Rail Directly — 2026-08-21
+
+- Work reference: `/Users/syw/Documents/playground/Cyrene/.codex/audits/work-board/work-rail-task-mode-reference.png`.
+- Board implementation: `/Users/syw/Documents/playground/Cyrene/.codex/audits/work-board/board-shared-work-rail.png`.
+- The Board no longer renders its standalone task-menu markup. It mounts the exported Work rail host, which delegates directly to the same `WbcRail` renderer used by Work.
+- In the same viewport and task-mode state, Work and Board resolve to the same root class, direct-child structure, `284 × 650 px` geometry, “最近” section, draggable task cards, marquee/preview treatment, status classes, project tools, file expansion, terminal list, and persistent module dock.
+- The shared toggle was exercised from Task to Chat and back; Chat rendered 14 visible rows. File expansion entered the same `has-expanded-tool expanded-file` state. No browser console errors were observed.
+
+final result: passed
+
+---
+
+# Board Search Order and Icon Alignment — 2026-08-21
+
+- Source visual truth: `/var/folders/zm/qgh_rgw903j0b9t01yg2l0mc0000gn/T/codex-clipboard-c79b9d42-19f0-4391-90e3-90f6a1bc4c3d.png` (`1096 × 308` px).
+- Browser-rendered implementation: `/Users/syw/Documents/playground/Cyrene/.codex/audits/work-board/board-search-reordered.png` (`1280 × 720` px) at a `1280 × 720` CSS viewport and device pixel ratio `2`.
+- State: dark theme, Board page, empty search. The focused light-theme source crop and full implementation were inspected together; the source establishes the Sort/New relationship while the user correction establishes Search after New.
+- No additional focused crop was required because all three toolbar controls and the search icon are clearly readable in the rendered capture.
+- The toolbar child order is now Sort, New, Search. All controls remain `38 px` high with the existing `8 px` rhythm.
+- The search container, icon wrapper, SVG, and input all resolve to the exact same vertical center (`198.1171875 px`). The icon wrapper uses flex centering and zero line-height, eliminating inline-SVG baseline drift.
+- Typography, neutral/accent tokens, existing search icon asset, and localized copy are unchanged. No image-quality or content regressions were introduced.
+- Production Web UI build completed (`43` JSX entries), the focused regressions passed (`2 passed`), and `git diff --check` passed.
+- Comparison history: the reported P2 alignment/order issue was fixed, recaptured, and verified in the evidence above. No actionable P0/P1/P2 finding remains.
+
+final result: passed
+
+---
+
+# Board Chat and Task Card Background Parity — 2026-08-21
+
+- Source visual truth: `/var/folders/zm/qgh_rgw903j0b9t01yg2l0mc0000gn/T/codex-clipboard-18a8a4fc-edc2-4513-8742-09ff2767b44b.png` (`640 × 282` px), showing the unwanted theme-tinted conversation card.
+- Browser-rendered implementation: `/Users/syw/Documents/playground/Cyrene/.codex/audits/work-board/board-chat-neutral-background.png` (`1280 × 720` px) at a `1280 × 720` CSS viewport and device pixel ratio `2`.
+- State: dark theme, Board page, conversation search results visible. The focused source and full rendered implementation were inspected in the same comparison input; no additional crop was required because the conversation-card surfaces are clearly readable.
+- The conversation-only accent background override was removed. Browser-computed values now match exactly between a conversation and task card: background `rgb(24, 25, 30)`, border `rgb(40, 41, 47)`, and shadow `rgba(15, 23, 42, 0.06) 0px 1px 2px`.
+- Typography, spacing, card radius, status dot, “对话” label, copy, and existing icon assets remain unchanged. Only the unwanted background-color distinction was removed.
+- Production Web UI build completed (`43` JSX entries), focused regressions passed (`3 passed`), and `git diff --check` passed.
+- Comparison history: the reported P2 color inconsistency was removed and verified against a task card. No actionable P0/P1/P2 finding remains.
+
+final result: passed
+
+---
+
+# Task Panel / Conversation Panel Parity — 2026-08-21
+
+- Source visual: `/var/folders/zm/qgh_rgw903j0b9t01yg2l0mc0000gn/T/codex-clipboard-4abbfb5e-5ed2-425f-a04a-2211e2295aca.png`.
+- Browser-rendered implementation: `/Users/syw/Documents/playground/Cyrene/.codex/audits/task-panel-conversation-parity.png` at the same `1280 × 720` app viewport.
+- The right-side title and accessibility label now read “任务面板” / “Task panel”. The task inspector reuses the conversation panel's card, header, collapse control, accordion item, label, icon, and chevron classes instead of maintaining a parallel visual structure.
+- Measured parity with the conversation panel: `18 px` card radius, the same neutral surface and border, `46 px` header, `32 × 33 px` transparent collapse control, `40 px` accordion rows, and `5px 40px 5px 16px` row padding. Font sizes, weights, colors, and expand/collapse motion also match.
+- Context was collapsed and reopened successfully; all four task rows remained interactive. No browser errors were introduced. Existing `/api/ui-data` fallback warnings are unrelated.
+- Production Web UI build completed (`43` JSX entries), focused regressions passed (`3 passed`), and `git diff --check` passed.
+
+final result: passed
+
+---
+
+# Task Panel Visibility and Shared Minimum Width — 2026-08-21
+
+- Regression evidence: `/Users/syw/Documents/playground/Cyrene/.codex/audits/task-panel-visible-shared-min-width.png`.
+- The task inspector no longer carries the outer `.wbc-side` marker that project-only workspaces intentionally hide for conversation panels. In a verified `wbc-project-pane-only wbc-project-task-pane` state, “任务面板” is visible with a `350 px` track and `326 px` inset card.
+- Task workspaces no longer receive the split-resource width override. Their track is controlled by the same `--wb-right-w` contract and shared `WB_RIGHT_MIN = 280` clamp used by the conversation panel.
+- The task card still reuses the conversation panel's inner card, header, collapse control, and accordion classes; context collapse remains interactive.
+- Browser verification found no new console errors. Production build completed (`43` JSX entries), focused regressions passed (`3 passed`), and `git diff --check` passed.
+
+final result: passed
+
+---
+
+# Task Context Menu Pin and Rename — 2026-08-21
+
+- Source visual truth: `/var/folders/zm/qgh_rgw903j0b9t01yg2l0mc0000gn/T/codex-clipboard-63bd1f68-116d-4089-90e1-929cf61294f7.png` (`546 × 314` px).
+- Browser-rendered implementation: `/Users/syw/Documents/playground/Cyrene/.codex/audits/work-board/task-context-menu-pin-rename.png` (`1280 × 720` px) at a `1280 × 720` CSS viewport and device pixel ratio `2`.
+- State: dark theme, Board page, shared Work rail in task mode, first task context menu open. The focused light-theme source and the full dark-theme implementation were inspected together; theme and crop differ intentionally, while the task-card/menu relationship remains directly comparable.
+- No additional focused crop was needed because the task card and all three menu actions are clearly readable in the browser capture.
+- The task menu now reuses the conversation menu's action rows, icons, spacing, typography, hover treatment, radius, border, and elevation. It contains “置顶任务 / 取消置顶”, “重命名任务”, and the existing destructive “删除任务”.
+- Pinning was exercised in the browser: the task moved into the “置顶” section, gained the pin indicator, and exposed “取消置顶”; the QA pin was then reverted. The rename dialog opened with the existing task title, localized “任务标题” label, and matching conversation-dialog treatment; Cancel closed it without mutating data.
+- Task rename persists through the existing session PATCH path, while pinned ordering uses the same pinned-session key mechanism as conversations. Typography, neutral/accent tokens, existing SVG assets, task-card geometry, and source copy remain unchanged.
+- Production Web UI build completed (`43` JSX entries), focused regressions passed (`4 passed`, `333 deselected`), and `git diff --check` passed.
+- Comparison history: the source showed a task menu with only deletion. The missing pin and rename actions were added by reusing the conversation front-end patterns, recaptured, and verified. No actionable P0/P1/P2 finding remains.
 
 final result: passed

@@ -58,7 +58,11 @@ async def _tool_schedule_task(args: dict[str, Any], _bot: Any, chat_id: int, db_
             if elevation_result is not None:
                 return elevation_result
 
-    project_id = resolve_project_data_key_for_session(get_current_session_id())
+    origin_session_id = str(get_current_session_id() or "").strip()
+    project_id = resolve_project_data_key_for_session(origin_session_id)
+    action_type = str(args.get("action_type") or "agent_task").strip().lower()
+    if action_type not in {"message", "agent_task"}:
+        action_type = "agent_task"
     task_id = await db.create_task(
         db_path,
         chat_id,
@@ -69,6 +73,8 @@ async def _tool_schedule_task(args: dict[str, Any], _bot: Any, chat_id: int, db_
         permission_mode=permission_mode,
         project_id=project_id,
         schedule_timezone=schedule_timezone,
+        origin_session_id=origin_session_id,
+        action_type=action_type,
     )
     return f"Task {task_id} scheduled. Next run: {next_run} 权限模式：{permission_mode}"
 

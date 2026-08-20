@@ -285,18 +285,64 @@ async def test_terminal_daemon_shutdown_closes_views_and_recovers_shell(
 def test_terminal_frontend_exposes_recovery_controls_and_input_cursor() -> None:
     frontend = Path(__file__).parents[1] / "src/webui/frontend"
     source = (frontend / "terminal/entry.jsx").read_text(encoding="utf-8")
+    chat_source = (frontend / "workbench-chat.jsx").read_text(encoding="utf-8")
     feedback = (frontend / "shared/feedback/service.jsx").read_text(encoding="utf-8")
     styles = (frontend / "workbench.css").read_text(encoding="utf-8")
+    terminal_styles = (frontend / "terminal/terminal.css").read_text(encoding="utf-8")
 
     assert 'cursorBlink: true' in source
     assert 'cursorStyle: "bar"' in source
     assert 'cursorWidth: 2' in source
-    assert 'cursorInactiveStyle: "outline"' in source
+    assert 'TERMINAL_LINE_HEIGHT = 1.14' in source
+    assert 'lineHeight: TERMINAL_LINE_HEIGHT' in source
+    assert 'cursorInactiveStyle: "none"' in source
+    assert 'TERMINAL_CURSOR_HEIGHT_RATIO = 0.74' in source
+    assert 'window.matchMedia("(prefers-reduced-motion: reduce)")' in source
+    assert 'smoothScrollDuration: 0' in source
+    assert 'customCursor.className = "wbc-terminal-input-cursor"' in source
+    assert 'terminal.element.classList.contains("focus")' in source
+    assert 'core.coreService.isCursorHidden' in source
+    assert 'cursorMove = terminal.onCursorMove(scheduleInputCursorUpdate)' in source
+    assert 'bufferChange = terminal.buffer.onBufferChange(handleBufferChange)' in source
+    assert 'buffer.type === "alternate"' in source
+    assert 'tailSpacer.classList.add("is-alternate-buffer")' in source
+    assert 'tailSpacer.classList.remove("is-alternate-buffer")' in source
+    assert 'terminal.buffer.active.type !== "normal"' in source
+    assert 'terminal.scrollToBottom();' in source
+    assert 'interactionEnd = Math.max(0, host.scrollHeight - host.clientHeight)' in source
+    assert 'top: interactionEnd' in source
+    assert 'bufferChange.dispose()' in source
+    assert '.wbc-terminal-input-cursor.is-visible {' in terminal_styles
+    assert '.wbc-terminal-host .xterm-cursor-layer {' in terminal_styles
+    assert '.wbc-terminal-host .xterm-cursor.xterm-cursor-bar {' in terminal_styles
+    assert 'box-shadow: none !important;' in terminal_styles
     assert 'terminal.write("\\u001b[?25h")' in source
     assert 'message.type === "replay_complete"' in source
     assert 'tailSpacer.className = "wbc-terminal-tail-spacer"' in source
-    assert 'TERMINAL_TAIL_TOP_RESERVE_LINES = 2' in source
-    assert 'host.clientHeight - (lineHeight * TERMINAL_TAIL_TOP_RESERVE_LINES)' in source
+    assert 'pendingUserInputMarker = createInteractionMarker()' in source
+    assert 'replaceLastInteractionMarker(pendingUserInputMarker || createInteractionMarker())' in source
+    assert 'trackAgentInputBoundary(message.terminal, message.type)' in source
+    assert 'String(terminalState.lastActor || "") === "agent"' in source
+    assert 'lastInteractionMarker && !lastInteractionMarker.isDisposed' in source
+    assert 'interactionLines <= terminal.rows' in source
+    assert 'TERMINAL_TAIL_COMPACT_LINES = 1' in source
+    assert 'markerViewportRow + 1 - TERMINAL_TAIL_COMPACT_LINES' in source
+    assert 'tailBaseOverflow = Math.max(0, host.scrollHeight - host.clientHeight)' in source
+    assert 'Math.max(0, desiredScrollTop - tailBaseOverflow)' in source
+    assert 'lastInteractionFits && !interactionFits && host.scrollTop > 0' in source
+    assert 'behavior: reduceMotionQuery && reduceMotionQuery.matches ? "auto" : "smooth"' in source
+    assert 'activeBuffer.type === "normal"' in source
+    assert 'screenHeight / terminal.rows' in source
+    assert 'function scrollHostToTail()' not in source
+    assert 'followHostTail' not in source
+    assert 'terminal.scrollToBottom();\n        updateTailSpacer();' in source
+    assert 'terminal.write(bytes, function () {\n          updateTailSpacer();' in source
+    assert 'scrollbar-width: none;' in terminal_styles
+    assert '.wbc-terminal-host::-webkit-scrollbar {' in terminal_styles
+    assert 'overflow-x: hidden;' in terminal_styles
+    assert 'scroll-behavior: smooth;' not in terminal_styles
+    assert 'transition: height 180ms cubic-bezier(0.22, 1, 0.36, 1);' in terminal_styles
+    assert '.wbc-terminal-tail-spacer.is-alternate-buffer {' in terminal_styles
     assert 'activeBuffer.viewportY >= activeBuffer.baseY' in source
     assert 'host.addEventListener("wheel", handleTailWheel' in source
     assert 'TerminalClient.restart(terminalId)' in source
@@ -316,11 +362,12 @@ def test_terminal_frontend_exposes_recovery_controls_and_input_cursor() -> None:
     assert 'notice.kind === "loading" ? "info" : notice.kind' in source
     assert 'feedback.dismissToast(statusToastRef.current)' in source
     assert 'className={"wbc-terminal-notice " + notice.kind}' not in source
-    assert '.wbc-terminal-notice {' not in (
-        frontend / "terminal/terminal.css"
-    ).read_text(encoding="utf-8")
+    assert '.wbc-terminal-notice {' not in terminal_styles
     assert 'actionLabel = notice.reconnect' in source
     assert '"重新启动"' in source
+    assert 'var [railMode, setRailMode] = useWbcState("chat")' in chat_source
+    assert 'setRailMode("terminal");\n    replaceWithTerminal(pending.terminalId' in chat_source
+    assert 'railMode={railMode}' in chat_source
 
 
 def test_agent_terminal_show_uses_split_and_replaces_one_existing_pane() -> None:

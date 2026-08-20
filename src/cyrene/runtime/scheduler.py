@@ -358,7 +358,11 @@ def _workbench_workspace_dir_for_project(project_id: str) -> str:
             (
                 item
                 for item in projects
-                if isinstance(item, dict) and str(item.get("id") or "") == project_id
+                if isinstance(item, dict)
+                and project_id in {
+                    str(item.get("id") or ""),
+                    str(item.get("dataKey") or ""),
+                }
             ),
             None,
         )
@@ -600,17 +604,28 @@ async def _execute_task(task: dict, bot, db_path: str) -> None:
     task_id = task["id"]
     task_chat_id = task["chat_id"]
     prompt = task["prompt"]
+    origin_session_id = str(task.get("origin_session_id") or "").strip()
+    action_type = str(task.get("action_type") or "agent_task").strip().lower()
+    if action_type not in {"message", "agent_task"}:
+        action_type = "agent_task"
     permission_mode = str(task.get("permission_mode") or "workspace_only").strip().lower()
     logger.info(
         "Executing task %s for chat %s (permission: %s): %s",
         task_id, task_chat_id, permission_mode, prompt[:80],
     )
 
-    # Apply stored permission_mode: temporarily elevate write permissions via ContextVar
+    # Bind delivery and file tools to the conversation and workspace that
+    # created the task. Older tasks have no origin and keep legacy behaviour.
     from cyrene.agent.context import bind_run_context
-    permission_binding = None
+    run_binding = bind_run_context(
+        session_id=origin_session_id,
+        agent_id="scheduler",
+        workspace_dir=_workbench_workspace_dir_for_project(
+            str(task.get("project_id") or "")
+        ),
+        temporary_full_access=permission_mode == "full_access",
+    )
     if permission_mode == "full_access":
-        permission_binding = bind_run_context(temporary_full_access=True)
         logger.info("Temporarily elevated write permissions to full_access for task %s", task_id)
 
     wrapped_prompt = (
@@ -619,14 +634,32 @@ async def _execute_task(task: dict, bot, db_path: str) -> None:
         "to report the result to the user. "
         f"Task: {prompt}"
     )
-    notify_state: dict[str, bool] = {"sent": False}
+    notify_state: dict[str, object] = {"sent": False, "delivered_text": ""}
 
     start = time.monotonic()
     had_error = False
+    workbench_persisted = False
     try:
-        result = await run_task_agent(
-            wrapped_prompt, bot, task_chat_id, db_path, notify_state,
-        )
+        if action_type == "message":
+            await append_system_message(
+                prompt,
+                message_meta={"scheduled": True, "task_id": task_id},
+                publish_event={"scheduled": True, "task_id": task_id},
+            )
+            notify_state["sent"] = True
+            notify_state["delivered_text"] = prompt
+            result = prompt
+        else:
+            result = await run_task_agent(
+                wrapped_prompt, bot, task_chat_id, db_path, notify_state,
+            )
+            if notify_state.get("deferred"):
+                logger.info(
+                    "Deferring task %s because origin session %s is busy",
+                    task_id,
+                    origin_session_id or "<legacy-default>",
+                )
+                return
 
         # Fallback: if the model forgot to call send_message, surface what it
         # actually did so the result doesn't go silent in web-only mode.
@@ -636,16 +669,28 @@ async def _execute_task(task: dict, bot, db_path: str) -> None:
                 fallback_text = _user_visible_text(result, prompt)
                 truncated = _truncate(fallback_text, 2000)
                 await append_system_message(
-                    f"Result: {truncated}",
-                    message_meta={"scheduled": True},
-                    publish_event={"scheduled": True},
+                    truncated,
+                    message_meta={"scheduled": True, "task_id": task_id},
+                    publish_event={"scheduled": True, "task_id": task_id},
                 )
+                notify_state["sent"] = True
+                notify_state["delivered_text"] = truncated
             except Exception:
                 logger.warning("Failed to append fallback message for task %s", task_id)
 
+        delivered_text = str(notify_state.get("delivered_text") or "").strip()
+        if origin_session_id and delivered_text:
+            from cyrene.workbench.chat import append_proactive_message
+
+            workbench_persisted = bool(
+                await append_proactive_message(origin_session_id, delivered_text)
+            )
+
+        public_result = delivered_text or _user_visible_text(result, prompt)
+
         duration_ms = int((time.monotonic() - start) * 1000)
         await db.log_task_run(
-            db_path, task_id, duration_ms, "success", result=result,
+            db_path, task_id, duration_ms, "success", result=public_result,
         )
     except Exception as e:
         had_error = True
@@ -654,10 +699,26 @@ async def _execute_task(task: dict, bot, db_path: str) -> None:
             db_path, task_id, duration_ms, "error", error=str(e),
         )
         result = f"Error: {e}"
+        delivered_text = str(notify_state.get("delivered_text") or "").strip()
+        public_result = delivered_text or "定时任务执行失败，请在日程的运行记录中查看详情。"
+        try:
+            if not delivered_text:
+                await append_system_message(
+                    public_result,
+                    message_meta={"scheduled": True, "task_id": task_id, "error": True},
+                    publish_event={"scheduled": True, "task_id": task_id, "error": True},
+                )
+            if origin_session_id and public_result and not workbench_persisted:
+                from cyrene.workbench.chat import append_proactive_message
+
+                workbench_persisted = bool(
+                    await append_proactive_message(origin_session_id, public_result)
+                )
+        except Exception:
+            logger.exception("Failed to persist scheduled-task error in origin chat %s", origin_session_id)
     finally:
-        # Restore original permission mode after task execution
-        if permission_binding is not None:
-            permission_binding.reset()
+        run_binding.reset()
+        if permission_mode == "full_access":
             logger.info("Restored write permissions after task %s", task_id)
 
     # Re-arm (or retire) the task based on its schedule type. ``next_run`` is
@@ -671,7 +732,7 @@ async def _execute_task(task: dict, bot, db_path: str) -> None:
     try:
         if stype == "once":
             await db.update_task_after_run(
-                db_path, task_id, result, None, "completed",
+                db_path, task_id, public_result, None, "completed",
             )
         else:
             next_run = compute_next_run(
@@ -681,7 +742,7 @@ async def _execute_task(task: dict, bot, db_path: str) -> None:
                 timezone_name=schedule_timezone,
             )
             await db.update_task_after_run(
-                db_path, task_id, result, next_run, "active",
+                db_path, task_id, public_result, next_run, "active",
             )
     except ValueError:
         logger.warning(
@@ -694,13 +755,9 @@ async def _execute_task(task: dict, bot, db_path: str) -> None:
 
     # ── Multi-channel notifications after task execution ─────────────────
     try:
-        # Use agent's execution result for notifications; fall back to prompt
-        # when needed.  On error the title already says "Scheduled task error",
-        # so use the safe prompt text rather than the raw exception message.
-        if had_error:
-            notify_body = prompt
-        else:
-            notify_body = _user_visible_text(result, prompt)
+        # Every channel must summarize the exact user-visible delivery, never
+        # the hidden execution prompt or the agent's post-tool bookkeeping text.
+        notify_body = public_result
         notify_body = _plaintext(notify_body)  # strip markdown for plain channels
         summary = _truncate(notify_body, 120)
         status_label = "error" if had_error else "completed"
@@ -719,7 +776,12 @@ async def _execute_task(task: dict, bot, db_path: str) -> None:
             source="scheduled_task_run",
             source_label="日程",
             link_label="日程",
-            meta={"taskId": task_id, "status": status_label},
+            meta={
+                "taskId": task_id,
+                "status": status_label,
+                "chatId": origin_session_id,
+                "actionType": action_type,
+            },
         )
     except Exception:
         logger.exception("Failed to send task execution notifications")

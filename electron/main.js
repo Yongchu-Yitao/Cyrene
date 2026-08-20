@@ -2,6 +2,7 @@ const {
   app,
   BrowserWindow,
   WebContentsView,
+  clipboard,
   desktopCapturer,
   dialog,
   globalShortcut,
@@ -33,6 +34,11 @@ const {
   agentCursorVisualScaleForZoom,
 } = require('./agent-cursor');
 const { buildBrowserTypeTargetScript } = require('./browser-input');
+const { buildBrowserContextMenuTemplate } = require('./browser-context-menu');
+const {
+  decideBrowserWindowOpen,
+  popupWindowOpenResponse,
+} = require('./browser-popup-policy');
 const { BROWSER_FIND_TARGET_SCRIPT } = require('./browser-target');
 const { HostControl } = require('./host-control');
 
@@ -266,6 +272,10 @@ let quitExtensionDecisionMade = false;
 let launchHidden = process.argv.includes('--hidden');
 let tray = null;
 const browserTabManagers = new Map();
+const browserContentOwners = new WeakMap();
+const activeBrowserDownloads = new Map();
+let nextBrowserDownloadId = 1;
+let browserManagerPublishTimer = null;
 let activeBrowserSessionId = '';
 let browserSurfaceObscured = false;
 let activeVideoFullscreenManager = null;
@@ -432,6 +442,23 @@ const DESKTOP_TRANSLATIONS = Object.freeze({
     pointerLockDetail: 'The site can hide the pointer and read relative mouse movement. Press Esc at any time to release it.',
     pointerLockAllow: 'Allow',
     pointerLockBlock: 'Block',
+    contextBack: 'Back',
+    contextForward: 'Forward',
+    contextReload: 'Reload',
+    contextOpenLinkNewTab: 'Open Link in New Tab',
+    contextCopyLink: 'Copy Link Address',
+    contextOpenImageNewTab: 'Open Image in New Tab',
+    contextSaveImage: 'Save Image',
+    contextOpenMediaNewTab: 'Open Media in New Tab',
+    contextSaveMedia: 'Save Media',
+    contextUndo: 'Undo',
+    contextRedo: 'Redo',
+    contextCut: 'Cut',
+    contextCopy: 'Copy',
+    contextPaste: 'Paste',
+    contextSelectAll: 'Select All',
+    contextAddToDictionary: 'Add to Dictionary',
+    contextInspectElement: 'Inspect Element',
     installQuitTitle: 'Extensions are still installing',
     installQuitMessage: 'One or more extension installations are still running.',
     installQuitDetail: 'Wait to keep the installations running, or cancel them before quitting. Interrupted tasks remain visible for a safe retry on the next launch.',
@@ -446,6 +473,23 @@ const DESKTOP_TRANSLATIONS = Object.freeze({
     pointerLockDetail: '允许后，网站可以隐藏指针并读取鼠标的相对移动。你可随时按 Esc 退出。',
     pointerLockAllow: '允许',
     pointerLockBlock: '阻止',
+    contextBack: '后退',
+    contextForward: '前进',
+    contextReload: '重新加载',
+    contextOpenLinkNewTab: '在新标签页中打开链接',
+    contextCopyLink: '复制链接地址',
+    contextOpenImageNewTab: '在新标签页中打开图片',
+    contextSaveImage: '保存图片',
+    contextOpenMediaNewTab: '在新标签页中打开媒体',
+    contextSaveMedia: '保存媒体',
+    contextUndo: '撤销',
+    contextRedo: '重做',
+    contextCut: '剪切',
+    contextCopy: '复制',
+    contextPaste: '粘贴',
+    contextSelectAll: '全选',
+    contextAddToDictionary: '添加到词典',
+    contextInspectElement: '检查元素',
     installQuitTitle: '扩展仍在安装',
     installQuitMessage: '一个或多个扩展安装任务仍在运行。',
     installQuitDetail: '可以等待安装完成，或取消安装后退出。异常中断的任务会保留记录，下次启动时可安全重试。',
@@ -615,7 +659,8 @@ const BROWSER_TAB_PICKER_HTML = `<!doctype html>
   * { box-sizing: border-box; }
   html, body { width: 100%; height: 100%; margin: 0; overflow: hidden; background: transparent; }
   body { padding: 6px; font-family: Manrope, "Noto Sans SC", system-ui, "Segoe UI", sans-serif; font-synthesis-weight: none; }
-  #menu { width: 100%; height: 100%; display: flex; flex-direction: column; gap: 4px; padding: 7px; overflow: auto; border: 1px solid var(--line, #d8dce4); border-radius: 14px; background: var(--panel, #fff); color: var(--text, #17191d); box-shadow: 0 14px 34px rgba(9,17,30,.18); opacity: 0; transform: translate3d(0,-10px,0) scale(.985); transform-origin: top center; }
+  #menu { width: 100%; height: 100%; display: flex; flex-direction: column; gap: 4px; padding: 7px; overflow-x: hidden; overflow-y: auto; scrollbar-width: none; border: 1px solid var(--line, #d8dce4); border-radius: 14px; background: var(--panel, #fff); color: var(--text, #17191d); box-shadow: none; opacity: 0; transform: translate3d(0,-10px,0) scale(.985); transform-origin: top center; }
+  #menu::-webkit-scrollbar { display: none; width: 0; height: 0; }
   body.open #menu { animation: picker-in 220ms cubic-bezier(.22,1,.36,1) both; }
   body.closing #menu { pointer-events: none; animation: picker-out 150ms cubic-bezier(.4,0,.2,1) both; }
   .row { min-height: 44px; display: flex; flex: 0 0 auto; align-items: center; gap: 4px; padding: 3px; border-radius: 10px; color: var(--muted, #6f737b); }
@@ -745,6 +790,15 @@ const BROWSER_TAB_PICKER_HTML = `<!doctype html>
   menu.addEventListener('animationend', (event) => { if (!state.visible && event.animationName === 'picker-out') window.browserTabPicker.hiddenReady(); });
   window.browserTabPicker.ready();
 </script></body></html>`;
+
+// Keep the native picker flat even when its same-origin HTML was retained by
+// Chromium's cache across a renderer refresh. The packaged page contains the
+// same rules; inserting them before the picker becomes ready makes the visual
+// contract independent of cached generated assets.
+const BROWSER_TAB_PICKER_FLAT_CHROME_CSS = `
+  #menu { box-shadow: none !important; scrollbar-width: none !important; }
+  #menu::-webkit-scrollbar { display: none !important; width: 0 !important; height: 0 !important; }
+`;
 
 function normalizeBrowserSessionId(value) {
   return String(value || '').trim();
@@ -1012,6 +1066,9 @@ function installBrowserSessionGuards(partition = BROWSER_PARTITION) {
       () => callback(false),
     );
   });
+  browserSession.on('will-download', (_event, item, webContents) => {
+    trackBrowserDownload(item, webContents);
+  });
   browserSession.webRequest.onBeforeSendHeaders((details, callback) => {
     details.requestHeaders = {
       ...details.requestHeaders,
@@ -1132,6 +1189,7 @@ class BrowserTabManager {
     this.agentOwnedTabIdsByRound = new Map();
     this.latestSnapshot = null;
     this.agentCursorRunning = agentCursorRunning;
+    this.configuredPageContents = new WeakSet();
   }
 
   invalidateSnapshot() {
@@ -1368,6 +1426,82 @@ class BrowserTabManager {
     this.emitState();
   }
 
+  pageContextMenuLabels() {
+    const settings = readDesktopSettings();
+    return {
+      back: desktopT('contextBack', settings),
+      forward: desktopT('contextForward', settings),
+      reload: desktopT('contextReload', settings),
+      openLinkNewTab: desktopT('contextOpenLinkNewTab', settings),
+      copyLink: desktopT('contextCopyLink', settings),
+      openImageNewTab: desktopT('contextOpenImageNewTab', settings),
+      saveImage: desktopT('contextSaveImage', settings),
+      openMediaNewTab: desktopT('contextOpenMediaNewTab', settings),
+      saveMedia: desktopT('contextSaveMedia', settings),
+      undo: desktopT('contextUndo', settings),
+      redo: desktopT('contextRedo', settings),
+      cut: desktopT('contextCut', settings),
+      copy: desktopT('contextCopy', settings),
+      paste: desktopT('contextPaste', settings),
+      selectAll: desktopT('contextSelectAll', settings),
+      addToDictionary: desktopT('contextAddToDictionary', settings),
+      inspectElement: desktopT('contextInspectElement', settings),
+    };
+  }
+
+  showPageContextMenu(webContents, params) {
+    if (!webContents || webContents.isDestroyed()) return;
+    const template = buildBrowserContextMenuTemplate({
+      params,
+      webContents,
+      labels: this.pageContextMenuLabels(),
+      openTab: (url) => {
+        this.createTab({ url, activate: true }).catch((err) => {
+          console.error('[electron] Failed to open context-menu tab:', err);
+        });
+      },
+      copyText: (value) => clipboard.writeText(String(value || '')),
+      isDev: !app.isPackaged,
+    });
+    if (!template.length) return;
+    const popupWindow = BrowserWindow.fromWebContents(webContents);
+    const owner = popupWindow && !popupWindow.isDestroyed() ? popupWindow : this.surfaceWindow();
+    Menu.buildFromTemplate(template).popup(owner ? { window: owner } : undefined);
+  }
+
+  configurePageContents(webContents, getAgentOwnerRoundId = () => '') {
+    if (!webContents || webContents.isDestroyed() || this.configuredPageContents.has(webContents)) return;
+    this.configuredPageContents.add(webContents);
+    webContents.setUserAgent(browserUserAgent());
+    webContents.on('context-menu', (_event, params) => this.showPageContextMenu(webContents, params));
+    webContents.setWindowOpenHandler((details) => {
+      const decision = decideBrowserWindowOpen(details);
+      if (decision.mode === 'popup') {
+        const response = popupWindowOpenResponse(decision, this.partition);
+        const parent = this.surfaceWindow();
+        if (parent && !parent.isDestroyed()) {
+          response.overrideBrowserWindowOptions.parent = parent;
+        }
+        return response;
+      }
+      if (decision.mode === 'tab') {
+        const agentOwnerRoundId = String(getAgentOwnerRoundId() || '');
+        this.createTab({ url: decision.url, activate: true, agentOwnerRoundId }).catch((err) => {
+          console.error('[electron] Failed to open browser tab:', err);
+        });
+      }
+      return { action: 'deny' };
+    });
+    webContents.on('did-create-window', (childWindow) => {
+      if (!childWindow || childWindow.isDestroyed()) return;
+      try { childWindow.setMenu(null); } catch (_) {}
+      const pageOwner = browserContentOwners.get(webContents);
+      if (pageOwner) browserContentOwners.set(childWindow.webContents, pageOwner);
+      const agentOwnerRoundId = String(getAgentOwnerRoundId() || '');
+      this.configurePageContents(childWindow.webContents, () => agentOwnerRoundId);
+    });
+  }
+
   createView() {
     const view = new WebContentsView({
       webPreferences: {
@@ -1383,20 +1517,15 @@ class BrowserTabManager {
       },
     });
     const wc = view.webContents;
-    wc.setUserAgent(browserUserAgent());
+    this.configurePageContents(wc, () => {
+      const opener = this._tabForView(view);
+      return opener && opener.agentClickInFlight
+        ? String(opener.agentOwnerRoundId || this.browserContext.roundId || '')
+        : '';
+    });
     // enableDeviceEmulation is intentionally omitted — it triggers SIGSEGV on
     // Electron 35 + macOS 26 when combined with WebContentsView viewport changes.
     // The UA override alone serves mobile content to most sites.
-    wc.setWindowOpenHandler(({ url }) => {
-      const opener = this._tabForView(view);
-      const agentOwnerRoundId = opener && opener.agentClickInFlight
-        ? String(opener.agentOwnerRoundId || this.browserContext.roundId || '')
-        : '';
-      this.createTab({ url, activate: true, agentOwnerRoundId }).catch((err) => {
-        console.error('[electron] Failed to open browser popup tab:', err);
-      });
-      return { action: 'deny' };
-    });
     const update = () => this.emitState();
     wc.on('did-start-loading', () => {
       update();
@@ -1992,6 +2121,7 @@ class BrowserTabManager {
   }
 
   emitState() {
+    publishBrowserManagerState();
     if (this.tabPickerState.visible || this.tabPickerState.closing) this.pushTabPickerState();
     if (this.sessionId !== activeBrowserSessionId) return;
     // Fullscreen video may live in a separate macOS window, but state updates
@@ -2031,6 +2161,7 @@ class BrowserTabManager {
       lastAgentRoundId: String(agentOwnerRoundId || '').trim(),
     };
     this.tabs.set(id, tab);
+    browserContentOwners.set(view.webContents, { sessionId: this.sessionId, tabId: id });
     this._recordAgentTab(tab, tab.agentOwnerRoundId);
     if (activate || !this.activeTabId) {
       const previous = this.tabs.get(this.activeTabId);
@@ -2500,8 +2631,12 @@ class BrowserTabManager {
     });
     this.tabPickerReady = false;
     try { view.setBackgroundColor('#00000000'); } catch (_) {}
-    view.webContents.on('did-finish-load', () => {
+    view.webContents.on('did-finish-load', async () => {
       if (this.tabPickerView !== view) return;
+      try {
+        await view.webContents.insertCSS(BROWSER_TAB_PICKER_FLAT_CHROME_CSS);
+      } catch (_) {}
+      if (this.tabPickerView !== view || view.webContents.isDestroyed()) return;
       this.tabPickerReady = true;
       this.pushTabPickerState();
       if (this.tabPickerState.visible) {
@@ -2514,7 +2649,7 @@ class BrowserTabManager {
     });
     this.tabPickerView = view;
     const pickerUrl = backendPort
-      ? `http://127.0.0.1:${backendPort}/static/app/electron/browser-tab-picker.html?platform=${encodeURIComponent(process.platform)}`
+      ? `http://127.0.0.1:${backendPort}/static/app/electron/browser-tab-picker.html?platform=${encodeURIComponent(process.platform)}&style=flat-chrome-1`
       : `data:text/html;charset=utf-8,${encodeURIComponent(BROWSER_TAB_PICKER_HTML)}`;
     view.webContents.loadURL(pickerUrl).catch((err) => {
       console.error('[electron] Failed to load browser tab picker:', err);
@@ -4069,6 +4204,158 @@ class BrowserTabManager {
   }
 }
 
+function browserContentOwner(webContents) {
+  const known = webContents && browserContentOwners.get(webContents);
+  if (known) return known;
+  for (const manager of browserTabManagers.values()) {
+    for (const tab of manager.tabs.values()) {
+      if (tab && tab.view && tab.view.webContents === webContents) {
+        const owner = { sessionId: manager.sessionId, tabId: tab.id };
+        browserContentOwners.set(webContents, owner);
+        return owner;
+      }
+    }
+  }
+  return { sessionId: '', tabId: '' };
+}
+
+function browserDownloadRecord(item, webContents) {
+  const owner = browserContentOwner(webContents);
+  let pageTitle = '';
+  let pageUrl = '';
+  try { pageTitle = String(webContents && webContents.getTitle() || ''); } catch (_) {}
+  try { pageUrl = String(webContents && webContents.getURL() || ''); } catch (_) {}
+  const id = `download_${nextBrowserDownloadId++}`;
+  return {
+    id,
+    item,
+    sessionId: String(owner.sessionId || ''),
+    tabId: String(owner.tabId || ''),
+    pageTitle,
+    pageUrl,
+    filename: String(item && item.getFilename && item.getFilename() || ''),
+    url: String(item && item.getURL && item.getURL() || ''),
+    receivedBytes: 0,
+    totalBytes: 0,
+    paused: false,
+    state: 'progressing',
+    startedAt: Date.now(),
+  };
+}
+
+function syncBrowserDownloadRecord(record, state) {
+  const item = record && record.item;
+  if (!record || !item) return;
+  try { record.filename = String(item.getFilename() || record.filename || ''); } catch (_) {}
+  try { record.receivedBytes = Math.max(0, Number(item.getReceivedBytes()) || 0); } catch (_) {}
+  try { record.totalBytes = Math.max(0, Number(item.getTotalBytes()) || 0); } catch (_) {}
+  try { record.paused = item.isPaused() === true; } catch (_) {}
+  record.state = String(state || record.state || 'progressing');
+}
+
+function trackBrowserDownload(item, webContents) {
+  if (!item) return;
+  const record = browserDownloadRecord(item, webContents);
+  activeBrowserDownloads.set(record.id, record);
+  syncBrowserDownloadRecord(record, 'progressing');
+  publishBrowserManagerState();
+  item.on('updated', (_event, state) => {
+    if (!activeBrowserDownloads.has(record.id)) return;
+    syncBrowserDownloadRecord(record, state);
+    scheduleBrowserManagerStatePublish();
+  });
+  item.once('done', (_event, state) => {
+    syncBrowserDownloadRecord(record, state);
+    activeBrowserDownloads.delete(record.id);
+    publishBrowserManagerState();
+  });
+}
+
+function controlBrowserDownload(downloadId, action) {
+  const record = activeBrowserDownloads.get(String(downloadId || ''));
+  const command = String(action || '').trim().toLowerCase();
+  if (!record || !record.item) return { ok: false, error: 'download_not_found' };
+  try {
+    if (command === 'pause') {
+      record.item.pause();
+    } else if (command === 'resume') {
+      record.item.resume();
+    } else if (command === 'cancel') {
+      record.item.cancel();
+    } else {
+      return { ok: false, error: 'unsupported_download_action' };
+    }
+    syncBrowserDownloadRecord(record, command === 'cancel' ? 'cancelled' : 'progressing');
+    if (command === 'cancel') activeBrowserDownloads.delete(record.id);
+    publishBrowserManagerState();
+    return { ok: true, state: browserManagerState() };
+  } catch (error) {
+    return { ok: false, error: String(error && error.message || error || 'download_action_failed') };
+  }
+}
+
+function browserManagerState() {
+  const downloads = Array.from(activeBrowserDownloads.values()).map((record) => ({
+    id: record.id,
+    sessionId: record.sessionId,
+    tabId: record.tabId,
+    pageTitle: record.pageTitle,
+    pageUrl: record.pageUrl,
+    filename: record.filename,
+    url: record.url,
+    receivedBytes: record.receivedBytes,
+    totalBytes: record.totalBytes,
+    paused: record.paused,
+    state: record.state,
+    startedAt: record.startedAt,
+  }));
+  const byPage = new Map();
+  downloads.forEach((download) => {
+    const key = `${download.sessionId}:${download.tabId}`;
+    if (!byPage.has(key)) byPage.set(key, []);
+    byPage.get(key).push(download);
+  });
+
+  const pages = [];
+  for (const manager of browserTabManagers.values()) {
+    const state = manager.state();
+    for (const tab of state.tabs) {
+      const key = `${state.sessionId}:${tab.id}`;
+      pages.push({
+        ...tab,
+        key,
+        sessionId: state.sessionId,
+        tabId: tab.id,
+        sessionActive: state.sessionId === activeBrowserSessionId,
+        downloads: byPage.get(key) || [],
+      });
+      byPage.delete(key);
+    }
+  }
+
+  return {
+    ok: true,
+    pageCount: pages.length,
+    downloadCount: downloads.length,
+    activeSessionId: activeBrowserSessionId,
+    pages,
+    downloads,
+  };
+}
+
+function publishBrowserManagerState() {
+  if (!mainWindow || mainWindow.isDestroyed() || !mainWindow.webContents || mainWindow.webContents.isDestroyed()) return;
+  try { mainWindow.webContents.send('browser:manager-state', browserManagerState()); } catch (_) {}
+}
+
+function scheduleBrowserManagerStatePublish() {
+  if (browserManagerPublishTimer) return;
+  browserManagerPublishTimer = setTimeout(() => {
+    browserManagerPublishTimer = null;
+    publishBrowserManagerState();
+  }, 100);
+}
+
 function getBrowserTabManager(sessionId = activeBrowserSessionId) {
   const normalized = normalizeBrowserSessionId(sessionId);
   if (!browserTabManagers.has(normalized)) {
@@ -4168,8 +4455,12 @@ function updateAgentCursorRunningSource(webContents, running) {
 function closeAllBrowserSessions() {
   for (const manager of browserTabManagers.values()) manager.closeAll();
   browserTabManagers.clear();
+  activeBrowserDownloads.clear();
+  if (browserManagerPublishTimer) clearTimeout(browserManagerPublishTimer);
+  browserManagerPublishTimer = null;
   activeBrowserSessionId = '';
   browserSurfaceObscured = false;
+  publishBrowserManagerState();
 }
 
 function closeBrowserSession(sessionId) {
@@ -4179,6 +4470,7 @@ function closeBrowserSession(sessionId) {
   manager.closeAll();
   browserTabManagers.delete(normalized);
   if (activeBrowserSessionId === normalized) activeBrowserSessionId = '';
+  publishBrowserManagerState();
   return { ok: true, sessionId: normalized, closed: true };
 }
 
@@ -5455,7 +5747,7 @@ async function createQuickChatWindow() {
 }
 
 const DETACHED_PANE_KINDS = new Set([
-  'chat', 'file', 'viewer', 'change', 'map', 'browser', 'subagents', 'side-agent', 'terminal',
+  'chat', 'task', 'file', 'viewer', 'change', 'map', 'browser', 'subagents', 'side-agent', 'terminal',
 ]);
 
 function debugDetachedPane(stage, details) {
@@ -7076,6 +7368,8 @@ if (!gotSingleInstanceLock) {
       return { path: result.filePaths[0] };
     });
     ipcMain.handle('browser:get-state', (_event, info) => handleBrowserRpc('state', {}, info || {}));
+    ipcMain.handle('browser:get-manager-state', () => browserManagerState());
+    ipcMain.handle('browser:control-download', (_event, info) => controlBrowserDownload(info && info.downloadId, info && info.action));
     ipcMain.handle('browser:set-bounds', (_event, info) => handleBrowserRpc('setBounds', info || {}, info || {}));
     ipcMain.handle('browser:set-chat-overlay', (_event, info) => handleBrowserRpc('setChatOverlay', info || {}, info || {}));
     ipcMain.handle('browser:set-tab-picker', (_event, info) => handleBrowserRpc('setTabPicker', info || {}, info || {}));

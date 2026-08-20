@@ -4970,9 +4970,14 @@ function UpdateSection({ t, config }) {
   var actionHandler = downloaded ? confirmInstall : (info && info.update_available ? startDownload : checkUpdate);
   var statusDetail = statusDetailText();
   var progressTotal = Number(progress.total || (info && info.asset_size) || 0);
-  var heroProgress = progressTotal > 0
-    ? Math.max(0, Math.min(100, Math.round((Number(progress.downloaded || 0) / progressTotal) * 100)))
-    : (downloaded ? 100 : 0);
+  // A verified download is the terminal state. The last byte-progress event can
+  // arrive just below the reported total, so completion must take precedence
+  // over that stale ratio or the hero fill remains visibly short of the card.
+  var heroProgress = downloaded
+    ? 100
+    : (progressTotal > 0
+      ? Math.max(0, Math.min(100, Math.round((Number(progress.downloaded || 0) / progressTotal) * 100)))
+      : 0);
   function exportLogs() {
     if (exporting) return;
     setExporting(true);

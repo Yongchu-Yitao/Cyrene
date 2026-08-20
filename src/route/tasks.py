@@ -57,6 +57,8 @@ def register_task_routes(router: APIRouter, bot: Any, db_path: str) -> None:
             next_run=next_run,
             permission_mode=permission_mode,
             schedule_timezone=schedule_timezone,
+            origin_session_id=str(body.get("origin_session_id") or "").strip(),
+            action_type=str(body.get("action_type") or "agent_task"),
         )
         tasks = await cy_db.get_all_tasks(_db_path)
         return {"ok": True, "id": task_id, "tasks": tasks}
@@ -92,7 +94,7 @@ def register_task_routes(router: APIRouter, bot: Any, db_path: str) -> None:
 
         # permission_mode 不可通过 REST API 修改 ——
         # 需通过 chat agent 的 schedule_task 工具重新创建（会弹出确认对话框）
-        for field in ("prompt", "schedule_type", "schedule_value", "schedule_timezone", "next_run", "status"):
+        for field in ("prompt", "action_type", "schedule_type", "schedule_value", "schedule_timezone", "next_run", "status"):
             if field in body:
                 sets.append(f"{field} = ?")
                 vals.append(body[field])

@@ -30,6 +30,7 @@ async def _tool_send_user_message(args: dict[str, Any], _bot: Any, _chat_id: int
         )
         if _notify_state is not None:
             _notify_state["sent"] = True
+            _notify_state["delivered_text"] = text
         return "Scheduled message sent to the user."
 
     round_id = str(get_current_round_id() or "").strip()
@@ -37,6 +38,7 @@ async def _tool_send_user_message(args: dict[str, Any], _bot: Any, _chat_id: int
         await append_system_message(text)
         if _notify_state is not None:
             _notify_state["sent"] = True
+            _notify_state["delivered_text"] = text
         return "System message sent to the user."
 
     client_request_id = str(get_current_client_request_id() or "").strip()

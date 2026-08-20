@@ -114,7 +114,11 @@ def register_project_routes(
         return payload
 
     @router.get("/api/projects/{project_id}/files")
-    async def api_workbench_project_files(project_id: str, path: str = "."):
+    async def api_workbench_project_files(
+        project_id: str,
+        path: str = ".",
+        query: str = "",
+    ):
         project = _workbench_find_project_lightweight(project_id)
         if project is None:
             return error_response("Project not found", 404, "project_not_found")
@@ -129,27 +133,54 @@ def register_project_routes(
         if not candidate.is_dir():
             return error_response("Directory not found", 404, "directory_not_found")
 
+        normalized_query = str(query or "").strip().casefold()
+
+        def entry_payload(item: Path) -> dict[str, Any]:
+            info = item.stat()
+            return {
+                "name": item.name,
+                "path": item.relative_to(root).as_posix(),
+                "kind": "directory" if item.is_dir() else "file",
+                "size": int(info.st_size) if item.is_file() else 0,
+                "modifiedNs": int(info.st_mtime_ns),
+            }
+
         def list_entries() -> list[dict[str, Any]]:
             entries: list[dict[str, Any]] = []
             for item in sorted(candidate.iterdir(), key=lambda value: (not value.is_dir(), value.name.lower())):
                 if item.is_symlink() or item.name in {".git", "node_modules", "__pycache__"}:
                     continue
-                info = item.stat()
-                entries.append({
-                    "name": item.name,
-                    "path": item.relative_to(root).as_posix(),
-                    "kind": "directory" if item.is_dir() else "file",
-                    "size": int(info.st_size) if item.is_file() else 0,
-                    "modifiedNs": int(info.st_mtime_ns),
-                })
+                entries.append(entry_payload(item))
                 if len(entries) >= 500:
                     break
             return entries
 
+        def search_entries() -> list[dict[str, Any]]:
+            entries: list[dict[str, Any]] = []
+            ignored = {".git", "node_modules", "__pycache__"}
+            for directory, names, filenames in os.walk(root, followlinks=False):
+                names[:] = sorted(
+                    name for name in names
+                    if name not in ignored and not (Path(directory) / name).is_symlink()
+                )
+                items = [Path(directory) / name for name in names]
+                items.extend(Path(directory) / name for name in sorted(filenames))
+                for item in items:
+                    if item.is_symlink():
+                        continue
+                    relative = item.relative_to(root).as_posix()
+                    if normalized_query not in item.name.casefold() and normalized_query not in relative.casefold():
+                        continue
+                    entries.append(entry_payload(item))
+                    if len(entries) >= 500:
+                        return entries
+            return entries
+
         return {
             "ok": True,
-            "path": "." if candidate == root else candidate.relative_to(root).as_posix(),
-            "entries": await asyncio.to_thread(list_entries),
+            "path": "." if normalized_query or candidate == root else candidate.relative_to(root).as_posix(),
+            "query": str(query or "").strip(),
+            "entries": await asyncio.to_thread(search_entries if normalized_query else list_entries),
         }
 
     @router.get("/api/projects/{project_id}/files/content/{file_path:path}")

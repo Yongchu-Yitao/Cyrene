@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from typing import Any
 
 from cyrene.tooling.native_definitions import get_native_tool_def
@@ -64,6 +65,18 @@ def _terminal_key_sequence(key: str) -> str:
     return ""
 
 
+def _screen_accepts_sensitive_input(screen_text: str) -> bool:
+    """Limit the sensitive-input bypass to a visible credential prompt."""
+    lines = [line.strip() for line in str(screen_text or "").splitlines() if line.strip()]
+    tail = "\n".join(lines[-4:])
+    return bool(re.search(
+        r"(?:password|passphrase|passcode|pin|密码|口令|验证码)"
+        r"(?:\s+for\s+[^:\n]+)?\s*[:：]?\s*$",
+        tail,
+        re.IGNORECASE,
+    ))
+
+
 async def _tool_send_shell(args: dict[str, Any], _bot: Any, _chat_id: int, _db_path: str, _notify_state: dict[str, bool] | None) -> str:
     import asyncio
     from cyrene.terminal.client import get_terminal_daemon_client
@@ -71,8 +84,9 @@ async def _tool_send_shell(args: dict[str, Any], _bot: Any, _chat_id: int, _db_p
 
     from cyrene.agent.context import has_temporary_full_access
     command = str(args.get("text", args.get("command", "")) or "")
+    sensitive = bool(args.get("sensitive"))
     _full_access = has_temporary_full_access()
-    if not _full_access and is_dangerous_subshell(command):
+    if not sensitive and not _full_access and is_dangerous_subshell(command):
         elev = await request_scope_elevation(
             tool_name="SendShell",
             path_hint="",
@@ -84,39 +98,48 @@ async def _tool_send_shell(args: dict[str, Any], _bot: Any, _chat_id: int, _db_p
         )
         if elev is not None:
             return elev
-    try:
-        guard_shell_command_workspace_write(command)
-    except ValueError:
-        elev = await request_write_elevation(tool_name="SendShell", path_hint="", reason=command[:240])
-        if elev is not None:
-            return elev
-    destructive = classify_destructive_shell_command(command)
-    if destructive is not None:
-        delete_result = await request_destructive_confirmation(
-            tool_name="SendShell",
-            operation=destructive["operation"],
-            detail=destructive["detail"],
-            destructive_kind=destructive["kind"],
-        )
-        if delete_result is not None:
-            return delete_result
-    elif command_is_file_deletion(command):
-        delete_result = await request_delete_confirmation(tool_name="SendShell", command=command)
-        if delete_result is not None:
-            return delete_result
+    if not sensitive:
+        try:
+            guard_shell_command_workspace_write(command)
+        except ValueError:
+            elev = await request_write_elevation(tool_name="SendShell", path_hint="", reason=command[:240])
+            if elev is not None:
+                return elev
+        destructive = classify_destructive_shell_command(command)
+        if destructive is not None:
+            delete_result = await request_destructive_confirmation(
+                tool_name="SendShell",
+                operation=destructive["operation"],
+                detail=destructive["detail"],
+                destructive_kind=destructive["kind"],
+            )
+            if delete_result is not None:
+                return delete_result
+        elif command_is_file_deletion(command):
+            delete_result = await request_delete_confirmation(tool_name="SendShell", command=command)
+            if delete_result is not None:
+                return delete_result
     terminal = await resolve_terminal(
         terminal_id=str(args.get("shell_id") or ""),
         name=str(args.get("name") or ""),
         access="write",
     )
+    client = get_terminal_daemon_client()
+    if sensitive:
+        before = await client.screen(str(terminal.get("id") or ""))
+        if not _screen_accepts_sensitive_input(str(before.get("screenText") or "")):
+            raise ValueError(
+                "sensitive=true is allowed only while the terminal visibly requests "
+                "a password, passphrase, passcode, PIN, or verification code."
+            )
     key = str(args.get("key") or "").strip().lower()
     data = command + _terminal_key_sequence(key)
     if not data:
         raise ValueError("text or key is required")
     await animate_terminal_control(str(terminal.get("id") or ""), "input")
-    snap = await get_terminal_daemon_client().input(str(terminal.get("id") or ""), data)
+    snap = await client.input(str(terminal.get("id") or ""), data)
     await asyncio.sleep(0.12)
-    snap = await get_terminal_daemon_client().screen(str(terminal.get("id") or ""))
+    snap = await client.screen(str(terminal.get("id") or ""))
     terminal_state = snap.get("terminal") or {}
     return json_result({
         "shell_id": terminal.get("id", ""),
@@ -133,5 +156,5 @@ handler = _tool_send_shell
 
 __all__ = [
     "TOOL_NAME", "TOOL_DEF", "handler", "_tool_send_shell",
-    "_terminal_key_sequence",
+    "_screen_accepts_sensitive_input", "_terminal_key_sequence",
 ]

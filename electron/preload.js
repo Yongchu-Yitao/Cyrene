@@ -65,6 +65,8 @@ contextBridge.exposeInMainWorld('cyrene', {
   pickBackupFile: (options) => ipcRenderer.invoke('dialog:pick-backup-file', options || {}),
   browser: {
     getState: (sessionId) => ipcRenderer.invoke('browser:get-state', { sessionId: String(sessionId || '') }),
+    getManagerState: () => ipcRenderer.invoke('browser:get-manager-state'),
+    controlDownload: (info) => ipcRenderer.invoke('browser:control-download', info || {}),
     setBounds: (info) => ipcRenderer.invoke('browser:set-bounds', info || {}),
     setChatOverlay: (info) => ipcRenderer.invoke('browser:set-chat-overlay', info || {}),
     setTabPicker: (info) => ipcRenderer.invoke('browser:set-tab-picker', info || {}),
@@ -92,6 +94,12 @@ contextBridge.exposeInMainWorld('cyrene', {
       const listener = (_event, state) => callback(state);
       ipcRenderer.on('browser:state', listener);
       return () => ipcRenderer.removeListener('browser:state', listener);
+    },
+    onManagerState: (callback) => {
+      if (typeof callback !== 'function') return () => {};
+      const listener = (_event, state) => callback(state);
+      ipcRenderer.on('browser:manager-state', listener);
+      return () => ipcRenderer.removeListener('browser:manager-state', listener);
     },
     onChatOverlayAction: (callback) => {
       if (typeof callback !== 'function') return () => {};

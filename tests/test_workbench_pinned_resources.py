@@ -62,6 +62,7 @@ def test_pinned_resource_upsert_deduplicates_and_remove(tmp_path):
             "ownerSessionId": "chat-owner",
             "stableRef": "chat-owner",
             "title": "First",
+            "favicon": "https://example.com/favicon-v1.ico",
         }
     )
     second = service.upsert_resource(
@@ -70,11 +71,13 @@ def test_pinned_resource_upsert_deduplicates_and_remove(tmp_path):
             "ownerSessionId": "chat-owner",
             "stableRef": "chat-owner",
             "title": "Updated",
+            "favicon": "https://example.com/favicon-v2.ico",
         }
     )
     assert first["id"] == second["id"]
     assert len(service.list_resources()) == 1
     assert service.list_resources()[0]["title"] == "Updated"
+    assert service.list_resources()[0]["favicon"] == "https://example.com/favicon-v2.ico"
     assert service.remove_resource(first["id"]) is True
     assert service.list_resources() == []
 

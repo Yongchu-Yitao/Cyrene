@@ -115,9 +115,12 @@ async def review_elevation(
 ) -> tuple[bool, str]:
     """返回 (approved, rationale)。LLM 失败或未给裁决时，出于安全默认拒绝。"""
     import cyrene.agent.state as _state
+    from cyrene.runtime.secret_redaction import redact_text
 
     ctx = _state._ensure_session(_state._current_session_id.get())
-    user_request = str(ctx.active_main_round_public_prompt or "").strip()
+    user_request = str(
+        redact_text(str(ctx.active_main_round_public_prompt or "")) or ""
+    ).strip()
     parts = [f"工具：{tool_name}", f"操作：{operation}"]
     if path_hint:
         parts.append(f"目标路径：{path_hint}")

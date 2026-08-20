@@ -12,11 +12,24 @@ TOOL_DEF = get_native_tool_def(TOOL_NAME)
 
 
 async def _tool_list_shells(_args: dict[str, Any], _bot: Any, _chat_id: int, _db_path: str, _notify_state: dict[str, bool] | None) -> str:
-    from cyrene.tooling.backends.terminals import list_agent_terminals
+    from cyrene.tooling.backends.terminals import (
+        list_agent_terminals,
+        list_visible_terminals,
+    )
 
-    shells = await list_agent_terminals(include_exited=True)
+    bound_shells = await list_agent_terminals(include_exited=True)
+    visible_shells = await list_visible_terminals()
+    bound_ids = {str(item.get("id") or "") for item in bound_shells}
+    visible_by_id = {
+        str(item.get("id") or ""): item for item in visible_shells
+    }
+    shells = list(bound_shells)
+    shells.extend(
+        item for item in visible_shells
+        if str(item.get("id") or "") not in bound_ids
+    )
     if not shells:
-        return "No terminals are bound to this conversation."
+        return "No terminals are bound to this conversation or visible in the current split."
     return json_result([
         {
             "shell_id": item.get("id", ""),
@@ -29,6 +42,11 @@ async def _tool_list_shells(_args: dict[str, Any], _bot: Any, _chat_id: int, _db
             "last_actor": item.get("lastActor", ""),
             "last_input_at": item.get("lastInputAt", ""),
             "input_event_count": item.get("inputEventCount", 0),
+            "bound_to_conversation": str(item.get("id") or "") in bound_ids,
+            "visible_in_current_split": str(item.get("id") or "") in visible_by_id,
+            "visible_side": str(
+                (visible_by_id.get(str(item.get("id") or "")) or {}).get("visibleSide") or ""
+            ),
         }
         for item in shells
     ])

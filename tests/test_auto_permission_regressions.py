@@ -329,6 +329,163 @@ async def test_auto_mode_reviews_unbounded_shell_but_skips_workspace_read_only_c
     assert len(reviews) == 1
 
 
+async def test_send_shell_uses_terminal_context_for_unified_auto_review(
+    monkeypatch, tmp_path
+):
+    from cyrene.agent import auto_review, state
+    from cyrene.observability import debug
+    from cyrene.tooling import catalog, executor
+
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    reviews = []
+
+    async def approve(**kwargs):
+        reviews.append(kwargs)
+        return True, "用户要求在该终端安装 Git"
+
+    async def fake_send_shell(arguments, *_args):
+        return json.dumps({"sent": arguments["text"]})
+
+    monkeypatch.setattr(auto_review, "review_elevation", approve)
+    monkeypatch.setattr(debug, "publish_event", _ignore_event)
+    monkeypatch.setitem(catalog.TOOL_HANDLERS, "SendShell", fake_send_shell)
+    workspace_token = state._active_workspace_dir.set(str(workspace))
+    round_token = state._current_round_id.set("round_terminal_review")
+    mode_token = state._permission_mode.set("auto")
+    try:
+        result = await executor._execute_tool(
+            "SendShell",
+            {
+                "name": "Terminal 5",
+                "text": "sudo apt install git",
+                "key": "enter",
+            },
+            None,
+            0,
+            "",
+            None,
+        )
+    finally:
+        state._permission_mode.reset(mode_token)
+        state._current_round_id.reset(round_token)
+        state._active_workspace_dir.reset(workspace_token)
+
+    assert json.loads(result)["sent"] == "sudo apt install git"
+    assert len(reviews) == 1
+    assert reviews[0]["tool_name"] == "SendShell"
+    assert reviews[0]["operation"] == "向已授权共享终端发送可执行输入"
+    assert reviews[0]["path_hint"] == "terminal:Terminal 5"
+    assert "目标终端：Terminal 5" in reviews[0]["reason"]
+    assert "输入：sudo apt install git" in reviews[0]["reason"]
+    assert "按键：enter" in reviews[0]["reason"]
+
+
+async def test_start_shell_and_sensitive_terminal_input_skip_process_review(
+    monkeypatch, tmp_path
+):
+    from cyrene.agent import auto_review, state
+    from cyrene.observability import debug
+    from cyrene.tooling import catalog, executor
+
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    reviews = []
+    calls = []
+
+    async def deny(**kwargs):
+        reviews.append(kwargs)
+        return False, "should not be called"
+
+    async def fake_handler(arguments, *_args):
+        calls.append(dict(arguments))
+        return "executed"
+
+    monkeypatch.setattr(auto_review, "review_elevation", deny)
+    monkeypatch.setattr(debug, "publish_event", _ignore_event)
+    monkeypatch.setitem(catalog.TOOL_HANDLERS, "StartShell", fake_handler)
+    monkeypatch.setitem(catalog.TOOL_HANDLERS, "SendShell", fake_handler)
+    workspace_token = state._active_workspace_dir.set(str(workspace))
+    round_token = state._current_round_id.set("round_terminal_no_review")
+    mode_token = state._permission_mode.set("auto")
+    try:
+        started = await executor._execute_tool(
+            "StartShell",
+            {"cwd": ".", "command": "python -m worker"},
+            None,
+            0,
+            "",
+            None,
+        )
+        password_sent = await executor._execute_tool(
+            "SendShell",
+            {
+                "name": "Terminal 5",
+                "text": "user-provided-password",
+                "key": "enter",
+                "sensitive": True,
+            },
+            None,
+            0,
+            "",
+            None,
+        )
+    finally:
+        state._permission_mode.reset(mode_token)
+        state._current_round_id.reset(round_token)
+        state._active_workspace_dir.reset(workspace_token)
+
+    assert started == "executed"
+    assert password_sent == "executed"
+    assert len(calls) == 2
+    assert reviews == []
+
+
+def test_sensitive_terminal_input_and_password_assignments_are_redacted():
+    from cyrene.runtime.secret_redaction import redact_text, redact_value
+
+    redacted = redact_value({
+        "name": "Terminal 5",
+        "text": "user-provided-password",
+        "key": "enter",
+        "sensitive": True,
+    })
+    assert redacted["text"] == "[REDACTED_SENSITIVE_INPUT]"
+    assert "user-provided-password" not in json.dumps(redacted)
+    assert redact_text("密码是 user-provided-password") == (
+        "密码是 [REDACTED_PASSWORD]"
+    )
+
+
+def test_sensitive_terminal_tool_call_is_redacted_before_session_storage():
+    from cyrene.agent.agent import _redact_sensitive_tool_calls_for_storage
+
+    message = {
+        "role": "assistant",
+        "tool_calls": [{
+            "id": "call_secret",
+            "function": {
+                "name": "SendShell",
+                "arguments": json.dumps({
+                    "name": "Terminal 5",
+                    "text": "literal-user-secret",
+                    "key": "enter",
+                    "sensitive": True,
+                }),
+            },
+        }],
+    }
+    safe = _redact_sensitive_tool_calls_for_storage(message)
+    safe_arguments = json.loads(
+        safe["tool_calls"][0]["function"]["arguments"]
+    )
+
+    assert safe_arguments["text"] == "[REDACTED_SENSITIVE_INPUT]"
+    assert safe_arguments["key"] == "enter"
+    assert "literal-user-secret" not in json.dumps(safe)
+    assert "literal-user-secret" in message["tool_calls"][0]["function"]["arguments"]
+
+
 def test_shell_review_classifier_distinguishes_read_only_git_from_mutating_commands(
     tmp_path
 ):

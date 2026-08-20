@@ -167,12 +167,16 @@ async def _kick_behavior_learning_processing() -> None:
 # ---------------------------------------------------------------------------
 
 async def _run_execution_agent(task: str, bot: Any, chat_id: int, db_path: str, notify_state: dict[str, bool] | None = None) -> str:
-    # 使用默认 session 的锁防止与用户聊天并发执行
-    default_ctx = _ensure_session("")
-    if default_ctx.lock.locked():
+    # Scheduled work inherits its originating session through the run context.
+    # Use that session's lock so background execution cannot race the user's
+    # active turn or accidentally write into the legacy default conversation.
+    target_ctx = _ensure_session(_current_session_id.get())
+    if target_ctx.lock.locked():
+        if notify_state is not None:
+            notify_state["deferred"] = True
         return ""
-    async with default_ctx.lock:
-        default_ctx.interrupt_event.clear()
+    async with target_ctx.lock:
+        target_ctx.interrupt_event.clear()
         from cyrene.tooling.gateway import (
             activate_catalog_snapshot,
             reset_catalog_snapshot,

@@ -112,6 +112,53 @@ async def _execute_tool(
     )
 
 
+def _redact_sensitive_tool_calls_for_storage(
+    message: dict[str, Any],
+) -> dict[str, Any]:
+    """Persist terminal credential delivery without persisting the credential."""
+    tool_calls = message.get("tool_calls")
+    if not isinstance(tool_calls, list):
+        return message
+    safe_calls: list[Any] = []
+    changed = False
+    for raw_call in tool_calls:
+        if not isinstance(raw_call, dict):
+            safe_calls.append(raw_call)
+            continue
+        function = raw_call.get("function")
+        if not isinstance(function, dict):
+            safe_calls.append(raw_call)
+            continue
+        raw_arguments = function.get("arguments")
+        try:
+            arguments = parse_tool_arguments(raw_arguments)
+        except ValueError:
+            safe_calls.append(raw_call)
+            continue
+        if not bool(arguments.get("sensitive")):
+            safe_calls.append(raw_call)
+            continue
+        safe_arguments = dict(arguments)
+        for field in ("text", "command"):
+            if field in safe_arguments:
+                safe_arguments[field] = "[REDACTED_SENSITIVE_INPUT]"
+        safe_function = dict(function)
+        safe_function["arguments"] = (
+            safe_arguments
+            if isinstance(raw_arguments, dict)
+            else json.dumps(safe_arguments, ensure_ascii=False, separators=(",", ":"))
+        )
+        safe_call = dict(raw_call)
+        safe_call["function"] = safe_function
+        safe_calls.append(safe_call)
+        changed = True
+    if not changed:
+        return message
+    safe_message = dict(message)
+    safe_message["tool_calls"] = safe_calls
+    return safe_message
+
+
 async def _publish_tool_call_started(
     tool_call_id: str, tool_name: str, arguments: dict[str, Any]
 ) -> None:
@@ -722,7 +769,7 @@ async def _run_main_agent_impl(
             if message.get("role") == "user" and message.get("message_id") == user_message_id:
                 saved.append(dict(user_entry))
                 continue
-            saved.append(message)
+            saved.append(_redact_sensitive_tool_calls_for_storage(message))
         if _economy_mode.get():
             saved = _economy_compact_messages(saved, round_id)
         return saved

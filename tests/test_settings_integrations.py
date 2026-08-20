@@ -580,6 +580,7 @@ def test_about_settings_matches_the_shared_settings_page_hierarchy():
     assert panel.index('className: "wb-about-product-card"') < panel.index('className: "wb-btn primary wb-about-check-btn"')
     assert 'className: "wb-about-hero-progress"' in panel
     assert '"--wb-about-download-progress": heroProgress + "%"' in panel
+    assert "var heroProgress = downloaded\n    ? 100" in panel
     assert 'className: "wb-about-update-footer"' not in panel
     assert 'className: "wb-about-card-head"' in panel
     assert 'className: "wb-about-related-card"' in panel

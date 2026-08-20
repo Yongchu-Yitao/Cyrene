@@ -29,7 +29,7 @@ _active_tool_call_id: ContextVar[str] = ContextVar("_active_tool_call_id", defau
 
 logger = logging.getLogger(__name__)
 
-_PROCESS_EXECUTION_TOOLS = frozenset({"Bash", "StartShell", "SendShell", "InterruptShell"})
+_PROCESS_EXECUTION_TOOLS = frozenset({"Bash", "SendShell"})
 _OPAQUE_SHELL_EXECUTABLES = frozenset({
     "bash", "sh", "zsh", "fish", "dash",
     "python", "python3", "node", "ruby", "perl",
@@ -41,8 +41,8 @@ _NETWORK_SHELL_EXECUTABLES = frozenset({
 })
 _READ_ONLY_SHELL_EXECUTABLES = frozenset({
     "[", "cat", "cd", "cut", "echo", "find", "git", "grep", "head",
-    "ls", "pwd", "printf", "rg", "sed", "sort", "tail", "test", "tr",
-    "uniq", "wc",
+    "id", "ls", "pwd", "printf", "rg", "sed", "sort", "stat", "tail",
+    "test", "tr", "uniq", "wc", "whereis", "which", "whoami",
 })
 _READ_ONLY_GIT_SUBCOMMANDS = frozenset({
     "diff", "grep", "log", "ls-files", "rev-parse", "show",
@@ -133,6 +133,51 @@ def _shell_command_needs_explicit_review(arguments: dict[str, Any]) -> bool:
     if executable == "sed" and not _sed_invocation_is_read_only(segment_tokens):
         return True
     return False
+
+
+def _terminal_input_needs_explicit_review(arguments: dict[str, Any]) -> bool:
+    """Review executable terminal text, but not keys or sensitive prompt input."""
+    if bool(arguments.get("sensitive")):
+        return False
+    text = str(arguments.get("text", arguments.get("command", "")) or "")
+    key = str(arguments.get("key") or "").strip().lower()
+    if not text:
+        return False
+    executes_input = key in {"enter", "ctrl_j", "ctrl_m"} or "\n" in text or "\r" in text
+    if not executes_input:
+        return False
+    return _shell_command_needs_explicit_review({"command": text})
+
+
+def _process_execution_review_context(
+    tool_name: str, arguments: dict[str, Any],
+) -> tuple[str, str, str]:
+    """Build an exact context for the shared elevation reviewer."""
+    if tool_name == "SendShell":
+        terminal = str(
+            arguments.get("name") or arguments.get("shell_id") or "当前分屏终端"
+        ).strip()
+        text = str(arguments.get("text", arguments.get("command", "")) or "")
+        key = str(arguments.get("key") or "").strip().lower()
+        preview = str(redact_text(text) or "")[:500]
+        detail = f"目标终端：{terminal}"
+        if preview:
+            detail += f"\n输入：{preview}"
+        if key:
+            detail += f"\n按键：{key}"
+        return (
+            f"terminal:{terminal}",
+            "向已授权共享终端发送可执行输入",
+            detail,
+        )
+    command_preview = str(redact_text(
+        str(arguments.get("command") or "").strip()
+    ) or "")[:500]
+    return (
+        str(arguments.get("cwd") or ""),
+        "执行本地进程或 Shell 命令",
+        f"命令：{command_preview or '[空命令]'}",
+    )
 
 
 def _sed_invocation_is_read_only(tokens: list[str]) -> bool:
@@ -360,7 +405,11 @@ def _proactive_tool_refusal(name: str, arguments: dict[str, Any]) -> str | None:
             "incremental file work. Editing existing files is forbidden."
         )
     if name in {"Bash", "SendShell", "StartShell", "InterruptShell"}:
-        command = str(arguments.get("command") or "").strip()
+        command = str(
+            arguments.get("text", arguments.get("command", ""))
+            if name == "SendShell"
+            else arguments.get("command", "")
+        ).strip()
         if not command:
             return None
         try:
@@ -452,22 +501,28 @@ async def _execute_tool(name: str, arguments: dict[str, Any], bot: Any, chat_id:
         else TOOL_HANDLERS.get(native_name)
     )
     run_context = current_run_context()
+    needs_process_review = (
+        _shell_command_needs_explicit_review(arguments)
+        if governance_name == "Bash"
+        else _terminal_input_needs_explicit_review(arguments)
+        if governance_name == "SendShell"
+        else False
+    )
     if (
         governance_name in _PROCESS_EXECUTION_TOOLS
         and run_context.permission_mode != "full_access"
-        and (
-            governance_name != "Bash"
-            or _shell_command_needs_explicit_review(arguments)
-        )
+        and needs_process_review
     ):
         from cyrene.tooling.runtime_api import request_scope_elevation
 
-        command_preview = str(arguments.get("command") or "").strip()[:500]
+        path_hint, operation, reason = _process_execution_review_context(
+            governance_name, arguments,
+        )
         permission_result = await request_scope_elevation(
             tool_name=requested_name,
-            path_hint=str(arguments.get("cwd") or ""),
-            operation="执行本地进程或 Shell 命令",
-            reason=f"命令：{command_preview or '[启动交互式 shell]'}",
+            path_hint=path_hint,
+            operation=operation,
+            reason=reason,
             permission_kind="process_execution",
             options=["允许执行这一次", "拒绝"],
             scope_hint="进程执行的 ",

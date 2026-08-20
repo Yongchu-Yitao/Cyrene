@@ -1327,6 +1327,8 @@ function WorkbenchApp({ theme, actualTheme, onToggleTheme, needsOnboarding }) {
   // The task entry point is a project-wide board. A task detail is opened only
   // after the user selects a card (or follows a direct task link/search hit).
   var [taskView, setTaskView] = useWorkbenchState("board");
+  var [projectRailMode, setProjectRailMode] = useWorkbenchState("task");
+  var [projectRailToTaskBusy, setProjectRailToTaskBusy] = useWorkbenchState(false);
   var [rightTab, setRightTab] = useWorkbenchState("context");
   var [railCollapsed, setRailCollapsed] = useWorkbenchState(function () {
     // Default to collapsed (icon strip); honour the user's stored choice once set.
@@ -1346,6 +1348,7 @@ function WorkbenchApp({ theme, actualTheme, onToggleTheme, needsOnboarding }) {
   var [newProjectOpen, setNewProjectOpen] = useWorkbenchState(false);
   var [newTaskOpen, setNewTaskOpen] = useWorkbenchState(false);
   var [newChatRequestId, setNewChatRequestId] = useWorkbenchState(0);
+  var [taskOpenRequest, setTaskOpenRequest] = useWorkbenchState({ id: "", sequence: 0 });
   var [mountedPages, setMountedPages] = useWorkbenchState({});
   var [editProject, setEditProject] = useWorkbenchState(null);
   var [editMemoryProject, setEditMemoryProject] = useWorkbenchState(null);
@@ -2151,7 +2154,11 @@ function WorkbenchApp({ theme, actualTheme, onToggleTheme, needsOnboarding }) {
   useWorkbenchEffect(function () {
     if (fullPage === "chat" && activeChatId) {
       rememberOpenedSession("chat", activeChatId);
-    } else if (!fullPage && taskView === "detail" && store && store.activeSessionId) {
+    } else if (
+      taskView === "detail"
+      && store && store.activeSessionId
+      && (!fullPage || (fullPage === "chat" && !activeChatId))
+    ) {
       rememberOpenedSession("task", store.activeSessionId);
     }
   }, [fullPage, taskView, activeChatId, store && store.activeSessionId]);
@@ -2421,6 +2428,26 @@ function WorkbenchApp({ theme, actualTheme, onToggleTheme, needsOnboarding }) {
     window.CyreneUI.require("model").setActiveProject(project.id, sessionId).catch(function () {});
   }
 
+  function openTaskInWorkspace(sessionId) {
+    var id = String(sessionId || "");
+    if (!id) return;
+    selectSession(id);
+    setFullPage("chat");
+    setTaskOpenRequest(function (current) {
+      return { id: id, sequence: Number(current && current.sequence || 0) + 1 };
+    });
+  }
+
+  function openChatInWorkspace(chat) {
+    if (!chat || !chat.id) return;
+    rememberOpenedSession("chat", chat.id);
+    navigateFromSearch({
+      type: "chat",
+      projectId: chat.projectId || (store.activeProject && store.activeProject.id) || "",
+      chatId: chat.id,
+    });
+  }
+
   // Global search navigation: select the right project/session/page and tell
   // the target module page which item to highlight/open.
   function navigateFromSearch(payload) {
@@ -2456,7 +2483,10 @@ function WorkbenchApp({ theme, actualTheme, onToggleTheme, needsOnboarding }) {
         });
         setExpandedStepId("");
         setTaskView("detail");
-        setFullPage(null);
+        setFullPage("chat");
+        setTaskOpenRequest(function (current) {
+          return { id: session.id, sequence: Number(current && current.sequence || 0) + 1 };
+        });
         window.CyreneUI.require("model").setActiveProject(project.id, session.id).catch(function () {});
       }
     } else if (type === "project" && project) {
@@ -2596,7 +2626,12 @@ function WorkbenchApp({ theme, actualTheme, onToggleTheme, needsOnboarding }) {
       setTaskView("detail");
       // Land in the freshly-created project's task view — important when the
       // project was created from the welcome page, so we leave it behind.
-      setFullPage(null);
+      setFullPage("chat");
+      if (next && next.activeSessionId) {
+        setTaskOpenRequest(function (current) {
+          return { id: String(next.activeSessionId), sequence: Number(current && current.sequence || 0) + 1 };
+        });
+      }
       return next;
     });
   }
@@ -2607,7 +2642,12 @@ function WorkbenchApp({ theme, actualTheme, onToggleTheme, needsOnboarding }) {
       setStore(next);
       setExpandedStepId("");
       setTaskView("detail");
-      setFullPage(null);
+      setFullPage("chat");
+      if (next && next.activeSessionId) {
+        setTaskOpenRequest(function (current) {
+          return { id: String(next.activeSessionId), sequence: Number(current && current.sequence || 0) + 1 };
+        });
+      }
       return next;
     });
   }
@@ -2679,10 +2719,15 @@ function WorkbenchApp({ theme, actualTheme, onToggleTheme, needsOnboarding }) {
     /* The active Dock item is a location indicator, not a toggle. Re-clicking
        it must preserve the current page (and a task detail, when applicable)
        instead of falling through to the default Task surface. */
-    if (page === "task") {
-      if (!fullPage) return;
+    if (page === "board" || page === "task") {
+      if (!fullPage && taskView === "board") return;
       setTaskView("board");
       setFullPage(null);
+      return;
+    }
+    if (page === "work") {
+      if (fullPage === "chat") return;
+      setFullPage("chat");
       return;
     }
     if (page === "profile") {
@@ -2694,6 +2739,15 @@ function WorkbenchApp({ theme, actualTheme, onToggleTheme, needsOnboarding }) {
     if (fullPage === page) return;
     setFullPage(page);
   }
+
+  useWorkbenchEffect(function () {
+    function openBoard() {
+      setTaskView("board");
+      setFullPage(null);
+    }
+    window.addEventListener("cyrene:open-workbench-board", openBoard);
+    return function () { window.removeEventListener("cyrene:open-workbench-board", openBoard); };
+  }, []);
 
   function handleSidebarModuleWheel(event) {
     var target = event.target;
@@ -2712,8 +2766,8 @@ function WorkbenchApp({ theme, actualTheme, onToggleTheme, needsOnboarding }) {
     gesture.delta += deltaX;
     if (Math.abs(gesture.delta) < 44) return;
 
-    var moduleOrder = ["schedule", "task", "chat", "knowledge", "memory"];
-    var activeModule = moduleOrder.indexOf(fullPage) >= 0 ? fullPage : "task";
+    var moduleOrder = ["schedule", "board", "work", "knowledge", "memory"];
+    var activeModule = activeDestination;
     var activeIndex = moduleOrder.indexOf(activeModule);
     var nextIndex = (activeIndex + direction + moduleOrder.length) % moduleOrder.length;
     handleOpenPage(moduleOrder[nextIndex]);
@@ -2736,12 +2790,11 @@ function WorkbenchApp({ theme, actualTheme, onToggleTheme, needsOnboarding }) {
     uiSurface.setScope(settingsActive ? "settings" : "main");
     var unregister = [];
     var modules = [
-      ["task", t("rail.tasks", "Tasks")],
-      ["chat", t("rail.chat", "Chat")],
       ["schedule", t("rail.schedule", "Schedule")],
+      ["board", t("workbench.page.board", "Board")],
+      ["work", t("workbench.page.work", "Work")],
       ["knowledge", t("rail.knowledge", "Knowledge")],
       ["memory", t("rail.memory", "Memory")],
-      ["profile", t("rail.profile", "Profile")],
     ];
     modules.forEach(function (item) {
       var page = item[0];
@@ -2753,7 +2806,13 @@ function WorkbenchApp({ theme, actualTheme, onToggleTheme, needsOnboarding }) {
           return {
             role: "navigation_item",
             name: item[1],
-            state: { selected: page === "task" ? !fullPage : (page === "profile" ? fullPage === "settings" && settingsTab === "profile" : fullPage === page) },
+            state: {
+              selected: page === "board"
+                ? !fullPage && taskView === "board"
+                : page === "work"
+                  ? fullPage === "chat"
+                  : fullPage === page,
+            },
           };
         },
         actions: [{
@@ -2814,15 +2873,93 @@ function WorkbenchApp({ theme, actualTheme, onToggleTheme, needsOnboarding }) {
     return <div className="workbench-sidebar-dock-slot" aria-hidden="true" />;
   }
 
+  function selectProjectRailChat(chatId) {
+    var chats = store.activeProject && recentChatsByProject[store.activeProject.id] || [];
+    var chat = chats.find(function (item) { return String(item && item.id || "") === String(chatId || ""); });
+    if (chat) openChatInWorkspace(chat);
+  }
+
+  function renameProjectRailChat(chatId, title) {
+    return chatModule.Model.renameChat(chatId, title).then(function (chat) {
+      setRecentChatsByProject(function (current) {
+        var projectId = String(store.activeProject && store.activeProject.id || "");
+        var nextChats = (current[projectId] || []).map(function (item) {
+          return String(item.id) === String(chat.id) ? Object.assign({}, item, chat) : item;
+        });
+        return Object.assign({}, current, { [projectId]: nextChats });
+      });
+      return chat;
+    });
+  }
+
+  function renameProjectRailTask(taskId, title) {
+    return model.patchSession(taskId, { title: title }).then(function (next) {
+      setStore(next);
+      var project = next && next.projects && next.projects.find(function (item) {
+        return (item.sessions || []).some(function (session) { return String(session.id) === String(taskId); });
+      });
+      return project && project.sessions.find(function (session) { return String(session.id) === String(taskId); });
+    });
+  }
+
+  function deleteProjectRailChat(chatId) {
+    if (!chatId) return Promise.resolve(null);
+    var feedback = window.CyreneUI.require("feedback");
+    return feedback.confirmModal({
+      body: t("workbenchChat.confirmDelete", "Delete this chat? Its messages cannot be recovered."),
+      confirmLabel: t("common.delete", "Delete"),
+      danger: true,
+    }).then(function (confirmed) {
+      if (!confirmed) return null;
+      return chatModule.Model.deleteChat(chatId);
+    }).then(function (result) {
+      if (!result) return null;
+      setRecentChatsByProject(function (current) {
+        var projectId = String(store.activeProject && store.activeProject.id || "");
+        return Object.assign({}, current, {
+          [projectId]: (current[projectId] || []).filter(function (item) { return String(item.id) !== String(chatId); }),
+        });
+      });
+      return result;
+    });
+  }
+
+  function promoteProjectRailChat(chatId) {
+    if (!chatId || projectRailToTaskBusy) return Promise.resolve(null);
+    setProjectRailToTaskBusy(true);
+    return chatModule.Model.toTask(chatId, {}).then(function (payload) {
+      handleChatToTask(payload);
+      return payload;
+    }).finally(function () { setProjectRailToTaskBusy(false); });
+  }
+
+  function openProjectRailResource(type, payload) {
+    setFullPage("chat");
+    window.setTimeout(function () {
+      try {
+        window.dispatchEvent(new CustomEvent("cyrene:workbench-navigate", {
+          detail: type === "terminal"
+            ? { type: "terminal", terminalId: String(payload || "") }
+            : { type: "file", entry: payload },
+        }));
+      } catch (e) {}
+    }, 0);
+  }
+
   // Conversation → task promotion: the chat page returns the refreshed store
   // (active = the new task session); adopt it and jump back to the task view.
   function handleChatToTask(payload) {
     var next = model.normalizeStore(payload);
     setStore(next);
-    setFullPage(null);
+    setFullPage("chat");
     setTaskView("detail");
     setExpandedStepId("");
     setRightTab("context");
+    if (next && next.activeSessionId) {
+      setTaskOpenRequest(function (current) {
+        return { id: String(next.activeSessionId), sequence: Number(current && current.sequence || 0) + 1 };
+      });
+    }
   }
 
   // Knowledge / schedule / memory keep the shared ProjectRail. Chat owns a
@@ -2849,9 +2986,20 @@ function WorkbenchApp({ theme, actualTheme, onToggleTheme, needsOnboarding }) {
   var showMemoryPage = isMemory || mountedPages.memory;
   var showWelcomePage = isWelcome || mountedPages.welcome;
   var showSettingsPage = isSettings || mountedPages.settings;
-  var activeSessionKey = isChat && activeChatId
-    ? "chat:" + activeChatId
-    : (!fullPage && taskView === "detail" && store.activeSessionId ? "task:" + store.activeSessionId : "");
+  var activeDestination = isSchedule
+    ? "schedule"
+    : isKnowledge
+      ? "knowledge"
+      : isMemory
+        ? "memory"
+        : isChat
+          ? "work"
+          : (!isModulePage && taskView === "board" ? "board" : "work");
+  var activeSessionKey = isChat && !activeChatId && taskView === "detail" && store.activeSessionId
+    ? "task:" + store.activeSessionId
+    : (isChat && activeChatId
+      ? "chat:" + activeChatId
+      : (!fullPage && taskView === "detail" && store.activeSessionId ? "task:" + store.activeSessionId : ""));
   var sessionTabCandidates = wbRecentSessionTabs(
     store.projects,
     recentChatsByProject,
@@ -2869,6 +3017,23 @@ function WorkbenchApp({ theme, actualTheme, onToggleTheme, needsOnboarding }) {
     );
     return Object.assign({}, item, {
       activity: wbSessionActivitySnapshot(item, runtime, sessionActivityLive[item.id], browserState),
+    });
+  });
+  var browserOwnerSessions = [];
+  (Array.isArray(store.projects) ? store.projects : []).forEach(function (project) {
+    var projectId = String(project && project.id || "");
+    var chats = recentChatsByProject && Array.isArray(recentChatsByProject[projectId])
+      ? recentChatsByProject[projectId]
+      : [];
+    chats.forEach(function (chat) {
+      if (!chat || !chat.id) return;
+      browserOwnerSessions.push({
+        id: String(chat.id),
+        kind: "chat",
+        title: String(chat.title || t("workbench.page.chat", "Conversation")),
+        projectId: projectId,
+        projectName: String(project.name || ""),
+      });
     });
   });
   var liveTopbarChatKey = sessionTabCandidates.filter(function (item) {
@@ -2946,6 +3111,7 @@ function WorkbenchApp({ theme, actualTheme, onToggleTheme, needsOnboarding }) {
         activeChatId={activeChatId}
         recentSessions={recentSessionTabs}
         overflowSessions={overflowSessionTabs}
+        browserOwners={browserOwnerSessions}
         pinnedResources={pinnedResources}
         keyboardEnabled={!searchOpen && !newProjectOpen && !newTaskOpen && !editProject && !editMemoryProject}
         onPinResource={pinTopbarResource}
@@ -2968,10 +3134,19 @@ function WorkbenchApp({ theme, actualTheme, onToggleTheme, needsOnboarding }) {
             return;
           }
           if (!resource.ownerSessionId) return;
-          var owner = recentSessionTabs.find(function (item) {
+          var owner = sessionTabCandidates.find(function (item) {
             return item.kind === "chat" && String(item.id || "") === String(resource.ownerSessionId || "");
           });
           if (!owner) return;
+          if (resource.kind === "browser" && resource.tabId) {
+            var browserBridge = window.cyrene && window.cyrene.browser;
+            if (browserBridge && typeof browserBridge.activateTab === "function") {
+              browserBridge.activateTab({
+                sessionId: resource.ownerSessionId,
+                tabId: resource.tabId,
+              }).catch(function () {});
+            }
+          }
           openSessionTabResource(owner, resource.kind === "file"
             ? { type: "file", file: resource.file && Object.keys(resource.file).length ? resource.file : resource }
             : { type: "browser" });
@@ -2989,6 +3164,14 @@ function WorkbenchApp({ theme, actualTheme, onToggleTheme, needsOnboarding }) {
           } else {
             navigateFromSearch({ type: "task", projectId: item.projectId, sessionId: item.id });
           }
+        }}
+        onOpenBrowserPage={function (page, owner) {
+          var target = owner || browserOwnerSessions.find(function (item) {
+            return String(item.id || "") === String(page && page.sessionId || "");
+          });
+          if (!target) return;
+          rememberOpenedSession("chat", target.id);
+          navigateFromSearch({ type: "chat", projectId: target.projectId, chatId: target.id });
         }}
         onPauseSession={function (item) {
           if (!item || item.kind !== "task") return Promise.resolve(null);
@@ -3055,6 +3238,7 @@ function WorkbenchApp({ theme, actualTheme, onToggleTheme, needsOnboarding }) {
             persistent={true}
             collapsed={railCollapsed}
             activePage={fullPage}
+            activeDestination={activeDestination}
             onOpenPage={handleOpenPage}
             onSettings={function () { setSettingsTab(""); setSettingsScrollTo(null); setFullPage("settings"); }}
           />
@@ -3064,6 +3248,19 @@ function WorkbenchApp({ theme, actualTheme, onToggleTheme, needsOnboarding }) {
                 active: isChat,
                 project: store.activeProject,
                 newChatRequestId: newChatRequestId,
+                taskOpenRequest: taskOpenRequest,
+                tasks: store.activeProject && Array.isArray(store.activeProject.sessions) ? store.activeProject.sessions : [],
+                activeTaskId: store.activeSessionId,
+                onSelectTask: selectSession,
+                onCreateTask: createSession,
+                onDeleteTask: handleDeleteSession,
+                onTaskStoreChange: function (nextStore, sourceSessionId) {
+                  setStore(function (previous) {
+                    return mergeTaskResponse(previous, nextStore, sourceSessionId);
+                  });
+                },
+                TaskPaneComponent: WorkbenchTaskPane,
+                TaskContextPanelComponent: RightContextPanel,
                 onOpenTask: handleChatToTask,
                 onActiveChatIdChange: setActiveChatId,
                 onChatsChange: function (projectId, chats) {
@@ -3077,9 +3274,19 @@ function WorkbenchApp({ theme, actualTheme, onToggleTheme, needsOnboarding }) {
                 }).map(function (key) {
                   return String(key).slice(5);
                 }),
+                pinnedTaskIds: pinnedSessionKeys.filter(function (key) {
+                  return String(key || "").indexOf("task:") === 0;
+                }).map(function (key) {
+                  return String(key).slice(5);
+                }),
                 onTogglePinnedChat: function (chat, pinned) {
                   if (!chat || !chat.id) return;
                   togglePinnedSession({ id: chat.id, kind: "chat" }, pinned);
+                },
+                onRenameTask: renameProjectRailTask,
+                onTogglePinnedTask: function (task, pinned) {
+                  if (!task || !task.id) return;
+                  togglePinnedSession({ id: task.id, kind: "task" }, pinned);
                 },
                 navCollapsed: railCollapsed,
                 onToggleNavCollapsed: toggleWorkspaceSidebar,
@@ -3144,24 +3351,60 @@ function WorkbenchApp({ theme, actualTheme, onToggleTheme, needsOnboarding }) {
           )}
           <WorkbenchStableSurface active={!isModulePage} enterMotion={true}>
           <>
-          <TaskRail
-            project={store.activeProject}
-            activeSessionId={store.activeSessionId}
-            onSelectSession={selectSession}
-            onCreateSession={createSession}
-            onDeleteSession={handleDeleteSession}
-            loading={loading}
-            collapsed={railCollapsed}
-            collapseControl={renderSidebarCollapseControl()}
-            moduleDock={!isModulePage ? renderSidebarDockSlot() : null}
-          />
+          {React.createElement(chatModule.Rail, {
+            active: !isModulePage,
+            projectId: store.activeProject && store.activeProject.id || "",
+            projectName: store.activeProject && store.activeProject.name || "",
+            chats: store.activeProject && recentChatsByProject[store.activeProject.id] || [],
+            tasks: store.activeProject && store.activeProject.sessions || [],
+            railMode: projectRailMode,
+            workRailMode: projectRailMode,
+            pinnedChatIds: pinnedSessionKeys.filter(function (key) {
+              return String(key || "").indexOf("chat:") === 0;
+            }).map(function (key) { return String(key).slice(5); }),
+            pinnedTaskIds: pinnedSessionKeys.filter(function (key) {
+              return String(key || "").indexOf("task:") === 0;
+            }).map(function (key) { return String(key).slice(5); }),
+            activeChatId: activeChatId,
+            activeTaskId: store.activeSessionId,
+            loading: loading,
+            runningChatIds: [],
+            runtimeEngine: chatRuntimeEngine,
+            onSelect: selectProjectRailChat,
+            onSelectTask: openTaskInWorkspace,
+            onAnswer: function () {},
+            onCreate: createChat,
+            onCreateTask: createSession,
+            onRename: renameProjectRailChat,
+            onRenameTask: renameProjectRailTask,
+            onDelete: deleteProjectRailChat,
+            onDeleteTask: handleDeleteSession,
+            onToTask: promoteProjectRailChat,
+            toTaskBusy: projectRailToTaskBusy,
+            onTogglePinned: function (chat, pinned) {
+              if (chat && chat.id) togglePinnedSession({ id: chat.id, kind: "chat" }, pinned);
+            },
+            onTogglePinnedTask: function (task, pinned) {
+              if (task && task.id) togglePinnedSession({ id: task.id, kind: "task" }, pinned);
+            },
+            onOpenFile: function (entry) { openProjectRailResource("file", entry); },
+            onOpenTerminal: function (terminalId) { openProjectRailResource("terminal", terminalId); },
+            onRailModeChange: setProjectRailMode,
+            collapsed: railCollapsed,
+            onToggleCollapsed: toggleWorkspaceSidebar,
+            collapseControl: renderSidebarCollapseControl(),
+            moduleDock: !isModulePage ? renderSidebarDockSlot() : null,
+          })}
           {taskView === "board" ? (
             <TaskBoard
               project={store.activeProject}
+              chats={store.activeProject && recentChatsByProject[store.activeProject.id] || []}
               loading={loading}
               error={error}
-              onOpenSession={selectSession}
+              onOpenSession={openTaskInWorkspace}
+              onOpenChat={openChatInWorkspace}
               onCreateSession={createSession}
+              onCreateChat={createChat}
               onDeleteSession={handleDeleteSession}
             />
           ) : (
@@ -3362,6 +3605,13 @@ function WorkbenchSessionStatusIcon({ phase, active }) {
   return <span className={"workbench-session-status-dot " + state + (active ? " is-live" : "")} />;
 }
 
+function WorkbenchAssetIcon({ name, className }) {
+  var assets = window.CyreneIconAssets;
+  var markup = assets && assets.settings && assets.settings[name] || "";
+  if (!markup) return null;
+  return <span className={className || "workbench-asset-icon"} dangerouslySetInnerHTML={{ __html: markup }} aria-hidden="true" />;
+}
+
 function WorkbenchSessionActivityPreview({ preview, t }) {
   if (!preview) return null;
   var item = preview.item;
@@ -3401,7 +3651,7 @@ function WorkbenchSessionActivityPreview({ preview, t }) {
   );
 }
 
-function WorkbenchTopbar({ projects, activeProject, activePage, taskView, activeTaskId, activeChatId, recentSessions, overflowSessions, pinnedResources, keyboardEnabled, onPinResource, onUnpinResource, onOpenPinnedResource, onOpenSession, onPauseSession, onStopSession, onTogglePinnedSession, onRemoveSessionTab, onLoadSessionResources, onLoadSessionBrowserPreview, onOpenSessionResource, notifications, onReloadNotifications, onOpenNotification, onSearch, onSettings, onNewProject, onSelectProject, onEditProject, onEditMemory, onDeleteProject, onNewTask, onOpenPage, theme, actualTheme, onToggleTheme }) {
+function WorkbenchTopbar({ projects, activeProject, activePage, taskView, activeTaskId, activeChatId, recentSessions, overflowSessions, browserOwners, pinnedResources, keyboardEnabled, onPinResource, onUnpinResource, onOpenPinnedResource, onOpenSession, onOpenBrowserPage, onPauseSession, onStopSession, onTogglePinnedSession, onRemoveSessionTab, onLoadSessionResources, onLoadSessionBrowserPreview, onOpenSessionResource, notifications, onReloadNotifications, onOpenNotification, onSearch, onSettings, onNewProject, onSelectProject, onEditProject, onEditMemory, onDeleteProject, onNewTask, onOpenPage, theme, actualTheme, onToggleTheme }) {
   var { t } = window.CyreneUI.require("i18n").use();
   var dataState = window.CyreneUI.require("data").state;
   var tabs = Array.isArray(recentSessions) ? recentSessions : [];
@@ -3418,8 +3668,11 @@ function WorkbenchTopbar({ projects, activeProject, activePage, taskView, active
   var [projectMenuOpen, setProjectMenuOpen] = useWorkbenchState(false);
   var [projectActionId, setProjectActionId] = useWorkbenchState("");
   var [voiceCommand, setVoiceCommand] = useWorkbenchState(function () { return WbVoiceCommand.snapshot(); });
+  var [browserManagerState, setBrowserManagerState] = useWorkbenchState({ ok: true, pageCount: 0, downloadCount: 0, pages: [], downloads: [] });
+  var [browserManagerMenu, setBrowserManagerMenu] = useWorkbenchState(null);
   var topbarRef = useWorkbenchRef(null);
   var projectMenuRef = useWorkbenchRef(null);
+  var browserManagerRef = useWorkbenchRef(null);
   var sessionMenuSeqRef = useWorkbenchRef(0);
   var previewTimerRef = useWorkbenchRef(0);
   var terminalMorphKey = tabs.map(function (item) {
@@ -3429,6 +3682,46 @@ function WorkbenchTopbar({ projects, activeProject, activePage, taskView, active
   useWorkbenchEffect(function () {
     return WbVoiceCommand.subscribe(setVoiceCommand);
   }, []);
+
+  useWorkbenchEffect(function () {
+    var bridge = window.cyrene && window.cyrene.browser;
+    if (!bridge || typeof bridge.getManagerState !== "function") return undefined;
+    var mounted = true;
+    bridge.getManagerState().then(function (next) {
+      if (mounted && next && next.ok !== false) setBrowserManagerState(next);
+    }).catch(function () {});
+    var unsubscribe = typeof bridge.onManagerState === "function"
+      ? bridge.onManagerState(function (next) {
+          if (mounted && next && next.ok !== false) setBrowserManagerState(next);
+        })
+      : function () {};
+    return function () {
+      mounted = false;
+      unsubscribe();
+    };
+  }, []);
+
+  useWorkbenchEffect(function () {
+    if (!browserManagerMenu) return undefined;
+    wbSetBrowserOverlayObscured(1);
+    function close(event) {
+      if (event && event.key && event.key !== "Escape") return;
+      setBrowserManagerMenu(null);
+    }
+    window.addEventListener("resize", close);
+    document.addEventListener("keydown", close);
+    return function () {
+      window.removeEventListener("resize", close);
+      document.removeEventListener("keydown", close);
+      wbSetBrowserOverlayObscured(-1);
+    };
+  }, [!!browserManagerMenu]);
+
+  useWorkbenchEffect(function () {
+    if (browserManagerMenu && !browserManagerState.pageCount && !browserManagerState.downloadCount) {
+      setBrowserManagerMenu(null);
+    }
+  }, [browserManagerState.pageCount, browserManagerState.downloadCount, !!browserManagerMenu]);
 
   useWorkbenchEffect(function () {
     if (!projectMenuOpen) return undefined;
@@ -3555,11 +3848,116 @@ function WorkbenchTopbar({ projects, activeProject, activePage, taskView, active
         "--wb-surface", "--wb-card-bg", "--wb-card-bg-strong", "--wb-line", "--wb-line-2",
         "--wb-text", "--wb-muted", "--wb-faint",
         "--wb-control-bg", "--wb-control-hover-bg", "--wb-row-hover-bg",
+        "--wb-flyout-bg", "--wb-flyout-border", "--wb-flyout-shadow",
         "--wb-green", "--wb-amber", "--wb-red", "--wb-accent", "--wb-ui-font-scale",
       ].forEach(function (name) { portalTheme[name] = computedTheme.getPropertyValue(name); });
       portalTheme.fontFamily = computedTheme.fontFamily;
     }
     return portalTheme;
+  }
+
+  function browserOwnerSession(page) {
+    return (Array.isArray(browserOwners) ? browserOwners : tabs.concat(overflowTabs)).find(function (item) {
+      return item.kind === "chat" && String(item.id || "") === String(page && page.sessionId || "");
+    }) || null;
+  }
+
+  function browserPageDomain(page) {
+    try { return new URL(String(page && page.url || "")).hostname.replace(/^www\./, ""); } catch (e) { return ""; }
+  }
+
+  function browserDownloadSize(value) {
+    var bytes = Math.max(0, Number(value) || 0);
+    if (bytes < 1024) return bytes + " B";
+    if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(bytes < 10 * 1024 ? 1 : 0) + " KB";
+    if (bytes < 1024 * 1024 * 1024) return (bytes / (1024 * 1024)).toFixed(bytes < 10 * 1024 * 1024 ? 1 : 0) + " MB";
+    return (bytes / (1024 * 1024 * 1024)).toFixed(1) + " GB";
+  }
+
+  function pinnedBrowserResource(page) {
+    if (!page) return null;
+    return resources.find(function (resource) {
+      if (!resource || resource.kind !== "browser") return false;
+      if (String(resource.ownerSessionId || "") !== String(page.sessionId || "")) return false;
+      var stableRef = String(resource.stableRef || "");
+      return !stableRef || stableRef === String(page.sessionId || "") || stableRef === String(page.sessionId || "") + ":" + String(page.tabId || "");
+    }) || null;
+  }
+
+  function openBrowserManagerMenu(event) {
+    event.preventDefault();
+    event.stopPropagation();
+    var rect = event.currentTarget.getBoundingClientRect();
+    var width = Math.min(390, window.innerWidth - 16);
+    setBrowserManagerMenu({
+      left: Math.max(8, Math.min(rect.left + rect.width / 2 - width / 2, window.innerWidth - width - 8)),
+      top: Math.min(window.innerHeight - 12, rect.bottom + 8),
+      width: width,
+      portalTheme: readTopbarPortalTheme(),
+    });
+  }
+
+  function openManagedBrowserPage(page) {
+    if (!page || page.closed) return;
+    var bridge = window.cyrene && window.cyrene.browser;
+    if (bridge && typeof bridge.activateTab === "function") {
+      bridge.activateTab({ sessionId: page.sessionId, tabId: page.tabId }).catch(function () {});
+    }
+    setBrowserManagerMenu(null);
+    if (onOpenBrowserPage) onOpenBrowserPage(page, browserOwnerSession(page));
+  }
+
+  function reloadManagedBrowserPage(page, event) {
+    if (event) event.stopPropagation();
+    var bridge = window.cyrene && window.cyrene.browser;
+    if (!bridge || !page || page.closed || typeof bridge.reload !== "function") return;
+    bridge.reload({ sessionId: page.sessionId, tabId: page.tabId }).catch(function () {});
+  }
+
+  function muteManagedBrowserPage(page, event) {
+    if (event) event.stopPropagation();
+    var bridge = window.cyrene && window.cyrene.browser;
+    if (!bridge || !page || page.closed || typeof bridge.setMuted !== "function") return;
+    bridge.setMuted({ sessionId: page.sessionId, tabId: page.tabId, muted: !page.muted }).catch(function () {});
+  }
+
+  function closeManagedBrowserPage(page, event) {
+    if (event) event.stopPropagation();
+    var bridge = window.cyrene && window.cyrene.browser;
+    if (!bridge || !page || page.closed || typeof bridge.closeTab !== "function") return;
+    bridge.closeTab({ sessionId: page.sessionId, tabId: page.tabId }).catch(function () {});
+  }
+
+  function controlManagedBrowserDownload(download, action, event) {
+    if (event) event.stopPropagation();
+    var bridge = window.cyrene && window.cyrene.browser;
+    if (!bridge || !download || typeof bridge.controlDownload !== "function") return;
+    bridge.controlDownload({ downloadId: download.id, action: action }).then(function (result) {
+      if (result && result.state && result.state.ok !== false) setBrowserManagerState(result.state);
+    }).catch(function () {});
+  }
+
+  function toggleManagedBrowserPin(page, event) {
+    if (event) event.stopPropagation();
+    if (!page || page.closed) return;
+    var pinned = pinnedBrowserResource(page);
+    if (pinned) {
+      if (onUnpinResource) onUnpinResource(pinned);
+      return;
+    }
+    if (!onPinResource) return;
+    var owner = browserOwnerSession(page);
+    onPinResource({
+      kind: "browser",
+      ownerSessionId: String(page.sessionId || ""),
+      ownerProjectId: String(owner && owner.projectId || ""),
+      ownerProjectName: String(owner && owner.projectName || ""),
+      stableRef: String(page.sessionId || ""),
+      title: String(page.title || browserPageDomain(page) || page.url || t("workbench.resourceShelf.browser", "Browser")),
+      url: String(page.url || ""),
+      tabId: String(page.tabId || ""),
+      favicon: String(page.favicon || ""),
+    });
   }
 
   function closeSessionPreview() {
@@ -4173,6 +4571,154 @@ function WorkbenchTopbar({ projects, activeProject, activePage, taskView, active
     ), document.body)
     : null;
 
+  var browserManagerPages = Array.isArray(browserManagerState.pages)
+    ? browserManagerState.pages.slice().sort(function (left, right) {
+        var leftActive = left.sessionActive && left.active ? 1 : 0;
+        var rightActive = right.sessionActive && right.active ? 1 : 0;
+        return rightActive - leftActive;
+      })
+    : [];
+  var browserManagerDownloads = Array.isArray(browserManagerState.downloads)
+    ? browserManagerState.downloads.slice().sort(function (left, right) {
+        return Number(right && right.startedAt || 0) - Number(left && left.startedAt || 0);
+      })
+    : [];
+  var browserManagerGroups = [];
+  var browserManagerGroupByKey = {};
+  browserManagerPages.forEach(function (page) {
+    var owner = browserOwnerSession(page);
+    var groupKey = String(owner ? (owner.projectId || page.sessionId || "other") : "other");
+    if (!browserManagerGroupByKey[groupKey]) {
+      var group = {
+        key: groupKey,
+        label: String(owner && owner.projectName || t("workbench.browserManager.otherProject", "Other pages")),
+        pages: [],
+      };
+      browserManagerGroupByKey[groupKey] = group;
+      browserManagerGroups.push(group);
+    }
+    browserManagerGroupByKey[groupKey].pages.push({ page: page, owner: owner });
+  });
+  var browserManagerPreviewPages = [];
+  var browserManagerPreviewDomains = {};
+  browserManagerPages.forEach(function (page) {
+    if (page.closed || browserManagerPreviewPages.length >= 4) return;
+    var domain = browserPageDomain(page);
+    var previewKey = domain || String(page.key || page.sessionId + ":" + page.tabId);
+    if (browserManagerPreviewDomains[previewKey]) return;
+    browserManagerPreviewDomains[previewKey] = true;
+    browserManagerPreviewPages.push(page);
+  });
+
+  var browserManagerMenuPortal = browserManagerMenu && typeof ReactDOM !== "undefined"
+    ? ReactDOM.createPortal((
+      <div className="workbench-browser-manager-layer" style={browserManagerMenu.portalTheme || {}}>
+        <div className="workbench-browser-manager-scrim" onMouseDown={function () { setBrowserManagerMenu(null); }} />
+        <section
+          className="workbench-browser-manager-menu"
+          role="dialog"
+          aria-modal="false"
+          aria-label={t("workbench.browserManager.title", "Browser pages")}
+          style={{ left: browserManagerMenu.left + "px", top: browserManagerMenu.top + "px", width: browserManagerMenu.width + "px" }}
+          onMouseDown={function (event) { event.stopPropagation(); }}
+        >
+          <header className="workbench-browser-manager-head">
+            <span>
+              <WorkbenchAssetIcon name="devices" className="workbench-browser-manager-title-icon" />
+              <strong>{t("workbench.browserManager.title", "Browser pages")}</strong>
+              <b>{browserManagerState.pageCount || 0}</b>
+            </span>
+            {browserManagerState.downloadCount ? (
+              <em><WorkbenchAssetIcon name="download" />{t("workbench.browserManager.downloadingCount", { count: browserManagerState.downloadCount }, "{count} downloading")}</em>
+            ) : null}
+          </header>
+          <div className="workbench-browser-manager-list">
+            {!browserManagerGroups.length ? (
+              <div className="workbench-browser-manager-empty">
+                <WorkbenchAssetIcon name="browser" />
+                <strong>{t("workbench.browserManager.empty", "No browser pages are open")}</strong>
+                <span>{t("workbench.browserManager.emptyHint", "Pages opened by any project will appear here.")}</span>
+              </div>
+            ) : browserManagerGroups.map(function (group) {
+              return (
+                <div className="workbench-browser-manager-group" key={group.key}>
+                  <div className="workbench-browser-manager-group-head"><span>{group.label}</span><b>{group.pages.length}</b></div>
+                  {group.pages.map(function (entry) {
+                    var page = entry.page;
+                    var owner = entry.owner;
+                    var pinnedResource = pinnedBrowserResource(page);
+                    var pageTitle = String(page.title || browserPageDomain(page) || page.url || t("workbench.resourceShelf.browser", "Browser"));
+                    var pageDetail = [String(owner && owner.title || ""), browserPageDomain(page)].filter(Boolean).join(" · ");
+                    return (
+                      <div key={page.key || page.sessionId + ":" + page.tabId} className={"workbench-browser-manager-page" + (page.sessionActive && page.active ? " active" : "") + (page.closed ? " closed" : "")}>
+                        <div className="workbench-browser-manager-page-main">
+                          <button type="button" className="workbench-browser-manager-page-select" disabled={!!page.closed} onClick={function () { openManagedBrowserPage(page); }}>
+                            <span className="workbench-browser-manager-favicon" aria-hidden="true">
+                              {page.favicon ? <img src={page.favicon} alt="" draggable="false" onError={function (event) { event.currentTarget.hidden = true; }} /> : null}
+                              <WorkbenchAssetIcon name="browser" />
+                            </span>
+                            <span className="workbench-browser-manager-page-copy">
+                              <b title={pageTitle}>{pageTitle}</b>
+                              <small title={pageDetail || page.url}>{pageDetail || page.url}</small>
+                            </span>
+                          </button>
+                          {!page.closed ? (
+                            <span className="workbench-browser-manager-page-actions">
+                              <button type="button" className={pinnedResource ? "active" : ""} onClick={function (event) { toggleManagedBrowserPin(page, event); }} title={pinnedResource ? t("workbench.browserManager.unpin", "Remove from topbar") : t("workbench.browserManager.pin", "Pin to topbar")} aria-label={pinnedResource ? t("workbench.browserManager.unpin", "Remove from topbar") : t("workbench.browserManager.pin", "Pin to topbar")}><WorkbenchAssetIcon name={pinnedResource ? "pinned-off" : "pin"} /></button>
+                              <button type="button" onClick={function (event) { reloadManagedBrowserPage(page, event); }} title={t("browser.context.reload", "Reload")} aria-label={t("browser.context.reload", "Reload")}><WorkbenchAssetIcon name="reload" /></button>
+                              <button type="button" className={page.muted ? "active" : ""} onClick={function (event) { muteManagedBrowserPage(page, event); }} title={page.muted ? t("browser.context.unmute", "Unmute") : t("browser.context.mute", "Mute")} aria-label={page.muted ? t("browser.context.unmute", "Unmute") : t("browser.context.mute", "Mute")}><WorkbenchAssetIcon name={page.muted ? "volume-off" : "volume"} /></button>
+                              <button type="button" onClick={function (event) { closeManagedBrowserPage(page, event); }} title={t("browser.context.closeTab", "Close tab")} aria-label={t("browser.context.closeTab", "Close tab")}><WorkbenchAssetIcon name="x" /></button>
+                            </span>
+                          ) : null}
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              );
+            })}
+          </div>
+          {browserManagerDownloads.length ? (
+            <section className="workbench-browser-manager-download-center" aria-label={t("workbench.browserManager.downloads", "Downloads")}>
+              <header className="workbench-browser-manager-download-head">
+                <span><WorkbenchAssetIcon name="download" /><strong>{t("workbench.browserManager.downloads", "Downloads")}</strong></span>
+                <b>{browserManagerDownloads.length}</b>
+              </header>
+              <div className="workbench-browser-manager-download-list">
+                {browserManagerDownloads.map(function (download) {
+                  var total = Math.max(0, Number(download.totalBytes) || 0);
+                  var received = Math.max(0, Number(download.receivedBytes) || 0);
+                  var percent = total > 0 ? Math.max(0, Math.min(100, Math.round(received / total * 100))) : 0;
+                  var byteProgress = total > 0
+                    ? percent + "% · " + browserDownloadSize(received) + " / " + browserDownloadSize(total)
+                    : browserDownloadSize(received);
+                  var progressText = download.paused
+                    ? t("workbench.browserManager.paused", "Paused") + " · " + byteProgress
+                    : byteProgress;
+                  var sourceTitle = String(download.pageTitle || browserPageDomain({ url: download.pageUrl }) || "");
+                  return (
+                    <article className={"workbench-browser-manager-download" + (download.paused ? " paused" : "")} key={download.id}>
+                      <span className="workbench-browser-manager-download-icon" aria-hidden="true"><WorkbenchAssetIcon name="download" /></span>
+                      <span className="workbench-browser-manager-download-copy">
+                        <b title={download.filename}>{download.filename || t("workbench.browserManager.download", "Download")}</b>
+                        <small title={[progressText, sourceTitle].filter(Boolean).join(" · ")}>{[progressText, sourceTitle].filter(Boolean).join(" · ")}</small>
+                      </span>
+                      <span className="workbench-browser-manager-download-actions">
+                        <button type="button" onClick={function (event) { controlManagedBrowserDownload(download, download.paused ? "resume" : "pause", event); }} title={download.paused ? t("workbench.browserManager.resume", "Resume download") : t("workbench.browserManager.pause", "Pause download")} aria-label={download.paused ? t("workbench.browserManager.resume", "Resume download") : t("workbench.browserManager.pause", "Pause download")}><WorkbenchAssetIcon name={download.paused ? "player-play" : "player-pause"} /></button>
+                        <button type="button" onClick={function (event) { controlManagedBrowserDownload(download, "cancel", event); }} title={t("workbench.browserManager.cancel", "Cancel download")} aria-label={t("workbench.browserManager.cancel", "Cancel download")}><WorkbenchAssetIcon name="x" /></button>
+                      </span>
+                      <span className={"workbench-browser-manager-progress" + (!total ? " indeterminate" : "")} role="progressbar" aria-label={download.filename || t("workbench.browserManager.download", "Download")} aria-valuemin={0} aria-valuemax={100} aria-valuenow={total ? percent : undefined}><i style={total ? { width: percent + "%" } : undefined} /></span>
+                    </article>
+                  );
+                })}
+              </div>
+            </section>
+          ) : null}
+        </section>
+      </div>
+    ), document.body)
+    : null;
+
   var hoverPreviewPortal = hoverPreview && typeof ReactDOM !== "undefined"
     ? ReactDOM.createPortal((
       <WorkbenchSessionActivityPreview preview={hoverPreview} t={t} />
@@ -4478,7 +5024,7 @@ function WorkbenchTopbar({ projects, activeProject, activePage, taskView, active
                 {resource.kind === "conversation" ? (
                   <svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d="M21 15a4 4 0 0 1-4 4H8l-5 3V7a4 4 0 0 1 4-4h10a4 4 0 0 1 4 4Z"/><path d="M8 9h8M8 13h5"/></svg>
                 ) : resource.kind === "browser" ? (
-                  <svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M3 8h18M6 6h.01M9 6h.01"/></svg>
+                  <><WorkbenchAssetIcon name="browser" />{resource.favicon ? <img src={resource.favicon} alt="" draggable="false" onError={function (event) { event.currentTarget.hidden = true; }} /> : null}</>
                 ) : resource.kind === "snippet" ? (
                   <svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round"><path d="M7 8h10M7 12h7M7 16h5"/><rect x="3" y="3" width="18" height="18" rx="3"/></svg>
                 ) : (
@@ -4504,6 +5050,38 @@ function WorkbenchTopbar({ projects, activeProject, activePage, taskView, active
           </span>
         ) : null}
       </div>
+      {window.cyrene && window.cyrene.browser && typeof window.cyrene.browser.getManagerState === "function" && (browserManagerPages.length || browserManagerDownloads.length) ? (
+        <div ref={browserManagerRef} className="workbench-browser-manager-anchor">
+          <button
+            type="button"
+            className={"workbench-browser-manager-button" + (browserManagerMenu ? " active" : "") + (browserManagerState.downloadCount ? " downloading" : "")}
+            data-workbench-topbar-item="browser-manager"
+            aria-haspopup="dialog"
+            aria-expanded={!!browserManagerMenu}
+            aria-label={t("workbench.browserManager.buttonLabel", { count: browserManagerState.pageCount || 0 }, "Manage {count} browser pages")}
+            title={t("workbench.browserManager.title", "Browser pages")}
+            onClick={function (event) {
+              if (browserManagerMenu) setBrowserManagerMenu(null);
+              else openBrowserManagerMenu(event);
+            }}
+            onKeyDown={handleTopbarItemKeyDown}
+          >
+            <span className="workbench-browser-manager-preview" aria-hidden="true">
+              {browserManagerPreviewPages.length ? browserManagerPreviewPages.map(function (page) {
+                return (
+                  <span className="workbench-browser-manager-preview-icon" key={page.key || page.sessionId + ":" + page.tabId}>
+                    {page.favicon ? <img src={page.favicon} alt="" draggable="false" onError={function (event) { event.currentTarget.hidden = true; }} /> : null}
+                    <WorkbenchAssetIcon name="browser" />
+                  </span>
+                );
+              }) : (
+                <span className="workbench-browser-manager-preview-icon empty"><WorkbenchAssetIcon name="devices" /></span>
+              )}
+            </span>
+            {browserManagerState.downloadCount ? <span className="workbench-browser-manager-download-dot" aria-hidden="true" /> : null}
+          </button>
+        </div>
+      ) : null}
       <div className="workbench-top-actions">
         {chatSideHidden && (
           <button
@@ -4562,6 +5140,7 @@ function WorkbenchTopbar({ projects, activeProject, activePage, taskView, active
       {sessionMenuPortal}
       {overflowMenuPortal}
       {resourceMenuPortal}
+      {browserManagerMenuPortal}
       {hoverPreviewPortal}
     </div>
   );
@@ -5337,17 +5916,17 @@ function WorkbenchRailAccount({ activePage, onOpenPage, onSettings, docked }) {
   );
 }
 
-function WorkbenchSidebarDock({ activePage, onOpenPage, onSettings, collapsed, persistent }) {
+function WorkbenchSidebarDock({ activePage, activeDestination, onOpenPage, onSettings, collapsed, persistent }) {
   var { t } = window.CyreneUI.require("i18n").use();
   var items = [
     { id: "schedule", label: t("workbench.page.schedule"), icon: (
       <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round"><rect x="3" y="4.5" width="18" height="17" rx="2.5"/><path d="M3 9.5h18M8 2.5v4M16 2.5v4"/></svg>
     ) },
-    { id: "task", label: t("workbench.page.task"), icon: (
-      <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round"><path d="M9 5H7a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V7a2 2 0 0 0-2-2h-2"/><rect x="9" y="3" width="6" height="4" rx="1.5"/><path d="M9 14 10.5 15.5 15 11"/></svg>
+    { id: "board", label: t("workbench.page.board", null, "Board"), icon: (
+      <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round"><rect x="3" y="4" width="18" height="16" rx="2.5"/><path d="M8.5 4v16M15.5 4v16"/><path d="M5.5 8h1M10.5 11h3M17.5 7h1M17.5 13h1"/></svg>
     ) },
-    { id: "chat", label: t("workbench.page.chat"), icon: (
-      <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round"><path d="M21 11.5a8.5 8.5 0 0 1-12.2 7.6L3 21l1.9-5.8A8.5 8.5 0 1 1 21 11.5Z"/></svg>
+    { id: "work", label: t("workbench.page.work", null, "Work"), icon: (
+      <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round"><rect x="3" y="7" width="18" height="13" rx="2.5"/><path d="M8 7V5a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2M3 12h18M9.5 12v2h5v-2"/></svg>
     ) },
     { id: "knowledge", label: t("workbench.page.knowledge"), icon: (
       <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round"><path d="M5 4.5A2.5 2.5 0 0 1 7.5 2H20v15H7.5A2.5 2.5 0 0 0 5 19.5Z"/><path d="M5 19.5A2.5 2.5 0 0 0 7.5 22H20"/></svg>
@@ -5358,10 +5937,9 @@ function WorkbenchSidebarDock({ activePage, onOpenPage, onSettings, collapsed, p
   ];
   return (
     <div className={"workbench-sidebar-dock" + (persistent ? " is-persistent" : "") + (collapsed ? " is-collapsed" : "")}>
-      <WorkbenchRailAccount docked={true} activePage={activePage} onOpenPage={onOpenPage} onSettings={onSettings} />
       <nav className="workbench-sidebar-dock-nav" aria-label={t("workbench.navigation", "Workbench navigation")}>
         {items.map(function (item) {
-          var active = item.id === "task" ? !activePage : activePage === item.id;
+          var active = String(activeDestination || "") === item.id;
           return (
             <button
               key={item.id}
@@ -5921,12 +6499,143 @@ function wbTaskBoardColumnKey(status) {
   return "planning";
 }
 
-function TaskBoard({ project, loading, error, onOpenSession, onCreateSession, onDeleteSession }) {
+var WB_MIXED_BOARD_LAYOUT_PREFIX = "cyrene-workbench-mixed-board-v1:";
+
+function wbMixedBoardCardKey(kind, id) {
+  return String(kind || "") + ":" + String(id || "");
+}
+
+function wbMixedBoardDefaultColumn(card) {
+  return card && card.kind === "task" ? wbTaskBoardColumnKey(card.item && card.item.status) : "planning";
+}
+
+function wbNormalizeMixedBoardLayout(savedLayout, cards) {
+  var saved = savedLayout && typeof savedLayout === "object" ? savedLayout : {};
+  var savedPlacements = saved.placements && typeof saved.placements === "object" ? saved.placements : {};
+  var savedColumns = saved.columns && typeof saved.columns === "object" ? saved.columns : {};
+  var cardMap = new Map((Array.isArray(cards) ? cards : []).map(function (card) { return [card.key, card]; }));
+  var placements = {};
+  var columns = {};
+  WB_TASK_BOARD_COLUMNS.forEach(function (column) { columns[column.id] = []; });
+
+  cardMap.forEach(function (card, key) {
+    var previous = savedPlacements[key] || {};
+    var systemColumn = wbMixedBoardDefaultColumn(card);
+    var column = systemColumn;
+    if (card.kind === "chat") {
+      column = columns[previous.column] ? previous.column : systemColumn;
+    } else if (String(previous.statusBasis || "") === String(card.item && card.item.status || "")) {
+      column = columns[previous.column] ? previous.column : systemColumn;
+    }
+    placements[key] = {
+      column: column,
+      statusBasis: card.kind === "task" ? String(card.item && card.item.status || "") : "user",
+    };
+  });
+
+  var seen = new Set();
+  WB_TASK_BOARD_COLUMNS.forEach(function (column) {
+    var ordered = Array.isArray(savedColumns[column.id]) ? savedColumns[column.id] : [];
+    ordered.forEach(function (key) {
+      key = String(key || "");
+      if (!cardMap.has(key) || seen.has(key) || placements[key].column !== column.id) return;
+      seen.add(key);
+      columns[column.id].push(key);
+    });
+  });
+  cardMap.forEach(function (_card, key) {
+    if (seen.has(key)) return;
+    columns[placements[key].column].push(key);
+  });
+  return { placements: placements, columns: columns };
+}
+
+function wbLoadMixedBoardLayout(projectId, cards) {
+  var saved = null;
+  try { saved = JSON.parse(localStorage.getItem(WB_MIXED_BOARD_LAYOUT_PREFIX + String(projectId || "")) || "null"); } catch (e) {}
+  return wbNormalizeMixedBoardLayout(saved, cards);
+}
+
+function wbStoreMixedBoardLayout(projectId, layout) {
+  try { localStorage.setItem(WB_MIXED_BOARD_LAYOUT_PREFIX + String(projectId || ""), JSON.stringify(layout)); } catch (e) {}
+}
+
+function wbMoveMixedBoardCard(layout, cards, movingKey, columnId, targetKey, edge) {
+  var next = wbNormalizeMixedBoardLayout(layout, cards);
+  var key = String(movingKey || "");
+  var targetColumn = String(columnId || "");
+  var card = (Array.isArray(cards) ? cards : []).find(function (candidate) { return candidate.key === key; });
+  if (!card || !next.columns[targetColumn]) return next;
+  Object.keys(next.columns).forEach(function (column) {
+    next.columns[column] = next.columns[column].filter(function (candidate) { return candidate !== key; });
+  });
+  var target = next.columns[targetColumn];
+  var targetIndex = targetKey ? target.indexOf(String(targetKey)) : -1;
+  if (targetIndex < 0) target.push(key);
+  else target.splice(targetIndex + (edge === "after" ? 1 : 0), 0, key);
+  next.placements[key] = {
+    column: targetColumn,
+    statusBasis: card.kind === "task" ? String(card.item && card.item.status || "") : "user",
+  };
+  return next;
+}
+
+function wbChatBoardTone(chat) {
+  var raw = String(chat && (chat.runStatus || chat.status) || "").toLowerCase();
+  if (chat && (chat.failed || chat.error) || ["failed", "error", "timeout"].indexOf(raw) >= 0) return "red";
+  if (chat && (chat.pendingQuestion || chat.awaitingUser) || ["blocked", "waiting_for_user", "waiting_for_approval"].indexOf(raw) >= 0) return "amber";
+  if (["completed", "complete", "done", "success"].indexOf(raw) >= 0) return "green";
+  return chat && chat.agentBusy ? "blue" : "muted";
+}
+
+function TaskBoard({ project, chats, loading, error, onOpenSession, onOpenChat, onCreateSession, onCreateChat, onDeleteSession }) {
   var { t } = window.CyreneUI.require("i18n").use();
   var sessions = project && Array.isArray(project.sessions) ? project.sessions : [];
+  var conversations = Array.isArray(chats) ? chats : [];
   var [recentFirst, setRecentFirst] = useWorkbenchState(false);
+  var [query, setQuery] = useWorkbenchState("");
   var [menuId, setMenuId] = useWorkbenchState("");
   var [completedOpen, setCompletedOpen] = useWorkbenchState(true);
+  var mixedCards = useWorkbenchMemo(function () {
+    return sessions.map(function (session) {
+      return { key: wbMixedBoardCardKey("task", session.id), kind: "task", item: session };
+    }).concat(conversations.map(function (chat) {
+      return { key: wbMixedBoardCardKey("chat", chat.id), kind: "chat", item: chat };
+    }));
+  }, [sessions, conversations]);
+  var mixedCardSignature = mixedCards.map(function (card) {
+    return card.key + ":" + (card.kind === "task" ? String(card.item.status || "") : "chat");
+  }).join("|");
+  var [layout, setLayout] = useWorkbenchState(function () {
+    return wbLoadMixedBoardLayout(project && project.id, mixedCards);
+  });
+  var [dragKey, setDragKey] = useWorkbenchState("");
+  var [dropTarget, setDropTarget] = useWorkbenchState(null);
+  var normalizedQuery = query.trim().toLowerCase();
+  var visibleMixedCards = normalizedQuery ? mixedCards.filter(function (card) {
+    var item = card.item || {};
+    var searchableValues = card.kind === "task"
+      ? [item.title, item.goal, item.summary, item.description, item.status, item.priority, sessionSummaryText(item)]
+      : [item.title, item.preview, item.summary, item.status, item.runStatus];
+    return searchableValues.some(function (value) {
+      return String(value || "").toLowerCase().indexOf(normalizedQuery) !== -1;
+    });
+  }) : mixedCards;
+
+  useWorkbenchEffect(function () {
+    var next = wbLoadMixedBoardLayout(project && project.id, mixedCards);
+    setLayout(next);
+    setDragKey("");
+    setDropTarget(null);
+  }, [project && project.id]);
+
+  useWorkbenchEffect(function () {
+    setLayout(function (current) {
+      var next = wbNormalizeMixedBoardLayout(current, mixedCards);
+      wbStoreMixedBoardLayout(project && project.id, next);
+      return JSON.stringify(next) === JSON.stringify(current) ? current : next;
+    });
+  }, [mixedCardSignature]);
 
   useWorkbenchEffect(function () {
     if (!menuId) return undefined;
@@ -5976,15 +6685,26 @@ function TaskBoard({ project, loading, error, onOpenSession, onCreateSession, on
     viewport.scrollLeft = nextLeft;
   }
 
-  var visibleSessions = sessions;
-  if (recentFirst) {
-    visibleSessions = visibleSessions.slice().sort(function (a, b) {
-      return String(b.updatedAt || b.createdAt || "").localeCompare(String(a.updatedAt || a.createdAt || ""));
-    });
-  }
+  var cardMap = new Map(visibleMixedCards.map(function (card) { return [card.key, card]; }));
   var completedSessions = sessions.filter(function (session) {
-    return wbTaskBoardColumnKey(session.status) === "completed";
+    if (wbTaskBoardColumnKey(session.status) !== "completed") return false;
+    if (!normalizedQuery) return true;
+    return [session.title, session.goal, session.summary, session.description, session.status, session.priority, sessionSummaryText(session)].some(function (value) {
+      return String(value || "").toLowerCase().indexOf(normalizedQuery) !== -1;
+    });
   });
+
+  function moveCard(columnId, targetKey, edge) {
+    if (!dragKey) return;
+    setRecentFirst(false);
+    setLayout(function (current) {
+      var next = wbMoveMixedBoardCard(current, mixedCards, dragKey, columnId, targetKey, edge);
+      wbStoreMixedBoardLayout(project && project.id, next);
+      return next;
+    });
+    setDragKey("");
+    setDropTarget(null);
+  }
 
   if (!project) {
     return (
@@ -6009,44 +6729,118 @@ function TaskBoard({ project, loading, error, onOpenSession, onCreateSession, on
           <button type="button" className={"wb-board-tool-btn" + (recentFirst ? " active" : "")} onClick={function () { setRecentFirst(!recentFirst); }}>
             {recentFirst ? t("taskBoard.sortRecent") : t("taskBoard.sortDefault")}
           </button>
-          <button type="button" data-tour="task_new" className="wb-board-new-btn" onClick={onCreateSession}>{t("taskBoard.newTask")}</button>
+          <div className="wb-board-create-menu">
+            <button
+              type="button"
+              data-tour="task_new"
+              className="wb-board-new-btn"
+              onClick={function () { setMenuId(menuId === "create" ? "" : "create"); }}
+              aria-haspopup="menu"
+              aria-expanded={menuId === "create"}
+            >
+              <span>{t("taskBoard.new")}</span>
+              <span className={"wb-board-new-chevron" + (menuId === "create" ? " open" : "")} aria-hidden="true">{ICONS.chevronDown}</span>
+            </button>
+            {menuId === "create" && <div className="wb-card-menu wb-board-create-dropdown" role="menu">
+              <button type="button" role="menuitem" onClick={function () { setMenuId(""); if (onCreateChat) onCreateChat(); }}>{t("workbenchChat.newChat")}</button>
+              <button type="button" role="menuitem" onClick={function () { setMenuId(""); onCreateSession(); }}>{t("taskBoard.newTask")}</button>
+            </div>}
+          </div>
+          <label className="wb-board-search">
+            <span aria-hidden="true">{ICONS.cmdResearch}</span>
+            <input
+              type="search"
+              value={query}
+              onChange={function (event) { setQuery(event.target.value); }}
+              placeholder={t("taskBoard.searchPlaceholder")}
+              aria-label={t("taskBoard.search")}
+            />
+          </label>
         </div>
       </header>
       {error && <div className="workbench-error wb-board-error">{error}</div>}
-      {loading && sessions.length === 0 ? (
+      {loading && mixedCards.length === 0 ? (
         <div className="wb-board-loading">{t("rail.loadingTasks")}</div>
       ) : (
         <div className="wb-board-scroll" onWheel={handleBoardWheel}>
           <div className="wb-board-columns">
             {WB_TASK_BOARD_COLUMNS.map(function (column) {
-              var cards = visibleSessions.filter(function (session) {
-                return wbTaskBoardColumnKey(session.status) === column.id;
+              var orderedKeys = layout && layout.columns && Array.isArray(layout.columns[column.id]) ? layout.columns[column.id] : [];
+              var cards = orderedKeys.map(function (key) { return cardMap.get(key); }).filter(Boolean);
+              if (recentFirst) cards = cards.slice().sort(function (left, right) {
+                return String(right.item.updatedAt || right.item.createdAt || "").localeCompare(String(left.item.updatedAt || left.item.createdAt || ""));
               });
               return (
-                <section key={column.id} className={"wb-board-column is-" + column.id} aria-label={t(column.labelKey)}>
+                <section
+                  key={column.id}
+                  className={"wb-board-column is-" + column.id + (dropTarget && dropTarget.column === column.id && !dropTarget.key ? " drop-active" : "")}
+                  aria-label={t(column.labelKey)}
+                  onDragOver={function (event) {
+                    if (!dragKey) return;
+                    event.preventDefault();
+                    if (event.dataTransfer) event.dataTransfer.dropEffect = "move";
+                    if (!event.target.closest || !event.target.closest(".wb-board-card")) setDropTarget({ column: column.id, key: "", edge: "after" });
+                  }}
+                  onDrop={function (event) {
+                    if (!dragKey) return;
+                    event.preventDefault();
+                    moveCard(column.id, "", "after");
+                  }}
+                >
                   <header className="wb-board-column-head">
                     <span className="wb-board-column-title">{t(column.labelKey)}</span>
                     <span className="wb-board-column-count">{cards.length}</span>
                     <button type="button" onClick={onCreateSession} aria-label={t("taskBoard.addInColumn", { stage: t(column.labelKey) })}>{t("taskBoard.add")}</button>
                   </header>
                   <div className="wb-board-column-body">
-                    {cards.map(function (session) {
+                    {cards.map(function (card) {
                       return (
                         <TaskBoardCard
-                          key={session.id}
-                          session={session}
+                          key={card.key}
+                          card={card}
                           column={column.id}
-                          menuOpen={menuId === session.id}
-                          onMenu={function () { setMenuId(menuId === session.id ? "" : session.id); }}
-                          onOpen={function () { setMenuId(""); onOpenSession(session.id); }}
-                          onDelete={function () { setMenuId(""); onDeleteSession && onDeleteSession(session); }}
+                          dragging={dragKey === card.key}
+                          dropTarget={dropTarget && dropTarget.key === card.key ? dropTarget : null}
+                          menuOpen={menuId === card.key}
+                          onMenu={function () { setMenuId(menuId === card.key ? "" : card.key); }}
+                          onOpen={function () {
+                            setMenuId("");
+                            if (card.kind === "task") onOpenSession(card.item.id);
+                            else if (onOpenChat) onOpenChat(card.item);
+                          }}
+                          onDelete={card.kind === "task" ? function () { setMenuId(""); onDeleteSession && onDeleteSession(card.item); } : null}
+                          onDragStart={function (event) {
+                            setMenuId("");
+                            setDragKey(card.key);
+                            if (event.dataTransfer) {
+                              event.dataTransfer.effectAllowed = "move";
+                              event.dataTransfer.setData("application/x-cyrene-board-card+json", JSON.stringify({ key: card.key, kind: card.kind, id: card.item.id }));
+                              event.dataTransfer.setData("text/plain", card.item.title || card.item.id);
+                            }
+                          }}
+                          onDragOver={function (event) {
+                            if (!dragKey || dragKey === card.key) return;
+                            event.preventDefault();
+                            event.stopPropagation();
+                            var rect = event.currentTarget.getBoundingClientRect();
+                            var edge = event.clientY < rect.top + rect.height / 2 ? "before" : "after";
+                            setDropTarget({ column: column.id, key: card.key, edge: edge });
+                          }}
+                          onDrop={function (event) {
+                            if (!dragKey) return;
+                            event.preventDefault();
+                            event.stopPropagation();
+                            var rect = event.currentTarget.getBoundingClientRect();
+                            moveCard(column.id, card.key, event.clientY < rect.top + rect.height / 2 ? "before" : "after");
+                          }}
+                          onDragEnd={function () { setDragKey(""); setDropTarget(null); }}
                         />
                       );
                     })}
                     {cards.length === 0 && (
                       <div className="wb-board-column-empty">
-                        <b>{column.id === "blocked" ? t("taskBoard.emptyBlocked") : t("taskBoard.empty")}</b>
-                        <span>{column.id === "blocked" ? t("taskBoard.emptyBlockedHint") : t("taskBoard.emptyHint")}</span>
+                        <b>{normalizedQuery ? t("taskBoard.noSearchResults") : (column.id === "blocked" ? t("taskBoard.emptyBlocked") : t("taskBoard.empty"))}</b>
+                        <span>{normalizedQuery ? t("taskBoard.noSearchResultsHint") : (column.id === "blocked" ? t("taskBoard.emptyBlockedHint") : t("taskBoard.emptyHint"))}</span>
                       </div>
                     )}
                   </div>
@@ -6081,17 +6875,25 @@ function TaskBoard({ project, loading, error, onOpenSession, onCreateSession, on
   );
 }
 
-function TaskBoardCard({ session, column, menuOpen, onMenu, onOpen, onDelete }) {
+function TaskBoardCard({ card, column, dragging, dropTarget, menuOpen, onMenu, onOpen, onDelete, onDragStart, onDragOver, onDrop, onDragEnd }) {
   var { t } = window.CyreneUI.require("i18n").use();
-  var tone = WorkbenchModel.statusTone(session.status);
-  var summary = sessionSummaryText(session);
-  var stepCount = Number(session.planStepCount != null ? session.planStepCount : (Array.isArray(session.plan) ? session.plan.length : 0));
+  var item = card.item;
+  var task = card.kind === "task";
+  var tone = task ? WorkbenchModel.statusTone(item.status) : wbChatBoardTone(item);
+  var summary = task ? sessionSummaryText(item) : String(item.preview || t("workbenchChat.noMessages", null, "No messages yet"));
+  var stepCount = task ? Number(item.planStepCount != null ? item.planStepCount : (Array.isArray(item.plan) ? item.plan.length : 0)) : 0;
   return (
     <article
       role="button"
       tabIndex={0}
-      className={"wb-board-card is-" + column + (menuOpen ? " menu-open" : "")}
+      draggable="true"
+      data-board-card-key={card.key}
+      className={"wb-board-card is-" + column + " is-" + card.kind + (menuOpen ? " menu-open" : "") + (dragging ? " dragging" : "") + (dropTarget ? " drop-" + dropTarget.edge : "")}
       onClick={onOpen}
+      onDragStart={onDragStart}
+      onDragOver={onDragOver}
+      onDrop={onDrop}
+      onDragEnd={onDragEnd}
       onContextMenu={function (event) {
         event.preventDefault();
         event.stopPropagation();
@@ -6103,16 +6905,16 @@ function TaskBoardCard({ session, column, menuOpen, onMenu, onOpen, onDelete }) 
     >
       <div className="wb-board-card-title">
         <span className={"workbench-status-dot " + tone}></span>
-        <b>{session.title}</b>
+        <b>{item.title}</b>
         <button type="button" className="wb-card-menu-btn wb-board-card-menu-btn" onClick={function (event) { event.stopPropagation(); onMenu(); }} aria-label={t("common.moreActions")}>{ICONS.dots}</button>
       </div>
-      {summary && summary !== session.title && <p>{summary}</p>}
+      {summary && summary !== item.title && <p>{summary}</p>}
       <div className="wb-board-card-meta">
-        <span className={"workbench-task-status " + tone}>{WorkbenchModel.statusText(session.status)}</span>
+        <span className={"workbench-task-status " + tone}>{task ? WorkbenchModel.statusText(item.status) : t("workbench.page.chat")}</span>
         {stepCount > 0 && <span>{t("taskBoard.steps", { count: stepCount })}</span>}
-        <time>{WorkbenchModel.formatRelativeTime(session.updatedAt || session.createdAt)}</time>
+        <time>{WorkbenchModel.formatRelativeTime(item.updatedAt || item.createdAt)}</time>
       </div>
-      {menuOpen && (
+      {menuOpen && onDelete && (
         <div className="wb-card-menu wb-board-card-menu" onClick={function (event) { event.stopPropagation(); }}>
           <button type="button" className="danger" onClick={onDelete}>{t("rail.deleteTask")}</button>
         </div>
@@ -6155,8 +6957,13 @@ function TaskRail({ project, activeSessionId, onSelectSession, onCreateSession, 
   }, [menuId]);
 
   return (
-    <aside className={"workbench-task-rail workbench-integrated-rail" + (collapsed ? " is-collapsed" : "")}>
+    <aside className={"workbench-task-rail workbench-integrated-rail wbc-rail" + (collapsed ? " is-collapsed" : "")}>
       <div className="workbench-integrated-rail-head workbench-integrated-rail-search-head">
+        {!collapsed && (
+          <span className="workbench-rail-mode-toggle is-static" aria-label={t("workbench.page.task", null, "Task")}>
+            {t("workbench.page.task", null, "Task")}
+          </span>
+        )}
         {!collapsed && (
           <div className="wbc-search workbench-task-search">
             <span className="wbc-search-icon">{ICONS.cmdResearch}</span>
@@ -6180,7 +6987,8 @@ function TaskRail({ project, activeSessionId, onSelectSession, onCreateSession, 
         )}
         {collapseControl}
       </div>
-      <div className={"workbench-task-list workbench-integrated-rail-body" + (!loading && visibleSessions.length === 0 ? " is-empty" : "")}>
+      <div className={"wbc-chat-list workbench-integrated-rail-body wbc-task-list" + (!loading && visibleSessions.length === 0 ? " is-empty" : "")}>
+        <div className="wbc-chat-list-primary">
         {loading && <div className="workbench-muted wb-task-rail-loading">{t("rail.loadingTasks")}</div>}
         {!loading && sessions.length === 0 && (
           <div className="wb-task-rail-empty">
@@ -6201,14 +7009,21 @@ function TaskRail({ project, activeSessionId, onSelectSession, onCreateSession, 
           </div>
         )}
         {visibleSessions.map(function (session) {
-          var tone = WorkbenchModel.statusTone(session.status);
           var isMenuOpen = menuId === session.id;
+          var rawStatus = String(session.status || "idle").toLowerCase();
+          var failed = ["failed", "cancelled", "blocked"].indexOf(rawStatus) >= 0;
+          var attention = ["waiting_for_user", "waiting_for_approval", "review"].indexOf(rawStatus) >= 0 || !!session.pendingQuestion;
+          var running = ["running", "planning", "paused"].indexOf(rawStatus) >= 0 || !!session.agentBusy;
+          var completed = ["completed", "done", "skipped"].indexOf(rawStatus) >= 0;
+          var visualTone = failed ? " status-failed" : attention ? " status-attention" : completed ? " status-completed" : running ? " status-running" : "";
+          var visualIcon = failed ? ICONS.x : attention ? ICONS.alert : completed ? ICONS.check : running ? ICONS.cmdQuick : ICONS.target;
+          var preview = sessionSummaryText(session) || String(session.goal || "") || t("task.summaryFallback", null, "The agent will create a summary while this task runs.");
           return (
             <div
               key={session.id}
               role="button"
               tabIndex={0}
-              className={"workbench-task-card" + (session.id === activeSessionId ? " active" : "") + (isMenuOpen ? " menu-open" : "")}
+              className={"wbc-chat-card wbc-task-card" + visualTone + (session.id === activeSessionId ? " active" : "") + (isMenuOpen ? " menu-open" : "")}
               onClick={function () { setMenuId(""); onSelectSession(session.id); }}
               onContextMenu={function (event) {
                 event.preventDefault();
@@ -6217,44 +7032,179 @@ function TaskRail({ project, activeSessionId, onSelectSession, onCreateSession, 
               }}
               onKeyDown={function (e) { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); onSelectSession(session.id); } }}
             >
-              <span className="workbench-task-top">
-                <span className={"workbench-status-dot " + tone}></span>
-                <b>{session.title}</b>
-              </span>
-              <span className="workbench-task-bottom">
-                <span className={"workbench-task-status " + tone}>
-                  {tone === "muted" && <i className="wb-status-ico">◷</i>}
-                  {WorkbenchModel.statusText(session.status)}
+              <span className="wbc-chat-card-top">
+                <span className="wbc-chat-row-icon" aria-hidden="true">{visualIcon}</span>
+                <span className="wbc-chat-card-title"><b>{session.title}</b></span>
+                <span className="wbc-chat-card-right">
+                  <time className="wbc-chat-card-time">{WorkbenchModel.formatTime(session.updatedAt || session.createdAt)}</time>
+                  <span className="wbc-chat-card-actions">
+                    <button
+                      type="button"
+                      className="wb-card-menu-btn wbc-chat-card-menu-btn"
+                      title={t("common.moreActions")}
+                      aria-label={t("common.moreActions")}
+                      onClick={function (event) { event.stopPropagation(); setMenuId(isMenuOpen ? "" : session.id); }}
+                    >{ICONS.dots}</button>
+                    {isMenuOpen && (
+                      <div className="wb-card-menu" role="menu">
+                        <button type="button" role="menuitem" className="wbc-chat-menu-action danger" onClick={function (event) {
+                          event.stopPropagation();
+                          setMenuId("");
+                          onDeleteSession && onDeleteSession(session);
+                        }}>{t("rail.deleteTask")}</button>
+                      </div>
+                    )}
+                  </span>
                 </span>
-                <time>{WorkbenchModel.formatTime(session.updatedAt || session.createdAt)}</time>
               </span>
-              <div className="wb-card-actions">
-                <button
-                  type="button"
-                  className="wb-card-menu-btn"
-                  title={t("common.moreActions")}
-                  onClick={function (e) { e.stopPropagation(); setMenuId(isMenuOpen ? "" : session.id); }}
-                >
-                  {ICONS.dots}
-                </button>
-                {isMenuOpen && (
-                  <div className="wb-card-menu">
-                    <button type="button" className="danger" onClick={function (e) {
-                      e.stopPropagation();
-                      setMenuId("");
-                      onDeleteSession && onDeleteSession(session);
-                    }}>{t("rail.deleteTask")}</button>
-                  </div>
-                )}
-              </div>
+              <span className="wbc-chat-card-preview">{preview}</span>
             </div>
           );
         })}
+        </div>
       </div>
       {moduleDock}
     </aside>
   );
 }
+
+function wbTaskPaneSessionFromStore(store, taskId) {
+  var id = String(taskId || "");
+  if (!store || !id) return null;
+  if (store.session && String(store.session.id || "") === id) return store.session;
+  if (store.activeSession && String(store.activeSession.id || "") === id) return store.activeSession;
+  var projects = Array.isArray(store.projects) ? store.projects : [];
+  for (var index = 0; index < projects.length; index += 1) {
+    var sessions = Array.isArray(projects[index].sessions) ? projects[index].sessions : [];
+    var found = sessions.find(function (session) { return String(session && session.id || "") === id; });
+    if (found) return found;
+  }
+  return null;
+}
+
+function WorkbenchTaskPane({ taskId, project, onTaskStoreChange, onOpenTask, detached, split, onSessionChange, onRightTab }) {
+  var id = String(taskId || "");
+  var initial = project && Array.isArray(project.sessions) ? project.sessions.find(function (session) {
+    return String(session && session.id || "") === id;
+  }) : null;
+  var [session, setSession] = useWorkbenchState(initial || null);
+  var [loading, setLoading] = useWorkbenchState(!initial || !!initial.isSummary);
+  var [error, setError] = useWorkbenchState("");
+  var [expandedStepId, setExpandedStepId] = useWorkbenchState("");
+  var [rightTab, setRightTab] = useWorkbenchState("context");
+  var [floatingPanelOpen, setFloatingPanelOpen] = useWorkbenchState(false);
+  var floatingPanelRef = useWorkbenchRef(null);
+
+  function adoptStore(nextStore) {
+    var nextSession = wbTaskPaneSessionFromStore(nextStore, id);
+    if (nextSession) setSession(Object.assign({}, nextSession, { isSummary: false }));
+    if (onTaskStoreChange) onTaskStoreChange(nextStore, id);
+    return nextStore;
+  }
+
+  useWorkbenchEffect(function () {
+    var cancelled = false;
+    var summary = project && Array.isArray(project.sessions) ? project.sessions.find(function (item) {
+      return String(item && item.id || "") === id;
+    }) : null;
+    setSession(summary || null);
+    setExpandedStepId("");
+    setRightTab("context");
+    setFloatingPanelOpen(false);
+    setError("");
+    if (!id) { setLoading(false); return undefined; }
+    setLoading(true);
+    window.CyreneUI.require("model").fetchSession(id).then(function (payload) {
+      if (cancelled) return;
+      var nextSession = wbTaskPaneSessionFromStore(payload, id);
+      if (nextSession) setSession(Object.assign({}, nextSession, { isSummary: false }));
+    }).catch(function (err) {
+      if (!cancelled) setError(wbErrorText(err));
+    }).finally(function () {
+      if (!cancelled) setLoading(false);
+    });
+    return function () { cancelled = true; };
+  }, [id, project && project.id]);
+
+  useWorkbenchEffect(function () {
+    if (onSessionChange) onSessionChange(session);
+  }, [session, onSessionChange]);
+
+  useWorkbenchEffect(function () {
+    function openTaskContextPanel(event) {
+      var detail = event && event.detail || {};
+      if (!split || String(detail.taskId || "") !== id) return;
+      if (detail.tab) setRightTab(String(detail.tab));
+      setFloatingPanelOpen(true);
+    }
+    window.addEventListener("cyrene:open-task-context-panel", openTaskContextPanel);
+    return function () {
+      window.removeEventListener("cyrene:open-task-context-panel", openTaskContextPanel);
+    };
+  }, [id, split]);
+
+  useWorkbenchEffect(function () {
+    if (!split || !floatingPanelOpen) return undefined;
+    function closeOutside(event) {
+      if (floatingPanelRef.current && !floatingPanelRef.current.contains(event.target)) {
+        setFloatingPanelOpen(false);
+      }
+    }
+    document.addEventListener("pointerdown", closeOutside);
+    return function () { document.removeEventListener("pointerdown", closeOutside); };
+  }, [split, floatingPanelOpen]);
+
+  function openRightTab(tab) {
+    var next = String(tab || "context");
+    setRightTab(next);
+    if (split) setFloatingPanelOpen(true);
+    else if (onRightTab) onRightTab(next);
+  }
+
+  function patchLocal(patch) {
+    setSession(function (current) { return current ? Object.assign({}, current, patch || {}) : current; });
+  }
+
+  return (
+    <div className={"wbc-task-pane" + (detached ? " is-detached" : "")} data-task-id={id}>
+      <TaskWorkArea
+        key={id || "none"}
+        project={project}
+        session={session}
+        expandedStepId={expandedStepId}
+        onToggleStep={function (stepId) { setExpandedStepId(expandedStepId === stepId ? "" : stepId); }}
+        onCreateRun={adoptStore}
+        onRightTab={openRightTab}
+        onSelectSession={onOpenTask}
+        onBackToBoard={function () {
+          try { window.dispatchEvent(new CustomEvent("cyrene:open-workbench-board")); } catch (e) {}
+        }}
+        onInitPatch={patchLocal}
+        onLocalPatch={patchLocal}
+        onRefresh={adoptStore}
+        error={error}
+        loading={loading}
+        active={true}
+      />
+      {split && floatingPanelOpen ? (
+        <div ref={floatingPanelRef} className="wbc-task-pane-floating-panel" role="dialog" aria-label={wbT("task.side.detailPanel", "Task details")}>
+          <RightContextPanel
+            project={project}
+            session={session}
+            expandedStepId={expandedStepId}
+            tab={rightTab}
+            onTabChange={setRightTab}
+            onRefresh={adoptStore}
+            onToggleSide={function () { setFloatingPanelOpen(false); }}
+            floating={true}
+          />
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
+window.CyreneTaskPane = WorkbenchTaskPane;
 
 // ===================================================================
 // Task execution console — the Subtask state machine.
@@ -7318,6 +8268,7 @@ function TaskWorkArea(props) {
   var project = props.project;
   var session = props.session;
   var active = props.active !== false;
+  var mainRef = useWorkbenchRef(null);
   var [attachments, setAttachments] = useWorkbenchState([]);
   var [mode, setMode] = useWorkbenchState("auto");
   var [configuredModels, setConfiguredModels] = useWorkbenchState([]);
@@ -7400,6 +8351,54 @@ function TaskWorkArea(props) {
       window.removeEventListener("cyrene:model-configuration-changed", onModelConfigurationChanged);
     };
   }, [sid]);
+  // Match the conversation surface: the fixed glass header and composer float
+  // over one scrolling task plane. Dynamic reserves keep the first and last
+  // cards fully reachable while still allowing scrolled content to become the
+  // glass backdrop. One observer covers responsive title wrapping, chips,
+  // attachments and textarea growth without polling on every keystroke.
+  useWorkbenchEffect(function () {
+    var main = mainRef.current;
+    if (!main) return undefined;
+    var composer = main.querySelector(":scope > .wbc-composer");
+    var header = main.querySelector(":scope > .workbench-task-header-sticky");
+    if (!composer || !header) return undefined;
+    var resizeRaf = 0;
+    var lastComposerHeight = 0;
+    var lastHeaderHeight = 0;
+    function commitFloatingReserveHeights() {
+      resizeRaf = 0;
+      var composerHeight = Math.ceil(composer.getBoundingClientRect().height);
+      if (composerHeight > 0 && composerHeight !== lastComposerHeight) {
+        lastComposerHeight = composerHeight;
+        main.style.setProperty("--wbc-composer-reserve-height", composerHeight + "px");
+      }
+      var headerHeight = Math.ceil(header.getBoundingClientRect().height);
+      if (headerHeight > 0 && headerHeight !== lastHeaderHeight) {
+        lastHeaderHeight = headerHeight;
+        main.style.setProperty("--wbc-task-header-reserve-height", headerHeight + "px");
+      }
+    }
+    function scheduleFloatingReserveHeights() {
+      if (resizeRaf) return;
+      resizeRaf = requestAnimationFrame(commitFloatingReserveHeights);
+    }
+    commitFloatingReserveHeights();
+    var observer = typeof ResizeObserver === "function"
+      ? new ResizeObserver(scheduleFloatingReserveHeights)
+      : null;
+    if (observer) {
+      observer.observe(composer);
+      observer.observe(header);
+    }
+    window.addEventListener("resize", scheduleFloatingReserveHeights);
+    return function () {
+      if (observer) observer.disconnect();
+      window.removeEventListener("resize", scheduleFloatingReserveHeights);
+      if (resizeRaf) cancelAnimationFrame(resizeRaf);
+      main.style.removeProperty("--wbc-composer-reserve-height");
+      main.style.removeProperty("--wbc-task-header-reserve-height");
+    };
+  }, [sid, props.loading]);
   var controller = useTaskController(session, props.onRefresh, {
     attachments: attachments,
     mode: mode,
@@ -7417,17 +8416,17 @@ function TaskWorkArea(props) {
     } catch (e) {}
   }, taskDropEnabled);
   if (props.loading && (!project || !session)) {
-    return <main className="workbench-main"><div className="workbench-empty">{wbT("workbench.loading", "Loading workbench…")}</div></main>;
+    return <main ref={mainRef} className="workbench-main"><div className="workbench-empty">{wbT("workbench.loading", "Loading workbench…")}</div></main>;
   }
   if (!project || !session) {
-    return <main className="workbench-main"><div className="workbench-empty">{wbT("workbench.selectProjectTask", "Select a project and task.")}</div></main>;
+    return <main ref={mainRef} className="workbench-main"><div className="workbench-empty">{wbT("workbench.selectProjectTask", "Select a project and task.")}</div></main>;
   }
   // "初始化项目" onboarding sessions take over the whole work area with their
   // own agent-led question flow (WorkbenchInitView), bypassing the task state
   // machine, plan list and composer below.
   if (session.kind === "init" && window.CyreneUI.require("create").InitView) {
     return (
-      <main className="workbench-main">
+      <main ref={mainRef} className="workbench-main">
         {React.createElement(window.CyreneUI.require("create").InitView, {
           project: project,
           session: session,
@@ -7442,12 +8441,12 @@ function TaskWorkArea(props) {
   var showPlan = ["planning", "waiting_for_approval", "waiting_for_user", "running", "review", "paused", "failed", "blocked", "done", "completed"].indexOf(status) >= 0
     && Array.isArray(session.plan);
   return (
-    <main className="workbench-main">
+    <main ref={mainRef} className="workbench-main">
       {taskFileDropActive && <WorkbenchFileDropOverlay label={wbT("workbenchChat.dropToAttach", "Release to add files to the task input")} />}
+      <div className="workbench-task-header-sticky">
+        <TaskHeader project={project} session={session} controller={controller} onRightTab={props.onRightTab} onSelectSession={props.onSelectSession} />
+      </div>
       <div className="workbench-stage">
-        <div className="workbench-task-header-sticky">
-          <TaskHeader project={project} session={session} controller={controller} onRightTab={props.onRightTab} onSelectSession={props.onSelectSession} onBackToBoard={props.onBackToBoard} />
-        </div>
         {props.error && <div className="workbench-error">{props.error}</div>}
         <ReflectionHintBanner session={session} controller={controller} />
         <StateCard
@@ -7597,7 +8596,7 @@ function canPauseTaskStatus(status) {
   return ["running", "waiting_for_user"].indexOf(String(status || "")) >= 0;
 }
 
-function TaskHeader({ project, session, controller, onRightTab, onSelectSession, onBackToBoard }) {
+function TaskHeader({ project, session, controller, onRightTab, onSelectSession }) {
   var tone = WorkbenchModel.statusTone(session.status);
   var status = String(session.status || "idle");
   var [editing, setEditing] = useWorkbenchState(false);
@@ -7644,9 +8643,8 @@ function TaskHeader({ project, session, controller, onRightTab, onSelectSession,
   var menuActions = headerMenuActions(status, controller, session, project, onSelectSession, onRightTab);
 
   return (
-    <div className="workbench-task-header workbench-composer-box">
+    <div className="workbench-task-header workbench-composer-box wbc-composer-box">
       <div className="wb-th-main">
-        <button type="button" className="wb-task-back-board" onClick={onBackToBoard}>{wbT("taskBoard.back", "Back to board")}</button>
         <div className="wb-th-title-row">
           {editing ? (
             <input
@@ -7665,11 +8663,45 @@ function TaskHeader({ project, session, controller, onRightTab, onSelectSession,
           ) : (
             <h1 title={session.title}>{session.title}</h1>
           )}
-          {!editing && (
-            <button type="button" className="wb-th-iconbtn" onClick={function () { setEditing(true); }} title={wbT("task.editTitle", "Edit title")}>
-              {ICONS.edit}
-            </button>
-          )}
+          <div className="wb-th-title-actions">
+            {!editing && (
+              <button type="button" className="wb-th-iconbtn" onClick={function () { setEditing(true); }} title={wbT("task.editTitle", "Edit title")} aria-label={wbT("task.editTitle", "Edit title")}>
+                {ICONS.edit}
+              </button>
+            )}
+            {canPauseTaskStatus(status) && (
+              <button
+                type="button"
+                className="wb-th-control-btn wb-th-pause"
+                disabled={controller.busy}
+                onClick={function () { status === "running" || session.agentBusy ? controller.interrupt() : controller.pause(); }}
+                title={wbT("task.action.pauseTask", "Pause task")}
+                aria-label={wbT("task.action.pauseTask", "Pause task")}
+              >
+                {ICONS.pause}
+              </button>
+            )}
+            <div className="wb-th-menu-wrap">
+              <button type="button" className="wb-th-control-btn wb-th-menu-btn" onClick={function () { setMenuOpen(!menuOpen); }} title={wbT("task.detailMenu", "Details menu")} aria-label={wbT("task.detailMenu", "Details menu")}>
+                {ICONS.dots}
+              </button>
+              {menuOpen && (
+                <>
+                  <div className="wb-th-menu-scrim" onClick={function () { setMenuOpen(false); }}></div>
+                  <div className="wb-th-menu">
+                    {menuActions.map(function (a, i) {
+                      return <button key={"act" + i} type="button" disabled={controller.busy} onClick={function () { setMenuOpen(false); a.onClick(); }}>{a.label}</button>;
+                    })}
+                    {menuActions.length > 0 && <div className="wb-th-menu-sep" />}
+                    <button type="button" onClick={function () { setMenuOpen(false); onRightTab && onRightTab("context"); }}>{wbT("task.menu.viewContext", "View context")}</button>
+                    <button type="button" onClick={function () { setMenuOpen(false); onRightTab && onRightTab("logs"); }}>{wbT("task.menu.runLogs", "Run logs")}</button>
+                    <button type="button" onClick={function () { setMenuOpen(false); onRightTab && onRightTab("acceptance"); }}>{wbT("task.menu.acceptance", "Acceptance criteria")}</button>
+                    <button type="button" onClick={function () { setMenuOpen(false); focusComposer(); }}>{wbT("task.menu.editTask", "Edit task content")}</button>
+                  </div>
+                </>
+              )}
+            </div>
+          </div>
         </div>
         <p className="wb-th-summary">
           <span className={"wb-th-inline-status " + tone}>{WorkbenchModel.statusText(session.status)}</span>
@@ -7678,40 +8710,6 @@ function TaskHeader({ project, session, controller, onRightTab, onSelectSession,
         <div className="wb-th-meta">
           <span>{wbT("task.priorityPrefix", "Priority {priority}", { priority: priorityText(session.priority) })}</span>
           <span>{project.name}</span>
-        </div>
-      </div>
-      <div className="wb-th-action-wrap">
-        {canPauseTaskStatus(status) && (
-          <button
-            type="button"
-            className="wb-th-control-btn wb-th-pause"
-            disabled={controller.busy}
-            onClick={function () { status === "running" || session.agentBusy ? controller.interrupt() : controller.pause(); }}
-            title={wbT("task.action.pauseTask", "Pause task")}
-            aria-label={wbT("task.action.pauseTask", "Pause task")}
-          >
-            {ICONS.pause}
-          </button>
-        )}
-        <div className="wb-th-menu-wrap">
-          <button type="button" className="wb-th-control-btn wb-th-menu-btn" onClick={function () { setMenuOpen(!menuOpen); }} title={wbT("task.detailMenu", "Details menu")} aria-label={wbT("task.detailMenu", "Details menu")}>
-            {ICONS.dots}
-          </button>
-          {menuOpen && (
-            <>
-              <div className="wb-th-menu-scrim" onClick={function () { setMenuOpen(false); }}></div>
-              <div className="wb-th-menu">
-                {menuActions.map(function (a, i) {
-                  return <button key={"act" + i} type="button" disabled={controller.busy} onClick={function () { setMenuOpen(false); a.onClick(); }}>{a.label}</button>;
-                })}
-                {menuActions.length > 0 && <div className="wb-th-menu-sep" />}
-                <button type="button" onClick={function () { setMenuOpen(false); onRightTab && onRightTab("context"); }}>{wbT("task.menu.viewContext", "View context")}</button>
-                <button type="button" onClick={function () { setMenuOpen(false); onRightTab && onRightTab("logs"); }}>{wbT("task.menu.runLogs", "Run logs")}</button>
-                <button type="button" onClick={function () { setMenuOpen(false); onRightTab && onRightTab("acceptance"); }}>{wbT("task.menu.acceptance", "Acceptance criteria")}</button>
-                <button type="button" onClick={function () { setMenuOpen(false); focusComposer(); }}>{wbT("task.menu.editTask", "Edit task content")}</button>
-              </div>
-            </>
-          )}
         </div>
       </div>
     </div>
@@ -8836,9 +9834,9 @@ function composerChips(status, controller, onRightTab, session) {
   }
   if (status === "planning") {
     return [
-      { label: wbT("task.action.approveExecution", "Approve execution"), onClick: function () { controller.approvePlan(); } },
-      { label: wbT("task.action.approveRunAll", "Approve & run all"), onClick: function () { controller.approveAndRunAll(); } },
-      { label: wbT("goalLoop.action.configure", "持续执行到验收通过"), className: "goal-loop", onClick: function () { controller.configureGoalLoop(); } },
+      { label: wbT("task.action.approveExecution", "Start"), onClick: function () { controller.approvePlan(); } },
+      { label: wbT("task.action.approveRunAll", "Run all"), onClick: function () { controller.approveAndRunAll(); } },
+      { label: wbT("goalLoop.action.configure", "Run until pass"), className: "goal-loop", onClick: function () { controller.configureGoalLoop(); } },
       { label: wbT("task.action.editPlan", "Edit plan"), onClick: focusComposer },
       { label: wbT("task.action.regenerate", "Regenerate"), onClick: function () { controller.regeneratePlan(); } },
     ];
@@ -8924,7 +9922,8 @@ function composerChips(status, controller, onRightTab, session) {
 }
 
 // Composer is always bound to the current task. Behaviour + quick-chips depend
-// on the task status. Action row: attachments / permission mode / send · stop.
+// on the task status. Permission mode lives in the shared model menu, matching
+// the conversation composer.
 function TaskComposer({
   session,
   controller,
@@ -8942,7 +9941,6 @@ function TaskComposer({
   var model = window.CyreneUI.require("model");
   var [draft, setDraft] = useWorkbenchState("");
   var [scopePrompt, setScopePrompt] = useWorkbenchState(null);
-  var [modeOpen, setModeOpen] = useWorkbenchState(false);
   var [modelOpen, setModelOpen] = useWorkbenchState(false);
   var [modelPanel, setModelPanel] = useWorkbenchState("root");
   var [uploading, setUploading] = useWorkbenchState(false);
@@ -8988,7 +9986,6 @@ function TaskComposer({
 
   useWorkbenchEffect(function () {
     if (!awaitingAnswer) return;
-    setModeOpen(false);
     setModelOpen(false);
     setModelPanel("root");
     var recorder = voiceRecorderRef.current;
@@ -9013,7 +10010,6 @@ function TaskComposer({
   // Reset transient composer state when switching tasks.
   useWorkbenchEffect(function () {
     setScopePrompt(null);
-    setModeOpen(false);
     setModelOpen(false);
     setModelPanel("root");
   }, [session.id]);
@@ -9030,13 +10026,8 @@ function TaskComposer({
     return function () { document.removeEventListener("pointerdown", closeModelPicker); };
   }, [modelOpen]);
 
-  function syncHeight() {
-    var ta = taRef.current;
-    if (ta) { ta.style.height = "auto"; ta.style.height = Math.min(ta.scrollHeight, 160) + "px"; }
-  }
   function resetDraft() {
     setDraft("");
-    if (taRef.current) taRef.current.style.height = "";
   }
 
   function dispatch(text) {
@@ -9084,7 +10075,6 @@ function TaskComposer({
       return;
     }
     if (event.key === "Escape") {
-      setModeOpen(false);
       setModelOpen(false);
       setModelPanel("root");
     }
@@ -9112,7 +10102,6 @@ function TaskComposer({
         return true;
       }
       requestAnimationFrame(function () {
-        syncHeight();
         if (taRef.current) taRef.current.focus();
       });
       return true;
@@ -9362,7 +10351,7 @@ function TaskComposer({
         </div>
       )}
       {chips.length > 0 && (
-        <div className="wb-composer-chips">
+        <div className={"wb-composer-chips" + (status === "planning" ? " planning-actions" : "")}>
           {chips.map(function (c, i) {
             return <button key={i} type="button" className={"wb-chip" + (c.className ? " " + c.className : "")} disabled={controller.busy && c.guard !== false} onClick={c.onClick}>{c.label}</button>;
           })}
@@ -9386,8 +10375,12 @@ function TaskComposer({
         )}
         <textarea
           ref={taRef}
+          className="wbc-composer-textarea"
           value={draft}
-          onChange={function (event) { setDraft(event.target.value); syncHeight(); }}
+          onChange={function (event) {
+            draftRef.current = event.target.value;
+            setDraft(event.target.value);
+          }}
           onKeyDown={onKeyDown}
           onPaste={onPaste}
           placeholder={composerPlaceholder(status)}
@@ -9399,34 +10392,6 @@ function TaskComposer({
           <button type="button" className="wb-composer-icon wbc-composer-icon" title={uploading ? wbT("workbenchChat.uploading", "Uploading...") : wbT("workbenchChat.addAttachment", "Add attachment")} disabled={uploading || disabled} onClick={pickFiles}>
             {uploading ? <span className="wb-spinner" /> : ICONS.attach}
           </button>
-          <span className="wb-popover-anchor">
-            <button type="button" className={"wb-composer-icon wbc-composer-icon mode" + (modeOpen ? " active" : "")} title={wbT("workbenchChat.permissionMode", "Permission mode")} disabled={disabled} onClick={function () {
-              setModeOpen(!modeOpen);
-              setModelOpen(false);
-              setModelPanel("root");
-            }}>
-              <span className="wb-mode-ico">{current.icon}</span>
-              <span className="wb-mode-label">{current.label}</span>
-            </button>
-            {modeOpen && !disabled && (
-              <div className="wb-popmenu wb-mode-menu">
-                <div className="wb-menu-head">{wbT("workbenchChat.permissionMode", "Permission mode")}</div>
-                {translatedModes.map(function (m) {
-                  var active = (mode || "auto") === m.id;
-                  return (
-                    <button key={m.id} type="button" className={"wb-mode-item" + (active ? " active" : "")} onClick={function () { onModeChange(m.id); setModeOpen(false); }}>
-                      <span className="wb-mode-item-ico">{m.icon}</span>
-                      <span className="wb-mode-item-body">
-                        <span className="wb-mode-item-label">{m.label}</span>
-                        <span className="wb-mode-item-desc">{m.desc}</span>
-                      </span>
-                      <span className="wb-mode-item-check">{active ? ICONS.checkSmall : null}</span>
-                    </button>
-                  );
-                })}
-              </div>
-            )}
-          </span>
           <span className="wb-composer-spacer" />
           {modelName ? (
             <span className="wbc-pop-anchor wbc-model-anchor" ref={modelPickerRef}>
@@ -9441,7 +10406,6 @@ function TaskComposer({
                 onClick={function () {
                   setModelOpen(!modelOpen);
                   setModelPanel("root");
-                  setModeOpen(false);
                 }}
               >
                 <span className="wbc-model-button-icon" aria-hidden="true">{ICONS.model}</span>
@@ -9465,6 +10429,11 @@ function TaskComposer({
                           <span className="wbc-model-menu-chevron">{ICONS.chevronRight}</span>
                         </button>
                       )}
+                      <button type="button" className="wbc-model-menu-row" onClick={function () { setModelPanel("permission"); }}>
+                        <span className="wbc-model-menu-key">{wbT("workbenchChat.permissionMode", "Permission mode")}</span>
+                        <span className="wbc-model-menu-value">{current.label}</span>
+                        <span className="wbc-model-menu-chevron">{ICONS.chevronRight}</span>
+                      </button>
                     </>
                   )}
                   {modelPanel === "models" && (
@@ -9504,6 +10473,27 @@ function TaskComposer({
                             setModelPanel("root");
                           }}>
                             <span className="wbc-popmenu-label">{wbT("settings.reasoningEffortValue." + effort, effort)}</span>
+                            {active ? <span className="wbc-popmenu-check">{ICONS.checkSmall}</span> : null}
+                          </button>
+                        );
+                      })}
+                    </>
+                  )}
+                  {modelPanel === "permission" && (
+                    <>
+                      <button type="button" className="wbc-model-menu-back" onClick={function () { setModelPanel("root"); }}>
+                        <span>{ICONS.chevronLeft}</span>
+                        <span>{wbT("workbenchChat.permissionMode", "Permission mode")}</span>
+                      </button>
+                      {translatedModes.map(function (item) {
+                        var active = (mode || "auto") === item.id;
+                        return (
+                          <button key={item.id} type="button" className={active ? "active" : ""} onClick={function () {
+                            onModeChange(item.id);
+                            setModelPanel("root");
+                          }}>
+                            <span className="wbc-popmenu-label">{item.label}</span>
+                            <span className="wbc-popmenu-desc">{item.desc}</span>
                             {active ? <span className="wbc-popmenu-check">{ICONS.checkSmall}</span> : null}
                           </button>
                         );
@@ -9556,7 +10546,7 @@ function TaskComposer({
   );
 }
 
-function RightContextPanel({ project, session, expandedStepId, tab, onTabChange, onRefresh }) {
+function RightContextPanel({ project, session, expandedStepId, tab, onTabChange, onRefresh, onToggleSide, floating, className }) {
   var activeBodyRef = useWorkbenchRef(null);
   var steps = session && Array.isArray(session.plan) ? session.plan : [];
   var artifacts = WorkbenchModel.ensureArtifacts(session);
@@ -9578,9 +10568,17 @@ function RightContextPanel({ project, session, expandedStepId, tab, onTabChange,
   }, [tab, artifacts.length]);
   if (!session) {
     return (
-      <aside className="workbench-right-panel wb-floating-detail-shell wb-task-detail-shell">
-        <div className="wb-floating-detail-card wb-task-detail-card empty">
-          <WbColResizer trackGutter surfaceId="task-detail-empty" />
+      <aside className={"workbench-right-panel wb-floating-detail-shell wb-task-detail-shell" + (floating ? " wbc-side-floating" : "") + (className ? " " + className : "")}>
+        <div className="wbc-side-card wb-floating-detail-card wb-task-detail-card empty">
+          {!floating && <WbColResizer trackGutter surfaceId="task-detail-empty" />}
+          {onToggleSide ? (
+            <div className="wbc-side-card-head">
+              <strong>{wbT("task.side.detailPanel", "Task panel")}</strong>
+              <button type="button" className="wbc-side-hide-btn wb-task-side-hide-btn" onClick={onToggleSide} aria-label={wbT("workbenchChat.hideSidebar", "Hide side panel")}>
+                <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d="m13 7 5 5-5 5M6 7l5 5-5 5"/></svg>
+              </button>
+            </div>
+          ) : null}
           <div className="wb-detail-empty-state">
             {ICONS.target}
             <p>{wbT("task.noTaskSelected", "Select a task.")}</p>
@@ -9605,43 +10603,52 @@ function RightContextPanel({ project, session, expandedStepId, tab, onTabChange,
     return null;
   }
   return (
-    <aside className="workbench-right-panel wb-floating-detail-shell wb-task-detail-shell" aria-label={wbT("task.side.detailPanel", "Task details")}>
-      <div className="wb-floating-detail-card wb-task-detail-card">
-        <WbColResizer trackGutter surfaceId="task-detail" />
-        <nav className="wb-detail-accordion wb-task-detail-tabs" aria-label={wbT("task.side.detailPanel", "Task details")}>
-          <div className="wb-detail-accordion-head wb-task-detail-head">
-            <span>{wbT("task.side.detailPanel", "Task details")}</span>
-          </div>
-          <div className="wb-detail-accordion-list wb-task-detail-tab-list">
-            {tabs.map(function (item) {
-              var expanded = tab === item.id;
-              var panelId = "wb-task-detail-panel-" + item.id;
-              return (
-                <React.Fragment key={item.id}>
-                  <button
-                    type="button"
-                    className={"wb-detail-accordion-trigger wb-task-detail-tab" + (expanded ? " active" : "")}
-                    aria-expanded={expanded}
-                    aria-controls={panelId}
-                    onClick={function () { onTabChange(expanded ? "" : item.id); }}
-                  >
-                    <span className="wb-detail-accordion-icon wb-task-detail-tab-icon" aria-hidden="true">{tabIcons[item.id]}</span>
-                    <span>{item.label}</span>
-                    {ICONS.chevronRight}
-                  </button>
-                  <div
-                    id={panelId}
-                    className={"wb-detail-accordion-panel wb-task-detail-tab-panel" + (expanded ? " open" : "")}
-                    aria-hidden={!expanded}
-                  >
-                    <div className="wb-detail-accordion-panel-inner">
-                      <div ref={expanded ? activeBodyRef : null} className="workbench-right-body">{tabBody(item.id)}</div>
-                    </div>
+    <aside className={"workbench-right-panel wb-floating-detail-shell wb-task-detail-shell" + (floating ? " wbc-side-floating is-floating" : "") + (className ? " " + className : "")} aria-label={wbT("task.side.detailPanel", "Task panel")}>
+      <div className="wbc-side-card wb-floating-detail-card wb-task-detail-card">
+        {!floating && <WbColResizer trackGutter surfaceId="task-detail" />}
+        <div className="wbc-side-card-head">
+          <strong>{wbT("task.side.detailPanel", "Task panel")}</strong>
+          {onToggleSide ? (
+            <button
+              type="button"
+              className={"wbc-side-hide-btn wb-task-side-hide-btn" + (floating ? " wbc-side-floating-close" : "")}
+              onClick={onToggleSide}
+              title={floating ? wbT("common.close", "Close") : wbT("workbenchChat.hideSidebar", "Hide side panel")}
+              aria-label={floating ? wbT("common.close", "Close") : wbT("workbenchChat.hideSidebar", "Hide side panel")}
+            >
+              {floating ? ICONS.x : <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d="m13 7 5 5-5 5M6 7l5 5-5 5"/></svg>}
+            </button>
+          ) : null}
+        </div>
+        <nav className="wbc-side-accordion wb-task-detail-tabs" aria-label={wbT("task.side.detailPanel", "Task panel")}>
+          {tabs.map(function (item) {
+            var expanded = tab === item.id;
+            var panelId = "wb-task-detail-panel-" + item.id;
+            return (
+              <section key={item.id} className={"wbc-side-accordion-item" + (expanded ? " expanded" : "")}>
+                <button
+                  type="button"
+                  className={"wbc-side-accordion-trigger wb-task-detail-tab" + (expanded ? " active" : "")}
+                  aria-expanded={expanded}
+                  aria-controls={panelId}
+                  onClick={function () { onTabChange(expanded ? "" : item.id); }}
+                >
+                  <span className="wbc-side-accordion-icon wb-task-detail-tab-icon" aria-hidden="true">{tabIcons[item.id]}</span>
+                  <span className="wbc-side-accordion-label">{item.label}</span>
+                  <span className="wbc-side-accordion-chevron" aria-hidden="true">{ICONS.chevronRight}</span>
+                </button>
+                <div
+                  id={panelId}
+                  className={"wbc-side-collapse wb-task-detail-tab-panel" + (expanded ? " open" : "")}
+                  aria-hidden={!expanded}
+                >
+                  <div className="wbc-side-collapse-inner">
+                    <div ref={expanded ? activeBodyRef : null} className="wbc-side-body workbench-right-body">{tabBody(item.id)}</div>
                   </div>
-                </React.Fragment>
-              );
-            })}
-          </div>
+                </div>
+              </section>
+            );
+          })}
         </nav>
       </div>
     </aside>

@@ -643,19 +643,25 @@ def test_workbench_model_authentication_error_is_actionable():
     }
 
 
-@pytest.mark.parametrize(
-    "base_url",
-    [
-        "https://api.deepseek.com",
-        "https://api.deepseek.com/",
-        "https://api.deepseek.com/v1",
-        "https://API.DEEPSEEK.COM:443/v1/",
-    ],
-)
-def test_official_deepseek_prefers_versioned_chat_completions(base_url):
+@pytest.mark.parametrize("base_url", [
+    "https://api.deepseek.com/v1",
+    "https://API.DEEPSEEK.COM:443/v1/",
+])
+def test_versioned_official_deepseek_prefers_configured_endpoint(base_url):
     assert cl._normalized_llm_endpoints(base_url) == [
         "https://api.deepseek.com/v1/chat/completions",
         "https://api.deepseek.com/chat/completions",
+    ]
+
+
+@pytest.mark.parametrize("base_url", [
+    "https://api.deepseek.com",
+    "https://api.deepseek.com/",
+])
+def test_unversioned_official_deepseek_retries_with_v1(base_url):
+    assert cl._normalized_llm_endpoints(base_url) == [
+        "https://api.deepseek.com/chat/completions",
+        "https://api.deepseek.com/v1/chat/completions",
     ]
 
 
@@ -666,7 +672,7 @@ def test_non_official_provider_keeps_generic_endpoint_order():
     ]
 
 
-def test_openai_adapter_keeps_official_deepseek_versioned_endpoint_priority(monkeypatch):
+def test_openai_adapter_adds_versioned_fallback_for_unversioned_deepseek(monkeypatch):
     monkeypatch.setattr(cl, "get_models", lambda: [{
         "id": "deepseek-chat",
         "model": "deepseek-v4-flash",
@@ -679,12 +685,57 @@ def test_openai_adapter_keeps_official_deepseek_versioned_endpoint_priority(monk
     candidate = cl._resolve_llm_candidates()[0]
 
     assert candidate["endpoints"] == [
-        "https://api.deepseek.com/v1/chat/completions",
         "https://api.deepseek.com/chat/completions",
+        "https://api.deepseek.com/v1/chat/completions",
     ]
 
 
-def test_stale_deepseek_root_affinity_does_not_override_versioned_priority(monkeypatch):
+async def test_unversioned_deepseek_failure_automatically_tries_v1(monkeypatch):
+    requested_paths = []
+
+    async def handler(request):
+        requested_paths.append(request.url.path)
+        if request.url.path == "/chat/completions":
+            return httpx.Response(404, request=request)
+        return httpx.Response(
+            200,
+            request=request,
+            json={
+                "choices": [{
+                    "message": {"role": "assistant", "content": "OK"},
+                    "finish_reason": "stop",
+                }],
+                "usage": {},
+            },
+        )
+
+    client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+    monkeypatch.setattr(cl, "_get_http_client", lambda _timeout: (client, "test", False))
+    candidate = {
+        "id": "deepseek",
+        "model": "deepseek-v4-flash",
+        "provider": "openai",
+        "adapter": "openai",
+        "base_url": "https://api.deepseek.com",
+        "api_key": "test-key",
+        "endpoints": cl._normalized_llm_endpoints("https://api.deepseek.com"),
+    }
+
+    try:
+        response = await cl.call_llm(
+            [{"role": "user", "content": "ping"}],
+            candidates=[candidate],
+            publish_events=False,
+            record_usage=False,
+        )
+    finally:
+        await client.aclose()
+
+    assert response["content"] == "OK"
+    assert requested_paths == ["/chat/completions", "/v1/chat/completions"]
+
+
+def test_saved_deepseek_root_keeps_versioned_fallback(monkeypatch):
     candidate = {
         "id": "deepseek",
         "model": "deepseek-chat",
@@ -703,9 +754,10 @@ def test_stale_deepseek_root_affinity_does_not_override_versioned_priority(monke
 
     prioritized = cl._prioritize_last_success([candidate], "primary", "chat-1")
 
-    assert prioritized[0]["endpoints"][0] == (
-        "https://api.deepseek.com/v1/chat/completions"
-    )
+    assert prioritized[0]["endpoints"] == [
+        "https://api.deepseek.com/chat/completions",
+        "https://api.deepseek.com/v1/chat/completions",
+    ]
 
 
 async def test_streaming_http_error_body_is_preserved_for_diagnostics():

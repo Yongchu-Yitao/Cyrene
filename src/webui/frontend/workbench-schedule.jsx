@@ -834,6 +834,7 @@
     }, [props.task, props.defaultDate]);
 
     var formKindState = useState(props.task ? "task" : props.entity ? "entity" : "entity"); var formKind = formKindState[0], setFormKind = formKindState[1];
+    var actionTypeState = useState((props.task && props.task.action_type) || "agent_task"); var actionType = actionTypeState[0], setActionType = actionTypeState[1];
     var promptState = useState(props.task ? props.task.prompt : props.entity ? (props.entity.title || "") : ""); var prompt = promptState[0], setPrompt = promptState[1];
     var noteState = useState(props.entity ? (props.entity.content || "") : ""); var note = noteState[0], setNote = noteState[1];
     var entityDateState = useState(toDateInputValue(props.entity && props.entity.due_date)); var entityDate = entityDateState[0], setEntityDate = entityDateState[1];
@@ -877,7 +878,7 @@
       if (repeat !== "cron" && repeat !== "interval" && isNaN(startDate.getTime())) { setErr(T("schedule.error.invalidFirstTime")); return; }
       var spec = buildSchedule(repeat, startDate, cronText, ivVal, ivUnit, scheduleTimezone, startVal);
       if ((spec.schedule_type === "cron" || spec.schedule_type === "interval") && !spec.schedule_value) { setErr(T("schedule.error.repeatRequired")); return; }
-      var body = { prompt: p, schedule_type: spec.schedule_type, schedule_value: spec.schedule_value, schedule_timezone: spec.schedule_timezone };
+      var body = { prompt: p, action_type: actionType, schedule_type: spec.schedule_type, schedule_value: spec.schedule_value, schedule_timezone: spec.schedule_timezone };
       if (spec.schedule_type === "once") body.next_run = startDate.toISOString();
       setSaving(true); setErr("");
       var op = props.task ? props.api.update(props.task.id, body) : props.api.create(body);
@@ -913,12 +914,30 @@
           ),
           React.createElement(
             "label", { className: "wb-sched-field" },
-            React.createElement("span", null, formKind === "task" ? T("schedule.taskContent") : T("schedule.eventTitle")),
+            React.createElement("span", null, formKind === "task"
+              ? (actionType === "message" ? T("schedule.messageContent") : T("schedule.taskContent"))
+              : T("schedule.eventTitle")),
             React.createElement("textarea", {
               value: prompt, rows: 3, autoFocus: true,
-              placeholder: formKind === "task" ? T("schedule.taskPlaceholder") : T("schedule.eventPlaceholder"),
+              placeholder: formKind === "task"
+                ? (actionType === "message" ? T("schedule.messagePlaceholder") : T("schedule.taskPlaceholder"))
+                : T("schedule.eventPlaceholder"),
               onChange: function (e) { setPrompt(e.target.value); },
             })
+          ),
+          formKind === "task" && React.createElement(
+            "label", { className: "wb-sched-field" },
+            React.createElement("span", null, T("schedule.actionType")),
+            React.createElement("div", { className: "wb-sched-seg" },
+              React.createElement("button", {
+                type: "button", className: actionType === "message" ? "on" : "",
+                onClick: function () { setActionType("message"); },
+              }, T("schedule.actionType.message")),
+              React.createElement("button", {
+                type: "button", className: actionType === "agent_task" ? "on" : "",
+                onClick: function () { setActionType("agent_task"); },
+              }, T("schedule.actionType.agentTask"))
+            )
           ),
           formKind === "entity" && React.createElement(
             React.Fragment, null,
@@ -991,7 +1010,7 @@
             React.createElement("input", { type: "text", value: cronText, placeholder: T("schedule.cronPlaceholder"), onChange: function (e) { setCronText(e.target.value); } })
           ),
           React.createElement("p", { className: "wb-sched-form-note" }, formKind === "task"
-            ? T("schedule.taskFormNote")
+            ? (actionType === "message" ? T("schedule.messageFormNote") : T("schedule.taskFormNote"))
             : T("schedule.eventFormNote")),
           err && React.createElement("div", { className: "wb-sched-form-err" }, err)
         ),
@@ -1421,8 +1440,10 @@
     return {
       id: ev.task_id,
       prompt: match.title || ev.title,
+      action_type: match.action_type || ev.action_type || "agent_task",
       schedule_type: match.schedule_type || ev.schedule_type,
       schedule_value: match.schedule_value || ev.schedule_value,
+      schedule_timezone: match.schedule_timezone || ev.schedule_timezone,
       next_run: match.next_run || ev.next_run,
     };
   }

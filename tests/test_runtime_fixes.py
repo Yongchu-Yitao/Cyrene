@@ -2218,10 +2218,104 @@ async def test_execute_task_fallback_persists_webui_reminder(monkeypatch, tmp_pa
 
     saved = json.loads(agent.STATE_FILE.read_text(encoding="utf-8"))["messages"]
 
-    assert saved[-1]["content"] == "Result: task finished without explicit message"
+    assert saved[-1]["content"] == "task finished without explicit message"
     assert saved[-1]["system_initiated"] is True
     assert saved[-1]["scheduled"] is True
     assert any(event.get("type") == "assistant_message" and event.get("scheduled") is True for event in seen)
+
+
+async def test_execute_message_task_sends_exact_text_to_origin_chat(monkeypatch):
+    from cyrene.runtime import scheduler
+    from cyrene.workbench import chat as workbench_chat
+
+    system_messages = []
+    workbench_messages = []
+    notifications = []
+    run_logs = []
+
+    async def fake_append_system_message(content, **kwargs):
+        system_messages.append((content, kwargs))
+
+    async def fake_append_proactive_message(chat_id, content):
+        workbench_messages.append((chat_id, content))
+        return {"chat_id": chat_id, "project_id": "proj", "title": "Origin"}
+
+    async def fake_log_task_run(*args, **kwargs):
+        run_logs.append((args, kwargs))
+
+    monkeypatch.setattr(scheduler, "append_system_message", fake_append_system_message)
+    monkeypatch.setattr(workbench_chat, "append_proactive_message", fake_append_proactive_message)
+    monkeypatch.setattr(scheduler, "run_task_agent", AsyncMock(side_effect=AssertionError("message mode must not run the Agent")))
+    monkeypatch.setattr(scheduler, "notify", AsyncMock(side_effect=lambda **kwargs: notifications.append(kwargs)))
+    monkeypatch.setattr(scheduler, "append_notification", lambda **kwargs: notifications.append(kwargs))
+    monkeypatch.setattr(scheduler.db, "log_task_run", fake_log_task_run)
+    monkeypatch.setattr(scheduler.db, "update_task_after_run", AsyncMock())
+    monkeypatch.setattr(scheduler, "_workbench_workspace_dir_for_project", lambda _project: "")
+
+    await scheduler._execute_task(
+        {
+            "id": "task_message",
+            "chat_id": -1,
+            "origin_session_id": "wbchat_origin",
+            "project_id": "proj",
+            "prompt": "27 分钟到了，请检查排队状态。",
+            "action_type": "message",
+            "schedule_type": "once",
+            "schedule_value": "2026-05-20T10:18:00+00:00",
+        },
+        bot=None,
+        db_path="db.sqlite3",
+    )
+
+    assert system_messages[0][0] == "27 分钟到了，请检查排队状态。"
+    assert workbench_messages == [("wbchat_origin", "27 分钟到了，请检查排队状态。")]
+    assert run_logs[0][1]["result"] == "27 分钟到了，请检查排队状态。"
+    assert notifications[-1]["body"] == "27 分钟到了，请检查排队状态。"
+    assert notifications[-1]["meta"]["chatId"] == "wbchat_origin"
+
+
+async def test_execute_agent_task_notifies_with_delivered_reply(monkeypatch):
+    from cyrene.runtime import scheduler
+    from cyrene.workbench import chat as workbench_chat
+
+    workbench_messages = []
+    notifications = []
+
+    async def fake_run_task_agent(prompt, bot, chat_id, db_path, notify_state=None):
+        notify_state["sent"] = True
+        notify_state["delivered_text"] = "排队已经结束，现在可以进入游戏。"
+        return "Done."
+
+    async def fake_append_proactive_message(chat_id, content):
+        workbench_messages.append((chat_id, content))
+        return {"chat_id": chat_id, "project_id": "proj", "title": "Origin"}
+
+    monkeypatch.setattr(scheduler, "run_task_agent", fake_run_task_agent)
+    monkeypatch.setattr(workbench_chat, "append_proactive_message", fake_append_proactive_message)
+    monkeypatch.setattr(scheduler, "notify", AsyncMock(side_effect=lambda **kwargs: notifications.append(kwargs)))
+    monkeypatch.setattr(scheduler, "append_notification", lambda **kwargs: notifications.append(kwargs))
+    monkeypatch.setattr(scheduler.db, "log_task_run", AsyncMock())
+    monkeypatch.setattr(scheduler.db, "update_task_after_run", AsyncMock())
+    monkeypatch.setattr(scheduler, "_workbench_workspace_dir_for_project", lambda _project: "")
+
+    await scheduler._execute_task(
+        {
+            "id": "task_agent",
+            "chat_id": -1,
+            "origin_session_id": "wbchat_origin",
+            "project_id": "proj",
+            "prompt": "检查云游戏排队状态",
+            "action_type": "agent_task",
+            "schedule_type": "once",
+            "schedule_value": "2026-05-20T10:18:00+00:00",
+        },
+        bot=None,
+        db_path="db.sqlite3",
+    )
+
+    assert workbench_messages == [("wbchat_origin", "排队已经结束，现在可以进入游戏。")]
+    assert notifications[-1]["body"] == "排队已经结束，现在可以进入游戏。"
+    assert "检查云游戏排队状态" not in notifications[-1]["body"]
 
 
 def test_format_httpx_error_includes_request_response_and_cause():
@@ -2384,6 +2478,7 @@ async def test_send_message_tool_from_scheduler_persists_system_message(monkeypa
 
     assert result == "Scheduled message sent to the user."
     assert notify_state["sent"] is True
+    assert notify_state["delivered_text"] == "这是调度任务消息"
     assert saved[-1]["role"] == "assistant"
     assert saved[-1]["content"] == "这是调度任务消息"
     assert saved[-1]["system_initiated"] is True
@@ -2399,7 +2494,7 @@ async def test_schedule_task_once_normalizes_naive_local_time_to_utc(monkeypatch
     seen = {}
     local_timezone = timezone(timedelta(hours=8))
 
-    async def fake_create_task(db_path, chat_id, prompt, schedule_type, schedule_value, next_run, permission_mode="workspace_only", project_id="default", schedule_timezone="UTC"):
+    async def fake_create_task(db_path, chat_id, prompt, schedule_type, schedule_value, next_run, permission_mode="workspace_only", project_id="default", schedule_timezone="UTC", origin_session_id="", action_type="agent_task"):
         seen["db_path"] = db_path
         seen["chat_id"] = chat_id
         seen["prompt"] = prompt
@@ -2409,6 +2504,8 @@ async def test_schedule_task_once_normalizes_naive_local_time_to_utc(monkeypatch
         seen["permission_mode"] = permission_mode
         seen["project_id"] = project_id
         seen["schedule_timezone"] = schedule_timezone
+        seen["origin_session_id"] = origin_session_id
+        seen["action_type"] = action_type
         return "task_local"
 
     class _FakeLocalNow(datetime):
@@ -2440,6 +2537,8 @@ async def test_schedule_task_once_normalizes_naive_local_time_to_utc(monkeypatch
     assert seen["permission_mode"] == "workspace_only"
     assert seen["project_id"] == "default"
     assert seen["schedule_timezone"] == "UTC"
+    assert seen["origin_session_id"] == ""
+    assert seen["action_type"] == "agent_task"
 
 
 async def test_schedule_task_uses_workbench_project_scope(monkeypatch, tmp_path):
@@ -2469,9 +2568,11 @@ async def test_schedule_task_uses_workbench_project_scope(monkeypatch, tmp_path)
         ]
     }), encoding="utf-8")
 
-    async def fake_create_task(db_path, chat_id, prompt, schedule_type, schedule_value, next_run, permission_mode="workspace_only", project_id="default", schedule_timezone="UTC"):
+    async def fake_create_task(db_path, chat_id, prompt, schedule_type, schedule_value, next_run, permission_mode="workspace_only", project_id="default", schedule_timezone="UTC", origin_session_id="", action_type="agent_task"):
         seen["project_id"] = project_id
         seen["schedule_timezone"] = schedule_timezone
+        seen["origin_session_id"] = origin_session_id
+        seen["action_type"] = action_type
         return "task_scope"
 
     monkeypatch.setattr(workbench_context, "_WORKBENCH_STORE", projects_store)
@@ -2483,6 +2584,7 @@ async def test_schedule_task_uses_workbench_project_scope(monkeypatch, tmp_path)
         result = await tools._tool_schedule_task(
             {
                 "prompt": "send_message(\"scope\")",
+                "action_type": "message",
                 "schedule_type": "interval",
                 "schedule_value": "3600",
             },
@@ -2496,6 +2598,8 @@ async def test_schedule_task_uses_workbench_project_scope(monkeypatch, tmp_path)
 
     assert result.startswith("Task task_scope scheduled.")
     assert seen["project_id"] == "proj_demo_scope"
+    assert seen["origin_session_id"] == "wbchat_1"
+    assert seen["action_type"] == "message"
 
 
 async def test_ask_user_tool_persists_pending_question(monkeypatch, tmp_path):

@@ -357,6 +357,8 @@ class ScheduleCreateBody(APIBody):
     schedule_timezone: str | None = Field(default=None, min_length=1, max_length=100)
     next_run: str | None = Field(default=None, max_length=200)
     chat_id: int = -1
+    origin_session_id: str = Field(default="", max_length=160)
+    action_type: Literal["message", "agent_task"] = "agent_task"
 
 
 class ScheduleUpdateBody(APIBody):
@@ -366,6 +368,7 @@ class ScheduleUpdateBody(APIBody):
     schedule_timezone: str | None = Field(default=None, min_length=1, max_length=100)
     next_run: str | None = Field(default=None, max_length=200)
     status: Literal["active", "paused"] | None = None
+    action_type: Literal["message", "agent_task"] | None = None
 
 
 class KnowledgeUpdateBody(APIBody):

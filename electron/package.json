@@ -154,6 +154,8 @@
       "main.js",
       "host-control.js",
       "browser-input.js",
+      "browser-context-menu.js",
+      "browser-popup-policy.js",
       "browser-target.js",
       "agent-cursor.js",
       "preload.js",

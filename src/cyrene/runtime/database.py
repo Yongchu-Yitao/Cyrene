@@ -21,8 +21,10 @@ _CREATE_TABLES = """
 CREATE TABLE IF NOT EXISTS scheduled_tasks (
     id TEXT PRIMARY KEY,
     chat_id INTEGER NOT NULL,
+    origin_session_id TEXT DEFAULT '',
     project_id TEXT DEFAULT 'default',
     prompt TEXT NOT NULL,
+    action_type TEXT DEFAULT 'agent_task',
     schedule_type TEXT NOT NULL,
     schedule_value TEXT NOT NULL,
     schedule_timezone TEXT DEFAULT 'UTC',
@@ -406,6 +408,14 @@ async def init_db(db_path: str) -> None:
             pass  # Column already exists
         try:
             await db.execute("ALTER TABLE scheduled_tasks ADD COLUMN schedule_timezone TEXT DEFAULT 'UTC'")
+        except Exception:
+            pass  # Column already exists
+        try:
+            await db.execute("ALTER TABLE scheduled_tasks ADD COLUMN origin_session_id TEXT DEFAULT ''")
+        except Exception:
+            pass  # Column already exists
+        try:
+            await db.execute("ALTER TABLE scheduled_tasks ADD COLUMN action_type TEXT DEFAULT 'agent_task'")
         except Exception:
             pass  # Column already exists
         await db.execute(
@@ -1920,12 +1930,27 @@ async def create_task(
     permission_mode: str = "workspace_only",
     project_id: str = "default",
     schedule_timezone: str = "UTC",
+    origin_session_id: str = "",
+    action_type: str = "agent_task",
 ) -> str:
     task_id = uuid.uuid4().hex[:8]
     async with aiosqlite.connect(db_path) as db:
         await db.execute(
-            "INSERT INTO scheduled_tasks (id, chat_id, project_id, prompt, schedule_type, schedule_value, schedule_timezone, next_run, created_at, permission_mode) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-            (task_id, chat_id, project_id or "default", prompt, schedule_type, schedule_value, schedule_timezone or "UTC", next_run, datetime.now(timezone.utc).isoformat(), permission_mode),
+            "INSERT INTO scheduled_tasks (id, chat_id, origin_session_id, project_id, prompt, action_type, schedule_type, schedule_value, schedule_timezone, next_run, created_at, permission_mode) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (
+                task_id,
+                chat_id,
+                str(origin_session_id or "").strip(),
+                project_id or "default",
+                prompt,
+                action_type if action_type in {"message", "agent_task"} else "agent_task",
+                schedule_type,
+                schedule_value,
+                schedule_timezone or "UTC",
+                next_run,
+                datetime.now(timezone.utc).isoformat(),
+                permission_mode,
+            ),
         )
         await db.commit()
     return task_id

@@ -19,13 +19,17 @@ from cyrene.model_runtime.cache_invalidation import invalidate_model_runtime_cac
 from cyrene.runtime import config_store
 
 
-CONFIG_VERSION = 4
+CONFIG_VERSION = 5
 ROUTE_NAMES = ("primary", "secondary", "vision", "embedding")
 _ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$")
 _MINIMAX_DEFAULT_BASE_URL = "https://api.minimaxi.com/v1"
 _MINIMAX_REPLACED_DEFAULT_BASE_URLS = {
     "https://api.minimax.io/v1",
     "https://api.minimax.com/v1",
+}
+_DEEPSEEK_DEFAULT_BASE_URL = "https://api.deepseek.com/v1"
+_DEEPSEEK_REPLACED_DEFAULT_BASE_URLS = {
+    "https://api.deepseek.com",
 }
 
 # Built-in providers are connection presets, not protocol adapters. This keeps
@@ -46,7 +50,7 @@ _DEFAULT_PROVIDER_CONNECTIONS: tuple[dict[str, Any], ...] = (
         "name": "DeepSeek",
         "adapter": "openai",
         "enabled": True,
-        "base_url": "https://api.deepseek.com",
+        "base_url": _DEEPSEEK_DEFAULT_BASE_URL,
         "api_key": "",
         "options": {"provider_preset": "deepseek"},
     },
@@ -322,6 +326,14 @@ def _with_default_provider_connections(raw: dict[str, Any]) -> dict[str, Any]:
             and base_url in _MINIMAX_REPLACED_DEFAULT_BASE_URLS
         ):
             connection["base_url"] = _MINIMAX_DEFAULT_BASE_URL
+        if (
+            (
+                preset == "deepseek"
+                or (connection_id == "deepseek" and connection_name == "deepseek")
+            )
+            and base_url in _DEEPSEEK_REPLACED_DEFAULT_BASE_URLS
+        ):
+            connection["base_url"] = _DEEPSEEK_DEFAULT_BASE_URL
         if preset in _DEFAULT_PROVIDER_HOSTS:
             recognized.add(preset)
         if connection_id in _DEFAULT_PROVIDER_HOSTS:
@@ -378,6 +390,12 @@ def _with_default_provider_connections(raw: dict[str, Any]) -> dict[str, Any]:
                 **(options if isinstance(options, dict) else {}),
                 "provider_preset": provider_id,
             }
+            if (
+                provider_id == "deepseek"
+                and str(connection.get("base_url") or "").strip().rstrip("/")
+                in _DEEPSEEK_REPLACED_DEFAULT_BASE_URLS
+            ):
+                connection["base_url"] = _DEEPSEEK_DEFAULT_BASE_URL
             profile_capabilities = {
                 str(capability or "").strip().lower()
                 for profile in profiles

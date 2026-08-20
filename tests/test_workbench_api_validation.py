@@ -132,6 +132,26 @@ def test_project_file_content_streams_inline_and_rejects_symlinks(monkeypatch, t
     assert blocked.json()["code"] == "symlink_not_allowed"
 
 
+def test_project_file_search_covers_nested_workspace_and_skips_ignored_trees(monkeypatch, tmp_path):
+    client = _client(monkeypatch, tmp_path)
+    workspace = tmp_path / "workspace"
+    nested = workspace / "src" / "features"
+    nested.mkdir(parents=True)
+    (nested / "unified-search.jsx").write_text("export default {};\n", encoding="utf-8")
+    ignored = workspace / "node_modules" / "example"
+    ignored.mkdir(parents=True)
+    (ignored / "unified-search.js").write_text("ignored\n", encoding="utf-8")
+
+    response = client.get("/api/projects/project_1/files", params={"query": "unified-search"})
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["query"] == "unified-search"
+    assert [entry["path"] for entry in payload["entries"]] == [
+        "src/features/unified-search.jsx"
+    ]
+
+
 def test_project_text_file_editor_saves_atomically_and_detects_conflicts(monkeypatch, tmp_path):
     client = _client(monkeypatch, tmp_path)
     workspace = tmp_path / "workspace"

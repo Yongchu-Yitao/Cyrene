@@ -102,6 +102,13 @@ def test_pane_cards_can_detach_into_native_windows_with_browser_view_migration()
     assert "const detachedPaneDragSessions = new Map()" in main
     assert "const detachedBrowserSurfaceWindows = new Map()" in main
     assert "createDetachedPaneWindow" in main
+    assert "'chat', 'task', 'file'" in main
+    detached_content = chat.split("  function renderContent() {", 1)[1].split(
+        "\n  return (", 1
+    )[0]
+    assert 'if (kind === "task")' in detached_content
+    assert "<TaskPane" in detached_content
+    assert "detached={true}" in detached_content
     assert "pointInsideBounds(session.sourceWindowBounds, screenPoint)" in main
     assert "crossedSourceBounds || session.boundaryExitIntent" in main
     assert "pointAtBlockedDisplayEdge(session.sourceWindowBounds, cursorPoint)" in main
@@ -1512,6 +1519,16 @@ def test_workbench_pane_drag_ghost_preserves_current_viewport_and_handle_hotspot
     grip = source.split("function WbcSplitGripBar(", 1)[1].split("function WbcSplitPickerMenu", 1)[0]
     assert "function captureDragPointer(event)" in grip
     assert "onPointerDown={captureDragPointer}" in grip
+    capture = grip.split("function captureDragPointer(event)", 1)[1].split(
+        "function trackDragPointer", 1
+    )[0]
+    tracking = grip.split("function trackDragPointer(event)", 1)[1].split(
+        "function releaseDragPointer", 1
+    )[0]
+    assert "onSplitPointerDown" not in capture
+    assert "!drag.moved" in tracking
+    assert "onSplitDragStart(event, dragSource)" in tracking
+    assert "onSplitPointerDown(event, dragSource)" not in tracking
     pane_drop = source.split("  function handlePaneDrop(event, targetCardId, edge) {", 1)[1].split(
         "\n  function handleSideLayerDragOver", 1
     )[0]
@@ -1661,6 +1678,27 @@ def test_pane_grip_drag_uses_rendered_position_key_for_drop_feedback():
     assert 'side + ":" + index' in source
 
 
+def test_task_and_chat_side_drop_use_the_same_live_panel_geometry():
+    root = Path(__file__).resolve().parent.parent
+    source = (root / "src" / "webui" / "frontend" / "workbench-chat.jsx").read_text(
+        encoding="utf-8"
+    )
+
+    helper = source.split("function wbcChatSideZoneRect()", 1)[1].split(
+        "function wbcPinSplitMotionOpen", 1
+    )[0]
+    task_selector = 'page.querySelector(":scope > .wbc-task-context-panel")'
+    chat_selector = 'page.querySelector(":scope > .wbc-side")'
+    assert task_selector in helper
+    assert chat_selector in helper
+    assert helper.index(task_selector) < helper.index(chat_selector)
+    assert "var sr = side.getBoundingClientRect();" in helper
+    assert "return { left: sr.left, top: pr.top, right: sr.right, bottom: pr.bottom };" in helper
+    assert helper.index("var sr = side.getBoundingClientRect();") < helper.index(
+        'getPropertyValue("--wbc-chat-side-preview-width")'
+    )
+
+
 def test_workbench_two_level_card_panes_share_drag_resize_and_menu_contracts():
     root = Path(__file__).resolve().parent.parent
     source = (root / "src" / "webui" / "frontend" / "workbench-chat.jsx").read_text(
@@ -1685,6 +1723,15 @@ const fileB = wbcPaneCard("file", {{ path: "b.md" }}, {{ id: "file:b" }});
 const chatB = wbcPaneCard("chat", "chat-b", {{ id: "chat:chat-b" }});
 const duplicateMain = wbcPaneCard("chat", "main", {{ freshInstance: true, ownerChatId: "main" }});
 const verticalSameChat = wbcPlacePaneCard(base, duplicateMain, "left", "top", "", "chat:main");
+const verticalSource = verticalSameChat.left[1];
+const verticalCompanion = verticalSameChat.left[0];
+const axisLeft = wbcPlacePaneCard(verticalSameChat, verticalSource, "left", "left", verticalSource.id, "chat:main");
+const axisRight = wbcPlacePaneCard(verticalSameChat, verticalSource, "left", "right", verticalSource.id, "chat:main");
+const externalLeft = wbcPlacePaneCard(base, fileA, "left", "left", "", "chat:main");
+const externalRight = wbcPlacePaneCard(base, fileA, "left", "right", "", "chat:main");
+const externalTop = wbcPlacePaneCard(base, fileA, "left", "top", "", "chat:main");
+const externalBottom = wbcPlacePaneCard(base, fileA, "left", "bottom", "", "chat:main");
+const externalReplace = wbcPlacePaneCard(base, fileA, "left", "replace", "", "chat:main");
 const horizontal = wbcPlacePaneCard(base, fileA, "right", "replace", "", "");
 const vertical = wbcPlacePaneCard(horizontal, chatB, "right", "bottom", "", "file:a");
 const replaced = wbcPlacePaneCard(vertical, fileB, "right", "top", "", "file:a");
@@ -1703,6 +1750,13 @@ process.stdout.write(JSON.stringify({{
     distinctIds: verticalSameChat.left[0].id !== verticalSameChat.left[1].id,
     payloads: verticalSameChat.left.map(card => card.payload),
   }},
+  axisLeft: [axisLeft.left[0].id === verticalSource.id, axisLeft.right[0].id === verticalCompanion.id],
+  axisRight: [axisRight.left[0].id === verticalCompanion.id, axisRight.right[0].id === verticalSource.id],
+  externalLeft: [externalLeft.left[0].id, externalLeft.right[0].id],
+  externalRight: [externalRight.left[0].id, externalRight.right[0].id],
+  externalTop: externalTop.left.map(card => card.id),
+  externalBottom: externalBottom.left.map(card => card.id),
+  externalReplace: externalReplace.left.map(card => card.id),
 }}));
 """
     result = subprocess.run(
@@ -1722,6 +1776,13 @@ process.stdout.write(JSON.stringify({{
             "distinctIds": True,
             "payloads": ["main", "main"],
         },
+        "axisLeft": [True, True],
+        "axisRight": [True, True],
+        "externalLeft": ["file:a", "chat:main"],
+        "externalRight": ["chat:main", "file:a"],
+        "externalTop": ["file:a", "chat:main"],
+        "externalBottom": ["chat:main", "file:a"],
+        "externalReplace": ["file:a"],
     }
 
     assert "function WbcPaneCardFrame" in source
@@ -1747,7 +1808,11 @@ process.stdout.write(JSON.stringify({{
     assert 'sourceCardId = replacingSameChatCard ? canonicalChatCardId : ""' in source
     assert 'String(card.id || "") === "chat:" + String(activeChatId || "")' in source
     assert '(layout[target.side] || []).length >= 2 ? "replace" : edge' in source
-    assert 'className={"wbc-pane-card-drop-layer" + (replaceOnly ? " replace-only" : "")}' in source
+    assert 'className={"wbc-pane-card-drop-layer" + (replaceOnly ? " replace-only" : "") + (axisEnabled ? " axis-enabled" : "")}' in source
+    assert "axisEnabled={paneCardCount === 1}" in source
+    assert 'className="wbc-pane-axis-drop-layer"' in source
+    assert 'dropKey: "axis:" + axisEdge' in source
+    assert 'edge === "left" || edge === "right"' in source
     assert 'promoteSourceLeft: true' in source
     assert 'restore: !!floating' in source
     assert 'card.kind === "file" || card.kind === "viewer"' in source
@@ -1760,7 +1825,7 @@ process.stdout.write(JSON.stringify({{
         "function openConversationPanelFromMainGrip()", 1
     )[1].split("function renderPaneCard", 1)[0]
     assert "onOpenConversationPanel={openConversationPanelFromMainGrip}" in source
-    assert ".wbc-page.wbc-side-hidden > .wbc-side" in styles
+    assert ".wbc-page.wbc-side-hidden > :is(.wbc-side, .wbc-task-context-panel)" in styles
 
     pane_card_css = styles.split(".wbc-pane-card {", 1)[1].split("}", 1)[0]
     assert "border: var(--wb-floating-rail-border);" in pane_card_css
@@ -1794,6 +1859,60 @@ process.stdout.write(JSON.stringify({{
     replace_only_css = styles.split(".wbc-pane-card-drop-layer.replace-only {", 1)[1].split("}", 1)[0]
     assert "grid-template-rows: minmax(0, 1fr);" in replace_only_css
     assert ".wbc-pane-card-drop-layer.replace-only .wbc-pane-card-drop-zone.replace" in styles
+    axis_drop_css = styles.split(".wbc-pane-card-drop-layer.axis-enabled {", 1)[1].split("}", 1)[0]
+    assert "grid-template-columns: repeat(3, minmax(0, 1fr));" in axis_drop_css
+    assert "grid-template-rows: repeat(3, minmax(0, 1fr));" in axis_drop_css
+    assert "minmax(64px" not in axis_drop_css
+    pane_frame = source.split("function WbcPaneCardFrame", 1)[1].split(
+        "function WbcPaneRowResizer", 1
+    )[0]
+    five_way_drop = source.split("function WbcPaneFiveWayDropSurface", 1)[1].split(
+        "function WbcPaneCardFrame", 1
+    )[0]
+    assert ") : axisEnabled ? (" in pane_frame
+    assert "<WbcPaneFiveWayDropSurface" in pane_frame
+    for edge in ("top", "left", "replace", "right", "bottom"):
+        assert f'className="wbc-pane-card-axis-sensor {edge}"' in five_way_drop
+        assert f'onDrop(event, card.id, "{edge}")' in five_way_drop
+    assert '"wbc-pane-card-drop-zone axis-preview " + activeEdge + " active"' in five_way_drop
+    assert 'onDrop(event, card.id, "left")' in five_way_drop
+    assert 'onDrop(event, card.id, "right")' in five_way_drop
+    assert ".wbc-pane-card-drop-zone.axis-preview.top" in styles
+    assert "inset: 0 0 66.6667%;" in styles
+    assert ".wbc-pane-card-drop-zone.axis-preview.replace" in styles
+    assert "inset: 33.3333% 0;" in styles
+    assert ".wbc-pane-card-drop-zone.axis-preview.bottom" in styles
+    assert "inset: 66.6667% 0 0;" in styles
+    assert ".wbc-pane-card-drop-zone.axis-preview.left" in styles
+    assert "inset: 0 50% 0 0;" in styles
+    assert ".wbc-pane-card-drop-zone.axis-preview.right" in styles
+    assert "inset: 0 0 0 50%;" in styles
+    active_drop_css = styles.split(".wbc-pane-card-drop-zone.active {", 1)[1].split("}", 1)[0]
+    assert "background: color-mix(in srgb, var(--wb-accent) 13%, var(--wb-card-bg));" in active_drop_css
+    assert 'className="wbc-pane-context-drop-host"' in source
+    assert 'dropKey="workspace:single"' in source
+    assert 'className="wbc-pane-card-drop-layer context-tracks"' in source
+    assert "<WbcPaneContextTrackDropSurface" in source
+    assert 'paneOnlyCard.kind === "chat" || paneOnlyCard.kind === "task"' in source
+    context_surface = source.split("function WbcPaneContextTrackDropSurface", 1)[1].split(
+        "function WbcPaneFiveWayDropSurface", 1
+    )[0]
+    for edge in ("left", "right"):
+        assert f'className="wbc-pane-context-drop-sensor {edge}"' in context_surface
+        assert f'onDrop(event, card.id, "{edge}")' in context_surface
+    assert '"wbc-pane-card-drop-zone context-preview " + activeEdge + " active"' in context_surface
+    context_drop_css = styles.split(".wbc-pane-context-drop-host {", 1)[1].split("}", 1)[0]
+    assert "grid-column: 3 / 5;" in context_drop_css
+    assert "grid-row: 1;" in context_drop_css
+    assert "var(--wbc-card-top-inset)" in context_drop_css
+    context_tracks_css = styles.split(".wbc-pane-card-drop-layer.context-tracks {", 1)[1].split("}", 1)[0]
+    assert "grid-template-columns: minmax(0, 1fr) var(--wbc-side-track-width);" in context_tracks_css
+    assert ".wbc-pane-card-drop-zone.context-preview.left" in styles
+    assert ".wbc-pane-card-drop-zone.context-preview.right" in styles
+    assert 'chatSideDropActive && paneCardCount !== 1' in source
+    assert 'resourceSplitDropSide && paneCardCount !== 1' in source
+    assert ".wbc-pane-axis-drop-layer" in styles
+    assert ".wbc-pane-axis-drop-zone.active" in styles
     assert "--wbc-pane-column-floor: min(380px" in styles
     assert "grid-template-columns:" in styles
     assert "grid-column: 2;" in styles
@@ -1807,6 +1926,8 @@ process.stdout.write(JSON.stringify({{
     assert '"workbenchChat.newConversation": "新建对话"' in i18n
     assert '"workbenchChat.dropPaneTop"' in i18n
     assert '"workbenchChat.dropPaneBottom"' in i18n
+    assert i18n.count('"workbenchChat.dropPaneLeft"') == 2
+    assert i18n.count('"workbenchChat.dropPaneRight"') == 2
     assert '"workbenchChat.dropPaneReplace"' in i18n
     assert '"workbenchChat.dropConversationReplace": "松手替换当前对话"' in i18n
 
@@ -2207,6 +2328,9 @@ process.stdout.write(JSON.stringify([
     side_zone_helper = source.split("function wbcChatSideZoneRect()", 1)[1].split(
         "function wbcClonePaneWithLiveState", 1
     )[0]
+    assert 'page.querySelector(":scope > .wbc-task-context-panel")' in side_zone_helper
+    assert 'page.querySelector(":scope > .wbc-side")' in side_zone_helper
+    assert side_zone_helper.index(".wbc-task-context-panel") < side_zone_helper.index(".wbc-side")
     assert 'page.classList.contains("wbc-side-hidden")' in side_zone_helper
     assert "if (side && !sideHidden)" in side_zone_helper
     assert "sr.left < pr.right && sr.right > pr.left" in side_zone_helper
@@ -2219,6 +2343,9 @@ process.stdout.write(JSON.stringify([
         "{splitDetailOpen &&", 1
     )[0]
     assert 'className="wbc-chat-side-drop-hint"' in side_drop_layer
+    assert 'chatDragKind === "task"' in side_drop_layer
+    assert 'wbcT("workbenchChat.dropTaskToOpenSide"' in side_drop_layer
+    assert 'wbcT("workbenchChat.dropToOpenSide"' in side_drop_layer
     assert "chatSideDropActive &&" not in side_drop_layer
     side_drop_css = styles.split(".wbc-chat-side-drop-layer {", 1)[1].split("}", 1)[0]
     side_drop_active_css = styles.split(".wbc-chat-side-drop-layer.active {", 1)[1].split("}", 1)[0]
@@ -2703,8 +2830,8 @@ def test_project_file_rows_drag_to_viewer_split_and_topbar_resource_shelf():
     project_resource = source.split("function wbcProjectFileResource", 1)[1].split(
         "function WbcRail", 1
     )[0]
-    project_rows = source.split('{railMode === "files" ? (', 1)[1].split(
-        ") : (", 1
+    project_rows = source.split('id="wbc-project-file-list"', 1)[1].split(
+        'id="wbc-project-terminal-list"', 1
     )[0]
     project_browser = source.split("function WbcRail", 1)[1].split(
         "function WbcBrowserFloatingSurface", 1
@@ -5493,7 +5620,8 @@ def test_workbench_chat_cards_reorder_and_open_when_dropped_on_conversation():
     assert "wbcMoveChatOrder(order, dragState.movingId" in rail
     assert "transfer.setDragImage(" not in rail
     assert "function prepareRailDragImage(root, transfer, clientX, clientY)" in rail
-    assert rail.count("prepareRailDragImage(") == 3
+    # Chat, chat-group, terminal and task rows all reuse the same drag preview.
+    assert rail.count("prepareRailDragImage(") == 4
     assert "function wbcBuildRailCardDragPreview(root, extraClassName)" in source
     drag_preview_helper = source.split(
         "function wbcBuildRailCardDragPreview(root, extraClassName) {", 1
@@ -6272,6 +6400,9 @@ def test_agent_terminal_control_reuses_surface_glint_and_visible_terminal_is_una
     surface = (root / "src/webui/frontend/platform/ui-surface.jsx").read_text(encoding="utf-8")
 
     assert 'error: "multiple_terminals_visible", terminals: visible' in chat
+    assert 'terminals: visible,' in chat
+    assert 'side: rect.left + rect.width / 2 <= window.innerWidth / 2 ? "left" : "right"' in chat
+    assert 'visible.sort(function (a, b)' in chat
     assert 'data-terminal-id={String(terminalId || "")}' in terminal
     control = surface.split('if (method === "terminal.control")', 1)[1].split(
         'return { ok: false, error: "unsupported_surface_method" }', 1
@@ -6675,7 +6806,7 @@ def test_every_workspace_sidebar_card_can_swipe_between_module_tabs():
         "function toggleWorkspaceSidebar()", 1
     )[0]
     assert 'target.closest(".workbench-integrated-rail, .workbench-sidebar-dock.is-persistent")' in sidebar_wheel
-    assert 'var moduleOrder = ["schedule", "task", "chat", "knowledge", "memory"];' in sidebar_wheel
+    assert 'var moduleOrder = ["schedule", "board", "work", "knowledge", "memory"];' in sidebar_wheel
     assert "Math.abs(deltaX) <= Math.abs(deltaY) * 1.15" in sidebar_wheel
     assert "Math.abs(gesture.delta) < 44" in sidebar_wheel
     assert "gesture.lockedUntil = now + 420" in sidebar_wheel
@@ -6775,6 +6906,88 @@ def test_task_menus_use_document_click_away_without_a_blocking_scrim():
         assert 'document.addEventListener("pointerdown", closeOnOutside, true);' in component
         assert 'target.closest(".wb-card-menu")' in component
         assert 'className="wb-card-menu-scrim"' not in component
+
+
+def test_board_new_button_opens_chat_or_task_creation_menu():
+    root = Path(__file__).resolve().parent.parent
+    source = (root / "src" / "webui" / "frontend" / "workbench.jsx").read_text(
+        encoding="utf-8"
+    )
+    styles = (root / "src" / "webui" / "frontend" / "workbench.css").read_text(
+        encoding="utf-8"
+    )
+    task_board = source.split("function TaskBoard(", 1)[1].split(
+        "function TaskBoardCard(", 1
+    )[0]
+
+    assert '<span>{t("taskBoard.new")}</span>' in task_board
+    assert 'className={"wb-board-new-chevron"' in task_board
+    assert 'aria-haspopup="menu"' in task_board
+    assert 'className="wb-card-menu wb-board-create-dropdown" role="menu"' in task_board
+    assert 'if (onCreateChat) onCreateChat();' in task_board
+    assert 'onCreateSession();' in task_board
+    assert 'onCreateChat={createChat}' in source
+    assert ".wb-board-create-menu {" in styles
+    assert ".wb-board-create-dropdown {" in styles
+
+
+def test_board_search_filters_conversations_and_tasks():
+    root = Path(__file__).resolve().parent.parent
+    source = (root / "src" / "webui" / "frontend" / "workbench.jsx").read_text(encoding="utf-8")
+    styles = (root / "src" / "webui" / "frontend" / "workbench.css").read_text(encoding="utf-8")
+    translations = (root / "src" / "webui" / "frontend" / "workbench-i18n.jsx").read_text(encoding="utf-8")
+    task_board = source.split("function TaskBoard(", 1)[1].split("function TaskBoardCard(", 1)[0]
+
+    assert 'var [query, setQuery] = useWorkbenchState("");' in task_board
+    assert 'var visibleMixedCards = normalizedQuery ? mixedCards.filter' in task_board
+    assert 'card.kind === "task"' in task_board
+    assert 'var cardMap = new Map(visibleMixedCards.map' in task_board
+    assert 'className="wb-board-search"' in task_board
+    assert 'type="search"' in task_board
+    assert 'placeholder={t("taskBoard.searchPlaceholder")}' in task_board
+    assert 't("taskBoard.noSearchResults")' in task_board
+    assert task_board.index('className="wb-board-create-menu"') < task_board.index('className="wb-board-search"')
+    assert '.wb-board-search {' in styles
+    assert '.wb-board-search:focus-within {' in styles
+    search_icon_css = styles.split('.wb-board-search > span {', 1)[1].split('}', 1)[0]
+    assert 'align-items: center;' in search_icon_css
+    assert 'justify-content: center;' in search_icon_css
+    assert 'line-height: 0;' in search_icon_css
+    assert '"taskBoard.searchPlaceholder": "Search conversations and tasks"' in translations
+    assert '"taskBoard.searchPlaceholder": "搜索对话和任务"' in translations
+
+
+def test_board_chat_cards_share_task_card_background():
+    root = Path(__file__).resolve().parent.parent
+    styles = (root / "src" / "webui" / "frontend" / "workbench.css").read_text(encoding="utf-8")
+
+    board_card_css = styles.split(".wb-board-card {", 1)[1].split("}", 1)[0]
+    assert "background: var(--wb-card-bg);" in board_card_css
+    assert ".wb-board-card.is-chat {" not in styles
+
+
+def test_task_rail_menu_reuses_chat_pin_and_rename_actions():
+    root = Path(__file__).resolve().parent.parent
+    chat = (root / "src" / "webui" / "frontend" / "workbench-chat.jsx").read_text(encoding="utf-8")
+    workbench = (root / "src" / "webui" / "frontend" / "workbench.jsx").read_text(encoding="utf-8")
+    translations = (root / "src" / "webui" / "frontend" / "workbench-i18n.jsx").read_text(encoding="utf-8")
+
+    task_card = chat.split("function renderTaskCard(task) {", 1)[1].split("var terminalMap", 1)[0]
+    assert 'className="wbc-chat-pin-action"' in task_card
+    assert 'onTogglePinnedTask(task, !isPinned)' in task_card
+    assert 'setRenameTask(task);' in task_card
+    assert 'wbcT("task.rename", "Rename task")' in task_card
+    assert 'wbcT("rail.deleteTask", "Delete task")' in task_card
+    assert 'entity="task"' in chat
+    assert 'chat={renameTask}' in chat
+    assert 'onRename={onRenameTask}' in chat
+    assert 'pinnedTasks.map(renderTaskCard)' in chat
+    assert 'recentTasks.map(renderTaskCard)' in chat
+    assert 'function renameProjectRailTask(taskId, title)' in workbench
+    assert 'model.patchSession(taskId, { title: title })' in workbench
+    assert 'onTogglePinnedTask' in workbench
+    assert '"task.pin": "置顶任务"' in translations
+    assert '"task.rename": "重命名任务"' in translations
 
 
 def test_expanded_task_detail_rail_uses_its_own_lane_and_hides_scrollbar():
@@ -6966,13 +7179,14 @@ def test_workbench_keeps_one_persistent_module_dock_across_workspace_switches():
     module_dock = source.split("function WorkbenchSidebarDock(", 1)[1].split(
         "// Temporarily keep sign-out", 1
     )[0]
-    for module_id in ("task", "chat", "knowledge", "schedule", "memory"):
+    for module_id in ("board", "work", "knowledge", "schedule", "memory"):
         assert f'id: "{module_id}"' in module_dock
     dock_item_positions = [
         module_dock.index(f'id: "{module_id}"')
-        for module_id in ("schedule", "task", "chat", "knowledge", "memory")
+        for module_id in ("schedule", "board", "work", "knowledge", "memory")
     ]
     assert dock_item_positions == sorted(dock_item_positions)
+    assert "WorkbenchModuleAccount" not in module_dock
     assert "function renderSidebarDockSlot()" in source
     assert 'return <div className="workbench-sidebar-dock-slot" aria-hidden="true" />;' in source
     assert "var [railCollapsed, setRailCollapsed] = useWorkbenchState" in source
@@ -7154,7 +7368,7 @@ def test_workbench_keeps_one_persistent_module_dock_across_workspace_switches():
     assert "grid-template-columns: 32px minmax(0, 0fr) 0fr;" in collapsed_account_button_css
     assert "padding: 3px 4px;" in collapsed_account_button_css
     assert "function WorkbenchRailAccount(" in source
-    assert "<WorkbenchRailAccount" in module_dock
+    assert "<WorkbenchRailAccount" not in module_dock
     assert 'className="workbench-rail-account-button"' in source
     account_summary_css = styles.split(".workbench-rail-account-summary {", 1)[1].split("}", 1)[0]
     account_name_css = styles.split(".workbench-rail-account-summary b {", 1)[1].split("}", 1)[0]
@@ -7244,7 +7458,7 @@ def test_chat_rail_show_all_expands_recent_items_without_removed_filter_state():
     assert "setRailFilter" not in source
 
 
-def test_active_module_dock_item_is_not_a_toggle_back_to_tasks():
+def test_active_module_dock_item_is_not_a_toggle_back_to_board_or_work():
     root = Path(__file__).resolve().parent.parent
     source = (root / "src" / "webui" / "frontend" / "workbench.jsx").read_text(
         encoding="utf-8"
@@ -7253,8 +7467,10 @@ def test_active_module_dock_item_is_not_a_toggle_back_to_tasks():
     handler = source.split("function handleOpenPage(page) {", 1)[1].split(
         "function toggleWorkspaceSidebar()", 1
     )[0]
-    assert 'if (page === "task") {' in handler
-    assert "if (!fullPage) return;" in handler
+    assert 'if (page === "board" || page === "task") {' in handler
+    assert 'if (!fullPage && taskView === "board") return;' in handler
+    assert 'if (page === "work") {' in handler
+    assert 'if (fullPage === "chat") return;' in handler
     assert "if (fullPage === page) return;" in handler
     assert "setFullPage(page);" in handler
     assert "prev === page ? null : page" not in handler
@@ -8518,7 +8734,7 @@ def test_workbench_artifact_rows_download_registered_files():
     assert "_workbench_artifact_download_target(project, session, artifact_id)" in routes
 
 
-def test_workbench_task_details_reuse_floating_animated_accordion():
+def test_workbench_task_panel_reuses_conversation_panel_structure_and_styles():
     root = Path(__file__).resolve().parent.parent
     source = (root / "src" / "webui" / "frontend" / "workbench.jsx").read_text(encoding="utf-8")
     styles = (root / "src" / "webui" / "frontend" / "workbench.css").read_text(encoding="utf-8")
@@ -8526,16 +8742,23 @@ def test_workbench_task_details_reuse_floating_animated_accordion():
     index = (root / "src" / "webui" / "frontend" / "index.html").read_text(encoding="utf-8")
 
     panel = source.split("function RightContextPanel", 1)[1].split("function ReflectionSection", 1)[0]
-    assert 'className="workbench-right-panel wb-floating-detail-shell wb-task-detail-shell"' in panel
-    assert 'className="wb-floating-detail-card wb-task-detail-card"' in panel
+    assert '"workbench-right-panel wb-floating-detail-shell wb-task-detail-shell"' in panel
+    assert '(className ? " " + className : "")' in panel
+    assert 'className="wbc-side-card wb-floating-detail-card wb-task-detail-card"' in panel
     assert '<WbColResizer trackGutter surfaceId="task-detail" />' in panel
-    assert 'className="wb-detail-accordion wb-task-detail-tabs"' in panel
+    assert 'className="wbc-side-card-head"' in panel
+    assert 'className="wbc-side-accordion wb-task-detail-tabs"' in panel
+    assert 'className={"wbc-side-accordion-item"' in panel
+    assert 'className={"wbc-side-accordion-trigger wb-task-detail-tab"' in panel
+    assert 'className="wbc-side-accordion-label"' in panel
+    assert 'className="wbc-side-accordion-chevron"' in panel
     assert 'aria-expanded={expanded}' in panel
     assert 'onTabChange(expanded ? "" : item.id)' in panel
     assert 'artifacts.length ? [{ id: "artifacts"' in panel
     assert 'tab === "artifacts" && !artifacts.length' in panel
-    assert 'className={"wb-detail-accordion-panel wb-task-detail-tab-panel"' in panel
-    assert 'className="workbench-right-body"' in panel
+    assert 'className={"wbc-side-collapse wb-task-detail-tab-panel"' in panel
+    assert 'className="wbc-side-collapse-inner"' in panel
+    assert 'className="wbc-side-body workbench-right-body"' in panel
     files_tab = source.split("function FilesTab", 1)[1].split("function LogsTab", 1)[0]
     logs_tab = source.split("function LogsTab", 1)[1].split("function AcceptanceTab", 1)[0]
     acceptance_tab = source.split("function AcceptanceTab", 1)[1].split("function ArtifactsTab", 1)[0]
@@ -8611,8 +8834,9 @@ def test_workbench_task_details_reuse_floating_animated_accordion():
     assert 'className="wb-acceptance-list"' in acceptance_tab
     assert 'className="wb-empty-action wb-acceptance-empty"' in acceptance_tab
     assert 'html[data-theme="dark"] .wb-task-detail-card' in styles
-    assert '"task.side.detailPanel": "Task details"' in i18n
-    assert '"task.side.detailPanel": "任务详情"' in i18n
+    assert 'html[data-theme="dark"] .wbc-page .wbc-side-card.wb-task-detail-card' in styles
+    assert '"task.side.detailPanel": "Task panel"' in i18n
+    assert '"task.side.detailPanel": "任务面板"' in i18n
     assert "workbench.css?v=0.7.11" in index
 
 
@@ -9614,7 +9838,10 @@ def test_workbench_task_composer_matches_chat_floating_card_material():
         ".workbench-task-header-sticky::before,\n.workbench-task-header-sticky::after {", 1
     )[1].split("}", 1)[0]
     task_header_left_mask = styles.split(".workbench-task-header-sticky::before {", 1)[1].split("}", 1)[0]
-    task_header_right_mask = styles.rsplit(".workbench-task-header-sticky::after {", 1)[1].split("}", 1)[0]
+    task_header_right_mask = styles.split(
+        ".workbench-task-header-sticky::before {", 1
+    )[1].split(".workbench-task-header-sticky::after {", 1)[1].split("}", 1)[0]
+    workbench_shell = styles.split(".workbench-shell {", 1)[1].split("}", 1)[0]
     chat_box = styles.split(".wbc-composer-box {", 1)[1].split("}", 1)[0]
     chat_actions = styles.split("\n.wbc-composer-actions {", 1)[1].split("}", 1)[0]
     task_main = styles.split(
@@ -9630,7 +9857,8 @@ def test_workbench_task_composer_matches_chat_floating_card_material():
     assert "background: color-mix(in srgb, var(--wb-card-bg) 72%, transparent);" in task_box
     assert "backdrop-filter: blur(18px) saturate(120%) contrast(102%);" in task_box
     assert "--wbc-composer-glass-background: color-mix(in srgb, var(--wb-card-bg) 72%, transparent);" in chat_box
-    assert "--wbc-composer-glass-filter: blur(18px) saturate(120%) contrast(102%);" in chat_box
+    assert "--wbc-composer-glass-filter: blur(18px) saturate(120%) contrast(102%);" in workbench_shell
+    assert "backdrop-filter: var(--wbc-composer-glass-filter);" in chat_box
     assert "wb-composer-disclaimer" not in styles
     assert "ComposerDisclaimer" not in source
     assert "workbench.composerDisclaimer" not in (
@@ -9641,7 +9869,7 @@ def test_workbench_task_composer_matches_chat_floating_card_material():
     assert "padding-bottom: 4px;" not in task_main
     assert 'className="workbench-composer wbc-composer"' in source
     assert 'className="workbench-composer-box wbc-composer-box"' in source
-    assert 'className="workbench-task-header workbench-composer-box"' in task_header
+    assert 'className="workbench-task-header workbench-composer-box wbc-composer-box"' in task_header
     assert 'className="wb-th-main"' in task_header
     assert "position: sticky;" in task_header_sticky
     assert "top: 0;" in task_header_sticky
@@ -9656,12 +9884,19 @@ def test_workbench_task_composer_matches_chat_floating_card_material():
     assert "left: 0;" not in task_header_corner_masks
     assert "radial-gradient(circle at 100% 100%" in task_header_left_mask
     assert "radial-gradient(circle at 0 100%" in task_header_right_mask
+    task_pane_corner_masks = styles.split(
+        ".wbc-task-pane .workbench-task-header-sticky::before,\n"
+        ".wbc-task-pane .workbench-task-header-sticky::after {",
+        1,
+    )[1].split("}", 1)[0]
+    assert "background: var(--wb-main-bg);" in task_pane_corner_masks
     task_main = source.split("function TaskWorkArea", 1)[1].split(
         "function TaskHeader", 1
     )[0]
-    stage_body = task_main.split('<div className="workbench-stage">', 1)[1]
-    assert '<div className="workbench-task-header-sticky">' in stage_body
-    assert stage_body.index("<TaskHeader") < stage_body.index("<StateCard")
+    header_position = task_main.index('<div className="workbench-task-header-sticky">')
+    stage_position = task_main.index('<div className="workbench-stage">')
+    assert header_position < stage_position
+    assert task_main.index("<TaskHeader") < task_main.index("<StateCard")
     assert 'className="workbench-composer-actions wbc-composer-actions"' in source
     assert 'className={"wb-composer-send wbc-send"' in source
     assert '.workbench-composer.wbc-composer {' in styles
@@ -9910,6 +10145,8 @@ def test_workbench_about_hero_owns_update_action_and_download_progress():
     assert hero_index < action_index < update_index
     assert 'className: "wb-about-hero-progress"' in about_block
     assert '"--wb-about-download-progress": heroProgress + "%"' in about_block
+    assert "var heroProgress = downloaded\n    ? 100" in about_block
+    assert about_block.index("var heroProgress = downloaded") < about_block.index("progressTotal > 0")
     assert 'className: "wb-about-update-footer"' not in about_block
     assert 'className: "wb-about-related-card"' in about_block
     assert "var relatedLinks = [" in about_block
@@ -10209,6 +10446,43 @@ def test_workbench_memory_detail_wraps_long_content_without_horizontal_overflow(
     assert "overflow-wrap: anywhere;" in content_block
     assert "overflow-wrap: anywhere;" in citation_block
     assert "white-space: normal;" in footer_button_block
+
+
+def test_workbench_schedule_timeline_items_do_not_use_left_accent_bar():
+    root = Path(__file__).resolve().parent.parent
+    css = (root / "src" / "webui" / "frontend" / "workbench.css").read_text(encoding="utf-8")
+
+    block = css.split("\n.wb-sched-block {", 1)[1].split("}", 1)[0]
+    assert "border-left" not in block
+    assert "border: none;" in block
+    assert "padding: 3px 10px;" in block
+
+
+def test_workbench_memory_list_contains_long_content_and_uses_neutral_selection():
+    root = Path(__file__).resolve().parent.parent
+    css = (root / "src" / "webui" / "frontend" / "workbench.css").read_text(encoding="utf-8")
+
+    scroll_block = css.split("\n.wb-mem-scroll {", 1)[1].split("}", 1)[0]
+    item_block = css.split("\n.wb-mem-item {", 1)[1].split("}", 1)[0]
+    active_block = css.split("\n.wb-mem-item.active {", 1)[1].split("}", 1)[0]
+    candidate_active_block = css.split("\n.wb-mem-item.wb-learning-candidate-card.active,", 1)[1].split("}", 1)[0]
+    chip_block = css.split("\n.wb-mem-item-tags .wb-mem-chip {", 1)[1].split("}", 1)[0]
+    chain_active_block = css.split("\n.wb-learning-chain-card.active {", 1)[1].split("}", 1)[0]
+
+    assert "overflow-x: hidden;" in scroll_block
+    assert "box-sizing: border-box;" in item_block
+    assert "min-width: 0;" in item_block
+    assert "max-width: 100%;" in chip_block
+    assert "white-space: normal;" in chip_block
+    assert "overflow-wrap: anywhere;" in chip_block
+    assert "var(--wb-accent)" not in active_block
+    assert "var(--wb-active" not in active_block
+    assert ".wb-mem-item.wb-learning-candidate-card.active:hover" in css
+    assert "var(--wb-accent)" not in candidate_active_block
+    assert "color-mix(in srgb, var(--wb-text) 18%, var(--wb-line))" in candidate_active_block
+    assert "0 2px 6px" in candidate_active_block
+    assert "#f23491" not in chain_active_block
+    assert "var(--wb-line-2)" in chain_active_block
 
 
 def test_workbench_skill_learning_uses_actionable_candidate_status_only():
@@ -11439,6 +11713,24 @@ def test_workbench_button_model_mode_forwards_to_runtime_endpoint():
     assert "def has_button_block" in service
     assert "class ChatActionBody" in schemas
     assert "actionId" in schemas
+
+
+def test_unsupported_file_viewer_uses_centered_accessible_empty_state():
+    root = Path(__file__).resolve().parent.parent
+    chat = (root / "src" / "webui" / "frontend" / "workbench-chat.jsx").read_text(encoding="utf-8")
+    styles = (root / "src" / "webui" / "frontend" / "workbench.css").read_text(encoding="utf-8")
+    i18n = (root / "src" / "webui" / "frontend" / "workbench-i18n.jsx").read_text(encoding="utf-8")
+
+    unsupported = chat.split('className="wbc-viewer-unsupported"', 1)[1].split("</div>\n    );", 1)[0]
+    assert 'role="status"' in chat
+    assert "<WbcFileVisual file={file}" in unsupported
+    assert "WBC_ICONS.openExternal" in unsupported
+    assert 'className="wb-btn tonal wbc-viewer-unsupported-action"' in unsupported
+    assert ".wbc-viewer-unsupported {" in styles
+    assert "place-items: center" in styles
+    assert "flex: 1 1 auto" in styles
+    assert ".wbc-viewer-unsupported-action:focus-visible" in styles
+    assert i18n.count('"workbenchChat.viewerUnsupportedHint"') == 2
 
 
 def test_settings_controls_share_memory_floating_material():

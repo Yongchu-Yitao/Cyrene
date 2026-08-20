@@ -170,6 +170,7 @@ async def test_profile_test_targets_only_the_selected_chat_model(monkeypatch):
         "api_key": "sk-test",
         "capabilities": ["chat", "vision"],
         "reasoning_effort": "",
+        "endpoints": ["https://example.test/v1/chat/completions"],
     }]
     assert captured["publish_events"] is False
     assert captured["record_usage"] is False
@@ -251,7 +252,7 @@ def test_default_provider_connections_are_added_once_and_can_be_deleted(
         "name": "DeepSeek",
         "adapter": "openai",
         "enabled": True,
-        "base_url": "https://api.deepseek.com",
+        "base_url": "https://api.deepseek.com/v1",
         "api_key": "",
         "options": {"provider_preset": "deepseek"},
     }
@@ -302,6 +303,34 @@ def test_provider_upgrade_replaces_legacy_minimax_default_address(
 
     assert upgraded["connections"][0]["base_url"] == "https://api.minimaxi.com/v1"
     assert upgraded["connections"][0]["api_key"] == "sk-minimax"
+
+
+def test_provider_upgrade_adds_v1_to_legacy_deepseek_default_address(
+    isolated_model_store,
+):
+    from cyrene.runtime.model_configuration import get_model_configuration
+
+    isolated_model_store.update_settings_atomic({
+        "model_configuration": {
+            "version": 4,
+            "connections": [{
+                "id": "deepseek",
+                "name": "DeepSeek",
+                "adapter": "openai",
+                "enabled": True,
+                "base_url": "https://api.deepseek.com",
+                "api_key": "sk-deepseek",
+                "options": {"provider_preset": "deepseek"},
+            }],
+            "profiles": [],
+            "routes": {name: [] for name in ("primary", "secondary", "vision", "embedding")},
+        },
+    })
+
+    upgraded = get_model_configuration(persist_migration=False)
+
+    assert upgraded["connections"][0]["base_url"] == "https://api.deepseek.com/v1"
+    assert upgraded["connections"][0]["api_key"] == "sk-deepseek"
 
 
 def test_provider_upgrade_recognizes_existing_custom_connections(
@@ -363,6 +392,7 @@ def test_provider_upgrade_rebrands_legacy_deepseek_connection_in_place(
 
     assert deepseek["name"] == "DeepSeek"
     assert deepseek["adapter"] == "openai"
+    assert deepseek["base_url"] == "https://api.deepseek.com/v1"
     assert deepseek["api_key"] == "sk-deepseek"
     assert deepseek["options"]["provider_preset"] == "deepseek"
     assert sum(item["name"] == "DeepSeek" for item in upgraded["connections"]) == 1

@@ -87,6 +87,8 @@ def test_scheduled_task_timezone_round_trips_through_database(tmp_path):
         tasks = await database.get_all_tasks(db_path)
         task = next(item for item in tasks if item["id"] == task_id)
         assert task["schedule_timezone"] == "America/New_York"
+        assert task["origin_session_id"] == ""
+        assert task["action_type"] == "agent_task"
 
     asyncio.run(exercise())
 

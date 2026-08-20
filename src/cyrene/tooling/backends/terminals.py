@@ -94,9 +94,21 @@ def _explicit_access(text: str, access: Access) -> bool:
     if not mentions_terminal:
         return False
     if access == "read":
-        return bool(re.search(r"看|查看|读|检查|inspect|look|read|check", normalized))
+        return bool(re.search(
+            r"看|查看|读|检查|操作|输入|执行|运行|安装|卸载|发送|键入|敲|按|"
+            r"(?:用|使用).{0,12}(?:终端|terminal|shell)|"
+            r"inspect|look|read|check|control|operate|type|input|run|send|install|uninstall|"
+            r"use.{0,20}(?:terminal|shell)",
+            normalized,
+        ))
     if access == "write":
-        return bool(re.search(r"操作|输入|执行|按|control|operate|type|input|run|send", normalized))
+        return bool(re.search(
+            r"操作|输入|执行|运行|安装|卸载|发送|键入|敲|按|"
+            r"(?:用|使用).{0,12}(?:终端|terminal|shell)|"
+            r"control|operate|type|input|run|send|install|uninstall|"
+            r"use.{0,20}(?:terminal|shell)",
+            normalized,
+        ))
     return bool(re.search(r"打开|显示|给我看|open|show|reveal", normalized))
 
 
@@ -191,6 +203,44 @@ async def list_agent_terminals(*, include_exited: bool = True) -> list[dict[str,
     return items
 
 
+async def list_visible_terminals() -> list[dict[str, Any]]:
+    """Return project terminals currently rendered in this run's UI surface."""
+    context, project_id, _chat_id = _context_scope()
+    if not context.ui_instance_id:
+        return []
+    from cyrene.workbench.ui_surface import request
+
+    result = await request(
+        context.ui_instance_id, "terminal.current", {}, timeout=3.0,
+    )
+    candidates = [
+        dict(item) for item in result.get("terminals") or []
+        if isinstance(item, dict) and str(item.get("terminalId") or "")
+    ]
+    current_id = str(result.get("terminalId") or "")
+    if current_id and not any(
+        str(item.get("terminalId") or "") == current_id for item in candidates
+    ):
+        candidates.append({"terminalId": current_id})
+    if not candidates:
+        return []
+    listing = await get_terminal_daemon_client().list(project_id)
+    by_id = {
+        str(item.get("id") or ""): dict(item)
+        for item in listing.get("terminals") or []
+    }
+    visible: list[dict[str, Any]] = []
+    for candidate in candidates:
+        terminal_id = str(candidate.get("terminalId") or "")
+        terminal = by_id.get(terminal_id)
+        if not terminal:
+            continue
+        terminal["visible"] = True
+        terminal["visibleSide"] = str(candidate.get("side") or "")
+        visible.append(terminal)
+    return visible
+
+
 async def show_terminal(terminal_id: str) -> dict[str, Any]:
     context, _project_id, _chat_id = _context_scope()
     terminal = await resolve_terminal(terminal_id=terminal_id, access="show")
@@ -211,5 +261,6 @@ async def show_terminal(terminal_id: str) -> dict[str, Any]:
 
 __all__ = [
     "agent_creation_scope", "animate_terminal_control", "list_agent_terminals",
-    "requested_terminal_title", "resolve_terminal", "show_terminal",
+    "list_visible_terminals", "requested_terminal_title", "resolve_terminal",
+    "show_terminal",
 ]

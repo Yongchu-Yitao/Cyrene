@@ -245,6 +245,7 @@ def _task_events(task: dict, start: datetime, end: datetime) -> list[dict]:
             "next_run": task.get("next_run"),
             "last_run": task.get("last_run"),
             "permission_mode": task.get("permission_mode") or "workspace_only",
+            "action_type": task.get("action_type") or "agent_task",
         })
     return events
 
@@ -387,6 +388,8 @@ def register_workbench_schedule_routes(router: APIRouter, db_path: str) -> None:
                 permission_mode="workspace_only",
                 project_id=resolved_workspace,
                 schedule_timezone=schedule_timezone,
+                origin_session_id=str(body.get("origin_session_id") or "").strip(),
+                action_type=str(body.get("action_type") or "agent_task"),
             )
             append_notification(
                 title="日程提醒已创建",
@@ -434,7 +437,7 @@ def register_workbench_schedule_routes(router: APIRouter, db_path: str) -> None:
         sets: list[str] = []
         vals: list = []
         # permission_mode is intentionally NOT updatable here (REST policy).
-        for field in ("prompt", "schedule_type", "schedule_value", "schedule_timezone", "next_run", "status"):
+        for field in ("prompt", "action_type", "schedule_type", "schedule_value", "schedule_timezone", "next_run", "status"):
             if field in body:
                 sets.append(f"{field} = ?")
                 vals.append(body[field])

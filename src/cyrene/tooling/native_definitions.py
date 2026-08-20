@@ -112,7 +112,10 @@ _NATIVE_TOOL_DEFS: tuple[dict[str, Any], ...] = tuple([{'type': 'function',
                               'required': ['goal_gap']}}},
  {'type': 'function',
   'function': {'name': 'schedule_task',
-               'description': 'Schedule a task. schedule_type must be cron, interval, or once. Use '
+               'description': 'Schedule either an exact message or an Agent task. Use action_type="message" to send '
+                              'the prompt text unchanged at the scheduled time, or action_type="agent_task" (default) '
+                              'to execute the prompt with tools and report the result. schedule_type must be cron, '
+                              'interval, or once. Use '
                               'permission_mode="full_access" only when the task MUST read/write files outside the '
                               'workspace (the user will be asked to confirm at creation time).',
                'parameters': {'type': 'object',
@@ -128,7 +131,10 @@ _NATIVE_TOOL_DEFS: tuple[dict[str, Any], ...] = tuple([{'type': 'function',
                                              'schedule_timezone': {'type': 'string',
                                                                    'description': 'IANA timezone used for cron wall-clock '
                                                                                   "fields (e.g. 'Asia/Shanghai'). Defaults "
-                                                                                  "to 'UTC'."},
+                                                                  "to 'UTC'."},
+                                             'action_type': {'type': 'string',
+                                                             'enum': ['message', 'agent_task'],
+                                                             'description': 'message sends prompt unchanged; agent_task executes prompt and reports the result.'},
                                              'permission_mode': {'type': 'string',
                                                                  'enum': ['workspace_only', 'full_access'],
                                                                  'description': "Permission scope. 'workspace_only' "
@@ -546,11 +552,20 @@ _NATIVE_TOOL_DEFS: tuple[dict[str, Any], ...] = tuple([{'type': 'function',
                                              }}}}},
  {'type': 'function',
   'function': {'name': 'SendShell',
-               'description': 'Send text or a terminal key to an authorized shared terminal. User input has priority. Requires explicit user authorization for terminals not created by this conversation. If multiple terminal panes are visible and no identifier is provided, ask the user which terminal to use.',
+               'description': 'Send text or a terminal key to an authorized shared terminal. Without shell_id or name, automatically use the single terminal currently visible in the active split, even when it is not bound to the conversation. User input has priority and non-owned terminals require explicit user authorization. If multiple terminal panes are visible, ask which terminal to use.',
                'parameters': {'type': 'object',
                               'properties': {'shell_id': {'type': 'string'},
                                              'name': {'type': 'string'},
                                              'text': {'type': 'string'},
+                                             'sensitive': {
+                                                 'type': 'boolean',
+                                                 'description': (
+                                                     'Set true only when text is a password, passphrase, token, or '
+                                                     'other secret being entered into an existing terminal prompt. '
+                                                     'The input is sent normally but redacted from tool activity and '
+                                                     'permission-review records.'
+                                                 ),
+                                             },
                                              'key': {'type': 'string',
                                                      'enum': ['enter', 'escape', 'tab', 'shift_tab',
                                                               'up', 'down', 'left', 'right',
@@ -568,11 +583,11 @@ _NATIVE_TOOL_DEFS: tuple[dict[str, Any], ...] = tuple([{'type': 'function',
                               'required': []}}},
  {'type': 'function',
   'function': {'name': 'ListShells',
-               'description': 'List terminals bound to the current conversation, including exited terminals.',
+               'description': 'List terminals bound to the current conversation and terminals currently visible in the active split. A visible terminal can be returned even when no terminal is bound to this conversation.',
                'parameters': {'type': 'object', 'properties': {}}}},
  {'type': 'function',
   'function': {'name': 'ReadShell',
-               'description': 'Read an authorized terminal. view=screen returns the current rendered VT viewport; view=scrollback returns a bounded plain-text range from durable PTY history. If multiple terminal panes are visible and no identifier is provided, ask the user which terminal to use.',
+               'description': 'Read an authorized terminal. Without shell_id or name, automatically use the single terminal currently visible in the active split; this works even when it is not bound to the conversation. view=screen returns the rendered VT viewport and view=scrollback returns durable PTY history. If multiple terminal panes are visible, ask the user which terminal to use.',
                'parameters': {'type': 'object',
                               'properties': {'shell_id': {'type': 'string'},
                                              'name': {'type': 'string'},

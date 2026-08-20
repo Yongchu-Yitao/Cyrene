@@ -488,15 +488,17 @@ def _is_official_deepseek_base_url(base_url: str) -> bool:
 def _normalized_llm_endpoints(base_url: str) -> list[str]:
     normalized_base = str(base_url or DEFAULT_OPENAI_BASE_URL).strip().rstrip("/") or DEFAULT_OPENAI_BASE_URL
     if _is_official_deepseek_base_url(normalized_base):
-        # The OpenAI-compatible /v1 route has proved more reliable in
-        # production than DeepSeek's documented unversioned alias. Try it
-        # first so a broken alias cannot consume the transport timeout before
-        # the working route is attempted.
+        # Respect the configured address first. If an older/manual DeepSeek
+        # connection omitted /v1, retain it as the first attempt and
+        # automatically retry through the versioned route when it fails.
         origin = "https://api.deepseek.com"
-        return [
-            f"{origin}/v1/chat/completions",
-            f"{origin}/chat/completions",
-        ]
+        versioned = f"{origin}/v1/chat/completions"
+        unversioned = f"{origin}/chat/completions"
+        return (
+            [versioned, unversioned]
+            if normalized_base.lower().endswith("/v1")
+            else [unversioned, versioned]
+        )
     endpoints = [f"{normalized_base}/chat/completions"]
     if not normalized_base.endswith("/v1"):
         endpoints.append(f"{normalized_base}/v1/chat/completions")
@@ -546,10 +548,9 @@ def _normalized_candidate(raw: dict[str, Any], index: int = 0, *, active_model: 
     elif adapter in {"openai", "openai_compatible"} and _is_official_deepseek_base_url(base_url):
         # The generic OpenAI adapter normally owns Chat Completions endpoint
         # construction.  Official DeepSeek is the exception: its versioned
-        # route is the reliable production path and must retain the fallback
-        # ordering used by the legacy OpenAI-compatible configuration.  Without
-        # this guard, migrating a DeepSeek profile to ``adapter=openai`` silently
-        # collapses the candidate to the unversioned alias only.
+        # route must remain available as a fallback for unversioned saved
+        # addresses. Without this guard, migrating a DeepSeek profile to
+        # ``adapter=openai`` silently collapses the candidate to one endpoint.
         endpoints = _normalized_llm_endpoints(base_url)
     elif adapter in {"anthropic", "openai", "openai_responses", "gemini", "ollama"}:
         from cyrene.model_runtime.protocol_adapters import protocol_endpoints

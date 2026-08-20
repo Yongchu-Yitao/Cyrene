@@ -6,6 +6,7 @@ import asyncio
 import base64
 import contextlib
 import os
+import re
 import signal
 import sqlite3
 import struct
@@ -25,6 +26,7 @@ DEFAULT_OUTPUT_LIMIT = 16 * 1024 * 1024
 USER_INPUT_PRIORITY_SECONDS = 2.0
 INPUT_AUDIT_RETAINED_EVENTS = 10_000
 DEFAULT_UTF8_LOCALE = "C.UTF-8"
+_DEFAULT_TITLE_RE = re.compile(r"^Terminal\s+(\d+)$", re.IGNORECASE)
 
 
 class TerminalInputBusyError(RuntimeError):
@@ -384,6 +386,63 @@ class TerminalManager:
                 self._ready_wake(session, exit_code=None, interrupted=True)
             if status != row["status"] or row["pid"] is not None:
                 self._persist_session(session)
+        self._repair_duplicate_titles()
+
+    @staticmethod
+    def _title_key(title: str) -> str:
+        return str(title or "").strip().casefold()
+
+    @classmethod
+    def _next_default_title(cls, sessions: list[TerminalSession]) -> str:
+        highest = 0
+        occupied = {cls._title_key(session.title) for session in sessions}
+        for session in sessions:
+            match = _DEFAULT_TITLE_RE.fullmatch(str(session.title or "").strip())
+            if match:
+                highest = max(highest, int(match.group(1)))
+        candidate_number = highest + 1
+        while cls._title_key(f"Terminal {candidate_number}") in occupied:
+            candidate_number += 1
+        return f"Terminal {candidate_number}"
+
+    @classmethod
+    def _deduplicated_copy_title(cls, title: str, occupied: set[str]) -> str:
+        base = str(title or "Terminal").strip()[:60] or "Terminal"
+        match = _DEFAULT_TITLE_RE.fullmatch(base)
+        if match:
+            candidate_number = int(match.group(1)) + 1
+            while cls._title_key(f"Terminal {candidate_number}") in occupied:
+                candidate_number += 1
+            return f"Terminal {candidate_number}"
+        copy_number = 2
+        while True:
+            suffix = f" ({copy_number})"
+            candidate = base[:60 - len(suffix)].rstrip() + suffix
+            if cls._title_key(candidate) not in occupied:
+                return candidate
+            copy_number += 1
+
+    def _repair_duplicate_titles(self) -> None:
+        """Repair historical duplicates so title-based lookup is unambiguous."""
+        by_project: dict[str, list[TerminalSession]] = {}
+        for session in self._sessions.values():
+            by_project.setdefault(session.project_id, []).append(session)
+        for sessions in by_project.values():
+            sessions.sort(key=lambda item: (item.order_index, item.created_at, item.id))
+            occupied = {self._title_key(item.title) for item in sessions}
+            seen: set[str] = set()
+            for session in sessions:
+                key = self._title_key(session.title)
+                if key and key not in seen:
+                    seen.add(key)
+                    continue
+                repaired = self._deduplicated_copy_title(session.title, occupied)
+                session.title = repaired
+                session.updated_at = _now_iso()
+                repaired_key = self._title_key(repaired)
+                occupied.add(repaired_key)
+                seen.add(repaired_key)
+                self._persist_session(session)
 
     async def restore_interrupted_sessions(self) -> list[dict[str, Any]]:
         """Restart interactive shells whose PTY owner stopped unexpectedly.
@@ -646,38 +705,44 @@ class TerminalManager:
             raise ValueError("terminal cwd does not exist")
         if not argv:
             raise ValueError("terminal command is required")
-        now = _now_iso()
-        project_sessions = [
-            current for current in self._sessions.values()
-            if current.project_id == project_id
-        ]
-        existing_count = len(project_sessions)
-        next_order_index = max(
-            (current.order_index for current in project_sessions), default=-1
-        ) + 1
-        session = TerminalSession(
-            id=_terminal_id(),
-            project_id=project_id,
-            title=str(title or "").strip()[:60] or f"Terminal {existing_count + 1}",
-            cwd=str(resolved_cwd),
-            shell=str(shell),
-            argv=[str(part) for part in argv],
-            created_at=now,
-            updated_at=now,
-            cols=max(20, min(400, int(cols or 100))),
-            rows=max(5, min(200, int(rows or 30))),
-            order_index=next_order_index,
-            owner_chat_id=str(owner_chat_id or "").strip(),
-            created_by=str(created_by or "user").strip() or "user",
-            owner_tool_call_id=str(owner_tool_call_id or "").strip(),
-            launch_mode=str(launch_mode or "interactive").strip() or "interactive",
-        )
-        self._reset_screen(session)
-        if wake_on_exit:
-            if not session.owner_chat_id:
-                raise ValueError("ownerChatId is required for wake_on_exit")
-            session.wake_id = "twake_" + uuid.uuid4().hex[:16]
         async with self._lock:
+            project_sessions = [
+                current for current in self._sessions.values()
+                if current.project_id == project_id
+            ]
+            requested_title = str(title or "").strip()[:60]
+            if requested_title and any(
+                self._title_key(current.title) == self._title_key(requested_title)
+                for current in project_sessions
+            ):
+                raise ValueError("terminal title already exists in this project")
+            resolved_title = requested_title or self._next_default_title(project_sessions)
+            next_order_index = max(
+                (current.order_index for current in project_sessions), default=-1
+            ) + 1
+            now = _now_iso()
+            session = TerminalSession(
+                id=_terminal_id(),
+                project_id=project_id,
+                title=resolved_title,
+                cwd=str(resolved_cwd),
+                shell=str(shell),
+                argv=[str(part) for part in argv],
+                created_at=now,
+                updated_at=now,
+                cols=max(20, min(400, int(cols or 100))),
+                rows=max(5, min(200, int(rows or 30))),
+                order_index=next_order_index,
+                owner_chat_id=str(owner_chat_id or "").strip(),
+                created_by=str(created_by or "user").strip() or "user",
+                owner_tool_call_id=str(owner_tool_call_id or "").strip(),
+                launch_mode=str(launch_mode or "interactive").strip() or "interactive",
+            )
+            self._reset_screen(session)
+            if wake_on_exit:
+                if not session.owner_chat_id:
+                    raise ValueError("ownerChatId is required for wake_on_exit")
+                session.wake_id = "twake_" + uuid.uuid4().hex[:16]
             self._sessions[session.id] = session
             self._persist_session(session)
             if session.wake_id:
@@ -1070,6 +1135,13 @@ class TerminalManager:
         normalized = str(title or "").strip()[:60]
         if not normalized:
             raise ValueError("terminal title is required")
+        if any(
+            current.id != session.id
+            and current.project_id == session.project_id
+            and self._title_key(current.title) == self._title_key(normalized)
+            for current in self._sessions.values()
+        ):
+            raise ValueError("terminal title already exists in this project")
         session.title = normalized
         session.updated_at = _now_iso()
         self._persist_session(session)

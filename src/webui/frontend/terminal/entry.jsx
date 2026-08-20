@@ -7,8 +7,10 @@ import "@xterm/xterm/css/xterm.css";
 
 var RESIZE_SETTLE_MS = 160;
 var TERMINAL_FONT_SIZE = 13;
+var TERMINAL_LINE_HEIGHT = 1.14;
+var TERMINAL_CURSOR_HEIGHT_RATIO = 0.74;
+var TERMINAL_TAIL_COMPACT_LINES = 1;
 var TERMINAL_SCROLLBACK_LINES = 100000;
-var TERMINAL_TAIL_TOP_RESERVE_LINES = 2;
 var DARK_TERMINAL_THEME = {
   background: "#171819",
   foreground: "#F1F1F4",
@@ -202,7 +204,7 @@ function showTerminalRecoveryToast(terminal) {
   if (!recoveredAt || !message) return;
   var key = String(terminal && terminal.id || "") + ":" + recoveredAt;
   if (shownTerminalRecoveryNotices.has(key)) return;
-  if (showTerminalToast("终端已恢复：" + message, "success", { duration: 5200 })) {
+  if (showTerminalToast("终端已恢复", "success", { duration: 5200 })) {
     shownTerminalRecoveryNotices.add(key);
   }
 }
@@ -264,13 +266,21 @@ function TerminalPane({ terminalId, onState }) {
     var replayRefreshTimer = 0;
     var replayRefreshDeadlineTimer = 0;
     var replayResizeTimer = 0;
+    var bufferRestoreFrame = 0;
+    var lastInputEventCount = null;
+    var pendingUserInputMarker = null;
+    var lastInteractionMarker = null;
+    var lastInteractionFits = false;
+    var reduceMotionQuery = window.matchMedia
+      ? window.matchMedia("(prefers-reduced-motion: reduce)")
+      : null;
     var appearance = terminalAppearance(host);
     var appearanceSignature = "";
     var terminal = new Terminal({
       cursorBlink: true,
       cursorStyle: "bar",
       cursorWidth: 2,
-      cursorInactiveStyle: "outline",
+      cursorInactiveStyle: "none",
       allowProposedApi: true,
       convertEol: false,
       customGlyphs: true,
@@ -282,11 +292,14 @@ function TerminalPane({ terminalId, onState }) {
       minimumContrastRatio: 1,
       rightClickSelectsWord: false,
       scrollOnUserInput: true,
+      // Wheel/trackpad scrolling must stay direct. Automatic layout movement
+      // is animated separately so repeated input never queues animations.
+      smoothScrollDuration: 0,
       fontFamily: appearance.fontFamily,
       fontSize: appearance.fontSize,
       fontWeight: "400",
       fontWeightBold: "600",
-      lineHeight: 1.22,
+      lineHeight: TERMINAL_LINE_HEIGHT,
       scrollback: TERMINAL_SCROLLBACK_LINES,
       theme: appearance.theme,
     });
@@ -298,19 +311,181 @@ function TerminalPane({ terminalId, onState }) {
     terminal.unicode.activeVersion = "11";
     terminal.loadAddon(new WebLinksAddon());
     terminal.open(host);
+    var terminalScreen = host.querySelector(".xterm-screen");
+    var customCursor = document.createElement("div");
+    customCursor.className = "wbc-terminal-input-cursor";
+    customCursor.setAttribute("aria-hidden", "true");
+    if (terminalScreen) terminalScreen.appendChild(customCursor);
     var tailSpacer = document.createElement("div");
     tailSpacer.className = "wbc-terminal-tail-spacer";
     tailSpacer.setAttribute("aria-hidden", "true");
     host.appendChild(tailSpacer);
+    var tailBaseOverflow = Math.max(0, host.scrollHeight - host.clientHeight);
+
+    function isNativeCursorHidden() {
+      var core = terminal._core;
+      return Boolean(core && core.coreService && core.coreService.isCursorHidden);
+    }
+
+    function updateInputCursor() {
+      if (!terminalScreen || !terminalScreen.isConnected) return;
+      var focused = Boolean(terminal.element && terminal.element.classList.contains("focus"));
+      var activeBuffer = terminal.buffer.active;
+      var rect = terminalScreen.getBoundingClientRect();
+      var cellWidth = terminal.cols > 0 ? rect.width / terminal.cols : 0;
+      var cellHeight = terminal.rows > 0 ? rect.height / terminal.rows : 0;
+      var cursorRow = activeBuffer
+        ? activeBuffer.cursorY + activeBuffer.baseY - activeBuffer.viewportY
+        : -1;
+      var visible = focused && !isNativeCursorHidden()
+        && cellWidth > 0 && cellHeight > 0
+        && cursorRow >= 0 && cursorRow < terminal.rows;
+      customCursor.classList.toggle("is-visible", visible);
+      if (!visible) return;
+      var cursorHeight = Math.max(8, Math.round(cellHeight * TERMINAL_CURSOR_HEIGHT_RATIO));
+      var cursorColumn = Math.min(Math.max(0, activeBuffer.cursorX), terminal.cols - 1);
+      customCursor.style.left = Math.round(cursorColumn * cellWidth) + "px";
+      customCursor.style.top = Math.round(
+        cursorRow * cellHeight + (cellHeight - cursorHeight) / 2
+      ) + "px";
+      customCursor.style.height = cursorHeight + "px";
+    }
+
+    function scheduleInputCursorUpdate() {
+      window.requestAnimationFrame(updateInputCursor);
+    }
+
+    function handleBufferChange(buffer) {
+      window.cancelAnimationFrame(bufferRestoreFrame);
+      if (!buffer || buffer.type === "alternate") {
+        // The alternate screen owns the whole viewport. Remove normal-buffer
+        // overscroll immediately so TUI painting cannot hide behind it.
+        tailSpacer.classList.add("is-alternate-buffer");
+        tailSpacer.style.height = "0px";
+        host.scrollTop = 0;
+        lastInteractionFits = false;
+        scheduleInputCursorUpdate();
+        return;
+      }
+      // xterm preserves the normal buffer while a TUI uses the alternate
+      // screen, but the outer spacer has its own scroll position. Restore both
+      // layers together after parsing the leave-alternate-screen sequence.
+      bufferRestoreFrame = window.requestAnimationFrame(function () {
+        if (disposed || terminal.buffer.active.type !== "normal") return;
+        terminal.scrollToBottom();
+        // Keep the transition disabled while the spacer receives its final
+        // normal-buffer height, then animate only the visible viewport to the
+        // latest interaction. This restores `top`/`less` like a native
+        // terminal without exposing an older full-screen command output.
+        updateTailSpacer();
+        var interactionEnd = Math.max(0, host.scrollHeight - host.clientHeight);
+        tailSpacer.classList.remove("is-alternate-buffer");
+        host.scrollTo({
+          top: interactionEnd,
+          behavior: reduceMotionQuery && reduceMotionQuery.matches ? "auto" : "smooth",
+        });
+        terminal.refresh(0, terminal.rows - 1);
+        scheduleInputCursorUpdate();
+      });
+    }
+
+    function handleTerminalFocusChange() {
+      scheduleInputCursorUpdate();
+    }
+
+    if (terminal.element) {
+      terminal.element.addEventListener("focusin", handleTerminalFocusChange);
+      terminal.element.addEventListener("focusout", handleTerminalFocusChange);
+    }
+    var bufferChange = terminal.buffer.onBufferChange(handleBufferChange);
+
+    function createInteractionMarker() {
+      if (terminal.buffer.active.type !== "normal") return null;
+      return terminal.registerMarker(0);
+    }
+
+    function replaceLastInteractionMarker(marker) {
+      if (!marker) return;
+      if (lastInteractionMarker && lastInteractionMarker !== marker) {
+        lastInteractionMarker.dispose();
+      }
+      lastInteractionMarker = marker;
+    }
+
+    function trackUserInputBoundary(data) {
+      var value = String(data || "");
+      var submits = /[\r\n]/.test(value) || value === "\u0003" || value === "\u0004";
+      var printable = value
+        .replace(/\u001b\[[0-9;?]*[ -/]*[@-~]/g, "")
+        .replace(/[\u0000-\u001f\u007f]/g, "");
+      if (!pendingUserInputMarker && (printable || submits)) {
+        pendingUserInputMarker = createInteractionMarker();
+      }
+      if (!submits) return;
+      replaceLastInteractionMarker(pendingUserInputMarker || createInteractionMarker());
+      pendingUserInputMarker = null;
+      updateTailSpacer();
+    }
+
+    function trackAgentInputBoundary(terminalState, messageType) {
+      var nextCount = Number(terminalState && terminalState.inputEventCount || 0);
+      if (lastInputEventCount === null || messageType === "snapshot") {
+        lastInputEventCount = nextCount;
+        return;
+      }
+      if (
+        nextCount > lastInputEventCount
+        && String(terminalState.lastActor || "") === "agent"
+      ) {
+        replaceLastInteractionMarker(createInteractionMarker());
+        updateTailSpacer();
+      }
+      lastInputEventCount = Math.max(lastInputEventCount, nextCount);
+    }
 
     function updateTailSpacer() {
-      var lineHeight = Math.max(1, Number(terminal.options.fontSize || 13)
-        * Number(terminal.options.lineHeight || 1));
-      // Keep enough scroll range for the newest terminal row to rest near the
-      // top of the viewport. Reserving two rows preserves the small top inset
-      // shown by native terminals while the remaining viewport stays blank.
-      var viewportTail = host.clientHeight - (lineHeight * TERMINAL_TAIL_TOP_RESERVE_LINES);
-      tailSpacer.style.height = Math.max(lineHeight, viewportTail) + "px";
+      var screen = host.querySelector(".xterm-screen");
+      var screenHeight = screen ? Number(screen.getBoundingClientRect().height || 0) : 0;
+      var measuredLineHeight = terminal.rows > 0 ? screenHeight / terminal.rows : 0;
+      var lineHeight = Math.max(1, measuredLineHeight || (
+        Number(terminal.options.fontSize || 13) * Number(terminal.options.lineHeight || 1)
+      ));
+      var activeBuffer = terminal.buffer.active;
+      var markerLine = lastInteractionMarker && !lastInteractionMarker.isDisposed
+        ? Number(lastInteractionMarker.line)
+        : -1;
+      var cursorLine = activeBuffer && activeBuffer.type === "normal"
+        ? Number(activeBuffer.baseY || 0) + Number(activeBuffer.cursorY || 0)
+        : -1;
+      var interactionLines = cursorLine >= markerLine && markerLine >= 0
+        ? cursorLine - markerLine + 1
+        : 0;
+      var markerViewportRow = markerLine - Number(activeBuffer && activeBuffer.viewportY || 0);
+      // When the latest command fits, the manual scroll endpoint places its
+      // input row at the top so its input, output and next prompt are all
+      // visible. If it is taller than the viewport, xterm's own bottom-follow
+      // behavior wins and keeps the final row exactly at the bottom. Keep the
+      // endpoint one row more compact so a short command does not leave an
+      // unnecessarily large empty area below its prompt.
+      var interactionFits = interactionLines > 0 && interactionLines <= terminal.rows;
+      var desiredScrollTop = interactionFits && markerViewportRow >= 0
+        ? lineHeight * Math.max(
+          0,
+          markerViewportRow + 1 - TERMINAL_TAIL_COMPACT_LINES
+        )
+        : 0;
+      // Padding and xterm's own layout can contribute a small amount of base
+      // overflow even with no spacer. Subtract it so the interaction's first
+      // row lands fully inside the viewport instead of being clipped above it.
+      var viewportTail = Math.max(0, desiredScrollTop - tailBaseOverflow);
+      tailSpacer.style.height = Math.max(0, viewportTail) + "px";
+      if (lastInteractionFits && !interactionFits && host.scrollTop > 0) {
+        host.scrollTo({
+          top: 0,
+          behavior: reduceMotionQuery && reduceMotionQuery.matches ? "auto" : "smooth",
+        });
+      }
+      lastInteractionFits = interactionFits;
     }
 
     function handleTailWheel(event) {
@@ -357,10 +532,11 @@ function TerminalPane({ terminalId, onState }) {
       var dimensions;
       try { dimensions = fit.proposeDimensions(); } catch (error) { return; }
       if (!dimensions || dimensions.cols < 20 || dimensions.rows < 5) return;
-      updateTailSpacer();
       if (terminal.cols !== dimensions.cols || terminal.rows !== dimensions.rows) {
         terminal.resize(dimensions.cols, dimensions.rows);
       }
+      updateTailSpacer();
+      updateInputCursor();
       var socket = socketRef.current;
       if (
         socket && socket.readyState === WebSocket.OPEN
@@ -394,6 +570,7 @@ function TerminalPane({ terminalId, onState }) {
       terminal.options.fontFamily = next.fontFamily;
       terminal.options.fontSize = next.fontSize;
       terminal.refresh(0, terminal.rows - 1);
+      scheduleInputCursorUpdate();
       scheduleFit();
     }
 
@@ -416,7 +593,7 @@ function TerminalPane({ terminalId, onState }) {
       window.requestAnimationFrame(function () {
         if (disposed) return;
         terminal.scrollToBottom();
-        host.scrollTop = 0;
+        updateTailSpacer();
         // A full-screen TUI can leave DECTCEM disabled in durable scrollback.
         // Re-enable it after replay so a live interactive shell always gets
         // an input cursor; later live TUI output can still hide it explicitly.
@@ -499,6 +676,7 @@ function TerminalPane({ terminalId, onState }) {
         try { message = JSON.parse(event.data); } catch (error) { return; }
         if (message.type === "snapshot" || message.type === "state") {
           if (message.terminal) {
+            trackAgentInputBoundary(message.terminal, message.type);
             statusRef.current = String(message.terminal.status || "exited");
             showTerminalRecoveryToast(message.terminal);
             showTerminalExitToast(message.terminal, restartTerminal);
@@ -561,6 +739,7 @@ function TerminalPane({ terminalId, onState }) {
         if (cursorRef.current > start) bytes = bytes.slice(cursorRef.current - start);
         cursorRef.current = end;
         terminal.write(bytes, function () {
+          updateTailSpacer();
           if (replaySettled || replayTarget === null || end < replayTarget) return;
           if (!replayRefreshStarted) refreshInteractiveScreen();
           else scheduleReplaySettle(90);
@@ -613,11 +792,16 @@ function TerminalPane({ terminalId, onState }) {
     window.addEventListener("offline", handleOffline);
 
     var input = terminal.onData(function (data) {
+      trackUserInputBoundary(data);
       sendInput(data, false);
     });
     var binaryInput = terminal.onBinary(function (data) {
       sendInput(data, true);
     });
+    var cursorMove = terminal.onCursorMove(scheduleInputCursorUpdate);
+    var cursorRender = terminal.onRender(scheduleInputCursorUpdate);
+    var cursorScroll = terminal.onScroll(scheduleInputCursorUpdate);
+    var cursorResize = terminal.onResize(scheduleInputCursorUpdate);
     var observer = new ResizeObserver(function (entries) {
       var rect = entries[0] && entries[0].contentRect;
       if (!rect) return;
@@ -655,12 +839,25 @@ function TerminalPane({ terminalId, onState }) {
       window.clearTimeout(replayRefreshDeadlineTimer);
       window.clearTimeout(replayResizeTimer);
       window.cancelAnimationFrame(resizeFrame);
+      window.cancelAnimationFrame(bufferRestoreFrame);
       observer.disconnect();
       appearanceObserver.disconnect();
       host.removeEventListener("wheel", handleTailWheel, { capture: true });
+      if (terminal.element) {
+        terminal.element.removeEventListener("focusin", handleTerminalFocusChange);
+        terminal.element.removeEventListener("focusout", handleTerminalFocusChange);
+      }
       input.dispose();
       binaryInput.dispose();
+      cursorMove.dispose();
+      cursorRender.dispose();
+      cursorScroll.dispose();
+      cursorResize.dispose();
+      bufferChange.dispose();
       if (socketRef.current) socketRef.current.close();
+      if (pendingUserInputMarker) pendingUserInputMarker.dispose();
+      if (lastInteractionMarker) lastInteractionMarker.dispose();
+      customCursor.remove();
       terminal.dispose();
       tailSpacer.remove();
       terminalRef.current = null;

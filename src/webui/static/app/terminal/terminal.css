@@ -42,15 +42,27 @@ html[data-theme="light"] .wbc-terminal-pane {
   height: 100%;
   padding: 10px 9px 7px 12px;
   contain: strict;
+  overflow-x: hidden;
   overflow-y: auto;
   overscroll-behavior-y: contain;
+  scrollbar-width: none;
   background: var(--wbc-terminal-background);
+}
+
+.wbc-terminal-host::-webkit-scrollbar {
+  width: 0;
+  height: 0;
 }
 
 .wbc-terminal-tail-spacer {
   width: 1px;
   min-height: 0;
   pointer-events: none;
+  transition: height 180ms cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+.wbc-terminal-tail-spacer.is-alternate-buffer {
+  transition: none;
 }
 
 .wbc-terminal-pane[data-has-content="false"][data-connection="connecting"] .wbc-terminal-host,
@@ -64,5 +76,40 @@ html[data-theme="light"] .wbc-terminal-pane {
 }
 
 .wbc-terminal-host .xterm-cursor-layer {
-  opacity: 1;
+  opacity: 0 !important;
+}
+
+.wbc-terminal-host .xterm-cursor.xterm-cursor-bar {
+  animation: none !important;
+  box-shadow: none !important;
+}
+
+.wbc-terminal-input-cursor {
+  position: absolute;
+  z-index: 8;
+  display: none;
+  width: 2px;
+  border-radius: 1px;
+  pointer-events: none;
+  background: var(--wbc-terminal-foreground);
+}
+
+.wbc-terminal-input-cursor.is-visible {
+  display: block;
+  animation: wbc-terminal-cursor-blink 1.2s steps(1, end) infinite;
+}
+
+@keyframes wbc-terminal-cursor-blink {
+  0%, 45% { opacity: 1; }
+  46%, 100% { opacity: 0; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .wbc-terminal-tail-spacer {
+    transition: none;
+  }
+
+  .wbc-terminal-input-cursor.is-visible {
+    animation: none;
+  }
 }

@@ -163,7 +163,14 @@ async def _test_model(connection: dict[str, Any], profile: Any) -> dict[str, Any
         "capabilities": sorted(capabilities),
         "reasoning_effort": str(profile.get("reasoning_effort") or ""),
     }
-    from cyrene.model_runtime.client import call_llm
+    from cyrene.model_runtime.client import call_llm, _normalized_llm_endpoints
+    from cyrene.model_runtime.protocol_adapters import protocol_endpoints
+
+    candidate["endpoints"] = (
+        _normalized_llm_endpoints(base_url)
+        if adapter in {"openai", "openai_compatible"}
+        else protocol_endpoints(adapter, base_url, model)
+    )
 
     response = await call_llm(
         [{"role": "user", "content": "Reply with OK."}],

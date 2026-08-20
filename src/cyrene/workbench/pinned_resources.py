@@ -217,6 +217,7 @@ def upsert_resource(raw: dict[str, Any]) -> dict[str, Any]:
     elif kind == "browser":
         item.update({
             "tabId": str(raw.get("tabId") or "").strip(),
+            "favicon": str(raw.get("favicon") or "").strip(),
             "readOnlyForOtherSessions": True,
         })
     elif kind == "conversation":

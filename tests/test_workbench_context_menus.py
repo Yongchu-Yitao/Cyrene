@@ -31,7 +31,7 @@ def test_browser_tab_picker_floats_in_a_native_view_without_obscuring_the_page()
     assert "!hasNativeTabPicker && pickerOpen && <div" in split
     assert "const BROWSER_TAB_PICKER_HTML" in main
     native_view = main.split("  ensureTabPickerView() {", 1)[1].split(
-        "pushTabPickerState()", 1
+        "  pushTabPickerState() {", 1
     )[0]
     assert "new WebContentsView" in native_view
     assert "parent.addChildView(view)" in main.split("syncTabPicker(", 1)[1]
@@ -65,6 +65,33 @@ def test_native_browser_tab_picker_has_motion_and_reduced_motion_support():
     assert ".row:focus-within" in picker_html
     assert "var(--focus" not in picker_html
     assert 'focus: color("--wb-accent"' not in chat
+
+
+def test_native_browser_tab_picker_has_flat_chrome_without_visible_scrollbars():
+    main = (ROOT / "electron" / "main.js").read_text(encoding="utf-8")
+    build = (ROOT / "src" / "webui" / "build-jsx.mjs").read_text(encoding="utf-8")
+    embedded_picker = main.split("const BROWSER_TAB_PICKER_HTML", 1)[1].split(
+        "function normalizeBrowserSessionId", 1
+    )[0]
+
+    assert "box-shadow: none" in embedded_picker
+    assert "scrollbar-width: none" in embedded_picker
+    assert "#menu::-webkit-scrollbar" in embedded_picker
+    assert "overflow-y: auto" in embedded_picker
+    assert "['BROWSER_TAB_PICKER_HTML', 'browser-tab-picker.html']" in build
+
+    native_view = main.split("  ensureTabPickerView() {", 1)[1].split(
+        "  pushTabPickerState() {", 1
+    )[0]
+    assert "BROWSER_TAB_PICKER_FLAT_CHROME_CSS" in native_view
+    assert "await view.webContents.insertCSS" in native_view
+    assert "&style=flat-chrome-1" in native_view
+
+    picker_bounds = main.split("tabPickerBounds()", 1)[1].split(
+        "trackTabPickerWindow", 1
+    )[0]
+    assert "variant === 'split' ? 'split' : 'maximized'" in main
+    assert "variant === 'maximized' ? 116 : 12" in picker_bounds
 
 
 def test_native_browser_tab_picker_title_clicks_are_debounced_in_both_hosts():

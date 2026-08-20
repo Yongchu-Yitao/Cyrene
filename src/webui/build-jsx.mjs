@@ -34,6 +34,18 @@ const SETTINGS_ICON_FILES = [
   'chart-bar.svg',
   'database.svg',
   'info-circle.svg',
+  'browser.svg',
+  'chevron-down.svg',
+  'devices.svg',
+  'download.svg',
+  'reload.svg',
+  'volume.svg',
+  'volume-off.svg',
+  'pin.svg',
+  'pinned-off.svg',
+  'player-pause.svg',
+  'player-play.svg',
+  'x.svg',
 ]
 const PROVIDER_ICON_FILES = [
   [join(TABLER_ICONS_DIR, 'brand-openai.svg'), 'openai.svg'],
