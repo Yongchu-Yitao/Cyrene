@@ -29,7 +29,7 @@ _active_tool_call_id: ContextVar[str] = ContextVar("_active_tool_call_id", defau
 
 logger = logging.getLogger(__name__)
 
-_PROCESS_EXECUTION_TOOLS = frozenset({"Bash", "StartShell", "SendShell"})
+_PROCESS_EXECUTION_TOOLS = frozenset({"Bash", "StartShell", "SendShell", "InterruptShell"})
 _OPAQUE_SHELL_EXECUTABLES = frozenset({
     "bash", "sh", "zsh", "fish", "dash",
     "python", "python3", "node", "ruby", "perl",
@@ -359,7 +359,7 @@ def _proactive_tool_refusal(name: str, arguments: dict[str, Any]) -> str | None:
             "Tool unavailable: proactive system-initiated rounds may only do "
             "incremental file work. Editing existing files is forbidden."
         )
-    if name in {"Bash", "SendShell", "StartShell"}:
+    if name in {"Bash", "SendShell", "StartShell", "InterruptShell"}:
         command = str(arguments.get("command") or "").strip()
         if not command:
             return None

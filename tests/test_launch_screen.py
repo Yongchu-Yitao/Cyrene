@@ -58,7 +58,28 @@ def test_launch_screen_waits_for_initial_workbench_content():
     assert 'root.addEventListener("cyrene:page-invalidated", disposeSurface' in ui_surface
     assert 'root.cyrene.uiSurface.unregister(instanceId)' in ui_surface
     assert 'surfaceSocket.close()' in ui_surface
+    assert '} else if (typeof root.WebSocket === "function") {' not in ui_surface
+    assert 'if (typeof root.WebSocket === "function") {' in ui_surface
     assert 'window.addEventListener("cyrene:page-invalidated", dispose' in markdown_actions
+
+
+def test_terminal_frontend_preserves_tui_controls_and_large_scrollback():
+    terminal = (ROOT / "src/webui/frontend/terminal/entry.jsx").read_text(
+        encoding="utf-8"
+    )
+    styles = (ROOT / "src/webui/frontend/terminal/terminal.css").read_text(
+        encoding="utf-8"
+    )
+
+    assert "TERMINAL_SCROLLBACK_LINES = 100000" in terminal
+    assert "terminal.onData" in terminal
+    assert "terminal.onBinary" in terminal
+    assert "terminal.attachCustomKeyEventHandler" in terminal
+    assert 'event.key === "Escape"' in terminal
+    assert 'event.key.startsWith("Arrow")' in terminal
+    assert 'socket.send(JSON.stringify({ type: "resize"' in terminal
+    assert 'setFullscreen(function (value) { return !value; })' in terminal
+    assert ".wbc-terminal-pane.is-fullscreen" in styles
 
 
 def test_stale_page_stops_same_origin_api_requests_after_first_401():

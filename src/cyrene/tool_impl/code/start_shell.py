@@ -17,7 +17,6 @@ from cyrene.tooling.runtime_api import (
     request_scope_elevation,
     request_write_elevation,
     resolve_tool_path,
-    start_shell_session as _start_shell_session,
 )
 
 TOOL_NAME = 'StartShell'
@@ -25,7 +24,13 @@ TOOL_DEF = get_native_tool_def(TOOL_NAME)
 
 
 async def _tool_start_shell(args: dict[str, Any], _bot: Any, _chat_id: int, _db_path: str, _notify_state: dict[str, bool] | None) -> str:
-    from cyrene.agent.context import get_current_round_id, get_current_session_id
+    from cyrene.tooling.backends.terminals import (
+        agent_creation_scope,
+        requested_terminal_title,
+    )
+    from cyrene.terminal.client import get_terminal_daemon_client
+
+    context, project_id, session_id = agent_creation_scope()
 
     cwd_arg = str(args.get("cwd", ".") or ".")
     try:
@@ -78,32 +83,32 @@ async def _tool_start_shell(args: dict[str, Any], _bot: Any, _chat_id: int, _db_
                 return delete_result
     wake_on_exit = bool(args.get("wake_on_exit", False))
     wake_note = str(args.get("wake_note", "") or "")
-    session_id = str(get_current_session_id() or "").strip()
-    snap = await _start_shell_session(
+    created = await get_terminal_daemon_client().create_agent_terminal(
+        project_id,
+        owner_chat_id=session_id,
         command=command,
         cwd=cwd,
-        title=str(args.get("title", "") or ""),
-        round_id=get_current_round_id(),
+        title=requested_terminal_title(
+            str(args.get("title", "") or ""), context.user_request_text,
+        ),
         wake_on_exit=wake_on_exit,
-        wake_chat_id=session_id if wake_on_exit else "",
         wake_note=wake_note,
+        owner_tool_call_id=str(context.client_request_id or context.round_id or ""),
     )
+    snap = dict(created.get("terminal") or {})
     result = {
         "shell_id": snap.get("id", ""),
+        "terminal_id": snap.get("id", ""),
         "status": snap.get("status", ""),
         "cwd": snap.get("cwd", "."),
-        "title": snap.get("title", "independent shell"),
-        "wake_on_exit": bool(snap.get("wakeOnExit")),
+        "title": snap.get("title", "Terminal"),
+        "owner_chat_id": snap.get("ownerChatId", ""),
+        "wake_on_exit": bool(snap.get("wakeId")),
         "wake_id": snap.get("wakeId", ""),
-        "wake_chat_id": snap.get("wakeChatId", ""),
-        "execution_mode": snap.get("executionMode", "persistent"),
+        "execution_mode": snap.get("launchMode", "interactive"),
+        "shown": False,
     }
-    if wake_on_exit and not result["wake_on_exit"]:
-        result["wake_error"] = (
-            "wake_on_exit requested but no Workbench session_id is bound; "
-            "shell started without an exit wake."
-        )
-    elif result["wake_on_exit"]:
+    if result["wake_on_exit"]:
         if result["execution_mode"] == "one_shot":
             result["wake_hint"] = (
                 "The command is running as a one-shot background job. Do not wait or poll. "
@@ -111,8 +116,8 @@ async def _tool_start_shell(args: dict[str, Any], _bot: Any, _chat_id: int, _db_
             )
         else:
             result["wake_hint"] = (
-                "The persistent shell is running in the background. Do not wait or poll. "
-                "Quit this turn; you will be woken only when the shell process exits."
+                "The terminal is running in the background. Do not wait or poll. "
+                "It remains in the conversation terminal list and wakes this chat only when its process exits."
             )
     return json_result(result)
 

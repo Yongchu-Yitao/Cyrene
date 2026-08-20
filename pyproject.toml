@@ -28,6 +28,7 @@ dependencies = [
     "onnxruntime-gpu>=1.26,<1.27; sys_platform != 'darwin' and (platform_machine == 'x86_64' or platform_machine == 'AMD64')",
     "pillow>=11.2.1",
     "prompt-toolkit>=3.0.52",
+    "pyte>=0.8.2",
     "pydantic>=2.10",
     "pypdf>=5.5.0",
     "pypdfium2>=4.30.0",

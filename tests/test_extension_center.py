@@ -655,39 +655,6 @@ def test_cli_hook_integration_is_a_compact_localized_detail_action():
     assert '"settings.extensionConfigureHook": "让 Agent 配置"' in translations
 
 
-@pytest.mark.asyncio
-@pytest.mark.skipif(os.name == "nt", reason="probe command uses POSIX shell syntax")
-async def test_persistent_shell_uses_the_shared_agent_process_environment(tmp_path, monkeypatch):
-    from cyrene.extensions import service
-    from cyrene.tooling.backends import shells
-
-    marker = "shared-extension-environment"
-    calls = []
-
-    def fake_agent_process_environment(base=None):
-        calls.append(base)
-        env = dict(os.environ)
-        env["CYRENE_EXTENSION_ENV_PROBE"] = marker
-        return env
-
-    monkeypatch.setattr(service, "agent_process_environment", fake_agent_process_environment)
-    snapshot = await shells.start_shell(
-        command='printf %s "$CYRENE_EXTENSION_ENV_PROBE"',
-        cwd=".",
-        workspace_root=tmp_path,
-        wake_on_exit=True,
-    )
-    shell_id = snapshot["id"]
-    try:
-        await shells._shells[shell_id]["watch_task"]
-        completed = shells.get_shell_snapshot(shell_id)
-        output = [line["text"] for line in completed["lines"] if line["kind"] == "out"]
-        assert output == [marker]
-        assert calls == [None]
-    finally:
-        shells._shells.pop(shell_id, None)
-
-
 def test_install_task_store_redacts_nested_secrets(tmp_path, monkeypatch):
     from cyrene.extensions import service
 

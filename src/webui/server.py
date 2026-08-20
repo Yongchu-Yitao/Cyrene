@@ -75,6 +75,9 @@ def create_app(bot: Any, db_path: str, instance_id: str = "", ui_mode: str = "wo
     @asynccontextmanager
     async def _lifespan(_app: FastAPI):
         await _start_workbench_chat_runs()
+        terminal_wake_bridge = getattr(_app.state, "terminal_wake_bridge", None)
+        if terminal_wake_bridge is not None:
+            await terminal_wake_bridge.start_daemon_bridge()
         await _start_remote_control()
         await _start_wechat()
         await _migrate_knowledge_db()
@@ -83,6 +86,8 @@ def create_app(bot: Any, db_path: str, instance_id: str = "", ui_mode: str = "wo
         try:
             yield
         finally:
+            if terminal_wake_bridge is not None:
+                await terminal_wake_bridge.stop_daemon_bridge()
             await _close_browser_session()
 
     app = FastAPI(title="Cyrene", lifespan=_lifespan)

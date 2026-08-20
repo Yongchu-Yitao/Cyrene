@@ -5,7 +5,7 @@
 // render as a binary 确认/拒绝 authorization card. This MUST mirror the backend's
 // _PERMISSION_ELEVATION_KINDS (cyrene/agent/session.py) exactly — matching by
 // substring (e.g. anything containing "confirmation") wrongly captures
-// plan_confirmation and claude_code_prompt_confirmation, which are ordinary
+// plan_confirmation, which is an ordinary
 // questions and should show their real options instead.
 var WB_PERMISSION_QUESTION_KINDS = {
   scope_elevation: true,

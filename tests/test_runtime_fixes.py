@@ -3171,59 +3171,6 @@ async def test_send_telegram_does_not_prompt_in_full_access(monkeypatch, tmp_pat
     assert "pending_question" not in saved
 
 
-async def test_start_shell_allows_external_cwd_in_full_access(monkeypatch, tmp_path):
-    from cyrene.agent import state as agent_state
-    from cyrene.tool_impl.code import start_shell as start_shell_tool
-
-    outside = tmp_path / "outside"
-    outside.mkdir()
-    seen = {}
-
-    async def fake_start_shell_session(
-        command,
-        cwd,
-        title,
-        round_id,
-        wake_on_exit=False,
-        wake_chat_id="",
-        wake_note="",
-    ):
-        seen.update({
-            "command": command,
-            "cwd": cwd,
-            "title": title,
-            "round_id": round_id,
-            "wake_on_exit": wake_on_exit,
-            "wake_chat_id": wake_chat_id,
-            "wake_note": wake_note,
-        })
-        return {"id": "shell_1", "status": "running", "cwd": cwd, "title": title}
-
-    monkeypatch.setattr(start_shell_tool, "_start_shell_session", fake_start_shell_session)
-
-    round_token = agent_state._current_round_id.set("round_1")
-    mode_token = agent_state._permission_mode.set("full_access")
-    full_token = agent_state._temporary_full_access.set(True)
-    try:
-        result = await start_shell_tool._tool_start_shell(
-            {"cwd": str(outside), "command": "", "title": "external"},
-            None,
-            0,
-            "",
-            {},
-        )
-    finally:
-        agent_state._temporary_full_access.reset(full_token)
-        agent_state._permission_mode.reset(mode_token)
-        agent_state._current_round_id.reset(round_token)
-
-    payload = json.loads(result)
-    assert payload["status"] == "running"
-    assert payload["cwd"] == str(outside)
-    assert seen["cwd"] == str(outside)
-    assert seen["wake_on_exit"] is False
-
-
 async def test_send_wechat_file_uses_auto_review_without_prompt(monkeypatch, tmp_path):
     from cyrene import agent
     from cyrene.agent import auto_review
@@ -3444,7 +3391,6 @@ def test_build_current_session_exposes_pending_question(monkeypatch, tmp_path):
     monkeypatch.setattr(routes, "STATE_FILE", tmp_path / "state.json")
     monkeypatch.setattr(routes, "_SERVER_STARTED_AT", 0)
     monkeypatch.setattr(routes, "get_live_rounds", lambda: [])
-    monkeypatch.setattr(routes, "list_live_shells", lambda include_exited=False: [])
 
     routes.STATE_FILE.write_text(json.dumps({
         "session_title": "当前会话",
@@ -4891,40 +4837,6 @@ def test_live_flow_marks_recent_overlay_tools_done(monkeypatch):
     assert tool["title"] == "web_search"
     assert tool["status"] == "done"
     assert tool_edge.get("kind") is None
-
-
-def test_build_current_session_uses_live_shell_snapshots(monkeypatch, tmp_path):
-    from cyrene.workbench import runtime as routes
-
-    monkeypatch.setattr(routes, "STATE_FILE", tmp_path / "state.json")
-    monkeypatch.setattr(routes, "DATA_DIR", tmp_path)
-    routes.STATE_FILE.write_text(
-        json.dumps({
-            "messages": [
-                {"role": "user", "content": "run server", "round_id": "round_1"},
-                {"role": "assistant", "content": "", "round_id": "round_1", "tool_calls": [
-                    {"id": "bash_1", "function": {"name": "Bash", "arguments": json.dumps({"command": "python -m http.server"})}},
-                ]},
-                {"role": "tool", "tool_call_id": "bash_1", "content": "started", "round_id": "round_1"},
-            ],
-        }, ensure_ascii=False),
-        encoding="utf-8",
-    )
-    monkeypatch.setattr(routes, "list_live_shells", lambda include_exited=False: [{
-        "id": "shell_live",
-        "title": "dev server",
-        "cwd": ".",
-        "pid": 1234,
-        "status": "running",
-        "elapsed": "00:12",
-        "updatedAt": "12:00:00",
-        "lines": [{"kind": "meta", "text": "[shell started]"}],
-    }])
-
-    session = routes._build_current_session()
-
-    assert session["shells"][0]["id"] == "shell_live"
-    assert len(session["shells"]) == 1
 
 
 def test_build_current_session_done_event_clears_recent_activity(monkeypatch, tmp_path):

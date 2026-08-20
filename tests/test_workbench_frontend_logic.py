@@ -6265,6 +6265,22 @@ def test_agent_chat_flow_glint_is_semantic_transient_and_reduced_motion_safe():
     assert '"workbenchChat.agentFlow.typing": "Agent 正在输入消息"' in i18n
 
 
+def test_agent_terminal_control_reuses_surface_glint_and_visible_terminal_is_unambiguous():
+    root = Path(__file__).resolve().parents[1]
+    chat = (root / "src/webui/frontend/workbench-chat.jsx").read_text(encoding="utf-8")
+    terminal = (root / "src/webui/frontend/terminal/entry.jsx").read_text(encoding="utf-8")
+    surface = (root / "src/webui/frontend/platform/ui-surface.jsx").read_text(encoding="utf-8")
+
+    assert 'error: "multiple_terminals_visible", terminals: visible' in chat
+    assert 'data-terminal-id={String(terminalId || "")}' in terminal
+    control = surface.split('if (method === "terminal.control")', 1)[1].split(
+        'return { ok: false, error: "unsupported_surface_method" }', 1
+    )[0]
+    assert "showAgentControlHighlight(" in control
+    assert "settleAgentControlHighlight(controlSequence)" in control
+    assert "showAgentCursor(terminalPoint" in control
+
+
 def test_workbench_context_tab_has_live_session_inbox_card():
     root = Path(__file__).resolve().parents[1]
     source = (root / "src" / "webui" / "frontend" / "workbench-chat.jsx").read_text(

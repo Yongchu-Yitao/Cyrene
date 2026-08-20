@@ -57,7 +57,7 @@ _TOOL_PACK_BLOCK_RE = re.compile(
 
 
 _TOOL_PACK_PROMPT_TERMS: dict[str, tuple[str, ...]] = {
-    "code_tools": ("code_tools", "code.", "claude code"),
+    "code_tools": ("code_tools", "code.", "terminal"),
     "browser_tools": (
         "browser_tools",
         "browser.",
@@ -241,8 +241,10 @@ _MAIN_DELIVERY_FILE_PROMPT = _tool_pack_prompt_block(
 
 _MAIN_CODE_PROMPT = _tool_pack_prompt_block(
     "code_tools",
-    """- For **Claude Code** operations use `code.check_claude_code`, `code.start_claude_code`, and `code.prompt_claude_code` through `code_tools`. Never use Bash to start or manage Claude Code.
-- **Long-running terminal jobs:** pass the job as the initial `command` to `code.shell.start` (`StartShell`) with `wake_on_exit=true` (and an optional `wake_note`). The command runs as a one-shot background job and the tool returns immediately — do **not** send the job later with `code.shell.send`, sleep, poll, or narrate that you will wait for hours. Tell the user the job is running, then `quit`. When the command completes, the runtime starts a fresh turn in this chat with the terminal tail so you can inspect results and continue. Starting without `command` creates a persistent shell that wakes only when that shell exits. The user can keep chatting while the job runs.""",
+    """- **Shared terminals:** `code.shell.start` creates a durable terminal bound to this conversation. It enters the terminal list without replacing the user's current view. When the user names a new terminal, pass that exact name in `title`. Use `code.shell.show` only when the user explicitly asks to open or show it.
+- Use `code.shell.read` to capture the current rendered VT screen and `code.shell.send` for text or raw keys. A request to look grants read access only; operating or typing requires an explicit user request. The current split terminal or an exact terminal name may be resolved when the user identifies it.
+- **Long-running terminal jobs:** pass the initial `command` to `code.shell.start` with `wake_on_exit=true` and an optional `wake_note`. It runs as a durable one-shot process. Do not sleep or poll; finish the turn and the conversation will resume exactly once after exit.
+- `code.shell.delete` is allowed only for Agent-created terminals bound to this conversation. Before invoking it, explicitly ask the user whether to delete the terminal and wait for their confirmation. Deletion terminates the process and cancels its wake.""",
 )
 
 _MAIN_BROWSER_PROMPT = _tool_pack_prompt_block(
@@ -425,7 +427,7 @@ Rules:
 - For a visible macOS text field omitted from accessibility, prefer disclosed `visual_type` so localization, coordinate mapping, targeted delivery, and a fresh exact-text check are atomic. Never describe PID event delivery alone as verified text entry, and never retry an uncertain type result because text may have been inserted. `isolation_required:true` means the only policy-compliant fallback is a separately configured desktop/VM worker; never ask to interrupt the user's active desktop.
 - If a webpage remains behind login, CAPTCHA, or 2FA after one recovery attempt, invoke `browser.request_takeover`. Never loop or use private APIs.
 - Prefer inbox-driven completion to fixed waiting. Invoke `browser.wait` at most once for a concrete condition.
-- For multi-hour shell jobs, pass the job as the initial `command` to `code.shell.start` (`StartShell`) with `wake_on_exit=true`, then quit. Do not send the job later with `code.shell.send` or block the turn; the runtime wakes this chat with the terminal output when the command completes. A shell started without an initial command wakes only when that persistent shell exits.
+- For multi-hour shell jobs, pass the job as the initial `command` to `code.shell.start` (`StartShell`) with `wake_on_exit=true`, then quit. When the user names the terminal, pass that exact name in `title`. Do not send the job later with `code.shell.send` or block the turn; the runtime wakes this chat with the terminal output when the command completes. A shell started without an initial command wakes only when that persistent shell exits.
 - Use the direct `send_message` tool for concise progress updates. Use `delivery.send_file` through `delivery_tools` for existing deliverable paths.
 {_USER_FACING_COMMUNICATION_PROMPT}
 - Never emit a bare filename, bare path, or raw command line as your final answer unless the user explicitly requested literal output.
@@ -814,17 +816,15 @@ You are comparing ALL items on a SINGLE dimension. Your PRIMARY tool is web sear
 - Return your report to the main agent for synthesis.
 """
 
-_CLAUDE_CODE_PROMPT = """## Claude Code Mode
+_TERMINAL_PROMPT = """## Shared Terminal Mode
 
-You are in **Claude Code** mode. The user wants Cyrene to help route work through Claude Code.
+The user selected Cyrene's shared terminal workflow. Use the conversation-bound Terminal Daemon tools.
 
-### What to Do
-1. First, invoke `code.check_claude_code` through `code_tools`.
-2. If not running, invoke `code.start_claude_code` through `code_tools`.
-3. For a concrete task, invoke `code.prompt_claude_code` through `code_tools` to prepare a stronger prompt and ask the user to confirm it.
-4. After the user confirms, the system will send that prompt into Claude Code automatically.
-5. If the user did not give a task, just let them know Claude Code is ready in the side panel.
-6. Do NOT execute the task yourself when the user explicitly wants Claude Code to do it.
+1. Create a terminal only when the task needs one; creation must not replace the current view.
+2. Read the current VT screen and send text/keys as needed for interactive programs.
+3. Respect read vs. control authorization for user-created terminals.
+4. Open a terminal split only when the user explicitly asks to see it.
+5. Use wake_on_exit for long-running jobs instead of sleeping or polling.
 """
 
 
@@ -858,107 +858,6 @@ def _spawn_policy_prompt_block(policy: str) -> str:
         "- Prefer delegation for well-bounded independent tasks, not for tightly coupled or trivial work.\n"
         "- If the benefit is marginal, keep the work in the main agent."
     )
-
-
-# ---------------------------------------------------------------------------
-# Claude Code helpers
-# ---------------------------------------------------------------------------
-
-def _contains_cjk(text: str) -> bool:
-    return bool(re.search(r"[一-鿿]", str(text or "")))
-
-
-async def optimize_claude_code_prompt(task: str) -> str:
-    raw_task = str(task or "").strip()
-    if not raw_task:
-        return ""
-
-    optimizer_system = (
-        "You rewrite user requests into high-signal prompts for Claude Code.\n"
-        "Return only the final prompt text. No preface, no markdown fences.\n"
-        "Make the prompt concrete, execution-oriented, and easy for Claude Code to act on.\n"
-        "When useful, include: goal, constraints, files/areas to inspect, expected output, and verification.\n"
-        "Preserve the user's language."
-    )
-    optimizer_user = (
-        "Rewrite this request into a better Claude Code prompt.\n\n"
-        f"Original request:\n{raw_task}"
-    )
-    try:
-        from cyrene.agent.model_service import call_agent_model as _call_llm
-
-        response = await _call_llm(
-            [
-                {"role": "system", "content": optimizer_system},
-                {"role": "user", "content": optimizer_user},
-            ],
-            tools=None,
-            max_tokens=3600,
-        )
-        from cyrene.model_runtime.messages import assistant_text
-
-        optimized = assistant_text(response).strip()
-        if optimized:
-            return optimized
-    except Exception:
-        logger.exception("Failed to optimize Claude Code prompt")
-
-    return _fallback_claude_code_prompt(raw_task)
-
-
-def _fallback_claude_code_prompt(task: str) -> str:
-    text = str(task or "").strip()
-    if not text:
-        return ""
-    if _contains_cjk(text):
-        return (
-            "请帮我完成下面这项任务。\n\n"
-            f"任务目标：\n{text}\n\n"
-            "要求：\n"
-            "1. 先阅读并定位相关代码或文件\n"
-            "2. 说明你的修改计划\n"
-            "3. 实施修改\n"
-            "4. 运行必要的验证或测试\n"
-            "5. 最后总结改动内容、影响范围和验证结果"
-        )
-    return (
-        "Please complete the following task.\n\n"
-        f"Goal:\n{text}\n\n"
-        "Requirements:\n"
-        "1. Inspect the relevant code or files first\n"
-        "2. State the implementation plan briefly\n"
-        "3. Make the changes\n"
-        "4. Run relevant verification or tests\n"
-        "5. Summarize what changed, impact, and validation results"
-    )
-
-
-def build_claude_code_question_payload(task: str, optimized_prompt: str, tmux_session: str = "") -> dict[str, Any]:
-    source_task = str(task or "").strip()
-    prompt = str(optimized_prompt or "").strip()
-    chinese = _contains_cjk(source_task or prompt)
-    text = (
-        "我已经把要交给 Claude Code 的提示词优化好了。确认后我会直接发送到 Claude Code 终端并开始运行。\n\n"
-        "优化后的提示词：\n"
-        f"{prompt}"
-        if chinese else
-        "I optimized the prompt for Claude Code. After you confirm, I will send it to the Claude Code terminal and run it.\n\n"
-        "Optimized prompt:\n"
-        f"{prompt}"
-    )
-    options = ["同意并发送", "取消"] if chinese else ["Send it", "Cancel"]
-    meta = {
-        "kind": "claude_code_prompt_confirmation",
-        "task": source_task,
-        "optimized_prompt": prompt,
-        "tmux_session": str(tmux_session or "").strip(),
-    }
-    return {
-        "text": text,
-        "options": options,
-        "allow_custom": True,
-        "meta": meta,
-    }
 
 
 # Stable prompt fragments consumed by the Subagent runtime.

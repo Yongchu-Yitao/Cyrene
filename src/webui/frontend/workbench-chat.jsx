@@ -3823,6 +3823,7 @@ var WBC_SIDE_TAB_ICONS = {
   viewer: <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><rect x="3.5" y="5" width="17" height="14" rx="2.5"/><path d="m6 16 3.5-3.5 2.7 2.7 2.3-2.3L18 16M8 9h.01"/><path d="M3.5 8.5h17"/></svg>,
   map: <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="m4 6.5 5-2.2 6 2.2 5-2.2v13.2l-5 2.2-6-2.2-5 2.2Z"/><path d="M9 4.3v13.2M15 6.5v13.2"/><circle cx="12" cy="11" r="1.5"/></svg>,
   browser: <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><rect x="3" y="4.5" width="18" height="15" rx="3"/><path d="M3 8.5h18M7 6.5h.01M10 6.5h.01"/><circle cx="12" cy="14" r="3.3"/><path d="M8.7 14h6.6M12 10.7c1.1 1.2 1.1 5.4 0 6.6M12 10.7c-1.1 1.2-1.1 5.4 0 6.6"/></svg>,
+  terminal: <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><rect x="3" y="4.5" width="18" height="15" rx="3"/><path d="m7.5 9 3 3-3 3M13 15h3.5"/></svg>,
   "side-agents": <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M7 4.5h10A2.5 2.5 0 0 1 19.5 7v10A2.5 2.5 0 0 1 17 19.5h-4L9 22v-2.5H7A2.5 2.5 0 0 1 4.5 17V7A2.5 2.5 0 0 1 7 4.5Z"/><path d="M9 9h6M9 13h4"/></svg>,
 };
 
@@ -3836,7 +3837,7 @@ var WBC_COMMANDS = [
   { id: "learning-plan", labelKey: "workbenchChat.command.learning-plan.label", descKey: "workbenchChat.command.learning-plan.desc" },
   { id: "daily-review", labelKey: "workbenchChat.command.daily-review.label", descKey: "workbenchChat.command.daily-review.desc" },
   { id: "deep-compare", labelKey: "workbenchChat.command.deep-compare.label", descKey: "workbenchChat.command.deep-compare.desc" },
-  { id: "claude-code", labelKey: "workbenchChat.command.claude-code.label", descKey: "workbenchChat.command.claude-code.desc" },
+  { id: "terminal", labelKey: "workbenchChat.command.terminal.label", descKey: "workbenchChat.command.terminal.desc" },
 ];
 
 var WBC_COMMAND_ICONS = {
@@ -3847,7 +3848,7 @@ var WBC_COMMAND_ICONS = {
   "learning-plan": WBC_ICONS.file,
   "daily-review": WBC_ICONS.task,
   "deep-compare": WBC_ICONS.fork,
-  "claude-code": WBC_ICONS.slash,
+  terminal: WBC_ICONS.terminal,
 };
 
 var WBC_MODES = [
@@ -5761,6 +5762,9 @@ function WorkbenchChatPage({ active, project, newChatRequestId, onOpenTask, onAc
   }
   function selectChat(chatId) {
     var nextId = String(chatId || "");
+    var previousId = String(activeChatIdRef.current || "");
+    restoreTerminalReplacement(previousId);
+    if (nextId !== previousId) restoreTerminalReplacement(nextId);
     // Publish selection intent immediately. Passive effects run too late to
     // protect a newly-created chat from an already in-flight list refresh.
     activeChatIdRef.current = nextId;
@@ -5784,17 +5788,17 @@ function WorkbenchChatPage({ active, project, newChatRequestId, onOpenTask, onAc
   var pendingTerminalRestoreRef = useWbcRef({ projectId: "", terminalId: "" });
   var [terminalRestoreRevision, setTerminalRestoreRevision] = useWbcState(0);
 
-  function refreshTerminals() {
+  function refreshTerminals(options) {
     if (!projectId) {
       setTerminals([]);
       return Promise.resolve([]);
     }
-    setTerminalsLoading(true);
+    if (!(options && options.background)) setTerminalsLoading(true);
     return terminalClient.list(projectId).then(function (payload) {
       var items = Array.isArray(payload && payload.terminals) ? payload.terminals : [];
       setTerminals(items);
       var restoredId = String(payload && payload.activeTerminalId || "");
-      if (restoredId && items.some(function (item) { return String(item.id) === restoredId; })) {
+      if (!(options && options.skipRestore) && restoredId && items.some(function (item) { return String(item.id) === restoredId; })) {
         pendingTerminalRestoreRef.current = {
           projectId: String(projectId),
           terminalId: restoredId,
@@ -5803,9 +5807,13 @@ function WorkbenchChatPage({ active, project, newChatRequestId, onOpenTask, onAc
       }
       return items;
     }).catch(function (err) {
-      window.CyreneUI.require("feedback").showToast(wbcErrorText(err), "error");
+      if (!(options && options.background)) {
+        window.CyreneUI.require("feedback").showToast(wbcErrorText(err), "error");
+      }
       return [];
-    }).finally(function () { setTerminalsLoading(false); });
+    }).finally(function () {
+      if (!(options && options.background)) setTerminalsLoading(false);
+    });
   }
 
   useWbcEffect(function () {
@@ -5813,6 +5821,14 @@ function WorkbenchChatPage({ active, project, newChatRequestId, onOpenTask, onAc
     pendingTerminalRestoreRef.current = { projectId: "", terminalId: "" };
     refreshTerminals();
   }, [projectId]);
+
+  useWbcEffect(function () {
+    if (!projectId || !isActive) return undefined;
+    var timer = window.setInterval(function () {
+      refreshTerminals({ background: true, skipRestore: true });
+    }, 1500);
+    return function () { window.clearInterval(timer); };
+  }, [projectId, isActive]);
 
   useWbcEffect(function () {
     var pending = pendingTerminalRestoreRef.current;
@@ -5853,14 +5869,74 @@ function WorkbenchChatPage({ active, project, newChatRequestId, onOpenTask, onAc
     openPaneContent("terminal", id, { side: side });
   }
 
+  function showAgentTerminal(terminalId, preferredSide) {
+    var id = String(terminalId || "");
+    if (!id) return null;
+    var ownerChatId = String(activeChatIdRef.current || "");
+    var layout = paneLayoutFor(ownerChatId);
+    var existing = wbcPaneCardLocation(layout, "terminal:" + id);
+    setActiveTerminalId(id);
+    terminalClient.activate(projectId, id).catch(function () {});
+    if (existing) return existing.card;
+    var card = paneContentCard("terminal", id, ownerChatId);
+    var requestedSide = preferredSide === "left" ? "left" : "right";
+    updatePaneLayout(function (current) {
+      var next = {
+        left: current.left.slice(),
+        right: current.right.slice(),
+        leftRatio: current.leftRatio,
+        rightRatio: current.rightRatio,
+      };
+      var count = next.left.length + next.right.length;
+      if (count <= 1) {
+        // Agent display is always a split operation. If the only current card
+        // already occupies the preferred side, put the terminal opposite it.
+        var occupiedSide = next.left.length ? "left" : (next.right.length ? "right" : "");
+        var targetSide = occupiedSide === requestedSide
+          ? (requestedSide === "left" ? "right" : "left")
+          : requestedSide;
+        next[targetSide] = [card];
+        return next;
+      }
+      // Once the workspace is already split, replace exactly one card on the
+      // preferred side. This keeps the pane count and the other user's view
+      // stable instead of creating a third pane or replacing the workspace.
+      var replaceSide = next[requestedSide].length
+        ? requestedSide
+        : (requestedSide === "left" ? "right" : "left");
+      var replaceIndex = Math.max(0, next[replaceSide].length - 1);
+      next[replaceSide][replaceIndex] = card;
+      return next;
+    }, ownerChatId);
+    return card;
+  }
+
   function replaceWithTerminal(terminalId, options) {
     var id = String(terminalId || "");
     if (!id) return;
+    var ownerChatId = String(
+      options && options.ownerChatId != null
+        ? options.ownerChatId
+        : (activeChatIdRef.current || "")
+    );
+    var currentLayout = paneLayoutFor(ownerChatId);
+    var currentCards = currentLayout.left.concat(currentLayout.right);
+    var replacedTerminal = currentCards.length === 1 && currentCards[0].kind === "terminal"
+      ? currentCards[0]
+      : null;
     setActiveTerminalId(id);
     if (!(options && options.skipPersist)) terminalClient.activate(projectId, id).catch(function () {});
+    if (replacedTerminal && String(replacedTerminal.payload || "") === id) return;
+    var restoreLayout = replacedTerminal
+      && Object.prototype.hasOwnProperty.call(paneLayoutRestoreRef.current, replacedTerminal.id)
+      ? paneLayoutRestoreRef.current[replacedTerminal.id]
+      : currentLayout;
+    if (replacedTerminal) delete paneLayoutRestoreRef.current[replacedTerminal.id];
     openPaneContent("terminal", id, {
       replaceWorkspace: true,
-      ownerChatId: options && options.ownerChatId,
+      restore: true,
+      restoreLayout: restoreLayout,
+      ownerChatId: ownerChatId,
     });
   }
 
@@ -5898,7 +5974,7 @@ function WorkbenchChatPage({ active, project, newChatRequestId, onOpenTask, onAc
     var feedback = window.CyreneUI.require("feedback");
     var confirmation = feedback.confirmModal ? feedback.confirmModal({
       title: wbcT("terminal.deleteTitle", "Delete terminal"),
-      body: wbcT("terminal.deleteBody", "This will stop the running process and remove {title}.", { title: terminal && terminal.title || "Terminal" }),
+      body: wbcT("terminal.deleteBody", "This will stop the running process, cancel any pending Agent wake, and remove {title}.", { title: terminal && terminal.title || "Terminal" }),
       confirmLabel: wbcT("terminal.delete", "Delete terminal"),
       danger: true,
     }) : Promise.resolve(window.confirm(wbcT("terminal.deleteBody", "This will stop the running process and remove this terminal.")));
@@ -6014,6 +6090,41 @@ function WorkbenchChatPage({ active, project, newChatRequestId, onOpenTask, onAc
     });
   }
   var [paneLayoutsByChat, setPaneLayoutsByChat] = useWbcState({});
+
+  useWbcEffect(function () {
+    var bridge = {
+      current: function () {
+        var visible = [];
+        var panes = document.querySelectorAll(".wbc-terminal-pane[data-terminal-id]");
+        Array.prototype.forEach.call(panes, function (pane) {
+          var rect = pane.getBoundingClientRect();
+          var style = window.getComputedStyle(pane);
+          if (rect.width <= 0 || rect.height <= 0 || style.display === "none" || style.visibility === "hidden") return;
+          var id = String(pane.getAttribute("data-terminal-id") || "");
+          if (!id || visible.some(function (item) { return item.terminalId === id; })) return;
+          var terminal = terminals.find(function (item) { return String(item.id || "") === id; });
+          visible.push({ terminalId: id, title: String(terminal && terminal.title || "Terminal") });
+        });
+        if (visible.length > 1) {
+          return { ok: false, error: "multiple_terminals_visible", terminals: visible };
+        }
+        return { ok: true, terminalId: visible[0] ? visible[0].terminalId : "" };
+      },
+      show: function (terminalId, side) {
+        var id = String(terminalId || "");
+        if (!id || !terminals.some(function (item) { return String(item.id) === id; })) {
+          return { ok: false, error: "terminal_not_found" };
+        }
+        var requestedSide = side === "left" ? "left" : "right";
+        showAgentTerminal(id, requestedSide);
+        return { ok: true, terminalId: id, mode: "split", preferredSide: requestedSide };
+      },
+    };
+    window.CyreneTerminalSurface = bridge;
+    return function () {
+      if (window.CyreneTerminalSurface === bridge) delete window.CyreneTerminalSurface;
+    };
+  }, [activeChatId, paneLayoutsByChat, terminals]);
   var paneLayoutRestoreRef = useWbcRef({});
   var paneCardDragImageCleanupRef = useWbcRef(null);
   var paneCardDetachRef = useWbcRef(null);
@@ -6034,6 +6145,21 @@ function WorkbenchChatPage({ active, project, newChatRequestId, onOpenTask, onAc
     var ownerChatId = String(chatId || activeChatIdRef.current || "");
     var ownerId = paneOwnerKey(ownerChatId);
     return wbcNormalizePaneLayout(paneLayoutsByChat[ownerId], ownerChatId);
+  }
+
+  function restoreTerminalReplacement(ownerChatId) {
+    var normalizedChatId = String(ownerChatId || "");
+    var layout = paneLayoutFor(normalizedChatId);
+    var cards = layout.left.concat(layout.right);
+    if (cards.length !== 1 || cards[0].kind !== "terminal") return false;
+    var terminalCard = cards[0];
+    var restore = paneLayoutRestoreRef.current[terminalCard.id];
+    if (!restore) return false;
+    delete paneLayoutRestoreRef.current[terminalCard.id];
+    updatePaneLayout(restore, normalizedChatId);
+    setActiveTerminalId("");
+    terminalClient.activate(projectId, null).catch(function () {});
+    return true;
   }
 
   function updatePaneLayout(updater, ownerChatId) {
@@ -6066,18 +6192,20 @@ function WorkbenchChatPage({ active, project, newChatRequestId, onOpenTask, onAc
     var canonicalCardId = (normalizedType === "chat" || normalizedType === "terminal") && payload
       ? normalizedType + ":" + String(payload)
       : "";
-    var existingCanonicalCard = canonicalCardId
+    var existingChatCard = canonicalCardId
       ? wbcPaneCardLocation(paneLayoutFor(ownerChatId), canonicalCardId)
       : null;
-    if (normalizedType === "terminal" && existingCanonicalCard && !opts.replaceWorkspace) {
-      return existingCanonicalCard.card;
+    if (normalizedType === "terminal" && existingChatCard && !opts.replaceWorkspace) {
+      return existingChatCard.card;
     }
     // Opening the conversation that is already visible creates a second view,
     // not a second card with the same DOM/state identity. Drop highlighting is
     // keyed by card id, so duplicate canonical ids made both panes display the
     // same target prompt at once.
-    var card = existingCanonicalCard
-      ? wbcPaneCard(normalizedType, payload, { ownerChatId: ownerId, freshInstance: true })
+    var card = existingChatCard
+      ? (normalizedType === "chat"
+        ? wbcPaneCard("chat", payload, { ownerChatId: ownerId, freshInstance: true })
+        : wbcPaneCard(normalizedType, payload, { ownerChatId: ownerId, freshInstance: true }))
       : paneContentCard(normalizedType, payload, ownerId);
     updatePaneLayout(function (layout) {
       var source = opts.sourceCardId ? wbcPaneCardLocation(layout, opts.sourceCardId) : null;
@@ -6085,6 +6213,9 @@ function WorkbenchChatPage({ active, project, newChatRequestId, onOpenTask, onAc
         ? opts.side
         : (source && source.side === "right" ? "left" : "right");
       if (opts.restore) paneLayoutRestoreRef.current[card.id] = layout;
+      if (opts.restore && Object.prototype.hasOwnProperty.call(opts, "restoreLayout")) {
+        paneLayoutRestoreRef.current[card.id] = opts.restoreLayout;
+      }
       var next = {
         left: layout.left.slice(),
         right: layout.right.slice(),
@@ -6990,7 +7121,8 @@ function WorkbenchChatPage({ active, project, newChatRequestId, onOpenTask, onAc
     var side = resourceSplitSideAt(event);
     var resource = wbcReadResourceDrag(event);
     setResourceSplitDropSide("");
-    if (!side || !resource || ["file", "terminal"].indexOf(resource.kind) < 0) return;
+    if (!side || !resource) return;
+    if (resource.kind !== "file" && resource.kind !== "terminal") return;
     event.preventDefault();
     event.stopPropagation();
     if (resource.kind === "terminal") {
@@ -9868,6 +10000,9 @@ function WorkbenchChatPage({ active, project, newChatRequestId, onOpenTask, onAc
         onSelectSideAgent={function (agentId) { openPanelContent("side-agent", agentId); }}
         onUpdateSideAgent={updateSideAgent}
         onDeleteSideAgent={deleteSideAgent}
+        terminals={terminals}
+        terminalsLoading={terminalsLoading}
+        onSelectTerminal={function (terminalId) { openTerminal(terminalId, "right"); }}
         onToggleSide={onToggleSide}
         onBrowserTakeoverComplete={function (payload) {
           var pending = activeChat && activeChat.pendingQuestion;
@@ -10279,6 +10414,9 @@ function WorkbenchChatPage({ active, project, newChatRequestId, onOpenTask, onAc
         onRenameTerminal={renameTerminal}
         onDeleteTerminal={deleteTerminal}
         onUpdateTerminalLayout={updateTerminalLayout}
+        onRailModeChange={function (mode) {
+          if (mode === "chat") restoreTerminalReplacement(activeChatIdRef.current);
+        }}
         collapsed={navCollapsed}
         onToggleCollapsed={onToggleNavCollapsed}
         collapseControl={collapseControl}
@@ -11080,7 +11218,7 @@ function wbcProjectFileResource(projectId, entry) {
   };
 }
 
-function WbcRail({ projectId, projectName, chats, terminals, terminalsLoading, activeTerminalId, pinnedChatIds, activeChatId, loading, runningChatIds, runtimeEngine, onSelect, onAnswer, onCreate, onRename, onDelete, onToTask, toTaskBusy, onTogglePinned, onOpenFile, onOpenTerminal, onCreateTerminal, onRenameTerminal, onDeleteTerminal, onUpdateTerminalLayout, collapsed, onToggleCollapsed, collapseControl, moduleDock }) {
+function WbcRail({ projectId, projectName, chats, terminals, terminalsLoading, activeTerminalId, pinnedChatIds, activeChatId, loading, runningChatIds, runtimeEngine, onSelect, onAnswer, onCreate, onRename, onDelete, onToTask, toTaskBusy, onTogglePinned, onOpenFile, onOpenTerminal, onCreateTerminal, onRenameTerminal, onDeleteTerminal, onUpdateTerminalLayout, onRailModeChange, collapsed, onToggleCollapsed, collapseControl, moduleDock }) {
   var [query, setQuery] = useWbcState("");
   var [railMode, setRailMode] = useWbcState("chat");
   var [fileLocation, setFileLocation] = useWbcState(function () {
@@ -11170,7 +11308,9 @@ function WbcRail({ projectId, projectName, chats, terminals, terminalsLoading, a
 
   function toggleRailMode() {
     setQuery("");
-    setRailMode(railMode === "chat" ? "files" : railMode === "files" ? "terminal" : "chat");
+    var nextMode = railMode === "chat" ? "files" : railMode === "files" ? "terminal" : "chat";
+    setRailMode(nextMode);
+    if (onRailModeChange) onRailModeChange(nextMode);
   }
   var railMotionCollapsedRef = useWbcRef(!!collapsed);
   /* Derive the phase during the first render that sees the new collapsed prop.
@@ -12866,15 +13006,15 @@ function WbcRail({ projectId, projectName, chats, terminals, terminalsLoading, a
               setMenuId(isMenuOpen ? "" : "terminal:" + id);
             }} aria-label={wbcT("common.moreActions", "More actions")}>{WBC_ICONS.dots}</button>
             {isMenuOpen && <div className="wb-card-menu" role="menu">
-              <button type="button" role="menuitem" onClick={function (event) { event.stopPropagation(); setMenuId(""); toggleTerminalPinned(id); }}>
+              <button type="button" role="menuitem" className="wbc-chat-pin-action" onClick={function (event) { event.stopPropagation(); setMenuId(""); toggleTerminalPinned(id); }}>
                 <span className="wbc-chat-menu-icon" aria-hidden="true">{WBC_ICONS.pin}</span>
                 <span>{isPinned ? wbcT("terminal.unpin", "Unpin terminal") : wbcT("terminal.pin", "Pin terminal")}</span>
               </button>
-              <button type="button" role="menuitem" onClick={function (event) { event.stopPropagation(); setMenuId(""); setRenameTerminalItem(terminal); }}>
+              <button type="button" role="menuitem" className="wbc-chat-menu-action" onClick={function (event) { event.stopPropagation(); setMenuId(""); setRenameTerminalItem(terminal); }}>
                 <span className="wbc-chat-menu-icon" aria-hidden="true">{WBC_ICONS.edit}</span>
                 <span>{wbcT("terminal.rename", "Rename terminal")}</span>
               </button>
-              <button type="button" role="menuitem" className="danger" onClick={function (event) { event.stopPropagation(); setMenuId(""); if (onDeleteTerminal) onDeleteTerminal(id); }}>
+              <button type="button" role="menuitem" className="wbc-chat-menu-action danger" onClick={function (event) { event.stopPropagation(); setMenuId(""); if (onDeleteTerminal) onDeleteTerminal(id); }}>
                 <span className="wbc-chat-menu-icon" aria-hidden="true">{WBC_ICONS.trash}</span>
                 <span>{wbcT("terminal.delete", "Delete terminal")}</span>
               </button>
@@ -16414,7 +16554,7 @@ function wbcTraceActionKind(entry) {
   if (/(^|_)(write|create_file|save_file)($|_)/.test(name)) return "write";
   if (/(^|_)(read|read_file|open_file)($|_)/.test(name)) return "read";
   if (/(approve|reject|permission)/.test(name)) return "permission";
-  if (/(^|_)(bash|shell|terminal|exec|exec_command|run_command|script)($|_)/.test(name) || /(runscript|startshell|closeshell|sendshell)/.test(name)) return "command";
+  if (/(^|_)(bash|shell|terminal|exec|exec_command|run_command|script)($|_)/.test(name) || /(runscript|startshell|sendshell|listshells|readshell|interruptshell|showshell|deleteshell)/.test(name)) return "command";
   if (/(skill|capability|ability)/.test(name)) return "skill";
   if (/(search|grep|glob|find|query)/.test(name)) return "search";
   if (/(browser|navigate|click|screenshot)/.test(name)) return "browser";
@@ -16445,8 +16585,8 @@ function wbcTraceActionLabel(entry) {
   if (kind === "browser") return wbcT("workbenchChat.traceAction.browsed", "Used the browser");
   if (kind === "git") return wbcT("workbenchChat.traceAction.git", "Used Git");
   if (kind === "code") {
-    if (wbcTraceNameIsRead(raw)) return wbcT("workbenchChat.traceAction.codeRead", "Checked Claude Code");
-    return wbcT("workbenchChat.traceAction.code", "Operated Claude Code");
+    if (wbcTraceNameIsRead(raw)) return wbcT("workbenchChat.traceAction.codeRead", "Read terminal");
+    return wbcT("workbenchChat.traceAction.code", "Operated terminal");
   }
   if (kind === "task") {
     if (wbcTraceNameIsRead(raw)) return wbcT("workbenchChat.traceAction.taskRead", "Read tasks");
@@ -21218,6 +21358,37 @@ function WbcSideAccordionBody({ expanded, flush, bodyClass, children }) {
   );
 }
 
+function WbcConversationTerminalList({ terminals, loading, onSelect }) {
+  var items = Array.isArray(terminals) ? terminals : [];
+  if (loading && !items.length) {
+    return <div className="workbench-muted wbc-side-terminal-empty">{wbcT("terminal.loading", "Loading terminals...")}</div>;
+  }
+  return (
+    <div className="wbc-side-terminal-list" role="list">
+      {items.map(function (terminal) {
+        var running = terminal.status === "running" || terminal.status === "starting";
+        return (
+          <button
+            key={terminal.id}
+            type="button"
+            className="wbc-side-terminal-row"
+            role="listitem"
+            onClick={function () { if (onSelect) onSelect(terminal.id); }}
+          >
+            <span className={"wbc-side-terminal-status" + (running ? " running" : " exited")} aria-hidden="true" />
+            <span className="wbc-side-terminal-copy">
+              <b>{terminal.title || wbcT("terminal.title", "Terminal")}</b>
+              <small>{running ? String(terminal.cwd || "") : wbcT("terminal.exited", "Process exited")}</small>
+            </span>
+            <time>{wbcFormatTime(terminal.updatedAt || terminal.createdAt)}</time>
+            <span aria-hidden="true">{WBC_ICONS.chevronRight}</span>
+          </button>
+        );
+      })}
+    </div>
+  );
+}
+
 function WbcSide({
   project,
   chat,
@@ -21253,6 +21424,9 @@ function WbcSide({
   onSelectSideAgent,
   onUpdateSideAgent,
   onDeleteSideAgent,
+  terminals,
+  terminalsLoading,
+  onSelectTerminal,
   onBrowserTakeoverComplete,
   browserActiveByChat,
   browserSuppressed,
@@ -21346,6 +21520,14 @@ function WbcSide({
   if (chatViewerFile) tabs.push({ id: "viewer", label: wbcT("workbenchChat.viewer", "Viewer") });
   if (hasMap) tabs.push({ id: "map", label: wbcT("chat.side.map", "Map") });
   if (hasBrowser) tabs.push({ id: "browser", label: wbcT("chat.side.browser", "Browser") });
+  var conversationTerminals = (Array.isArray(terminals) ? terminals : []).filter(function (terminal) {
+    return terminal
+      && String(terminal.createdBy || "") === "agent"
+      && String(terminal.ownerChatId || "") === String(activeChatId || "");
+  });
+  if (conversationTerminals.length) {
+    tabs.push({ id: "terminal", label: wbcT("terminal.title", "Terminal") });
+  }
   if (sideAgents && sideAgents.length) {
     tabs.push({
       id: "side-agents",
@@ -21370,6 +21552,7 @@ function WbcSide({
     artifacts: artifactItems.length ? String(artifactItems.length) : "",
     viewer: viewerItems.length ? String(viewerItems.length) : "",
     browser: browserPanelState && Array.isArray(browserPanelState.tabs) ? String(browserPanelState.tabs.length) : "",
+    terminal: conversationTerminals.length ? String(conversationTerminals.length) : "",
     "side-agents": sideAgents && sideAgents.length ? String(sideAgents.length) : "",
   };
   var activeContent = (
@@ -21385,6 +21568,13 @@ function WbcSide({
       {activeTab === "map" && <WbcMapList chatId={chat ? chat.id : ""} onSelect={onSelectMap} />}
       {activeTab === "browser" && !browserSuppressed && (
         <WbcBrowserList browserState={browserPanelState} onSelect={onSelectBrowser} />
+      )}
+      {activeTab === "terminal" && (
+        <WbcConversationTerminalList
+          terminals={conversationTerminals}
+          loading={terminalsLoading}
+          onSelect={onSelectTerminal}
+        />
       )}
       {activeTab === "side-agents" && (
         <WbcSideAgentsPanel

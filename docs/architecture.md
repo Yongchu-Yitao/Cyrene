@@ -114,9 +114,11 @@ Each executed round is recorded as a short purpose plus its detailed tool
 chain. Learned workflows are progressively disclosed through `skill_tools`;
 low-risk declarative workflows can be invoked with `skill.run_learned`.
 
-### Claude Code Bridge
+### Terminal Daemon
 
-When `tmux` and Claude Code are available, Cyrene can detect existing Claude Code sessions, start new ones, send prompts, and read their output through a terminal bridge (`cc_terminal.py`). This lets Cyrene delegate heavy coding sessions to Claude Code and pull the results back into chat.
+An independent local daemon owns interactive PTYs, persistent metadata,
+scrollback, rendered VT screens, and durable exit wakes. Electron and the Web
+backend attach as clients, so closing a view never terminates a terminal.
 
 ### Code Tools
 

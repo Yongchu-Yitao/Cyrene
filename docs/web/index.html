@@ -154,7 +154,7 @@
           <li><strong>任务调度</strong>——Cron、间隔和一次性任务；抽奖系统让代理主动发起行动；管家代理维护 SOUL.md。详见<a href="#" onclick="navigateTo('scheduler')">任务调度</a>。</li>
           <li><strong>代码工具</strong>——代码库索引、符号搜索、调用链分析、Git 操作（diff / blame / log / status）。</li>
           <li><strong>技能系统</strong>——在运行时安装 <code>.md</code> / <code>.zip</code> 提示技能，管理启用和卸载，无需重新部署。</li>
-          <li><strong>Claude Code 桥接</strong>——检测现有 Claude Code tmux 会话，启动新会话，发送提示并读取输出。</li>
+          <li><strong>共享持久化终端</strong>——用户与 Agent 共用由独立 Daemon 托管的交互式终端。</li>
         </ul>
 
         <h3>界面与渠道</h3>
@@ -254,7 +254,7 @@
           <li><strong>Task scheduler</strong> — cron, interval, and one-shot tasks. Proactive lottery system for agent-initiated actions. Steward agent for SOUL.md maintenance. See <a href="#" onclick="navigateTo('scheduler')">Scheduler</a>.</li>
           <li><strong>Code tools</strong> — codebase indexing, symbol search, call-chain analysis, git operations (diff, blame, log, status).</li>
           <li><strong>Skill system</strong> — install <code>.md</code> / <code>.zip</code> prompt skills at runtime, enable/disable and uninstall — no redeploy needed.</li>
-          <li><strong>Claude Code bridge</strong> — detect existing Claude Code tmux sessions, start new ones, send prompts and read output.</li>
+          <li><strong>Shared persistent terminals</strong> — user and Agent share interactive terminals owned by an independent daemon.</li>
         </ul>
         <h3>Interfaces & Channels</h3>
         <ul>
@@ -1004,7 +1004,7 @@ cyrene stop</code></pre></div>
           <span class="tool-tag">MCP 工具</span>
           <span class="tool-tag">任务调度</span>
           <span class="tool-tag">技能管理</span>
-          <span class="tool-tag">Claude Code</span>
+          <span class="tool-tag">共享终端</span>
         </div>
         <p>设置 → 能力按完整工具包提供开关，不再提供单工具开关。关闭工具包后，其网关 schema、包级说明和专用 prompt 信息都不会传给模型，运行时也会拒绝历史消息中的过期调用。AnalyzeAttachment 等直接工具不受工具包开关影响。</p>
         <p>代理在多轮之间保持状态，直到调用 <code>quit</code> 结束交互。</p>

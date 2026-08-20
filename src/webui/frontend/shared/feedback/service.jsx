@@ -53,17 +53,31 @@
 
   function showToast(message, type, options) {
     var opts = options || {};
-    var id = ++sequence;
+    var toastKey = opts.key == null ? "" : String(opts.key);
+    var existing = toastKey
+      ? toasts.find(function (toast) { return toast.key === toastKey; })
+      : null;
+    var id = existing ? existing.id : ++sequence;
     var kind = type || "info";
     var duration = opts.duration != null
       ? opts.duration
       : (kind === "error" ? 6000 : 3200);
-    toasts = toasts.concat([{
+    var nextToast = {
       id: id,
+      key: toastKey,
       message: message == null ? "" : String(message),
       type: kind,
       duration: duration,
-    }]);
+      actionLabel: opts.actionLabel == null ? "" : String(opts.actionLabel),
+      onAction: typeof opts.onAction === "function" ? opts.onAction : null,
+    };
+    if (toastTimers[id]) {
+      window.clearTimeout(toastTimers[id]);
+      delete toastTimers[id];
+    }
+    toasts = existing
+      ? toasts.map(function (toast) { return toast.id === id ? nextToast : toast; })
+      : toasts.concat([nextToast]);
     emit();
     if (duration > 0) {
       toastTimers[id] = window.setTimeout(function () {
@@ -72,6 +86,21 @@
       }, duration);
     }
     return id;
+  }
+
+  function invokeToastAction(toast) {
+    if (!toast || typeof toast.onAction !== "function") return;
+    dismissToast(toast.id);
+    try {
+      var result = toast.onAction();
+      if (result && typeof result.catch === "function") {
+        result.catch(function (error) {
+          console.error("Cyrene: toast action failed", error);
+        });
+      }
+    } catch (error) {
+      console.error("Cyrene: toast action failed", error);
+    }
   }
 
   function confirmModal(options) {
@@ -195,6 +224,11 @@
                 <div key={toast.id} className={"workbench-toast is-" + toast.type} role="status">
                   <span className="workbench-toast-icon">{toastIcon(toast.type)}</span>
                   <span className="workbench-toast-msg">{toast.message}</span>
+                  {toast.actionLabel && toast.onAction ? (
+                    <button type="button" className="workbench-toast-action" onClick={function () { invokeToastAction(toast); }}>
+                      {toast.actionLabel}
+                    </button>
+                  ) : null}
                   <button type="button" className="workbench-toast-close" onClick={function () { dismissToast(toast.id); }} aria-label={text("common.close", "Close")}>
                     <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><path d="m6 6 12 12M18 6 6 18" /></svg>
                   </button>

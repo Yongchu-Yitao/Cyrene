@@ -186,10 +186,6 @@ def register_learning_routes(router: APIRouter, bot: Any, db_path: str) -> None:
             "learned_skills": learned_skills,
             "skill_candidates": candidates,
             "tool_chains": _learning_enrich_tool_chains(tool_chains),
-            # Claude Code transcript analysis is intentionally not part of the
-            # aggregate learning payload.  It is an expensive, unrelated
-            # operation and must not delay the skill-learning workbench.
-            "cc_learning": None,
         }
 
     @router.get("/api/learned-skills")

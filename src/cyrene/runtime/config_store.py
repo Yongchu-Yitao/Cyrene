@@ -88,14 +88,14 @@ _DEFAULT_VISION_MODELS: list[dict[str, str]] = []
 _DEFAULT_ENABLED_TOOLS: dict[str, bool] = {
     "Read": True, "Write": True, "Edit": True, "Glob": True, "Grep": True,
     "Bash": True, "StartShell": True, "SendShell": True, "ListShells": True,
-    "CloseShell": True, "WebFetch": True, "WebSearch": True,
+    "ReadShell": True, "InterruptShell": True, "ShowShell": True, "DeleteShell": True,
+    "WebFetch": True, "WebSearch": True,
     "spawn_subagent": True, "send_agent_message": True,
     "schedule_task": True, "list_tasks": True, "pause_task": True,
     "resume_task": True, "cancel_task": True,
     "send_message": True, "send_file": True, "send_wechat_file": True,
-    "ask_user": True, "PromptClaudeCode": True,
+    "ask_user": True,
     "send_telegram": False, "query_round": True,
-    "CheckClaudeCode": True, "StartClaudeCode": True,
     "app_use": True,
 }
 

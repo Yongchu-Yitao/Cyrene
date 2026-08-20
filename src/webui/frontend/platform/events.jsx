@@ -23,7 +23,6 @@
     "browser_takeover_request",
     "browser_user_operation",
     "budget_warning",
-    "cc_learning",
     "chat_message",
     "destructive_confirmation",
     "entity_created",

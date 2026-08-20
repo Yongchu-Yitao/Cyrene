@@ -360,7 +360,6 @@ function connectEvents() {
           "subagent_update",
           "session_update",
           "shell_update",
-          "cc_learning",
           "round_guidance_update",
           "agent_comm",
           "agent_chat_user_message",

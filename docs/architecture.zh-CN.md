@@ -100,10 +100,10 @@ Workflow 通过 `skill_tools` 渐进披露。
 每轮执行会记录目的和 Tool Chain。低风险声明式 Workflow 可以通过
 `skill.run_learned` 调用。
 
-### Claude Code Bridge
+### Terminal Daemon
 
-当 `tmux` 和 Claude Code 可用时，Cyrene 能检测、启动、发送 Prompt 并读取
-Claude Code Session。实现位于 `cyrene.tooling.backends`。
+独立本地服务负责交互式 PTY、持久化元数据、滚动记录、VT 屏幕和退出唤醒。
+Electron 与 Web 后端仅作为客户端连接，因此关闭视图不会结束终端。
 
 ### Code Tool
 

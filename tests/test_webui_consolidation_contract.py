@@ -20,17 +20,19 @@ WEBUI_ROOT = ROOT / "src" / "webui"
 WORKBENCH_ROOT = WEBUI_ROOT / "frontend"
 INDEX = WORKBENCH_ROOT / "index.html"
 
-OPENAPI_OPERATION_COUNT = 386
+OPENAPI_OPERATION_COUNT = 389
 OPENAPI_BASELINE_FASTAPI = "0.136.1"
 OPENAPI_BASELINE_PYDANTIC = "2.13.4"
-OPENAPI_SHA256 = "0238c1558e2805b9e228ff76b6feed8799931bd892d97724da838d11742582df"
-TOOL_REGISTRY_SHA256 = "b273e998e8a304c933f1389bd37066f12a08e9dca66c491bbfef0497441fb26c"
-MAIN_WIRE_SHA256 = "65cb29372ffbd995e5c2db946df33e726a97db6093f12ab436c1d83f94fce315"
-SUBAGENT_WIRE_SHA256 = "84c1b37fd89fc1847a389b21b675272cc485706c80edb30722d66818634a7e31"
+OPENAPI_SHA256 = "4988cb42b90469d806b0c027ac151643cb65c76d695969474a5f51a188e64117"
+TOOL_REGISTRY_SHA256 = "f8200a17bc65c20ae8fb3615fc8031714856198faddb92f985a47abcc4db2e48"
+MAIN_WIRE_SHA256 = "2e3bc8be6e0039af2ac92184500f7f88627a77401335e0b41f1bb42fc6cb67cf"
+SUBAGENT_WIRE_SHA256 = "a01ae0fc2a72750c4cd8248220dcd525d39523156acb1d26573ba598b2d5b643"
 
 # CyreneUI owns runtime services. The launch lifecycle is the sole bootstrap
 # global because it must guard fetch before the platform registry is loaded.
-REGISTERED_WORKBENCH_GLOBALS = {"CyreneUI", "CyrenePageLifecycle"}
+REGISTERED_WORKBENCH_GLOBALS = {
+    "CyreneUI", "CyrenePageLifecycle", "CyreneTerminalSurface",
+}
 
 BROWSER_AND_VENDOR_GLOBALS = {
     "AudioContext",
@@ -41,6 +43,8 @@ BROWSER_AND_VENDOR_GLOBALS = {
     "L",
     "addEventListener",
     "alert",
+    "atob",
+    "btoa",
     "close",
     "confirm",
     "cyrene",
@@ -231,6 +235,11 @@ def test_single_webui_source_build_and_entrypoint_shape():
         "@aiden0z/pptx-renderer",
         "@lobehub/icons-static-svg",
         "@tabler/icons",
+        "@xterm/addon-fit",
+        "@xterm/addon-search",
+        "@xterm/addon-unicode11",
+        "@xterm/addon-web-links",
+        "@xterm/xterm",
         "docx-preview",
         "esbuild",
         "echarts",

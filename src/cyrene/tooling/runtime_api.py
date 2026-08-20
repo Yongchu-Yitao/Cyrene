@@ -32,17 +32,10 @@ from cyrene.runtime.inbox import send_message as send_inbox
 from cyrene.runtime.schedule_spec import compute_next_run
 from cyrene.tooling import runtime_support as _implementation
 from cyrene.tooling.backends.search import deep_search
-from cyrene.tooling.backends.shells import (
-    close_shell as close_shell_session,
-    list_shells as list_shell_sessions,
-    send_shell as send_shell_session,
-    start_shell as start_shell_session,
-)
 from cyrene.workbench.context import resolve_project_data_key_for_session
 
 logger = logging.getLogger("cyrene.tooling.runtime_support")
 
-CC_PROJECT_DIR = _implementation._CC_PROJECT_DIR
 classify_destructive_shell_command = _implementation._classify_destructive_shell_command
 command_is_file_deletion = _implementation._command_is_file_deletion
 guard_nonbash_shell_command = _implementation._guard_nonbash_shell_command
@@ -82,14 +75,12 @@ def spawn_subagent_task(*args, **kwargs):
 
 
 __all__ = [
-    "CC_PROJECT_DIR",
     "analyze_attachment",
     "asyncio",
     "build_public_attachment_payload",
     "build_skills",
     "can_receive",
     "classify_destructive_shell_command",
-    "close_shell_session",
     "command_is_file_deletion",
     "compute_next_run",
     "datetime",
@@ -102,7 +93,6 @@ __all__ = [
     "is_dangerous_subshell",
     "json",
     "json_result",
-    "list_shell_sessions",
     "logger",
     "re",
     "register_generated_attachment",
@@ -123,10 +113,8 @@ __all__ = [
     "resolve_workspace_write_target",
     "run_subagent",
     "send_inbox",
-    "send_shell_session",
     "shell_command_requires_write_guard",
     "spawn_subagent_task",
-    "start_shell_session",
     "time",
     "timezone",
     "truncate",

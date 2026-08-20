@@ -1519,6 +1519,41 @@
   async function handleHostRequest(method, args) {
     if (method === "snapshot") return snapshot(args || {});
     if (method === "act") return act(args || {});
+    if (method === "terminal.current") {
+      var currentBridge = root.CyreneTerminalSurface;
+      return currentBridge && typeof currentBridge.current === "function"
+        ? currentBridge.current()
+        : { ok: false, error: "terminal_surface_unavailable" };
+    }
+    if (method === "terminal.show") {
+      var showBridge = root.CyreneTerminalSurface;
+      return showBridge && typeof showBridge.show === "function"
+        ? showBridge.show(args && args.terminalId, args && args.side)
+        : { ok: false, error: "terminal_surface_unavailable" };
+    }
+    if (method === "terminal.control") {
+      var terminalId = String(args && args.terminalId || "");
+      var terminalElement = null;
+      var panes = root.document && root.document.querySelectorAll
+        ? root.document.querySelectorAll(".wbc-terminal-pane[data-terminal-id]")
+        : [];
+      Array.prototype.some.call(panes, function (pane) {
+        if (String(pane.getAttribute("data-terminal-id") || "") !== terminalId) return false;
+        if (!elementVisible(pane)) return false;
+        terminalElement = pane;
+        return true;
+      });
+      if (!terminalElement) return { ok: true, highlighted: false, terminalId: terminalId };
+      var controlSequence = showAgentControlHighlight(
+        terminalElement,
+        "terminal:" + terminalId,
+        String(args && args.action || "input")
+      );
+      settleAgentControlHighlight(controlSequence);
+      var terminalPoint = visibleCenter(terminalElement);
+      if (terminalPoint) showAgentCursor(terminalPoint, { element: terminalElement });
+      return { ok: true, highlighted: controlSequence != null, terminalId: terminalId };
+    }
     return { ok: false, error: "unsupported_surface_method" };
   }
 
@@ -1628,7 +1663,13 @@
     }).catch(function (error) {
       console.warn("[ui-surface] Electron registration failed", error);
     });
-  } else if (typeof root.WebSocket === "function") {
+  }
+
+  // Electron's IPC surface serves native desktop controls, while Agent tools
+  // such as ShowShell are dispatched by the Python backend. Keep the backend
+  // WebSocket registered as well so both request paths resolve the same live
+  // renderer instance instead of reporting no_current_surface in Electron.
+  if (typeof root.WebSocket === "function") {
     var protocol = root.location.protocol === "https:" ? "wss:" : "ws:";
     var socket = new root.WebSocket(protocol + "//" + root.location.host + "/api/app-control/ui-surface/" + encodeURIComponent(instanceId));
     surfaceSocket = socket;

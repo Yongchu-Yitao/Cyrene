@@ -46,6 +46,7 @@ CYRENE_TOP_LEVEL_DIRECTORIES = {
     "model_runtime",
     "observability",
     "runtime",
+    "terminal",
     "tool_impl",
     "tooling",
     "voice",

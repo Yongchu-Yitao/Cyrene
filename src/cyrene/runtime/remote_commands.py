@@ -38,13 +38,7 @@ from cyrene.runtime.remote_control import (
     unregister_remote_gateway,
 )
 from cyrene.tooling.gateway import execute_wire_tool_in_context
-from cyrene.tooling.backends.shells import (
-    close_shell,
-    get_shell_snapshot,
-    interrupt_shell,
-    send_shell,
-    start_shell,
-)
+from cyrene.terminal.client import get_terminal_daemon_client
 from cyrene.tooling.snapshot import build_catalog_snapshot
 from cyrene.tooling.types import ToolExecutionContext
 from cyrene.runtime.remote_pairing import DirectPairingServer
@@ -128,7 +122,7 @@ _REMOTE_TOOL_PACK_LABELS = {
 
 _REMOTE_TOOL_PACK_DESCRIPTIONS_ZH = {
     "browser_tools": "启用浏览器导航、页面快照、截图、点击、输入、等待和网络检查工具。",
-    "code_tools": "代码分析、Git、持久化终端以及 Claude Code 辅助能力。",
+    "code_tools": "代码分析、Git 与共享持久化终端。",
     "delivery_tools": "发送进度更新、通知、消息和文件。",
     "desktop_tools": "通过应用控制发现桌面应用并与其交互。",
     "entity_tools": "追踪、查询、更新、列出和删除用户数据库中的记录。",
@@ -145,7 +139,7 @@ _REMOTE_TOOL_PACK_DESCRIPTIONS_ZH = {
 
 _REMOTE_TOOL_PACK_DESCRIPTIONS = {
     "browser_tools": "Enable browser navigation, page snapshots, screenshots, clicks, typing, waiting, and network inspection.",
-    "code_tools": "Code analysis, Git, persistent shells, and Claude Code helpers.",
+    "code_tools": "Code analysis, Git, and shared persistent terminals.",
     "delivery_tools": "Send progress updates, notifications, messages, and files.",
     "desktop_tools": "Discover and interact with desktop applications through App Use.",
     "entity_tools": "Track, query, update, list, and delete records in the user database.",
@@ -1519,23 +1513,19 @@ class RemoteCommandExecutor:
         cursor: int = 0,
     ) -> dict[str, Any]:
         safe_cursor = max(0, int(cursor or 0))
-        lines = [
-            {
-                "seq": int(item.get("seq") or 0),
-                "kind": str(item.get("kind") or "out"),
-                "text": str(item.get("text") or ""),
-            }
-            for item in snapshot.get("lines") or []
-            if isinstance(item, dict)
-            and int(item.get("seq") or 0) > safe_cursor
+        terminal = dict(snapshot.get("terminal") or snapshot)
+        next_cursor = int(terminal.get("nextSeq") or safe_cursor)
+        screen_text = str(snapshot.get("screenText") or "")
+        lines = [] if next_cursor <= safe_cursor else [
+            {"seq": next_cursor, "kind": "screen", "text": screen_text}
         ]
         return {
             "ok": True,
-            "shell_id": str(snapshot.get("id") or ""),
-            "status": str(snapshot.get("status") or "closed"),
-            "cwd": str(snapshot.get("cwd") or "."),
-            "exit_code": snapshot.get("exitCode"),
-            "next_cursor": int(snapshot.get("nextCursor") or safe_cursor),
+            "shell_id": str(terminal.get("id") or ""),
+            "status": str(terminal.get("status") or "closed"),
+            "cwd": str(terminal.get("cwd") or "."),
+            "exit_code": terminal.get("exitCode"),
+            "next_cursor": next_cursor,
             "lines": lines,
         }
 
@@ -1554,7 +1544,7 @@ class RemoteCommandExecutor:
         symbol = "%" if shell_name == "zsh" else "$"
         return f"{environment_prefix}{user}@{host} {cwd_label} {symbol}"
 
-    def _owned_shell(
+    async def _owned_shell(
         self,
         peer_device_id: str,
         project_id: str,
@@ -1566,8 +1556,9 @@ class RemoteCommandExecutor:
             project_id,
         ):
             raise ValueError("remote shell is unavailable for this device and project")
-        snapshot = get_shell_snapshot(shell_id)
-        if snapshot is None:
+        try:
+            snapshot = await get_terminal_daemon_client().screen(shell_id)
+        except Exception:
             self._remote_shell_owners.pop(shell_id, None)
             raise ValueError("remote shell no longer exists")
         return shell_id, snapshot
@@ -1591,14 +1582,14 @@ class RemoteCommandExecutor:
             or str(workbench_runtime.WORKSPACE_DIR)
         )
         if command == "shell.open":
-            snapshot = await start_shell(
+            created = await get_terminal_daemon_client().create(
+                project_id,
                 cwd=workspace_dir,
                 title=f"Mobile Shell · {str(project.get('name') or project_id)}",
-                workspace_root=workspace_dir,
-                interactive=False,
-                survive_interrupt=True,
             )
-            shell_id = str(snapshot.get("id") or "")
+            terminal = dict(created.get("terminal") or {})
+            snapshot = await get_terminal_daemon_client().screen(str(terminal.get("id") or ""))
+            shell_id = str(terminal.get("id") or "")
             self._remote_shell_owners[shell_id] = (
                 peer_device_id,
                 project_id,
@@ -1608,29 +1599,30 @@ class RemoteCommandExecutor:
                 "prompt": self._desktop_shell_prompt(workspace_dir),
             }
 
-        shell_id, snapshot = self._owned_shell(
+        shell_id, snapshot = await self._owned_shell(
             peer_device_id, project_id, payload
         )
+        terminal_state = dict(snapshot.get("terminal") or snapshot)
         cursor = max(0, int(payload.get("cursor") or 0))
         if command == "shell.read":
             return self._public_shell_snapshot(snapshot, cursor=cursor)
         if command == "shell.write":
-            if str(snapshot.get("status") or "") != "running":
+            if str(terminal_state.get("status") or "") != "running":
                 raise ValueError("remote shell is not running")
             shell_input = _require_text(payload, "input", max_length=32_768)
-            snapshot = await send_shell(
-                shell_id,
-                shell_input,
-                wait_ms=max(0, min(int(payload.get("wait_ms") or 250), 1500)),
+            snapshot = await get_terminal_daemon_client().input(
+                shell_id, shell_input, actor="user",
             )
             return self._public_shell_snapshot(snapshot, cursor=cursor)
         if command == "shell.interrupt":
-            if str(snapshot.get("status") or "") != "running":
+            if str(terminal_state.get("status") or "") != "running":
                 raise ValueError("remote shell is not running")
-            snapshot = await interrupt_shell(shell_id)
+            snapshot = await get_terminal_daemon_client().interrupt(shell_id)
             return self._public_shell_snapshot(snapshot, cursor=cursor)
         if command == "shell.close":
-            snapshot = await close_shell(shell_id)
+            result = await get_terminal_daemon_client().remove(shell_id)
+            terminal = dict(result.get("terminal") or snapshot.get("terminal") or {})
+            snapshot = {"terminal": terminal, "screenText": snapshot.get("screenText", "")}
             self._remote_shell_owners.pop(shell_id, None)
             return self._public_shell_snapshot(snapshot, cursor=cursor)
         raise ValueError("unsupported shell operation")

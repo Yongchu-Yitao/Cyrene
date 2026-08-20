@@ -705,7 +705,7 @@ class TestSearch:
             doc["id"],
             [{
                 "ordinal": 0,
-                "content": "Otty reports agent state through Claude Code hooks.",
+                "content": "Otty reports agent state through terminal hooks.",
                 "char_start": 0,
                 "char_end": 50,
             }],

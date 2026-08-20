@@ -50,9 +50,9 @@ def register_terminal_routes(router: APIRouter) -> None:
     client = get_terminal_daemon_client()
 
     @router.get("/api/terminals")
-    async def list_terminals(projectId: str = ""):
+    async def list_terminals(projectId: str = "", ownerChatId: str | None = None):
         try:
-            result = await client.list(projectId)
+            result = await client.list(projectId, owner_chat_id=ownerChatId)
         except Exception as exc:
             raise _http_error(exc) from exc
         return {
@@ -85,6 +85,31 @@ def register_terminal_routes(router: APIRouter) -> None:
             return await client.remove(terminal_id)
         except Exception as exc:
             raise _http_error(exc) from exc
+
+    @router.post("/api/terminals/{terminal_id}/restart")
+    async def restart_terminal(terminal_id: str):
+        try:
+            result = await client.restart(terminal_id)
+        except Exception as exc:
+            raise _http_error(exc) from exc
+        return {"terminal": result["terminal"]}
+
+    @router.get("/api/terminals/{terminal_id}/screen")
+    async def terminal_screen(terminal_id: str):
+        try:
+            return await client.screen(terminal_id)
+        except Exception as exc:
+            raise _http_error(exc) from exc
+
+    @router.get("/api/terminals/{terminal_id}/input-history")
+    async def terminal_input_history(terminal_id: str, limit: int = 200):
+        try:
+            result = await client.input_history(
+                terminal_id, limit=max(1, min(int(limit or 200), 1000))
+            )
+        except Exception as exc:
+            raise _http_error(exc) from exc
+        return {"events": result.get("events", [])}
 
     @router.put("/api/terminals/layout")
     async def update_terminal_layout(payload: TerminalLayoutRequest):
@@ -128,13 +153,17 @@ def register_terminal_routes(router: APIRouter) -> None:
 
         sender = asyncio.create_task(send_events())
         receiver = asyncio.create_task(receive_commands())
+        daemon_disconnected = False
         try:
             done, pending = await asyncio.wait(
                 {sender, receiver}, return_when=asyncio.FIRST_COMPLETED
             )
             for task in pending:
                 task.cancel()
-            await asyncio.gather(*done, *pending, return_exceptions=True)
+            results = await asyncio.gather(*done, *pending, return_exceptions=True)
+            daemon_disconnected = any(
+                isinstance(result, ConnectionError) for result in results
+            )
         except WebSocketDisconnect:
             pass
         finally:
@@ -142,6 +171,11 @@ def register_terminal_routes(router: APIRouter) -> None:
             receiver.cancel()
             with contextlib.suppress(Exception):
                 await connection.close()
+            if daemon_disconnected:
+                with contextlib.suppress(Exception):
+                    await websocket.close(
+                        code=1013, reason="terminal daemon disconnected"
+                    )
 
 
 __all__ = ["register_terminal_routes"]

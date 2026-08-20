@@ -1,5 +1,6 @@
 .wbc-terminal-pane {
   --wbc-terminal-background: #171819;
+  --wbc-terminal-foreground: #f1f1f4;
   --wbc-terminal-muted: #a5a9b1;
   position: relative;
   min-width: 0;
@@ -9,8 +10,19 @@
   background: var(--wbc-terminal-background);
 }
 
+.wbc-terminal-pane.is-fullscreen {
+  position: fixed;
+  z-index: 10000;
+  inset: 0;
+  width: 100vw;
+  height: 100vh;
+  padding-top: 0 !important;
+  border-radius: 0;
+}
+
 html[data-theme="light"] .wbc-terminal-pane {
   --wbc-terminal-background: #fcfdfd;
+  --wbc-terminal-foreground: #171c22;
   --wbc-terminal-muted: #717c88;
 }
 
@@ -30,11 +42,19 @@ html[data-theme="light"] .wbc-terminal-pane {
   height: 100%;
   padding: 10px 9px 7px 12px;
   contain: strict;
+  overflow-y: auto;
+  overscroll-behavior-y: contain;
   background: var(--wbc-terminal-background);
 }
 
-.wbc-terminal-pane[data-connection="connecting"] .wbc-terminal-host,
-.wbc-terminal-pane[data-connection="replaying"] .wbc-terminal-host {
+.wbc-terminal-tail-spacer {
+  width: 1px;
+  min-height: 0;
+  pointer-events: none;
+}
+
+.wbc-terminal-pane[data-has-content="false"][data-connection="connecting"] .wbc-terminal-host,
+.wbc-terminal-pane[data-has-content="false"][data-connection="replaying"] .wbc-terminal-host {
   opacity: 0;
 }
 
@@ -43,13 +63,6 @@ html[data-theme="light"] .wbc-terminal-pane {
   height: 100%;
 }
 
-.wbc-terminal-connection {
-  position: absolute;
-  z-index: 3;
-  top: 8px;
-  right: 12px;
-  min-height: 18px;
-  color: var(--wbc-terminal-muted);
-  font-size: 11px;
-  pointer-events: none;
+.wbc-terminal-host .xterm-cursor-layer {
+  opacity: 1;
 }

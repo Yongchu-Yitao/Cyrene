@@ -2557,7 +2557,10 @@ def register_workbench_chat_routes(
             from cyrene.workbench.project_memory_prompt import build_main_agent_suffix
             from cyrene.runtime.host_bridge import resolve_conversation_source
 
-            conversation_source = await resolve_conversation_source(ui_instance_id)
+            conversation_source = (
+                "side_agent" if is_side_agent
+                else await resolve_conversation_source(ui_instance_id)
+            )
 
             return await run_agent(
                 user_message=agent_message,

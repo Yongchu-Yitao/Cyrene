@@ -15,16 +15,62 @@ from cyrene.tooling.runtime_api import (
     request_destructive_confirmation,
     request_scope_elevation,
     request_write_elevation,
-    send_shell_session,
 )
 
 TOOL_NAME = 'SendShell'
 TOOL_DEF = get_native_tool_def(TOOL_NAME)
 
 
+_TERMINAL_KEYS = {
+    "enter": "\r",
+    "escape": "\x1b",
+    "tab": "\t",
+    "shift_tab": "\x1b[Z",
+    "up": "\x1b[A",
+    "down": "\x1b[B",
+    "right": "\x1b[C",
+    "left": "\x1b[D",
+    "home": "\x1b[H",
+    "end": "\x1b[F",
+    "insert": "\x1b[2~",
+    "delete": "\x1b[3~",
+    "page_up": "\x1b[5~",
+    "page_down": "\x1b[6~",
+    "backspace": "\x7f",
+    "f1": "\x1bOP",
+    "f2": "\x1bOQ",
+    "f3": "\x1bOR",
+    "f4": "\x1bOS",
+    "f5": "\x1b[15~",
+    "f6": "\x1b[17~",
+    "f7": "\x1b[18~",
+    "f8": "\x1b[19~",
+    "f9": "\x1b[20~",
+    "f10": "\x1b[21~",
+    "f11": "\x1b[23~",
+    "f12": "\x1b[24~",
+    "ctrl_space": "\x00",
+}
+
+
+def _terminal_key_sequence(key: str) -> str:
+    normalized = str(key or "").strip().lower()
+    if normalized in _TERMINAL_KEYS:
+        return _TERMINAL_KEYS[normalized]
+    if normalized.startswith("ctrl_") and len(normalized) == 6:
+        letter = normalized[-1]
+        if "a" <= letter <= "z":
+            return chr(ord(letter) - ord("a") + 1)
+    return ""
+
+
 async def _tool_send_shell(args: dict[str, Any], _bot: Any, _chat_id: int, _db_path: str, _notify_state: dict[str, bool] | None) -> str:
+    import asyncio
+    from cyrene.terminal.client import get_terminal_daemon_client
+    from cyrene.tooling.backends.terminals import animate_terminal_control, resolve_terminal
+
     from cyrene.agent.context import has_temporary_full_access
-    command = str(args.get("command", ""))
+    command = str(args.get("text", args.get("command", "")) or "")
     _full_access = has_temporary_full_access()
     if not _full_access and is_dangerous_subshell(command):
         elev = await request_scope_elevation(
@@ -58,19 +104,34 @@ async def _tool_send_shell(args: dict[str, Any], _bot: Any, _chat_id: int, _db_p
         delete_result = await request_delete_confirmation(tool_name="SendShell", command=command)
         if delete_result is not None:
             return delete_result
-    snap = await send_shell_session(
-        str(args.get("shell_id", "")),
-        command,
-        wait_ms=int(args.get("wait_ms", 700) or 700),
+    terminal = await resolve_terminal(
+        terminal_id=str(args.get("shell_id") or ""),
+        name=str(args.get("name") or ""),
+        access="write",
     )
+    key = str(args.get("key") or "").strip().lower()
+    data = command + _terminal_key_sequence(key)
+    if not data:
+        raise ValueError("text or key is required")
+    await animate_terminal_control(str(terminal.get("id") or ""), "input")
+    snap = await get_terminal_daemon_client().input(str(terminal.get("id") or ""), data)
+    await asyncio.sleep(0.12)
+    snap = await get_terminal_daemon_client().screen(str(terminal.get("id") or ""))
+    terminal_state = snap.get("terminal") or {}
     return json_result({
-        "shell_id": snap.get("id", ""),
-        "status": snap.get("status", ""),
-        "elapsed": snap.get("elapsed", "—"),
-        "lines": snap.get("lines", [])[-20:],
+        "shell_id": terminal.get("id", ""),
+        "terminal_id": terminal.get("id", ""),
+        "status": terminal_state.get("status", ""),
+        "screen_text": snap.get("screenText", ""),
+        "cursor": snap.get("cursor", {}),
+        "last_actor": terminal_state.get("lastActor", ""),
+        "input_event_count": terminal_state.get("inputEventCount", 0),
     })
 
 
 handler = _tool_send_shell
 
-__all__ = ["TOOL_NAME", "TOOL_DEF", "handler", "_tool_send_shell"]
+__all__ = [
+    "TOOL_NAME", "TOOL_DEF", "handler", "_tool_send_shell",
+    "_terminal_key_sequence",
+]

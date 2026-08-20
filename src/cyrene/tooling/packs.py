@@ -5,7 +5,7 @@ from __future__ import annotations
 from cyrene.tooling.types import PackSpec
 
 PACKS = (
-    PackSpec("code", "code_tools", "Code analysis, Git, persistent shells, and Claude Code helpers.", ("code.",), 100),
+    PackSpec("code", "code_tools", "Code analysis, Git, and shared persistent terminals.", ("code.",), 100),
     PackSpec("browser", "browser_tools", "Persistent browser navigation, inspection, interaction, uploads, and takeover.", ("browser.",), 200),
     PackSpec("desktop", "desktop_tools", "Desktop application discovery and interaction through App Use.", ("desktop.",), 300),
     PackSpec("memory", "memory_tools", "Conversation, short-term, and project memory retrieval and maintenance.", ("memory.",), 400),
@@ -25,13 +25,13 @@ PACKS = (
 
 CAPABILITY_BINDINGS: dict[str, tuple[tuple[str, str], ...]] = {
     "code_tools": (
-        ("code.prompt_claude_code", "PromptClaudeCode"),
-        ("code.check_claude_code", "CheckClaudeCode"),
-        ("code.start_claude_code", "StartClaudeCode"),
         ("code.shell.start", "StartShell"),
         ("code.shell.send", "SendShell"),
         ("code.shell.list", "ListShells"),
-        ("code.shell.close", "CloseShell"),
+        ("code.shell.read", "ReadShell"),
+        ("code.shell.interrupt", "InterruptShell"),
+        ("code.shell.show", "ShowShell"),
+        ("code.shell.delete", "DeleteShell"),
         ("code.lint", "LintCode"),
         ("code.format", "FormatCode"),
         ("code.review", "CodeReview"),

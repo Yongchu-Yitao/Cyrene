@@ -3173,6 +3173,12 @@ async def dispatch_shell_wake_run(wake: dict[str, Any], *, bot: Any, db_path: st
     chat = _find_chat(payload, chat_id)
     if not chat:
         return "missing"
+    wake_id = str(wake.get("wake_id") or "").strip()
+    if wake_id and any(
+        isinstance(item, dict) and str(item.get("wakeId") or "") == wake_id
+        for item in chat.get("messages") or []
+    ):
+        return "started"
     project_id = str(chat.get("projectId") or "")
     project_store = await asyncio.to_thread(legacy_routes._read_workbench_store)
     project = legacy_routes._workbench_find_project(project_store, project_id)

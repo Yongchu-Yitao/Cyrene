@@ -111,17 +111,6 @@ _NATIVE_TOOL_DEFS: tuple[dict[str, Any], ...] = tuple([{'type': 'function',
                                                                       'reflection worker.'}},
                               'required': ['goal_gap']}}},
  {'type': 'function',
-  'function': {'name': 'PromptClaudeCode',
-               'description': "Prepare a stronger Claude Code prompt from the user's task, then show it to the user "
-                              'for confirmation. Use this when the user wants Claude Code to execute a task and you '
-                              'want Cyrene to optimize the prompt first. Requires Claude Code to already be running; '
-                              'check with CheckClaudeCode and launch with StartClaudeCode if needed.',
-               'parameters': {'type': 'object',
-                              'properties': {'task': {'type': 'string',
-                                                      'description': 'The task that should be turned into a better '
-                                                                     'Claude Code prompt.'}},
-                              'required': ['task']}}},
- {'type': 'function',
   'function': {'name': 'schedule_task',
                'description': 'Schedule a task. schedule_type must be cron, interval, or once. Use '
                               'permission_mode="full_access" only when the task MUST read/write files outside the '
@@ -524,18 +513,17 @@ _NATIVE_TOOL_DEFS: tuple[dict[str, Any], ...] = tuple([{'type': 'function',
                               'required': ['query']}}},
  {'type': 'function',
   'function': {'name': 'StartShell',
-               'description': (
-                   'Start an independent persistent shell session for long-running work. '
-                   'Returns immediately — do not wait for the process. For multi-hour jobs '
-                   '(training, builds, experiments), set wake_on_exit=true, tell the user the '
-                   'job is running, then quit: an initial command runs as a one-shot job, and '
-                   'when it completes the runtime starts a fresh '
-                   'Workbench turn with the terminal tail so you can continue. The user can '
-                   'keep chatting while the shell runs.'
-               ),
+               'description': 'Create a conversation-bound terminal in the Cyrene Terminal Daemon. It appears in the terminal list but does not replace the user\'s current view. With wake_on_exit and an initial command, the command runs as a durable one-shot job and wakes this conversation after exit.',
                'parameters': {'type': 'object',
                               'properties': {'cwd': {'type': 'string'},
-                                             'title': {'type': 'string'},
+                                             'title': {
+                                                 'type': 'string',
+                                                 'description': (
+                                                     'Terminal name. When the user supplies a name, pass it '
+                                                     'exactly; do not leave this field empty or only repeat the '
+                                                     'name in the response.'
+                                                 ),
+                                             },
                                              'command': {'type': 'string',
                                                          'description': 'Optional initial command to run immediately '
                                                                         'after the shell starts'},
@@ -558,22 +546,65 @@ _NATIVE_TOOL_DEFS: tuple[dict[str, Any], ...] = tuple([{'type': 'function',
                                              }}}}},
  {'type': 'function',
   'function': {'name': 'SendShell',
-               'description': 'Send a command to an existing persistent shell session and wait briefly for new output.',
+               'description': 'Send text or a terminal key to an authorized shared terminal. User input has priority. Requires explicit user authorization for terminals not created by this conversation. If multiple terminal panes are visible and no identifier is provided, ask the user which terminal to use.',
                'parameters': {'type': 'object',
                               'properties': {'shell_id': {'type': 'string'},
-                                             'command': {'type': 'string'},
-                                             'wait_ms': {'type': 'integer'}},
-                              'required': ['shell_id', 'command']}}},
+                                             'name': {'type': 'string'},
+                                             'text': {'type': 'string'},
+                                             'key': {'type': 'string',
+                                                     'enum': ['enter', 'escape', 'tab', 'shift_tab',
+                                                              'up', 'down', 'left', 'right',
+                                                              'home', 'end', 'insert', 'delete',
+                                                              'page_up', 'page_down', 'backspace',
+                                                              'f1', 'f2', 'f3', 'f4', 'f5', 'f6',
+                                                              'f7', 'f8', 'f9', 'f10', 'f11', 'f12',
+                                                              'ctrl_space', 'ctrl_a', 'ctrl_b', 'ctrl_c',
+                                                              'ctrl_d', 'ctrl_e', 'ctrl_f', 'ctrl_g',
+                                                              'ctrl_h', 'ctrl_i', 'ctrl_j', 'ctrl_k',
+                                                              'ctrl_l', 'ctrl_m', 'ctrl_n', 'ctrl_o',
+                                                              'ctrl_p', 'ctrl_q', 'ctrl_r', 'ctrl_s',
+                                                              'ctrl_t', 'ctrl_u', 'ctrl_v', 'ctrl_w',
+                                                              'ctrl_x', 'ctrl_y', 'ctrl_z']}},
+                              'required': []}}},
  {'type': 'function',
   'function': {'name': 'ListShells',
-               'description': 'List currently running independent persistent shell sessions.',
+               'description': 'List terminals bound to the current conversation, including exited terminals.',
                'parameters': {'type': 'object', 'properties': {}}}},
  {'type': 'function',
-  'function': {'name': 'CloseShell',
-               'description': 'Terminate an independent persistent shell session.',
+  'function': {'name': 'ReadShell',
+               'description': 'Read an authorized terminal. view=screen returns the current rendered VT viewport; view=scrollback returns a bounded plain-text range from durable PTY history. If multiple terminal panes are visible and no identifier is provided, ask the user which terminal to use.',
                'parameters': {'type': 'object',
-                              'properties': {'shell_id': {'type': 'string'}},
-                              'required': ['shell_id']}}},
+                              'properties': {'shell_id': {'type': 'string'},
+                                             'name': {'type': 'string'},
+                                             'view': {'type': 'string',
+                                                      'enum': ['screen', 'scrollback'],
+                                                      'default': 'screen'},
+                                             'cursor': {'type': 'integer',
+                                                        'minimum': 0,
+                                                        'description': 'Scrollback byte sequence to read forward from. Omit to read the latest retained range.'},
+                                             'max_bytes': {'type': 'integer',
+                                                           'minimum': 1,
+                                                           'maximum': 524288,
+                                                           'default': 65536}},
+                              'required': []}}},
+ {'type': 'function',
+  'function': {'name': 'InterruptShell',
+               'description': 'Send Ctrl+C to an authorized running terminal without closing it. If multiple terminal panes are visible and no identifier is provided, ask the user which terminal to use.',
+               'parameters': {'type': 'object',
+                              'properties': {'shell_id': {'type': 'string'}, 'name': {'type': 'string'}},
+                              'required': []}}},
+ {'type': 'function',
+  'function': {'name': 'ShowShell',
+               'description': 'Show an authorized terminal in a split. Creates a split when only one pane is open; otherwise replaces one existing pane. Use only when the user explicitly asks to open or show it. If multiple terminal panes are visible and no identifier is provided, ask which terminal to use.',
+               'parameters': {'type': 'object',
+                              'properties': {'shell_id': {'type': 'string'}, 'name': {'type': 'string'}},
+                              'required': []}}},
+ {'type': 'function',
+  'function': {'name': 'DeleteShell',
+               'description': 'Permanently terminate and delete a terminal created by the Agent in this conversation. Ask the user and wait for confirmation before calling. Deletion cancels any pending wake. If multiple terminal panes are visible and no identifier is provided, ask which terminal to use.',
+               'parameters': {'type': 'object',
+                              'properties': {'shell_id': {'type': 'string'}, 'name': {'type': 'string'}},
+                              'required': []}}},
  {'type': 'function',
   'function': {'name': 'WebFetch',
                'description': 'Fetch a URL. HTML responses are automatically converted to readable text with a limited number of HTTP(S) links preserved; other text responses are returned unchanged.',
@@ -679,24 +710,6 @@ _NATIVE_TOOL_DEFS: tuple[dict[str, Any], ...] = tuple([{'type': 'function',
                               'properties': {'round_id': {'type': 'string',
                                                           'description': 'Optional specific live round id to '
                                                                          'inspect'}}}}},
- {'type': 'function',
-  'function': {'name': 'CheckClaudeCode',
-               'description': 'Check if Claude Code is currently running in a tmux session. Use this when the user '
-                              "asks about Claude Code status, or before StartClaudeCode to see if it's already "
-                              'running. Returns whether CC is running, the session name, and whether it can be '
-                              'launched.',
-               'parameters': {'type': 'object', 'properties': {}}}},
- {'type': 'function',
-  'function': {'name': 'StartClaudeCode',
-               'description': 'Start Claude Code in a new tmux session. Use this when the user asks you to start, '
-                              'open, launch, or run Claude Code. Creates a detached tmux session named after the '
-                              'project, then registers it so it appears in the WebUI active shells list. Do NOT use '
-                              'Bash to start Claude Code — use this tool instead.',
-               'parameters': {'type': 'object',
-                              'properties': {'session_name': {'type': 'string',
-                                                              'description': 'Optional custom tmux session name. If '
-                                                                             'omitted a name is derived from the '
-                                                                             'project directory.'}}}}},
  {'type': 'function',
   'function': {'name': 'InstallSkill',
                'description': 'Install an external skill from a local path. Supports .md / .txt / .prompt / .json / '

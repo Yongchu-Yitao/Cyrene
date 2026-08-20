@@ -36,10 +36,6 @@ from cyrene.config import (
 from cyrene.model_runtime.messages import truncate
 from cyrene.runtime.schedule_spec import compute_next_run
 from cyrene.tooling.backends.search import deep_search
-from cyrene.tooling.backends.shells import close_shell as _close_shell_session
-from cyrene.tooling.backends.shells import list_shells as _list_shell_sessions
-from cyrene.tooling.backends.shells import send_shell as _send_shell_session
-from cyrene.tooling.backends.shells import start_shell as _start_shell_session
 from cyrene.learning.skills import (
     build_skills as _build_skills,
     install_skill_from_path as _install_skill,
@@ -49,7 +45,6 @@ from cyrene.runtime.inbox import send_message as _send_inbox
 from cyrene.workbench.context import resolve_project_data_key_for_session
 
 logger = logging.getLogger(__name__)
-_CC_PROJECT_DIR = WORKSPACE_DIR.parent
 _truncate = truncate
 
 
@@ -83,10 +78,8 @@ __all__ = [
     "DATA_DIR",
     "STATE_FILE",
     "WORKSPACE_DIR",
-    "_CC_PROJECT_DIR",
     "_build_skills",
     "_classify_destructive_shell_command",
-    "_close_shell_session",
     "_command_is_file_deletion",
     "_destructive_operation_fingerprint",
     "_guard_nonbash_shell_command",
@@ -94,7 +87,6 @@ __all__ = [
     "_install_skill",
     "_is_dangerous_subshell",
     "_json_result",
-    "_list_shell_sessions",
     "_reg_subagent",
     "_request_delete_confirmation",
     "_request_destructive_confirmation",
@@ -111,10 +103,8 @@ __all__ = [
     "_resolve_workspace_write_target",
     "_run_subagent",
     "_send_inbox",
-    "_send_shell_session",
     "_shell_command_requires_write_guard",
     "_spawn_subagent_task",
-    "_start_shell_session",
     "_truncate",
     "truncate",
     "_uninstall_skill",

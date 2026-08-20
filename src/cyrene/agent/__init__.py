@@ -56,9 +56,8 @@ _EXPORT_GROUPS: dict[str, tuple[str, ...]] = {
         "_ui_round_hide_initial_detail",
     ),
     "cyrene.agent.prompts": (
-        "_CLAUDE_CODE_PROMPT",
+        "_TERMINAL_PROMPT",
         "_COMPARE_SUBAGENT_PROMPT",
-        "_contains_cjk",
         "_DAILY_REVIEW_PROMPT",
         "_DECISION_SUBAGENT_PROMPT",
         "_DEEP_COMPARE_PROMPT",
@@ -76,9 +75,6 @@ _EXPORT_GROUPS: dict[str, tuple[str, ...]] = {
         "_QUICK_ANSWER_PROMPT",
         "_SECTION_WRITE_PROMPT",
         "_spawn_policy_prompt_block",
-        "build_claude_code_question_payload",
-        "_fallback_claude_code_prompt",
-        "optimize_claude_code_prompt",
     ),
     "cyrene.agent.message": (
         "_apply_assistant_meta",

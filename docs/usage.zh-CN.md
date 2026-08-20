@@ -280,17 +280,11 @@ Chromium Tab；非 Electron Playwright 遇到 Login Wall 时可请求 Login
 Takeover。详见
 [Browser Live View](browser-live-view.zh-CN.md)。
 
-## Claude Code Bridge
+## 共享持久化终端
 
-安装 `tmux` 和 Claude Code 后，Cyrene 可以：
-
-- 检测现有 Claude Code Session；
-- 启动新 Session；
-- 发送 Prompt 和读取输出；
-- 在 UI 显示 Terminal。
-
-通过 `code_tools` 使用 `code.check_claude_code`、
-`code.start_claude_code`、`code.prompt_claude_code`。
+Cyrene Terminal Daemon 独立于桌面窗口托管交互式 PTY。用户与 Agent
+可以重连同一个终端、运行 TUI，并在 Electron 重启后保留滚动记录与元数据。
+Agent 创建的终端绑定到对应对话，通过 `code.shell.*` 使用。
 
 ## Telegram
 

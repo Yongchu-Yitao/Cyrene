@@ -111,8 +111,8 @@ TOOL_METADATA: dict[str, dict[str, Any]] = {}
 _READ_ONLY_TOOLS = {
     "Read", "read_tool_result", "AnalyzeAttachment", "Glob", "Grep", "ListMemories", "RecallMemory",
     "RecallConversation", "ReadChatGroupSessions", "search_project_memory", "ListKnowledgeDocuments",
-    "SearchKnowledge", "ListLibraryItems", "SearchLibrary", "ListShells", "WebFetch", "WebSearch", "query_round",
-    "CheckClaudeCode", "ListSkills", "SearchSkills", "LoadSkill", "ReadSkillResource", "GetLearnedSkill", "list_tasks",
+    "SearchKnowledge", "ListLibraryItems", "SearchLibrary", "ListShells", "ReadShell", "WebFetch", "WebSearch", "query_round",
+    "ListSkills", "SearchSkills", "LoadSkill", "ReadSkillResource", "GetLearnedSkill", "list_tasks",
     "ListEnvironment", "SearchEnvironment",
     "list_entities", "query_entities", "browser_user_events", "GitStatus",
     "GitDiff", "GitLog", "SearchSymbol", "FindReferences", "GetFileSymbols",
@@ -175,7 +175,10 @@ _RESOURCE_KEY_TEMPLATES: dict[str, tuple[str, ...]] = {
     "GitLog": ("git:workspace",),
     "ListShells": ("shell:registry",),
     "SendShell": ("shell:{shell_id}",),
-    "CloseShell": ("shell:{shell_id}",),
+    "ReadShell": ("shell:{shell_id}",),
+    "InterruptShell": ("shell:{shell_id}",),
+    "ShowShell": ("shell:{shell_id}",),
+    "DeleteShell": ("shell:{shell_id}",),
     "ListRemoteDevices": ("remote:chat-context",),
     "RemoteCyreneStatus": ("remote:{device_id}",),
     "RemoteCyreneFiles": ("remote:{device_id}",),
@@ -212,7 +215,7 @@ for _semantic_tool_name in (
 ):
     _RESOURCE_KEY_TEMPLATES[_semantic_tool_name] = ("desktop:app-semantic",)
 
-_RESOURCE_PARALLEL_WRITES = {"Write", "Edit", "FormatCode", "CloseShell"}
+_RESOURCE_PARALLEL_WRITES = {"Write", "Edit", "FormatCode"}
 _RESOURCE_FIELD_RE = re.compile(r"\{([A-Za-z_][A-Za-z0-9_]*)\}")
 
 
@@ -398,6 +401,18 @@ def get_active_tool_defs_for_actor(actor: str = "main") -> list[dict[str, Any]]:
     """Return tool defs filtered by actor and whole-package settings."""
 
     blocked = _tool_blocklist_for_actor(actor)
+    if actor == "main":
+        try:
+            from importlib import import_module
+            from cyrene.agent.context import get_current_session_id
+
+            chat = import_module("cyrene.workbench.chat").get_workbench_chat(
+                get_current_session_id()
+            )
+            if chat and str(chat.get("kind") or "") == "side-agent":
+                blocked.add("StartShell")
+        except Exception:
+            pass
     from cyrene.agent.state import has_response_capability
 
     try:

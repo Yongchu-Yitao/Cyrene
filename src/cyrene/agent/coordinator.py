@@ -22,7 +22,7 @@ from cyrene.agent.message import (
     _ensure_message_identity,
 )
 from cyrene.agent.prompts import (
-    _CLAUDE_CODE_PROMPT,
+    _TERMINAL_PROMPT,
     _DAILY_REVIEW_PROMPT,
     _DEEP_COMPARE_PROMPT,
     _DEEP_RESEARCH_PROMPT,
@@ -1126,16 +1126,16 @@ async def _run_chat_agent_impl(
                 transforms=["concat_into_system"],
                 content=deep_compare_spawn_policy,
             ))
-        elif command == "claude-code":
+        elif command == "terminal":
             command_prompt = prompt_for_enabled_tool_packs(
-                _CLAUDE_CODE_PROMPT
+                _TERMINAL_PROMPT
             )
             main_system = main_system + "\n\n" + command_prompt
             main_system_context.append(context_block(
-                "command.claude-code",
+                "command.terminal",
                 "command_prompt",
-                source="cyrene.agent.prompts._CLAUDE_CODE_PROMPT",
-                reason="claude-code command selected",
+                source="cyrene.agent.prompts._TERMINAL_PROMPT",
+                reason="terminal command selected",
                 transforms=["concat_into_system"],
                 content=command_prompt,
             ))

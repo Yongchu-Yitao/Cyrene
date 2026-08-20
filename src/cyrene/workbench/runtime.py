@@ -37,14 +37,11 @@ from PIL import Image
 from fastapi import APIRouter, BackgroundTasks, Request, UploadFile, WebSocket, WebSocketDisconnect
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, StreamingResponse
 
-from cyrene.tooling.backends.claude_code_bridge import get_cc_status
 from cyrene.tooling.result_store import (
     ToolResultReferenceError,
     project_tool_result_for_model,
     read_tool_result,
 )
-from cyrene.learning.claude_code import analyze_session, learn_from_session
-from cyrene.tooling.backends.claude_code_terminal import CCTerminalSession
 from cyrene.observability import debug
 from cyrene.model_runtime.errors import format_httpx_error
 from cyrene.runtime.attachments import (
@@ -111,8 +108,6 @@ from cyrene.learning.skills import (
     toggle_skill as _toggle_skill,
     uninstall_skill as _uninstall_skill,
 )
-from cyrene.tooling.backends.shells import list_shells as list_live_shells
-from cyrene.tooling.backends.shells import set_cc_since
 from cyrene.runtime.memory.short_term import load_entries
 from cyrene.runtime.memory.soul import get_default_soul_content, read_soul, get_soul_path
 from cyrene.runtime.version import get_version_label
@@ -154,7 +149,6 @@ from cyrene.workbench.task_context import (
 from cyrene.runtime.io import atomic_write_json, read_json_safe
 
 logger = logging.getLogger(__name__)
-_CC_PROJECT_DIR = WORKSPACE_DIR.parent
 
 # Historical private presentation helpers remain available from the old
 # Workbench composition module.
@@ -6955,7 +6949,6 @@ async def _reset_app_data() -> dict[str, Any]:
 
     # Clear presentation caches that otherwise survive the disk reset inside
     # this process and can momentarily repopulate a fresh UI with old records.
-    _cc_preview_cache.clear()
 
     return {
         "ok": True,
@@ -6996,81 +6989,6 @@ def _reply_stream_chunks(text: str, target_chars: int = 36) -> list[str]:
             chunks.append(remaining[:split_at])
             remaining = remaining[split_at:]
     return [chunk for chunk in chunks if chunk]
-
-
-def _consume_cc_input_buffer(buffer: str, data: str) -> tuple[str, list[str]]:
-    current = str(buffer or "")
-    submitted: list[str] = []
-    if not data:
-        return current, submitted
-
-    index = 0
-    while index < len(data):
-        char = data[index]
-        if char == "\x1b":
-            break
-        if char in ("\r", "\n"):
-            text = current.strip()
-            if text:
-                submitted.append(text)
-            current = ""
-        elif char in ("\x7f", "\b"):
-            current = current[:-1]
-        elif char == "\t":
-            current += "\t"
-        elif ord(char) >= 32:
-            current += char
-        index += 1
-    return current, submitted
-
-
-async def _publish_cc_learning(text: str, tmux_session: str = "") -> None:
-    prompt = str(text or "").strip()
-    if not prompt:
-        return
-
-    status = get_cc_status(_CC_PROJECT_DIR)
-    latest_jsonl = str(status.get("latest_jsonl") or "").strip()
-    await debug.publish_event(
-        {
-            "type": "cc_learning",
-            "phase": "started",
-            "tmux_session": tmux_session,
-            "user_input": prompt[:200],
-            "latest_jsonl": latest_jsonl,
-        }
-    )
-    if not latest_jsonl:
-        return
-
-    try:
-        result = await asyncio.to_thread(learn_from_session, Path(latest_jsonl))
-    except Exception:
-        logger.exception("Failed learning from Claude Code transcript %s", latest_jsonl)
-        await debug.publish_event(
-            {
-                "type": "cc_learning",
-                "phase": "error",
-                "tmux_session": tmux_session,
-                "user_input": prompt[:200],
-                "latest_jsonl": latest_jsonl,
-            }
-        )
-        return
-
-    summary = result.get("summary", {})
-    await debug.publish_event(
-        {
-            "type": "cc_learning",
-            "phase": "completed",
-            "tmux_session": tmux_session,
-            "user_input": prompt[:200],
-            "latest_jsonl": latest_jsonl,
-            "highlights": summary.get("highlights", []),
-            "top_tools": summary.get("top_tools", []),
-            "top_tasks": summary.get("top_tasks", []),
-        }
-    )
 
 
 async def _stream_reply_payload(response_text: str) -> StreamingResponse:
@@ -7707,10 +7625,6 @@ def _resolve_local_username() -> str:
 # ---------------------------------------------------------------------------
 
 
-# Per-session CC preview cache — archived sessions keep their initial snapshot
-_cc_preview_cache: dict[str, list] = {}
-
-
 async def _delete_chat_session(session_id: str) -> tuple[dict[str, Any], int]:
     """Delete/reset a legacy chat session and return its API payload/status."""
     if session_id == "run_live":
@@ -7760,18 +7674,6 @@ def _build_sessions() -> list[dict]:
 
     archive_sessions = _build_archive_sessions(skip_archive_ids=skip_archive_ids)
     sessions.extend(archive_sessions)
-
-    # Per-session CC preview: live session always fresh, archives use cached snapshot
-    for session in sessions:
-        sid = session["id"]
-        for shell in session.get("shells", []):
-            if shell.get("kind") == "cc":
-                if sid == "run_live":
-                    _cc_preview_cache[sid] = list(shell.get("lines", []))
-                elif sid in _cc_preview_cache:
-                    shell["lines"] = list(_cc_preview_cache[sid])
-                else:
-                    _cc_preview_cache[sid] = list(shell.get("lines", []))
 
     return sessions
 
@@ -7893,11 +7795,6 @@ def _build_current_session() -> dict | None:
         )
         live_summary["total_tokens"] = combined_live_usage.get("total_tokens")
 
-    # Set timestamp filter so CC preview only shows entries from this session
-    set_cc_since(started_at)
-
-    visible_shells = [] if is_empty else list_live_shells(include_exited=False)
-
     return {
         "id": "run_live",
         "title": str(state.get("session_title", "")).strip() or ("new session" if is_empty else "current session"),
@@ -7920,7 +7817,6 @@ def _build_current_session() -> dict | None:
             "messages": messages,
         },
         "liveRounds": live_rounds,
-        "shells": visible_shells,
         "subagents": subagents,
         "flow": _build_live_flow(raw_msgs, messages, subagents, subagent_registry),
     }

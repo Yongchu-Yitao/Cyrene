@@ -954,17 +954,6 @@ async def answer_pending_question(
         raise ValueError("Pending question not found.")
 
     pending_meta = cleared.get("meta")
-    if isinstance(pending_meta, dict) and str(pending_meta.get("kind", "")).strip() == "claude_code_prompt_confirmation":
-        try:
-            return await _handle_claude_code_prompt_answer(
-                round_id=round_id,
-                pending=cleared,
-                answer_text=content,
-                client_request_id=client_request_id,
-            )
-        except Exception:
-            await _restore_pending_question(pending)
-            raise
     if isinstance(pending_meta, dict) and _pending_question_is_permission_elevation(cleared):
         try:
             return await _handle_permission_elevation_answer(
@@ -1054,66 +1043,6 @@ def _is_negative_answer(text: str) -> bool:
     return normalized in {
         "取消", "不用", "不发", "停止", "算了", "cancel", "no", "n", "stop",
     }
-
-
-async def _handle_claude_code_prompt_answer(
-    round_id: str,
-    pending: dict[str, Any],
-    answer_text: str,
-    client_request_id: str = "",
-) -> str:
-    from cyrene.tooling.backends.claude_code_bridge import send_prompt_to_cc
-    from cyrene.agent.prompts import _contains_cjk
-
-    meta = pending.get("meta", {})
-    optimized_prompt = str(meta.get("optimized_prompt") or "").strip()
-    task = str(meta.get("task") or "").strip()
-    user_answer = str(answer_text or "").strip()
-    chinese = _contains_cjk(task or optimized_prompt or user_answer)
-
-    user_entry: dict[str, Any] = {
-        "role": "user",
-        "content": user_answer,
-        "round_id": round_id,
-    }
-    if client_request_id:
-        user_entry["client_request_id"] = client_request_id
-    await _append_session_message(user_entry)
-
-    if _is_negative_answer(user_answer):
-        reply = "已取消，Claude Code 没有收到这条提示词。" if chinese else "Cancelled. The prompt was not sent to Claude Code."
-        await _insert_intermediate_user_reply(reply, round_id=round_id, client_request_id=client_request_id)
-        return reply
-
-    prompt_to_send = optimized_prompt if _is_affirmative_answer(user_answer) else user_answer
-    if not prompt_to_send:
-        reply = "没有可发送的提示词。" if chinese else "There is no prompt to send."
-        await _insert_intermediate_user_reply(reply, round_id=round_id, client_request_id=client_request_id)
-        return reply
-
-    result = send_prompt_to_cc(prompt_to_send)
-    if not result.get("ok"):
-        reason = str(result.get("reason") or "unknown error").strip()
-        reply = (
-            f"没有成功发送到 Claude Code：{reason}"
-            if chinese else
-            f"Failed to send the prompt to Claude Code: {reason}"
-        )
-        await _insert_intermediate_user_reply(reply, round_id=round_id, client_request_id=client_request_id)
-        return reply
-
-    reply = (
-        "已把提示词输入到 Claude Code，任务已经开始运行。"
-        if chinese else
-        "I sent the prompt to Claude Code and it is now running."
-    )
-    await _insert_intermediate_user_reply(reply, round_id=round_id, client_request_id=client_request_id)
-    await _publish_runtime_event({
-        "type": "chat_message",
-        "client_request_id": client_request_id,
-        "round_id": round_id,
-    })
-    return reply
 
 
 async def _handle_write_permission_answer(

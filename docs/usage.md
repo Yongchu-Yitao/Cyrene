@@ -366,17 +366,12 @@ See [browser-live-view.md](browser-live-view.md) for setup and configuration.
 
 ---
 
-## Claude Code Bridge
+## Shared persistent terminals
 
-If you have `tmux` and Claude Code installed, Cyrene can:
-
-- Detect existing Claude Code tmux sessions
-- Start a new Claude Code session in a tmux pane
-- Send prompts to Claude Code and read the response
-- Show a live terminal view of the Claude Code session in the UI
-
-Use `code.check_claude_code`, `code.start_claude_code`, and
-`code.prompt_claude_code` through `code_tools`.
+Cyrene Terminal Daemon owns interactive PTYs independently from the desktop
+window. User and Agent can reconnect to the same terminal, run TUIs, and keep
+scrollback and metadata across Electron restarts. Agent-created terminals are
+bound to their conversation and are exposed through `code.shell.*`.
 
 ---
 

@@ -9,7 +9,6 @@ from fastapi import APIRouter, FastAPI
 from cyrene.workbench import runtime as shared
 from route.agent.browser import register_browser_routes
 from route.agent.chat import register_chat_routes
-from route.agent.claude_code import register_claude_code_routes
 from route.agent.collaboration import register_collaboration_routes
 from route.agent.sessions import register_session_routes
 from route.agents import register_agent_routes
@@ -158,7 +157,6 @@ def register_routes(app: FastAPI, bot: Any, db_path: str) -> None:
         register_chat_routes,
         register_collaboration_routes,
         register_event_routes,
-        register_claude_code_routes,
         register_browser_routes,
         register_session_routes,
         register_learning_routes,
@@ -179,5 +177,9 @@ def register_routes(app: FastAPI, bot: Any, db_path: str) -> None:
         _register_shared_adapter(factory, router, bot, db_path)
 
     app.include_router(router)
+
+    from cyrene.runtime.shell_wake import get_shell_wake_service
+
+    app.state.terminal_wake_bridge = get_shell_wake_service()
 
 __all__ = ["register_routes"]

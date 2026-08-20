@@ -1302,68 +1302,41 @@ def test_remote_shell_is_direct_project_scoped_and_device_owned(
             "cyrene.runtime.remote_commands.workbench_runtime._workbench_resolve_workspace_dir",
             lambda _project: str(tmp_path),
         )
-        snapshots = {}
         observed = {}
 
-        async def start_direct_shell(**kwargs):
-            observed["start"] = kwargs
-            snapshot = {
-                "id": "shell_mobile_1",
-                "status": "running",
-                "cwd": ".",
-                "exitCode": None,
-                "nextCursor": 1,
-                "lines": [
-                    {
-                        "seq": 1,
-                        "kind": "meta",
-                        "text": "[shell started]",
-                    }
-                ],
-            }
-            snapshots["shell_mobile_1"] = snapshot
-            return snapshot
+        class FakeTerminalClient:
+            def __init__(self):
+                self.terminal = {
+                    "id": "shell_mobile_1", "status": "running",
+                    "cwd": str(tmp_path), "exitCode": None, "nextSeq": 1,
+                }
+                self.screen_text = "[terminal started]"
 
-        async def send_direct_shell(shell_id, command, wait_ms=0):
-            observed["send"] = (shell_id, command, wait_ms)
-            snapshot = dict(snapshots[shell_id])
-            snapshot["nextCursor"] = 3
-            snapshot["lines"] = snapshot["lines"] + [
-                {"seq": 2, "kind": "prompt", "text": f"$ {command}"},
-                {"seq": 3, "kind": "out", "text": str(tmp_path)},
-            ]
-            snapshots[shell_id] = snapshot
-            return snapshot
+            async def create(self, project_id, **kwargs):
+                observed["create"] = (project_id, kwargs)
+                return {"terminal": dict(self.terminal)}
 
-        async def close_direct_shell(shell_id):
-            snapshot = dict(snapshots[shell_id])
-            snapshot["status"] = "done"
-            snapshots[shell_id] = snapshot
-            return snapshot
+            async def screen(self, terminal_id):
+                return {"terminal": dict(self.terminal), "screenText": self.screen_text}
 
-        async def interrupt_direct_shell(shell_id):
-            observed["interrupt"] = shell_id
-            return dict(snapshots[shell_id])
+            async def input(self, terminal_id, data, *, actor="agent"):
+                observed["input"] = (terminal_id, data, actor)
+                self.terminal["nextSeq"] = 3
+                self.screen_text = f"$ {data}\n{tmp_path}"
+                return await self.screen(terminal_id)
 
+            async def interrupt(self, terminal_id):
+                observed["interrupt"] = terminal_id
+                return await self.screen(terminal_id)
+
+            async def remove(self, terminal_id):
+                self.terminal["status"] = "closed"
+                return {"terminal": dict(self.terminal), "deleted": True}
+
+        fake_client = FakeTerminalClient()
         monkeypatch.setattr(
-            "cyrene.runtime.remote_commands.start_shell",
-            start_direct_shell,
-        )
-        monkeypatch.setattr(
-            "cyrene.runtime.remote_commands.send_shell",
-            send_direct_shell,
-        )
-        monkeypatch.setattr(
-            "cyrene.runtime.remote_commands.close_shell",
-            close_direct_shell,
-        )
-        monkeypatch.setattr(
-            "cyrene.runtime.remote_commands.interrupt_shell",
-            interrupt_direct_shell,
-        )
-        monkeypatch.setattr(
-            "cyrene.runtime.remote_commands.get_shell_snapshot",
-            lambda shell_id: snapshots.get(shell_id),
+            "cyrene.runtime.remote_commands.get_terminal_daemon_client",
+            lambda: fake_client,
         )
         executor = RemoteCommandExecutor(
             store=target,
@@ -1390,13 +1363,12 @@ def test_remote_shell_is_direct_project_scoped_and_device_owned(
             "project_1",
         )
 
-        assert observed["start"]["cwd"] == str(tmp_path)
-        assert observed["start"]["workspace_root"] == str(tmp_path)
-        assert observed["send"][0:2] == ("shell_mobile_1", "pwd")
-        assert [line["text"] for line in written["lines"]] == [
-            "$ pwd",
-            str(tmp_path),
-        ]
+        assert observed["create"] == (
+            "project_1",
+            {"cwd": str(tmp_path), "title": "Mobile Shell · Authorized project"},
+        )
+        assert observed["input"] == ("shell_mobile_1", "pwd", "user")
+        assert written["lines"][0]["text"] == f"$ pwd\n{tmp_path}"
         interrupted = await executor(
             controller.identity.device_id,
             "shell.interrupt",
