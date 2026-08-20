@@ -32,10 +32,7 @@ from cyrene.agent.context import (
     session_interrupt_event,
 )
 from cyrene.observability import debug
-from cyrene.agent.message import (
-    _ensure_message_identity,
-    _insert_intermediate_user_reply,
-)
+from cyrene.agent.message import _ensure_message_identity
 from cyrene.agent.model_service import (
     call_agent_model as _call_llm,
     stream_agent_model as _call_llm_stream,
