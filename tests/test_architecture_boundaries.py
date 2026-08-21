@@ -193,7 +193,11 @@ def _application_javascript_files() -> list[Path]:
     files = [REPOSITORY_ROOT / "src" / "webui" / "build-jsx.mjs"]
     for root in roots:
         for suffix in ("*.js", "*.jsx", "*.mjs"):
-            files.extend(root.rglob(suffix))
+            files.extend(
+                path
+                for path in root.rglob(suffix)
+                if "node_modules" not in path.relative_to(REPOSITORY_ROOT).parts
+            )
     return sorted(set(files))
 
 
