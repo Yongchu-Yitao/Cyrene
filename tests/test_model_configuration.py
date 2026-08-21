@@ -256,6 +256,15 @@ def test_default_provider_connections_are_added_once_and_can_be_deleted(
         "api_key": "",
         "options": {"provider_preset": "deepseek"},
     }
+    assert providers["codex_oauth"] == {
+        "id": "codex_oauth",
+        "name": "OpenAI Codex OAuth",
+        "adapter": "codex_oauth",
+        "enabled": True,
+        "base_url": "codex://oauth",
+        "api_key": "",
+        "options": {"provider_preset": "codex_oauth"},
+    }
     assert configured["profiles"] == []
     assert all(not route for route in configured["routes"].values())
 
@@ -269,7 +278,72 @@ def test_default_provider_connections_are_added_once_and_can_be_deleted(
     reloaded = get_model_configuration()
 
     assert reloaded["version"] == CONFIG_VERSION
-    assert [item["id"] for item in reloaded["connections"]] == ["deepseek"]
+    assert [item["id"] for item in reloaded["connections"]] == [
+        "deepseek",
+        "codex_oauth",
+    ]
+
+
+def test_version_five_configuration_gains_managed_codex_connection(
+    isolated_model_store,
+):
+    from cyrene.runtime.model_configuration import (
+        CONFIG_VERSION,
+        get_model_configuration,
+        normalize_model_configuration,
+    )
+
+    existing = _configuration()
+    existing["version"] = 5
+    isolated_model_store.update_settings_atomic({"model_configuration": existing})
+
+    upgraded = get_model_configuration(persist_migration=False)
+    normalized_existing = normalize_model_configuration(existing)
+    codex_connections = [
+        item
+        for item in upgraded["connections"]
+        if item["adapter"] == "codex_oauth"
+    ]
+
+    assert upgraded["version"] == CONFIG_VERSION
+    assert codex_connections == [{
+        "id": "codex_oauth",
+        "name": "OpenAI Codex OAuth",
+        "adapter": "codex_oauth",
+        "enabled": True,
+        "base_url": "codex://oauth",
+        "api_key": "",
+        "options": {"provider_preset": "codex_oauth"},
+    }]
+    assert upgraded["profiles"] == normalized_existing["profiles"]
+    assert upgraded["routes"] == normalized_existing["routes"]
+
+
+def test_provider_upgrade_does_not_duplicate_existing_codex_connection(
+    isolated_model_store,
+):
+    from cyrene.runtime.model_configuration import get_model_configuration
+
+    existing = _configuration()
+    existing["version"] = 5
+    existing["connections"].append({
+        "id": "legacy-codex",
+        "name": "Codex",
+        "adapter": "codex_oauth",
+        "enabled": True,
+        "base_url": "codex://oauth",
+        "api_key": "",
+        "options": {},
+    })
+    isolated_model_store.update_settings_atomic({"model_configuration": existing})
+
+    upgraded = get_model_configuration(persist_migration=False)
+
+    assert [
+        item["id"]
+        for item in upgraded["connections"]
+        if item["adapter"] == "codex_oauth"
+    ] == ["legacy-codex"]
 
 
 @pytest.mark.parametrize(

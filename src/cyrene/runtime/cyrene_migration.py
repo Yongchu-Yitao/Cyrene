@@ -5,12 +5,15 @@ SOUL.md) live under each workspace root's ``.cyrene`` folder so user files stay
 visible at the root. Older installs wrote these directly under the workspace
 root; this module moves them on first startup.
 
-Migration is gated by a marker file: after a successful scan the workspace
-root's ``.cyrene/.migrated`` marker records the migrating Cyrene version.
-Workspaces created or upgraded by 0.7.10+ already write straight into
-``.cyrene`` and carry the marker, so they are never rescanned. A marker-less
-root whose Cyrene-signature contents sit at the root is treated as pre-0.7.10
-data and migrated once.
+The ``.cyrene`` directory itself is the durable completion signal. New
+workspaces write there from the beginning; legacy workspaces do not have the
+directory until this migration finishes. This keeps the migration one-shot
+across process restarts without exposing a separate marker file to users.
+
+Moves are staged in a sibling directory and committed by renaming that
+directory to ``.cyrene``. If a move fails, completed moves are rolled back so a
+later startup can safely retry instead of mistaking a partial migration for a
+completed one.
 
 To avoid touching user-owned content, most candidates are only moved when
 their contents match Cyrene's output signatures — a user's own ``plan/`` or
@@ -33,10 +36,8 @@ from cyrene.runtime.paths import CYRENE_DIR_NAME
 
 logger = logging.getLogger(__name__)
 
-# Version of Cyrene that introduced the .cyrene layout. Workspaces carrying a
-# migration marker at or above this version are never rescanned.
-CYRENE_LAYOUT_VERSION = "0.7.10"
-_MIGRATION_MARKER = ".migrated"
+_LEGACY_MIGRATION_MARKER = ".migrated"
+_MIGRATION_STAGING_SUFFIX = "-migration"
 
 # Folders migrated when their content matches the Cyrene output signature.
 # scratch has no stable signature and is always migrated (prompt directs the
@@ -95,31 +96,59 @@ def looks_like_cyrene_soul(file_path: Path) -> bool:
     return "## SELF:IDENTITY" in head
 
 
-def _has_migration_marker(root: Path) -> bool:
-    marker = root / CYRENE_DIR_NAME / _MIGRATION_MARKER
+def _remove_legacy_migration_marker(cyrene: Path) -> None:
+    """Remove the marker written by releases that predate directory gating."""
+    marker = cyrene / _LEGACY_MIGRATION_MARKER
     try:
-        return marker.is_file()
+        marker.unlink(missing_ok=True)
     except OSError:
-        return False
+        logger.warning("Failed to remove legacy migration marker %s", marker, exc_info=True)
 
 
-def _write_migration_marker(root: Path) -> None:
-    marker = root / CYRENE_DIR_NAME / _MIGRATION_MARKER
-    try:
-        marker.parent.mkdir(parents=True, exist_ok=True)
-        marker.write_text(CYRENE_LAYOUT_VERSION + "\n", encoding="utf-8")
-    except OSError:
-        logger.exception("Failed to write migration marker %s", marker)
+def _rollback_staged_moves(root: Path, staging: Path, names: list[str]) -> bool:
+    """Restore staged entries to the workspace root after an interrupted pass."""
+    ok = True
+    for name in reversed(names):
+        staged = staging / name
+        if not staged.exists():
+            continue
+        source = root / name
+        if source.exists():
+            logger.error("Cannot roll back %s because %s already exists", staged, source)
+            ok = False
+            continue
+        try:
+            shutil.move(str(staged), str(source))
+        except OSError:
+            logger.exception("Failed to roll back staged workspace entry %s", staged)
+            ok = False
+    if ok:
+        try:
+            staging.rmdir()
+        except FileNotFoundError:
+            pass
+        except OSError:
+            logger.exception("Failed to remove migration staging directory %s", staging)
+            ok = False
+    return ok
+
+
+def _recover_interrupted_migration(root: Path, staging: Path) -> bool:
+    """Roll back a staging directory left behind by a terminated process."""
+    if not staging.is_dir():
+        return True
+    names = [child.name for child in staging.iterdir()]
+    logger.warning("Recovering interrupted Cyrene workspace migration in %s", root)
+    return _rollback_staged_moves(root, staging, names)
 
 
 def migrate_workspace_to_cyrene(workspace_root: str | Path) -> int:
     """Move legacy root-level Cyrene folders/files into ``.cyrene`` (idempotent).
 
-    A root carrying the migration marker (0.7.10+) or already scanned in this
+    A root that already contains ``.cyrene`` or was already scanned in this
     process is skipped entirely. Otherwise signature-matching Cyrene folders,
-    scratch/, and SOUL.md are moved into ``.cyrene`` and the marker is written.
-    The marker is only written after a full successful pass, so a failed move
-    leaves the root rescan-able on the next attempt.
+    scratch/, and SOUL.md are staged and committed into ``.cyrene``. A failed
+    pass is rolled back and remains retryable.
 
     Returns the number of entries moved.
     """
@@ -127,12 +156,18 @@ def migrate_workspace_to_cyrene(workspace_root: str | Path) -> int:
     key = str(root)
     if key in _migrated_roots or not root.is_dir():
         return 0
-    if _has_migration_marker(root):
+    cyrene = root / CYRENE_DIR_NAME
+    if cyrene.exists() or cyrene.is_symlink():
+        if cyrene.is_dir():
+            _remove_legacy_migration_marker(cyrene)
         _migrated_roots.add(key)
         return 0
-    cyrene = root / CYRENE_DIR_NAME
-    moved = 0
-    failed = False
+
+    staging = root / f"{CYRENE_DIR_NAME}{_MIGRATION_STAGING_SUFFIX}"
+    if not _recover_interrupted_migration(root, staging):
+        return 0
+
+    candidates: list[Path] = []
     for name in _SIGNATURE_FOLDER_NAMES + _UNCONDITIONAL_FOLDER_NAMES:
         source = root / name
         if not source.is_dir():
@@ -143,16 +178,7 @@ def migrate_workspace_to_cyrene(workspace_root: str | Path) -> int:
                 source,
             )
             continue
-        target = cyrene / name
-        if target.exists():
-            continue
-        try:
-            target.parent.mkdir(parents=True, exist_ok=True)
-            shutil.move(str(source), str(target))
-            moved += 1
-        except OSError:
-            logger.exception("Failed to migrate workspace folder %s", source)
-            failed = True
+        candidates.append(source)
     for name in _MIGRATED_FILE_NAMES:
         source = root / name
         if not source.is_file():
@@ -163,22 +189,22 @@ def migrate_workspace_to_cyrene(workspace_root: str | Path) -> int:
                 source,
             )
             continue
-        target = cyrene / name
-        if target.exists():
-            continue
-        try:
-            target.parent.mkdir(parents=True, exist_ok=True)
-            shutil.move(str(source), str(target))
-            moved += 1
-        except OSError:
-            logger.exception("Failed to migrate workspace file %s", source)
-            failed = True
-    # Only a fully successful pass writes the marker and caches the root; a
-    # failed move keeps the root rescan-able so the leftover entry is retried
-    # on the next call (or process restart).
-    if not failed:
-        _write_migration_marker(root)
-        _migrated_roots.add(key)
+        candidates.append(source)
+
+    staged_names: list[str] = []
+    try:
+        staging.mkdir()
+        for source in candidates:
+            shutil.move(str(source), str(staging / source.name))
+            staged_names.append(source.name)
+        staging.rename(cyrene)
+    except OSError:
+        logger.exception("Failed to migrate workspace entries in %s", root)
+        _rollback_staged_moves(root, staging, staged_names)
+        return 0
+
+    moved = len(staged_names)
+    _migrated_roots.add(key)
     if moved:
         logger.info("Migrated %d Cyrene item(s) into %s", moved, cyrene)
     return moved

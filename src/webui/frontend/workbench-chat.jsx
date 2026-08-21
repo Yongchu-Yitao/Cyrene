@@ -17642,7 +17642,8 @@ function wbcTraceActionLabel(entry) {
   if (kind === "subagent") return wbcT("workbenchChat.traceAction.subagent", "Coordinated subagents");
   if (kind === "permission") return wbcT("workbenchChat.traceAction.permission", "Reviewed permissions");
   if (kind === "event") return wbcT("workbenchChat.traceAction.event", "Handled an agent event");
-  return wbcT("toolName." + raw, raw || wbcT("workbenchChat.traceLabel", "Execution"));
+  var toolName = wbcT("toolName." + raw, raw || wbcT("workbenchChat.traceLabel", "Execution"));
+  return wbcT("workbenchChat.traceAction.usedTool", "Used {tool}", { tool: toolName });
 }
 
 function wbcTraceActionIcon(entry) {

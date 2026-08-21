@@ -4,10 +4,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from cyrene.runtime.cyrene_migration import (
-    CYRENE_LAYOUT_VERSION,
-    migrate_workspace_to_cyrene,
-)
+from cyrene.runtime.cyrene_migration import migrate_workspace_to_cyrene
 
 
 def _seed_legacy_workspace(root: Path) -> None:
@@ -58,32 +55,35 @@ def test_migrate_moves_cyrene_folders_into_dot_cyrene(tmp_path: Path) -> None:
     # deliverables untouched, user files untouched.
     assert (root / "deliverables" / "old.pdf").read_bytes() == b"%PDF"
     assert (root / "notes.md").read_text(encoding="utf-8") == "user\n"
-    # Marker written for 0.7.10+ gating.
-    assert (cyrene / ".migrated").read_text(encoding="utf-8").strip() == CYRENE_LAYOUT_VERSION
+    assert not (cyrene / ".migrated").exists()
 
 
-def test_migrate_is_idempotent_and_marker_gated(tmp_path: Path) -> None:
+def test_migrate_is_idempotent_and_directory_gated(tmp_path: Path) -> None:
     root = tmp_path / "workspace"
     root.mkdir()
     _seed_legacy_workspace(root)
 
     assert migrate_workspace_to_cyrene(root) == 6
     assert migrate_workspace_to_cyrene(root) == 0
-    # 0.7.10+ workspace carrying the marker is never rescanned, even if legacy
+    # Once .cyrene exists, the workspace is never rescanned, even if matching
     # folders appear at the root again.
     (root / "conversations").mkdir()
     (root / "conversations" / "2026-02-01.md").write_text(
         "# Conversations - 2026-02-01\n", encoding="utf-8"
     )
+    # Simulate a new process so .cyrene, not the in-memory cache, gates it.
+    from cyrene.runtime import cyrene_migration as migration
+
+    migration._migrated_roots.discard(str(root.resolve()))
     assert migrate_workspace_to_cyrene(root) == 0
     assert (root / "conversations" / "2026-02-01.md").exists()
 
 
-def test_marker_skips_scan_without_process_cache(tmp_path: Path) -> None:
+def test_existing_cyrene_dir_skips_scan_and_removes_legacy_marker(tmp_path: Path) -> None:
     root = tmp_path / "workspace"
     root.mkdir()
     _seed_legacy_workspace(root)
-    # Simulate a fresh process: no _migrated_roots entry, but marker present.
+    # Simulate a fresh process with a workspace migrated by an older release.
     from cyrene.runtime import cyrene_migration as migration
 
     marker_root = root / ".cyrene"
@@ -93,6 +93,7 @@ def test_marker_skips_scan_without_process_cache(tmp_path: Path) -> None:
     assert migration._migrated_roots.isdisjoint({str(root)})
     assert migrate_workspace_to_cyrene(root) == 0
     assert (root / "conversations" / "2026-01-01.md").exists()
+    assert not (marker_root / ".migrated").exists()
 
 
 def test_user_owned_same_name_dirs_are_left_in_place(tmp_path: Path) -> None:
@@ -147,16 +148,47 @@ def test_failed_move_leaves_root_rescannable(tmp_path: Path) -> None:
     original_move = migration.shutil.move
     try:
         migration.shutil.move = _fail_move
-        # scratch is first in the unconditional list; the failure marks failed.
         assert migrate_workspace_to_cyrene(root) == 0
-        assert not (root / ".cyrene" / ".migrated").exists()
+        assert not (root / ".cyrene").exists()
     finally:
         migration.shutil.move = original_move
 
-    # Marker absent → a retry re-attempts the move.
+    # No completed .cyrene directory → a retry re-attempts the move.
     assert migrate_workspace_to_cyrene(root) >= 1
-    assert (root / ".cyrene" / ".migrated").exists()
+    assert (root / ".cyrene").is_dir()
+    assert not (root / ".cyrene" / ".migrated").exists()
     assert not (root / "conversations").exists()
+
+
+def test_partial_failure_rolls_back_before_retry(tmp_path: Path) -> None:
+    root = tmp_path / "workspace"
+    root.mkdir()
+    _seed_legacy_workspace(root)
+
+    from cyrene.runtime import cyrene_migration as migration
+
+    original_move = migration.shutil.move
+    failed_once = False
+
+    def _fail_second_forward_move(source, target):
+        nonlocal failed_once
+        source_path = Path(source)
+        if source_path.parent == root and source_path.name == "patterns" and not failed_once:
+            failed_once = True
+            raise OSError("simulated partial failure")
+        return original_move(source, target)
+
+    migration.shutil.move = _fail_second_forward_move
+    try:
+        assert migrate_workspace_to_cyrene(root) == 0
+    finally:
+        migration.shutil.move = original_move
+
+    assert not (root / ".cyrene").exists()
+    assert not (root / ".cyrene-migration").exists()
+    assert (root / "conversations" / "2026-01-01.md").exists()
+
+    assert migrate_workspace_to_cyrene(root) == 6
 
 
 def test_migrate_noop_for_missing_workspace(tmp_path: Path) -> None:

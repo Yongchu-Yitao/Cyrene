@@ -7794,8 +7794,48 @@ def test_workbench_execution_card_uses_collapsible_activity_summary():
     assert "编辑了文件" in (root / "src" / "webui" / "frontend" / "workbench-i18n.jsx").read_text(encoding="utf-8")
     i18n = (root / "src" / "webui" / "frontend" / "workbench-i18n.jsx").read_text(encoding="utf-8")
     assert '"workbenchChat.traceAction.usedSkill": "使用了技能工具"' in i18n
+    assert '"workbenchChat.traceAction.usedTool": "使用了 {tool}"' in i18n
     assert '"workbenchChat.traceAction.conjunction": "并"' in i18n
     assert '"workbenchChat.traceAction.executed"' not in i18n
+
+
+def test_workbench_trace_summary_adds_a_verb_before_named_application_tools():
+    root = Path(__file__).resolve().parent.parent
+    source = (root / "src" / "webui" / "frontend" / "workbench-chat.jsx").read_text(
+        encoding="utf-8"
+    )
+    helpers = "function wbcTraceNormalizeName(" + source.split(
+        "function wbcTraceNormalizeName(", 1
+    )[1].split("function wbcNormalizeReasoningText", 1)[0]
+    script = f"""
+const WBC_ICONS = new Proxy({{}}, {{ get: (_target, name) => String(name) }});
+const messages = {{
+  "workbenchChat.traceAction.browsed": "操作了浏览器",
+  "workbenchChat.traceAction.usedTool": "使用了 {{tool}}",
+  "workbenchChat.traceAction.conjunction": "并",
+  "workbenchChat.traceAction.listSeparator": "、",
+  "toolName.browser_navigate": "浏览器导航",
+  "toolName.cyrene_tools": "Cyrene 应用工具"
+}};
+function wbcT(key, fallback, params) {{
+  let value = messages[key] || fallback || key;
+  Object.entries(params || {{}}).forEach(([name, replacement]) => {{
+    value = value.split("{{" + name + "}}").join(String(replacement));
+  }});
+  return value;
+}}
+eval({json.dumps(helpers)});
+const summary = wbcTraceCollapsedSummary([
+  {{ kind: "tool", tool: "browser_navigate" }},
+  {{ kind: "tool", tool: "cyrene_tools" }}
+]);
+process.stdout.write(summary.label);
+"""
+    completed = subprocess.run(
+        ["node", "-e", script], check=True, capture_output=True, text=True
+    )
+
+    assert completed.stdout == "操作了浏览器并使用了 Cyrene 应用工具"
 
 
 def test_workbench_trace_timeline_removes_blank_lines_and_interleaves_tools():
