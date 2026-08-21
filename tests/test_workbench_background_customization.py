@@ -31,9 +31,10 @@ def test_workbench_background_preferences_are_exposed_and_applied_before_paint()
     assert "background: var(--wb-user-bg-light, #f5f6f8);" in index
     assert "background: var(--wb-user-bg-dark, #101114);" in index
 
+    shell_styles = styles.split(".workbench-shell {", 1)[1].split("}", 1)[0]
     composer_styles = styles.split(".wbc-composer-box {", 1)[1].split("}", 1)[0]
     assert "--wbc-composer-glass-background: color-mix(in srgb, var(--wb-card-bg) 72%, transparent)" in composer_styles
-    assert "--wbc-composer-glass-filter: blur(18px) saturate(120%) contrast(102%)" in composer_styles
+    assert "--wbc-composer-glass-filter: blur(18px) saturate(120%) contrast(102%)" in shell_styles
     assert "--wbc-composer-glass-border: 1px solid color-mix(in srgb, var(--wb-line-2) 64%, transparent)" in composer_styles
     assert "background: var(--wbc-composer-glass-background);" in composer_styles
     assert "backdrop-filter: var(--wbc-composer-glass-filter);" in composer_styles

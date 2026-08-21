@@ -5,6 +5,53 @@
 This English edition preserves the release history of the Chinese changelog.
 The Chinese edition remains the most detailed record for older releases.
 
+## [0.7.12] - 2026-08-21
+
+`0.7.12` brings together every feature and interface change since `0.7.11`, led by shared persistent terminals, a unified Work rail and mixed board, global browser and download management, and more reliable task, schedule, and split-pane workflows. This section contains user-visible capabilities and experience changes only.
+
+### Shared persistent terminals and project tools
+
+- Workbench adds shared persistent terminals. Users and the Agent can view and operate the same terminal, and active sessions can be reattached after switching conversations, refreshing the interface, or reopening the app.
+- The Agent can create, type into, read, show, interrupt, and delete terminals. The former Claude Code shortcut is replaced by a general Terminal entry, so command-line, Git, and coding work are no longer tied to one external tool.
+- Terminals can open as workspace splits with the same selection, dragging, resizing, and restoration patterns as conversations and files. The terminal list supports creation, search, pinning, renaming, deletion, and live process state.
+- Files and Terminal are grouped under Project tools in the rail. Expanding either promotes it to the full rail content area, keeping search, directory browsing, and long terminal lists clear and usable.
+- File navigation moves the current directory and Back action into the header. The project root shows a folder and project name; child folders use the same position for Back and the current path.
+- Rail search becomes a unified project search that finds chats, tasks, files, and terminals together and groups the results by type.
+- Terminal input marked as sensitive is not stored in plain text in conversation or tool history, and common password expressions are hidden from related review information.
+
+### Work rail, mixed board, and task workspaces
+
+- Primary navigation is organized as Schedule, Board, Work, Knowledge, and Memory. Work uses one shared rail that switches directly between chats and tasks, with task rows matching chat density, status, and selection feedback.
+- Board becomes a mixed work board for both tasks and conversations. Tasks follow their real status by default while retaining a manual placement until that status changes; conversations can be arranged freely.
+- Board adds chat-and-task search alongside Sort and New. Column counts and empty states update with the filtered results.
+- Task cards gain Pin, Unpin, and Rename and now share the same background, menus, icons, spacing, and feedback as conversation cards. Pinned state and custom ordering persist.
+- Tasks can open in a full workspace or in left, right, top, and bottom splits just like conversations, including move, replace, close, resize, detach, and merge-back flows.
+- A resizable Task panel returns for single-task workspaces, while split tasks can open their own floating details. Titles, collapsing, cards, and minimum widths now match the conversation side panel.
+- Horizontal chat and task switching is more stable: one trackpad swipe no longer skips multiple sessions because of momentum, and scrolled task content no longer paints above the floating header edge.
+
+### Browser pages, downloads, and webpage interaction
+
+- The top bar adds a global browser-page manager with site icons for pages opened by every project. Its expanded view groups pages by project and can activate, reload, mute, unmute, or close them.
+- Browser pages can be pinned to or removed from the top bar and restored accurately even when their conversation is outside the recent-session list. Pinned resources use each site's real favicon.
+- A global download center shows filename, progress, transferred and total size, and source page, with Pause, Resume, and Cancel controls.
+- Webpage context menus add Back, Forward, Reload, link copying, opening links in a new tab, saving images or media, text editing, and spelling actions.
+- New-window requests are handled as normal tabs or separate popups according to the page's intent. Pointer-lock requests show the requesting source and risk explanation and require an explicit Allow or Block decision.
+- The browser tab picker removes extra shadow and scrollbar chrome while keeping scrolling and keyboard interaction, with matching styling in split and maximized browser views.
+
+### Schedules, task execution, and result continuity
+
+- Creating or editing a scheduled task now offers Run Agent task or Send message. Message mode delivers the entered text unchanged at the scheduled time without starting an Agent run.
+- Scheduled tasks remember their originating conversation and project. Results, failure notices, and notifications return to the correct original chat, while Schedule history and other channels show the same user-visible result.
+- The Agent can edit scheduled tasks, including their content, action type, timing, time zone, and permission. The next run updates with the revised schedule.
+- Conversation runs, task runs, and run-until-pass mode now share consistent ownership, stop, and recovery behavior. Repeated actions cannot start overlapping runs, and pause, cancel, failure, and reopened states are more dependable.
+- If the originating conversation is already running, a scheduled task waits for an appropriate time to continue instead of interleaving with or replacing the active response.
+
+### Interface and experience refinements
+
+- DeepSeek connections honor the saved address first and can fall back to the more reliable versioned address when needed, with older configurations migrated automatically. Model connection tests use the selected model's actual connection path.
+- Once an update package is downloaded and verified, the About page progress reliably reaches 100% instead of appearing slightly incomplete because of a late final progress event.
+- Files that cannot be previewed inside Cyrene now explain that they can still be opened with a compatible application, replacing a dead-end unsupported state.
+
 ## [0.7.11] - 2026-08-19
 
 `0.7.11` brings together every feature and interface change since `0.7.10`, with major improvements to spoken replies, skill learning, usage analytics, guided tours, model settings, and the speed and clarity of Settings. This section contains user-visible capabilities and experience changes only.

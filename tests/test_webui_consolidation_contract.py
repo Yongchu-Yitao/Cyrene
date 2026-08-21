@@ -20,18 +20,18 @@ WEBUI_ROOT = ROOT / "src" / "webui"
 WORKBENCH_ROOT = WEBUI_ROOT / "frontend"
 INDEX = WORKBENCH_ROOT / "index.html"
 
-OPENAPI_OPERATION_COUNT = 389
+OPENAPI_OPERATION_COUNT = 391
 OPENAPI_BASELINE_FASTAPI = "0.136.1"
 OPENAPI_BASELINE_PYDANTIC = "2.13.4"
-OPENAPI_SHA256 = "4988cb42b90469d806b0c027ac151643cb65c76d695969474a5f51a188e64117"
-TOOL_REGISTRY_SHA256 = "f8200a17bc65c20ae8fb3615fc8031714856198faddb92f985a47abcc4db2e48"
+OPENAPI_SHA256 = "e6e36bfc14bc8fca35d605ffbee5c98ee77545330cbc61eb9b9a71d1801ac2b9"
+TOOL_REGISTRY_SHA256 = "c0b57a692939d438ea6b0efb09217929b3e01c6dff2e34ced5f7073dabc2b300"
 MAIN_WIRE_SHA256 = "2e3bc8be6e0039af2ac92184500f7f88627a77401335e0b41f1bb42fc6cb67cf"
 SUBAGENT_WIRE_SHA256 = "a01ae0fc2a72750c4cd8248220dcd525d39523156acb1d26573ba598b2d5b643"
 
 # CyreneUI owns runtime services. The launch lifecycle is the sole bootstrap
 # global because it must guard fetch before the platform registry is loaded.
 REGISTERED_WORKBENCH_GLOBALS = {
-    "CyreneUI", "CyrenePageLifecycle", "CyreneTerminalSurface",
+    "CyreneUI", "CyrenePageLifecycle", "CyreneTaskPane", "CyreneTerminalSurface",
 }
 
 BROWSER_AND_VENDOR_GLOBALS = {
@@ -122,8 +122,8 @@ def test_tool_registry_wire_and_actor_policy_contracts_are_unchanged(monkeypatch
         "get_models",
         lambda: [{"provider": "openai_compatible", "model": "custom-model"}],
     )
-    assert len(catalog.TOOL_DEFS) == 137
-    assert len(catalog.TOOL_HANDLERS) == 137
+    assert len(catalog.TOOL_DEFS) == 138
+    assert len(catalog.TOOL_HANDLERS) == 138
     assert len(catalog._MAIN_ONLY_TOOLS) == 72
     assert _sha256_json(catalog.TOOL_DEFS) == TOOL_REGISTRY_SHA256
 
@@ -169,45 +169,45 @@ def test_workbench_runtime_dependencies_keep_their_relative_script_order():
         "katex/katex.min.js",
         "purify.min.js",
         "highlight.min.js",
-        "compiled/platform/runtime.js?v=0.7.11",
-        "compiled/shared/markdown/math.js?v=0.7.11",
-        "compiled/shared/markdown/highlight.js?v=0.7.11",
+        "compiled/platform/runtime.js?v=0.7.12",
+        "compiled/shared/markdown/math.js?v=0.7.12",
+        "compiled/shared/markdown/highlight.js?v=0.7.12",
         "leaflet.js",
-        "pdfjs/pdf.min.js?v=0.7.11",
-        "pdfjs/pdf_viewer.js?v=0.7.11",
-        "compiled/platform/readiness.js?v=0.7.11",
-        "compiled/platform/events.js?v=0.7.11",
-        "compiled/platform/navigation.js?v=0.7.11",
-        "compiled/workbench-i18n.js?v=0.7.11",
-        "compiled/shared/i18n/format.js?v=0.7.11",
-        "compiled/shared/i18n/translations.js?v=0.7.11",
-        "compiled/shared/pdf/bridge.js?v=0.7.11",
-        "compiled/shared/feedback/service.js?v=0.7.11",
-        "compiled/shared/markdown/renderer.js?v=0.7.11",
-        "compiled/platform/data-store.js?v=0.7.11",
-        "compiled/shared/browser/viewport.js?v=0.7.11",
-        "compiled/shared/search/overlay.js?v=0.7.11",
-        "compiled/shared/markdown/actions.js?v=0.7.11",
-        "compiled/shared/diff/viewer.js?v=0.7.11",
-        "compiled/code/editor.js?v=0.7.11",
-        "compiled/platform/api.js?v=0.7.11",
-        "compiled/workbench-chat.js?v=0.7.11",
-        "compiled/workbench-quick-chat.js?v=0.7.11",
-        "compiled/workbench.js?v=0.7.11",
-        "compiled/settings-overlay.js?v=0.7.11",
-        "compiled/entry/bootstrap.js?v=0.7.11",
+        "pdfjs/pdf.min.js?v=0.7.12",
+        "pdfjs/pdf_viewer.js?v=0.7.12",
+        "compiled/platform/readiness.js?v=0.7.12",
+        "compiled/platform/events.js?v=0.7.12",
+        "compiled/platform/navigation.js?v=0.7.12",
+        "compiled/workbench-i18n.js?v=0.7.12",
+        "compiled/shared/i18n/format.js?v=0.7.12",
+        "compiled/shared/i18n/translations.js?v=0.7.12",
+        "compiled/shared/pdf/bridge.js?v=0.7.12",
+        "compiled/shared/feedback/service.js?v=0.7.12",
+        "compiled/shared/markdown/renderer.js?v=0.7.12",
+        "compiled/platform/data-store.js?v=0.7.12",
+        "compiled/shared/browser/viewport.js?v=0.7.12",
+        "compiled/shared/search/overlay.js?v=0.7.12",
+        "compiled/shared/markdown/actions.js?v=0.7.12",
+        "compiled/shared/diff/viewer.js?v=0.7.12",
+        "compiled/code/editor.js?v=0.7.12",
+        "compiled/platform/api.js?v=0.7.12",
+        "compiled/workbench-chat.js?v=0.7.12",
+        "compiled/workbench-quick-chat.js?v=0.7.12",
+        "compiled/workbench.js?v=0.7.12",
+        "compiled/settings-overlay.js?v=0.7.12",
+        "compiled/entry/bootstrap.js?v=0.7.12",
     ]
 
     positions = [scripts.index(script) for script in required_in_order]
     assert positions == sorted(positions)
     assert not {
-        "compiled/app.js?v=0.7.11",
-        "compiled/chat.js?v=0.7.11",
-        "compiled/dashboard.js?v=0.7.11",
-        "compiled/knowledge.js?v=0.7.11",
-        "compiled/memory.js?v=0.7.11",
-        "compiled/tasks.js?v=0.7.11",
-        "compiled/settings.js?v=0.7.11",
+        "compiled/app.js?v=0.7.12",
+        "compiled/chat.js?v=0.7.12",
+        "compiled/dashboard.js?v=0.7.12",
+        "compiled/knowledge.js?v=0.7.12",
+        "compiled/memory.js?v=0.7.12",
+        "compiled/tasks.js?v=0.7.12",
+        "compiled/settings.js?v=0.7.12",
     }.intersection(scripts)
 
 

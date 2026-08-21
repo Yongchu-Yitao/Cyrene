@@ -366,7 +366,7 @@ def test_terminal_frontend_exposes_recovery_controls_and_input_cursor() -> None:
     assert 'actionLabel = notice.reconnect' in source
     assert '"重新启动"' in source
     assert 'var [railMode, setRailMode] = useWbcState("chat")' in chat_source
-    assert 'setRailMode("terminal");\n    replaceWithTerminal(pending.terminalId' in chat_source
+    assert 'setRailMode(lastWorkRailModeRef.current === "task" ? "task" : "chat");\n    replaceWithTerminal(pending.terminalId' in chat_source
     assert 'railMode={railMode}' in chat_source
 
 

@@ -174,7 +174,7 @@ def test_existing_item_action_menus_are_available_from_right_click():
     task_board_card = shell.split('className={"wb-board-card is-"', 1)[1].split(
         "</article>", 1
     )[0]
-    task_rail_card = shell.split('className={"workbench-task-card"', 1)[1].split(
+    task_rail_card = shell.split('className={"wbc-chat-card wbc-task-card"', 1)[1].split(
         "</div>", 1
     )[0]
     chat_card = chat.split('className={"wbc-chat-card"', 1)[1].split("</div>", 1)[0]

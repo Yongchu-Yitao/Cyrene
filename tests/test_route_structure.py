@@ -18,7 +18,7 @@ ROUTE_DECORATOR = re.compile(
     r"\(\s*[\"']([^\"']+)"
 )
 EXPECTED_ROUTE_CONTRACT_SHA256 = (
-    "128026646b1377daa8372bbbc113aa7269845234b43b74dd03d966c1bff6611c"
+    "c82ac186525a6269a736d34b202b2ae580a07279e99f677118a19b2bd44fad89"
 )
 
 
@@ -52,7 +52,7 @@ def _registered_routes(db_path: Path) -> set[str]:
 def test_route_package_owns_the_complete_public_contract():
     routes = _declared_routes(ROOT / "src" / "route")
 
-    assert len(routes) == 394
+    assert len(routes) == 396
     assert len(routes) == len(set(routes)), "duplicate method/path declaration"
     assert {
         "GET /api/projects/{project_id}/memory-prompt",

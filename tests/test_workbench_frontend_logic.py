@@ -952,13 +952,14 @@ def test_workbench_chat_search_and_custom_background_composer_stay_distinct():
 
     search_css = styles.split(".wbc-search input {", 1)[1].split("}", 1)[0]
     search_focus_css = styles.split(".wbc-search input:focus {", 1)[1].split("}", 1)[0]
+    shell_css = styles.split(".workbench-shell {", 1)[1].split("}", 1)[0]
     composer_css = styles.split(".wbc-composer-box {", 1)[1].split("}", 1)[0]
     assert "border: 1px solid" in search_css
     assert "box-shadow: none;" in search_css
     assert "border-color:" in search_focus_css
     assert "--wbc-composer-glass-border: 1px solid color-mix(in srgb, var(--wb-line-2) 64%, transparent);" in composer_css
     assert "--wbc-composer-glass-background: color-mix(in srgb, var(--wb-card-bg) 72%, transparent);" in composer_css
-    assert "--wbc-composer-glass-filter: blur(18px) saturate(120%) contrast(102%);" in composer_css
+    assert "--wbc-composer-glass-filter: blur(18px) saturate(120%) contrast(102%);" in shell_css
     assert "border: var(--wbc-composer-glass-border);" in composer_css
     assert "background: var(--wbc-composer-glass-background);" in composer_css
     assert "backdrop-filter: var(--wbc-composer-glass-filter);" in composer_css
@@ -1078,7 +1079,8 @@ def test_hidden_chat_sidebar_slightly_widens_and_centers_the_conversation_lane()
 
     assert "--wbc-reclaimed-side-width: 0px;" in page_css
     assert "--wbc-conversation-shift: 0px;" in page_css
-    assert "--wbc-side-track-width: var(--wb-right-w, 350px);" in page_css
+    assert "--wbc-docked-side-open-width: var(--wb-right-w, 350px);" in page_css
+    assert "--wbc-side-track-width: var(--wbc-docked-side-open-width);" in page_css
     assert "grid-template-columns: var(--wbc-rail-width) 0px minmax(var(--wbc-main-min-width), 1fr) var(--wbc-side-track-width);" in page_css
     assert "transition: grid-template-columns 500ms cubic-bezier(.22, 1.16, .36, 1);" in page_css
     assert "--wbc-collapsed-lane-growth: clamp(144px, 12vw, 208px);" in page_css
@@ -2960,7 +2962,7 @@ def test_project_text_files_use_codemirror_with_live_markdown_and_conflict_contr
     assert "root.CyreneCodeMirror = Object.freeze({" in editor
     assert "Editor: Editor," in editor
     assert 'key: "Mod-s"' in editor
-    assert 'compiled/code/editor.js?v=0.7.11' in index
+    assert 'compiled/code/editor.js?v=0.7.12' in index
     assert 'function wbcProjectFileEditUrl(file)' in source
     assert 'expectedVersion: editorVersionRef.current' in source
     assert 'force: !!force' in source
@@ -3124,6 +3126,7 @@ def test_workbench_chat_composer_themes_share_one_optimized_glass_pipeline():
         encoding="utf-8"
     )
 
+    shell = styles.split("\n.workbench-shell {", 1)[1].split("}", 1)[0]
     base = styles.split("\n.wbc-composer-box {", 1)[1].split("}", 1)[0]
     light = styles.split('html[data-theme="light"] .wbc-composer-box {', 1)[1].split(
         "}", 1
@@ -3138,7 +3141,7 @@ def test_workbench_chat_composer_themes_share_one_optimized_glass_pipeline():
         'html[data-performance-mode="on"] *,', 1
     )[1].split("}", 1)[0]
 
-    assert "--wbc-composer-glass-filter: blur(18px) saturate(120%) contrast(102%);" in base
+    assert "--wbc-composer-glass-filter: blur(18px) saturate(120%) contrast(102%);" in shell
     assert "backdrop-filter: var(--wbc-composer-glass-filter);" in base
     assert "var(--wbc-composer-glass-drop-shadow)" in base
     assert "var(--wbc-composer-glass-top-highlight)" in base
@@ -5739,8 +5742,8 @@ def test_workbench_chat_switches_stop_to_guidance_while_running():
     assert "输入内容以引导正在运行的 Agent" in (
         root / "src" / "webui" / "frontend" / "workbench-i18n.jsx"
     ).read_text(encoding="utf-8")
-    assert "workbench-chat.js?v=0.7.11" in index
-    assert "workbench-i18n.js?v=0.7.11" in index
+    assert "workbench-chat.js?v=0.7.12" in index
+    assert "workbench-i18n.js?v=0.7.12" in index
 
 
 def test_task_answer_resume_uses_interrupt_not_pause_and_suppresses_cancel_error():
@@ -7205,7 +7208,7 @@ def test_workbench_keeps_one_persistent_module_dock_across_workspace_switches():
     assert "moduleDock: isKnowledge ? renderSidebarDockSlot() : null" in source
     assert "moduleDock: isSchedule ? renderSidebarDockSlot() : null" in source
     assert "moduleDock: isMemory ? renderSidebarDockSlot() : null" in source
-    assert "moduleDock={!isModulePage ? renderSidebarDockSlot() : null}" in source
+    assert "moduleDock: !isModulePage ? renderSidebarDockSlot() : null" in source
     assert "navCollapsed: railCollapsed" in source
     assert "sidebarCollapsed: railCollapsed" in source
     assert "collapsed={railCollapsed}" in source
@@ -8842,7 +8845,7 @@ def test_workbench_task_panel_reuses_conversation_panel_structure_and_styles():
     assert 'html[data-theme="dark"] .wbc-page .wbc-side-card.wb-task-detail-card' in styles
     assert '"task.side.detailPanel": "Task panel"' in i18n
     assert '"task.side.detailPanel": "任务面板"' in i18n
-    assert "workbench.css?v=0.7.11" in index
+    assert "workbench.css?v=0.7.12" in index
 
 
 def test_workbench_collapsed_rail_keeps_labels_horizontal_during_expansion():
@@ -8864,7 +8867,7 @@ def test_workbench_collapsed_rail_keeps_labels_horizontal_during_expansion():
     assert "height: 63px;" in account_rule
     assert "grid-template-rows: 36px;" in account_rule
     assert "height: 36px;" in account_meta_rule
-    assert "workbench.css?v=0.7.11" in index
+    assert "workbench.css?v=0.7.12" in index
 
 
 def test_workbench_collapsed_rail_icons_stay_left_anchored_while_closing():
@@ -8937,7 +8940,7 @@ def test_workbench_wechat_channel_uses_qr_login_instead_of_token_input():
     assert "WECHAT_BOT_TOKEN" not in settings
     assert '"settings.wechatScanConnect": "扫描二维码连接"' in translations
     assert ".wb-wechat-qr-overlay" in styles
-    assert "settings-overlay.js?v=0.7.11" in index
+    assert "settings-overlay.js?v=0.7.12" in index
 
 
 def test_linux_desktop_uses_native_frame_and_directory_picker():
@@ -9308,7 +9311,7 @@ def test_workbench_tools_menu_combines_content_commands_and_long_workspace_paths
     assert 'className={"wbc-send"' in chat
     assert ".wbc-send span" not in styles
     assert "transform: none;" in styles
-    assert "workbench-chat.js?v=0.7.11" in index
+    assert "workbench-chat.js?v=0.7.12" in index
 
 
 def test_workbench_follow_up_uses_context_endpoint_without_native_prompt():
@@ -9324,8 +9327,8 @@ def test_workbench_follow_up_uses_context_endpoint_without_native_prompt():
     assert '"/api/task-sessions/{session_id}/follow-up"' in routes
     assert 'session["parentSessionId"] = session_id' in routes
     assert "followUpContext" in routes
-    assert "workbench-model.js?v=0.7.11" in index
-    assert "workbench.js?v=0.7.11" in index
+    assert "workbench-model.js?v=0.7.12" in index
+    assert "workbench.js?v=0.7.12" in index
 
 
 def test_workbench_regenerate_plan_failure_preserves_current_plan():
@@ -9453,7 +9456,7 @@ def test_workbench_model_settings_preserve_form_on_failed_response():
     assert "}).then(readSettingsResponse).then(function (p)" in save_block
     assert "p.custom_models || norm" in save_block
     assert "p.vision_models || p.vision_candidates || vNorm" in save_block
-    assert "settings-overlay.js?v=0.7.11" in index
+    assert "settings-overlay.js?v=0.7.12" in index
 
 
 def test_workbench_chat_subagent_page_is_independent_and_localized():
@@ -10136,7 +10139,7 @@ def test_workbench_settings_page_has_shortcuts_tab_and_no_legacy_overlay_mode():
     assert ".wb-shortcut-row" in styles
     assert ".wb-shortcut-capture" in styles
     # The new module is loaded before the panels that consume it
-    assert "compiled/workbench-shortcuts.js?v=0.7.11" in index
+    assert "compiled/workbench-shortcuts.js?v=0.7.12" in index
 
 
 def test_workbench_about_hero_owns_update_action_and_download_progress():
