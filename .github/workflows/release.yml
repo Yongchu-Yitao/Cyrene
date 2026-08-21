@@ -517,6 +517,7 @@ jobs:
       - name: Install and smoke test RPM package
         run: |
           docker run --rm \
+            --shm-size=1g \
             -v "$PWD:/workspace:ro" \
             fedora:latest \
             bash /workspace/build/linux-rpm-release-smoke.sh
