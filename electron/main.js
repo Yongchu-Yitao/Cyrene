@@ -6890,6 +6890,10 @@ async function runDesktopSmokeTest(window) {
   }
   console.log(successMessage);
   isQuitting = true;
+  // Release smoke runs have already proved the packaged backend and UI are
+  // healthy. Skip the normal interactive active-extension quit prompt so the
+  // headless process exits deterministically on every desktop platform.
+  quitExtensionDecisionMade = true;
   app.quit();
 }
 
