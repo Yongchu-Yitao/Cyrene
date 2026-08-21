@@ -354,9 +354,8 @@ def register_run_routes(router: APIRouter, context: ChatRouteContext) -> dict[st
         selected_key = "" if agent_owns_models else requested_model or str(chat.get("modelSelectionId") or "").strip()
         if selected_key:
             from cyrene.runtime.model_configuration import selectable_model_candidates
-            from cyrene.runtime.settings_store import get_models
 
-            configured_models = selectable_model_candidates(legacy_candidates=get_models() or [])
+            configured_models = selectable_model_candidates()
             selected_candidate = next(
                 (
                     candidate
@@ -381,7 +380,9 @@ def register_run_routes(router: APIRouter, context: ChatRouteContext) -> dict[st
                 # A retry has no explicit model field, so recover by selecting
                 # the current configured primary instead of rejecting the run
                 # with a misleading "configured model not found" response.
-                primary_models = get_models() or []
+                from cyrene.runtime.model_configuration import candidates_for_route
+
+                primary_models = candidates_for_route("primary")
                 selected_candidate = primary_models[0] if primary_models else None
                 if selected_candidate is not None:
                     recovered_stale_selection = True

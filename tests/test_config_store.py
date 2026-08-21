@@ -323,18 +323,31 @@ def test_parallel_model_settings_migrate_from_legacy_candidate_order(
     }
 
     assert isolated_config_store.get_model_source() == "codex"
-    assert isolated_config_store.get_codex_model() == codex
-    assert isolated_config_store.get_custom_models() == [custom]
+    assert isolated_config_store.get_codex_model()["model"] == codex["model"]
+    assert [item["model"] for item in isolated_config_store.get_custom_models()] == [
+        custom["model"]
+    ]
+    assert "models" not in isolated_config_store.export_snapshot()["settings"]
 
 
-def test_parallel_model_settings_are_saved_independently(isolated_config_store):
+def test_legacy_parallel_model_writes_commit_only_as_one_graph(isolated_config_store):
     custom = [{"model": "deepseek-chat", "provider": "openai_compatible"}]
     codex = {"model": "gpt-5.6-sol", "provider": "codex_oauth"}
 
     isolated_config_store.save_custom_models(custom)
     isolated_config_store.save_codex_model(codex)
     isolated_config_store.save_model_source("codex")
+    isolated_config_store.save_models([codex])
 
-    assert isolated_config_store.get_custom_models() == custom
-    assert isolated_config_store.get_codex_model() == codex
+    assert [item["model"] for item in isolated_config_store.get_custom_models()] == [
+        custom[0]["model"]
+    ]
+    assert isolated_config_store.get_codex_model()["model"] == codex["model"]
     assert isolated_config_store.get_model_source() == "codex"
+    settings = isolated_config_store.export_snapshot()["settings"]
+    assert {
+        "models",
+        "custom_models",
+        "codex_model",
+        "model_source",
+    }.isdisjoint(settings)

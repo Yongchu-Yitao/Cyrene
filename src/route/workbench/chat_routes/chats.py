@@ -613,12 +613,10 @@ def register_chat_routes(
             if selected_key:
                 from cyrene.runtime.model_configuration import selectable_model_candidates
 
-                from cyrene.runtime.settings_store import get_models
-
                 selected = next(
                     (
                         item
-                        for item in selectable_model_candidates(legacy_candidates=get_models() or [])
+                        for item in selectable_model_candidates()
                         if selected_key
                         in {
                             str(item.get("id") or ""),

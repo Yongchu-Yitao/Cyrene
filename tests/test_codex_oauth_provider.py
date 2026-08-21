@@ -322,10 +322,10 @@ def test_codex_candidate_never_inherits_api_credentials() -> None:
     assert candidate["endpoints"] == [CODEX_BASE_URL]
 
 
-def test_codex_candidate_is_never_resolved_as_a_fallback(
+def test_codex_candidate_keeps_its_configured_fallback_position(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setattr(model_client, "get_models", lambda: [
+    monkeypatch.setattr(model_client, "candidates_for_route", lambda _route: [
         {
             "id": "custom-primary",
             "model": "deepseek-chat",
@@ -344,7 +344,8 @@ def test_codex_candidate_is_never_resolved_as_a_fallback(
     candidates = model_client._resolve_llm_candidates()
 
     assert [candidate["provider"] for candidate in candidates] == [
-        "openai_compatible"
+        "openai_compatible",
+        CODEX_PROVIDER,
     ]
 
 

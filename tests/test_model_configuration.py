@@ -102,11 +102,49 @@ def test_save_redacts_secrets_and_mirrors_independent_routes(isolated_model_stor
     primary = isolated_model_store.get_models()
     assert primary[0]["profile_id"] == "qwen-next"
     assert primary[0]["context_limit"] == 1_000_000
+    from cyrene.runtime.model_configuration import RETIRED_MODEL_SETTING_KEYS
+
+    assert RETIRED_MODEL_SETTING_KEYS.isdisjoint(
+        isolated_model_store.export_snapshot()["settings"]
+    )
     assert isolated_model_store.get_vision_models()[0]["profile_id"] == "qwen-next"
     assert isolated_model_store.get_secondary_model()["profile_id"] == "qwen-next"
     assert isolated_model_store.get_setting("embedding")["model"] == "qwen3-embedding-0.6b"
     assert isolated_model_store.get_env("OPENAI_MODEL") == "Qwen3-Next-80B-A3B"
     assert isolated_model_store.get_env("EMBEDDING_MODEL") == "qwen3-embedding-0.6b"
+
+
+def test_primary_route_wins_over_retired_models_setting(isolated_model_store):
+    from cyrene.runtime.model_configuration import get_model_configuration
+
+    configured = _configuration()
+    configured["version"] = 6
+    configured["profiles"].append({
+        "id": "qwen-backup",
+        "connection_id": "fastllm",
+        "model": "Qwen-Backup",
+        "capabilities": ["chat"],
+        "context_limit": 128_000,
+    })
+    configured["routes"]["primary"] = ["qwen-next", "qwen-backup"]
+    isolated_model_store.update_settings_atomic({
+        "model_configuration": configured,
+        # Deliberately opposite to the UI graph: an upgraded runtime must
+        # ignore and remove this retired duplicate ordering.
+        "models": [
+            {"id": "qwen-backup", "model": "Qwen-Backup"},
+            {"id": "qwen-next", "model": "Qwen3-Next-80B-A3B"},
+        ],
+    })
+
+    upgraded = get_model_configuration()
+
+    assert upgraded["routes"]["primary"] == ["qwen-next", "qwen-backup"]
+    assert [item["profile_id"] for item in isolated_model_store.get_models()] == [
+        "qwen-next",
+        "qwen-backup",
+    ]
+    assert "models" not in isolated_model_store.export_snapshot()["settings"]
 
 
 def test_blank_secret_is_retained_and_clear_is_explicit(isolated_model_store):
@@ -507,7 +545,7 @@ def test_runtime_candidates_keep_wire_protocols_distinct(monkeypatch):
             "api_key": "sk-test",
         },
     ]
-    monkeypatch.setattr(client, "get_models", lambda: configured)
+    monkeypatch.setattr(client, "candidates_for_route", lambda _route: configured)
 
     candidates = client.resolve_llm_candidates()
 

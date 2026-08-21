@@ -321,10 +321,10 @@ def register_settings_routes(router: APIRouter, bot: Any, db_path: str) -> None:
             get_secondary_model,
             get_vision_models,
         )
-        from cyrene.config import OPENAI_API_KEY, DEFAULT_OPENAI_BASE_URL, read_env_file
+        from cyrene.config import DEFAULT_OPENAI_BASE_URL
         from cyrene.model_runtime.pricing import price_hint as _price_hint
 
-        def _normalize_candidates(raw_items: list[dict[str, Any]] | None, fallback_api_key: str, fallback_base_url: str) -> list[dict[str, Any]]:
+        def _normalize_candidates(raw_items: list[dict[str, Any]] | None) -> list[dict[str, Any]]:
             from cyrene.model_runtime.codex_provider import CODEX_BASE_URL, CODEX_PROVIDER
 
             normalized_items: list[dict[str, Any]] = []
@@ -341,17 +341,13 @@ def register_settings_routes(router: APIRouter, bot: Any, db_path: str) -> None:
                 model_base_url = (
                     CODEX_BASE_URL
                     if provider == CODEX_PROVIDER
-                    else str(model.get("base_url") or fallback_base_url or DEFAULT_OPENAI_BASE_URL).strip() or DEFAULT_OPENAI_BASE_URL
+                    else str(model.get("base_url") or "").strip()
                 )
                 raw_model_api_key = strip_wrapping_quotes(str(model.get("api_key") or "").strip())
                 if provider == CODEX_PROVIDER:
                     model_api_key = ""
-                elif raw_model_api_key:
-                    model_api_key = raw_model_api_key
-                elif model_base_url.rstrip("/") == (fallback_base_url or DEFAULT_OPENAI_BASE_URL).rstrip("/"):
-                    model_api_key = fallback_api_key
                 else:
-                    model_api_key = ""
+                    model_api_key = raw_model_api_key
                 user_price = str(model.get("price") or "").strip()
                 is_deepseek = "deepseek" in model_identifier.lower()
                 normalized_items.append(
@@ -382,22 +378,17 @@ def register_settings_routes(router: APIRouter, bot: Any, db_path: str) -> None:
         model_source = get_model_source()
         raw_vision_models = get_vision_models()
         raw_secondary = get_secondary_model()
-        active_model_name, base_url = _live_llm_config()
-        env_keys = read_env_file()
-        active_api_key = strip_wrapping_quotes(str(env_keys.get("OPENAI_API_KEY") or OPENAI_API_KEY or "").strip())
-        normalized = _normalize_candidates(raw_models, active_api_key, base_url)
-        normalized_custom = _normalize_candidates(
-            raw_custom_models, active_api_key, base_url
-        )
+        active_model_name = str((raw_models[0] if raw_models else {}).get("model") or "").strip()
+        base_url = str((raw_models[0] if raw_models else {}).get("base_url") or DEFAULT_OPENAI_BASE_URL).strip()
+        normalized = _normalize_candidates(raw_models)
+        normalized_custom = _normalize_candidates(raw_custom_models)
         normalized_codex_items = _normalize_candidates(
             [raw_codex_model] if raw_codex_model else [],
-            active_api_key,
-            base_url,
         )
         normalized_codex = (
             normalized_codex_items[0] if normalized_codex_items else None
         )
-        normalized_vision = _normalize_candidates(raw_vision_models, active_api_key, base_url)
+        normalized_vision = _normalize_candidates(raw_vision_models)
         from cyrene.runtime.model_configuration import selectable_model_candidates
 
         selectable_models = []
@@ -436,8 +427,6 @@ def register_settings_routes(router: APIRouter, bot: Any, db_path: str) -> None:
             sec_raw_api_key = strip_wrapping_quotes(str(raw_secondary.get("api_key") or "").strip())
             if sec_raw_api_key:
                 sec_api_key = sec_raw_api_key
-            elif sec_base_url.rstrip("/") == (base_url or DEFAULT_OPENAI_BASE_URL).rstrip("/"):
-                sec_api_key = active_api_key
             else:
                 sec_api_key = ""
             normalized_secondary = {
@@ -466,47 +455,6 @@ def register_settings_routes(router: APIRouter, bot: Any, db_path: str) -> None:
                 "max_concurrency": 0,
             }
 
-        if not normalized:
-            fallback_model = active_model_name or "deepseek-v4-flash"
-            normalized = [
-                {
-                    "id": "candidate-1",
-                    "name": fallback_model,
-                    "model": fallback_model,
-                    "desc": "",
-                    "ctx": "",
-                    "price": "",
-                    "priceHint": _price_hint(fallback_model),
-                    "api_key": active_api_key,
-                    "base_url": base_url or DEFAULT_OPENAI_BASE_URL,
-                }
-            ]
-        if not normalized_custom:
-            normalized_custom = [
-                model
-                for model in normalized
-                if model.get("provider") != "codex_oauth"
-            ]
-        if model_source == "codex" and normalized_codex:
-            normalized = [normalized_codex]
-        elif normalized_custom:
-            model_source = "custom"
-            normalized = normalized_custom
-        if not normalized_vision:
-            normalized_vision = [
-                {
-                    "id": "vision-candidate-1",
-                    "name": normalized[0]["model"],
-                    "model": normalized[0]["model"],
-                    "desc": "",
-                    "ctx": "",
-                    "price": "",
-                    "priceHint": _price_hint(normalized[0]["model"]),
-                    "api_key": normalized[0]["api_key"],
-                    "base_url": normalized[0]["base_url"],
-                }
-            ]
-
         active_model_id = next(
             (
                 str(model.get("id") or "").strip()
@@ -515,7 +463,7 @@ def register_settings_routes(router: APIRouter, bot: Any, db_path: str) -> None:
                 or str(model.get("name") or "").strip() == active_model_name
                 or str(model.get("id") or "").strip() == active_model_name
             ),
-            str(normalized[0].get("id") or "candidate-1"),
+            str((normalized[0] if normalized else {}).get("id") or ""),
         )
         return {
             "models": normalized,
@@ -772,11 +720,14 @@ def register_settings_routes(router: APIRouter, bot: Any, db_path: str) -> None:
         if normalized_codex:
             save_codex_model(normalized_codex)
         save_model_source(primary_source)
-        save_models(normalized)
         if raw_vision_models is not None:
             save_vision_models(normalized_vision)
         if isinstance(raw_secondary, dict):
             save_secondary_model(raw_secondary)
+        # Compatibility clients still submit flat candidates.  Persist them
+        # last so save_models() can normalize the complete legacy-shaped
+        # payload into the single model configuration graph.
+        save_models(normalized)
         env_updates = {"OPENAI_MODEL": primary_model}
         if primary.get("provider") != "codex_oauth":
             env_updates.update(
@@ -786,14 +737,6 @@ def register_settings_routes(router: APIRouter, bot: Any, db_path: str) -> None:
                 }
             )
         write_env_keys(env_updates)
-        # Keep the normalized adapter/profile graph coherent for older clients
-        # that still save through this compatibility endpoint.
-        from cyrene.runtime import config_store as _config_store
-        from cyrene.runtime.model_configuration import migrate_legacy_model_configuration
-
-        _config_store.set_setting(
-            "model_configuration", migrate_legacy_model_configuration()
-        )
         # Settings are live without a backend restart. Drop affinities and
         # cooldowns derived from the previous configuration before the first
         # conversation uses the newly saved model.

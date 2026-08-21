@@ -1,7 +1,8 @@
 """Normalized model connections, profiles, and independent role routes.
 
-This module is the compatibility boundary between the new adapter-oriented
-configuration and the legacy candidate lists consumed by the current runtime.
+This module owns the single adapter-oriented model configuration used by both
+the settings UI and the runtime.  Legacy candidate lists are accepted only as
+upgrade/write inputs; they are never maintained as a second source of truth.
 It contains no HTTP concerns and never returns stored secrets from its public
 read API.
 """
@@ -21,6 +22,14 @@ from cyrene.runtime import config_store
 
 CONFIG_VERSION = 6
 ROUTE_NAMES = ("primary", "secondary", "vision", "embedding")
+RETIRED_MODEL_SETTING_KEYS = frozenset({
+    "models",
+    "custom_models",
+    "codex_model",
+    "model_source",
+    "vision_models",
+    "secondary_model",
+})
 _ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$")
 _MINIMAX_DEFAULT_BASE_URL = "https://api.minimaxi.com/v1"
 _MINIMAX_REPLACED_DEFAULT_BASE_URLS = {
@@ -451,7 +460,9 @@ def _configuration_version(raw: dict[str, Any]) -> int:
         return 0
 
 
-def migrate_legacy_model_configuration() -> dict[str, Any]:
+def migrate_legacy_model_configuration(
+    primary_candidates: list[dict[str, Any]] | None = None,
+) -> dict[str, Any]:
     """Build the normalized graph from the pre-plugin settings schema."""
 
     connections: list[dict[str, Any]] = []
@@ -530,12 +541,26 @@ def migrate_legacy_model_configuration() -> dict[str, Any]:
             routes[role].append(profile_id)
         return profile_id
 
-    legacy_models = [item for item in config_store.get_models() or [] if isinstance(item, dict)]
-    legacy_custom = [item for item in config_store.get_custom_models() or [] if isinstance(item, dict)]
-    legacy_codex = config_store.get_codex_model()
-    source = config_store.get_model_source()
+    # Read the retired raw key directly.  ``get_models()`` is now a derived
+    # primary-route view and calling it here would make legacy migration depend
+    # on the graph that this function is constructing.
+    legacy_models = [
+        item
+        for item in config_store.get_setting("models", []) or []
+        if isinstance(item, dict)
+    ]
+    legacy_custom = [
+        item
+        for item in config_store.get_setting("custom_models", []) or []
+        if isinstance(item, dict)
+    ]
+    raw_codex = config_store.get_setting("codex_model", {})
+    legacy_codex = raw_codex if isinstance(raw_codex, dict) else {}
+    source = str(config_store.get_setting("model_source", "") or "").strip().lower()
     primary_items = (
-        [legacy_codex]
+        [item for item in primary_candidates if isinstance(item, dict)]
+        if primary_candidates is not None
+        else [legacy_codex]
         if source == "codex" and isinstance(legacy_codex, dict) and legacy_codex
         else (legacy_custom or legacy_models)
     )
@@ -550,9 +575,9 @@ def migrate_legacy_model_configuration() -> dict[str, Any]:
         profile_id = add(legacy_codex, "primary", forced_adapter="codex_oauth")
         if source != "codex" and profile_id in routes["primary"]:
             routes["primary"].remove(profile_id)
-    for item in config_store.get_vision_models() or []:
+    for item in config_store.get_setting("vision_models", []) or []:
         add(item, "vision")
-    secondary = config_store.get_secondary_model()
+    secondary = config_store.get_setting("secondary_model", {})
     if isinstance(secondary, dict) and str(secondary.get("model") or "").strip():
         add(secondary, "secondary")
 
@@ -582,11 +607,11 @@ def _stored_configuration() -> dict[str, Any] | None:
     # If legacy model state exists, migrate it once instead of hiding it.
     has_graph = bool(raw.get("connections") or raw.get("profiles"))
     has_legacy = bool(
-        config_store.get_models()
-        or config_store.get_custom_models()
-        or config_store.get_codex_model()
-        or config_store.get_vision_models()
-        or str((config_store.get_secondary_model() or {}).get("model") or "").strip()
+        config_store.get_setting("models", [])
+        or config_store.get_setting("custom_models", [])
+        or config_store.get_setting("codex_model", {})
+        or config_store.get_setting("vision_models", [])
+        or str((config_store.get_setting("secondary_model", {}) or {}).get("model") or "").strip()
         or str((config_store.get_setting("embedding", {}) or {}).get("model") or "").strip()
     )
     return raw if has_graph or not has_legacy else None
@@ -596,11 +621,18 @@ def get_model_configuration(*, persist_migration: bool = True) -> dict[str, Any]
     raw = _stored_configuration()
     if raw is not None:
         needs_upgrade = _configuration_version(raw) < CONFIG_VERSION
+        needs_retired_models_cleanup = any(
+            config_store.get_setting(key, None) is not None
+            for key in RETIRED_MODEL_SETTING_KEYS
+        )
         source = _with_default_provider_connections(raw) if needs_upgrade else raw
         normalized = normalize_model_configuration(source, previous=raw)
-        if needs_upgrade and persist_migration:
+        if (needs_upgrade or needs_retired_models_cleanup) and persist_migration:
             try:
-                config_store.update_settings_atomic({"model_configuration": normalized})
+                config_store.update_settings_atomic(
+                    {"model_configuration": normalized},
+                    remove_setting_keys=RETIRED_MODEL_SETTING_KEYS,
+                )
             except config_store.SettingsRevisionConflict:
                 latest = _stored_configuration()
                 if latest is not None:
@@ -614,7 +646,10 @@ def get_model_configuration(*, persist_migration: bool = True) -> dict[str, Any]
     migrated = migrate_legacy_model_configuration()
     if persist_migration:
         try:
-            config_store.update_settings_atomic({"model_configuration": migrated})
+            config_store.update_settings_atomic(
+                {"model_configuration": migrated},
+                remove_setting_keys=RETIRED_MODEL_SETTING_KEYS,
+            )
         except config_store.SettingsRevisionConflict:
             # Another request completed the same migration first.
             latest = _stored_configuration()
@@ -698,8 +733,6 @@ def candidates_for_route(
 
 def selectable_model_candidates(
     configuration: dict[str, Any] | None = None,
-    *,
-    legacy_candidates: list[dict[str, Any]] | None = None,
 ) -> list[dict[str, Any]]:
     """Return every enabled profile that can be selected in a chat composer.
 
@@ -724,38 +757,12 @@ def selectable_model_candidates(
         if not capabilities.intersection({"chat", "vision"}):
             continue
         result.append(candidate)
-    # Compatibility callers may still hold an unsaved legacy primary list.
-    # Merge it after the profile graph so the graph stays authoritative while
-    # an in-flight migration (and older API clients) remains selectable.
-    existing_ids = {str(item.get("id") or "") for item in result}
-    for raw in legacy_candidates or []:
-        if not isinstance(raw, dict) or raw.get("enabled") is False:
-            continue
-        model_id = str(raw.get("id") or raw.get("model") or raw.get("name") or "").strip()
-        model_name = str(raw.get("model") or raw.get("name") or "").strip()
-        capabilities = set(raw.get("capabilities") or [])
-        if not model_id or not model_name or model_id in existing_ids:
-            continue
-        if capabilities and not capabilities.intersection({"chat", "vision"}):
-            continue
-        result.append(dict(raw))
-        existing_ids.add(model_id)
     return result
 
 
 def _legacy_mirrors(configuration: dict[str, Any]) -> tuple[dict[str, object], dict[str, str]]:
     primary = candidates_for_route("primary", configuration)
-    vision = candidates_for_route("vision", configuration)
-    secondary = candidates_for_route("secondary", configuration)
     embedding = candidates_for_route("embedding", configuration)
-    all_candidates = [
-        candidate_for_profile(profile["id"], configuration)
-        for profile in configuration["profiles"]
-    ]
-    enabled = [item for item in all_candidates if item is not None]
-    custom = [item for item in enabled if item.get("provider") != "codex_oauth" and "chat" in item.get("capabilities", [])]
-    codex = next((item for item in enabled if item.get("provider") == "codex_oauth"), {})
-    selected_secondary = secondary[0] if secondary else {}
     selected_embedding = embedding[0] if embedding else {}
     embedding_adapter = str(selected_embedding.get("adapter") or "openai_compatible")
     embedding_base = str(selected_embedding.get("base_url") or "")
@@ -770,25 +777,6 @@ def _legacy_mirrors(configuration: dict[str, Any]) -> tuple[dict[str, object], d
     }
     settings_updates: dict[str, object] = {
         "model_configuration": configuration,
-        "models": primary,
-        "custom_models": custom,
-        "codex_model": codex,
-        "model_source": "codex" if primary and primary[0].get("provider") == "codex_oauth" else "custom",
-        "vision_models": vision,
-        "secondary_model": {
-            "model": str(selected_secondary.get("model") or ""),
-            "name": str(selected_secondary.get("name") or ""),
-            "api_key": str(selected_secondary.get("api_key") or ""),
-            "base_url": str(selected_secondary.get("base_url") or ""),
-            "ctx_limit": int(selected_secondary.get("context_limit") or 0),
-            "max_concurrency": int(selected_secondary.get("max_concurrency") or 0),
-            "id": str(selected_secondary.get("id") or "secondary"),
-            "profile_id": str(selected_secondary.get("profile_id") or ""),
-            "connection_id": str(selected_secondary.get("connection_id") or ""),
-            "provider": str(selected_secondary.get("provider") or "openai_compatible"),
-            "adapter": str(selected_secondary.get("adapter") or "openai_compatible"),
-            "capabilities": list(selected_secondary.get("capabilities") or []),
-        },
         "embedding": integration_embedding,
     }
     selected_primary = primary[0] if primary else {}
@@ -815,9 +803,23 @@ def save_model_configuration(
         settings_updates,
         env_updates,
         expected_revision=expected_revision,
+        remove_setting_keys=RETIRED_MODEL_SETTING_KEYS,
     )
     invalidate_model_runtime_caches()
     return normalized, revision
+
+
+def save_primary_model_candidates(
+    candidates: list[dict[str, Any]],
+) -> tuple[dict[str, Any], int]:
+    """Compatibility write: replace the primary route without storing a list.
+
+    Older callers still submit flat candidates.  Convert them immediately into
+    connections/profiles/routes and persist only the normalized graph so a
+    compatibility write cannot diverge from the settings page again.
+    """
+    migrated = migrate_legacy_model_configuration(list(candidates or []))
+    return save_model_configuration(migrated)
 
 
 def public_model_configuration(configuration: dict[str, Any] | None = None) -> dict[str, Any]:
@@ -853,5 +855,6 @@ __all__ = [
     "normalize_model_configuration",
     "public_model_configuration",
     "save_model_configuration",
+    "save_primary_model_candidates",
     "selectable_model_candidates",
 ]

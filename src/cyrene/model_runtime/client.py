@@ -34,11 +34,9 @@ from cyrene.config import (
 )
 from cyrene.observability.context_trace import strip_context_metadata, summarize_context_trace
 from cyrene.runtime.config_store import effective_ctx_limit_for_model
+from cyrene.runtime.model_configuration import candidates_for_route
 from cyrene.runtime.settings_store import (
     get as get_setting,
-    get_models,
-    get_secondary_model,
-    get_vision_models,
     set_ as set_setting,
 )
 from cyrene.runtime.task_lifecycle import drain_or_cancel, track_task
@@ -252,7 +250,11 @@ def _prioritize_last_success(
                 candidate["reasoning_effort"] = requested_effort
         candidate["endpoints"] = endpoints
         prepared.append(candidate)
-    selected = preference or affinity
+    # A remembered success may optimize the endpoint order *inside* the same
+    # profile, but it must never promote a fallback model ahead of the primary
+    # route configured in Settings.  Only an explicit per-conversation model
+    # selection is allowed to override the global route order.
+    selected = preference
     preferred_id = str(selected.get("candidate_id") or "")
     preferred_adapter = str(selected.get("adapter") or "")
     preferred_model = str(selected.get("model") or "")
@@ -586,12 +588,7 @@ def primary_candidate_supports_vision(session_id: str = "") -> bool:
         "primary",
         session_id,
     )
-    available = [
-        candidate
-        for candidate in candidates
-        if not _candidate_cooling(_candidate_key(candidate, session_id))
-    ]
-    candidate = (available or candidates or [{}])[0]
+    candidate = (candidates or [{}])[0]
     return candidate.get("vision_capable") is True
 
 
@@ -620,54 +617,48 @@ def _public_base_url(url: str) -> str:
 
 
 def _inherit_sibling_keys(candidates: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    """Keyless candidates inherit the key of the first same-endpoint candidate
-    that has one ("…/v1" 与不带 /v1 视为同端点)。跨提供商不继承；本地端点可以
-    始终无 key（请求时不会带 Authorization 头）。"""
+    """Share a key only between legacy rows from the same logical service.
+
+    Graph-derived candidates carry ``connection_id`` and therefore never
+    borrow credentials from a different service, even if two services happen
+    to use the same URL.  The endpoint identity remains only as a compatibility
+    scope for old, connection-less candidate payloads.
+    """
     keyed_roots: dict[tuple[str, str], str] = {}
     for candidate in candidates:
+        connection_id = str(candidate.get("connection_id") or "").strip()
         root = (
-            str(candidate.get("adapter") or candidate.get("provider") or ""),
-            _base_root(candidate.get("base_url") or ""),
+            "connection" if connection_id else str(candidate.get("adapter") or candidate.get("provider") or ""),
+            connection_id or _base_root(candidate.get("base_url") or ""),
         )
         if candidate.get("api_key") and root not in keyed_roots:
             keyed_roots[root] = candidate["api_key"]
     for candidate in candidates:
         if not candidate.get("api_key"):
+            connection_id = str(candidate.get("connection_id") or "").strip()
             root = (
-                str(candidate.get("adapter") or candidate.get("provider") or ""),
-                _base_root(candidate.get("base_url") or ""),
+                "connection" if connection_id else str(candidate.get("adapter") or candidate.get("provider") or ""),
+                connection_id or _base_root(candidate.get("base_url") or ""),
             )
             candidate["api_key"] = keyed_roots.get(root, "")
     return candidates
 
 
 def _resolve_llm_candidates() -> list[dict[str, Any]]:
-    """模型列表是唯一事实来源：每个候选自带「标识符 + API Key + Base URL」，
-    按列表顺序逐个尝试、失败回退下一条。env 里的 OPENAI_* 只是「保存模型设置时
-    镜像 models[0]」的派生值，仅用于补全某条目缺失的 base_url/key，本身不作为
-    独立候选参与调用。列表为空（从未配置过任何模型）时返回空——调用方会抛出一个
-    明确的「未配置模型」错误，而不是用空 key 撞一个必然 401 的默认端点。"""
-    active_model = str(os.environ.get("OPENAI_MODEL", "deepseek-chat") or "").strip() or "deepseek-chat"
-    active_base_url = str(os.environ.get("OPENAI_BASE_URL", DEFAULT_OPENAI_BASE_URL) or "").strip() or DEFAULT_OPENAI_BASE_URL
-    active_api_key = strip_wrapping_quotes(str(os.environ.get("OPENAI_API_KEY", "") or "").strip())
+    """Resolve the UI-configured primary route in its exact saved order.
 
+    ``model_configuration.routes.primary`` is the sole source of truth.  The
+    environment mirrors never contribute candidates or credentials.
+    """
     candidates: list[dict[str, Any]] = []
-    seen: set[tuple[str, str, str, str, str]] = set()
-    for index, raw in enumerate(get_models() or []):
-        candidate = _normalized_candidate(raw, index, active_model=active_model, active_base_url=active_base_url, active_api_key=active_api_key)
-        # OAuth credentials are owned by the Codex app-server and the product
-        # exposes this provider only as an explicit primary-model choice. A
-        # stale or hand-edited settings record must never make it a fallback
-        # after a custom model fails.
-        if index > 0 and candidate["provider"] == "codex_oauth":
-            continue
-        key = (
-            candidate["provider"], candidate.get("adapter", ""),
-            candidate["model"], candidate["base_url"], candidate["api_key"],
+    for index, raw in enumerate(candidates_for_route("primary")):
+        candidate = _normalized_candidate(
+            raw,
+            index,
+            active_model=str(raw.get("model") or ""),
+            active_base_url=str(raw.get("base_url") or DEFAULT_OPENAI_BASE_URL),
+            active_api_key=str(raw.get("api_key") or ""),
         )
-        if key in seen:
-            continue
-        seen.add(key)
         candidates.append(candidate)
 
     return _inherit_sibling_keys(candidates)
@@ -772,23 +763,23 @@ def resolve_exact_model_candidate(identity: dict[str, Any]) -> dict[str, Any] | 
 
 
 def _resolve_secondary_candidates() -> list[dict[str, Any]]:
-    secondary = get_secondary_model()
-    model = str(secondary.get("model") or "").strip()
-    if not model:
-        return []
-    active_model = str(os.environ.get("OPENAI_MODEL", model) or model).strip() or model
-    active_base_url = str(os.environ.get("OPENAI_BASE_URL", DEFAULT_OPENAI_BASE_URL) or "").strip() or DEFAULT_OPENAI_BASE_URL
-    active_api_key = strip_wrapping_quotes(str(os.environ.get("OPENAI_API_KEY", "") or "").strip())
-    candidate = _normalized_candidate(
-        secondary,
-        active_model=active_model,
-        active_base_url=active_base_url,
-        active_api_key=active_api_key,
-    )
-    candidate["profile_id"] = str(secondary.get("profile_id") or candidate.get("profile_id") or "")
-    candidate["id"] = "secondary"
-    candidate["max_concurrency"] = int(secondary.get("max_concurrency") or 0)
-    return [candidate]
+    result: list[dict[str, Any]] = []
+    for index, raw in enumerate(candidates_for_route("secondary")):
+        model = str(raw.get("model") or "").strip()
+        if not model:
+            continue
+        candidate = _normalized_candidate(
+            raw,
+            index,
+            active_model=model,
+            active_base_url=str(raw.get("base_url") or DEFAULT_OPENAI_BASE_URL),
+            active_api_key=str(raw.get("api_key") or ""),
+        )
+        candidate["profile_id"] = str(raw.get("profile_id") or raw.get("id") or "")
+        candidate["max_concurrency"] = int(raw.get("max_concurrency") or 0)
+        candidate["route_role"] = "secondary"
+        result.append(candidate)
+    return _inherit_sibling_keys(result)
 
 
 def _resolve_vision_candidates() -> list[dict[str, Any]]:
@@ -801,15 +792,17 @@ def _resolve_vision_candidates() -> list[dict[str, Any]]:
     push startup past Electron's boot timeout. When no vision model is
     configured this degrades to the primary chain alone, so a vision-capable
     primary still works. Same per-entry key semantics as the primary list."""
-    active_model = str(os.environ.get("OPENAI_MODEL", "deepseek-chat") or "").strip() or "deepseek-chat"
-    active_base_url = str(os.environ.get("OPENAI_BASE_URL", DEFAULT_OPENAI_BASE_URL) or "").strip() or DEFAULT_OPENAI_BASE_URL
-    active_api_key = strip_wrapping_quotes(str(os.environ.get("OPENAI_API_KEY", "") or "").strip())
-
     candidates: list[dict[str, Any]] = []
     seen: set[tuple[str, str, str, str, str]] = set()
 
-    for index, raw in enumerate(get_vision_models() or []):
-        candidate = _normalized_candidate(raw, index, active_model=active_model, active_base_url=active_base_url, active_api_key=active_api_key)
+    for index, raw in enumerate(candidates_for_route("vision")):
+        candidate = _normalized_candidate(
+            raw,
+            index,
+            active_model=str(raw.get("model") or ""),
+            active_base_url=str(raw.get("base_url") or DEFAULT_OPENAI_BASE_URL),
+            active_api_key=str(raw.get("api_key") or ""),
+        )
         if candidate.get("vision_capable") is False:
             continue
         key = (
@@ -2107,26 +2100,18 @@ async def call_llm(
 
     # ctx_limit check for secondary model: if messages exceed the limit,
     # skip secondary and fall through to primary candidates
-    if resolved and resolved[0].get("id") == "secondary":
+    if resolved and resolved[0].get("route_role") == "secondary":
         ctx_limit = int(resolved[0].get("ctx_limit") or 0)
         if ctx_limit > 0:
             total_tokens = sum(_message_token_estimate(m) for m in messages)
             if total_tokens > ctx_limit:
                 resolved = resolved[1:] if len(resolved) > 1 else _resolve_llm_candidates()
 
-    # Skip candidates that recently failed (dead endpoint / bad key). If that
-    # would leave nothing, ignore cooldowns and try the full list anyway.
-    available = [
-        c for c in resolved
-        if not _candidate_cooling(_candidate_key(c, session_id))
-    ]
-    skipped_cooling = [
-        c for c in resolved
-        if _candidate_cooling(_candidate_key(c, session_id))
-    ]
-    if not available:
-        available = resolved
-        skipped_cooling = []
+    # Always evaluate candidates in the saved primary-route order.  Cooldown
+    # state remains useful for diagnostics, but skipping a configured entry on
+    # a later call makes actual model use diverge from the Settings ordering.
+    available = resolved
+    skipped_cooling: list[dict[str, Any]] = []
     failed_this_call: list[str] = []
     rejected_primary = next(
         (
@@ -2144,9 +2129,8 @@ async def call_llm(
         int(candidate.get("_configured_rank") or 0) == 0
         for candidate in [*skipped_cooling, *context_rejected]
     ):
-        # Cooldown means the configured primary recently failed; a context
-        # rejection means it cannot accept this request.  Both are genuine
-        # fallback reasons. Merely promoting a last-success affinity is not.
+        # A context rejection means the configured primary cannot accept this
+        # request and is therefore a genuine fallback reason.
         failed_primary_model = str(configured_primary.get("model") or "")
     fallback_notice_sent = False
     attempt_number = 0
@@ -2160,7 +2144,7 @@ async def call_llm(
         last_error: Exception | None = None
 
         for candidate_position, candidate in enumerate(available):
-            is_secondary = candidate.get("id") == "secondary"
+            is_secondary = candidate.get("route_role") == "secondary"
             max_conc = int(candidate.get("max_concurrency") or 0)
             provider = str(candidate.get("provider") or "openai_compatible")
             adapter = str(candidate.get("adapter") or provider).strip().lower()

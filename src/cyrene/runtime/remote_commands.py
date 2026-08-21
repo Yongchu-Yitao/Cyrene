@@ -577,9 +577,12 @@ def _update_remote_model_settings(raw: Any) -> None:
         save_codex_model(codex)
     save_model_source(source)
     active_models = [codex] if source == "codex" and codex is not None else custom
-    save_models(active_models)
     save_vision_models(vision)
     save_secondary_model(secondary or {})
+    # Normalize once, after every legacy-shaped input has been updated.  This
+    # compatibility call persists only the model graph and cannot create a
+    # second primary-order setting.
+    save_models(active_models)
 
     primary = active_models[0]
     env_updates = {"OPENAI_MODEL": str(primary["model"])}

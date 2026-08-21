@@ -81,10 +81,6 @@ _REMOVED_ENV_KEYS = frozenset({"MAX_TOOL_ROUNDS"})
 # state while preserving any other explicitly supplied value.
 _LEGACY_MAX_TOOL_OUTPUT_CHARS = "12000"
 
-_DEFAULT_MODELS: list[dict[str, str]] = []
-
-_DEFAULT_VISION_MODELS: list[dict[str, str]] = []
-
 _DEFAULT_ENABLED_TOOLS: dict[str, bool] = {
     "Read": True, "Write": True, "Edit": True, "Glob": True, "Grep": True,
     "Bash": True, "StartShell": True, "SendShell": True, "ListShells": True,
@@ -105,12 +101,6 @@ _DEFAULT_SETTINGS: dict = {
     "spawn_policy": "conservative",
     "heartbeat_interval": 1800,
     "write_permission_mode": "workspace_only",
-    "models": _DEFAULT_MODELS,
-    "custom_models": _DEFAULT_MODELS,
-    "codex_model": {},
-    "model_source": "",
-    "vision_models": _DEFAULT_VISION_MODELS,
-    "secondary_model": {"model": "", "name": "", "api_key": "", "base_url": "", "ctx_limit": 0, "max_concurrency": 0},
     # Adapter definitions live in code; user-owned connections, model profiles,
     # and their independent role routes live in this encrypted document.
     "model_configuration": {
@@ -718,6 +708,7 @@ def update_settings_atomic(
     updates: dict[str, object],
     *,
     expected_revision: int | None = None,
+    remove_setting_keys: frozenset[str] = frozenset(),
 ) -> tuple[int, dict[str, object]]:
     """Persist one detached settings patch with compare-and-swap semantics.
 
@@ -728,6 +719,7 @@ def update_settings_atomic(
     revision, _before, settings = patch_settings_atomic(
         updates,
         expected_revision=expected_revision,
+        remove_setting_keys=remove_setting_keys,
     )
     return revision, settings
 
@@ -737,6 +729,7 @@ def update_settings_and_env_atomic(
     env_updates: dict[str, str],
     *,
     expected_revision: int | None = None,
+    remove_setting_keys: frozenset[str] = frozenset(),
 ) -> tuple[int, dict[str, object]]:
     """Atomically replace settings and their legacy environment mirrors.
 
@@ -768,6 +761,8 @@ def update_settings_and_env_atomic(
             if not isinstance(key, str) or not key:
                 raise ValueError("settings patch keys must be non-empty strings")
             candidate_settings[key] = deepcopy(value)
+        for key in remove_setting_keys:
+            candidate_settings.pop(key, None)
         candidate.setdefault("env", {}).update(normalized_env)
         next_revision = actual_revision + 1
         candidate["settings_revision"] = next_revision
@@ -789,6 +784,7 @@ def patch_settings_atomic(
     expected_revision: int | None = None,
     merge_mapping_keys: frozenset[str] = frozenset(),
     merge_mapping_delete_none_keys: frozenset[str] = frozenset(),
+    remove_setting_keys: frozenset[str] = frozenset(),
 ) -> tuple[int, dict[str, object], dict[str, object]]:
     """Apply a patch and return the exact in-lock before/after values.
 
@@ -825,6 +821,8 @@ def patch_settings_atomic(
                         merged[nested_key] = nested_value
                 next_value = merged
             candidate_settings[key] = next_value
+        for key in remove_setting_keys:
+            candidate_settings.pop(key, None)
         next_revision = actual_revision + 1
         candidate["settings_revision"] = next_revision
         _persist(candidate)
@@ -876,21 +874,27 @@ def reset_all() -> None:
 
 
 def get_models() -> list[dict]:
-    return get_setting("models", _DEFAULT_MODELS)
+    """Return the primary route as a compatibility view, never stored state."""
+    from cyrene.runtime.model_configuration import candidates_for_route
+
+    return candidates_for_route("primary")
 
 
 def save_models(models: list[dict]) -> None:
-    set_setting("models", list(models))
+    """Accept a legacy flat write and immediately normalize it into the graph."""
+    from cyrene.runtime.model_configuration import save_primary_model_candidates
+
+    save_primary_model_candidates(list(models))
 
 
 def get_custom_models() -> list[dict]:
-    saved = get_setting("custom_models", None)
-    if isinstance(saved, list) and saved:
-        return saved
+    """Return non-Codex chat profiles derived from the model graph."""
+    from cyrene.runtime.model_configuration import selectable_model_candidates
+
     return [
-        model
-        for model in (get_models() or [])
-        if str(model.get("provider") or "openai_compatible") != "codex_oauth"
+        model for model in selectable_model_candidates()
+        if str(model.get("provider") or "") != "codex_oauth"
+        and "chat" in (model.get("capabilities") or [])
     ]
 
 
@@ -899,13 +903,12 @@ def save_custom_models(models: list[dict]) -> None:
 
 
 def get_codex_model() -> dict:
-    saved = get_setting("codex_model", None)
-    if isinstance(saved, dict) and saved:
-        return saved
+    from cyrene.runtime.model_configuration import selectable_model_candidates
+
     return next(
         (
             model
-            for model in (get_models() or [])
+            for model in selectable_model_candidates()
             if str(model.get("provider") or "") == "codex_oauth"
         ),
         {},
@@ -917,9 +920,6 @@ def save_codex_model(model: dict) -> None:
 
 
 def get_model_source() -> str:
-    saved = str(get_setting("model_source", "") or "").strip().lower()
-    if saved in {"custom", "codex"}:
-        return saved
     models = get_models() or []
     return (
         "codex"
@@ -936,7 +936,9 @@ def save_model_source(source: str) -> None:
 
 
 def get_vision_models() -> list[dict]:
-    return get_setting("vision_models", _DEFAULT_VISION_MODELS)
+    from cyrene.runtime.model_configuration import candidates_for_route
+
+    return candidates_for_route("vision")
 
 
 def _parse_ctx_str(ctx_str: str) -> int:
@@ -1129,9 +1131,13 @@ def effective_ctx_limit_for_model(
 
 
 def get_current_ctx_limit() -> int:
-    """Context window for the active model, with fallback only if unset."""
+    """Context window for the first profile in the primary route."""
+    models = get_models() or []
+    if not models:
+        return 0
     return effective_ctx_limit_for_model(
-        get_env("OPENAI_MODEL", "deepseek-v4-flash")
+        str(models[0].get("profile_id") or models[0].get("model") or ""),
+        models,
     )
 
 
@@ -1140,7 +1146,10 @@ def save_vision_models(models: list[dict]) -> None:
 
 
 def get_secondary_model() -> dict:
-    return get_setting("secondary_model", {"model": "", "name": "", "api_key": "", "base_url": "", "ctx_limit": 0, "max_concurrency": 0})
+    from cyrene.runtime.model_configuration import candidates_for_route
+
+    candidates = candidates_for_route("secondary")
+    return dict(candidates[0]) if candidates else {}
 
 
 def save_secondary_model(model: dict) -> None:

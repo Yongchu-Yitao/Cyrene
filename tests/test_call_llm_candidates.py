@@ -1,9 +1,8 @@
-"""Candidate resilience in cyrene.call_llm — cooldown, connect timeout, resolution.
+"""Candidate resilience in cyrene.call_llm — fallback, timeout, resolution.
 
 Regression tests for the 2026-06-11 latency incident: a dead LAN endpoint in the
-model list added ~120s to every LLM call. Also pins the candidate model: the
-model list is the sole ordered source of truth, with no phantom env candidate
-prepended (that duplicate 401'd on every call when its key was empty).
+model list added ~120s to every LLM call.  The normalized primary route is the
+sole ordered source of truth, with no phantom env candidate prepended.
 """
 import json
 import socket
@@ -405,7 +404,7 @@ def stub_server_factory():
         server.server_close()
 
 
-async def test_failed_candidate_gets_cooldown_and_is_skipped(stub_server_factory, monkeypatch):
+async def test_failed_candidate_is_retried_in_configured_order_on_next_call(stub_server_factory, monkeypatch):
     monkeypatch.setattr(cl, "_SERVER_ERROR_RETRY_BASE_DELAY_SECONDS", 0)
     bad_server, bad = stub_server_factory(500)
     good_server, good = stub_server_factory(200)
@@ -422,14 +421,15 @@ async def test_failed_candidate_gets_cooldown_and_is_skipped(stub_server_factory
     assert cl._candidate_cooling(cl._candidate_key(bad))
     assert not cl._candidate_cooling(cl._candidate_key(good))
 
-    # Second call: the failed candidate is cooling and must be skipped entirely.
+    # A later call starts from the configured primary again.  Diagnostic
+    # cooldown state must not silently rewrite the UI-defined model order.
     msg = await cl.call_llm(
         [{"role": "user", "content": "hi"}],
         candidates=[bad, good],
         publish_events=False, record_usage=False,
     )
     assert msg.get("content") == "pong"
-    assert bad_server.hits == expected_bad_hits  # unchanged — skipped
+    assert bad_server.hits == expected_bad_hits * 2
     assert good_server.hits == 2
 
 
@@ -684,7 +684,7 @@ def test_non_official_provider_keeps_generic_endpoint_order():
 
 
 def test_openai_adapter_normalizes_unversioned_deepseek(monkeypatch):
-    monkeypatch.setattr(cl, "get_models", lambda: [{
+    monkeypatch.setattr(cl, "candidates_for_route", lambda _route: [{
         "id": "deepseek-chat",
         "model": "deepseek-v4-flash",
         "provider": "openai",
@@ -790,13 +790,12 @@ async def test_streaming_http_error_body_is_preserved_for_diagnostics():
     assert 'body={"error":{"message":"reasoning_content is required"}}' in detail
 
 
-def test_resolve_llm_candidates_is_the_model_list_in_order(monkeypatch):
-    """The model list is the sole source of truth — no phantom env candidate
-    prepended, entries kept in their configured order."""
+def test_resolve_llm_candidates_is_the_primary_route_in_order(monkeypatch):
+    """The primary route is the sole source of truth and keeps UI order."""
     monkeypatch.setenv("OPENAI_MODEL", "deepseek-v4-flash")
     monkeypatch.setenv("OPENAI_BASE_URL", "https://api.deepseek.com/v1")
     monkeypatch.setenv("OPENAI_API_KEY", "env-key")
-    monkeypatch.setattr(cl, "get_models", lambda: [
+    monkeypatch.setattr(cl, "candidates_for_route", lambda _route: [
         {"id": "primary", "model": "deepseek-v4-flash", "api_key": "key-flash", "base_url": "https://api.deepseek.com"},
         {"id": "lan", "model": "qwen", "api_key": "", "base_url": "http://10.0.0.1:1234/v1"},
     ])
@@ -810,7 +809,7 @@ def test_resolve_llm_candidates_allows_keyless_local_endpoint(monkeypatch):
     not force-fed an unrelated provider's key."""
     monkeypatch.setenv("OPENAI_BASE_URL", "https://api.deepseek.com/v1")
     monkeypatch.setenv("OPENAI_API_KEY", "env-key")
-    monkeypatch.setattr(cl, "get_models", lambda: [
+    monkeypatch.setattr(cl, "candidates_for_route", lambda _route: [
         {"id": "lan", "model": "qwen", "api_key": "", "base_url": "http://10.0.0.1:1234/v1"},
         {"id": "cloud", "model": "deepseek", "api_key": "cloud-key", "base_url": "https://api.deepseek.com"},
     ])
@@ -819,12 +818,50 @@ def test_resolve_llm_candidates_allows_keyless_local_endpoint(monkeypatch):
     assert lan["api_key"] == ""  # different endpoint → no inheritance
 
 
+def test_graph_candidate_never_inherits_legacy_env_credentials(monkeypatch):
+    monkeypatch.setenv("OPENAI_BASE_URL", "https://provider.example/v1")
+    monkeypatch.setenv("OPENAI_API_KEY", "stale-env-secret")
+    monkeypatch.setattr(cl, "candidates_for_route", lambda _route: [{
+        "id": "configured",
+        "profile_id": "configured",
+        "connection_id": "configured-service",
+        "model": "configured-model",
+        "api_key": "",
+        "base_url": "https://provider.example/v1",
+    }])
+
+    assert cl._resolve_llm_candidates()[0]["api_key"] == ""
+
+
+def test_distinct_services_on_same_endpoint_do_not_share_credentials(monkeypatch):
+    monkeypatch.setattr(cl, "candidates_for_route", lambda _route: [
+        {
+            "id": "first",
+            "connection_id": "service-a",
+            "model": "model-a",
+            "api_key": "service-a-secret",
+            "base_url": "https://provider.example/v1",
+        },
+        {
+            "id": "second",
+            "connection_id": "service-b",
+            "model": "model-b",
+            "api_key": "",
+            "base_url": "https://provider.example/v1",
+        },
+    ])
+
+    candidates = cl._resolve_llm_candidates()
+    assert candidates[0]["api_key"] == "service-a-secret"
+    assert candidates[1]["api_key"] == ""
+
+
 def test_resolve_llm_candidates_shares_key_within_same_endpoint(monkeypatch):
     """Same-endpoint candidates may inherit the first filled-in key, so the
     user need not paste it onto every row."""
     monkeypatch.setenv("OPENAI_BASE_URL", "https://api.deepseek.com/v1")
     monkeypatch.delenv("OPENAI_API_KEY", raising=False)
-    monkeypatch.setattr(cl, "get_models", lambda: [
+    monkeypatch.setattr(cl, "candidates_for_route", lambda _route: [
         {"id": "a", "model": "deepseek-v4-flash", "api_key": "shared", "base_url": "https://api.deepseek.com"},
         {"id": "b", "model": "deepseek-reasoner", "api_key": "", "base_url": "https://api.deepseek.com/v1"},
     ])
@@ -838,16 +875,14 @@ def test_resolve_llm_candidates_empty_when_list_empty(monkeypatch):
     monkeypatch.setenv("OPENAI_MODEL", "deepseek-v4-flash")
     monkeypatch.setenv("OPENAI_BASE_URL", "https://api.deepseek.com/v1")
     monkeypatch.setenv("OPENAI_API_KEY", "env-key")
-    monkeypatch.setattr(cl, "get_models", lambda: [])
+    monkeypatch.setattr(cl, "candidates_for_route", lambda _route: [])
     assert cl._resolve_llm_candidates() == []
 
 
 async def test_call_llm_returns_empty_when_no_model_configured(monkeypatch):
     """No candidates → historical empty-string contract (callers degrade), but
     the phantom env candidate that used to 401 is gone."""
-    monkeypatch.setattr(cl, "get_models", lambda: [])
-    monkeypatch.setattr(cl, "get_vision_models", lambda: [])
-    monkeypatch.setattr(cl, "get_secondary_model", lambda: {"model": ""})
+    monkeypatch.setattr(cl, "candidates_for_route", lambda _route: [])
     result = await cl.call_llm(
         [{"role": "user", "content": "hi"}],
         publish_events=False, record_usage=False,
@@ -883,9 +918,9 @@ def test_last_success_affinity_is_scoped_to_conversation_and_exact_endpoint():
     new_chat_order = cl._prioritize_last_success(candidates, "primary", "chat_new")
     unscoped_order = cl._prioritize_last_success(candidates, "primary")
 
-    assert [item["id"] for item in ordered] == ["backup", "main"]
-    assert ordered[0]["endpoints"][0].endswith("chat/completions-alt")
-    assert ordered[0]["_configured_rank"] == 1
+    assert [item["id"] for item in ordered] == ["main", "backup"]
+    assert ordered[1]["endpoints"][0].endswith("chat/completions-alt")
+    assert ordered[1]["_configured_rank"] == 1
     assert [item["id"] for item in new_chat_order] == ["main", "backup"]
     assert [item["id"] for item in unscoped_order] == ["main", "backup"]
 
@@ -1367,7 +1402,7 @@ async def test_all_candidates_over_context_raise_without_cooldown(monkeypatch):
     assert not cl._candidate_cooling(cl._candidate_key(candidates[0]))
 
 
-async def test_last_success_affinity_does_not_publish_fallback_ui_event(monkeypatch):
+async def test_last_success_affinity_does_not_override_primary_route(monkeypatch):
     published = []
 
     class FakeResponse:
@@ -1381,7 +1416,7 @@ async def test_last_success_affinity_does_not_publish_fallback_ui_event(monkeypa
 
     class FakeClient:
         async def post(self, endpoint, json=None, headers=None):
-            assert json["model"] == "backup"
+            assert json["model"] == "main"
             return FakeResponse()
 
     async def capture(**kwargs):
@@ -1414,7 +1449,7 @@ async def test_last_success_affinity_does_not_publish_fallback_ui_event(monkeypa
     )
 
     assert result["content"] == "direct"
-    assert result["model"] == "backup"
+    assert result["model"] == "main"
     assert published == []
 
 

@@ -1171,11 +1171,11 @@ async def test_call_llm_falls_back_to_next_model_candidate(monkeypatch):
 
     monkeypatch.setattr(
         cll,
-        "get_models",
-        lambda: [
+        "candidates_for_route",
+        lambda route: [
             {"id": "candidate-1", "model": "primary-model", "base_url": "https://primary.example/v1", "api_key": "primary-key"},
             {"id": "candidate-2", "model": "fallback-model", "base_url": "https://fallback.example/v1", "api_key": "fallback-key"},
-        ],
+        ] if route == "primary" else [],
     )
     monkeypatch.setattr(cll.httpx, "AsyncClient", lambda *args, **kwargs: FakeClient())
     monkeypatch.setenv("OPENAI_MODEL", "primary-model")
@@ -1247,11 +1247,11 @@ async def test_call_llm_stream_falls_back_to_next_model_candidate(monkeypatch):
 
     monkeypatch.setattr(
         cll,
-        "get_models",
-        lambda: [
+        "candidates_for_route",
+        lambda route: [
             {"id": "candidate-1", "model": "primary-model", "base_url": "https://primary.example/v1", "api_key": "primary-key"},
             {"id": "candidate-2", "model": "fallback-model", "base_url": "https://fallback.example/v1", "api_key": "fallback-key"},
-        ],
+        ] if route == "primary" else [],
     )
     monkeypatch.setattr(cll.httpx, "AsyncClient", lambda *args, **kwargs: FakeClient())
     monkeypatch.setenv("OPENAI_MODEL", "primary-model")
@@ -1440,13 +1440,14 @@ async def test_run_vision_chat_uses_vision_candidates_after_primary_failure(monk
 
     monkeypatch.setattr(
         cll,
-        "get_models",
-        lambda: [{"id": "candidate-1", "model": "primary-model", "base_url": "https://primary.example/v1", "api_key": "primary-key"}],
-    )
-    monkeypatch.setattr(
-        cll,
-        "get_vision_models",
-        lambda: [{"id": "vision-1", "model": "vision-model", "base_url": "https://vision.example/v1", "api_key": "vision-key"}],
+        "candidates_for_route",
+        lambda route: (
+            [{"id": "candidate-1", "model": "primary-model", "base_url": "https://primary.example/v1", "api_key": "primary-key"}]
+            if route == "primary"
+            else [{"id": "vision-1", "model": "vision-model", "base_url": "https://vision.example/v1", "api_key": "vision-key"}]
+            if route == "vision"
+            else []
+        ),
     )
     monkeypatch.setattr(cll.httpx, "AsyncClient", lambda *args, **kwargs: FakeClient())
     monkeypatch.setenv("OPENAI_MODEL", "primary-model")
@@ -6304,10 +6305,10 @@ def test_resolve_secondary_candidates_cross_provider_no_key_not_inherited(monkey
     from cyrene import call_llm
     from cyrene.call_llm import DEFAULT_OPENAI_BASE_URL
 
-    monkeypatch.setattr(call_llm, "get_secondary_model", lambda: {
+    monkeypatch.setattr(call_llm, "candidates_for_route", lambda route: [{
         "model": "secondary-model",
         "base_url": "https://secondary-provider.example/v1",
-    })
+    }] if route == "secondary" else [])
     monkeypatch.setenv("OPENAI_API_KEY", "primary-secret")
     monkeypatch.setenv("OPENAI_BASE_URL", DEFAULT_OPENAI_BASE_URL)
 
@@ -6316,21 +6317,21 @@ def test_resolve_secondary_candidates_cross_provider_no_key_not_inherited(monkey
     assert candidates[0]["api_key"] == ""
 
 
-def test_resolve_secondary_candidates_same_provider_inherits_key(monkeypatch):
-    """Secondary model on same base_url without api_key inherits OPENAI_API_KEY."""
+def test_resolve_secondary_candidates_do_not_inherit_env_key(monkeypatch):
+    """Service credentials come from the profile graph, never legacy env."""
     from cyrene import call_llm
     from cyrene.call_llm import DEFAULT_OPENAI_BASE_URL
 
-    monkeypatch.setattr(call_llm, "get_secondary_model", lambda: {
+    monkeypatch.setattr(call_llm, "candidates_for_route", lambda route: [{
         "model": "secondary-model",
         "base_url": DEFAULT_OPENAI_BASE_URL,
-    })
+    }] if route == "secondary" else [])
     monkeypatch.setenv("OPENAI_API_KEY", "primary-secret")
     monkeypatch.setenv("OPENAI_BASE_URL", DEFAULT_OPENAI_BASE_URL)
 
     candidates = call_llm._resolve_secondary_candidates()
     assert candidates
-    assert candidates[0]["api_key"] == "primary-secret"
+    assert candidates[0]["api_key"] == ""
 
 
 def test_resolve_vision_candidates_cross_provider_no_key_not_inherited(monkeypatch):
@@ -6338,10 +6339,9 @@ def test_resolve_vision_candidates_cross_provider_no_key_not_inherited(monkeypat
     from cyrene import call_llm
     from cyrene.call_llm import DEFAULT_OPENAI_BASE_URL
 
-    monkeypatch.setattr(call_llm, "get_models", lambda: [])
-    monkeypatch.setattr(call_llm, "get_vision_models", lambda: [
+    monkeypatch.setattr(call_llm, "candidates_for_route", lambda route: [
         {"model": "vision-model", "base_url": "https://vision-provider.example/v1"},
-    ])
+    ] if route == "vision" else [])
     monkeypatch.setenv("OPENAI_API_KEY", "primary-secret")
     monkeypatch.setenv("OPENAI_BASE_URL", DEFAULT_OPENAI_BASE_URL)
     monkeypatch.setenv("OPENAI_MODEL", "primary-model")
