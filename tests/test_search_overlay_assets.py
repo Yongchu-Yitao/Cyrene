@@ -14,7 +14,7 @@ def test_search_overlay_styles_are_owned_and_loaded_by_shared_search():
         encoding="utf-8"
     )
 
-    assert 'href="shared/search/overlay.css?v=0.7.12"' in index
+    assert 'href="shared/search/overlay.css?v=0.7.13"' in index
     for selector in (
         ".search-overlay {",
         ".search-overlay-panel {",
@@ -35,7 +35,7 @@ def test_built_search_overlay_assets_match_the_frontend_sources():
     normalized_built_index = re.sub(
         r'<script>window\.CyreneIconAssets=Object\.freeze\(.*?\);</script>',
         "<!-- CYRENE_ICON_ASSETS -->",
-        built_index.replace(revision, "0.7.12"),
+        built_index.replace(revision, "0.7.13"),
     )
     assert normalized_built_index == source_index
     assert (STATIC_APP / "shared" / "search" / "overlay.css").read_bytes() == (

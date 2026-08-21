@@ -5,6 +5,23 @@
 This English edition preserves the release history of the Chinese changelog.
 The Chinese edition remains the most detailed record for older releases.
 
+## [0.7.13] - 2026-08-22
+
+`0.7.13` brings together every feature and interface change since `0.7.12`, led by faster long conversations, large workspaces, and continuous Agent runs, together with improved terminal continuation, model connectivity, and message presentation. This section contains user-visible capabilities and experience changes only.
+
+### Features and interface changes
+
+- Chat lists, chat details, message appends, and run-state saves are substantially faster. Projects with long histories or many conversations feel smoother when opening, sending, reconnecting, and completing replies.
+- Context reporting, token estimation, and automatic compaction checks are faster for long conversations while preserving the existing counts, context boundaries, and compaction behavior.
+- Conversation, project, behavior-learning, and skill context is prepared more efficiently before each Agent turn, with one consistent conversation scope used throughout the turn.
+- File-change tracking in large workspaces reuses the latest snapshot and refreshes only files that actually changed. Created, edited, replaced, moved, and deleted files still appear accurately in conversation changes.
+- Conversation history and file-change history are more reliable under frequent saves, long-running use, and app restarts, with faster lookup and recovery as history grows.
+- Reconnection and event replay are more stable for very long streamed replies, while accumulated run history remains bounded to reduce slowdowns during extended use.
+- When a background terminal exits, the Agent receives a clear continuation notice in the original conversation and reads the latest terminal state before resuming. Terminal titles, notes, and project ownership are retained correctly.
+- Official DeepSeek and MiniMax connections consistently use the correct versioned endpoint. Initial setup, connection tests, model discovery, and real conversations now follow the same connection rules so an incorrect fallback cannot hide the real issue.
+- Image-preview bubbles in user messages keep a compact width and align correctly to the right instead of stretching across a wide message lane, while still adapting to narrow windows.
+- Workbench frontend and conversation services have been reorganized without changing the existing entry points or workflows for chats, tasks, split panes, search, PDF, voice, and Settings, providing a more stable foundation for future updates.
+
 ## [0.7.12] - 2026-08-21
 
 `0.7.12` brings together every feature and interface change since `0.7.11`, led by shared persistent terminals, a unified Work rail and mixed board, global browser and download management, and more reliable task, schedule, and split-pane workflows. This section contains user-visible capabilities and experience changes only.
