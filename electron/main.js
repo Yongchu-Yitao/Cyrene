@@ -5406,9 +5406,10 @@ function restartPythonBackend() {
   quickChatWindowReady = null;
   try {
     if (isWindows) {
-      spawn('taskkill', ['/pid', String(proc.pid), '/f'], {
-        stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true,
+      const taskkill = spawn('taskkill', ['/pid', String(proc.pid), '/f'], {
+        stdio: 'ignore', windowsHide: true,
       });
+      taskkill.unref();
     } else {
       proc.kill('SIGTERM');
       setTimeout(() => {
@@ -5432,10 +5433,11 @@ function killPython() {
       // On Windows, SIGTERM doesn't exist — terminate the backend directly.
       // The Terminal Daemon is a detached descendant by design. Killing the
       // whole tree here would destroy PTYs when the Electron window closes.
-      spawn('taskkill', ['/pid', String(proc.pid), '/f'], {
-        stdio: ['ignore', 'pipe', 'pipe'],
+      const taskkill = spawn('taskkill', ['/pid', String(proc.pid), '/f'], {
+        stdio: 'ignore',
         windowsHide: true,
       });
+      taskkill.unref();
     } else {
       proc.kill('SIGTERM');
       // Graceful shutdown: wait up to 5s, then force-kill

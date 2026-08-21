@@ -97,6 +97,16 @@ def test_windows_release_installs_and_runs_the_built_nsis_package():
     assert "CYRENE_DESKTOP_SMOKE_RESULT" in smoke
 
 
+def test_windows_backend_termination_does_not_hold_electron_open():
+    main = (ROOT / "electron" / "main.js").read_text(encoding="utf-8")
+    taskkill_calls = main.split("spawn('taskkill'")[1:]
+
+    assert len(taskkill_calls) == 2
+    assert all("stdio: 'ignore'" in call[:220] for call in taskkill_calls)
+    assert all("'pipe'" not in call[:220] for call in taskkill_calls)
+    assert main.count("taskkill.unref();") == 2
+
+
 def test_frozen_smoke_imports_numpy_native_extension():
     entrypoint = (ROOT / "build" / "run_cyrene.py").read_text(encoding="utf-8")
 
