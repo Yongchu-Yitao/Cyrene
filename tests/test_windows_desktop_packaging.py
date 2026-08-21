@@ -98,6 +98,11 @@ def test_windows_release_installs_and_runs_the_built_nsis_package():
     assert "SMOKE TEST FAILED|DESKTOP_SMOKE_TEST=failed" in smoke
     assert "WINDOWS_INSTALL_SMOKE_TEST=ok" in smoke
     assert "CYRENE_DESKTOP_SMOKE_RESULT" in smoke
+    assert "function Invoke-DesktopSmokeProcess" in smoke
+    assert "did not write its success result within $TimeoutSeconds seconds" in smoke
+    assert "Do not wait for the detached" in smoke
+    assert "-ResultPath $installedResultPath" in smoke
+    assert "-ResultPath $portableResultPath" in smoke
     captured_process = smoke.split("function Invoke-CapturedProcess", 1)[1].split(
         "function Assert-SmokeSucceeded", 1
     )[0]

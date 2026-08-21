@@ -72,6 +72,62 @@ function Invoke-CapturedProcess {
     }
 }
 
+function Invoke-DesktopSmokeProcess {
+    param(
+        [Parameter(Mandatory = $true)][string]$Path,
+        [Parameter(Mandatory = $true)][string[]]$Arguments,
+        [Parameter(Mandatory = $true)][string]$Label,
+        [Parameter(Mandatory = $true)][string]$ResultPath,
+        [int]$TimeoutSeconds = 180
+    )
+
+    $safeLabel = $Label -replace '[^a-zA-Z0-9_-]', '_'
+    $stdoutPath = Join-Path $runnerTemp "$safeLabel-stdout.log"
+    $stderrPath = Join-Path $runnerTemp "$safeLabel-stderr.log"
+    Remove-Item -Force -ErrorAction SilentlyContinue $stdoutPath, $stderrPath, $ResultPath
+    $env:CYRENE_DESKTOP_SMOKE_RESULT = $ResultPath
+
+    $process = Start-Process `
+        -FilePath $Path `
+        -ArgumentList $Arguments `
+        -PassThru `
+        -RedirectStandardOutput $stdoutPath `
+        -RedirectStandardError $stderrPath
+
+    $deadline = [DateTime]::UtcNow.AddSeconds($TimeoutSeconds)
+    while (-not (Test-Path $ResultPath) -and [DateTime]::UtcNow -lt $deadline) {
+        Start-Sleep -Milliseconds 250
+    }
+
+    if (-not (Test-Path $ResultPath)) {
+        & taskkill.exe /pid $process.Id /f /t 2>$null | Out-Null
+        $stdout = if (Test-Path $stdoutPath) { Get-Content -Raw $stdoutPath } else { "" }
+        $stderr = if (Test-Path $stderrPath) { Get-Content -Raw $stderrPath } else { "" }
+        $combined = ($stdout, $stderr) -join [Environment]::NewLine
+        if ($combined) { Write-Host $combined }
+        throw "$Label did not write its success result within $TimeoutSeconds seconds"
+    }
+
+    # The synchronous result file is written only after DOM, screenshot,
+    # semantic-tree, and interaction checks pass. Do not wait for the detached
+    # Terminal Daemon that intentionally survives the desktop process.
+    if (-not $process.HasExited) {
+        & taskkill.exe /pid $process.Id /f 2>$null | Out-Null
+        [void]$process.WaitForExit(30000)
+    }
+    $stdout = if (Test-Path $stdoutPath) { Get-Content -Raw $stdoutPath } else { "" }
+    $stderr = if (Test-Path $stderrPath) { Get-Content -Raw $stderrPath } else { "" }
+    $result = Get-Content -Raw $ResultPath
+    $combined = ($stdout, $stderr, $result) -join [Environment]::NewLine
+    if ($combined) { Write-Host $combined }
+    Remove-Item Env:CYRENE_DESKTOP_SMOKE_RESULT -ErrorAction SilentlyContinue
+
+    return @{
+        ExitCode = 0
+        Output = $combined
+    }
+}
+
 function Assert-SmokeSucceeded {
     param(
         [Parameter(Mandatory = $true)]$Result,
@@ -223,10 +279,12 @@ if ($installedSmoke.Output -notmatch '(?m)^numpy=') {
 $env:CYRENE_USER_DATA_DIR = Join-Path $smokeRoot "data"
 $env:CYRENE_CACHE_DIR = Join-Path $smokeRoot "cache"
 $env:CYRENE_TEMP_DIR = Join-Path $smokeRoot "tmp"
-$desktopSmoke = Invoke-CapturedProcess `
+$installedResultPath = Join-Path $smokeRoot "installed-desktop-result.log"
+$desktopSmoke = Invoke-DesktopSmokeProcess `
     -Path $installedApp `
     -Arguments @("--desktop-smoke-test") `
-    -Label "windows-$Arch-installed-desktop"
+    -Label "windows-$Arch-installed-desktop" `
+    -ResultPath $installedResultPath
 Assert-SmokeSucceeded `
     -Result $desktopSmoke `
     -SuccessMarker "DESKTOP_SMOKE_TEST=ok" `
@@ -252,22 +310,14 @@ $env:CYRENE_TEMP_DIR = Join-Path $smokeRoot "portable-tmp"
 $portableResultPath = Join-Path $smokeRoot "portable-desktop-result.log"
 Remove-Item -Force -ErrorAction SilentlyContinue $portableResultPath
 $env:CYRENE_DESKTOP_SMOKE_RESULT = $portableResultPath
-$portableDesktopSmoke = Invoke-CapturedProcess `
+$portableDesktopSmoke = Invoke-DesktopSmokeProcess `
     -Path $portableApp `
     -Arguments @("--desktop-smoke-test") `
-    -Label "windows-$Arch-portable-desktop"
-$portableDeadline = [DateTime]::UtcNow.AddSeconds(120)
-while (-not (Test-Path $portableResultPath) -and [DateTime]::UtcNow -lt $portableDeadline) {
-    Start-Sleep -Milliseconds 500
-}
-if (Test-Path $portableResultPath) {
-    $portableResult = Get-Content -Raw $portableResultPath
-    $portableDesktopSmoke.Output = ($portableDesktopSmoke.Output, $portableResult) -join [Environment]::NewLine
-}
+    -Label "windows-$Arch-portable-desktop" `
+    -ResultPath $portableResultPath
 Assert-SmokeSucceeded `
     -Result $portableDesktopSmoke `
     -SuccessMarker "DESKTOP_SMOKE_TEST=ok" `
     -Label "Portable Electron desktop smoke test"
-Remove-Item Env:CYRENE_DESKTOP_SMOKE_RESULT -ErrorAction SilentlyContinue
 
 Write-Host "WINDOWS_INSTALL_SMOKE_TEST=ok arch=$Arch installDir=$installDir portable=$portableApp"
