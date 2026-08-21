@@ -7726,8 +7726,9 @@ def test_workbench_execution_card_uses_collapsible_activity_summary():
         "function wbcTraceCollapsedSummary", 1
     )[0]
     mapped_icons = re.findall(r"return WBC_ICONS\.([A-Za-z0-9_]+)", icon_block)
-    assert len(mapped_icons) == 25
-    assert len(mapped_icons) == len(set(mapped_icons))
+    assert mapped_icons
+    assert 'if (kind === "terminalRead") return WBC_ICONS.code;' in icon_block
+    assert 'kind === "desktopRead" || kind === "cyrene" || kind === "cyreneRead"' in icon_block
     assert 'className="wbc-trace-entry-icon" aria-hidden="true">{WBC_ICONS.brain}' in source
     assert '{failed ? <span className="wbc-trace-entry-icon" aria-hidden="true">{wbcTraceActionIcon(entry)}</span> : null}' in source
     reasoning_icon_rule = styles.split(
@@ -7794,7 +7795,8 @@ def test_workbench_execution_card_uses_collapsible_activity_summary():
     assert "编辑了文件" in (root / "src" / "webui" / "frontend" / "workbench-i18n.jsx").read_text(encoding="utf-8")
     i18n = (root / "src" / "webui" / "frontend" / "workbench-i18n.jsx").read_text(encoding="utf-8")
     assert '"workbenchChat.traceAction.usedSkill": "使用了技能工具"' in i18n
-    assert '"workbenchChat.traceAction.usedTool": "使用了 {tool}"' in i18n
+    assert '"workbenchChat.traceAction.usedTool": "使用了{tool}"' in i18n
+    assert '"workbenchChat.traceAction.usedToolSpaced": "使用了 {tool}"' in i18n
     assert '"workbenchChat.traceAction.conjunction": "并"' in i18n
     assert '"workbenchChat.traceAction.executed"' not in i18n
 
@@ -7811,7 +7813,8 @@ def test_workbench_trace_summary_adds_a_verb_before_named_application_tools():
 const WBC_ICONS = new Proxy({{}}, {{ get: (_target, name) => String(name) }});
 const messages = {{
   "workbenchChat.traceAction.browsed": "操作了浏览器",
-  "workbenchChat.traceAction.usedTool": "使用了 {{tool}}",
+  "workbenchChat.traceAction.usedTool": "使用了{{tool}}",
+  "workbenchChat.traceAction.usedToolSpaced": "使用了 {{tool}}",
   "workbenchChat.traceAction.conjunction": "并",
   "workbenchChat.traceAction.listSeparator": "、",
   "toolName.browser_navigate": "浏览器导航",
@@ -7836,6 +7839,104 @@ process.stdout.write(summary.label);
     )
 
     assert completed.stdout == "操作了浏览器并使用了 Cyrene 应用工具"
+
+
+def test_workbench_trace_summary_uses_capability_ownership_before_name_heuristics():
+    root = Path(__file__).resolve().parent.parent
+    source = (root / "src" / "webui" / "frontend" / "workbench-chat.jsx").read_text(
+        encoding="utf-8"
+    )
+    helpers = "function wbcTraceNormalizeName(" + source.split(
+        "function wbcTraceNormalizeName(", 1
+    )[1].split("function wbcNormalizeReasoningText", 1)[0]
+    packs = (root / "src" / "cyrene" / "tooling" / "packs.py").read_text(encoding="utf-8")
+    bindings_block = packs.split("CAPABILITY_BINDINGS:", 1)[1].split(
+        "PACK_BY_WIRE_NAME", 1
+    )[0]
+    aliases = dict(re.findall(r'\("([a-z0-9_.]+)", "([A-Za-z0-9_]+)"\)', bindings_block))
+    i18n = (root / "src" / "webui" / "frontend" / "workbench-i18n.jsx").read_text(
+        encoding="utf-8"
+    )
+    assert len(aliases) >= 100
+    assert all(f'"{capability}": "{tool}"' in i18n for capability, tool in aliases.items())
+    messages = {
+        "workbenchChat.traceAction.desktop": "操作了桌面应用",
+        "workbenchChat.traceAction.desktopRead": "查看了桌面应用",
+        "workbenchChat.traceAction.cyrene": "操作了 Cyrene 应用",
+        "workbenchChat.traceAction.cyreneRead": "查看了 Cyrene 应用",
+        "workbenchChat.traceAction.systemRead": "查看了系统设置",
+        "workbenchChat.traceAction.task": "更新了任务和计划",
+        "workbenchChat.traceAction.terminalRead": "读取了终端",
+        "workbenchChat.traceAction.memory": "使用了记忆",
+        "workbenchChat.traceAction.usedSkill": "使用了技能工具",
+        "workbenchChat.traceAction.code": "处理了代码",
+        "workbenchChat.traceAction.codeRead": "分析了代码",
+        "workbenchChat.traceAction.delivery": "发送了内容",
+        "workbenchChat.traceAction.environment": "查看了运行环境",
+        "workbenchChat.traceAction.map": "更新了地图",
+        "workbenchChat.traceAction.remoteRead": "查看了远程设备",
+        "workbenchChat.traceAction.subagent": "协调了子 Agent",
+        "workbenchChat.traceAction.usedTool": "使用了{tool}",
+        "workbenchChat.traceAction.usedToolSpaced": "使用了 {tool}",
+        "toolName.code_tools": "代码工具",
+        "toolName.environment_tools": "环境工具",
+        "toolName.integration_tools": "集成工具",
+    }
+    cases = [
+        ("AppUIClick", "desktop", "操作了桌面应用"),
+        ("AppUISnapshot", "desktopRead", "查看了桌面应用"),
+        ("CyreneUIClick", "cyrene", "操作了 Cyrene 应用"),
+        ("CyreneUISnapshot", "cyreneRead", "查看了 Cyrene 应用"),
+        ("CyreneSettingsRead", "systemRead", "查看了系统设置"),
+        ("edit_task", "task", "更新了任务和计划"),
+        ("ReadShell", "terminalRead", "读取了终端"),
+        ("ReadChatGroupSessions", "memory", "使用了记忆"),
+        ("ReadSkillResource", "skill", "使用了技能工具"),
+        ("LintCode", "codeRead", "分析了代码"),
+        ("FormatCode", "code", "处理了代码"),
+        ("GetFileSymbols", "codeRead", "分析了代码"),
+        ("send_file", "delivery", "发送了内容"),
+        ("environment_tools", "tool", "使用了环境工具"),
+        ("pin_location", "map", "更新了地图"),
+        ("ListRemoteDevices", "remoteRead", "查看了远程设备"),
+        ("RemoteCyreneStatus", "remoteRead", "查看了远程设备"),
+        ("spawn_subagent", "subagent", "协调了子 Agent"),
+        ("code_tools", "tool", "使用了代码工具"),
+        ("integration_tools", "tool", "使用了集成工具"),
+    ]
+    script = f"""
+const aliases = {json.dumps(aliases, ensure_ascii=False)};
+const messages = {json.dumps(messages, ensure_ascii=False)};
+const window = {{ CyreneUI: {{ require: () => ({{ toolNameAliases: aliases }}) }} }};
+const WBC_ICONS = new Proxy({{}}, {{ get: (_target, name) => String(name) }});
+function wbcT(key, fallback, params) {{
+  let value = messages[key] || fallback || key;
+  Object.entries(params || {{}}).forEach(([name, replacement]) => {{
+    value = value.split("{{" + name + "}}").join(String(replacement));
+  }});
+  return value;
+}}
+eval({json.dumps(helpers)});
+const cases = {json.dumps(cases, ensure_ascii=False)};
+const results = cases.map(([tool, expectedKind, expectedLabel]) => ({{
+    tool,
+    expectedKind,
+    expectedLabel,
+    kind: wbcTraceActionKind({{ kind: "tool", text: tool }}),
+    label: wbcTraceActionLabel({{ kind: "tool", text: tool }})
+}}));
+const uncategorized = Object.entries(aliases).filter(([_capability, tool]) => !wbcTraceKnownToolKind(tool));
+process.stdout.write(JSON.stringify({{ results, uncategorized }}));
+"""
+    completed = subprocess.run(
+        ["node", "-e", script], check=True, capture_output=True, text=True
+    )
+    payload = json.loads(completed.stdout)
+    results = payload["results"]
+
+    assert payload["uncategorized"] == []
+    assert all(item["kind"] == item["expectedKind"] for item in results), results
+    assert all(item["label"] == item["expectedLabel"] for item in results), results
 
 
 def test_workbench_trace_timeline_removes_blank_lines_and_interleaves_tools():
