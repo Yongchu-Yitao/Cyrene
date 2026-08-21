@@ -6695,11 +6695,13 @@ async function runDesktopSemanticSmokeTest(window) {
   let tree = await waitForDesktopSmokeTree(
     uiInstanceId,
     (candidate) => candidate.surface && candidate.surface.kind === 'main'
-      && !!findDesktopSmokeNode(candidate.root, (node) => node.node_id === 'navigation_chat')
       && !!findDesktopSmokeNode(candidate.root, (node) => node.node_id === 'workspace_sidebar')
       && (
-        !!findDesktopSmokeNode(candidate.root, (node) => node.node_id === 'project_switcher')
-        || isDesktopOnboardingTree(candidate)
+        isDesktopOnboardingTree(candidate)
+        || (
+          !!findDesktopSmokeNode(candidate.root, (node) => node.node_id === 'navigation_work')
+          && !!findDesktopSmokeNode(candidate.root, (node) => node.node_id === 'project_switcher')
+        )
       ),
     'main project/navigation or onboarding tree',
   );
