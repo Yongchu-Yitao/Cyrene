@@ -100,8 +100,9 @@ def test_windows_release_installs_and_runs_the_built_nsis_package():
     assert "CYRENE_DESKTOP_SMOKE_RESULT" in smoke
     assert "function Invoke-DesktopSmokeProcess" in smoke
     assert "did not write its success result within $TimeoutSeconds seconds" in smoke
-    assert "Do not wait for the detached" in smoke
-    assert "Stop-Process -Id $process.Id -Force -ErrorAction SilentlyContinue" in smoke
+    assert "isolated smoke process tree" in smoke
+    assert "-FilePath taskkill.exe" in smoke
+    assert '@("/pid", [string]$process.Id, "/f", "/t")' in smoke
     assert "-ResultPath $installedResultPath" in smoke
     assert "-ResultPath $portableResultPath" in smoke
     captured_process = smoke.split("function Invoke-CapturedProcess", 1)[1].split(
@@ -117,6 +118,7 @@ def test_windows_release_installs_and_runs_the_built_nsis_package():
 
 def test_windows_backend_termination_does_not_hold_electron_open():
     main = (ROOT / "electron" / "main.js").read_text(encoding="utf-8")
+    assert "DESKTOP_SMOKE_TEST=awaiting_harness_cleanup" in main
     taskkill_calls = main.split("spawn('taskkill'")[1:]
 
     assert len(taskkill_calls) == 2

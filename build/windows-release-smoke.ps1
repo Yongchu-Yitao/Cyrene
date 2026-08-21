@@ -109,10 +109,17 @@ function Invoke-DesktopSmokeProcess {
     }
 
     # The synchronous result file is written only after DOM, screenshot,
-    # semantic-tree, and interaction checks pass. Do not wait for the detached
-    # Terminal Daemon that intentionally survives the desktop process.
+    # semantic-tree, and interaction checks pass. The Windows app deliberately
+    # remains alive here so the isolated smoke process tree can be stopped in
+    # one operation, including its backend and Terminal Daemon descendants.
     if (-not $process.HasExited) {
-        Stop-Process -Id $process.Id -Force -ErrorAction SilentlyContinue
+        $cleanup = Start-Process `
+            -FilePath taskkill.exe `
+            -ArgumentList @("/pid", [string]$process.Id, "/f", "/t") `
+            -Wait `
+            -PassThru `
+            -WindowStyle Hidden
+        $null = $cleanup.ExitCode
         [void]$process.WaitForExit(30000)
     }
     $stdout = if (Test-Path $stdoutPath) { Get-Content -Raw $stdoutPath } else { "" }
