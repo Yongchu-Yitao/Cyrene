@@ -112,7 +112,7 @@ function Invoke-DesktopSmokeProcess {
     # semantic-tree, and interaction checks pass. Do not wait for the detached
     # Terminal Daemon that intentionally survives the desktop process.
     if (-not $process.HasExited) {
-        & taskkill.exe /pid $process.Id /f 2>$null | Out-Null
+        Stop-Process -Id $process.Id -Force -ErrorAction SilentlyContinue
         [void]$process.WaitForExit(30000)
     }
     $stdout = if (Test-Path $stdoutPath) { Get-Content -Raw $stdoutPath } else { "" }
