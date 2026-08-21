@@ -1096,7 +1096,10 @@ def test_hidden_chat_sidebar_slightly_widens_and_centers_the_conversation_lane()
 
     compact_css = styles.split("@media (max-width: 980px) {", 1)[1].split("}", 3)
     assert any("--wbc-reclaimed-side-width: 0px;" in block for block in compact_css)
-    hidden_side_css = styles.split(".wbc-page.wbc-side-hidden > .wbc-side {", 1)[1].split("}", 1)[0]
+    hidden_side_css = styles.split(
+        ".wbc-page.wbc-side-hidden > :is(.wbc-side, .wbc-task-context-panel) {",
+        1,
+    )[1].split("}", 1)[0]
     assert "display: none;" not in hidden_side_css
     assert "opacity: 0;" in hidden_side_css
     assert "visibility: hidden;" in hidden_side_css
@@ -7298,7 +7301,7 @@ def test_workbench_keeps_one_persistent_module_dock_across_workspace_switches():
     assert "flex: 1 1 auto;" in shared_body_css
     assert "overflow-y: auto;" in shared_body_css
     assert 'className="workbench-integrated-rail-head workbench-integrated-rail-search-head"' in source
-    assert 'className={"workbench-task-list workbench-integrated-rail-body"' in source
+    assert 'className={"wbc-chat-list workbench-integrated-rail-body wbc-task-list"' in source
     assert "workbench-integrated-rail-head workbench-integrated-rail-search-head" in chat
     assert "wbc-chat-list workbench-integrated-rail-body" in chat
     assert "wb-lib-sidebar-head workbench-integrated-rail-head" in library

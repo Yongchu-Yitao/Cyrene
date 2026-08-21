@@ -645,7 +645,49 @@ def read_project_bundle(
             legacy_path=legacy_path,
         )
         conn.commit()
-        value = shell if lightweight else full
+        if lightweight:
+            # List payloads keep exactly one complete task: the current one.
+            # The UI can resume that workspace immediately while every sibling
+            # remains a compact project-index summary.
+            value = _plain(shell)
+            active_project_id = str(value.get("activeProjectId") or "")
+            active_session_id = str(value.get("activeSessionId") or "")
+            if active_project_id and active_session_id:
+                full_project = next(
+                    (
+                        project
+                        for project in full.get("projects") or []
+                        if isinstance(project, dict)
+                        and str(project.get("id") or "") == active_project_id
+                    ),
+                    None,
+                )
+                full_session = next(
+                    (
+                        session
+                        for session in (full_project or {}).get("sessions") or []
+                        if isinstance(session, dict)
+                        and str(session.get("id") or "") == active_session_id
+                    ),
+                    None,
+                )
+                if full_session is not None:
+                    for project in value.get("projects") or []:
+                        if (
+                            not isinstance(project, dict)
+                            or str(project.get("id") or "") != active_project_id
+                        ):
+                            continue
+                        project["sessions"] = [
+                            _plain(full_session)
+                            if isinstance(session, dict)
+                            and str(session.get("id") or "") == active_session_id
+                            else session
+                            for session in project.get("sessions") or []
+                        ]
+                        break
+        else:
+            value = full
         return _tracked(value, "projects")
     except Exception:
         conn.rollback()
