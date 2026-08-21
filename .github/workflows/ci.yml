@@ -68,6 +68,7 @@ jobs:
           PYTHONFAULTHANDLER: "1"
         run: |
           gdb --batch --return-child-result \
+            -ex "handle SIGPIPE nostop noprint pass" \
             -ex run \
             -ex "thread apply all bt" \
             --args .venv/bin/python -m pytest -q \
