@@ -633,6 +633,7 @@ def test_chat_run_outcome_projection_is_persisted_for_list_and_topbar(monkeypatc
         }]
     }
     written = []
+    monkeypatch.setattr(chat_mod, "_STORE_DB_PATH", "")
     monkeypatch.setattr(chat_mod, "_read_chats_store", lambda: payload)
     monkeypatch.setattr(chat_mod, "_write_chats_store", lambda value: written.append(value))
 

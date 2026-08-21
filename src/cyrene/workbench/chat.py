@@ -2377,9 +2377,9 @@ def _aggregate_usage(messages: list[dict[str, Any]]) -> dict[str, int]:
 # ---------------------------------------------------------------------------
 
 def _session_state_messages(session_id: str) -> list[dict[str, Any]]:
-    from cyrene.agent.session import _load_session_state
+    from cyrene.agent.session import load_session_state
 
-    data = _load_session_state(session_id)
+    data = load_session_state(session_id)
     if isinstance(data, dict) and isinstance(data.get("messages"), list):
         return data["messages"]
     return []

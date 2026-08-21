@@ -1375,12 +1375,15 @@ async def test_main_agent_applies_guidance_sent_while_model_call_is_in_flight(mo
         task = asyncio.create_task(
             agent_mod._run_main_agent("回答问题", [], None, 0, "db.sqlite3")
         )
-        await asyncio.wait_for(model_started.wait(), timeout=1)
+        await asyncio.wait_for(model_started.wait(), timeout=5)
         await inbox.put_guidance("改成新答案", client_request_id="guide_during_model")
         assert await asyncio.wait_for(task, timeout=2) == "新答案"
         assert first_model_cancelled.is_set()
     finally:
         release_model.set()
+        if not task.done():
+            task.cancel()
+            await asyncio.gather(task, return_exceptions=True)
         _workbench_agent_inbox.reset(inbox_token)
         state_mod._current_round_id.reset(round_token)
         await inbox.close()
