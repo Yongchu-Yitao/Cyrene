@@ -95,6 +95,13 @@ def test_windows_release_installs_and_runs_the_built_nsis_package():
     assert "SMOKE TEST FAILED|DESKTOP_SMOKE_TEST=failed" in smoke
     assert "WINDOWS_INSTALL_SMOKE_TEST=ok" in smoke
     assert "CYRENE_DESKTOP_SMOKE_RESULT" in smoke
+    captured_process = smoke.split("function Invoke-CapturedProcess", 1)[1].split(
+        "function Assert-SmokeSucceeded", 1
+    )[0]
+    assert "Start-Process" in captured_process
+    assert "\n        -Wait `" not in captured_process
+    assert "$process.WaitForExit($TimeoutSeconds * 1000)" in captured_process
+    assert "timed out after $TimeoutSeconds seconds" in captured_process
 
 
 def test_windows_backend_termination_does_not_hold_electron_open():

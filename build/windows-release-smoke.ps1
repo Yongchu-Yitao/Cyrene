@@ -23,7 +23,8 @@ function Invoke-CapturedProcess {
     param(
         [Parameter(Mandatory = $true)][string]$Path,
         [Parameter(Mandatory = $true)][string[]]$Arguments,
-        [Parameter(Mandatory = $true)][string]$Label
+        [Parameter(Mandatory = $true)][string]$Label,
+        [int]$TimeoutSeconds = 180
     )
 
     $safeLabel = $Label -replace '[^a-zA-Z0-9_-]', '_'
@@ -34,10 +35,20 @@ function Invoke-CapturedProcess {
     $process = Start-Process `
         -FilePath $Path `
         -ArgumentList $Arguments `
-        -Wait `
         -PassThru `
         -RedirectStandardOutput $stdoutPath `
         -RedirectStandardError $stderrPath
+
+    # Start-Process -Wait waits for the entire Windows descendant tree. Cyrene's
+    # Terminal Daemon is intentionally detached and survives the Electron app,
+    # so tree waiting would never finish after a successful desktop smoke test.
+    # WaitForExit targets only the process we launched and still gives every
+    # package check a deterministic upper bound.
+    if (-not $process.WaitForExit($TimeoutSeconds * 1000)) {
+        & taskkill.exe /pid $process.Id /f /t 2>$null | Out-Null
+        throw "$Label timed out after $TimeoutSeconds seconds"
+    }
+    $process.WaitForExit()
 
     $stdout = if (Test-Path $stdoutPath) { Get-Content -Raw $stdoutPath } else { "" }
     $stderr = if (Test-Path $stderrPath) { Get-Content -Raw $stderrPath } else { "" }
