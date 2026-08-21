@@ -50,7 +50,7 @@ The Chinese edition remains the most detailed record for older releases.
 
 - Model Services now includes an OpenAI Codex OAuth sign-in connection automatically. Upgrading keeps existing models, routes, and any Codex connection already in place without adding a duplicate.
 - DeepSeek connections honor the saved address first and can fall back to the more reliable versioned address when needed, with older configurations migrated automatically. Model connection tests use the selected model's actual connection path.
-- Conversation execution summaries now describe terminal, code, task, desktop app, Cyrene app, and remote-device activity more clearly, distinguish inspection from changes, and keep natural spacing for other named tools.
+- Conversation execution summaries now give application tools a clear action phrase, such as “Used Cyrene application tools,” matching the wording used for reading, search, and browser activity.
 - Older workspaces upgrade more reliably: an interrupted or failed migration no longer leaves a half-finished state, a later launch can recover or retry safely, and user-owned files and folders with matching names remain untouched.
 - Once an update package is downloaded and verified, the About page progress reliably reaches 100% instead of appearing slightly incomplete because of a late final progress event.
 - Files that cannot be previewed inside Cyrene now explain that they can still be opened with a compatible application, replacing a dead-end unsupported state.
