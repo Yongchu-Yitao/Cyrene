@@ -210,7 +210,19 @@ def pytest_runtest_call(item):
     """
     yield
 
+    # pytest-asyncio 0.26+ gives collector-scoped event-loop fixtures dynamic
+    # names instead of exposing them consistently as ``event_loop``.  Locate
+    # the fixture by value so teardown still runs across supported versions.
     loop = item.funcargs.get("event_loop")
+    if loop is None:
+        loop = next(
+            (
+                value
+                for value in item.funcargs.values()
+                if isinstance(value, asyncio.AbstractEventLoop)
+            ),
+            None,
+        )
     if loop is None:
         return
     if loop.is_closed() or loop.is_running():
