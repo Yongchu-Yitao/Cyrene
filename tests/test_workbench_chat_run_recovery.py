@@ -273,7 +273,8 @@ async def test_chat_detail_load_does_not_block_other_event_loop_work(monkeypatch
 
     import httpx
     from fastapi import FastAPI
-    from route.workbench import chat as chat_routes
+    from cyrene.workbench import chat as chat_service
+    from route.workbench.chat import register_workbench_chat_routes
     from cyrene.workbench.chat_runs import ChatRunManager
 
     started = threading.Event()
@@ -292,12 +293,12 @@ async def test_chat_detail_load_does_not_block_other_event_loop_work(monkeypatch
             }]
         }
 
-    monkeypatch.setattr(chat_routes, "_read_chats_store", locked_read)
+    monkeypatch.setattr(chat_service, "_read_chats_store", locked_read)
     monkeypatch.setattr(
-        chat_routes, "_CHAT_RUN_MANAGER", ChatRunManager(retention_seconds=0)
+        chat_service, "_CHAT_RUN_MANAGER", ChatRunManager(retention_seconds=0)
     )
     app = FastAPI()
-    chat_routes.register_workbench_chat_routes(app, bot=None, db_path="")
+    register_workbench_chat_routes(app, bot=None, db_path="")
     transport = httpx.ASGITransport(app=app)
 
     async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:

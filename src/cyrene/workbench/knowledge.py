@@ -104,6 +104,11 @@ async def _ensure_kb_db(workspace_id: str | None) -> str:
     return db_path
 
 
+async def ensure_kb_db(workspace_id: str | None) -> str:
+    """Public workspace knowledge-store initialization seam."""
+    return await _ensure_kb_db(workspace_id)
+
+
 def _related_value_tokens(value: Any) -> set[str]:
     """Return stable exact-match tokens for a file path, URL, id, or name."""
     raw = unquote(str(value or "").strip())

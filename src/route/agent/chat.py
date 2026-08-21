@@ -447,20 +447,20 @@ def register_chat_routes(router: APIRouter, bot: Any, db_path: str) -> None:
         workbench_run = None
         if session_id:
             try:
-                from route.workbench.chat import _CHAT_RUN_MANAGER
+                from cyrene.workbench.chat_service import get_chat_run_manager
 
-                workbench_run = _CHAT_RUN_MANAGER.get(session_id)
+                workbench_run = get_chat_run_manager().get(session_id)
             except Exception:
                 logger.exception("Failed to resolve workbench chat run for %s", session_id)
         interrupted = interrupt_active_run(session_id=session_id)
         if session_id:
             try:
-                from route.workbench.chat import (
-                    _CHAT_RUN_MANAGER,
-                    _settle_chat_running_status,
+                from cyrene.workbench.chat_service import (
+                    get_chat_run_manager,
+                    settle_chat_running_status,
                 )
 
-                interrupted = _CHAT_RUN_MANAGER.interrupt(session_id) or interrupted
+                interrupted = get_chat_run_manager().interrupt(session_id) or interrupted
                 if workbench_run is not None and not workbench_run.done.is_set():
                     try:
                         await asyncio.wait_for(
@@ -481,7 +481,7 @@ def register_chat_routes(router: APIRouter, bot: Any, db_path: str) -> None:
                 # chat record can still say "running". The frontend waits for
                 # this response before detaching its stream, so the subsequent
                 # re-sync cannot race an unfinished running -> idle write.
-                await asyncio.to_thread(_settle_chat_running_status, session_id)
+                await asyncio.to_thread(settle_chat_running_status, session_id)
             except Exception:
                 logger.exception("Failed to interrupt workbench chat run for %s", session_id)
         return {"ok": True, "interrupted": interrupted}

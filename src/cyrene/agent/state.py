@@ -314,6 +314,11 @@ def _session_state_file(session_id: str = "") -> Path:
         return ctx.state_file
     return STATE_FILE
 
+
+def session_state_file(session_id: str = "") -> Path:
+    """Public storage-path seam for application services outside agent state."""
+    return _session_state_file(session_id)
+
 # ---------------------------------------------------------------------------
 # ContextVars — per-request state
 # ---------------------------------------------------------------------------

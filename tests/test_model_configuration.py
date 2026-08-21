@@ -1,6 +1,7 @@
 """Focused coverage for plugin-oriented model configuration."""
 
 from __future__ import annotations
+from conftest import workbench_chat_source
 
 from pathlib import Path
 
@@ -596,7 +597,7 @@ def test_frontend_registers_split_pages_and_live_context_contract():
     root = Path(__file__).resolve().parents[1]
     settings = (root / "src/webui/frontend/settings-model-configuration.jsx").read_text()
     overlay = (root / "src/webui/frontend/settings-overlay.jsx").read_text()
-    chat = (root / "src/webui/frontend/workbench-chat.jsx").read_text()
+    chat = workbench_chat_source()
     i18n = (root / "src/webui/frontend/workbench-i18n.jsx").read_text()
     styles = (root / "src/webui/frontend/settings-model-configuration.css").read_text()
 

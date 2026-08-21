@@ -347,7 +347,7 @@ def test_rename_workbench_chat_persists_trimmed_title(client, search_env):
 def test_chat_group_metadata_endpoint_forwards_language_and_title_lock(
     client, search_env, monkeypatch,
 ):
-    from route.workbench import chat as chat_routes
+    from cyrene.workbench import chat as chat_routes
 
     captured = {}
 
@@ -356,7 +356,7 @@ def test_chat_group_metadata_endpoint_forwards_language_and_title_lock(
         captured["kwargs"] = kwargs
         return {"title": "", "summary": "浏览器操作相关对话", "lang": "zh"}
 
-    monkeypatch.setattr(chat_routes._service, "generate_chat_group_metadata", fake_generate)
+    monkeypatch.setattr(chat_routes, "generate_chat_group_metadata", fake_generate)
     response = client.post(
         "/api/workbench/chat-groups/metadata",
         json={
@@ -384,7 +384,7 @@ def test_chat_group_metadata_endpoint_forwards_language_and_title_lock(
 def test_chat_group_metadata_endpoint_persists_before_returning(
     client, search_env, monkeypatch,
 ):
-    from route.workbench import chat as chat_routes
+    from cyrene.workbench import chat as chat_routes
     from cyrene.workbench import chat_groups as chat_groups_service
 
     calls = []
@@ -414,7 +414,7 @@ def test_chat_group_metadata_endpoint_persists_before_returning(
         }]}
 
     monkeypatch.setattr(chat_groups_service, "get_group_metadata_context", fake_context)
-    monkeypatch.setattr(chat_routes._service, "generate_chat_group_metadata", fake_generate)
+    monkeypatch.setattr(chat_routes, "generate_chat_group_metadata", fake_generate)
     monkeypatch.setattr(chat_groups_service, "update_group_metadata", fake_update)
     response = client.post(
         "/api/workbench/chat-groups/metadata",
@@ -543,7 +543,7 @@ def test_compact_workbench_chat_returns_running_reason_as_promptable_result(
 
 
 def test_empty_legacy_live_session_is_not_listed(search_env, monkeypatch):
-    from route.workbench import chat as chat_mod
+    from cyrene.workbench import chat as chat_mod
 
     monkeypatch.setattr(
         search_env["routes_mod"],
@@ -1043,7 +1043,7 @@ def test_workbench_chat_persists_intermediate_messages_between_tool_cards(
     client, search_env, monkeypatch,
 ):
     from cyrene import agent
-    from route.workbench import chat as chat_mod
+    from cyrene.workbench import chat as chat_mod
 
     state_messages = [{"role": "user", "content": "old"}]
 

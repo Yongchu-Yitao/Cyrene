@@ -39,6 +39,48 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 
 _REAL_PIL_IMAGE = importlib.import_module("PIL.Image")
 
+_WORKBENCH_CHAT_SOURCE_FILES = (
+    "workbench-chat.jsx",
+    "features/chat/file-resources.jsx",
+    "features/chat/page.jsx",
+    "features/chat/rail.jsx",
+    "features/chat/conversation.jsx",
+    "features/chat/messages.jsx",
+    "features/chat/composer.jsx",
+    "features/chat/split-pane.jsx",
+    "features/chat/viewer.jsx",
+    "features/chat/context-panel.jsx",
+    "features/chat/index.jsx",
+)
+
+
+def workbench_chat_source() -> str:
+    """Return the explicit Chat module set for legacy characterization tests.
+
+    New behavior belongs in native JavaScript tests. This adapter keeps older
+    source-characterization tests useful while they are migrated incrementally.
+    """
+    frontend = Path(__file__).resolve().parent.parent / "src" / "webui" / "frontend"
+    return "\n".join(
+        (frontend / relative).read_text(encoding="utf-8")
+        for relative in _WORKBENCH_CHAT_SOURCE_FILES
+    )
+
+
+def workbench_chat_route_source() -> str:
+    """Return the split Workbench Chat route adapter source in route order."""
+    src = Path(__file__).resolve().parent.parent / "src" / "route" / "workbench"
+    files = (
+        src / "chat.py",
+        src / "chat_routes" / "context.py",
+        src / "chat_routes" / "shared.py",
+        src / "chat_routes" / "chats.py",
+        src / "chat_routes" / "runs.py",
+        src / "chat_routes" / "conversation_context.py",
+        src / "chat_routes" / "files.py",
+    )
+    return "\n".join(path.read_text(encoding="utf-8") for path in files)
+
 
 @pytest.fixture
 def real_pillow_modules():

@@ -79,7 +79,7 @@ function collect(dir) {
     const full = join(dir, entry)
     if (statSync(full).isDirectory()) {
       files.push(...collect(full))
-    } else if (entry.endsWith('.jsx')) {
+    } else if ((entry.endsWith('.jsx') || entry.endsWith('.mjs')) && !entry.includes('.test.')) {
       files.push(full)
     }
   }
@@ -168,41 +168,20 @@ async function build() {
   mkdirSync(OUT_DIR, { recursive: true })
   mkdirSync(OFFICE_OUT_DIR, { recursive: true })
 
-  for (const file of files) {
-    const srcDir = file.startsWith(WORKBENCH_DIR) ? WORKBENCH_DIR : APP_DIR
-    const rel = relative(srcDir, file).replace(/\.jsx$/, '.js')
-    const outFile = join(OUT_DIR, rel)
-    mkdirSync(dirname(outFile), { recursive: true })
-
-    if (rel === 'code/editor.js' || rel === 'terminal/entry.js') {
-      await esbuild.build({
-        entryPoints: [file],
-        outfile: outFile,
-        bundle: true,
-        format: 'iife',
-        platform: 'browser',
-        jsx: 'transform',
-        target: 'es2020',
-        logLevel: 'silent',
-      })
-    } else {
-      const src = readFileSync(file, 'utf8')
-      const result = await esbuild.transform(src, {
-        loader: 'jsx',
-        jsx: 'transform',
-      })
-
-      // Change top-level const to var to avoid redeclaration errors
-      // across separate <script> tags (Babel standalone isolated per file)
-      const code = result.code.replace(/^const /gm, 'var ')
-      writeFileSync(outFile, code)
-    }
-
-    console.log(`✓ ${relative(srcDir, file)} → compiled/${rel}`)
-  }
-
-  const total = files.length
-  console.log(`\nDone. ${total} JSX file${total > 1 ? 's' : ''} compiled to ${OUT_DIR}`)
+  await esbuild.build({
+    entryPoints: {
+      app: resolve(WORKBENCH_DIR, 'entry/app.jsx'),
+      pdf: resolve(WORKBENCH_DIR, 'entry/pdf.jsx'),
+    },
+    outdir: OUT_DIR,
+    bundle: true,
+    format: 'esm',
+    platform: 'browser',
+    jsx: 'transform',
+    target: 'es2020',
+    logLevel: 'silent',
+  })
+  console.log(`✓ ESM surfaces → compiled/app.js, compiled/pdf.js (${files.length} source modules)`)
 
   // Office renderers are large and needed only after a DOCX/PPTX is opened.
   // Keep them out of the startup scripts and expose one small global API per

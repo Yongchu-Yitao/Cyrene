@@ -5,6 +5,7 @@ from __future__ import annotations
 import ast
 from collections import Counter
 import json
+import re
 import subprocess
 import sys
 from pathlib import Path
@@ -13,6 +14,8 @@ import pytest
 
 
 SRC_ROOT = Path(__file__).resolve().parents[1] / "src"
+REPOSITORY_ROOT = SRC_ROOT.parent
+COMPLEXITY_BASELINE = REPOSITORY_ROOT / "project-notes" / "architecture-complexity-baseline.json"
 PRIVATE_IMPORT_BUDGET = {
     "cyrene.agent": 7,
     "cyrene.agent.agent": 1,
@@ -66,22 +69,229 @@ CYRENE_TOP_LEVEL_FILES = {
     "tools.py",
 }
 
+# Historical namespace-wide imports are migration debt. The set may shrink but
+# no new module may join it.
+IMPORT_STAR_ALLOWLIST = {
+    "src/route/agent/browser.py",
+    "src/route/agent/chat.py",
+    "src/route/agent/collaboration.py",
+    "src/route/agent/sessions.py",
+    "src/route/backup.py",
+    "src/route/learning.py",
+    "src/route/memory.py",
+    "src/route/notifications.py",
+    "src/route/search.py",
+    "src/route/settings/general.py",
+    "src/route/skills.py",
+    "src/route/system/events.py",
+    "src/route/system/logs.py",
+    "src/route/system/shell.py",
+    "src/route/system/updates.py",
+    "src/route/tasks.py",
+    "src/route/usage.py",
+    "src/route/workbench/projects.py",
+    "src/route/workbench/task_sessions.py",
+}
+
+# These three adapters predate explicit application-service seams. New dynamic
+# namespace injection is forbidden; each listed module must be migrated away.
+DYNAMIC_NAMESPACE_ALLOWLIST = {
+    "src/route/registry.py",
+    "src/route/workbench/goal_loop.py",
+    "src/route/workbench/knowledge.py",
+    "src/route/workbench/memory.py",
+}
+JAVASCRIPT_IMPORT_STAR_ALLOWLIST = {
+    "src/webui/build-jsx.mjs",
+}
+JAVASCRIPT_DYNAMIC_NAMESPACE_ALLOWLIST = {
+    "electron/agent-cursor.js",
+}
+
 
 def test_cyrene_top_level_matches_final_architecture() -> None:
     package_dir = SRC_ROOT / "cyrene"
-    directories = {
-        path.name
-        for path in package_dir.iterdir()
-        if path.is_dir() and path.name != "__pycache__"
-    }
-    files = {
-        path.name
-        for path in package_dir.iterdir()
-        if path.is_file() and path.suffix == ".py"
-    }
+    directories = {path.name for path in package_dir.iterdir() if path.is_dir() and path.name != "__pycache__"}
+    files = {path.name for path in package_dir.iterdir() if path.is_file() and path.suffix == ".py"}
 
     assert directories == CYRENE_TOP_LEVEL_DIRECTORIES
     assert files == CYRENE_TOP_LEVEL_FILES
+
+
+def _application_python_files() -> list[Path]:
+    return sorted(SRC_ROOT.rglob("*.py"))
+
+
+def _relative_source(path: Path) -> str:
+    return path.relative_to(REPOSITORY_ROOT).as_posix()
+
+
+def test_namespace_wide_import_budget_can_only_decrease() -> None:
+    current: set[str] = set()
+    for path in _application_python_files():
+        tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+        if any(isinstance(node, ast.ImportFrom) and any(alias.name == "*" for alias in node.names) for node in ast.walk(tree)):
+            current.add(_relative_source(path))
+
+    assert current <= IMPORT_STAR_ALLOWLIST
+
+
+def test_dynamic_namespace_injection_budget_can_only_decrease() -> None:
+    current: set[str] = set()
+    for path in _application_python_files():
+        tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+        namespace_aliases = {
+            target.id
+            for node in ast.walk(tree)
+            if isinstance(node, (ast.Assign, ast.AnnAssign))
+            for target in (
+                node.targets
+                if isinstance(node, ast.Assign)
+                else [node.target]
+            )
+            if isinstance(target, ast.Name)
+            and (
+                isinstance(node.value, ast.Attribute)
+                and node.value.attr in {"__globals__", "__dict__"}
+                or isinstance(node.value, ast.Call)
+                and isinstance(node.value.func, ast.Name)
+                and node.value.func.id == "globals"
+            )
+        }
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.Call):
+                continue
+            function = node.func
+            if not isinstance(function, ast.Attribute) or function.attr != "update":
+                continue
+            receiver = function.value
+            direct_globals = (
+                isinstance(receiver, ast.Call)
+                and isinstance(receiver.func, ast.Name)
+                and receiver.func.id == "globals"
+            )
+            private_namespace = (
+                isinstance(receiver, ast.Attribute)
+                and receiver.attr in {"__globals__", "__dict__"}
+            )
+            namespace_alias = (
+                isinstance(receiver, ast.Name)
+                and receiver.id in namespace_aliases
+            )
+            if direct_globals or private_namespace or namespace_alias:
+                current.add(_relative_source(path))
+
+    assert current <= DYNAMIC_NAMESPACE_ALLOWLIST
+
+
+def _application_javascript_files() -> list[Path]:
+    roots = (
+        REPOSITORY_ROOT / "electron",
+        REPOSITORY_ROOT / "src" / "webui" / "build",
+        REPOSITORY_ROOT / "src" / "webui" / "frontend",
+    )
+    files = [REPOSITORY_ROOT / "src" / "webui" / "build-jsx.mjs"]
+    for root in roots:
+        for suffix in ("*.js", "*.jsx", "*.mjs"):
+            files.extend(root.rglob(suffix))
+    return sorted(set(files))
+
+
+def test_javascript_namespace_import_budget_can_only_decrease() -> None:
+    current = {
+        _relative_source(path)
+        for path in _application_javascript_files()
+        if re.search(r"^\s*(?:import\s+\*\s+as|export\s+\*)", path.read_text(encoding="utf-8"), re.MULTILINE)
+    }
+
+    assert current <= JAVASCRIPT_IMPORT_STAR_ALLOWLIST
+
+
+def test_javascript_dynamic_namespace_budget_can_only_decrease() -> None:
+    dynamic_namespace = re.compile(
+        r"Object\.assign\(\s*(?:globalThis|window)\s*,"
+        r"|(?:globalThis|window)\s*\[[^\]\"']+\]\s*="
+    )
+    current = {
+        _relative_source(path)
+        for path in _application_javascript_files()
+        if dynamic_namespace.search(path.read_text(encoding="utf-8"))
+    }
+
+    assert current <= JAVASCRIPT_DYNAMIC_NAMESPACE_ALLOWLIST
+
+
+def _large_python_functions(threshold: int) -> dict[str, int]:
+    functions: dict[str, int] = {}
+
+    class Collector(ast.NodeVisitor):
+        def __init__(self, path: Path):
+            self.path = path
+            self.scope: list[str] = []
+
+        def _visit_function(
+            self,
+            node: ast.FunctionDef | ast.AsyncFunctionDef,
+        ) -> None:
+            self.scope.append(node.name)
+            lines = int(node.end_lineno or node.lineno) - node.lineno + 1
+            if lines >= threshold:
+                key = f"{_relative_source(self.path)}::{'.'.join(self.scope)}"
+                functions[key] = lines
+            self.generic_visit(node)
+            self.scope.pop()
+
+        visit_FunctionDef = _visit_function
+        visit_AsyncFunctionDef = _visit_function
+
+        def visit_ClassDef(self, node: ast.ClassDef) -> None:
+            self.scope.append(node.name)
+            self.generic_visit(node)
+            self.scope.pop()
+
+    for path in _application_python_files():
+        collector = Collector(path)
+        collector.visit(ast.parse(path.read_text(encoding="utf-8"), filename=str(path)))
+    return functions
+
+
+def test_large_python_function_budget_can_only_decrease() -> None:
+    baseline = json.loads(COMPLEXITY_BASELINE.read_text(encoding="utf-8"))
+    limits = baseline["large_functions"]
+    current = _large_python_functions(int(baseline["threshold_lines"]))
+
+    new_functions = sorted(set(current) - set(limits))
+    grown_functions = {name: {"current": lines, "budget": limits[name]} for name, lines in current.items() if name in limits and lines > int(limits[name])}
+
+    assert new_functions == []
+    assert grown_functions == {}
+
+
+def _private_cross_package_imports() -> set[str]:
+    imports: set[str] = set()
+    for path in _application_python_files():
+        relative = _relative_source(path)
+        parts = path.relative_to(SRC_ROOT).parts
+        importer_package = ".".join(parts[:2]) if len(parts) > 1 else parts[0]
+        tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.ImportFrom) or node.level or not node.module:
+                continue
+            imported_parts = node.module.split(".")
+            imported_package = ".".join(imported_parts[:2])
+            if importer_package == imported_package:
+                continue
+            for alias in node.names:
+                if alias.name.startswith("_") and alias.name != "__all__":
+                    imports.add(f"{relative}::{node.module}::{alias.name}")
+    return imports
+
+
+def test_private_cross_package_imports_can_only_decrease() -> None:
+    baseline = json.loads(COMPLEXITY_BASELINE.read_text(encoding="utf-8"))
+    allowed = set(baseline["private_cross_package_imports"])
+
+    assert _private_cross_package_imports() <= allowed
 
 
 @pytest.mark.parametrize(
@@ -90,12 +300,7 @@ def test_cyrene_top_level_matches_final_architecture() -> None:
 )
 def test_public_package_facades_are_lazy(package: str) -> None:
     """Importing a facade must not initialize its implementation graph."""
-    code = (
-        "import json, sys\n"
-        f"import {package}\n"
-        f"print(json.dumps(sorted(name for name in sys.modules "
-        f"if name == {package!r} or name.startswith({package!r} + '.'))))\n"
-    )
+    code = f"import json, sys\nimport {package}\nprint(json.dumps(sorted(name for name in sys.modules if name == {package!r} or name.startswith({package!r} + '.'))))\n"
 
     output = subprocess.check_output(
         [sys.executable, "-c", code],
@@ -152,11 +357,7 @@ def _static_import_graph() -> dict[str, set[str]]:
                 package = importer if is_package else importer.rpartition(".")[0]
                 package_parts = package.split(".") if package else []
                 parents = node.level - 1
-                anchor = (
-                    package_parts[: len(package_parts) - parents]
-                    if parents <= len(package_parts)
-                    else []
-                )
+                anchor = package_parts[: len(package_parts) - parents] if parents <= len(package_parts) else []
                 module_parts = (node.module or "").split(".") if node.module else []
                 base = ".".join(anchor + module_parts)
             else:
@@ -218,10 +419,7 @@ def test_source_tree_has_no_static_import_cycles() -> None:
 
 def test_tool_executor_import_does_not_require_registry_import_order() -> None:
     """Remote tool registration imports progress reporting during catalog init."""
-    code = (
-        "from cyrene.tooling.executor import _execute_tool, publish_tool_progress\n"
-        "print(_execute_tool.__name__, publish_tool_progress.__name__)\n"
-    )
+    code = "from cyrene.tooling.executor import _execute_tool, publish_tool_progress\nprint(_execute_tool.__name__, publish_tool_progress.__name__)\n"
 
     output = subprocess.check_output(
         [sys.executable, "-c", code],
@@ -239,17 +437,9 @@ def _private_import_counts() -> Counter[str]:
         for path in (SRC_ROOT / package).rglob("*.py"):
             tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
             for node in ast.walk(tree):
-                if (
-                    not isinstance(node, ast.ImportFrom)
-                    or node.level
-                    or not node.module
-                    or not node.module.startswith(("cyrene.", "webui."))
-                ):
+                if not isinstance(node, ast.ImportFrom) or node.level or not node.module or not node.module.startswith(("cyrene.", "webui.")):
                     continue
-                counts[node.module] += sum(
-                    alias.name.startswith("_") and alias.name != "__all__"
-                    for alias in node.names
-                )
+                counts[node.module] += sum(alias.name.startswith("_") and alias.name != "__all__" for alias in node.names)
     return +counts
 
 
@@ -260,8 +450,7 @@ def test_private_import_budget_can_only_decrease() -> None:
     over_budget = {
         source: {"current": count, "budget": PRIVATE_IMPORT_BUDGET[source]}
         for source, count in current.items()
-        if source in PRIVATE_IMPORT_BUDGET
-        and count > PRIVATE_IMPORT_BUDGET[source]
+        if source in PRIVATE_IMPORT_BUDGET and count > PRIVATE_IMPORT_BUDGET[source]
     }
 
     assert unexpected_sources == []
@@ -273,11 +462,7 @@ def test_agent_facade_private_export_budget_can_only_decrease() -> None:
     """Do not add more historical private names to the lazy agent facade."""
     from cyrene import agent
 
-    exported_names = [
-        name
-        for names in agent._EXPORT_GROUPS.values()
-        for name in names
-    ]
+    exported_names = [name for names in agent._EXPORT_GROUPS.values() for name in names]
     private_names = [name for name in exported_names if name.startswith("_")]
 
     assert len(private_names) <= 120

@@ -1,3 +1,5 @@
+import { DATA } from "../../platform/data-store.jsx"
+
 // Cyrene — global Workbench search overlay
 const { useState: useStateSr, useEffect: useEffectSr, useRef: useRefSr, useCallback: useCallbackSr, useMemo: useMemoSr } = React;
 

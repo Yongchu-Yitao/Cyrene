@@ -1,3 +1,4 @@
+from conftest import workbench_chat_source
 import io
 from pathlib import Path
 
@@ -444,7 +445,7 @@ def test_voice_routes_reuse_engine_adapters(monkeypatch):
 
 def test_voice_controls_follow_existing_chat_layout():
     root = Path(__file__).resolve().parents[1]
-    chat = (root / "src/webui/frontend/workbench-chat.jsx").read_text(encoding="utf-8")
+    chat = workbench_chat_source()
     settings = (root / "src/webui/frontend/settings-overlay.jsx").read_text(encoding="utf-8")
     shell = (root / "src/webui/frontend/workbench.jsx").read_text(encoding="utf-8")
     shortcuts = (root / "src/webui/frontend/workbench-shortcuts.jsx").read_text(encoding="utf-8")

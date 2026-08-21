@@ -1,3 +1,4 @@
+from conftest import workbench_chat_source
 import json
 import subprocess
 from pathlib import Path
@@ -7,9 +8,7 @@ ROOT = Path(__file__).resolve().parent.parent
 
 
 def test_selected_text_opens_independent_persistent_side_agent_tabs():
-    source = (
-        ROOT / "src/webui/frontend/workbench-chat.jsx"
-    ).read_text(encoding="utf-8")
+    source = workbench_chat_source()
     styles = (
         ROOT / "src/webui/frontend/workbench.css"
     ).read_text(encoding="utf-8")
@@ -48,9 +47,7 @@ def test_selected_text_opens_independent_persistent_side_agent_tabs():
 
 
 def test_selection_menu_uses_text_fragments_and_sits_below_their_center():
-    source = (
-        ROOT / "src/webui/frontend/workbench-chat.jsx"
-    ).read_text(encoding="utf-8")
+    source = workbench_chat_source()
     styles = (
         ROOT / "src/webui/frontend/workbench.css"
     ).read_text(encoding="utf-8")

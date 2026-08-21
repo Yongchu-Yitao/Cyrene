@@ -8204,3 +8204,5 @@ window.CyreneUI.i18n = window.CyreneUI.register("i18n", {
   use: useWorkbenchI18n,
   registerTranslations: registerWorkbenchTranslations,
 });
+
+export { useWorkbenchI18n }

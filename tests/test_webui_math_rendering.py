@@ -7,14 +7,17 @@ APP_DIR = ROOT / "src" / "webui" / "static" / "app"
 
 def test_math_assets_are_loaded_before_chat_renderers():
     html = (APP_DIR / "index.html").read_text(encoding="utf-8")
+    entry = (APP_DIR.parent.parent / "frontend" / "entry" / "app.jsx").read_text(
+        encoding="utf-8"
+    )
 
     assert 'href="katex/katex.min.css"' in html
     assert html.index('src="marked.min.js"') < html.index('src="katex/katex.min.js"')
     assert html.index('src="katex/katex.min.js"') < html.index(
-        'src="compiled/shared/markdown/math.js'
+        'src="compiled/app.js'
     )
-    assert html.index('src="compiled/shared/markdown/math.js') < html.index(
-        'src="compiled/workbench-chat.js'
+    assert entry.index('import "../shared/markdown/math.jsx"') < entry.index(
+        'import "../workbench-chat.jsx"'
     )
 
 

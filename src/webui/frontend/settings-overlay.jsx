@@ -1,3 +1,6 @@
+import { useWorkbenchI18n } from "./workbench-i18n.jsx"
+import { WbcVoice, wbcStartVoiceRecorder, wbcTranscribeVoiceBlob } from "./workbench-chat.jsx"
+
 // Workbench Settings Overlay — floating panel (like search)
 var {
   useState: useStateSt,

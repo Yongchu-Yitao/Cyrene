@@ -1,3 +1,4 @@
+from conftest import workbench_chat_source
 import json
 import subprocess
 from pathlib import Path
@@ -173,7 +174,7 @@ const viewer = {{
 
 
 def test_both_pdf_viewers_submit_automatic_context():
-    workbench = (ROOT / "src" / "webui" / "frontend" / "workbench-chat.jsx").read_text(encoding="utf-8")
+    workbench = workbench_chat_source()
     routes = (ROOT / "src" / "route" / "pdf.py").read_text(encoding="utf-8")
 
     assert "pdf.buildAnalysisInventory(containerRef.current, viewerRef.current, pageNum)" in workbench
@@ -185,8 +186,8 @@ def test_both_pdf_viewers_submit_automatic_context():
     assert "context: context" in workbench
     assert "pdfBridge.buildAnalysisInventory(container, viewer, currentPage)" in routes
     assert "pdfBridge.extractAnalysisContext(viewer, plan.page_numbers" in routes
-    assert 'src="/static/app/compiled/platform/runtime.js?v={asset_version}"' in routes
-    assert 'src="/static/app/compiled/shared/pdf/bridge.js?v={asset_version}"' in routes
+    assert 'type="module" src="/static/app/compiled/pdf.js?v={asset_version}"' in routes
+    assert '<script type="module">' in routes
     assert "pdfjs/pdf-setup.js" not in routes
     assert "fetch('/api/pdf/context-plan'" in routes
     assert "lang: language" in routes

@@ -469,9 +469,8 @@ def _PDF_VIEWER_HTML(pdf_url: str, pdf_name_raw: str, language: str = "en") -> s
 
 <script src="/static/app/pdfjs/pdf.min.js?v={asset_version}"></script>
 <script src="/static/app/pdfjs/pdf_viewer.js?v={asset_version}"></script>
-<script src="/static/app/compiled/platform/runtime.js?v={asset_version}"></script>
-<script src="/static/app/compiled/shared/pdf/bridge.js?v={asset_version}"></script>
-<script>
+<script type="module" src="/static/app/compiled/pdf.js?v={asset_version}"></script>
+<script type="module">
 (function() {{
   var pdfUrl = {js_url};
   var language = {js_language};

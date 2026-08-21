@@ -1,3 +1,4 @@
+from conftest import workbench_chat_source
 import json
 from datetime import datetime, timezone
 from unittest.mock import AsyncMock, MagicMock
@@ -409,14 +410,8 @@ async def test_proactive_rejects_edit_and_shell_file_mutations(monkeypatch):
 
 
 def test_workbench_frontend_handles_proactive_sse():
-    from pathlib import Path
 
-    source = (
-        Path(__file__).resolve().parent.parent
-        / "src"
-        / "webui" / "frontend"
-        / "workbench-chat.jsx"
-    ).read_text(encoding="utf-8")
+    source = workbench_chat_source()
 
     assert 'event.type === "workbench_proactive_message"' in source
     assert "messages.concat([proactiveMessage])" in source

@@ -1,4 +1,5 @@
 from __future__ import annotations
+from conftest import workbench_chat_source
 
 import asyncio
 import json
@@ -800,7 +801,7 @@ async def test_workbench_guidance_endpoint_queues_into_live_chat(monkeypatch, tm
     import httpx
     from fastapi import FastAPI
     from cyrene.workbench import chat as chat_service
-    from route.workbench import chat as chat_mod
+    from route.workbench.chat import register_workbench_chat_routes
     from cyrene.workbench.chat_runs import ChatRunManager
 
     db_path = tmp_path / "workbench.db"
@@ -822,10 +823,10 @@ async def test_workbench_guidance_endpoint_queues_into_live_chat(monkeypatch, tm
     manager = ChatRunManager(retention_seconds=0)
     monkeypatch.setattr(chat_service, "_CHATS_STORE", chats_path)
     monkeypatch.setattr(chat_service, "_CONFIGURED_CHATS_STORE", None)
-    monkeypatch.setattr(chat_mod, "_CHAT_RUN_MANAGER", manager)
+    monkeypatch.setattr(chat_service, "_CHAT_RUN_MANAGER", manager)
 
     app = FastAPI()
-    chat_mod.register_workbench_chat_routes(app, bot=None, db_path=str(db_path))
+    register_workbench_chat_routes(app, bot=None, db_path=str(db_path))
     release = asyncio.Event()
 
     async def runner(_run):
@@ -839,7 +840,7 @@ async def test_workbench_guidance_endpoint_queues_into_live_chat(monkeypatch, tm
         raise AssertionError("active inbox poll should use the in-memory run")
 
     with monkeypatch.context() as active_patch:
-        active_patch.setattr(chat_mod, "_read_chats_store", unexpected_store_read)
+        active_patch.setattr(chat_service, "_read_chats_store", unexpected_store_read)
         async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
             active_inbox = await client.get("/api/workbench/chats/chat_live/inbox")
     assert active_inbox.status_code == 200
@@ -895,7 +896,7 @@ async def test_workbench_guidance_endpoint_maps_sealed_admission_to_follow_up(
     import httpx
     from fastapi import FastAPI
     from cyrene.workbench import chat as chat_service
-    from route.workbench import chat as chat_mod
+    from route.workbench.chat import register_workbench_chat_routes
     from cyrene.workbench.chat_runs import ChatRunManager
 
     chats_path = tmp_path / "workbench_chats.json"
@@ -908,9 +909,9 @@ async def test_workbench_guidance_endpoint_maps_sealed_admission_to_follow_up(
     manager = ChatRunManager(retention_seconds=0)
     monkeypatch.setattr(chat_service, "_CHATS_STORE", chats_path)
     monkeypatch.setattr(chat_service, "_CONFIGURED_CHATS_STORE", None)
-    monkeypatch.setattr(chat_mod, "_CHAT_RUN_MANAGER", manager)
+    monkeypatch.setattr(chat_service, "_CHAT_RUN_MANAGER", manager)
     app = FastAPI()
-    chat_mod.register_workbench_chat_routes(
+    register_workbench_chat_routes(
         app, bot=None, db_path=str(tmp_path / "workbench.db")
     )
     release = asyncio.Event()
@@ -1511,9 +1512,8 @@ async def test_chat_run_interrupt_cleans_pending_inbox_with_run_id(tmp_path):
 
 
 def test_workbench_composer_switches_stop_button_to_guidance_when_typed():
-    from pathlib import Path
 
-    source = Path("src/webui/frontend/workbench-chat.jsx").read_text(encoding="utf-8")
+    source = workbench_chat_source()
     assert "var hasRuntimeGuidance = running && !!draft.trim();" in source
     assert "running && !hasRuntimeGuidance ? onInterrupt : submit" in source
     assert 'wbcT("workbenchChat.sendGuidance", "Send guidance")' in source
@@ -1564,9 +1564,7 @@ def test_interrupt_waits_for_workbench_run_cleanup_before_acknowledging():
     manager_source = Path("src/cyrene/workbench/chat_runs.py").read_text(
         encoding="utf-8"
     )
-    frontend_source = Path("src/webui/frontend/workbench-chat.jsx").read_text(
-        encoding="utf-8"
-    )
+    frontend_source = workbench_chat_source()
     interrupt_route = route_source.split(
         'async def api_interrupt_chat(session_id: str = ""):', 1
     )[1].split('@router.post("/api/chat/clear")', 1)[0]
@@ -1626,9 +1624,7 @@ def test_workbench_has_actionable_codex_failure_alerts():
     i18n = Path("src/webui/frontend/workbench-i18n.jsx").read_text(
         encoding="utf-8"
     )
-    chat = Path("src/webui/frontend/workbench-chat.jsx").read_text(
-        encoding="utf-8"
-    )
+    chat = workbench_chat_source()
     for key in (
         "phase.codexQuotaExhausted",
         "phase.codexAuthenticationExpired",

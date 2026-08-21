@@ -22,7 +22,6 @@ def control_env(monkeypatch, tmp_path):
     from cyrene.runtime import attachments as managed_attachments
     from cyrene.workbench import chat as chat_service
     from cyrene.workbench import runtime as workbench_runtime
-    from route.workbench import chat as chat_routes
 
     data_dir = tmp_path / "data"
     store_dir = tmp_path / "store"
@@ -56,7 +55,7 @@ def control_env(monkeypatch, tmp_path):
     chat_service._CHATS_STORE = data_dir / "workbench_chats.json"
     workbench_runtime._WORKBENCH_STORE = data_dir / "workbench_projects.json"
     manager = ChatRunManager(retention_seconds=30)
-    monkeypatch.setattr(chat_routes, "_CHAT_RUN_MANAGER", manager)
+    monkeypatch.setattr(chat_service, "_CHAT_RUN_MANAGER", manager)
 
     atomic_write_json(
         workbench_runtime._WORKBENCH_STORE,

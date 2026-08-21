@@ -1,4 +1,5 @@
 from __future__ import annotations
+from conftest import workbench_chat_source
 
 import asyncio
 import base64
@@ -285,7 +286,7 @@ async def test_terminal_daemon_shutdown_closes_views_and_recovers_shell(
 def test_terminal_frontend_exposes_recovery_controls_and_input_cursor() -> None:
     frontend = Path(__file__).parents[1] / "src/webui/frontend"
     source = (frontend / "terminal/entry.jsx").read_text(encoding="utf-8")
-    chat_source = (frontend / "workbench-chat.jsx").read_text(encoding="utf-8")
+    chat_source = workbench_chat_source()
     feedback = (frontend / "shared/feedback/service.jsx").read_text(encoding="utf-8")
     styles = (frontend / "workbench.css").read_text(encoding="utf-8")
     terminal_styles = (frontend / "terminal/terminal.css").read_text(encoding="utf-8")
@@ -371,10 +372,7 @@ def test_terminal_frontend_exposes_recovery_controls_and_input_cursor() -> None:
 
 
 def test_agent_terminal_show_uses_split_and_replaces_one_existing_pane() -> None:
-    source = (
-        Path(__file__).parents[1]
-        / "src/webui/frontend/workbench-chat.jsx"
-    ).read_text(encoding="utf-8")
+    source = workbench_chat_source()
 
     assert "function showAgentTerminal(terminalId, preferredSide)" in source
     assert "if (count <= 1)" in source

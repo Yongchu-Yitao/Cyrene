@@ -34,6 +34,22 @@ def _id() -> str:
     return str(uuid.uuid4())
 
 
+async def get_primary_attachment(db_path: str, item_id: str) -> dict[str, Any] | None:
+    """Return the preferred raw attachment for a library item."""
+    async with aiosqlite.connect(db_path, timeout=30) as db:
+        db.row_factory = aiosqlite.Row
+        cursor = await db.execute(
+            """SELECT a.*,d.path AS document_path,d.content_type AS document_content_type
+               FROM library_attachments a LEFT JOIN kb_documents d ON d.id=a.kb_document_id
+               WHERE a.item_id=? ORDER BY
+                 CASE WHEN lower(COALESCE(a.content_type,d.content_type,''))='application/pdf' THEN 0 ELSE 1 END,
+                 a.created_at LIMIT 1""",
+            (item_id,),
+        )
+        row = await cursor.fetchone()
+        return dict(row) if row else None
+
+
 def _loads(value: Any, default: Any) -> Any:
     if isinstance(value, type(default)):
         return value
@@ -1416,7 +1432,7 @@ def render_bibtex(item: dict[str, Any]) -> str:
 
 
 __all__ = [
-    "sync_knowledge_documents", "create_item", "get_item", "get_item_by_provider_key",
+    "sync_knowledge_documents", "create_item", "get_item", "get_item_by_provider_key", "get_primary_attachment",
     "update_item", "list_items",
     "delete_item", "delete_items", "restore_item", "create_collection", "upsert_collection", "list_collections",
     "update_collection", "delete_collection", "create_note", "update_note", "delete_note",

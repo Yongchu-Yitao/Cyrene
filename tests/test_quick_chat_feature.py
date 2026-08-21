@@ -1,3 +1,4 @@
+from conftest import workbench_chat_source
 import importlib
 import json
 import sys
@@ -74,7 +75,7 @@ def test_quick_chat_surface_is_loaded_without_uploading_the_screenshot():
     assert 'return surface === "quick-chat"' in app
     assert 'var QuickChatApp = window.CyreneUI.require("quickChat").App;' in app
     assert "<QuickChatApp />" in app
-    assert "compiled/workbench-quick-chat.js?v=0.7.12" in index
+    assert '<script type="module" src="compiled/app.js?v=0.7.12">' in index
     # The picker pulls writable targets from the dedicated endpoint.
     assert "/api/workbench/quick-chat/targets" in quick_chat
     assert "getLaunchContext" in quick_chat
@@ -91,9 +92,7 @@ def test_quick_chat_reuses_the_shared_composer_not_a_fork():
     quick_chat = (
         ROOT / "src" / "webui" / "frontend" / "workbench-quick-chat.jsx"
     ).read_text(encoding="utf-8")
-    chat = (
-        ROOT / "src" / "webui" / "frontend" / "workbench-chat.jsx"
-    ).read_text(encoding="utf-8")
+    chat = workbench_chat_source()
 
     # The composer is shared, not duplicated.
     assert "Composer: WbcComposer" in chat
@@ -113,9 +112,7 @@ def test_quick_chat_send_close_and_sync_contract():
     quick_chat = (
         ROOT / "src" / "webui" / "frontend" / "workbench-quick-chat.jsx"
     ).read_text(encoding="utf-8")
-    chat = (
-        ROOT / "src" / "webui" / "frontend" / "workbench-chat.jsx"
-    ).read_text(encoding="utf-8")
+    chat = workbench_chat_source()
     workbench = (
         ROOT / "src" / "webui" / "frontend" / "workbench.jsx"
     ).read_text(encoding="utf-8")

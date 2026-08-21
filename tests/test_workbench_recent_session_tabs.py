@@ -1,3 +1,4 @@
+from conftest import workbench_chat_source
 from pathlib import Path
 import json
 import subprocess
@@ -152,9 +153,7 @@ process.stdout.write(JSON.stringify({
 
 def test_recent_conversation_lists_stay_in_sync_with_chat_page():
     shell = (ROOT / "src/webui/frontend/workbench.jsx").read_text(encoding="utf-8")
-    chat = (ROOT / "src/webui/frontend/workbench-chat.jsx").read_text(
-        encoding="utf-8"
-    )
+    chat = workbench_chat_source()
 
     assert "reloadRecentChats(store.projects || [])" in shell
     assert "onChatsChange: function (projectId, chats)" in shell
@@ -197,9 +196,7 @@ def test_active_session_tab_stretches_with_an_accessible_transition():
 
 def test_session_tab_context_menu_supports_pinning_resources_and_removal():
     shell = (ROOT / "src/webui/frontend/workbench.jsx").read_text(encoding="utf-8")
-    chat = (ROOT / "src/webui/frontend/workbench-chat.jsx").read_text(
-        encoding="utf-8"
-    )
+    chat = workbench_chat_source()
     css = (ROOT / "src/webui/frontend/workbench.css").read_text(encoding="utf-8")
 
     assert "openSessionMenu(event, item, activity, false)" in shell
@@ -751,7 +748,7 @@ process.stdout.write(JSON.stringify({completed, sameRunLateEvent, mismatchedTool
 
 def test_chat_runtime_broadcasts_terminal_lifecycle_to_topbar():
     shell = (ROOT / "src/webui/frontend/workbench.jsx").read_text(encoding="utf-8")
-    chat = (ROOT / "src/webui/frontend/workbench-chat.jsx").read_text(encoding="utf-8")
+    chat = workbench_chat_source()
 
     assert 'new CustomEvent("cyrene:wbc-chat-lifecycle"' in chat
     assert 'publishLifecycle(chatId, "completed", event)' in chat
@@ -786,9 +783,7 @@ def test_tab_menus_use_cyrene_context_menu_surface():
 
 def test_browser_can_be_copied_to_another_conversation_by_drop():
     shell = (ROOT / "src/webui/frontend/workbench.jsx").read_text(encoding="utf-8")
-    chat = (ROOT / "src/webui/frontend/workbench-chat.jsx").read_text(
-        encoding="utf-8"
-    )
+    chat = workbench_chat_source()
 
     copy_helper = shell.split("function wbCopyBrowserToChat", 1)[1].split(
         "\nfunction WorkbenchSessionMenuFileName", 1
@@ -813,9 +808,7 @@ def test_browser_can_be_copied_to_another_conversation_by_drop():
 
 def test_conversation_drag_can_be_pinned_as_a_read_only_topbar_resource():
     shell = (ROOT / "src/webui/frontend/workbench.jsx").read_text(encoding="utf-8")
-    chat = (ROOT / "src/webui/frontend/workbench-chat.jsx").read_text(
-        encoding="utf-8"
-    )
+    chat = workbench_chat_source()
 
     assert 'transfer.effectAllowed = "copyMove"' in chat
     assert 'chatMime: WBC_CHAT_DRAG_MIME' in chat

@@ -1,3 +1,4 @@
+from conftest import workbench_chat_source
 import json
 import subprocess
 from pathlib import Path
@@ -7,9 +8,7 @@ ROOT = Path(__file__).resolve().parent.parent
 
 
 def test_browser_tab_picker_floats_in_a_native_view_without_obscuring_the_page():
-    chat = (ROOT / "src/webui/frontend/workbench-chat.jsx").read_text(
-        encoding="utf-8"
-    )
+    chat = workbench_chat_source()
     main = (ROOT / "electron/main.js").read_text(encoding="utf-8")
     preload = (ROOT / "electron/preload.js").read_text(encoding="utf-8")
     package = (ROOT / "electron/package.json").read_text(encoding="utf-8")
@@ -41,9 +40,7 @@ def test_browser_tab_picker_floats_in_a_native_view_without_obscuring_the_page()
 
 
 def test_native_browser_tab_picker_has_motion_and_reduced_motion_support():
-    chat = (ROOT / "src/webui/frontend/workbench-chat.jsx").read_text(
-        encoding="utf-8"
-    )
+    chat = workbench_chat_source()
     main = (ROOT / "electron/main.js").read_text(encoding="utf-8")
     picker_html = main.split("const BROWSER_TAB_PICKER_HTML", 1)[1].split(
         "function normalizeBrowserSessionId", 1
@@ -95,9 +92,7 @@ def test_native_browser_tab_picker_has_flat_chrome_without_visible_scrollbars():
 
 
 def test_native_browser_tab_picker_title_clicks_are_debounced_in_both_hosts():
-    chat = (ROOT / "src/webui/frontend/workbench-chat.jsx").read_text(
-        encoding="utf-8"
-    )
+    chat = workbench_chat_source()
     maximized = chat.split("function WbcBrowserFloatingSurface(", 1)[1].split(
         "function wbcNavigationPreview", 1
     )[0]
@@ -112,9 +107,7 @@ def test_native_browser_tab_picker_title_clicks_are_debounced_in_both_hosts():
 
 
 def test_native_browser_tab_picker_dismisses_and_syncs_actions_to_both_hosts():
-    chat = (ROOT / "src/webui/frontend/workbench-chat.jsx").read_text(
-        encoding="utf-8"
-    )
+    chat = workbench_chat_source()
     main = (ROOT / "electron/main.js").read_text(encoding="utf-8")
     picker_preload = (ROOT / "electron/browser-tab-picker-preload.js").read_text(
         encoding="utf-8"
@@ -144,9 +137,7 @@ def test_native_browser_tab_picker_dismisses_and_syncs_actions_to_both_hosts():
 
 
 def test_composer_tools_menu_closes_on_outside_pointerdown():
-    chat = (ROOT / "src/webui/frontend/workbench-chat.jsx").read_text(
-        encoding="utf-8"
-    )
+    chat = workbench_chat_source()
     composer = chat.split("function WbcComposer(", 1)[1].split(
         "// Context picker popup", 1
     )[0]
@@ -161,9 +152,7 @@ def test_composer_tools_menu_closes_on_outside_pointerdown():
 
 def test_existing_item_action_menus_are_available_from_right_click():
     shell = (ROOT / "src/webui/frontend/workbench.jsx").read_text(encoding="utf-8")
-    chat = (ROOT / "src/webui/frontend/workbench-chat.jsx").read_text(
-        encoding="utf-8"
-    )
+    chat = workbench_chat_source()
     library = (ROOT / "src/webui/frontend/workbench-library.jsx").read_text(
         encoding="utf-8"
     )
@@ -201,9 +190,7 @@ def test_existing_item_action_menus_are_available_from_right_click():
 
 
 def test_chat_page_blank_area_context_menu_reuses_quick_actions():
-    chat = (ROOT / "src/webui/frontend/workbench-chat.jsx").read_text(
-        encoding="utf-8"
-    )
+    chat = workbench_chat_source()
     css = (ROOT / "src/webui/frontend/workbench.css").read_text(encoding="utf-8")
 
     page = chat.split("function WorkbenchChatPage(", 1)[1].split(
@@ -248,9 +235,7 @@ def test_chat_page_blank_area_context_menu_reuses_quick_actions():
 
 
 def test_chat_quick_rename_uses_existing_dialog_instead_of_native_prompt():
-    chat = (ROOT / "src/webui/frontend/workbench-chat.jsx").read_text(
-        encoding="utf-8"
-    )
+    chat = workbench_chat_source()
     page = chat.split("function WorkbenchChatPage(", 1)[1].split(
         "function WbcRenameDialog(", 1
     )[0]
@@ -266,9 +251,7 @@ def test_chat_quick_rename_uses_existing_dialog_instead_of_native_prompt():
 
 
 def test_chat_card_menu_can_convert_the_selected_chat_to_a_task():
-    chat = (ROOT / "src/webui/frontend/workbench-chat.jsx").read_text(
-        encoding="utf-8"
-    )
+    chat = workbench_chat_source()
     page = chat.split("function WorkbenchChatPage(", 1)[1].split(
         "function WbcRenameDialog(", 1
     )[0]
@@ -284,9 +267,7 @@ def test_chat_card_menu_can_convert_the_selected_chat_to_a_task():
 
 
 def test_all_chat_action_menu_items_have_icons():
-    chat = (ROOT / "src/webui/frontend/workbench-chat.jsx").read_text(
-        encoding="utf-8"
-    )
+    chat = workbench_chat_source()
 
     rail = chat.split("function WbcRail(", 1)[1].split(
         "// Conversation main", 1
@@ -449,9 +430,7 @@ def test_memory_and_library_flyouts_expose_accessible_state():
 
 
 def test_chat_page_context_menu_preserves_native_browser_surface():
-    chat = (ROOT / "src/webui/frontend/workbench-chat.jsx").read_text(
-        encoding="utf-8"
-    )
+    chat = workbench_chat_source()
     opener = chat.split("function openPageContextMenu(event)", 1)[1].split(
         "function handleDelete()", 1
     )[0]
@@ -468,7 +447,7 @@ def test_chat_page_context_menu_preserves_native_browser_surface():
 
 def test_project_memory_editor_and_manual_chat_trigger_are_wired_end_to_end():
     shell = (ROOT / "src/webui/frontend/workbench.jsx").read_text(encoding="utf-8")
-    chat = (ROOT / "src/webui/frontend/workbench-chat.jsx").read_text(encoding="utf-8")
+    chat = workbench_chat_source()
     memory_page = (ROOT / "src/webui/frontend/workbench-memory.jsx").read_text(encoding="utf-8")
     css = (ROOT / "src/webui/frontend/workbench.css").read_text(encoding="utf-8")
     i18n = (ROOT / "src/webui/frontend/workbench-i18n.jsx").read_text(encoding="utf-8")
@@ -533,9 +512,7 @@ def test_project_memory_editor_and_manual_chat_trigger_are_wired_end_to_end():
 
 
 def test_chat_page_context_menu_placement_avoids_browser_window():
-    chat = (ROOT / "src/webui/frontend/workbench-chat.jsx").read_text(
-        encoding="utf-8"
-    )
+    chat = workbench_chat_source()
     helpers = "function wbcRectsOverlap(" + chat.split(
         "function wbcRectsOverlap(", 1
     )[1].split("function wbcCanOpenPageContextMenu", 1)[0]

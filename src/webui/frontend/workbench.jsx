@@ -1,3 +1,6 @@
+import { WbVoiceCommand, WbcVoice, wbcCreateComposerVoiceFeedback, wbcStartVoiceRecorder, wbcTranscribeVoiceBlob } from "./workbench-chat.jsx"
+import { WbcHoverMarquee } from "./features/chat/rail.jsx"
+
 // Four-column Project / Task Session workbench.
 var {
   useState: useWorkbenchState,
@@ -11090,3 +11093,5 @@ window.CyreneUI.shell = window.CyreneUI.register("shell", {
   App: WorkbenchApp,
   ColResizer: WbColResizer,
 });
+
+export { WorkbenchFileDropOverlay, useWorkbenchFileDrop }

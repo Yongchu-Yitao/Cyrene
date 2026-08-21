@@ -28,7 +28,6 @@ def fork_env(monkeypatch, tmp_path):
     from cyrene.runtime import io as io_utils
     from cyrene.workbench import chat as chat_service
     from cyrene.workbench import runtime as routes_mod
-    from route.workbench import chat as chat_mod
     from cyrene.workbench.chat_runs import ChatRunManager
 
     data_dir = tmp_path / "data"
@@ -54,7 +53,7 @@ def fork_env(monkeypatch, tmp_path):
     agent_state._sessions.clear()
     chat_service._CHATS_STORE = data_dir / "workbench_chats.json"
     monkeypatch.setattr(
-        chat_mod,
+        chat_service,
         "_CHAT_RUN_MANAGER",
         ChatRunManager(retention_seconds=0),
     )
@@ -95,7 +94,7 @@ def fork_env(monkeypatch, tmp_path):
             "store_dir": store_dir,
             "workspace_dir": workspace_dir,
             "routes_mod": routes_mod,
-            "chat_mod": chat_mod,
+            "chat_mod": chat_service,
         }
         cyrene_config.set_knowledge_db_path_override(None)
 
@@ -626,7 +625,7 @@ def test_non_streaming_send_is_owned_by_chat_run_manager(
     client, fork_env, monkeypatch
 ):
     from cyrene import agent
-    from route.workbench import chat as chat_mod
+    from cyrene.workbench import chat as chat_mod
 
     _write_chat(fork_env, "chat_owned", [])
     calls = []
@@ -732,7 +731,7 @@ def test_root_chat_runs_structured_and_holistic_memory_learning(
 def test_existing_run_rejects_new_send_and_has_explicit_reconnect_endpoint(
     client, fork_env, monkeypatch
 ):
-    from route.workbench import chat as chat_mod
+    from cyrene.workbench import chat as chat_mod
 
     _write_chat(fork_env, "chat_running", [])
 

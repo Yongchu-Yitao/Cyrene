@@ -6,6 +6,7 @@ OpenAPI, tool wire, event, and dependency assertions must remain equivalent.
 """
 
 from __future__ import annotations
+from conftest import workbench_chat_source
 
 import hashlib
 from importlib.metadata import version
@@ -159,7 +160,7 @@ def test_workbench_cross_script_globals_are_registered():
     assert inline_assignments <= {"fetch", "CyrenePageLifecycle"}
 
 
-def test_workbench_runtime_dependencies_keep_their_relative_script_order():
+def test_workbench_uses_one_module_entry_after_ordered_vendor_scripts():
     index = INDEX.read_text(encoding="utf-8")
     scripts = re.findall(r'<script[^>]+src="([^"]+)"', index)
     required_in_order = [
@@ -169,53 +170,27 @@ def test_workbench_runtime_dependencies_keep_their_relative_script_order():
         "katex/katex.min.js",
         "purify.min.js",
         "highlight.min.js",
-        "compiled/platform/runtime.js?v=0.7.12",
-        "compiled/shared/markdown/math.js?v=0.7.12",
-        "compiled/shared/markdown/highlight.js?v=0.7.12",
+        "echarts.min.js",
         "leaflet.js",
         "pdfjs/pdf.min.js?v=0.7.12",
         "pdfjs/pdf_viewer.js?v=0.7.12",
-        "compiled/platform/readiness.js?v=0.7.12",
-        "compiled/platform/events.js?v=0.7.12",
-        "compiled/platform/navigation.js?v=0.7.12",
-        "compiled/workbench-i18n.js?v=0.7.12",
-        "compiled/shared/i18n/format.js?v=0.7.12",
-        "compiled/shared/i18n/translations.js?v=0.7.12",
-        "compiled/shared/pdf/bridge.js?v=0.7.12",
-        "compiled/shared/feedback/service.js?v=0.7.12",
-        "compiled/shared/markdown/renderer.js?v=0.7.12",
-        "compiled/platform/data-store.js?v=0.7.12",
-        "compiled/shared/browser/viewport.js?v=0.7.12",
-        "compiled/shared/search/overlay.js?v=0.7.12",
-        "compiled/shared/markdown/actions.js?v=0.7.12",
-        "compiled/shared/diff/viewer.js?v=0.7.12",
-        "compiled/code/editor.js?v=0.7.12",
-        "compiled/platform/api.js?v=0.7.12",
-        "compiled/workbench-chat.js?v=0.7.12",
-        "compiled/workbench-quick-chat.js?v=0.7.12",
-        "compiled/workbench.js?v=0.7.12",
-        "compiled/settings-overlay.js?v=0.7.12",
-        "compiled/entry/bootstrap.js?v=0.7.12",
+        "compiled/app.js?v=0.7.12",
     ]
 
     positions = [scripts.index(script) for script in required_in_order]
     assert positions == sorted(positions)
-    assert not {
-        "compiled/app.js?v=0.7.12",
-        "compiled/chat.js?v=0.7.12",
-        "compiled/dashboard.js?v=0.7.12",
-        "compiled/knowledge.js?v=0.7.12",
-        "compiled/memory.js?v=0.7.12",
-        "compiled/tasks.js?v=0.7.12",
-        "compiled/settings.js?v=0.7.12",
-    }.intersection(scripts)
+    compiled_scripts = [script for script in scripts if script.startswith("compiled/")]
+    assert compiled_scripts == ["compiled/app.js?v=0.7.12"]
+    assert '<script type="module" src="compiled/app.js?v=0.7.12"></script>' in index
 
 
 def test_single_webui_source_build_and_entrypoint_shape():
     """Keep one Workbench source/output root and no classic selector."""
 
     assert not (ROOT / "src" / "workbench-webui").exists()
+    assert (WEBUI_ROOT / "frontend" / "entry" / "app.jsx").is_file()
     assert (WEBUI_ROOT / "frontend" / "entry" / "bootstrap.jsx").is_file()
+    assert (WEBUI_ROOT / "frontend" / "entry" / "pdf.jsx").is_file()
     assert (WEBUI_ROOT / "static" / "app").is_dir()
 
     package = json.loads((WEBUI_ROOT / "package.json").read_text(encoding="utf-8"))
@@ -276,7 +251,7 @@ def test_ui_background_and_pdf_resources_have_explicit_cleanup_paths():
     feedback = (
         WORKBENCH_ROOT / "shared" / "feedback" / "service.jsx"
     ).read_text(encoding="utf-8")
-    chat = (WORKBENCH_ROOT / "workbench-chat.jsx").read_text(encoding="utf-8")
+    chat = workbench_chat_source()
     library = (WORKBENCH_ROOT / "workbench-library.jsx").read_text(encoding="utf-8")
     standalone_pdf = (ROOT / "src" / "route" / "pdf.py").read_text(encoding="utf-8")
 
@@ -346,7 +321,9 @@ class FakeEventSource {
 }
 global.EventSource = FakeEventSource;
 for (const sourcePath of process.argv.slice(1)) {
-  vm.runInThisContext(fs.readFileSync(sourcePath, "utf8"), { filename: sourcePath });
+  const source = fs.readFileSync(sourcePath, "utf8")
+    .replace(/^export\s+\{[^}]+\}\s*;?\s*$/gm, "");
+  vm.runInThisContext(source, { filename: sourcePath });
 }
 (async () => {
   const dataStore = window.CyreneUI.require("data");

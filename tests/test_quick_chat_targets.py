@@ -31,7 +31,6 @@ def targets_env(monkeypatch, tmp_path):
     from cyrene.runtime import io as io_utils
     from cyrene.workbench import chat as chat_service
     from cyrene.workbench import runtime as routes_mod
-    from route.workbench import chat as chat_mod
     from cyrene.workbench.chat_runs import ChatRunManager
 
     data_dir = tmp_path / "data"
@@ -47,7 +46,7 @@ def targets_env(monkeypatch, tmp_path):
     monkeypatch.setattr(routes_mod, "WORKSPACE_DIR", workspace_dir)
     monkeypatch.setattr(chat_service, "DATA_DIR", data_dir)
     chat_service._CHATS_STORE = data_dir / "workbench_chats.json"
-    monkeypatch.setattr(chat_mod, "_CHAT_RUN_MANAGER", ChatRunManager(retention_seconds=0))
+    monkeypatch.setattr(chat_service, "_CHAT_RUN_MANAGER", ChatRunManager(retention_seconds=0))
     routes_mod._WORKBENCH_STORE = data_dir / "workbench_projects.json"
 
     # Default project deliberately NOT named "Cyrene" — resolution must rely on
@@ -121,7 +120,7 @@ def targets_env(monkeypatch, tmp_path):
         asyncio.run(db.init_db(db_path))
         cyrene_config.set_knowledge_db_path_override(db_path)
         routes_mod._db_path = db_path
-        yield {"db_path": db_path, "data_dir": data_dir, "chat_mod": chat_mod}
+        yield {"db_path": db_path, "data_dir": data_dir, "chat_mod": chat_service}
         cyrene_config.set_knowledge_db_path_override(None)
 
 

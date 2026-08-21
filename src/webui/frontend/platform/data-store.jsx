@@ -526,3 +526,5 @@ function disposePageData() {
 window.addEventListener("beforeunload", disposePageData, { once: true });
 window.addEventListener("pagehide", disposePageData, { once: true });
 window.addEventListener("unload", disposePageData, { once: true });
+
+export { DATA }

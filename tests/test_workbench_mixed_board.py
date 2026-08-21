@@ -1,3 +1,4 @@
+from conftest import workbench_chat_source
 import json
 import subprocess
 from pathlib import Path
@@ -47,9 +48,7 @@ def test_work_menu_task_split_and_project_tools_expand_existing_surfaces_inline(
     workbench = (ROOT / "src" / "webui" / "frontend" / "workbench.jsx").read_text(
         encoding="utf-8"
     )
-    chat = (ROOT / "src" / "webui" / "frontend" / "workbench-chat.jsx").read_text(
-        encoding="utf-8"
-    )
+    chat = workbench_chat_source()
     css = (ROOT / "src" / "webui" / "frontend" / "workbench.css").read_text(
         encoding="utf-8"
     )
@@ -160,9 +159,7 @@ def test_task_workspace_reuses_right_panel_visibility_and_split_contracts():
     workbench = (ROOT / "src" / "webui" / "frontend" / "workbench.jsx").read_text(
         encoding="utf-8"
     )
-    chat = (ROOT / "src" / "webui" / "frontend" / "workbench-chat.jsx").read_text(
-        encoding="utf-8"
-    )
+    chat = workbench_chat_source()
     css = (ROOT / "src" / "webui" / "frontend" / "workbench.css").read_text(
         encoding="utf-8"
     )

@@ -1,0 +1,1770 @@
+import { WBC_AGENT_CHAT_FLOW_EVENT, WBC_BUILTIN_AGENT_ID, WBC_BUILTIN_AGENT_INSTALLATION, WBC_COMMANDS, WBC_COMMAND_ICONS, WBC_ICONS, WBC_MODES, WbcVoice, WorkbenchChatModel, useWbcEffect, useWbcRef, useWbcState, wbcAgentAvailability, wbcAgentChatFlowSnapshot, wbcAgentDisplayName, wbcAttachmentTypeLabel, wbcCapabilityEnabled, wbcCapabilityStatus, wbcChatAgent, wbcComposerAgentRow, wbcComposerSlashCommands, wbcCreateComposerVoiceFeedback, wbcCurrentModel, wbcDefaultAgentBinding, wbcErrorText, wbcFriendlyModelName, wbcHasAgentCapabilitySnapshot, wbcIsBuiltinAgent, wbcLocalizedModelDescription, wbcModeMeta, wbcNormalizePermissionMode, wbcPublishChatModelChanged, wbcReasoningEffortForModel, wbcStartVoiceRecorder, wbcSupportedReasoningEfforts, wbcT, wbcTranscribeVoiceBlob, wbcWorkspaceDisplayName } from "../../workbench-chat.jsx"
+import { WBC_DRAFT_SAVE_DELAY_MS, WBC_NATIVE_FIELD_SIZING, WbcRemoteDeviceCatalog, wbcLoadAttachments, wbcLoadDraft, wbcLoadWorkspaceOverride, wbcSaveAttachments, wbcSaveDraft, wbcSaveWorkspaceOverride, wbcSyncLegacyComposerHeight, wbcWorkspaceContextKey } from "./messages.jsx"
+import { WbcFileVisual, wbcCommandMeta } from "./file-resources.jsx"
+
+// Workbench chat feature module with explicit ESM dependencies.
+function WbcComposer({ chat, project, runtime, running, onSend, onGuidance, onInterrupt, draftNamespace, autoFocus, clearOnSend, error, errorKind, compact, placeholder, runningPlaceholder, topOverlay, draftAgent, onDraftAgentChange, onSwitchAgent, onOpenAgentDetail }) {
+  var model = WorkbenchChatModel;
+  var chatId = chat ? chat.id : "";
+  var awaitingAnswer = !!(chat && chat.pendingQuestion && chat.pendingQuestion.id);
+  var projectId = (project && project.id) || "";
+  var projectWorkspacePath = (project && project.workspacePath) || "";
+  // Surface-scoped storage prefix (empty for the main chat). The quick-chat
+  // window passes one so its draft/attachments never overwrite the main
+  // window's for the same chat id.
+  var draftNs = draftNamespace || "";
+  var shouldClearOnSend = clearOnSend !== false;
+  var workspaceContextKey = wbcWorkspaceContextKey(chatId, projectId);
+  var [draft, setDraft] = useWbcState(function () { return wbcLoadDraft(chatId, draftNs); });
+  var [attachments, setAttachments] = useWbcState(function () { return wbcLoadAttachments(chatId, draftNs); });
+  var [mode, setMode] = useWbcState(function () {
+    return wbcNormalizePermissionMode(chat && chat.permissionMode, "auto");
+  });
+  var [command, setCommand] = useWbcState("");
+  var [uploading, setUploading] = useWbcState(false);
+  var [failedImagePreviews, setFailedImagePreviews] = useWbcState({});
+  var [toolsOpen, setToolsOpen] = useWbcState(false);
+  var [modelOpen, setModelOpen] = useWbcState(false);
+  var [modelPanel, setModelPanel] = useWbcState("root");
+  var [agentOptions, setAgentOptions] = useWbcState([]);
+  var [agentOptionsLoaded, setAgentOptionsLoaded] = useWbcState(false);
+  var [configuredModels, setConfiguredModels] = useWbcState([]);
+  var [agentConfigOptions, setAgentConfigOptions] = useWbcState([]);
+  var [agentConfigValues, setAgentConfigValues] = useWbcState({});
+  var [agentConfigLoading, setAgentConfigLoading] = useWbcState(false);
+  var [selectedModelId, setSelectedModelId] = useWbcState("");
+  var [reasoningEffort, setReasoningEffort] = useWbcState(function () {
+    return String(chat && chat.reasoningEffort || "").trim().toLowerCase();
+  });
+  var [contextState, setContextState] = useWbcState(null);
+  var [soulActive, setSoulActive] = useWbcState(function () {
+    return chat && typeof chat.soulActive === "boolean" ? chat.soulActive : true;
+  });
+  var [workspaceActive, setWorkspaceActive] = useWbcState(function () {
+    return chat && typeof chat.workspaceActive === "boolean" ? chat.workspaceActive : true;
+  });
+  var [workspaceOverride, setWorkspaceOverride] = useWbcState(function () {
+    return String(chat && chat.workspaceOverride || "").trim()
+      || wbcLoadWorkspaceOverride(workspaceContextKey, draftNs);
+  });
+  var [remoteDevices, setRemoteDevices] = useWbcState([]);
+  var [remoteDeviceIds, setRemoteDeviceIds] = useWbcState(function () {
+    return chat && Array.isArray(chat.remoteDeviceIds) ? chat.remoteDeviceIds.slice() : [];
+  });
+  var [voiceSnapshot, setVoiceSnapshot] = useWbcState({ status: {}, activeKey: "" });
+  var [voicePhase, setVoicePhase] = useWbcState("");
+  var [agentFlowState, setAgentFlowState] = useWbcState(function () {
+    return wbcAgentChatFlowSnapshot(chatId) || { chatId: "", kind: "", expiresAt: 0 };
+  });
+  var taRef = useWbcRef(null);
+  var composerBoxRef = useWbcRef(null);
+  var sendButtonRef = useWbcRef(null);
+  var fileRef = useWbcRef(null);
+  var toolsPickerRef = useWbcRef(null);
+  var modelPickerRef = useWbcRef(null);
+  var uploadCountRef = useWbcRef(0);
+  var draftRef = useWbcRef(draft);
+  var attachRef = useWbcRef(attachments);
+  var prevChatIdRef = useWbcRef(chatId);
+  var workspaceOverrideRef = useWbcRef(workspaceOverride);
+  var remoteDeviceIdsRef = useWbcRef(remoteDeviceIds);
+  var pendingRemoteContextRef = useWbcRef({});
+  var prevWorkspaceContextKeyRef = useWbcRef(workspaceContextKey);
+  var draftSaveTimerRef = useWbcRef(0);
+  var pendingDraftSaveRef = useWbcRef(null);
+  // Last payload snapshot for optimistic clear with restore on error
+  var lastSentRef = useWbcRef(null);
+  var prevRunningRef = useWbcRef(running);
+  var voiceRecorderRef = useWbcRef(null);
+  var voiceChatIdRef = useWbcRef(String(chatId || ""));
+  var voiceFeedbackRef = useWbcRef(null);
+  var agentFlowTimerRef = useWbcRef(null);
+  var ComposerBrowserIcon = window.CyreneUI.require("browser").Icon;
+  if (!voiceFeedbackRef.current) voiceFeedbackRef.current = wbcCreateComposerVoiceFeedback();
+  var agentFlow = agentFlowState.chatId === String(chatId || "")
+    ? String(agentFlowState.kind || "")
+    : "";
+  // Effective Agent identity: an existing chat carries its locked binding; an
+  // empty draft carries the composer's draft selection; otherwise the built-in
+  // Cyrene Agent is the default.
+  var boundAgent = wbcChatAgent(chat);
+  var draftAgentIdentity = draftAgent && draftAgent.agent && typeof draftAgent.agent === "object"
+    ? draftAgent.agent
+    : draftAgent;
+  var effectiveAgent = boundAgent || draftAgentIdentity || { installationId: WBC_BUILTIN_AGENT_INSTALLATION, agentId: WBC_BUILTIN_AGENT_ID, displayName: "Cyrene", builtin: true };
+  var effectiveCatalogAgent = agentOptions.find(function (agent) {
+    return String(agent && agent.installationId || "") === String(effectiveAgent.installationId || "");
+  }) || null;
+  var effectiveAgentName = wbcAgentDisplayName(effectiveCatalogAgent || effectiveAgent);
+  // Probe/auth/settings changes refresh the installed catalog. Overlay that
+  // current snapshot so an open composer is never gated by stale capabilities
+  // captured when the chat was first created.
+  var capabilitySource = (!wbcIsBuiltinAgent(effectiveAgent) && effectiveCatalogAgent)
+    ? { capabilities: effectiveCatalogAgent.capabilities || {} }
+    : chat;
+  var agentBindingLocked = !!(chat && ((chat.agent && chat.agent.bindingLocked) || (chat.messages && chat.messages.length > 0)));
+  function pickAgentBinding(binding) {
+    var targetId = String(binding && binding.agent && binding.agent.installationId || WBC_BUILTIN_AGENT_INSTALLATION);
+    if (targetId === String(effectiveAgent.installationId || WBC_BUILTIN_AGENT_INSTALLATION)) return;
+    // Persisted empty chats are safely rebound in place by the backend. Chats
+    // with messages ask before creating a new Agent-bound conversation.
+    if (chat && chat.id && onSwitchAgent) onSwitchAgent(binding);
+    else onDraftAgentChange(binding);
+  }
+  var chatCapabilitySnapshot = wbcHasAgentCapabilitySnapshot(capabilitySource);
+  var capText = wbcCapabilityEnabled(capabilitySource, "input", "text", { strictUnknown: true });
+  var capImage = wbcCapabilityEnabled(capabilitySource, "input", "image", { strictUnknown: true });
+  var capFile = wbcCapabilityEnabled(capabilitySource, "input", "file", { strictUnknown: true });
+  var capAudio = wbcCapabilityEnabled(capabilitySource, "input", "audio", { strictUnknown: true });
+  var capSteer = wbcCapabilityEnabled(capabilitySource, "interaction", "steer", { strictUnknown: true });
+  var capCancel = wbcCapabilityEnabled(capabilitySource, "interaction", "cancel", { strictUnknown: true });
+  var capReasoningEffort = wbcCapabilityEnabled(capabilitySource, "model", "reasoningEffort");
+  var capSwitchModel = wbcCapabilityEnabled(capabilitySource, "model", "switchDuringSession", { strictUnknown: true });
+  var effectiveModelAccess = (effectiveCatalogAgent && effectiveCatalogAgent.modelAccess)
+    || (draftAgent && draftAgent.modelAccess)
+    || (chat && chat.modelAccess)
+    || {};
+  var agentManagedModels = effectiveModelAccess.mode === "agent_managed";
+  var agentPickerEnabled = typeof onDraftAgentChange === "function";
+  var permissionCapability = chatCapabilitySnapshot
+    ? wbcCapabilityStatus(capabilitySource, "interaction", "permission")
+    : "supported";
+  var permissionAgentDefined = chatCapabilitySnapshot
+    && permissionCapability === "agent_defined";
+  var permissionModeVisible = permissionCapability === "supported" || permissionAgentDefined;
+  var commandSource = {
+    ...(chat || {}),
+    agent: effectiveAgent,
+    capabilities: capabilitySource && capabilitySource.capabilities,
+  };
+  var agentSlashCommands = wbcComposerSlashCommands(commandSource);
+  var slashCommandsCapabilityDriven = agentSlashCommands !== null;
+
+  useWbcEffect(function () {
+    if (!agentPickerEnabled || agentOptionsLoaded || !model || !model.listAgents) return;
+    var cancelled = false;
+    model.listAgents().then(function (list) {
+      if (cancelled) return;
+      setAgentOptions(Array.isArray(list) ? list : []);
+      setAgentOptionsLoaded(true);
+    }).catch(function () {
+      if (cancelled) return;
+      setAgentOptionsLoaded(true);
+    });
+    return function () { cancelled = true; };
+  }, [agentOptionsLoaded, agentPickerEnabled]);
+
+  useWbcEffect(function () {
+    function refreshAgentOptions() {
+      if (!agentPickerEnabled) return;
+      setAgentOptionsLoaded(false);
+    }
+    window.addEventListener("cyrene:agents-changed", refreshAgentOptions);
+    return function () { window.removeEventListener("cyrene:agents-changed", refreshAgentOptions); };
+  }, [agentPickerEnabled]);
+
+  useWbcEffect(function () { draftRef.current = draft; });
+  useWbcEffect(function () { attachRef.current = attachments; });
+  useWbcEffect(function () { workspaceOverrideRef.current = workspaceOverride; });
+  useWbcEffect(function () { remoteDeviceIdsRef.current = remoteDeviceIds; });
+
+  useWbcEffect(function () {
+    return WbcVoice.subscribe(setVoiceSnapshot);
+  }, []);
+
+  useWbcEffect(function () {
+    function clearTimer() {
+      if (!agentFlowTimerRef.current) return;
+      window.clearTimeout(agentFlowTimerRef.current);
+      agentFlowTimerRef.current = null;
+    }
+    function applyFlow(detail) {
+      var next = detail && typeof detail === "object" ? detail : null;
+      if (!next || String(next.chatId || "") !== String(chatId || "")) return;
+      var expiresAt = Number(next.expiresAt || 0);
+      var remaining = Math.max(0, expiresAt - Date.now());
+      clearTimer();
+      if (!remaining) {
+        setAgentFlowState({ chatId: String(chatId || ""), kind: "", expiresAt: 0 });
+        return;
+      }
+      setAgentFlowState({
+        chatId: String(chatId || ""),
+        kind: String(next.kind || ""),
+        expiresAt: expiresAt,
+      });
+      agentFlowTimerRef.current = window.setTimeout(function () {
+        agentFlowTimerRef.current = null;
+        setAgentFlowState({ chatId: String(chatId || ""), kind: "", expiresAt: 0 });
+      }, remaining);
+    }
+    function onAgentChatFlow(event) {
+      applyFlow(event && event.detail);
+    }
+    applyFlow(wbcAgentChatFlowSnapshot(chatId));
+    window.addEventListener(WBC_AGENT_CHAT_FLOW_EVENT, onAgentChatFlow);
+    return function () {
+      window.removeEventListener(WBC_AGENT_CHAT_FLOW_EVENT, onAgentChatFlow);
+      clearTimer();
+    };
+  }, [chatId]);
+
+  useWbcEffect(function () {
+    voiceChatIdRef.current = String(chatId || "");
+    setVoicePhase("");
+    return function () {
+      var recorder = voiceRecorderRef.current;
+      voiceRecorderRef.current = null;
+      voiceFeedbackRef.current.dismiss();
+      if (recorder && typeof recorder.stop === "function") recorder.stop().catch(function () {});
+    };
+  }, [chatId]);
+
+  useWbcEffect(function () {
+    if (!awaitingAnswer) return;
+    setToolsOpen(false);
+    setModelOpen(false);
+    setModelPanel("root");
+    var recorder = voiceRecorderRef.current;
+    voiceRecorderRef.current = null;
+    setVoicePhase("");
+    voiceFeedbackRef.current.dismiss();
+    if (recorder && typeof recorder.stop === "function") recorder.stop().catch(function () {});
+  }, [awaitingAnswer]);
+
+  useWbcEffect(function () {
+    if (!modelOpen) return undefined;
+    var overlays;
+    try { overlays = window.CyreneUI.require("browser-overlays"); } catch (e) {}
+    if (!overlays || typeof overlays.adjust !== "function") return undefined;
+    overlays.adjust(1);
+    return function () { overlays.adjust(-1); };
+  }, [modelOpen]);
+
+  useWbcEffect(function () {
+    if (prevChatIdRef.current !== chatId) return;
+    if (draftSaveTimerRef.current) window.clearTimeout(draftSaveTimerRef.current);
+    pendingDraftSaveRef.current = { id: chatId, text: draft, ns: draftNs };
+    draftSaveTimerRef.current = window.setTimeout(flushPendingDraftSave, WBC_DRAFT_SAVE_DELAY_MS);
+  }, [draft, chatId, draftNs]);
+
+  useWbcEffect(function () {
+    function flushHiddenDraft() {
+      if (document.visibilityState === "hidden") flushPendingDraftSave();
+    }
+    window.addEventListener("pagehide", flushPendingDraftSave);
+    document.addEventListener("visibilitychange", flushHiddenDraft);
+    return function () {
+      window.removeEventListener("pagehide", flushPendingDraftSave);
+      document.removeEventListener("visibilitychange", flushHiddenDraft);
+      flushPendingDraftSave();
+    };
+  }, []);
+
+  useWbcEffect(function () {
+    if (prevChatIdRef.current === chatId) wbcSaveAttachments(chatId, attachments, draftNs);
+  }, [attachments]);
+
+  useWbcEffect(function () {
+    if (prevWorkspaceContextKeyRef.current === workspaceContextKey) {
+      wbcSaveWorkspaceOverride(workspaceContextKey, workspaceOverride, draftNs);
+    }
+  }, [workspaceOverride]);
+
+  useWbcEffect(function () {
+    if (!WBC_NATIVE_FIELD_SIZING) {
+      wbcSyncLegacyComposerHeight(taRef.current, draft, compact);
+    }
+  }, [draft, compact]);
+
+  // Focus the textarea on mount when the host surface asks for it (the quick
+  // chat window opens straight into typing).
+  useWbcEffect(function () {
+    if (autoFocus && taRef.current) {
+      taRef.current.focus();
+    }
+  }, []);
+
+  useWbcEffect(function () {
+    if (!toolsOpen) return undefined;
+    function closeToolsMenu(event) {
+      if (toolsPickerRef.current && !toolsPickerRef.current.contains(event.target)) {
+        setToolsOpen(false);
+      }
+    }
+    document.addEventListener("pointerdown", closeToolsMenu);
+    return function () { document.removeEventListener("pointerdown", closeToolsMenu); };
+  }, [toolsOpen]);
+
+  useWbcEffect(function () {
+    if (!modelOpen) return undefined;
+    function closeModelPicker(event) {
+      if (modelPickerRef.current && !modelPickerRef.current.contains(event.target)) {
+        setModelOpen(false);
+        setModelPanel("root");
+      }
+    }
+    document.addEventListener("pointerdown", closeModelPicker);
+    return function () { document.removeEventListener("pointerdown", closeModelPicker); };
+  }, [modelOpen]);
+
+  useWbcEffect(function () {
+    if (!agentManagedModels || !chatId || !model.getAgentConfigOptions) {
+      setAgentConfigOptions([]);
+      setAgentConfigValues({});
+      setAgentConfigLoading(false);
+      return undefined;
+    }
+    var cancelled = false;
+    setAgentConfigLoading(true);
+    model.getAgentConfigOptions(chatId).then(function (payload) {
+      if (cancelled) return;
+      setAgentConfigOptions(Array.isArray(payload.configOptions) ? payload.configOptions : []);
+      setAgentConfigValues(payload.values && typeof payload.values === "object" ? payload.values : {});
+      setAgentConfigLoading(false);
+    }).catch(function () {
+      if (cancelled) return;
+      setAgentConfigOptions([]);
+      setAgentConfigLoading(false);
+    });
+    return function () { cancelled = true; };
+  }, [chatId, agentManagedModels]);
+
+  useWbcEffect(function () {
+    if (!chat || !agentManagedModels) return;
+    if (Array.isArray(chat.agentConfigOptions) && chat.agentConfigOptions.length) {
+      setAgentConfigOptions(chat.agentConfigOptions);
+    }
+    if (chat.agentConfigValues && typeof chat.agentConfigValues === "object") {
+      setAgentConfigValues(chat.agentConfigValues);
+    }
+  }, [chat && chat.agentConfigOptions, chat && chat.agentConfigValues, agentManagedModels]);
+
+  useWbcEffect(function () {
+    if (agentManagedModels) return undefined;
+    var cancelled = false;
+    function loadConfiguredModels() {
+      return window.CyreneUI.require("api").json("/api/settings/models", { toast: false })
+      .then(function (payload) {
+        // Default routes decide automatic fallback order; manual selection is
+        // intentionally sourced from every enabled chat-capable profile.
+        var options = Array.isArray(payload.selectable_models)
+          ? payload.selectable_models
+          : (Array.isArray(payload.models) ? payload.models : []);
+        var needsCodexCatalog = options.some(function (item) {
+          return String(item.provider || "") === "codex_oauth";
+        });
+        var catalogRequest = needsCodexCatalog
+          ? window.CyreneUI.require("api").json("/api/settings/openai-oauth", { toast: false }).catch(function () { return {}; })
+          : Promise.resolve({});
+        return catalogRequest.then(function (catalog) {
+          if (cancelled) return;
+          var codexModels = Array.isArray(catalog.models) ? catalog.models : [];
+          options = options.map(function (item) {
+            if (String(item.provider || "") !== "codex_oauth") return item;
+            var match = codexModels.find(function (entry) {
+              var id = String(entry.model || entry.id || entry.slug || "").trim();
+              return id === String(item.model || "").trim();
+            });
+            return match ? Object.assign({}, item, {
+              supportedReasoningEfforts: match.supportedReasoningEfforts || match.supported_reasoning_efforts || [],
+              defaultReasoningEffort: match.defaultReasoningEffort || match.default_reasoning_effort || "",
+            }) : item;
+          });
+          setConfiguredModels(options);
+          var chatSelection = String(
+            chat && (chat.modelSelectionId || chat.model || chat.lastModel) || ""
+          ).trim();
+          var selected = options.find(function (item) {
+            return chatSelection && [
+              String(item.id || ""),
+              String(item.model || ""),
+              String(item.name || ""),
+            ].indexOf(chatSelection) >= 0;
+          }) || options.find(function (item) {
+            return String(item.id || "") === String(payload.active || "");
+          }) || options[0];
+          if (selected) {
+            setSelectedModelId(String(selected.id || selected.model || ""));
+            setReasoningEffort(wbcReasoningEffortForModel(
+              selected,
+              chat && chat.reasoningEffort
+            ));
+          } else {
+            setSelectedModelId("");
+            setReasoningEffort("");
+          }
+        });
+      })
+      .catch(function () {
+        if (!cancelled) setConfiguredModels([]);
+      });
+    }
+    function onModelConfigurationChanged() { loadConfiguredModels(); }
+    loadConfiguredModels();
+    window.addEventListener("cyrene:model-configuration-changed", onModelConfigurationChanged);
+    return function () {
+      cancelled = true;
+      window.removeEventListener("cyrene:model-configuration-changed", onModelConfigurationChanged);
+    };
+  }, [chatId, agentManagedModels]);
+
+  useWbcEffect(function () {
+    var prev = prevChatIdRef.current;
+    if (prev !== chatId) {
+      flushPendingDraftSave();
+      wbcSaveDraft(prev, draftRef.current, draftNs);
+      wbcSaveAttachments(prev, attachRef.current, draftNs);
+      setDraft(wbcLoadDraft(chatId, draftNs));
+      setAttachments(wbcLoadAttachments(chatId, draftNs));
+      setMode(wbcNormalizePermissionMode(chat && chat.permissionMode, "auto"));
+      setSoulActive(chat && typeof chat.soulActive === "boolean" ? chat.soulActive : true);
+      setWorkspaceActive(chat && typeof chat.workspaceActive === "boolean" ? chat.workspaceActive : true);
+      setReasoningEffort(String(chat && chat.reasoningEffort || "").trim().toLowerCase());
+      setRemoteDeviceIds(chat && Array.isArray(chat.remoteDeviceIds) ? chat.remoteDeviceIds.slice() : []);
+      setFailedImagePreviews({});
+      prevChatIdRef.current = chatId;
+    }
+      setCommand("");
+      setToolsOpen(false);
+      setModelOpen(false);
+      setModelPanel("root");
+  }, [chatId]);
+
+  useWbcEffect(function () {
+    var prevKey = prevWorkspaceContextKeyRef.current;
+    if (prevKey === workspaceContextKey) return;
+    var currentOverride = workspaceOverrideRef.current;
+    wbcSaveWorkspaceOverride(prevKey, currentOverride, draftNs);
+    var nextOverride = String(chat && chat.workspaceOverride || "").trim()
+      || wbcLoadWorkspaceOverride(workspaceContextKey, draftNs);
+    setWorkspaceOverride(nextOverride);
+    workspaceOverrideRef.current = nextOverride;
+    prevWorkspaceContextKeyRef.current = workspaceContextKey;
+  }, [workspaceContextKey]);
+
+  // Track running→false transitions where an error occurred to restore the draft
+  // that was optimistically cleared in submit() — only for the main chat surface
+  // (shouldClearOnSend is true) and only for message-kind errors.
+  useWbcEffect(function () {
+    var wasRunning = prevRunningRef.current;
+    prevRunningRef.current = running;
+    if (wasRunning && !running && lastSentRef.current && shouldClearOnSend) {
+      var isSendError = error && (errorKind === "message" || errorKind === "load");
+      if (isSendError) {
+        var saved = lastSentRef.current;
+        setDraft(saved.message || "");
+        setAttachments(saved.attachments || []);
+        if (saved.command) setCommand(saved.command);
+      }
+      lastSentRef.current = null;
+    }
+  }, [running, error, errorKind]);
+
+  useWbcEffect(function () {
+    function onChatCreated(event) {
+      var detail = (event && event.detail) || {};
+      if (String(detail.projectId || "") !== String(projectId || "") || !detail.chatId) return;
+      var nextKey = wbcWorkspaceContextKey(detail.chatId, projectId);
+      wbcSaveWorkspaceOverride(nextKey, workspaceOverrideRef.current, draftNs);
+      if (remoteDeviceIdsRef.current.length) {
+        var selectedIds = remoteDeviceIdsRef.current.slice();
+        pendingRemoteContextRef.current[detail.chatId] = selectedIds;
+        wbcSaveRemoteContext(detail.chatId, selectedIds).finally(function () {
+          delete pendingRemoteContextRef.current[detail.chatId];
+        });
+      }
+    }
+    window.addEventListener("cyrene:wbc-chat-created", onChatCreated);
+    return function () { window.removeEventListener("cyrene:wbc-chat-created", onChatCreated); };
+  }, [projectId]);
+
+  function wbcRefreshCtxState() {
+    window.CyreneUI.require("api").json("/api/context/state", { toast: false }).then(function (s) {
+      setContextState(s);
+    }).catch(function () {});
+  }
+
+  useWbcEffect(function () {
+    var cancelled = false;
+    window.CyreneUI.require("api").json("/api/context/state", { toast: false }).then(function (s) {
+      if (!cancelled) setContextState(s);
+    }).catch(function () {});
+    return function () { cancelled = true; };
+  }, [projectId, projectWorkspacePath]);
+
+  useWbcEffect(function () {
+    return WbcRemoteDeviceCatalog.subscribe(function (catalog) {
+      var nextDevices = Array.isArray(catalog.devices) ? catalog.devices : [];
+      setRemoteDevices(nextDevices);
+      // The first catalog snapshot is intentionally empty while its request is
+      // still pending. Do not treat that placeholder as a real revocation pass.
+      if (Number(catalog.revision) < 0) return;
+      setRemoteDeviceIds(function (current) {
+        var nextIds = current.filter(function (deviceId) {
+          var device = nextDevices.find(function (item) { return item.device_id === deviceId; });
+          return !!(device && device.eligible && !device.revoked_at);
+        });
+        if (nextIds.length !== current.length && chatId && String(chatId).indexOf("legacy:") !== 0) {
+          remoteDeviceIdsRef.current = nextIds;
+          wbcSaveRemoteContext(chatId, nextIds).catch(function () {});
+        }
+        return nextIds;
+      });
+    });
+  }, [chatId]);
+
+  useWbcEffect(function () {
+    if (!chatId || String(chatId).indexOf("legacy:") === 0) {
+      setRemoteDeviceIds([]);
+      return undefined;
+    }
+    var pendingIds = pendingRemoteContextRef.current[chatId];
+    if (Array.isArray(pendingIds)) {
+      setRemoteDeviceIds(pendingIds);
+      return undefined;
+    }
+    // Session summaries now carry this field. Keeping it as the single source
+    // prevents a second GET from changing the badge after the chat is painted.
+    setRemoteDeviceIds(chat && Array.isArray(chat.remoteDeviceIds) ? chat.remoteDeviceIds.slice() : []);
+    return undefined;
+  }, [chatId]);
+
+  function flushPendingDraftSave() {
+    if (draftSaveTimerRef.current) {
+      window.clearTimeout(draftSaveTimerRef.current);
+      draftSaveTimerRef.current = 0;
+    }
+    var pending = pendingDraftSaveRef.current;
+    pendingDraftSaveRef.current = null;
+    if (pending) wbcSaveDraft(pending.id, pending.text, pending.ns);
+  }
+
+  function persistCurrentDraft() {
+    pendingDraftSaveRef.current = {
+      id: chatId,
+      text: String(draftRef.current || ""),
+      ns: draftNs,
+    };
+    flushPendingDraftSave();
+  }
+
+  function submit(messageOverride) {
+    if (awaitingAnswer) return;
+    var text = String(typeof messageOverride === "string" ? messageOverride : draft).trim();
+    if (running) {
+      if (!text || !onGuidance) return;
+      draftRef.current = "";
+      setDraft("");
+      persistCurrentDraft();
+      onGuidance(text).catch(function () {
+        draftRef.current = text;
+        setDraft(text);
+      });
+      return;
+    }
+    if (!text && attachments.length === 0) return;
+    var payload = {
+      message: text,
+      attachments: attachments,
+      mode: mode,
+      command: command,
+      model: agentManagedModels ? "" : selectedModelId,
+      reasoningEffort: agentManagedModels ? "" : reasoningEffort,
+      workspaceOverride: workspaceOverride,
+      soulActive: personaOn,
+      workspaceActive: workspaceOn,
+    };
+    // Optimistically clear on send; restored in the running-transition effect
+    // if the send fails (error). The quick-chat surface passes clearOnSend=false
+    // and manages its own draft lifecycle.
+    if (shouldClearOnSend) {
+      lastSentRef.current = payload;
+      draftRef.current = "";
+      setDraft("");
+      persistCurrentDraft();
+      setAttachments([]);
+      setCommand("");
+    }
+    onSend(payload);
+  }
+
+  function onKeyDown(event) {
+    var sc = window.CyreneUI.require("shortcuts");
+    if (sc && sc.matches(event, "composer-send")) {
+      if (event.nativeEvent && event.nativeEvent.isComposing) return; // IME guard
+      event.preventDefault();
+      submit();
+      return;
+    }
+    if (sc && sc.matches(event, "composer-newline")) {
+      // Allow the textarea's default Shift+Enter behavior (insert newline).
+      return;
+    }
+    // Fallback when the shortcut module is unavailable: plain Enter sends,
+    // Shift/Cmd/Ctrl+Enter inserts a newline.
+    if (!sc && event.key === "Enter" && !event.shiftKey && !event.metaKey && !event.ctrlKey) {
+      if (event.nativeEvent && event.nativeEvent.isComposing) return; // IME guard
+      event.preventDefault();
+      submit();
+      return;
+    }
+    if (event.key === "Escape") {
+      setToolsOpen(false);
+      setModelOpen(false);
+      setModelPanel("root");
+    }
+  }
+
+  function pickFiles() { if (fileRef.current) fileRef.current.click(); }
+
+  function showVoiceError(error) {
+    voiceFeedbackRef.current.error(error);
+  }
+
+  function transcribeVoiceBlob(blob) {
+    return wbcTranscribeVoiceBlob(blob)
+      .then(function (transcript) {
+        if (transcript === false) {
+          voiceFeedbackRef.current.noSpeech();
+          return false;
+        }
+        var current = String(draftRef.current || "");
+        var combined = current && !/\s$/.test(current) ? current + " " + transcript : current + transcript;
+        setDraft(combined);
+        draftRef.current = combined;
+        voiceFeedbackRef.current.complete();
+        if (voiceSnapshot.status.auto_send_after_asr === true) {
+          submit(combined);
+          return;
+        }
+        requestAnimationFrame(function () {
+          if (taRef.current) taRef.current.focus();
+        });
+      });
+  }
+
+  function finishVoiceInput(recorder) {
+    if (!recorder || voiceRecorderRef.current !== recorder) return;
+    voiceRecorderRef.current = null;
+    setVoicePhase("transcribing");
+    voiceFeedbackRef.current.transcribing();
+    recorder.stop()
+      .then(transcribeVoiceBlob)
+      .catch(showVoiceError)
+      .finally(function () { setVoicePhase(""); });
+  }
+
+  function toggleVoiceInput() {
+    if (awaitingAnswer || voicePhase === "starting" || voicePhase === "transcribing") return;
+    if (voicePhase === "recording") {
+      var recorder = voiceRecorderRef.current;
+      if (!recorder) {
+        setVoicePhase("");
+        return;
+      }
+      finishVoiceInput(recorder);
+      return;
+    }
+    // Voice input is a barge-in action. Stop current playback and discard its
+    // queued sentences before opening the microphone so TTS is not re-recorded.
+    WbcVoice.stop();
+    setVoicePhase("starting");
+    voiceFeedbackRef.current.starting();
+    var startedForChat = String(chatId || "");
+    wbcStartVoiceRecorder({
+      autoStopOnSilence: voiceSnapshot.status.auto_stop_on_silence !== false,
+      onSilence: finishVoiceInput,
+    })
+      .then(function (recorder) {
+        if (voiceChatIdRef.current !== startedForChat) {
+          recorder.stop().catch(function () {});
+          return;
+        }
+        voiceRecorderRef.current = recorder;
+        setVoicePhase("recording");
+        voiceFeedbackRef.current.listening();
+      })
+      .catch(function (error) {
+        setVoicePhase("");
+        showVoiceError(error);
+      });
+  }
+  function addFiles(files) {
+    if (awaitingAnswer) return;
+    if (!files || !files.length) return;
+    if (!capFile) {
+      var nonImageFiles = Array.prototype.filter.call(files || [], function (file) {
+        return !(file && (String(file.type || "").indexOf("image/") === 0 || String(file.kind || "") === "image"));
+      });
+      if (nonImageFiles.length) {
+        window.CyreneUI.require("feedback").showToast(
+          wbcT("workbenchChat.capability.noFile", "This Agent does not support file input"),
+          "error"
+        );
+      }
+      files = Array.prototype.filter.call(files || [], function (file) {
+        return file && (String(file.type || "").indexOf("image/") === 0 || String(file.kind || "") === "image");
+      });
+      if (!files.length) return;
+    }
+    // Capability gate: an Agent without input.image rejects image attachments
+    // with a clear notice instead of silently uploading them (handoff §13).
+    if (!capImage) {
+      var imageFiles = Array.prototype.filter.call(files || [], function (file) {
+        return file && (String(file.type || "").indexOf("image/") === 0 || String(file.kind || "") === "image");
+      });
+      if (imageFiles.length) {
+        window.CyreneUI.require("feedback").showToast(
+          wbcT("workbenchChat.capability.noImage", "This Agent does not support image input"),
+          "error"
+        );
+      }
+      files = Array.prototype.filter.call(files || [], function (file) {
+        return !(file && (String(file.type || "").indexOf("image/") === 0 || String(file.kind || "") === "image"));
+      });
+      if (!files.length) return;
+    }
+    uploadCountRef.current += 1;
+    setUploading(true);
+    model.uploadFiles(files)
+      .then(function (uploaded) { setAttachments(function (prev) { return prev.concat(uploaded); }); })
+      .catch(function (err) { window.CyreneUI.require("feedback").showToast(wbcT("workbenchChat.uploadFailed", "Upload failed: {error}", { error: wbcErrorText(err) }), "error"); })
+      .finally(function () {
+        uploadCountRef.current = Math.max(0, uploadCountRef.current - 1);
+        if (uploadCountRef.current === 0) setUploading(false);
+        if (fileRef.current) fileRef.current.value = "";
+      });
+  }
+  function onFilePick(event) {
+    addFiles(event.target.files);
+  }
+  function onPaste(event) {
+    if (running || awaitingAnswer) return;
+    var clipboard = event && (event.clipboardData || (event.nativeEvent && event.nativeEvent.clipboardData));
+    if (!clipboard) return;
+    var files = Array.prototype.slice.call(clipboard.files || []).filter(function (file) { return !!file; });
+    // Some WebViews expose pasted files only through DataTransferItemList.
+    if (!files.length) {
+      files = Array.prototype.slice.call(clipboard.items || []).map(function (item) {
+        return item && item.kind === "file" ? item.getAsFile() : null;
+      }).filter(function (file) { return !!file; });
+    }
+    if (!files.length) return; // Preserve the browser's normal text paste.
+    event.preventDefault();
+    addFiles(files);
+  }
+  useWbcEffect(function () {
+    function onDroppedFiles(event) {
+      if (awaitingAnswer) return;
+      var detail = event && event.detail || {};
+      if (detail.targetChatId && String(detail.targetChatId) !== String(chatId)) return;
+      if (detail.resource && detail.resource.kind === "file") {
+        var file = detail.resource.file || detail.resource;
+        var resourceIsImage = file
+          && (String(file.kind || "") === "image" || String(file.content_type || file.type || "").indexOf("image/") === 0);
+        if (!capImage && resourceIsImage) {
+          window.CyreneUI.require("feedback").showToast(
+            wbcT("workbenchChat.capability.noImage", "This Agent does not support image input"),
+            "error"
+          );
+          return;
+        }
+        if (!capFile && !resourceIsImage) {
+          window.CyreneUI.require("feedback").showToast(
+            wbcT("workbenchChat.capability.noFile", "This Agent does not support file input"),
+            "error"
+          );
+          return;
+        }
+        setAttachments(function (prev) {
+          var key = String(file.id || file.path || file.url || file.name || "");
+          if (key && prev.some(function (item) {
+            return String(item.id || item.path || item.url || item.name || "") === key;
+          })) return prev;
+          return prev.concat([file]);
+        });
+        return;
+      }
+      if (detail.resource && detail.resource.kind === "snippet") {
+        var quote = String(detail.resource.text || "").trim().split("\n").map(function (line) {
+          return "> " + line;
+        }).join("\n");
+        if (quote) setDraft(function (prev) { return prev ? prev + "\n\n" + quote : quote; });
+        return;
+      }
+      var files = detail.files;
+      addFiles(files);
+    }
+    window.addEventListener("cyrene:add-chat-attachments", onDroppedFiles);
+    return function () { window.removeEventListener("cyrene:add-chat-attachments", onDroppedFiles); };
+  }, [chatId, awaitingAnswer, capFile, capImage]);
+
+  var slashQuery = draft.indexOf("/") === 0 ? draft.slice(1).toLowerCase() : "";
+  var translatedCommands = WBC_COMMANDS.map(function (c) { return wbcCommandMeta(c.id); }).filter(Boolean);
+  var translatedModes = WBC_MODES.map(function (m) { return wbcModeMeta(m.id); });
+  // Slash commands come from the Agent's declared command list when a
+  // capability snapshot exists; the built-in command set stays legacy-only.
+  var slashPool = slashCommandsCapabilityDriven
+    ? agentSlashCommands.map(function (declared) {
+        var builtin = translatedCommands.find(function (item) { return item.id === declared.id; });
+        return builtin || { id: declared.id, label: declared.label || declared.id, desc: declared.description || declared.inputHint || "", external: true };
+      })
+    : translatedCommands;
+  var slashItems = slashPool.filter(function (c) {
+    return !slashQuery || c.id.indexOf(slashQuery) !== -1 || c.label.toLowerCase().indexOf(slashQuery) !== -1;
+  });
+  var slashDraftOpen = draft.indexOf("/") === 0 && draft.indexOf(" ") === -1 && slashItems.length > 0 && !running;
+  var showToolsMenu = (toolsOpen || slashDraftOpen) && !running && !awaitingAnswer;
+  var activeCommand = command ? (slashPool.find(function (item) { return item.id === command; }) || wbcCommandMeta(command) || { id: command, label: command, desc: "" }) : null;
+  var currentMode = wbcModeMeta(mode);
+  var personaOn = soulActive !== false;
+  var workspaceOn = workspaceActive !== false;
+  var enabledContentCount = (personaOn ? 1 : 0) + (workspaceOn ? 1 : 0) + remoteDeviceIds.length;
+  // Follow the active project's workspace by default. A directory explicitly
+  // chosen from the composer remains selected when the user switches projects.
+  var wsDir = workspaceOverride || projectWorkspacePath || (contextState && contextState.workspace_dir) || "";
+  var wsHistory = (contextState && Array.isArray(contextState.workspace_history)) ? contextState.workspace_history : [];
+  var workspaceOptions = [];
+  [wsDir, projectWorkspacePath].concat(wsHistory).forEach(function (path) {
+    var normalized = String(path || "").trim();
+    if (!normalized || workspaceOptions.some(function (item) { return item.path === normalized; })) return;
+    workspaceOptions.push({ path: normalized, isDefault: normalized === projectWorkspacePath });
+  });
+  var selectedModel = configuredModels.find(function (item) {
+    return String(item.id || item.model || "") === String(selectedModelId || "");
+  });
+  var agentModelConfig = agentConfigOptions.find(function (option) {
+    return String(option.category || "") === "model";
+  }) || agentConfigOptions.find(function (option) {
+    return String(option.id || "").toLowerCase() === "model";
+  });
+  var agentModelValue = String(
+    agentModelConfig && Object.prototype.hasOwnProperty.call(agentConfigValues, agentModelConfig.id)
+      ? agentConfigValues[agentModelConfig.id]
+      : agentModelConfig && agentModelConfig.currentValue || ""
+  );
+  var agentSelectedModel = agentModelConfig && (agentModelConfig.options || []).find(function (item) {
+    return String(item.value || "") === agentModelValue;
+  });
+  var agentReasoningConfig = agentConfigOptions.find(function (option) {
+    return String(option.category || "") === "thought_level";
+  }) || agentConfigOptions.find(function (option) {
+    return ["reasoning_effort", "reasoning-effort"].indexOf(String(option.id || "").toLowerCase()) >= 0;
+  });
+  var agentReasoningValue = String(
+    agentReasoningConfig && Object.prototype.hasOwnProperty.call(agentConfigValues, agentReasoningConfig.id)
+      ? agentConfigValues[agentReasoningConfig.id]
+      : agentReasoningConfig && agentReasoningConfig.currentValue || ""
+  );
+  var modelLocked = agentManagedModels
+    ? agentConfigLoading || !agentModelConfig || !(agentModelConfig.options || []).length
+    : agentBindingLocked && !capSwitchModel;
+  var modelName = wbcCurrentModel(chat, project, runtime, null);
+  modelName = wbcFriendlyModelName(selectedModel, modelName);
+  if (agentManagedModels) {
+    modelName = agentSelectedModel && (agentSelectedModel.name || agentSelectedModel.value)
+      || agentModelValue
+      || (agentConfigLoading
+        ? wbcT("workbenchChat.agentModelLoading", "Loading Agent models…")
+        : wbcT("workbenchChat.agentModelUnavailable", "Agent did not provide model choices"));
+  }
+  var effectiveReasoningEffort = agentManagedModels ? agentReasoningValue : reasoningEffort;
+  var effortLabel = effectiveReasoningEffort
+    ? wbcT("settings.reasoningEffortValue." + effectiveReasoningEffort, effectiveReasoningEffort)
+    : "";
+  var modelButtonLabel = wbcT("workbenchChat.chooseModel", "Choose model")
+    + ": " + modelName + (effortLabel ? " · " + effortLabel : "");
+  var supportedReasoningEfforts = agentManagedModels
+    ? (agentReasoningConfig && agentReasoningConfig.options || []).map(function (item) {
+        return String(item.value || "");
+      }).filter(Boolean)
+    : wbcSupportedReasoningEfforts(selectedModel);
+
+  function wbcTogglePersona() {
+    var previous = personaOn;
+    var next = !previous;
+    setSoulActive(next);
+    if (!chatId || String(chatId).indexOf("legacy:") === 0) return;
+    model.updateChatPreferences(chatId, { soulActive: next }).then(function (nextChat) {
+      if (chat && nextChat) Object.assign(chat, nextChat);
+    }, function (err) {
+        setSoulActive(previous);
+        window.CyreneUI.require("api").toastError(err, wbcT("workbenchChat.personaFailed", "Failed to toggle persona: "));
+      }).catch(function () {});
+  }
+
+  function wbcAddWorkspace(path) {
+    var selectedPath = String(path || "").trim();
+    var previousOverride = workspaceOverride;
+    var previousActive = workspaceOn;
+    setWorkspaceOverride(selectedPath && selectedPath !== projectWorkspacePath ? selectedPath : "");
+    setWorkspaceActive(true);
+    setContextState(function (prev) {
+      if (!prev) return prev;
+      var history = Array.isArray(prev.workspace_history) ? prev.workspace_history : [];
+      if (selectedPath) {
+        history = [selectedPath].concat(history.filter(function (item) { return item !== selectedPath; })).slice(0, 10);
+      }
+      return { ...prev, workspace_active: true, workspace_dir: selectedPath || prev.workspace_dir, workspace_history: history };
+    });
+    if (!chatId || String(chatId).indexOf("legacy:") === 0) return;
+    model.updateChatPreferences(chatId, {
+      workspaceActive: true,
+      workspaceOverride: selectedPath && selectedPath !== projectWorkspacePath ? selectedPath : "",
+    }).then(function (nextChat) {
+      if (chat && nextChat) Object.assign(chat, nextChat);
+    }, function (err) {
+      setWorkspaceOverride(previousOverride);
+      setWorkspaceActive(previousActive);
+      window.CyreneUI.require("api").toastError(err, wbcT("workbenchChat.workspaceAddFailed", "Failed to add workspace: "));
+    }).catch(function () {});
+  }
+
+  function wbcRemoveWorkspace() {
+    var previous = workspaceOn;
+    setWorkspaceActive(false);
+    if (!chatId || String(chatId).indexOf("legacy:") === 0) return;
+    model.updateChatPreferences(chatId, { workspaceActive: false })
+      .then(function (nextChat) {
+        if (chat && nextChat) Object.assign(chat, nextChat);
+      }, function (err) {
+        setWorkspaceActive(previous);
+        window.CyreneUI.require("api").toastError(err, wbcT("workbenchChat.workspaceRemoveFailed", "Failed to remove workspace: "));
+      }).catch(function () {});
+  }
+
+  function wbcPickWorkspace() {
+    setToolsOpen(false);
+    if (
+      window.cyrene &&
+      window.cyrene.platform === "linux" &&
+      typeof window.cyrene.pickDirectory === "function"
+    ) {
+      window.cyrene.pickDirectory().then(function (data) {
+        if (data && data.path) wbcAddWorkspace(data.path);
+      }).catch(function () {});
+      return;
+    }
+    window.CyreneUI.require("api").fetch("/api/context/pick-directory", { method: "POST" })
+      .then(function (r) { return r.json().catch(function () { return {}; }); })
+      .then(function (data) { if (data && data.path) wbcAddWorkspace(data.path); })
+      .catch(function (err) {
+        window.CyreneUI.require("api").toastError(err, wbcT("workbenchChat.pickDirFailed", "Failed to open directory picker: "));
+      });
+  }
+
+  function wbcSaveRemoteContext(targetChatId, nextDeviceIds) {
+    var normalized = Array.from(new Set(nextDeviceIds || []));
+    setRemoteDeviceIds(normalized);
+    if (!targetChatId || String(targetChatId).indexOf("legacy:") === 0) {
+      return Promise.resolve();
+    }
+    return window.CyreneUI.require("api").fetch(
+      "/api/workbench/chats/" + encodeURIComponent(targetChatId) + "/remote-context",
+      {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ device_ids: normalized }),
+      }
+    ).then(function () {}, function (err) {
+      window.CyreneUI.require("api").toastError(err, wbcT("workbenchChat.remoteContextFailed", "Failed to update remote context: "));
+      throw err;
+    });
+  }
+
+  function wbcToggleRemoteDevice(deviceId) {
+    var previousIds = remoteDeviceIds.slice();
+    var selected = remoteDeviceIds.indexOf(deviceId) >= 0;
+    var nextIds = selected
+      ? remoteDeviceIds.filter(function (item) { return item !== deviceId; })
+      : remoteDeviceIds.concat([deviceId]);
+    wbcSaveRemoteContext(chatId, nextIds).catch(function () {
+      setRemoteDeviceIds(previousIds);
+    });
+  }
+
+  function wbcRemoveRemoteDevice(deviceId) {
+    var previousIds = remoteDeviceIds.slice();
+    var nextIds = remoteDeviceIds.filter(function (item) { return item !== deviceId; });
+    wbcSaveRemoteContext(chatId, nextIds).catch(function () {
+      setRemoteDeviceIds(previousIds);
+    });
+  }
+  // Steer is capability-driven: an Agent that cannot steer mid-run only offers
+  // stop, so the running composer never fabricates a guidance send path.
+  var canSteerWhileRunning = !running || capSteer;
+  var hasRuntimeGuidance = running && !!draft.trim();
+  if (!capSteer) hasRuntimeGuidance = false;
+  var cancelUnsupported = running && !capCancel;
+  // An Agent without interaction.cancel never shows a misleading Stop action;
+  // the composer waits (read-only) until the Agent finishes (handoff §13).
+  var waitingForAgent = running && !capCancel && !hasRuntimeGuidance;
+  var showStopButton = running && !hasRuntimeGuidance && capCancel;
+  var sendDisabled = awaitingAnswer || (running
+    ? waitingForAgent
+    : (!draft.trim() && attachments.length === 0) || (!!draft.trim() && !capText));
+  var isLegacy = !!(chat && chat.legacy);
+
+  // Self-management may prepare text in the current visible composer. Submit
+  // is an explicit stable R2 action, so it is never inherited from the generic
+  // DOM projection and always passes exact local-user delegation review.
+  useWbcEffect(function () {
+    if (!window.CyreneUI.has("uiSurface")) return undefined;
+    var uiSurface = window.CyreneUI.require("uiSurface");
+    var unregister = [];
+    unregister.push(uiSurface.register({
+      node_id: "chat_composer_input",
+      parent_id: "root",
+      scope: "main",
+      get_element: function () { return taRef.current; },
+      get_highlight_element: function () { return composerBoxRef.current; },
+      get_node: function () {
+        if (isLegacy || (compact && running) || (chat && chat.pendingQuestion)) return null;
+        var currentDraft = String(draftRef.current || "");
+        return {
+          role: "textbox",
+          name: wbcT("workbenchChat.placeholder", "Message Cyrene..."),
+          value_summary: currentDraft ? "Draft present" : "Empty draft",
+          state: {
+            session_id: String(chatId || ""),
+            session_kind: "chat",
+            draft_empty: !currentDraft,
+            draft_length: currentDraft.length,
+            running: running === true,
+            submit_exposed: !sendDisabled,
+          },
+        };
+      },
+      actions: [{
+        action_id: "set_value",
+        kind: "set_value",
+        risk: "R1",
+        gesture_aliases: ["text_input"],
+        input_schema: { value: "text<=20000" },
+      }, {
+        action_id: "clear_value",
+        kind: "set_value",
+        risk: "R1",
+        gesture_aliases: ["semantic_clear"],
+        input_schema: { expected_value: "text<=20000" },
+      }],
+      handlers: {
+        set_value: function (input) {
+          var currentDraft = String(draftRef.current || "");
+          var nextDraft = String(input.value || "");
+          if (currentDraft && currentDraft !== nextDraft) {
+            throw new Error("composer draft is not empty");
+          }
+          draftRef.current = nextDraft;
+          setDraft(nextDraft);
+          return { draft_length: nextDraft.length, submitted: false };
+        },
+        clear_value: function (input) {
+          var currentDraft = String(draftRef.current || "");
+          if (currentDraft !== String(input.expected_value || "")) {
+            throw new Error("composer draft changed");
+          }
+          draftRef.current = "";
+          setDraft("");
+          return { draft_length: 0, cleared: true, submitted: false };
+        },
+      },
+    }));
+    var submitMode = running && !hasRuntimeGuidance ? "interrupt" : (running ? "guidance" : "send");
+    var submitRisk = submitMode === "interrupt" ? "R1" : "R2";
+    var submitActionId = submitMode === "interrupt" ? "interrupt" : "submit";
+    unregister.push(uiSurface.register({
+      node_id: "chat_composer_submit",
+      parent_id: "root",
+      scope: "main",
+      get_element: function () { return sendButtonRef.current; },
+      get_node: function () {
+        if (isLegacy || (compact && running) || (chat && chat.pendingQuestion)) return null;
+        return {
+          role: "button",
+          name: submitMode === "interrupt"
+            ? wbcT("workbenchChat.stop", "Stop")
+            : submitMode === "guidance"
+              ? wbcT("workbenchChat.sendGuidance", "Send guidance")
+              : wbcT("workbenchChat.send", "Send"),
+          state: {
+            session_id: String(chatId || ""),
+            session_kind: "chat",
+            mode: submitMode,
+            disabled: !!sendDisabled,
+          },
+        };
+      },
+      actions: sendDisabled ? [] : [{
+        action_id: submitActionId,
+        kind: "invoke",
+        risk: submitRisk,
+        gesture_aliases: ["press", "keyboard"],
+        outcome: {
+          effect: submitMode === "interrupt" ? "interrupts_current_run" : "submits_current_composer",
+          target_scope: "chat",
+          inspect_after: true,
+        },
+      }],
+      handlers: {
+        interrupt: function () {
+          var button = sendButtonRef.current;
+          if (!button || button.disabled) throw new Error("composer interrupt is unavailable");
+          button.click();
+        },
+        submit: function () {
+          var button = sendButtonRef.current;
+          if (!button || button.disabled) throw new Error("composer submit is unavailable");
+          button.click();
+        },
+      },
+    }));
+    return function () { unregister.forEach(function (remove) { remove(); }); };
+  }, [chatId, compact, running, isLegacy, chat && chat.pendingQuestion, hasRuntimeGuidance, sendDisabled]);
+
+  if (isLegacy) {
+    return (
+      <div className={"wbc-composer" + (compact ? " compact" : "")}>
+        <div className="wbc-composer-box wbc-composer-readonly">
+          {topOverlay}
+          {wbcT("workbenchChat.legacyReadonly", "This is an archived legacy session — read-only. Start a new chat to continue the topic.")}
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div className={"wbc-composer" + (compact ? " compact" : "")} data-tour="chat_composer">
+      {activeCommand && (
+        <div className="wbc-command-row">
+          <span className="wbc-command-chip">
+            {WBC_ICONS.slash}
+            {activeCommand.label}
+            <button type="button" disabled={awaitingAnswer} onClick={function () { setCommand(""); }} aria-label={wbcT("workbenchChat.removeCommand", "Remove command")}>{WBC_ICONS.x}</button>
+          </span>
+        </div>
+      )}
+      <div
+        ref={composerBoxRef}
+        className={"wbc-composer-box" + (agentFlow ? (" agent-flow agent-flow-" + agentFlow) : "")}
+        data-agent-flow={agentFlow || undefined}
+      >
+        {topOverlay}
+        {attachments.length > 0 && (
+          <div className="wbc-attach-row">
+            {attachments.map(function (file, i) {
+              var isImg = file.kind === "image" || String(file.content_type || "").indexOf("image") === 0;
+              var attachmentKey = String(file.id || file.url || i);
+              var showImagePreview = isImg && file.url && !failedImagePreviews[attachmentKey];
+              return (
+                <div className={"wbc-attach-card" + (showImagePreview ? " image" : " file")} key={attachmentKey}>
+                  {showImagePreview
+                    ? <img src={file.url} alt="" onError={function () {
+                        setFailedImagePreviews(function (prev) {
+                          return Object.assign({}, prev, { [attachmentKey]: true });
+                        });
+                      }} />
+                    : <>
+                        <WbcFileVisual file={file} className="wbc-composer-file-visual" />
+                        <span className="wbc-attach-file-meta">
+                          <b title={file.name}>{file.name || "file"}</b>
+                          <small>{wbcAttachmentTypeLabel(file)}</small>
+                        </span>
+                      </>}
+                  <button type="button" className="wbc-attach-x" disabled={awaitingAnswer} onClick={function () {
+                    setAttachments(attachments.filter(function (_f, idx) { return idx !== i; }));
+                  }} aria-label={wbcT("workbenchChat.removeAttachment", "Remove attachment")}>{WBC_ICONS.x}</button>
+                </div>
+              );
+            })}
+          </div>
+        )}
+        <textarea
+          ref={taRef}
+          className="wbc-composer-textarea"
+          aria-label={capText ? (running
+            ? (runningPlaceholder || wbcT("workbenchChat.placeholderRunning", "Send guidance to the running agent..."))
+            : (placeholder || wbcT("workbenchChat.placeholder", "Message Cyrene...")))
+            : wbcT("workbenchChat.capability.noText", "This Agent does not support text input")}
+          value={draft}
+          rows={compact ? 1 : 2}
+          disabled={awaitingAnswer || !capText || (running && !capSteer) || cancelUnsupported}
+          onChange={function (e) {
+            draftRef.current = e.target.value;
+            setDraft(e.target.value);
+          }}
+          onBlur={persistCurrentDraft}
+          onKeyDown={onKeyDown}
+          onPaste={onPaste}
+          placeholder={!capText
+            ? wbcT("workbenchChat.capability.noText", "This Agent does not support text input")
+            : cancelUnsupported
+              ? wbcT("workbenchChat.capability.waitForAgent", "Waiting for the Agent to finish…")
+              : running
+                ? (capSteer ? (runningPlaceholder || wbcT("workbenchChat.placeholderRunning", "Send guidance to the running agent...")) : wbcT("workbenchChat.capability.waitForAgent", "Waiting for the Agent to finish…"))
+                : (placeholder || wbcT("workbenchChat.placeholder", "Message Cyrene..."))}
+        />
+        <div className="wbc-composer-actions">
+          <input ref={fileRef} type="file" multiple accept={!capFile && capImage ? "image/*" : undefined} style={{ display: "none" }} onChange={onFilePick} />
+          {(capFile || capImage) && (
+            <button type="button" data-tour="chat_attach" className="wbc-composer-icon" title={uploading ? wbcT("workbenchChat.uploading", "Uploading...") : wbcT("workbenchChat.addAttachment", "Add attachment")} disabled={uploading || running || awaitingAnswer} onClick={pickFiles}>
+              {uploading ? <span className="wb-spinner small" /> : WBC_ICONS.attach}
+            </button>
+          )}
+          {!compact && (
+            <span className="wbc-pop-anchor wbc-tools-anchor" ref={toolsPickerRef}>
+              <button
+                type="button"
+                data-tour="chat_tools"
+                className={"wbc-composer-icon wbc-tools-trigger" + (enabledContentCount > 0 ? " has-content" : "") + (showToolsMenu ? " active" : "")}
+                title={wbcT("workbenchChat.toolsCount", "Tools · {count} enabled", { count: enabledContentCount })}
+                aria-label={wbcT("workbenchChat.toolsCount", "Tools · {count} enabled", { count: enabledContentCount })}
+                aria-haspopup="menu"
+                aria-expanded={showToolsMenu}
+                disabled={running || awaitingAnswer}
+                onClick={function () {
+                  setToolsOpen(!toolsOpen);
+                  setModelOpen(false);
+                }}
+              >
+                <span className="wbc-tools-trigger-icon" aria-hidden="true">{WBC_ICONS.layers}</span>
+                {enabledContentCount > 0 ? <span className="wbc-tools-trigger-count" aria-hidden="true">{enabledContentCount}</span> : null}
+              </button>
+              {showToolsMenu && (
+                <div className="wbc-popmenu wbc-tools-menu" role="menu">
+                  <section
+                    className="wbc-tools-section"
+                    aria-label={wbcT("workbenchChat.contentItems", "Content")}
+                  >
+                    <div className="wbc-tools-section-title">
+                      {wbcT("workbenchChat.contentItems", "Content")}
+                    </div>
+                    <div className="wbc-tools-content-list">
+                      <button type="button" className={"wbc-tools-enabled-row" + (personaOn ? " active" : "")} role="menuitemcheckbox" aria-checked={personaOn} onClick={wbcTogglePersona}>
+                        <span className="wbc-tools-row-icon">{WBC_ICONS.spark}</span>
+                        <span className="wbc-tools-row-copy">
+                          <span>{wbcT("workbenchChat.persona", "Persona")}</span>
+                          <small>{wbcT("workbenchChat.personaDescription", "Cyrene persona settings")}</small>
+                        </span>
+                        {personaOn ? <span className="wbc-tools-row-check">{WBC_ICONS.check}</span> : null}
+                      </button>
+                      {workspaceOptions.map(function (option) {
+                        var selected = workspaceOn && option.path === wsDir;
+                        return (
+                          <button key={option.path} type="button" className={"wbc-tools-enabled-row" + (selected ? " active" : "")} role="menuitemcheckbox" aria-checked={selected} onClick={function () {
+                            if (selected) wbcRemoveWorkspace();
+                            else wbcAddWorkspace(option.path);
+                          }}>
+                            <span className="wbc-tools-row-icon">{WBC_ICONS.folder}</span>
+                            <span className="wbc-tools-row-copy">
+                              <span>{option.isDefault ? wbcT("workbenchChat.defaultWorkspace", "Default workspace") : (wbcWorkspaceDisplayName(option.path) || wbcT("workbenchChat.workspacePath", "Workspace path"))}</span>
+                              <small title={option.path}>{option.path}</small>
+                            </span>
+                            {selected ? <span className="wbc-tools-row-check">{WBC_ICONS.check}</span> : null}
+                          </button>
+                        );
+                      })}
+                      <button type="button" className="wbc-tools-enabled-row wbc-tools-choose-row" role="menuitem" onClick={wbcPickWorkspace}>
+                        <span className="wbc-tools-row-icon">{WBC_ICONS.plus}</span>
+                        <span className="wbc-tools-row-copy"><span>{wbcT("workbenchChat.chooseDirectory", "Choose directory…")}</span></span>
+                      </button>
+                      {remoteDevices.map(function (device) {
+                        var selected = remoteDeviceIds.indexOf(device.device_id) >= 0;
+                        var eligible = !!device.eligible;
+                        var stateLabel = device.state === "syncing_grants"
+                          ? wbcT("workbenchChat.remoteDeviceSyncing", "Syncing permissions…")
+                          : device.state === "offline"
+                            ? wbcT("workbenchChat.remoteDeviceOffline", "Offline · available when reconnected")
+                            : wbcT("workbenchChat.remoteDeviceHint", "{count} granted capabilities", { count: (device.received_capabilities || []).length });
+                        return (
+                          <button key={device.device_id} type="button" disabled={!eligible} className={"wbc-tools-enabled-row" + (selected ? " active" : "")} role="menuitemcheckbox" aria-checked={selected} onClick={function () { wbcToggleRemoteDevice(device.device_id); }}>
+                            <span className="wbc-tools-row-icon">{WBC_ICONS.device}</span>
+                            <span className="wbc-tools-row-copy">
+                              <span>{device.display_name || device.device_id}</span>
+                              <small>{stateLabel}</small>
+                            </span>
+                            {selected ? <span className="wbc-tools-row-check">{WBC_ICONS.check}</span> : null}
+                          </button>
+                        );
+                      })}
+                    </div>
+                  </section>
+                  <section
+                    className="wbc-tools-section wbc-tools-commands"
+                    aria-label={wbcT("workbenchChat.composer.commandMenu", "Commands")}
+                  >
+                    <div className="wbc-tools-section-title">
+                      {wbcT("workbenchChat.commands", "Commands")}
+                    </div>
+                    <div className="wbc-tools-command-grid">
+                      {slashItems.map(function (c) {
+                        var on = command === c.id;
+                        return (
+                          <button key={c.id} type="button" title={c.desc} aria-label={c.label + ": " + c.desc} className={"wbc-tools-command" + (on ? " active" : "")} role="menuitemcheckbox" aria-checked={on} onClick={function () {
+                            setCommand(on ? "" : c.id);
+                            setToolsOpen(false);
+                            if (draft.indexOf("/") === 0) setDraft("");
+                            if (taRef.current) taRef.current.focus();
+                          }}>
+                            <span className="wbc-tools-command-icon">{WBC_COMMAND_ICONS[c.id] || WBC_ICONS.slash}</span>
+                            <span className="wbc-tools-command-copy"><span>{c.label}</span></span>
+                            {on ? <span className="wbc-tools-command-check">{WBC_ICONS.check}</span> : null}
+                          </button>
+                        );
+                      })}
+                    </div>
+                  </section>
+                </div>
+              )}
+            </span>
+          )}
+          <span className="wbc-composer-spacer" />
+          {!compact && modelName ? (
+            <span className="wbc-pop-anchor wbc-model-anchor" ref={modelPickerRef}>
+              <button
+                type="button"
+                data-tour="chat_model_picker"
+                className={"wbc-model-button" + (modelOpen ? " active" : "")}
+                title={modelButtonLabel}
+                aria-label={modelButtonLabel}
+                aria-haspopup="menu"
+                aria-expanded={modelOpen}
+                disabled={running || awaitingAnswer}
+                onClick={function () {
+                  setModelOpen(!modelOpen);
+                  setModelPanel("root");
+                  setToolsOpen(false);
+                }}
+              >
+                <span className="wbc-model-button-icon" aria-hidden="true">{WBC_ICONS.model}</span>
+                <span className="wbc-model-button-name">{modelName}</span>
+                {!agentManagedModels && effortLabel ? <span className="wbc-model-button-effort">{effortLabel}</span> : null}
+                <span className="wbc-model-button-chevron">{WBC_ICONS.chevronDown}</span>
+              </button>
+              {modelOpen && !awaitingAnswer && (
+                <div className="wbc-popmenu wbc-model-menu" role="menu">
+                  {modelPanel === "root" && (
+                    <>
+                      {agentPickerEnabled && (
+                        <button type="button" className="wbc-model-menu-row" onClick={function () { setModelPanel("agents"); }}>
+                          <span className="wbc-model-menu-key">{wbcT("workbenchChat.agent", "Agent")}</span>
+                          <span className="wbc-model-menu-value wbc-model-menu-agent-name">{effectiveAgentName}</span>
+                          <span className="wbc-model-menu-chevron">{WBC_ICONS.chevronRight}</span>
+                        </button>
+                      )}
+                      <button type="button" className={"wbc-model-menu-row" + (modelLocked ? " locked" : "")} disabled={modelLocked} aria-disabled={modelLocked ? "true" : undefined} onClick={modelLocked ? undefined : function () { setModelPanel("models"); }}>
+                        <span className="wbc-model-menu-key">{wbcT("workbenchChat.model", "Model")}</span>
+                        <span className="wbc-model-menu-value">{modelName}</span>
+                        {!modelLocked ? <span className="wbc-model-menu-chevron">{WBC_ICONS.chevronRight}</span> : null}
+                      </button>
+                      {capReasoningEffort && supportedReasoningEfforts.length > 0 && (
+                        <button type="button" className="wbc-model-menu-row" onClick={function () { setModelPanel("effort"); }}>
+                          <span className="wbc-model-menu-key">{wbcT("workbenchChat.reasoningEffort", "Reasoning effort")}</span>
+                          <span className="wbc-model-menu-value">{effortLabel || "—"}</span>
+                          <span className="wbc-model-menu-chevron">{WBC_ICONS.chevronRight}</span>
+                        </button>
+                      )}
+                      {permissionModeVisible && (permissionAgentDefined ? (
+                        <button type="button" className="wbc-model-menu-row" onClick={function () { setModelPanel("root"); }}>
+                          <span className="wbc-model-menu-key">{wbcT("workbenchChat.permissionMode", "Permission mode")}</span>
+                          <span className="wbc-model-menu-value">{wbcT("workbenchChat.permissionAgentManaged", "Managed by Agent")}</span>
+                          <span className="wbc-model-menu-chevron">{WBC_ICONS.chevronRight}</span>
+                        </button>
+                      ) : (
+                        <button type="button" className="wbc-model-menu-row" onClick={function () { setModelPanel("permission"); }}>
+                          <span className="wbc-model-menu-key">{wbcT("workbenchChat.permissionMode", "Permission mode")}</span>
+                          <span className="wbc-model-menu-value">{currentMode.label}</span>
+                          <span className="wbc-model-menu-chevron">{WBC_ICONS.chevronRight}</span>
+                        </button>
+                      ))}
+                    </>
+                  )}
+                  {modelPanel === "agents" && agentPickerEnabled && (
+                    <>
+                      <button type="button" className="wbc-model-menu-back" onClick={function () { setModelPanel("root"); }}>
+                        <span>{WBC_ICONS.chevronLeft}</span>
+                        <span>{wbcT("workbenchChat.agent", "Agent")}</span>
+                      </button>
+                      {agentBindingLocked ? (
+                        <div className="wbc-agent-menu-note" role="status">
+                          {wbcT("workbenchChat.agentLockedNote", "This conversation is bound to its Agent. Choose another Agent to continue in a new chat.")}
+                        </div>
+                      ) : null}
+                      <div className="wbc-agent-menu-group">
+                        <div className="wbc-agent-menu-group-title">{wbcT("workbenchChat.agentGroup.builtin", "Cyrene built-in")}</div>
+                        {wbcComposerAgentRow({
+                          key: "builtin",
+                          agent: { installationId: WBC_BUILTIN_AGENT_INSTALLATION, agentId: WBC_BUILTIN_AGENT_ID, displayName: "Cyrene", builtin: true, installState: "installed", authState: "connected", runtimeState: "ready" },
+                          active: effectiveAgent.installationId === WBC_BUILTIN_AGENT_INSTALLATION,
+                          locked: false,
+                          canPick: true,
+                          onPick: function () {
+                            var binding = wbcDefaultAgentBinding();
+                            pickAgentBinding(binding);
+                            setModelOpen(false); setModelPanel("root");
+                          },
+                          onOpen: onOpenAgentDetail,
+                        })}
+                      </div>
+                      <div className="wbc-agent-menu-group">
+                        <div className="wbc-agent-menu-group-title">{wbcT("workbenchChat.agentGroup.installed", "Installed Agents")}</div>
+                        {agentOptions.filter(function (agent) { return !wbcIsBuiltinAgent(agent); }).map(function (agent) {
+                          var availability = wbcAgentAvailability(agent);
+                          var active = String(effectiveAgent.installationId || "") === String(agent.installationId || "");
+                          return wbcComposerAgentRow({
+                            key: String(agent.installationId || agent.agentId || ""),
+                            agent: agent,
+                            active: active,
+                            locked: false,
+                            availability: availability,
+                            canPick: availability.state === "available",
+                            onPick: function () {
+                              var binding = {
+                                agent: { installationId: String(agent.installationId || "") },
+                                modelAccess: agent.modelAccess && agent.modelAccess.mode
+                                  ? { mode: String(agent.modelAccess.mode), profileId: String(agent.modelAccess.profileId || "primary") }
+                                  : { mode: "cyrene_managed", profileId: "primary" },
+                              };
+                              pickAgentBinding(binding);
+                              setModelOpen(false); setModelPanel("root");
+                            },
+                            onOpen: onOpenAgentDetail,
+                          });
+                        })}
+                        {agentOptionsLoaded && agentOptions.filter(function (agent) { return !wbcIsBuiltinAgent(agent); }).length === 0 ? (
+                          <div className="wbc-agent-menu-empty">{wbcT("workbenchChat.agentGroup.installedEmpty", "No installed Agents yet — install one from Extensions.")}</div>
+                        ) : null}
+                      </div>
+                    </>
+                  )}
+                  {modelPanel === "models" && (
+                    <>
+                      <button type="button" className="wbc-model-menu-back" onClick={function () { setModelPanel("root"); }}>
+                        <span>{WBC_ICONS.chevronLeft}</span>
+                        <span>{wbcT("workbenchChat.model", "Model")}</span>
+                      </button>
+                      {modelLocked ? (
+                        <div className="wbc-agent-menu-note" role="status">
+                          {wbcT("workbenchChat.modelLockedNote", "This Agent does not support switching models after the first message.")}
+                        </div>
+                      ) : null}
+                      {(agentManagedModels ? (agentModelConfig && agentModelConfig.options || []) : configuredModels).map(function (item) {
+                        var id = String(agentManagedModels ? item.value || "" : item.id || item.model || "");
+                        var active = agentManagedModels ? id === agentModelValue : id === selectedModelId;
+                        return (
+                          <button key={id} type="button" className={active ? "active" : ""} disabled={modelLocked} aria-disabled={modelLocked ? "true" : undefined} onClick={modelLocked ? undefined : function () {
+                            if (agentManagedModels) {
+                              var nextValues = Object.assign({}, agentConfigValues, { [agentModelConfig.id]: id });
+                              setAgentConfigValues(nextValues);
+                              wbcPublishChatModelChanged(chatId, item, { refresh: false });
+                              model.updateAgentConfigValues(chatId, { [agentModelConfig.id]: id }).then(function (nextChat) {
+                                if (nextChat && nextChat.agentConfigValues) setAgentConfigValues(nextChat.agentConfigValues);
+                                wbcPublishChatModelChanged(chatId, Object.assign({}, item, {
+                                  model: nextChat && nextChat.model || item.name || item.value,
+                                }));
+                                return model.getAgentConfigOptions(chatId);
+                              }).then(function (payload) {
+                                if (!payload) return;
+                                setAgentConfigOptions(Array.isArray(payload.configOptions) ? payload.configOptions : []);
+                                setAgentConfigValues(payload.values && typeof payload.values === "object" ? payload.values : {});
+                              }).catch(function () {
+                                setAgentConfigValues(agentConfigValues);
+                                wbcPublishChatModelChanged(chatId, {}, { refresh: true });
+                              });
+                            } else {
+                              setSelectedModelId(id);
+                              var nextEffort = wbcReasoningEffortForModel(item, "");
+                              setReasoningEffort(nextEffort);
+                              wbcPublishChatModelChanged(chatId, item, { refresh: false });
+                              if (chatId && String(chatId).indexOf("legacy:") !== 0) {
+                                model.updateChatPreferences(chatId, { model: id, reasoningEffort: nextEffort }).then(function (nextChat) {
+                                  if (chat && nextChat) Object.assign(chat, nextChat);
+                                  wbcPublishChatModelChanged(chatId, Object.assign({}, item, {
+                                    model: nextChat && nextChat.model || item.model || item.name,
+                                  }));
+                                }).catch(function () {
+                                  wbcPublishChatModelChanged(chatId, {}, { refresh: true });
+                                });
+                              }
+                            }
+                            setModelPanel("root");
+                          }}>
+                            <span className="wbc-popmenu-label">{item.name || item.model || item.value}</span>
+                            {wbcLocalizedModelDescription(item) ? <span className="wbc-popmenu-desc">{wbcLocalizedModelDescription(item)}</span> : null}
+                            {active ? <span className="wbc-popmenu-check">{WBC_ICONS.check}</span> : null}
+                          </button>
+                        );
+                      })}
+                      {agentManagedModels && !agentConfigLoading && (!agentModelConfig || !(agentModelConfig.options || []).length) ? (
+                        <div className="wbc-agent-menu-empty">{wbcT("workbenchChat.agentModelUnavailable", "This Agent did not provide model choices.")}</div>
+                      ) : null}
+                    </>
+                  )}
+                  {modelPanel === "effort" && (
+                    <>
+                      <button type="button" className="wbc-model-menu-back" onClick={function () { setModelPanel("root"); }}>
+                        <span>{WBC_ICONS.chevronLeft}</span>
+                        <span>{wbcT("workbenchChat.reasoningEffort", "Reasoning effort")}</span>
+                      </button>
+                      {supportedReasoningEfforts.map(function (effort) {
+                        var active = effort === effectiveReasoningEffort;
+                        return (
+                          <button key={effort} type="button" className={active ? "active" : ""} onClick={function () {
+                            if (agentManagedModels && agentReasoningConfig) {
+                              var previousValues = agentConfigValues;
+                              var nextValues = Object.assign({}, previousValues, { [agentReasoningConfig.id]: effort });
+                              setAgentConfigValues(nextValues);
+                              model.updateAgentConfigValues(chatId, { [agentReasoningConfig.id]: effort }).then(function (nextChat) {
+                                if (nextChat && nextChat.agentConfigValues) setAgentConfigValues(nextChat.agentConfigValues);
+                              }).catch(function () {
+                                setAgentConfigValues(previousValues);
+                              });
+                            } else {
+                              setReasoningEffort(effort);
+                              if (chatId && String(chatId).indexOf("legacy:") !== 0) {
+                                model.updateChatPreferences(chatId, { reasoningEffort: effort }).then(function (nextChat) {
+                                  if (chat && nextChat) Object.assign(chat, nextChat);
+                                }).catch(function () {});
+                              }
+                            }
+                            setModelPanel("root");
+                          }}>
+                            <span className="wbc-popmenu-label">{wbcT("settings.reasoningEffortValue." + effort, effort)}</span>
+                            {active ? <span className="wbc-popmenu-check">{WBC_ICONS.check}</span> : null}
+                          </button>
+                        );
+                      })}
+                    </>
+                  )}
+                  {modelPanel === "permission" && permissionCapability === "supported" && (
+                    <>
+                      <button type="button" className="wbc-model-menu-back" onClick={function () { setModelPanel("root"); }}>
+                        <span>{WBC_ICONS.chevronLeft}</span>
+                        <span>{wbcT("workbenchChat.permissionMode", "Permission mode")}</span>
+                      </button>
+                      {translatedModes.map(function (item) {
+                        var active = mode === item.id;
+                        return (
+                          <button key={item.id} type="button" className={active ? "active" : ""} onClick={function () {
+                            setMode(item.id);
+                            setModelPanel("root");
+                          }}>
+                            <span className="wbc-popmenu-label">{item.label}</span>
+                            <span className="wbc-popmenu-desc">{item.desc}</span>
+                            {active ? <span className="wbc-popmenu-check">{WBC_ICONS.check}</span> : null}
+                          </button>
+                        );
+                      })}
+                    </>
+                  )}
+                </div>
+              )}
+            </span>
+          ) : null}
+          {!compact && capAudio && voiceSnapshot.status.asr_ready ? (
+            <button
+              type="button"
+              data-tour="chat_voice"
+              className={"wbc-composer-icon wbc-voice-input" + (voicePhase ? " " + voicePhase : "")}
+              onClick={toggleVoiceInput}
+              disabled={awaitingAnswer || voicePhase === "starting" || voicePhase === "transcribing"}
+              title={voicePhase === "recording"
+                ? (voiceSnapshot.status.auto_stop_on_silence !== false
+                    ? wbcT("workbenchChat.voiceInputAutoStop", "Recording · pauses automatically start recognition")
+                    : wbcT("workbenchChat.voiceInputStop", "Stop recording"))
+                : voicePhase === "starting"
+                  ? wbcT("workbenchChat.voiceInputStarting", "Accessing microphone…")
+                  : voicePhase === "transcribing"
+                  ? wbcT("workbenchChat.voiceTranscribing", "Recognizing speech…")
+                  : wbcT("workbenchChat.voiceInputStart", "Voice input")}
+              aria-label={voicePhase === "recording"
+                ? wbcT("workbenchChat.voiceInputStop", "Stop recording")
+                : wbcT("workbenchChat.voiceInputStart", "Voice input")}
+              aria-pressed={voicePhase === "recording"}
+              aria-busy={voicePhase === "starting" || voicePhase === "transcribing"}
+            >
+              {voicePhase === "starting" || voicePhase === "transcribing"
+                ? <span className="wb-spinner small" />
+                : ComposerBrowserIcon ? <ComposerBrowserIcon name="microphone" size={16} /> : null}
+            </button>
+          ) : null}
+          <button
+            ref={sendButtonRef}
+            type="button"
+            className={"wbc-send" + (showStopButton ? " stop" : "")}
+            onClick={running && !hasRuntimeGuidance ? onInterrupt : submit}
+            disabled={sendDisabled}
+            title={running
+              ? (hasRuntimeGuidance
+                  ? wbcT("workbenchChat.sendGuidance", "Send guidance")
+                  : showStopButton
+                    ? wbcT("workbenchChat.stop", "Stop")
+                    : wbcT("workbenchChat.capability.waitForAgent", "Waiting for the Agent to finish…"))
+              : wbcT("workbenchChat.send", "Send")}
+            aria-label={running
+              ? (hasRuntimeGuidance
+                  ? wbcT("workbenchChat.sendGuidance", "Send guidance")
+                  : showStopButton
+                    ? wbcT("workbenchChat.stop", "Stop")
+                    : wbcT("workbenchChat.capability.waitForAgent", "Waiting for the Agent to finish…"))
+              : wbcT("workbenchChat.send", "Send")}
+          >
+            {showStopButton ? WBC_ICONS.stop : WBC_ICONS.send}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// Shared with the quick-chat surface (workbench-quick-chat.jsx), which renders
+// the exact same composer (attachments, commands, permission mode, IME-safe
+// send) rather than forking a second input box.
+// Also shared with the quick-chat surface so its transcript renders with the
+// exact same message cards (tool-call traces, agent files, attachments, the live
+// "thinking/calling tools" card) as the main conversation instead of a
+// simplified text bubble. They are self-contained (only module-level helpers +
+// optional callbacks), so the quick-chat window can mount them standalone.
+// Clears a persisted draft + attachments for one chat in a given namespace.
+// The quick-chat window keeps its draft on a failed send (clearOnSend=false),
+// so it calls this on success to wipe the namespaced draft before remounting.
+function wbcClearComposerDraft(chatId, ns) {
+  wbcSaveDraft(chatId, "", ns);
+  wbcSaveAttachments(chatId, [], ns);
+}
+
+// Context picker popup controls now live directly in WbcComposer's single tools menu.
+
+// ---------------------------------------------------------------------------
+// Branch tree (fork lineage navigator)
+// ---------------------------------------------------------------------------
+
+// Resolve the fork lineage the active chat belongs to. Walks up
+// forkedFromChatId to the lineage root, then confirms the lineage spans more
+// than one chat (a lone conversation has no branches to show). Returns
+// { root, byId, children } or null when there's nothing to draw.
+function wbcBranchLineage(chats, activeChatId) {
+  if (!activeChatId || !Array.isArray(chats) || !chats.length) return null;
+  var byId = {};
+  chats.forEach(function (c) { if (c && c.id) byId[c.id] = c; });
+  var active = byId[activeChatId];
+  if (!active) return null;
+  var children = {};
+  chats.forEach(function (c) {
+    var parent = c && c.forkedFromChatId;
+    if (parent && byId[parent]) (children[parent] = children[parent] || []).push(c);
+  });
+  Object.keys(children).forEach(function (key) {
+    children[key].sort(function (a, b) {
+      return String(a.createdAt || "").localeCompare(String(b.createdAt || ""));
+    });
+  });
+  // Climb to the lineage root (a missing/deleted parent terminates the walk).
+  var root = active;
+  var guard = 0;
+  while (root.forkedFromChatId && byId[root.forkedFromChatId] && guard < 500) {
+    root = byId[root.forkedFromChatId];
+    guard += 1;
+  }
+  var size = 0;
+  (function count(node) {
+    size += 1;
+    (children[node.id] || []).forEach(count);
+  })(root);
+  if (size < 2) return null;
+  return { root: root, byId: byId, children: children };
+}
+
+// Flatten a lineage into render rows via DFS. Each chat is a vertical lane at
+// its depth: a head row (root start or fork divergence) and, once it has a
+// reply, a tip row (its latest message). Children nest between the two at
+// depth+1. Per-row line flags drive the connectors so the lane stays unbroken:
+//   lineDown — own column runs from the dot to the row bottom (head with more
+//              below it); lineUp — own column runs from the top into the dot
+//              (tip closing the lane); elbow — horizontal join from the parent
+//              column (only a fork head taps its parent's trunk).
+function wbcBranchRows(lineage) {
+  if (!lineage) return [];
+  var rows = [];
+  (function walk(chat, depth, isRoot) {
+    var children = lineage.children[chat.id] || [];
+    var head = isRoot
+      ? String(chat.firstMessage || chat.preview || "")
+      : String(chat.forkMessage || chat.firstMessage || chat.preview || "");
+    var tip = String(chat.preview || "");
+    // A branch with no reply yet has tip === head; render only the head node.
+    var hasTip = !!(tip && tip !== head);
+    var hasKids = children.length > 0;
+    rows.push({
+      chatId: chat.id, kind: isRoot ? "root" : "fork", depth: depth,
+      text: head, title: chat.title, isHead: true,
+      lineUp: false, lineDown: hasTip || hasKids, elbow: depth > 0,
+    });
+    children.forEach(function (child) { walk(child, depth + 1, false); });
+    if (hasTip) {
+      rows.push({
+        chatId: chat.id, kind: "tip", depth: depth,
+        text: tip, title: chat.title, isHead: false,
+        lineUp: true, lineDown: false, elbow: false,
+      });
+    }
+  })(lineage.root, 0, true);
+  return rows;
+}
+
+// Connector segments for one compact Git-style row. Each depth gets a narrow
+// lane; the root lane uses the source-control blue while nested lanes use the
+// Workbench accent. Keeping the tone on each segment lets a fork stay readable
+// without adding cards, badges, or other decoration around the row.
+function wbcBranchConnectors(row) {
+  var U = 14, CY = 28, BASE = 14, CURVE_W = 14, CURVE_H = 24, d = row.depth;
+  function cx(col) { return col * U + BASE; }
+  function tone(col) { return col === 0 ? "main-lane" : "fork-lane"; }
+  var segs = [];
+  for (var c = 0; c < d; c += 1) {
+    segs.push({ cls: "v " + tone(c), style: { left: cx(c) + "px", top: 0, bottom: 0 } });
+  }
+  if (row.lineDown) segs.push({ cls: "v " + tone(d), style: { left: cx(d) + "px", top: CY + "px", bottom: 0 } });
+  if (row.lineUp) segs.push({ cls: "v " + tone(d), style: { left: cx(d) + "px", top: 0, height: CY + "px" } });
+  if (row.elbow) {
+    var nodeX = cx(d), parentX = cx(d - 1);
+    var curveWidth = Math.min(CURVE_W, nodeX - parentX);
+    var straightWidth = nodeX - curveWidth - parentX;
+    if (straightWidth > 0) {
+      segs.push({ cls: "h fork-lane", style: { left: parentX + "px", top: (CY - CURVE_H) + "px", width: (straightWidth + 1) + "px" } });
+    }
+    segs.push({
+      cls: "arc fork-lane",
+      style: {
+        left: (nodeX - curveWidth) + "px",
+        top: (CY - CURVE_H) + "px",
+        width: curveWidth + "px",
+        height: CURVE_H + "px",
+      },
+    });
+  }
+  return segs;
+}
+
+function wbcBranchKindLabel(kind) {
+  if (kind === "root") return wbcT("workbenchChat.branchStart", "Start");
+  if (kind === "tip") return wbcT("workbenchChat.branchEnd", "Latest");
+  return wbcT("workbenchChat.branchFork", "Branch");
+}
+
+function wbcBrowserStateForChat(chatId) {
+  var id = String(chatId || "").trim();
+  if (!id) return {};
+  var dataState = window.CyreneUI.require("data").state;
+  var byChat = dataState.browserByChat || {};
+  if (byChat[id]) return byChat[id];
+  var browser = dataState.browser || {};
+  var browserSessionId = String(browser.sessionId || browser.chatId || "").trim();
+  return browserSessionId && browserSessionId === id ? browser : {};
+}
+
+// Right-panel tab rendering the fork lineage as a node-and-line tree. Clicking
+// a node switches to that branch; the active chat's nodes stay highlighted.
+
+export { WbcComposer, wbcBranchConnectors, wbcBranchKindLabel, wbcBranchLineage, wbcBranchRows, wbcBrowserStateForChat, wbcClearComposerDraft }

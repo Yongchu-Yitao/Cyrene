@@ -1,8 +1,7 @@
 // Cyrene Workbench platform registry.
 //
-// The UI ships as ordered non-module scripts for compatibility with the
-// current React/Electron build. Cross-script services must be registered here
-// instead of creating new ad-hoc window globals.
+// The UI ships from one ES-module entry. The registry remains the stable seam
+// between feature modules while historical globals are migrated away.
 (function (root) {
   "use strict";
 
