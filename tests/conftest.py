@@ -217,5 +217,14 @@ def pytest_runtest_call(item):
         return
 
     from cyrene.runtime.lifecycle import shutdown_background_work
+    from cyrene.runtime.task_lifecycle import cancel_and_wait
 
     loop.run_until_complete(shutdown_background_work())
+    # Some tests intentionally exercise detached work that is outside the
+    # production registries drained above.  Await its cancellation while the
+    # pytest-owned loop is still alive so aiosqlite worker threads cannot post
+    # completion callbacks into a loop that the next fixture has already
+    # closed.
+    pending = {task for task in asyncio.all_tasks(loop) if not task.done()}
+    if pending:
+        loop.run_until_complete(cancel_and_wait(pending, timeout=5.0))

@@ -19,6 +19,7 @@ The Chinese edition remains the most detailed record for older releases.
 - Reconnection and event replay are more stable for very long streamed replies, while accumulated run history remains bounded to reduce slowdowns during extended use.
 - When a background terminal exits, the Agent receives a clear continuation notice in the original conversation and reads the latest terminal state before resuming. Terminal titles, notes, and project ownership are retained correctly.
 - Official DeepSeek and MiniMax connections consistently use the correct versioned endpoint. Initial setup, connection tests, model discovery, and real conversations now follow the same connection rules so an incorrect fallback cannot hide the real issue.
+- Model connections and primary, vision, and secondary routes now follow the exact order saved in Settings for conversations, retries, fallbacks, and task runs. Credentials remain isolated between services, and upgraded legacy settings are cleaned up so the selected model matches the model actually used.
 - Image-preview bubbles in user messages keep a compact width and align correctly to the right instead of stretching across a wide message lane, while still adapting to narrow windows.
 - Workbench frontend and conversation services have been reorganized without changing the existing entry points or workflows for chats, tasks, split panes, search, PDF, voice, and Settings, providing a more stable foundation for future updates.
 
