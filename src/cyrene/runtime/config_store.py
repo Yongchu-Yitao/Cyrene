@@ -10,6 +10,7 @@ The legacy files are renamed to .bak for safety.
 
 from __future__ import annotations
 
+import importlib
 import json
 import logging
 import os
@@ -875,24 +876,27 @@ def reset_all() -> None:
 
 def get_models() -> list[dict]:
     """Return the primary route as a compatibility view, never stored state."""
-    from cyrene.runtime.model_configuration import candidates_for_route
-
-    return candidates_for_route("primary")
+    model_configuration = importlib.import_module(
+        "cyrene.runtime.model_configuration"
+    )
+    return model_configuration.candidates_for_route("primary")
 
 
 def save_models(models: list[dict]) -> None:
     """Accept a legacy flat write and immediately normalize it into the graph."""
-    from cyrene.runtime.model_configuration import save_primary_model_candidates
-
-    save_primary_model_candidates(list(models))
+    model_configuration = importlib.import_module(
+        "cyrene.runtime.model_configuration"
+    )
+    model_configuration.save_primary_model_candidates(list(models))
 
 
 def get_custom_models() -> list[dict]:
     """Return non-Codex chat profiles derived from the model graph."""
-    from cyrene.runtime.model_configuration import selectable_model_candidates
-
     return [
-        model for model in selectable_model_candidates()
+        model
+        for model in importlib.import_module(
+            "cyrene.runtime.model_configuration"
+        ).selectable_model_candidates()
         if str(model.get("provider") or "") != "codex_oauth"
         and "chat" in (model.get("capabilities") or [])
     ]
@@ -903,12 +907,12 @@ def save_custom_models(models: list[dict]) -> None:
 
 
 def get_codex_model() -> dict:
-    from cyrene.runtime.model_configuration import selectable_model_candidates
-
     return next(
         (
             model
-            for model in selectable_model_candidates()
+            for model in importlib.import_module(
+                "cyrene.runtime.model_configuration"
+            ).selectable_model_candidates()
             if str(model.get("provider") or "") == "codex_oauth"
         ),
         {},
@@ -936,9 +940,9 @@ def save_model_source(source: str) -> None:
 
 
 def get_vision_models() -> list[dict]:
-    from cyrene.runtime.model_configuration import candidates_for_route
-
-    return candidates_for_route("vision")
+    return importlib.import_module(
+        "cyrene.runtime.model_configuration"
+    ).candidates_for_route("vision")
 
 
 def _parse_ctx_str(ctx_str: str) -> int:
@@ -1146,9 +1150,9 @@ def save_vision_models(models: list[dict]) -> None:
 
 
 def get_secondary_model() -> dict:
-    from cyrene.runtime.model_configuration import candidates_for_route
-
-    candidates = candidates_for_route("secondary")
+    candidates = importlib.import_module(
+        "cyrene.runtime.model_configuration"
+    ).candidates_for_route("secondary")
     return dict(candidates[0]) if candidates else {}
 
 

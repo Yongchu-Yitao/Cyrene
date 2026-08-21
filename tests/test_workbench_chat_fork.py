@@ -211,7 +211,7 @@ def test_chat_message_selects_configured_model_and_reasoning_effort(
 ):
     from cyrene import agent
     from cyrene.model_runtime import client as model_client
-    from cyrene.runtime import settings_store
+    from cyrene.runtime import model_configuration
 
     _write_chat(fork_env, "chat_model", [], permissionMode="auto")
     configured = {
@@ -221,7 +221,11 @@ def test_chat_message_selects_configured_model_and_reasoning_effort(
         "base_url": "https://api.example/v1",
         "reasoning_effort": "medium",
     }
-    monkeypatch.setattr(settings_store, "get_models", lambda: [configured])
+    monkeypatch.setattr(
+        model_configuration,
+        "selectable_model_candidates",
+        lambda: [configured],
+    )
     selected = {}
     monkeypatch.setattr(
         model_client,
@@ -259,7 +263,7 @@ def test_retry_recovers_from_stale_model_selection_after_source_switch(
 ):
     from cyrene import agent
     from cyrene.model_runtime import client as model_client
-    from cyrene.runtime import settings_store
+    from cyrene.runtime import model_configuration
 
     _write_chat(
         fork_env,
@@ -288,7 +292,16 @@ def test_retry_recovers_from_stale_model_selection_after_source_switch(
         "base_url": "https://api.deepseek.example/v1",
         "reasoning_effort": "max",
     }
-    monkeypatch.setattr(settings_store, "get_models", lambda: [deepseek])
+    monkeypatch.setattr(
+        model_configuration,
+        "selectable_model_candidates",
+        lambda: [deepseek],
+    )
+    monkeypatch.setattr(
+        model_configuration,
+        "candidates_for_route",
+        lambda route: [deepseek] if route == "primary" else [],
+    )
     selected = {}
     monkeypatch.setattr(
         model_client,
@@ -322,12 +335,12 @@ def test_retry_recovers_from_stale_model_selection_after_source_switch(
 def test_explicit_unknown_model_still_returns_validation_error(
     client, fork_env, monkeypatch
 ):
-    from cyrene.runtime import settings_store
+    from cyrene.runtime import model_configuration
 
     _write_chat(fork_env, "chat_unknown_model", [], permissionMode="auto")
     monkeypatch.setattr(
-        settings_store,
-        "get_models",
+        model_configuration,
+        "selectable_model_candidates",
         lambda: [{"id": "deepseek-flash", "model": "deepseek-v4-flash"}],
     )
 

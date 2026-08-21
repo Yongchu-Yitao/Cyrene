@@ -54,7 +54,7 @@ def test_config_reset_replaces_persisted_and_live_environment(monkeypatch):
     config_store.reset_all()
 
     assert persisted["settings_revision"] == 9
-    assert persisted["settings"]["models"] == []
+    assert "models" not in persisted["settings"]
     assert persisted["env"] == config_store._DEFAULT_ENV
     assert "OPENAI_API_KEY" not in live_env
     assert "REMOVED_AFTER_RESET" not in live_env
