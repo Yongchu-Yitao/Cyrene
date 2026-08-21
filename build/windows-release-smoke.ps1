@@ -55,8 +55,19 @@ function Invoke-CapturedProcess {
     $combined = ($stdout, $stderr) -join [Environment]::NewLine
     if ($combined) { Write-Host $combined }
 
+    # Windows PowerShell 5 can leave ExitCode unset when Start-Process is used
+    # without -Wait even after Process.WaitForExit() succeeds. Every caller also
+    # requires a command-specific success marker and rejects explicit failure
+    # markers, so retain non-zero codes when available and let those stronger
+    # output contracts cover the legacy null case.
+    $exitCode = $process.ExitCode
+    if ($null -eq $exitCode) {
+        Write-Host "$Label completed without an exposed process exit code"
+        $exitCode = 0
+    }
+
     return @{
-        ExitCode = $process.ExitCode
+        ExitCode = $exitCode
         Output = $combined
     }
 }

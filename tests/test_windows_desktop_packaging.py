@@ -102,6 +102,8 @@ def test_windows_release_installs_and_runs_the_built_nsis_package():
     assert "\n        -Wait `" not in captured_process
     assert "$process.WaitForExit($TimeoutSeconds * 1000)" in captured_process
     assert "timed out after $TimeoutSeconds seconds" in captured_process
+    assert "if ($null -eq $exitCode)" in captured_process
+    assert "ExitCode = $exitCode" in captured_process
 
 
 def test_windows_backend_termination_does_not_hold_electron_open():
