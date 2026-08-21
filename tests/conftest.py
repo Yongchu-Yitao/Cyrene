@@ -28,7 +28,6 @@ import importlib
 import sys
 from pathlib import Path
 
-import aiosqlite
 import pytest
 import PIL as _REAL_PIL
 import pypdf as _REAL_PYPDF
@@ -39,46 +38,6 @@ import pypdf as _REAL_PYPDF
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 
 _REAL_PIL_IMAGE = importlib.import_module("PIL.Image")
-
-# Keep test-created aiosqlite connections reachable until their worker threads
-# have been closed and joined.  Detached runtime tasks can otherwise drop the
-# last connection reference while pytest is tearing down the owning loop,
-# leaving sqlite worker threads active during interpreter finalization.
-_OPEN_AIOSQLITE_CONNECTIONS: set[aiosqlite.Connection] = set()
-_ORIGINAL_AIOSQLITE_CONNECT = aiosqlite.connect
-
-
-def _tracked_aiosqlite_connect(*args, **kwargs):
-    connection = _ORIGINAL_AIOSQLITE_CONNECT(*args, **kwargs)
-    _OPEN_AIOSQLITE_CONNECTIONS.add(connection)
-    return connection
-
-
-aiosqlite.connect = _tracked_aiosqlite_connect
-
-
-async def _close_aiosqlite_connections(
-    connections: tuple[aiosqlite.Connection, ...],
-) -> None:
-    open_connections = [
-        connection
-        for connection in connections
-        if connection._connection is not None
-    ]
-    if open_connections:
-        await asyncio.gather(
-            *(connection.close() for connection in open_connections),
-            return_exceptions=True,
-        )
-
-
-def _join_aiosqlite_workers(
-    connections: tuple[aiosqlite.Connection, ...],
-) -> None:
-    for connection in connections:
-        worker = connection._thread
-        if worker.ident is not None:
-            worker.join(timeout=5.0)
 
 _WORKBENCH_CHAT_SOURCE_FILES = (
     "workbench-chat.jsx",
@@ -281,19 +240,3 @@ def pytest_runtest_call(item):
     pending = {task for task in asyncio.all_tasks(loop) if not task.done()}
     if pending:
         loop.run_until_complete(cancel_and_wait(pending, timeout=5.0))
-
-    connections = tuple(_OPEN_AIOSQLITE_CONNECTIONS)
-    _OPEN_AIOSQLITE_CONNECTIONS.clear()
-    loop.run_until_complete(_close_aiosqlite_connections(connections))
-    _join_aiosqlite_workers(connections)
-
-
-def pytest_sessionfinish(session, exitstatus):
-    """Close connections created outside pytest-asyncio-managed test calls."""
-    del session, exitstatus
-    connections = tuple(_OPEN_AIOSQLITE_CONNECTIONS)
-    _OPEN_AIOSQLITE_CONNECTIONS.clear()
-    if not connections:
-        return
-    asyncio.run(_close_aiosqlite_connections(connections))
-    _join_aiosqlite_workers(connections)

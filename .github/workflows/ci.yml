@@ -61,9 +61,12 @@ jobs:
       - name: Run full Python suite
         env:
           PYTHONFAULTHANDLER: "1"
-        run: >-
-          uv run --locked pytest -q
-          -W error::pytest.PytestUnhandledThreadExceptionWarning
+        run: |
+          gdb --batch --return-child-result \
+            -ex run \
+            -ex "thread apply all bt" \
+            --args .venv/bin/python -m pytest -q \
+            -W error::pytest.PytestUnhandledThreadExceptionWarning
 
   webui-electron:
     name: WebUI build / Electron tests
