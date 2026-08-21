@@ -37,6 +37,7 @@ import json
 import logging
 import sqlite3
 import threading
+import zlib
 from datetime import datetime, timedelta, timezone
 from typing import Any, AsyncGenerator, Awaitable, Callable
 from uuid import uuid4
@@ -75,6 +76,8 @@ _DURABLE_RETENTION_DAYS = 7
 # events continue to force an immediate flush.
 _DURABLE_EVENT_BATCH_INTERVAL_SECONDS = 1.0
 _DURABLE_EVENT_BATCH_MAX = 512
+_COMPRESSED_EVENT_PREFIX = b"CYE1"
+_COMPRESS_EVENT_MIN_BYTES = 512
 _BATCHABLE_DURABLE_EVENT_TYPES = frozenset({
     "reasoning_delta",
     "reply_delta",
@@ -96,6 +99,55 @@ Runner = Callable[["ChatRun"], Awaitable[None]]
 
 def _ndjson_line(payload: dict[str, Any]) -> str:
     return json.dumps(payload, ensure_ascii=False) + "\n"
+
+
+def _encode_durable_event(event: dict[str, Any]) -> str | memoryview:
+    """Encode one event without changing its cursor or replay payload."""
+    raw = json.dumps(
+        event,
+        ensure_ascii=False,
+        separators=(",", ":"),
+        default=str,
+    ).encode("utf-8")
+    if len(raw) < _COMPRESS_EVENT_MIN_BYTES:
+        return raw.decode("utf-8")
+    compressed = zlib.compress(raw, level=3)
+    if len(compressed) + len(_COMPRESSED_EVENT_PREFIX) >= len(raw):
+        return raw.decode("utf-8")
+    return sqlite3.Binary(_COMPRESSED_EVENT_PREFIX + compressed)
+
+
+def _decode_durable_event(value: Any) -> dict[str, Any]:
+    if isinstance(value, memoryview):
+        value = value.tobytes()
+    if isinstance(value, bytes):
+        if value.startswith(_COMPRESSED_EVENT_PREFIX):
+            value = zlib.decompress(value[len(_COMPRESSED_EVENT_PREFIX):])
+        text = value.decode("utf-8")
+    else:
+        text = str(value)
+    decoded = json.loads(text)
+    if not isinstance(decoded, dict):
+        raise ValueError("durable chat event must be a JSON object")
+    return decoded
+
+
+def _trim_durable_events(
+    conn: sqlite3.Connection,
+    run_id: str,
+    last_seq: int,
+) -> None:
+    """Match the live ring buffer: retain ack plus the newest events."""
+    cutoff = int(last_seq) - (_MAX_BUFFER_EVENTS - 1)
+    if cutoff < 2:
+        return
+    conn.execute(
+        """
+        DELETE FROM workbench_chat_run_events
+        WHERE run_id = ? AND seq > 1 AND seq <= ?
+        """,
+        (str(run_id), cutoff),
+    )
 
 
 class ChatRunEventStore:
@@ -166,6 +218,19 @@ class ChatRunEventStore:
                     "DELETE FROM workbench_chat_runs WHERE run_id = ?",
                     [(run_id,) for run_id in expired],
                 )
+            oversized = conn.execute(
+                """
+                SELECT run_id, last_seq FROM workbench_chat_runs
+                WHERE last_seq >= ?
+                """,
+                (_MAX_BUFFER_EVENTS,),
+            ).fetchall()
+            for row in oversized:
+                _trim_durable_events(
+                    conn,
+                    str(row["run_id"]),
+                    int(row["last_seq"]),
+                )
 
     def create(self, run: "ChatRun") -> None:
         with self._lock, self._connect() as conn:
@@ -202,12 +267,7 @@ class ChatRunEventStore:
                 (
                     str(run_id),
                     int(event.get("_seq") or 0),
-                    json.dumps(
-                        event,
-                        ensure_ascii=False,
-                        separators=(",", ":"),
-                        default=str,
-                    ),
+                    _encode_durable_event(event),
                     datetime.now(timezone.utc).isoformat(),
                 )
                 for event in events
@@ -229,6 +289,7 @@ class ChatRunEventStore:
                 """,
                 (last_seq, last_seq, str(run_id)),
             )
+            _trim_durable_events(conn, str(run_id), last_seq)
 
     @staticmethod
     def _append_locked(
@@ -246,12 +307,7 @@ class ChatRunEventStore:
             (
                 str(run_id),
                 seq,
-                json.dumps(
-                    event,
-                    ensure_ascii=False,
-                    separators=(",", ":"),
-                    default=str,
-                ),
+                _encode_durable_event(event),
                 datetime.now(timezone.utc).isoformat(),
             ),
         )
@@ -263,6 +319,7 @@ class ChatRunEventStore:
             """,
             (seq, seq, str(run_id)),
         )
+        _trim_durable_events(conn, str(run_id), seq)
 
     def finalize(self, run: "ChatRun") -> None:
         outcome = run.outcome if isinstance(run.outcome, dict) else {}
@@ -375,7 +432,7 @@ class ChatRunEventStore:
         events = []
         for event_row in event_rows:
             try:
-                event = json.loads(str(event_row["event_json"]))
+                event = _decode_durable_event(event_row["event_json"])
             except Exception:
                 logger.warning(
                     "Corrupt durable event row dropped (run=%s, row=%s)",

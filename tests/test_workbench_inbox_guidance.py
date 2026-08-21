@@ -523,6 +523,48 @@ def test_inbox_schema_migrates_existing_database_without_dropping_events(tmp_pat
     assert old_event == ("old_event", "completed")
 
 
+def test_inbox_startup_prunes_only_expired_terminal_history(tmp_path):
+    from cyrene.workbench.inbox import WorkbenchAgentInbox
+
+    db_path = tmp_path / "workbench.db"
+    WorkbenchAgentInbox("chat_1", str(db_path), run_id="run_1")
+    with sqlite3.connect(db_path) as conn:
+        conn.execute(
+            """
+            INSERT INTO workbench_agent_inbox(
+                event_id, session_id, run_id, event_type, status,
+                payload_json, created_at, completed_at
+            ) VALUES
+                ('expired', 'chat_1', 'run_1', 'tool_result', 'completed',
+                 '{}', '2020-01-01T00:00:00+00:00', '2020-01-01T00:00:00+00:00'),
+                ('pending', 'chat_1', 'run_1', 'guidance', 'queued',
+                 '{}', '2020-01-01T00:00:00+00:00', '')
+            """
+        )
+        conn.execute(
+            """
+            INSERT INTO workbench_agent_run_events(
+                event_id, session_id, run_id, event_type, created_at
+            ) VALUES ('expired_trace', 'chat_1', 'run_1', 'tool_started',
+                      '2020-01-01T00:00:00+00:00')
+            """
+        )
+
+    WorkbenchAgentInbox("chat_2", str(db_path), run_id="run_2")
+
+    with sqlite3.connect(db_path) as conn:
+        inbox_ids = {
+            row[0] for row in conn.execute(
+                "SELECT event_id FROM workbench_agent_inbox"
+            ).fetchall()
+        }
+        trace_count = conn.execute(
+            "SELECT COUNT(*) FROM workbench_agent_run_events"
+        ).fetchone()[0]
+    assert inbox_ids == {"pending"}
+    assert trace_count == 0
+
+
 async def test_guidance_skips_not_yet_started_tools_in_submitted_batch(tmp_path):
     from cyrene.workbench.inbox import WorkbenchAgentInbox
 

@@ -5,7 +5,10 @@ Depends on ``state`` (ContextVars, ``_call_llm``) and message helpers
 """
 
 import asyncio
+import copy
 import logging
+import threading
+from collections import OrderedDict
 from datetime import datetime, timezone
 from typing import Any
 from uuid import uuid4
@@ -14,7 +17,7 @@ import cyrene.agent.state as _state
 import cyrene.model_runtime.compaction as _compaction
 from cyrene.observability import debug
 from cyrene.observability.context_trace import strip_context_metadata, summarize_context_trace
-from cyrene.runtime.io import atomic_write_json, read_json_safe
+from cyrene.runtime.io import atomic_write_json_compact, read_json_safe
 from cyrene.agent.message_utils import (
     dedupe_messages_by_id as _dedupe_messages_by_id,
     ensure_message_identity as _ensure_message_identity,
@@ -58,6 +61,40 @@ _COMPACT_RECENT_RATIO = _compaction.COMPACT_RECENT_RATIO
 # ---------------------------------------------------------------------------
 # Session state I/O
 # ---------------------------------------------------------------------------
+
+_SESSION_STATE_CACHE_MAX = 64
+_SESSION_STATE_CACHE_LOCK = threading.RLock()
+_SESSION_STATE_CACHE: OrderedDict[
+    str,
+    tuple[tuple[int, int, int, int], dict[str, Any]],
+] = OrderedDict()
+
+
+def _session_state_signature(state_file: Any) -> tuple[int, int, int, int] | None:
+    try:
+        stat = state_file.stat()
+    except OSError:
+        return None
+    return (
+        int(stat.st_ino),
+        int(stat.st_size),
+        int(stat.st_mtime_ns),
+        int(stat.st_ctime_ns),
+    )
+
+
+def _cache_session_state(
+    state_file: Any,
+    signature: tuple[int, int, int, int],
+    state: dict[str, Any],
+) -> None:
+    key = str(state_file)
+    with _SESSION_STATE_CACHE_LOCK:
+        _SESSION_STATE_CACHE[key] = (signature, state)
+        _SESSION_STATE_CACHE.move_to_end(key)
+        while len(_SESSION_STATE_CACHE) > _SESSION_STATE_CACHE_MAX:
+            _SESSION_STATE_CACHE.popitem(last=False)
+
 
 def _messages_equivalent(left: dict[str, Any], right: dict[str, Any]) -> bool:
     left_id = str(left.get("message_id", "")).strip()
@@ -172,6 +209,17 @@ def _load_session_state(session_id: str | None = None) -> dict[str, Any]:
     if session_id is None:
         session_id = _current_session_id.get()
     state_file = _session_state_file(session_id)
+    signature = _session_state_signature(state_file)
+    key = str(state_file)
+    if signature is not None:
+        with _SESSION_STATE_CACHE_LOCK:
+            cached = _SESSION_STATE_CACHE.get(key)
+            if cached is not None and cached[0] == signature:
+                _SESSION_STATE_CACHE.move_to_end(key)
+                return copy.deepcopy(cached[1])
+    else:
+        with _SESSION_STATE_CACHE_LOCK:
+            _SESSION_STATE_CACHE.pop(key, None)
     try:
         data = read_json_safe(state_file)
     except Exception:
@@ -179,14 +227,22 @@ def _load_session_state(session_id: str | None = None) -> dict[str, Any]:
         return {}
     if data is None:
         return {}
-    return data if isinstance(data, dict) else {}
+    if not isinstance(data, dict):
+        return {}
+    signature = _session_state_signature(state_file)
+    if signature is not None:
+        _cache_session_state(state_file, signature, data)
+    return copy.deepcopy(data)
 
 
 def _write_session_state(state: dict[str, Any], session_id: str | None = None) -> None:
     if session_id is None:
         session_id = _current_session_id.get()
     state_file = _session_state_file(session_id)
-    atomic_write_json(state_file, state)
+    atomic_write_json_compact(state_file, state)
+    signature = _session_state_signature(state_file)
+    if signature is not None:
+        _cache_session_state(state_file, signature, copy.deepcopy(state))
 
 
 def _ensure_archive_session_id(state: dict[str, Any]) -> str:
@@ -1392,7 +1448,7 @@ async def clear_session_id(session_id: str = "", *, deleting: bool = False) -> N
         pass
     async with ctx.session_state_lock:
         ctx.session_epoch += 1
-        atomic_write_json(state_file, {"_session_epoch": ctx.session_epoch})
+        _write_session_state({"_session_epoch": ctx.session_epoch}, session_id)
     # Keep module-level epoch in sync for the default session
     if not session_id:
         _state._session_epoch = ctx.session_epoch

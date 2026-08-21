@@ -12,6 +12,7 @@ import sys
 import threading
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from pathlib import Path
+from urllib.parse import urlsplit
 
 import httpx
 import pytest
@@ -650,7 +651,6 @@ def test_workbench_model_authentication_error_is_actionable():
 def test_versioned_official_deepseek_prefers_configured_endpoint(base_url):
     assert cl._normalized_llm_endpoints(base_url) == [
         "https://api.deepseek.com/v1/chat/completions",
-        "https://api.deepseek.com/chat/completions",
     ]
 
 
@@ -658,10 +658,21 @@ def test_versioned_official_deepseek_prefers_configured_endpoint(base_url):
     "https://api.deepseek.com",
     "https://api.deepseek.com/",
 ])
-def test_unversioned_official_deepseek_retries_with_v1(base_url):
+def test_unversioned_official_deepseek_is_normalized_to_v1(base_url):
     assert cl._normalized_llm_endpoints(base_url) == [
-        "https://api.deepseek.com/chat/completions",
         "https://api.deepseek.com/v1/chat/completions",
+    ]
+
+
+@pytest.mark.parametrize("base_url", [
+    "https://api.minimaxi.com",
+    "https://api.minimaxi.com/v1",
+    "https://api.minimax.io",
+    "https://api.minimax.io/v1",
+])
+def test_official_minimax_is_normalized_to_v1_without_root_fallback(base_url):
+    assert cl._normalized_llm_endpoints(base_url) == [
+        f"https://{urlsplit(base_url).hostname}/v1/chat/completions",
     ]
 
 
@@ -672,7 +683,7 @@ def test_non_official_provider_keeps_generic_endpoint_order():
     ]
 
 
-def test_openai_adapter_adds_versioned_fallback_for_unversioned_deepseek(monkeypatch):
+def test_openai_adapter_normalizes_unversioned_deepseek(monkeypatch):
     monkeypatch.setattr(cl, "get_models", lambda: [{
         "id": "deepseek-chat",
         "model": "deepseek-v4-flash",
@@ -685,18 +696,15 @@ def test_openai_adapter_adds_versioned_fallback_for_unversioned_deepseek(monkeyp
     candidate = cl._resolve_llm_candidates()[0]
 
     assert candidate["endpoints"] == [
-        "https://api.deepseek.com/chat/completions",
         "https://api.deepseek.com/v1/chat/completions",
     ]
 
 
-async def test_unversioned_deepseek_failure_automatically_tries_v1(monkeypatch):
+async def test_unversioned_deepseek_uses_only_v1(monkeypatch):
     requested_paths = []
 
     async def handler(request):
         requested_paths.append(request.url.path)
-        if request.url.path == "/chat/completions":
-            return httpx.Response(404, request=request)
         return httpx.Response(
             200,
             request=request,
@@ -732,10 +740,10 @@ async def test_unversioned_deepseek_failure_automatically_tries_v1(monkeypatch):
         await client.aclose()
 
     assert response["content"] == "OK"
-    assert requested_paths == ["/chat/completions", "/v1/chat/completions"]
+    assert requested_paths == ["/v1/chat/completions"]
 
 
-def test_saved_deepseek_root_keeps_versioned_fallback(monkeypatch):
+def test_saved_deepseek_root_keeps_only_versioned_endpoint(monkeypatch):
     candidate = {
         "id": "deepseek",
         "model": "deepseek-chat",
@@ -755,7 +763,6 @@ def test_saved_deepseek_root_keeps_versioned_fallback(monkeypatch):
     prioritized = cl._prioritize_last_success([candidate], "primary", "chat-1")
 
     assert prioritized[0]["endpoints"] == [
-        "https://api.deepseek.com/chat/completions",
         "https://api.deepseek.com/v1/chat/completions",
     ]
 

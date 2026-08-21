@@ -51,6 +51,42 @@ def test_protocol_endpoints_use_native_provider_routes() -> None:
     ]
 
 
+@pytest.mark.parametrize(
+    ("base_url", "expected"),
+    [
+        ("https://api.deepseek.com", "https://api.deepseek.com/v1/chat/completions"),
+        ("https://api.deepseek.com/v1", "https://api.deepseek.com/v1/chat/completions"),
+        ("https://api.minimaxi.com", "https://api.minimaxi.com/v1/chat/completions"),
+        ("https://api.minimaxi.com/v1", "https://api.minimaxi.com/v1/chat/completions"),
+        ("https://api.minimax.io", "https://api.minimax.io/v1/chat/completions"),
+        ("https://api.minimax.io/v1", "https://api.minimax.io/v1/chat/completions"),
+    ],
+)
+def test_official_openai_compatible_providers_use_only_v1_chat_endpoint(
+    base_url: str,
+    expected: str,
+) -> None:
+    assert protocol_endpoints("openai", base_url, "model") == [expected]
+
+
+@pytest.mark.parametrize(
+    ("base_url", "expected"),
+    [
+        ("https://api.deepseek.com", "https://api.deepseek.com/v1/models"),
+        ("https://api.minimaxi.com", "https://api.minimaxi.com/v1/models"),
+        ("https://api.minimax.io", "https://api.minimax.io/v1/models"),
+    ],
+)
+def test_official_openai_compatible_discovery_uses_v1(
+    base_url: str,
+    expected: str,
+) -> None:
+    assert discovery_request("openai", base_url, "key") == (
+        expected,
+        {"Authorization": "Bearer key"},
+    )
+
+
 def test_discovery_uses_provider_native_auth_and_normalizes_gemini_models() -> None:
     assert discovery_request("anthropic", "https://api.anthropic.com/v1/", "ant-key") == (
         "https://api.anthropic.com/v1/models",

@@ -7293,10 +7293,12 @@ def test_workbench_attachment_preview_falls_back_without_overflowing():
     assert 'className={"wbc-attach-card" + (showImagePreview ? " image" : " file")}' in source
     assert ".wbc-attach-file-open" in styles
     assert ".wbc-inline-image-preview img" in styles
+    message_row_rule = styles.split(".wbc-msg-row {", 1)[1].split("}", 1)[0]
+    assert "justify-content: flex-end;" in message_row_rule
     image_bubble_rule = styles.split(
         ".wbc-msg.user .wbc-bubble.with-inline-image {", 1
     )[1].split("}", 1)[0]
-    assert "width: fit-content;" in image_bubble_rule
+    assert "width: min(calc(280px + 28px), 100%);" in image_bubble_rule
     assert "max-width: 100%;" in image_bubble_rule
     assert ".wbc-inline-image-actions .wbc-inline-image-action" in styles
     inline_image_rule = styles.split(".wbc-inline-image {", 1)[1].split("}", 1)[0]

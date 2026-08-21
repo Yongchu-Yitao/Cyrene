@@ -16,15 +16,13 @@ from typing import Any
 logger = logging.getLogger(__name__)
 
 
-def atomic_write_json(path: Path, data: Any) -> None:
-    """Serialize *data* as JSON and write it to *path* atomically.
-
-    Writes to a uniquely-named sibling temp file first, then calls
-    os.replace so readers always see either the previous complete file or
-    the new complete file, never a partial write.  The temp file is
-    removed on failure.
-    """
-    content = json.dumps(data, ensure_ascii=False, indent=2)
+def _atomic_write_json(path: Path, data: Any, *, compact: bool) -> None:
+    content = json.dumps(
+        data,
+        ensure_ascii=False,
+        indent=None if compact else 2,
+        separators=(",", ":") if compact else None,
+    )
     path.parent.mkdir(parents=True, exist_ok=True)
     fd, tmp = tempfile.mkstemp(dir=path.parent, prefix=path.stem + "_", suffix=".tmp")
     try:
@@ -37,6 +35,22 @@ def atomic_write_json(path: Path, data: Any) -> None:
         except OSError:
             pass
         raise
+
+
+def atomic_write_json(path: Path, data: Any) -> None:
+    """Serialize *data* as readable JSON and write it to *path* atomically.
+
+    Writes to a uniquely-named sibling temp file first, then calls
+    os.replace so readers always see either the previous complete file or
+    the new complete file, never a partial write.  The temp file is
+    removed on failure.
+    """
+    _atomic_write_json(path, data, compact=False)
+
+
+def atomic_write_json_compact(path: Path, data: Any) -> None:
+    """Atomically write compact JSON for machine-owned, high-churn state."""
+    _atomic_write_json(path, data, compact=True)
 
 
 def read_json_safe(path: Path) -> Any:

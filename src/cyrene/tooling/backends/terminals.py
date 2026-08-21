@@ -71,7 +71,11 @@ def _context_scope(*, allow_side_question: bool = True) -> tuple[Any, str, str]:
         and str(chat.get("kind") or "") == "side-agent"
     ):
         raise PermissionError("Side questions cannot create terminals.")
-    project_id = str(resolve_workbench_project_id_for_session(chat_id) or "").strip()
+    project_id = str(
+        (chat or {}).get("projectId")
+        or resolve_workbench_project_id_for_session(chat_id)
+        or ""
+    ).strip()
     if not project_id:
         raise ValueError("The current conversation is not attached to a project.")
     return context, project_id, chat_id

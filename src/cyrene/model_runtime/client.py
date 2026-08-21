@@ -15,6 +15,7 @@ import re
 import time as _time
 import uuid
 import weakref
+from functools import lru_cache
 from typing import Any, Callable, Awaitable
 from urllib.parse import urlsplit, urlunsplit
 
@@ -487,18 +488,14 @@ def _is_official_deepseek_base_url(base_url: str) -> bool:
 
 def _normalized_llm_endpoints(base_url: str) -> list[str]:
     normalized_base = str(base_url or DEFAULT_OPENAI_BASE_URL).strip().rstrip("/") or DEFAULT_OPENAI_BASE_URL
-    if _is_official_deepseek_base_url(normalized_base):
-        # Respect the configured address first. If an older/manual DeepSeek
-        # connection omitted /v1, retain it as the first attempt and
-        # automatically retry through the versioned route when it fails.
-        origin = "https://api.deepseek.com"
-        versioned = f"{origin}/v1/chat/completions"
-        unversioned = f"{origin}/chat/completions"
-        return (
-            [versioned, unversioned]
-            if normalized_base.lower().endswith("/v1")
-            else [unversioned, versioned]
-        )
+    from cyrene.model_runtime.protocol_adapters import official_versioned_chat_endpoint
+
+    official_endpoint = official_versioned_chat_endpoint(normalized_base)
+    if official_endpoint:
+        # DeepSeek and MiniMax expose their OpenAI-compatible API below /v1.
+        # Never rotate to an unversioned route: it is not a useful fallback and
+        # can replace the actionable error returned by the configured endpoint.
+        return [official_endpoint]
     endpoints = [f"{normalized_base}/chat/completions"]
     if not normalized_base.endswith("/v1"):
         endpoints.append(f"{normalized_base}/v1/chat/completions")
@@ -545,13 +542,6 @@ def _normalized_candidate(raw: dict[str, Any], index: int = 0, *, active_model: 
             explicit_ctx_limit = 0
     if provider == CODEX_PROVIDER:
         endpoints = [CODEX_BASE_URL]
-    elif adapter in {"openai", "openai_compatible"} and _is_official_deepseek_base_url(base_url):
-        # The generic OpenAI adapter normally owns Chat Completions endpoint
-        # construction.  Official DeepSeek is the exception: its versioned
-        # route must remain available as a fallback for unversioned saved
-        # addresses. Without this guard, migrating a DeepSeek profile to
-        # ``adapter=openai`` silently collapses the candidate to one endpoint.
-        endpoints = _normalized_llm_endpoints(base_url)
     elif adapter in {"anthropic", "openai", "openai_responses", "gemini", "ollama"}:
         from cyrene.model_runtime.protocol_adapters import protocol_endpoints
 
@@ -1031,6 +1021,40 @@ def _is_minimax_model(model: str) -> bool:
     return "minimax" in normalized or normalized == "m2-her"
 
 
+def _scan_approx_token_count(source: str) -> int:
+    """Single-pass equivalent of the historical three-regex heuristic."""
+    total = 0
+    index = 0
+    length = len(source)
+    while index < length:
+        char = source[index]
+        if char.isspace():
+            index += 1
+            continue
+        if "\u4e00" <= char <= "\u9fff":
+            total += 1
+            index += 1
+            continue
+        if char.isascii() and (char.isalnum() or char == "_"):
+            end = index + 1
+            while end < length:
+                current = source[end]
+                if not current.isascii() or not (current.isalnum() or current == "_"):
+                    break
+                end += 1
+            total += max(1, (end - index + 3) // 4)
+            index = end
+            continue
+        total += 1
+        index += 1
+    return total
+
+
+@lru_cache(maxsize=4096)
+def _cached_approx_token_count(source: str) -> int:
+    return _scan_approx_token_count(source)
+
+
 def _approx_token_count(text: str) -> int:
     """Estimate token count with CJK-aware heuristic.
 
@@ -1041,14 +1065,9 @@ def _approx_token_count(text: str) -> int:
     source = str(text or "")
     if not source.strip():
         return 0
-    units = re.findall(r"[一-鿿]|[A-Za-z0-9_]+|[^\s]", source)
-    total = 0
-    for unit in units:
-        if re.fullmatch(r"[A-Za-z0-9_]+", unit):
-            total += max(1, (len(unit) + 3) // 4)
-        else:
-            total += 1
-    return total
+    if len(source) <= 65_536:
+        return _cached_approx_token_count(source)
+    return _scan_approx_token_count(source)
 
 
 def approx_token_count(text: str) -> int:
@@ -1056,18 +1075,21 @@ def approx_token_count(text: str) -> int:
     return _approx_token_count(text)
 
 
-def _message_token_estimate(message: dict[str, Any]) -> int:
-    total = 4
+def _message_token_signature(
+    message: dict[str, Any],
+) -> tuple[tuple[str, ...], int]:
+    text_parts: list[str] = []
+    image_tokens = 0
     content = message.get("content")
     if isinstance(content, str):
-        total += _approx_token_count(content)
+        text_parts.append(content)
     elif isinstance(content, list):
         for block in content:
             if not isinstance(block, dict):
                 continue
             block_type = block.get("type")
             if block_type == "text":
-                total += _approx_token_count(block.get("text") or "")
+                text_parts.append(str(block.get("text") or ""))
             elif block_type in {"image_url", "cyrene_mcp_image_file"}:
                 try:
                     width = max(0, int(block.get("width") or 0))
@@ -1076,16 +1098,36 @@ def _message_token_estimate(message: dict[str, Any]) -> int:
                     width = height = 0
                 # Provider-specific image accounting varies. Use a bounded,
                 # conservative estimate for local context gating.
-                total += min(4096, max(1024, (width * height + 1023) // 1024))
+                image_tokens += min(4096, max(1024, (width * height + 1023) // 1024))
     else:
-        total += _approx_token_count(content or "")
-    total += _approx_token_count(message.get("role") or "")
-    total += _approx_token_count(message.get("reasoning_content") or "")
+        text_parts.append(str(content or ""))
+    text_parts.append(str(message.get("role") or ""))
+    text_parts.append(str(message.get("reasoning_content") or ""))
     for tc in message.get("tool_calls") or []:
-        total += _approx_token_count(tc.get("function", {}).get("name") or "")
-        total += _approx_token_count(tc.get("function", {}).get("arguments") or "")
-    total += _approx_token_count(message.get("tool_call_id") or "")
-    return total
+        function = tc.get("function", {})
+        text_parts.append(str(function.get("name") or ""))
+        text_parts.append(str(function.get("arguments") or ""))
+    text_parts.append(str(message.get("tool_call_id") or ""))
+    return tuple(text_parts), image_tokens
+
+
+def _estimate_message_signature(signature: tuple[tuple[str, ...], int]) -> int:
+    text_parts, image_tokens = signature
+    return 4 + image_tokens + sum(_approx_token_count(part) for part in text_parts)
+
+
+@lru_cache(maxsize=256)
+def _cached_message_token_estimate(
+    signature: tuple[tuple[str, ...], int],
+) -> int:
+    return _estimate_message_signature(signature)
+
+
+def _message_token_estimate(message: dict[str, Any]) -> int:
+    signature = _message_token_signature(message)
+    if sum(len(part) for part in signature[0]) <= 1_000_000:
+        return _cached_message_token_estimate(signature)
+    return _estimate_message_signature(signature)
 
 
 def message_token_estimate(message: dict[str, Any]) -> int:
@@ -1097,10 +1139,17 @@ def _request_token_estimate(messages: list[dict], tools: list | None = None) -> 
     """Conservative input-token estimate used for per-candidate context gates."""
     total = sum(_message_token_estimate(message) for message in messages)
     if tools:
-        total += _approx_token_count(
-            json.dumps(tools, ensure_ascii=False, sort_keys=True, default=str)
-        )
+        encoded_tools = json.dumps(tools, ensure_ascii=False, sort_keys=True, default=str)
+        if len(encoded_tools) <= 2_000_000:
+            total += _cached_tools_token_estimate(encoded_tools)
+        else:
+            total += _approx_token_count(encoded_tools)
     return total
+
+
+@lru_cache(maxsize=64)
+def _cached_tools_token_estimate(encoded_tools: str) -> int:
+    return _approx_token_count(encoded_tools)
 
 
 def _candidate_ctx_limit(candidate: dict[str, Any]) -> int:

@@ -2,9 +2,16 @@ from __future__ import annotations
 
 import json
 import multiprocessing
+import sqlite3
 from pathlib import Path
 
-from cyrene.workbench.store import patch_document_fields, read_document, write_document
+from cyrene.workbench.store import (
+    mutate_chat,
+    patch_document_fields,
+    read_chat_summaries,
+    read_document,
+    write_document,
+)
 
 
 def _append_worker(db_path: str, barrier, item_id: str) -> None:
@@ -151,6 +158,47 @@ def test_concurrent_chat_messages_are_both_preserved(tmp_path: Path) -> None:
 
     payload = read_document(db_path, "chats", lambda: {"chats": []})
     assert {item["id"] for item in payload["chats"][0]["messages"]} == {"msg_a", "msg_b"}
+
+
+def test_point_chat_mutation_updates_projection_and_only_appends_tail(tmp_path: Path) -> None:
+    db_path = str(tmp_path / "cyrene.runtime.database")
+    messages = [
+        {"id": f"msg_{index}", "role": "user", "content": f"message {index}"}
+        for index in range(50)
+    ]
+    write_document(
+        db_path,
+        "chats",
+        {
+            "chats": [
+                {"id": "chat_1", "title": "One", "messages": messages},
+                {"id": "chat_2", "title": "Two", "messages": []},
+            ]
+        },
+        lambda: {"chats": []},
+    )
+
+    mutate_chat(
+        db_path,
+        "chat_1",
+        lambda chat: chat["messages"].append(
+            {"id": "msg_tail", "role": "assistant", "content": "final answer"}
+        ),
+        lambda: {"chats": []},
+    )
+
+    summaries = read_chat_summaries(db_path, lambda: {"chats": []})
+    first = summaries[0]
+    assert "messages" not in first
+    assert first["_messageProjection"]["messageCount"] == 51
+    assert first["_messageProjection"]["preview"] == "final answer"
+    with sqlite3.connect(db_path) as conn:
+        assert conn.execute(
+            "SELECT COUNT(*) FROM workbench_chat_messages WHERE chat_id='chat_1'"
+        ).fetchone()[0] == 51
+        assert conn.execute(
+            "SELECT COUNT(*) FROM workbench_chat_messages WHERE chat_id='chat_2'"
+        ).fetchone()[0] == 0
 
 
 def test_notification_append_and_mark_read_do_not_overwrite_each_other(tmp_path: Path) -> None:

@@ -3,6 +3,8 @@ import types
 from pathlib import Path
 from unittest.mock import AsyncMock
 
+import pytest
+
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 
 from route.registry import register_routes
@@ -203,6 +205,46 @@ async def test_vision_capability_probe_sends_an_image(monkeypatch):
     content = calls[0]["json"]["messages"][0]["content"]
     assert content[1]["type"] == "image_url"
     assert content[1]["image_url"]["url"].startswith("data:image/png;base64,")
+
+
+@pytest.mark.parametrize(
+    ("base_url", "expected"),
+    [
+        ("https://api.deepseek.com", "https://api.deepseek.com/v1/chat/completions"),
+        ("https://api.minimaxi.com", "https://api.minimaxi.com/v1/chat/completions"),
+    ],
+)
+async def test_text_connection_probe_normalizes_official_provider_endpoint(
+    monkeypatch,
+    base_url,
+    expected,
+):
+    from cyrene.runtime import onboarding
+
+    calls = []
+
+    class FakeResponse:
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            return {"choices": [{"message": {"content": "OK"}}]}
+
+    class FakeClient:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return False
+
+        async def post(self, endpoint, headers=None, json=None):
+            calls.append(endpoint)
+            return FakeResponse()
+
+    monkeypatch.setattr(onboarding.httpx, "AsyncClient", lambda *args, **kwargs: FakeClient())
+
+    assert await onboarding._test_llm_connection("sk-test", base_url, "model") == "OK"
+    assert calls == [expected]
 
 
 def test_settings_model_save_persists_vision_probe_result(monkeypatch, tmp_path):

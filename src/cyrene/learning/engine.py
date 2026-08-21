@@ -907,14 +907,14 @@ def _project_scope_for_session(session_id: str | None) -> dict[str, str]:
         return {"project_id": "global", "project_key": "global", "session_kind": "global"}
     try:
         from cyrene.workbench.context import (
-            resolve_project_data_key_for_session,
-            resolve_workbench_project_id_for_session,
-            resolve_workbench_session_kind,
+            resolve_workbench_project_id_for_data_key,
+            resolve_workbench_session_scope,
         )
 
-        project_id = str(resolve_workbench_project_id_for_session(sid) or "").strip()
-        project_key = str(resolve_project_data_key_for_session(sid) or "").strip()
-        session_kind = str(resolve_workbench_session_kind(sid) or "").strip()
+        resolved_scope = resolve_workbench_session_scope(sid)
+        project_id = str(resolved_scope.get("project_id") or "").strip()
+        project_key = str(resolved_scope.get("project_key") or "default").strip()
+        session_kind = str(resolved_scope.get("session_kind") or "").strip()
     except Exception:
         project_id = ""
         project_key = ""
@@ -928,13 +928,11 @@ def _project_scope_for_session(session_id: str | None) -> dict[str, str]:
     # from non-project-scoped sessions.
     if project_id == project_key and project_key:
         try:
-            from cyrene.workbench.context import read_projects
-            for _p in read_projects():
-                if str(_p.get("dataKey") or "") == project_key:
-                    _resolved = str(_p.get("id") or "").strip()
-                    if _resolved:
-                        project_id = _resolved
-                        break
+            _resolved = str(
+                resolve_workbench_project_id_for_data_key(project_key) or ""
+            ).strip()
+            if _resolved:
+                project_id = _resolved
         except Exception:
             pass
     return {
@@ -1109,6 +1107,7 @@ async def begin_turn(
         "turn_id": turn_id,
         "session_id": normalized_session_id,
         "round_id": normalized_round_id,
+        "scope": scope,
         "session_token": session_token,
         "turn_token": turn_token,
         "round_token": round_token,
@@ -2499,7 +2498,12 @@ async def list_learned_skills(project_id: str = "") -> list[dict[str, Any]]:
     return skills
 
 
-async def build_learned_skill_block(session_id: str = "", max_skills: int = 20) -> str:
+async def build_learned_skill_block(
+    session_id: str = "",
+    max_skills: int = 20,
+    *,
+    scope: dict[str, str] | None = None,
+) -> str:
     """Build a compact system-prompt block listing active learned skill names.
 
     Returns empty string when there are no active skills for the session's
@@ -2507,7 +2511,7 @@ async def build_learned_skill_block(session_id: str = "", max_skills: int = 20) 
     cache it in the system prompt without degrading prefix-cache hit rates.
     """
     current_sid = str(session_id or _current_session_id.get() or "").strip()
-    scope = _project_scope_for_session(current_sid or None)
+    resolved_scope = scope or _project_scope_for_session(current_sid or None)
     async with _conn() as conn:
         cursor = await conn.execute(
             """
@@ -2517,7 +2521,7 @@ async def build_learned_skill_block(session_id: str = "", max_skills: int = 20) 
             ORDER BY updated_at DESC
             LIMIT ?
             """,
-            (scope["project_id"], max(int(max_skills or 20), 1)),
+            (resolved_scope["project_id"], max(int(max_skills or 20), 1)),
         )
         rows = await cursor.fetchall()
     if not rows:

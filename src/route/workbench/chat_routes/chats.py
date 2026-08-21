@@ -51,6 +51,8 @@ def register_chat_routes(
     _public_chat_full = service.public_chat_full
     _public_chat_light = service.public_chat_light
     _read_chats_store = service.repository.read
+    _read_chat_summaries_store = service.repository.read_summaries
+    _get_workbench_chat = service.repository.get
     _resolve_chat_workspace_dir = service.resolve_chat_workspace_dir
     _sanitize_durable_traces = service.sanitize_durable_traces
     _short_id = service.short_id
@@ -112,9 +114,12 @@ def register_chat_routes(
         # SQLite busy waits and JSON decoding are synchronous. Keep them off the
         # uvicorn event loop so one contended read cannot freeze every Workbench
         # request (the client otherwise reaches its 30s timeout as a group).
-        payload = await asyncio.to_thread(_read_chats_store)
+        payload = await asyncio.to_thread(_read_chat_summaries_store)
         if _prune_orphaned_fork_metadata(payload):
-            await asyncio.to_thread(_write_chats_store, payload)
+            full_payload = await asyncio.to_thread(_read_chats_store)
+            if _prune_orphaned_fork_metadata(full_payload):
+                await asyncio.to_thread(_write_chats_store, full_payload)
+                payload = await asyncio.to_thread(_read_chat_summaries_store)
         data_key = await asyncio.to_thread(_project_data_key, project) if project else ""
         chats = [
             _public_chat_light(chat)
@@ -159,7 +164,7 @@ def register_chat_routes(
         query = str(q or "").strip().lower()
         limit = max(1, min(int(limit or 40), 200))
 
-        payload = await asyncio.to_thread(_read_chats_store)
+        payload = await asyncio.to_thread(_read_chat_summaries_store)
         targets: list[dict[str, Any]] = []
         for chat in payload.get("chats", []):
             if str(chat.get("kind") or "chat") != "chat":
@@ -498,16 +503,17 @@ def register_chat_routes(
                     elapsed_ms,
                 )
             return {"chat": legacy[0]}
-        payload = await asyncio.to_thread(_read_chats_store)
-        if _prune_orphaned_fork_metadata(payload):
-            await asyncio.to_thread(_write_chats_store, payload)
-        chat = _find_chat(payload, chat_id)
+        summary_payload = await asyncio.to_thread(_read_chat_summaries_store)
+        if _prune_orphaned_fork_metadata(summary_payload):
+            full_payload = await asyncio.to_thread(_read_chats_store)
+            if _prune_orphaned_fork_metadata(full_payload):
+                await asyncio.to_thread(_write_chats_store, full_payload)
+        chat = await asyncio.to_thread(_get_workbench_chat, chat_id)
         if not chat:
             return JSONResponse({"error": "chat not found"}, status_code=404)
         if "generatedFiles" not in chat:
             await asyncio.to_thread(_sync_chat_generated_files, chat_id)
-            payload = await asyncio.to_thread(_read_chats_store)
-            chat = _find_chat(payload, chat_id)
+            chat = await asyncio.to_thread(_get_workbench_chat, chat_id)
             if not chat:
                 return JSONResponse({"error": "chat not found"}, status_code=404)
         elapsed_ms = (time.monotonic() - started) * 1000

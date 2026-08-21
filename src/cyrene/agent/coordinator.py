@@ -293,6 +293,8 @@ class SessionRunConflictError(RuntimeError):
 async def run_session_operation(
     session_id: str,
     operation: Callable[[], Awaitable[Any]],
+    *,
+    on_acquired: Callable[[], None] | None = None,
 ) -> Any:
     """Run an agent continuation under the session's interrupt ownership.
 
@@ -314,6 +316,8 @@ async def run_session_operation(
         ctx.interrupt_event.clear()
         current_task = asyncio.current_task()
         ctx.active_task = current_task
+        if on_acquired is not None:
+            on_acquired()
         try:
             return await operation()
         finally:
@@ -345,6 +349,9 @@ async def run_agent(
     response_capabilities: tuple[str, ...] | frozenset[str] = (),
     ui_instance_id: str = "",
     conversation_source: str = "",
+    persist_user_message: bool = True,
+    assistant_message_meta: dict[str, Any] | None = None,
+    on_session_acquired: Callable[[], None] | None = None,
 ) -> str:
     """Main entry point. Runs the main agent loop with stable tool gateways.
 
@@ -398,9 +405,15 @@ async def run_agent(
                 volatile_ephemeral_system=volatile_ephemeral_system,
                 static_system_extra=static_system_extra,
                 final_system_extra=final_system_extra,
+                persist_user_message=persist_user_message,
+                assistant_message_meta=assistant_message_meta,
             )
 
-        return await run_session_operation(session_id, run_chat)
+        return await run_session_operation(
+            session_id,
+            run_chat,
+            on_acquired=on_session_acquired,
+        )
     finally:
         _state._explicit_delegation_batches.reset(delegation_batches_token)
         _state._explicit_delegation_receipts.reset(delegation_receipts_token)
@@ -825,7 +838,9 @@ async def _run_chat_agent_impl(
             ))
         try:
             learned_skill_block = (
-                await _behavior_learning.build_learned_skill_block()
+                await _behavior_learning.build_learned_skill_block(
+                    scope=(behavior_turn_context or {}).get("scope")
+                )
                 if is_tool_pack_enabled("skill_tools")
                 else ""
             )

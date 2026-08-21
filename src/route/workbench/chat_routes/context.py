@@ -117,6 +117,7 @@ class ChatRouteContext:
         return public
 
     def _configure_shell_wake(self) -> None:
+        from cyrene.agent import is_session_running
         from cyrene.runtime.shell_wake import get_shell_wake_service
 
         async def dispatch(wake: dict[str, Any]) -> str:
@@ -128,7 +129,10 @@ class ChatRouteContext:
 
         get_shell_wake_service().configure(
             dispatcher=dispatch,
-            is_busy=lambda chat_id: self.service.run_manager.get(str(chat_id)) is not None,
+            is_busy=lambda chat_id: (
+                self.service.run_manager.get(str(chat_id)) is not None
+                or is_session_running(str(chat_id))
+            ),
         )
 
 

@@ -14,6 +14,30 @@ from cyrene.agent import session as agent_session
 from cyrene.call_llm import _message_token_estimate
 
 
+def test_session_state_cache_is_defensive_and_invalidates_external_writes(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    state_path = tmp_path / "session.json"
+    monkeypatch.setattr(agent_session, "_session_state_file", lambda _session_id: state_path)
+    agent_session._SESSION_STATE_CACHE.clear()
+
+    agent_session._write_session_state(
+        {"messages": [{"role": "user", "content": "first"}]},
+        "chat_1",
+    )
+    assert "\n  " not in state_path.read_text(encoding="utf-8")
+    loaded = agent_session._load_session_state("chat_1")
+    loaded["messages"][0]["content"] = "mutated copy"
+    assert agent_session._load_session_state("chat_1")["messages"][0]["content"] == "first"
+
+    state_path.write_text(
+        json.dumps({"messages": [{"role": "user", "content": "external"}]}),
+        encoding="utf-8",
+    )
+    assert agent_session._load_session_state("chat_1")["messages"][0]["content"] == "external"
+
+
 def test_dedupe_messages_by_id_keeps_latest_occurrence_in_original_position() -> None:
     messages = [
         {"role": "user", "message_id": "msg_1", "content": "hello"},

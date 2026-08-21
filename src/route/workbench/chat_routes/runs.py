@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import copy
 import json
 import logging
 import re
@@ -49,6 +50,7 @@ def register_run_routes(router: APIRouter, context: ChatRouteContext) -> dict[st
     _extract_exchange_timeline = service.extract_exchange_timeline
     _finalize_workspace_changes = service.finalize_workspace_changes
     _find_chat = service.repository.find
+    _get_workbench_chat = service.repository.get
     _last_exchange_model = service.last_exchange_model
     _mark_user_activity = service.mark_user_activity
     _merge_chat_messages_chronologically = service.merge_chat_messages_chronologically
@@ -58,6 +60,7 @@ def register_run_routes(router: APIRouter, context: ChatRouteContext) -> dict[st
     _public_message = service.public_message
     _publish_live_exchange_segments_loop = service.publish_live_exchange_segments_loop
     _read_chats_store = service.repository.read
+    _mutate_chat_store = service.repository.mutate_one
     _record_chat_run_outcome = service.record_chat_run_outcome
     _remove_retry_replaced_messages = service.remove_retry_replaced_messages
     _resolve_chat_workspace_dir = service.resolve_chat_workspace_dir
@@ -70,6 +73,7 @@ def register_run_routes(router: APIRouter, context: ChatRouteContext) -> dict[st
     _utc_now_iso = service.utc_now_iso
     _workbench_chat_run_error_message = service.chat_run_error_message
     _write_chats_store = service.repository.write
+    _write_chat_store = service.repository.write_one
     complete_chat_plan = service.complete_chat_plan
     disable_button_block = service.disable_button_block
     has_button_block = service.has_button_block
@@ -132,8 +136,7 @@ def register_run_routes(router: APIRouter, context: ChatRouteContext) -> dict[st
                 {"error": "chat has no running reply", "code": "chat_not_running"},
                 status_code=409,
             )
-        payload = await asyncio.to_thread(_read_chats_store)
-        chat = _find_chat(payload, chat_id)
+        chat = await asyncio.to_thread(_get_workbench_chat, chat_id)
         if not chat:
             return JSONResponse({"error": "chat not found"}, status_code=404)
 
@@ -198,9 +201,12 @@ def register_run_routes(router: APIRouter, context: ChatRouteContext) -> dict[st
         }
         if client_request_id:
             user_entry["clientRequestId"] = client_request_id
-        chat.setdefault("messages", []).append(user_entry)
-        chat["updatedAt"] = now
-        await asyncio.to_thread(_write_chats_store, payload)
+
+        def persist_guidance(current: dict[str, Any]) -> None:
+            current.setdefault("messages", []).append(user_entry)
+            current["updatedAt"] = now
+
+        await asyncio.to_thread(_mutate_chat_store, chat_id, persist_guidance)
         await run.publish(
             {
                 "type": "guidance_received",
@@ -285,10 +291,10 @@ def register_run_routes(router: APIRouter, context: ChatRouteContext) -> dict[st
         if _bgt:
             return JSONResponse(_bgt, status_code=403)
 
-        payload = await asyncio.to_thread(_read_chats_store)
-        chat = _find_chat(payload, chat_id)
+        chat = await asyncio.to_thread(_get_workbench_chat, chat_id)
         if not chat:
             return JSONResponse({"error": "chat not found"}, status_code=404)
+        base_chat = copy.deepcopy(chat)
         from cyrene.agent_runtime.builtin import normalize_agent_binding
 
         agent_binding = normalize_agent_binding(chat.get("agent") if isinstance(chat.get("agent"), dict) else None)
@@ -305,7 +311,14 @@ def register_run_routes(router: APIRouter, context: ChatRouteContext) -> dict[st
             )
         is_side_agent = str(chat.get("kind") or "") == "side-agent"
         completed_turn_count_before = _completed_turn_count(chat)
-        parent_chat = _find_chat(payload, str(chat.get("parentChatId") or "")) if is_side_agent else None
+        parent_chat = (
+            await asyncio.to_thread(
+                _get_workbench_chat,
+                str(chat.get("parentChatId") or ""),
+            )
+            if is_side_agent
+            else None
+        )
         parent_transcript = _side_agent_parent_transcript(parent_chat)
         stored_mode = str(chat.get("permissionMode") or "").strip().lower()
         if requested_mode:
@@ -481,7 +494,11 @@ def register_run_routes(router: APIRouter, context: ChatRouteContext) -> dict[st
         if selected_candidate is None and not agent_owns_models:
             chat["model"] = R.get_model()
         _mark_user_activity(chat, now)
-        await asyncio.to_thread(_write_chats_store, payload)
+        await asyncio.to_thread(
+            _write_chat_store,
+            chat,
+            base_chat=base_chat,
+        )
 
         # Register sent attachments into the session's project knowledge base
         # (idempotent by content hash; failures never block the message).
@@ -526,18 +543,25 @@ def register_run_routes(router: APIRouter, context: ChatRouteContext) -> dict[st
                 generated_title = ""
 
             def persist_title() -> bool:
-                fresh = _read_chats_store()
-                fresh_chat = _find_chat(fresh, chat_id)
-                if not fresh_chat or fresh_chat.get("titleNamingStatus") != "pending":
-                    return False
-                if generated_title and not bool(fresh_chat.get("titleLocked")):
-                    fresh_chat["title"] = generated_title
-                    fresh_chat["titleNamingStatus"] = "generated"
-                    fresh_chat["titleGeneratedAt"] = _utc_now_iso()
-                else:
-                    fresh_chat["titleNamingStatus"] = "locked" if bool(fresh_chat.get("titleLocked")) else "failed"
-                _write_chats_store(fresh)
-                return bool(generated_title) and not bool(fresh_chat.get("titleLocked"))
+                changed = False
+
+                def update(fresh_chat: dict[str, Any]) -> bool:
+                    nonlocal changed
+                    if fresh_chat.get("titleNamingStatus") != "pending":
+                        return False
+                    if generated_title and not bool(fresh_chat.get("titleLocked")):
+                        fresh_chat["title"] = generated_title
+                        fresh_chat["titleNamingStatus"] = "generated"
+                        fresh_chat["titleGeneratedAt"] = _utc_now_iso()
+                        changed = True
+                    else:
+                        fresh_chat["titleNamingStatus"] = (
+                            "locked" if bool(fresh_chat.get("titleLocked")) else "failed"
+                        )
+                    return True
+
+                _mutate_chat_store(chat_id, update)
+                return changed
 
             changed = await asyncio.to_thread(persist_title)
             logger.info(
@@ -961,10 +985,10 @@ def register_run_routes(router: APIRouter, context: ChatRouteContext) -> dict[st
             state_messages = _session_state_messages(chat_id)
             timeline_entries, usage, files = _extract_exchange_timeline(state_messages, state_ids_before)
             with _CHATS_STORE_JSON_LOCK:
-                fresh = _read_chats_store()
-                fresh_chat = _find_chat(fresh, chat_id)
+                fresh_chat = _get_workbench_chat(chat_id)
                 if not fresh_chat:
                     return {}
+                fresh_base = copy.deepcopy(fresh_chat)
                 _commit_retry_cut(fresh_chat)
                 configured_model = str(fresh_chat.get("model") or "")
                 model_name = _last_exchange_model(state_messages, state_ids_before) or configured_model
@@ -1049,7 +1073,7 @@ def register_run_routes(router: APIRouter, context: ChatRouteContext) -> dict[st
                 fresh_chat["status"] = "idle"
                 fresh_chat.pop("pendingQuestion", None)
                 fresh_chat["updatedAt"] = assistant_entry["createdAt"]
-                _write_chats_store(fresh)
+                _write_chat_store(fresh_chat, base_chat=fresh_base)
             # Persist this exchange to the workspace's per-session conversation
             # file so the conversation survives outside the JSON store and the
             # agent can read its own history by id. Best-effort; never block reply.
@@ -1116,19 +1140,15 @@ def register_run_routes(router: APIRouter, context: ChatRouteContext) -> dict[st
             _remove_retry_replaced_messages(target_chat, truncate_after_id, retry_replaced_message_ids)
 
         def _settle_status() -> None:
-            fresh = _read_chats_store()
-            fresh_chat = _find_chat(fresh, chat_id)
-            if fresh_chat and fresh_chat.get("status") == "running":
-                fresh_chat["status"] = "idle"
-                _write_chats_store(fresh)
+            _settle_chat_running_status(chat_id)
 
         def _stash_chat_pending(pending: dict[str, Any] | None) -> list[dict[str, Any]]:
             """Persist a paused run's pending question on the chat record so the
             transcript shows an answer prompt (not the raw awaiting-user sentinel)."""
-            fresh = _read_chats_store()
-            fresh_chat = _find_chat(fresh, chat_id)
+            fresh_chat = _get_workbench_chat(chat_id)
             if not fresh_chat:
                 return []
+            fresh_base = copy.deepcopy(fresh_chat)
             saved_messages: list[dict[str, Any]] = []
             fresh_chat["status"] = "idle"
             if pending:
@@ -1154,7 +1174,7 @@ def register_run_routes(router: APIRouter, context: ChatRouteContext) -> dict[st
             else:
                 fresh_chat.pop("pendingQuestion", None)
             fresh_chat["updatedAt"] = _utc_now_iso()
-            _write_chats_store(fresh)
+            _write_chat_store(fresh_chat, base_chat=fresh_base)
             return [_public_message(item) for item in saved_messages]
 
         async def run_non_streaming(run: ChatRun) -> None:
@@ -1211,11 +1231,11 @@ def register_run_routes(router: APIRouter, context: ChatRouteContext) -> dict[st
                 if retry:
 
                     def commit_retry() -> None:
-                        fresh = _read_chats_store()
-                        fresh_chat = _find_chat(fresh, chat_id)
+                        fresh_chat = _get_workbench_chat(chat_id)
                         if fresh_chat:
+                            fresh_base = copy.deepcopy(fresh_chat)
                             _commit_retry_cut(fresh_chat)
-                            _write_chats_store(fresh)
+                            _write_chat_store(fresh_chat, base_chat=fresh_base)
 
                     await asyncio.to_thread(commit_retry)
                 pending = await asyncio.to_thread(R.pending_question_for, chat_id)
@@ -1369,11 +1389,11 @@ def register_run_routes(router: APIRouter, context: ChatRouteContext) -> dict[st
                     if retry:
 
                         def commit_stream_retry() -> None:
-                            fresh = _read_chats_store()
-                            fresh_chat = _find_chat(fresh, chat_id)
+                            fresh_chat = _get_workbench_chat(chat_id)
                             if fresh_chat:
+                                fresh_base = copy.deepcopy(fresh_chat)
                                 _commit_retry_cut(fresh_chat)
-                                _write_chats_store(fresh)
+                                _write_chat_store(fresh_chat, base_chat=fresh_base)
 
                         await asyncio.to_thread(commit_stream_retry)
                     pending = await asyncio.to_thread(R.pending_question_for, chat_id)

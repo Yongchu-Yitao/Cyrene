@@ -112,7 +112,8 @@ async def _tool_start_shell(args: dict[str, Any], _bot: Any, _chat_id: int, _db_
         if result["execution_mode"] == "one_shot":
             result["wake_hint"] = (
                 "The command is running as a one-shot background job. Do not wait or poll. "
-                "Quit this turn; you will be woken with the terminal output when it completes."
+                "Quit this turn; an internal wake will remind you to read this terminal "
+                "with code.shell.read when it completes."
             )
         else:
             result["wake_hint"] = (

@@ -890,7 +890,6 @@ class TerminalManager:
             status=status,
             exit_code=exit_code,
             note=str(row["note"] or ""),
-            screen=screen,
         )
         self._db.execute(
             """UPDATE terminal_wakes SET status='ready', exit_status=?, exit_code=?,
@@ -903,7 +902,7 @@ class TerminalManager:
     @staticmethod
     def _wake_prompt(
         *, session: TerminalSession, status: str, exit_code: int | None,
-        note: str, screen: str,
+        note: str,
     ) -> str:
         blocks = [
             "[Terminal exited — automatic wake]",
@@ -917,11 +916,9 @@ class TerminalManager:
             blocks.append(f"wake_note: {note.strip()}")
         blocks.extend([
             "",
-            "The terminal process has exited. Inspect the captured final VT screen, "
-            "continue the prior work, and do not wait for this process again.",
-            "",
-            "--- final screen ---",
-            screen[-12000:] or "(no captured output)",
+            "This is an internal wake notification, not a user message. "
+            "Use code.shell.read with the terminal_id above to inspect the terminal, "
+            "then continue the prior work. Do not wait for this process again.",
         ])
         return "\n".join(blocks)
 

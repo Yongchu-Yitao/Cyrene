@@ -285,7 +285,9 @@ def get_onboarding_status() -> dict[str, Any]:
 
 
 async def _test_llm_connection(api_key: str, base_url: str, model: str) -> str:
-    endpoint = f"{base_url.rstrip('/')}/chat/completions"
+    from cyrene.model_runtime.protocol_adapters import protocol_endpoints
+
+    endpoint = protocol_endpoints("openai", base_url, model)[0]
     headers = {"Content-Type": "application/json"}
     if api_key.strip():
         headers["Authorization"] = f"Bearer {api_key.strip()}"
@@ -314,7 +316,9 @@ async def _test_llm_vision_capability(api_key: str, base_url: str, model: str) -
     probe never prevents an otherwise healthy text model from being saved.
     """
     checked_at = _now_iso()
-    endpoint = f"{base_url.rstrip('/')}/chat/completions"
+    from cyrene.model_runtime.protocol_adapters import protocol_endpoints
+
+    endpoint = protocol_endpoints("openai", base_url, model)[0]
     headers = {"Content-Type": "application/json"}
     if api_key.strip():
         headers["Authorization"] = f"Bearer {api_key.strip()}"

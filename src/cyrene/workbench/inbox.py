@@ -20,7 +20,7 @@ import time
 from contextlib import contextmanager
 from contextvars import ContextVar
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Awaitable, Callable
 from uuid import uuid4
@@ -31,6 +31,7 @@ logger = logging.getLogger(__name__)
 
 ToolRunner = Callable[[], Awaitable[str]]
 _MAX_PARALLEL_TOOL_CALLS = 8
+_DURABLE_RETENTION_DAYS = 30
 
 
 class GuidanceAdmissionClosed(RuntimeError):
@@ -170,6 +171,10 @@ class WorkbenchAgentInbox:
                 "ON workbench_agent_inbox(session_id, status, priority, created_at)"
             )
             conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_workbench_agent_inbox_completed "
+                "ON workbench_agent_inbox(status, completed_at)"
+            )
+            conn.execute(
                 """
                 CREATE TABLE IF NOT EXISTS workbench_agent_run_events (
                     event_id TEXT PRIMARY KEY,
@@ -207,6 +212,30 @@ class WorkbenchAgentInbox:
             conn.execute(
                 "CREATE INDEX IF NOT EXISTS idx_workbench_agent_run_events_run "
                 "ON workbench_agent_run_events(session_id, run_id, created_at)"
+            )
+            conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_workbench_agent_run_events_created "
+                "ON workbench_agent_run_events(created_at)"
+            )
+            cutoff = (
+                datetime.now(timezone.utc)
+                - timedelta(days=_DURABLE_RETENTION_DAYS)
+            ).isoformat()
+            conn.execute(
+                """
+                DELETE FROM workbench_agent_inbox
+                WHERE status IN ('completed', 'failed', 'cancelled')
+                  AND completed_at GLOB '????-??-*'
+                  AND completed_at < ?
+                """,
+                (cutoff,),
+            )
+            conn.execute(
+                """
+                DELETE FROM workbench_agent_run_events
+                WHERE created_at GLOB '????-??-*' AND created_at < ?
+                """,
+                (cutoff,),
             )
 
     def configure_storage(self, db_path: str) -> None:

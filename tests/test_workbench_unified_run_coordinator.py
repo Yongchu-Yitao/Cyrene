@@ -157,6 +157,25 @@ async def test_low_level_session_conflict_never_cancels_the_existing_run():
     assert await asyncio.wait_for(first, timeout=1) == "first-completed"
 
 
+async def test_session_operation_reports_only_after_lock_acquisition():
+    from cyrene.agent.coordinator import run_session_operation
+
+    acquired = []
+
+    async def operation():
+        assert acquired == ["acquired"]
+        return "done"
+
+    result = await run_session_operation(
+        "acquisition-callback-session",
+        operation,
+        on_acquired=lambda: acquired.append("acquired"),
+    )
+
+    assert result == "done"
+    assert acquired == ["acquired"]
+
+
 def test_project_storage_migrates_to_one_row_per_task_and_updates_only_one(tmp_path):
     from cyrene.workbench.store import read_document, write_document
 
@@ -225,6 +244,25 @@ def test_project_storage_migrates_to_one_row_per_task_and_updates_only_one(tmp_p
         not item.get("isSummary")
         for item in exported["projects"][0]["sessions"]
     )
+
+
+def test_normalized_project_read_does_not_request_a_write_lock(tmp_path):
+    from cyrene.workbench.store import read_document, write_document
+
+    db_path = tmp_path / "read-while-writing.sqlite3"
+    payload = _projects_payload(tmp_path)
+    write_document(db_path, "projects", payload, lambda: {"projects": []})
+
+    writer = sqlite3.connect(db_path, timeout=0.05)
+    writer.execute("PRAGMA busy_timeout = 50")
+    writer.execute("BEGIN IMMEDIATE")
+    try:
+        hydrated = read_document(db_path, "projects", lambda: {"projects": []})
+    finally:
+        writer.rollback()
+        writer.close()
+
+    assert hydrated["projects"][0]["id"] == "project_1"
 
 
 def test_task_chat_audits_before_agent_rejects_competitor_and_keeps_task_open(

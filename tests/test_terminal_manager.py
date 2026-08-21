@@ -392,6 +392,9 @@ async def test_agent_terminal_vt_screen_and_wake_are_durable_and_exactly_once(
     assert claimed is not None
     assert claimed["terminal_id"] == terminal["id"]
     assert "verify result" in claimed["prompt"]
+    assert "code.shell.read" in claimed["prompt"]
+    assert "WAKE_OK" not in claimed["prompt"]
+    assert "WAKE_OK" in claimed["final_screen"]
     settled = manager.settle_wake(
         claimed["wake_id"], claimed["lease_token"], "delivered"
     )

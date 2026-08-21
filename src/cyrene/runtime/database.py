@@ -4,6 +4,7 @@ Note: Message history is stored in conversations/ folder (not in DB).
 The DB is used for structured data that needs querying and stable aggregates.
 """
 
+import asyncio
 import json
 import logging
 import re
@@ -715,6 +716,9 @@ async def init_knowledge_db(db_path: str) -> None:
     path = Path(db_path).expanduser()
     path.parent.mkdir(parents=True, exist_ok=True)
     async with aiosqlite.connect(str(path)) as db:
+        page_count = int((await (await db.execute("PRAGMA page_count")).fetchone())[0])
+        if page_count == 0:
+            await db.execute("PRAGMA auto_vacuum = INCREMENTAL")
         await db.executescript(KB_TABLES_SQL)
         await db.execute(KB_FTS_SQL)
         await db.execute(LIBRARY_FTS_SQL)
@@ -736,6 +740,49 @@ async def init_knowledge_db(db_path: str) -> None:
             "ON kb_documents(updated_at DESC)"
         )
         await db.commit()
+    _schedule_knowledge_fts_maintenance(str(path))
+
+
+_KNOWLEDGE_FTS_MAINTENANCE_TASKS: dict[str, asyncio.Task[None]] = {}
+
+
+def _schedule_knowledge_fts_maintenance(db_path: str) -> None:
+    """Repair pathological FTS tombstone growth outside request latency."""
+    path = str(Path(db_path).expanduser().resolve())
+    existing = _KNOWLEDGE_FTS_MAINTENANCE_TASKS.get(path)
+    if existing is not None and not existing.done():
+        return
+
+    async def maintain() -> None:
+        await asyncio.sleep(1.0)
+        try:
+            async with aiosqlite.connect(path, timeout=30) as db:
+                await db.execute("PRAGMA busy_timeout = 30000")
+                cursor = await db.execute("SELECT COUNT(*) FROM kb_chunks_fts")
+                live_rows = int((await cursor.fetchone())[0])
+                cursor = await db.execute("SELECT COUNT(*) FROM kb_chunks_fts_data")
+                data_blocks = int((await cursor.fetchone())[0])
+                if data_blocks <= max(4096, live_rows * 32):
+                    return
+                logger.info(
+                    "Optimizing bloated knowledge FTS index [rows=%s blocks=%s]",
+                    live_rows,
+                    data_blocks,
+                )
+                await db.execute(
+                    "INSERT INTO kb_chunks_fts(kb_chunks_fts) VALUES('optimize')"
+                )
+                await db.execute("PRAGMA incremental_vacuum(2048)")
+                await db.commit()
+        except Exception:
+            logger.warning("Knowledge FTS maintenance failed for %s", path, exc_info=True)
+        finally:
+            _KNOWLEDGE_FTS_MAINTENANCE_TASKS.pop(path, None)
+
+    try:
+        _KNOWLEDGE_FTS_MAINTENANCE_TASKS[path] = asyncio.create_task(maintain())
+    except RuntimeError:
+        return
 
 
 def _local_tzinfo():

@@ -15,19 +15,46 @@ import time
 import uuid
 from dataclasses import dataclass
 from typing import Any, Awaitable, Callable
-from urllib.parse import quote
+from urllib.parse import quote, urlsplit
 
 import httpx
 
 
 NATIVE_PROTOCOL_ADAPTERS = frozenset({"anthropic", "openai_responses", "gemini"})
 OPENAI_CHAT_ADAPTERS = frozenset({"openai", "openai_compatible", "ollama"})
+_OFFICIAL_VERSIONED_OPENAI_CHAT_HOSTS = frozenset({
+    "api.deepseek.com",
+    "api.minimax.com",
+    "api.minimax.io",
+    "api.minimaxi.com",
+})
 
 
 @dataclass(frozen=True, slots=True)
 class PreparedRequest:
     payload: dict[str, Any]
     headers: dict[str, str]
+
+
+def official_versioned_chat_endpoint(base_url: str) -> str | None:
+    """Return the sole supported Chat Completions route for known providers."""
+    base = str(base_url or "").strip().rstrip("/")
+    try:
+        parsed = urlsplit(base)
+        port = parsed.port
+    except ValueError:
+        return None
+    host = (parsed.hostname or "").lower()
+    if (
+        parsed.scheme.lower() != "https"
+        or host not in _OFFICIAL_VERSIONED_OPENAI_CHAT_HOSTS
+        or port not in {None, 443}
+        or parsed.path.lower() not in {"", "/v1"}
+        or parsed.query
+        or parsed.fragment
+    ):
+        return None
+    return f"https://{host}/v1/chat/completions"
 
 
 def protocol_endpoints(adapter_id: str, base_url: str, model: str) -> list[str]:
@@ -45,6 +72,9 @@ def protocol_endpoints(adapter_id: str, base_url: str, model: str) -> list[str]:
     if adapter == "ollama":
         compatibility_base = base if base.endswith("/v1") else f"{base}/v1"
         return [f"{compatibility_base}/chat/completions"]
+    official_endpoint = official_versioned_chat_endpoint(base)
+    if official_endpoint:
+        return [official_endpoint]
     return [f"{base}/chat/completions"]
 
 
@@ -60,6 +90,9 @@ def discovery_request(adapter_id: str, base_url: str, api_key: str) -> tuple[str
         }
     if adapter == "gemini":
         return f"{base}/models", {"x-goog-api-key": str(api_key or "")}
+    official_endpoint = official_versioned_chat_endpoint(base)
+    if official_endpoint:
+        base = official_endpoint.removesuffix("/chat/completions")
     headers = {"Authorization": f"Bearer {api_key}"} if api_key else {}
     return f"{base}/models", headers
 

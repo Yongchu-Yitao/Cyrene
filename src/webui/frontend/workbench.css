@@ -24052,6 +24052,7 @@ html[data-platform="darwin"] .wbc-browser-window.maximized .wbc-browser-window-b
 .wbc-msg-row {
   display: flex;
   align-items: flex-end;
+  justify-content: flex-end;
   gap: 8px;
 }
 
@@ -24080,11 +24081,12 @@ html[data-platform="darwin"] .wbc-browser-window.maximized .wbc-browser-window-b
   margin: 0;
 }
 
-/* Image previews have their own bounded width. Keep the surrounding user
-   bubble content-sized so it does not extend into an empty column beside the
-   preview, while still yielding on narrow conversation lanes. */
+/* Image previews have their own bounded width. Size the surrounding user
+   bubble to the 280px preview plus its 14px horizontal padding instead of
+   leaving intrinsic flex sizing to stretch it across the message lane. The
+   percentage cap still lets the bubble yield in narrow conversation lanes. */
 .wbc-msg.user .wbc-bubble.with-inline-image {
-  width: fit-content;
+  width: min(calc(280px + 28px), 100%);
   max-width: 100%;
 }
 

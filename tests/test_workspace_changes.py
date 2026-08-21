@@ -202,6 +202,42 @@ def test_incremental_workspace_snapshot_reuses_unchanged_file_state(tmp_path):
     assert after.files["changed.txt"].text == "after and a different size\n"
 
 
+def test_watcher_incremental_snapshot_only_refreshes_dirty_paths(tmp_path):
+    from cyrene.workbench.workspace_changes import (
+        capture_workspace_snapshot,
+        compare_workspace_snapshots,
+    )
+
+    unchanged = tmp_path / "unchanged.txt"
+    changed = tmp_path / "changed.txt"
+    deleted = tmp_path / "deleted.txt"
+    unchanged.write_text("same\n", encoding="utf-8")
+    changed.write_text("before\n", encoding="utf-8")
+    deleted.write_text("remove\n", encoding="utf-8")
+    before = capture_workspace_snapshot(tmp_path)
+
+    changed.write_text("after\n", encoding="utf-8")
+    deleted.unlink()
+    created = tmp_path / "nested" / "created.txt"
+    created.parent.mkdir()
+    created.write_text("new\n", encoding="utf-8")
+    after = capture_workspace_snapshot(
+        tmp_path,
+        previous=before,
+        changed_paths={str(changed), str(deleted), str(created.parent)},
+    )
+
+    assert after.files["unchanged.txt"] is before.files["unchanged.txt"]
+    assert after.files["changed.txt"].text == "after\n"
+    assert "deleted.txt" not in after.files
+    assert after.files["nested/created.txt"].text == "new\n"
+    assert {item["path"] for item in compare_workspace_snapshots(before, after)} == {
+        "changed.txt",
+        "deleted.txt",
+        "nested/created.txt",
+    }
+
+
 def test_change_store_keeps_diff_private_until_file_fetch(tmp_path):
     from cyrene.workbench.workspace_changes import (
         get_chat_file_change,

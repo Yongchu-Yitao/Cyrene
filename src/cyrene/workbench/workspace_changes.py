@@ -9,7 +9,10 @@ from __future__ import annotations
 
 import difflib
 import hashlib
+import json
 import os
+import sqlite3
+import threading
 import uuid
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -19,7 +22,7 @@ from typing import Any
 from cyrene.config import DATA_DIR
 from cyrene.runtime.io import atomic_write_json, read_json_safe
 from cyrene.runtime.paths import CYRENE_DIR_NAME
-from cyrene.workbench.store import read_document, write_document
+from cyrene.workbench.store import ensure_schema
 
 
 _LEGACY_STORE = DATA_DIR / "workbench_chat_changes.json"
@@ -47,6 +50,8 @@ _MAX_CHANGE_SET_DIFF_CHARS = 10_000_000
 _MAX_CHANGE_SETS_PER_CHAT = 50
 _MAX_CHANGE_SETS_TOTAL = 500
 _MAX_STORED_DIFF_CHARS = 25_000_000
+_NORMALIZED_STORES: set[str] = set()
+_NORMALIZED_STORES_LOCK = threading.Lock()
 
 
 def _utc_now_iso() -> str:
@@ -108,6 +113,7 @@ class WorkspaceFileState:
     digest: str
     text: str | None
     ctime_ns: int = 0
+    inode: int = 0
 
 
 @dataclass(frozen=True)
@@ -147,6 +153,7 @@ def _read_file_state(
             digest=digest,
             text=text,
             ctime_ns=int(stat.st_ctime_ns),
+            inode=int(stat.st_ino),
         )
     except OSError:
         return None
@@ -156,6 +163,7 @@ def capture_workspace_snapshot(
     workspace_root: str | Path | None,
     *,
     previous: WorkspaceSnapshot | None = None,
+    changed_paths: set[str] | None = None,
 ) -> WorkspaceSnapshot | None:
     """Capture a bounded snapshot, reusing unchanged state when available.
 
@@ -173,6 +181,8 @@ def capture_workspace_snapshot(
         return None
     if previous is None or previous.root != root:
         previous = None
+    if previous is not None and changed_paths is not None:
+        return _capture_incremental_snapshot(root, previous, changed_paths)
 
     files: dict[str, WorkspaceFileState] = {}
     captured_text_bytes = 0
@@ -197,6 +207,7 @@ def capture_workspace_snapshot(
                 prior = previous.files.get(rel) if previous is not None else None
                 if (
                     prior is not None
+                    and prior.inode == int(stat.st_ino)
                     and prior.mtime_ns == int(stat.st_mtime_ns)
                     and prior.ctime_ns == int(stat.st_ctime_ns)
                     and prior.size == int(size)
@@ -224,11 +235,122 @@ def capture_workspace_snapshot(
     return WorkspaceSnapshot(root=root, files=files, captured_at=_utc_now_iso())
 
 
+def _capture_incremental_snapshot(
+    root: Path,
+    previous: WorkspaceSnapshot,
+    changed_paths: set[str],
+) -> WorkspaceSnapshot:
+    """Apply watcher-reported paths to an immutable prior snapshot.
+
+    Directory events are rescanned recursively, while file events touch only
+    that file. A watcher failure never calls this path; callers fall back to a
+    complete walk so missed events cannot hide user-visible changes.
+    """
+    files = dict(previous.files)
+    captured_text_files = sum(1 for state in files.values() if state.text is not None)
+    captured_text_bytes = sum(
+        state.size for state in files.values() if state.text is not None
+    )
+
+    def remove_relative(relative: str) -> None:
+        nonlocal captured_text_bytes, captured_text_files
+        if relative in {"", "."}:
+            captured_text_files = 0
+            captured_text_bytes = 0
+            files.clear()
+            return
+        removed = files.pop(relative, None)
+        if removed is not None and removed.text is not None:
+            captured_text_files -= 1
+            captured_text_bytes -= removed.size
+        prefix = relative.rstrip("/") + "/"
+        for stored_path in [path for path in files if path.startswith(prefix)]:
+            removed = files.pop(stored_path, None)
+            if removed is not None and removed.text is not None:
+                captured_text_files -= 1
+                captured_text_bytes -= removed.size
+
+    def capture_file(target: Path) -> None:
+        nonlocal captured_text_bytes, captured_text_files
+        try:
+            relative = target.relative_to(root).as_posix()
+        except ValueError:
+            return
+        prior = files.get(relative)
+        if is_cyrene_managed_workspace_path(relative, root):
+            remove_relative(relative)
+            return
+        try:
+            stat = target.stat()
+        except OSError:
+            remove_relative(relative)
+            return
+        if not target.is_file() or target.is_symlink():
+            remove_relative(relative)
+            return
+        if (
+            prior is not None
+            and prior.inode == int(stat.st_ino)
+            and prior.mtime_ns == int(stat.st_mtime_ns)
+            and prior.ctime_ns == int(stat.st_ctime_ns)
+            and prior.size == int(stat.st_size)
+        ):
+            return
+        if prior is not None:
+            files.pop(relative, None)
+            if prior.text is not None:
+                captured_text_files -= 1
+                captured_text_bytes -= prior.size
+        capture_text = (
+            captured_text_files < _MAX_CAPTURED_TEXT_FILES
+            and stat.st_size <= _MAX_TEXT_FILE_BYTES
+            and captured_text_bytes + stat.st_size <= _MAX_CAPTURED_TEXT_BYTES
+        )
+        state = _read_file_state(
+            target,
+            capture_text=capture_text,
+            stat_result=stat,
+        )
+        if state is None:
+            return
+        files[relative] = state
+        if state.text is not None:
+            captured_text_files += 1
+            captured_text_bytes += state.size
+
+    for raw_path in sorted(changed_paths):
+        try:
+            target = Path(raw_path).expanduser().resolve(strict=False)
+            relative = target.relative_to(root).as_posix()
+        except (OSError, RuntimeError, ValueError):
+            continue
+        if not target.exists():
+            remove_relative(relative)
+            continue
+        if target.is_dir():
+            remove_relative(relative)
+            for current, dirnames, filenames in os.walk(target):
+                dirnames[:] = [name for name in dirnames if name not in _IGNORED_DIRS]
+                current_path = Path(current)
+                if current_path == root:
+                    dirnames[:] = [
+                        name for name in dirnames
+                        if name not in _CYRENE_MANAGED_ROOT_DIRS
+                    ]
+                for filename in filenames:
+                    capture_file(current_path / filename)
+            continue
+        capture_file(target)
+
+    return WorkspaceSnapshot(root=root, files=files, captured_at=_utc_now_iso())
+
+
 def _same_file(before: WorkspaceFileState, after: WorkspaceFileState) -> bool:
     if before.digest and after.digest:
         return before.digest == after.digest
     return (
-        before.mtime_ns == after.mtime_ns
+        before.inode == after.inode
+        and before.mtime_ns == after.mtime_ns
         and before.ctime_ns == after.ctime_ns
         and before.size == after.size
     )
@@ -358,34 +480,219 @@ def build_change_set(
     }
 
 
+def _changes_connect(db_path: str) -> sqlite3.Connection:
+    ensure_schema(db_path)
+    conn = sqlite3.connect(db_path, timeout=30)
+    conn.execute("PRAGMA busy_timeout = 30000")
+    return conn
+
+
+def _touch_normalized_store(conn: sqlite3.Connection) -> None:
+    conn.execute(
+        """
+        INSERT INTO workbench_state(key, payload_json, updated_at)
+        VALUES ('chat_changes', ?, ?)
+        ON CONFLICT(key) DO UPDATE SET
+            payload_json = excluded.payload_json,
+            updated_at = excluded.updated_at
+        """,
+        (json.dumps({"normalizedVersion": 1}), _utc_now_iso()),
+    )
+
+
+def _write_change_set_rows(
+    conn: sqlite3.Connection,
+    change_set: dict[str, Any],
+) -> None:
+    change_id = str(change_set.get("id") or "").strip()
+    if not change_id:
+        raise ValueError("Workbench change set is missing id")
+    files = [item for item in change_set.get("files") or [] if isinstance(item, dict)]
+    metadata = {key: value for key, value in change_set.items() if key != "files"}
+    diff_chars = sum(len(str(item.get("diff") or "")) for item in files)
+    conn.execute(
+        """
+        INSERT INTO workbench_chat_change_sets(
+            change_set_id, chat_id, completed_at, diff_chars,
+            payload_json, updated_at
+        ) VALUES (?, ?, ?, ?, ?, ?)
+        ON CONFLICT(change_set_id) DO UPDATE SET
+            chat_id = excluded.chat_id,
+            completed_at = excluded.completed_at,
+            diff_chars = excluded.diff_chars,
+            payload_json = excluded.payload_json,
+            updated_at = excluded.updated_at
+        """,
+        (
+            change_id,
+            str(change_set.get("chatId") or ""),
+            str(change_set.get("completedAt") or ""),
+            diff_chars,
+            json.dumps(metadata, ensure_ascii=False),
+            _utc_now_iso(),
+        ),
+    )
+    conn.execute(
+        "DELETE FROM workbench_chat_change_files WHERE change_set_id = ?",
+        (change_id,),
+    )
+    if files:
+        conn.executemany(
+            """
+            INSERT INTO workbench_chat_change_files(
+                change_set_id, ordinal, path, payload_json, diff_text
+            ) VALUES (?, ?, ?, ?, ?)
+            """,
+            [
+                (
+                    change_id,
+                    ordinal,
+                    str(item.get("path") or ""),
+                    json.dumps(
+                        {key: value for key, value in item.items() if key != "diff"},
+                        ensure_ascii=False,
+                    ),
+                    str(item.get("diff") or ""),
+                )
+                for ordinal, item in enumerate(files)
+            ],
+        )
+
+
+def _load_change_sets(
+    conn: sqlite3.Connection,
+    *,
+    chat_id: str | None = None,
+    include_diffs: bool = True,
+) -> list[dict[str, Any]]:
+    parameters: tuple[Any, ...] = ()
+    where = ""
+    if chat_id is not None:
+        where = "WHERE chat_id = ?"
+        parameters = (str(chat_id),)
+    rows = conn.execute(
+        f"""
+        SELECT change_set_id, payload_json
+        FROM workbench_chat_change_sets
+        {where}
+        ORDER BY completed_at DESC, rowid ASC
+        """,
+        parameters,
+    ).fetchall()
+    result: list[dict[str, Any]] = []
+    for change_id, payload_json in rows:
+        try:
+            change_set = json.loads(str(payload_json))
+        except (TypeError, ValueError, json.JSONDecodeError) as exc:
+            raise RuntimeError(
+                f"invalid Workbench change-set payload for {change_id}"
+            ) from exc
+        if not isinstance(change_set, dict):
+            continue
+        files: list[dict[str, Any]] = []
+        file_query = (
+            "SELECT payload_json, diff_text "
+            if include_diffs
+            else "SELECT payload_json, '' AS diff_text "
+        ) + (
+            "FROM workbench_chat_change_files "
+            "WHERE change_set_id = ? ORDER BY ordinal"
+        )
+        for file_payload, diff_text in conn.execute(
+            file_query,
+            (str(change_id),),
+        ).fetchall():
+            try:
+                item = json.loads(str(file_payload))
+            except (TypeError, ValueError, json.JSONDecodeError) as exc:
+                raise RuntimeError(
+                    f"invalid Workbench change-file payload for {change_id}"
+                ) from exc
+            if not isinstance(item, dict):
+                continue
+            if include_diffs and diff_text:
+                item["diff"] = str(diff_text)
+            files.append(item)
+        change_set["files"] = files
+        result.append(change_set)
+    return result
+
+
+def _ensure_normalized_store(db_path: str) -> None:
+    normalized_path = str(Path(db_path).expanduser().resolve())
+    if normalized_path in _NORMALIZED_STORES:
+        return
+    with _NORMALIZED_STORES_LOCK:
+        if normalized_path in _NORMALIZED_STORES:
+            return
+        conn = _changes_connect(normalized_path)
+        try:
+            conn.execute("BEGIN IMMEDIATE")
+            row = conn.execute(
+                "SELECT payload_json FROM workbench_state WHERE key = 'chat_changes'"
+            ).fetchone()
+            count = int(
+                conn.execute(
+                    "SELECT COUNT(*) FROM workbench_chat_change_sets"
+                ).fetchone()[0]
+            )
+            legacy_items: list[Any] = []
+            if row is not None:
+                try:
+                    stored = json.loads(str(row[0]))
+                except (TypeError, ValueError, json.JSONDecodeError):
+                    stored = None
+                if isinstance(stored, dict) and isinstance(stored.get("changeSets"), list):
+                    legacy_items = stored["changeSets"]
+            if not count:
+                for item in legacy_items:
+                    if isinstance(item, dict) and str(item.get("id") or "").strip():
+                        _write_change_set_rows(conn, item)
+            _touch_normalized_store(conn)
+            conn.commit()
+        except Exception:
+            conn.rollback()
+            raise
+        finally:
+            conn.close()
+        _NORMALIZED_STORES.add(normalized_path)
+
+
 def _read_store(db_path: str) -> dict[str, Any]:
     if db_path:
-        return read_document(
-            db_path,
-            "chat_changes",
-            lambda: {"changeSets": []},
-        )
+        _ensure_normalized_store(db_path)
+        conn = _changes_connect(db_path)
+        try:
+            return {"changeSets": _load_change_sets(conn)}
+        finally:
+            conn.close()
     data = read_json_safe(_LEGACY_STORE)
     return data if isinstance(data, dict) else {"changeSets": []}
 
 
 def _write_store(db_path: str, payload: dict[str, Any]) -> None:
     if db_path:
-        merged = write_document(
-            db_path,
-            "chat_changes",
-            payload,
-            lambda: {"changeSets": []},
-        )
-        payload.clear()
-        payload.update(merged)
+        _ensure_normalized_store(db_path)
+        conn = _changes_connect(db_path)
+        try:
+            conn.execute("BEGIN IMMEDIATE")
+            conn.execute("DELETE FROM workbench_chat_change_files")
+            conn.execute("DELETE FROM workbench_chat_change_sets")
+            for item in payload.get("changeSets") or []:
+                if isinstance(item, dict) and str(item.get("id") or "").strip():
+                    _write_change_set_rows(conn, item)
+            _touch_normalized_store(conn)
+            conn.commit()
+        except Exception:
+            conn.rollback()
+            raise
+        finally:
+            conn.close()
         return
     atomic_write_json(_LEGACY_STORE, payload)
 
 
 def save_change_set(db_path: str, change_set: dict[str, Any]) -> dict[str, Any]:
-    payload = _read_store(db_path)
-    items = payload.setdefault("changeSets", [])
     change_id = str(change_set.get("id") or "")
     replacement = dict(change_set)
     workspace_root = change_set.get("workspacePath")
@@ -402,6 +709,69 @@ def save_change_set(db_path: str, change_set: dict[str, Any]) -> dict[str, Any]:
     replacement["deletions"] = sum(
         int(item.get("deletions") or 0) for item in replacement["files"]
     )
+    if db_path:
+        _ensure_normalized_store(db_path)
+        conn = _changes_connect(db_path)
+        try:
+            conn.execute("BEGIN IMMEDIATE")
+            if not replacement["files"]:
+                conn.execute(
+                    "DELETE FROM workbench_chat_change_files WHERE change_set_id = ?",
+                    (change_id,),
+                )
+                removed = conn.execute(
+                    "DELETE FROM workbench_chat_change_sets WHERE change_set_id = ?",
+                    (change_id,),
+                ).rowcount
+                if removed:
+                    _touch_normalized_store(conn)
+                conn.commit()
+                return replacement
+
+            _write_change_set_rows(conn, replacement)
+            rows = conn.execute(
+                """
+                SELECT change_set_id, chat_id, diff_chars
+                FROM workbench_chat_change_sets
+                ORDER BY completed_at DESC, rowid ASC
+                """
+            ).fetchall()
+            per_chat: dict[str, int] = {}
+            kept_ids: list[str] = []
+            stored_diff_chars = 0
+            for stored_id, item_chat_id, item_diff_chars in rows:
+                normalized_chat_id = str(item_chat_id or "")
+                if per_chat.get(normalized_chat_id, 0) >= _MAX_CHANGE_SETS_PER_CHAT:
+                    continue
+                if len(kept_ids) >= _MAX_CHANGE_SETS_TOTAL:
+                    continue
+                diff_chars = int(item_diff_chars or 0)
+                if kept_ids and stored_diff_chars + diff_chars > _MAX_STORED_DIFF_CHARS:
+                    continue
+                kept_ids.append(str(stored_id))
+                stored_diff_chars += diff_chars
+                per_chat[normalized_chat_id] = per_chat.get(normalized_chat_id, 0) + 1
+            dropped_ids = [str(row[0]) for row in rows if str(row[0]) not in kept_ids]
+            if dropped_ids:
+                conn.executemany(
+                    "DELETE FROM workbench_chat_change_files WHERE change_set_id = ?",
+                    [(item_id,) for item_id in dropped_ids],
+                )
+                conn.executemany(
+                    "DELETE FROM workbench_chat_change_sets WHERE change_set_id = ?",
+                    [(item_id,) for item_id in dropped_ids],
+                )
+            _touch_normalized_store(conn)
+            conn.commit()
+            return replacement
+        except Exception:
+            conn.rollback()
+            raise
+        finally:
+            conn.close()
+
+    payload = _read_store(db_path)
+    items = payload.setdefault("changeSets", [])
     if not replacement["files"]:
         kept = [
             item for item in items
@@ -465,6 +835,22 @@ def _public_change_set(change_set: dict[str, Any]) -> dict[str, Any]:
 
 
 def list_chat_change_sets(db_path: str, chat_id: str) -> list[dict[str, Any]]:
+    if db_path:
+        _ensure_normalized_store(db_path)
+        conn = _changes_connect(db_path)
+        try:
+            stored_items = _load_change_sets(
+                conn,
+                chat_id=str(chat_id),
+                include_diffs=False,
+            )
+        finally:
+            conn.close()
+        return [
+            public
+            for item in stored_items
+            if (public := _public_change_set(item)).get("fileCount")
+        ]
     payload = _read_store(db_path)
     items: list[dict[str, Any]] = []
     for item in payload.get("changeSets") or []:
@@ -485,6 +871,42 @@ def get_chat_file_change(
     change_set_id: str,
     file_path: str,
 ) -> dict[str, Any] | None:
+    if db_path:
+        _ensure_normalized_store(db_path)
+        conn = _changes_connect(db_path)
+        try:
+            row = conn.execute(
+                """
+                SELECT payload_json FROM workbench_chat_change_sets
+                WHERE change_set_id = ? AND chat_id = ?
+                """,
+                (str(change_set_id), str(chat_id)),
+            ).fetchone()
+            if row is None:
+                return None
+            metadata = json.loads(str(row[0]))
+            workspace_root = metadata.get("workspacePath") if isinstance(metadata, dict) else None
+            if is_cyrene_managed_workspace_path(file_path, workspace_root):
+                return None
+            file_row = conn.execute(
+                """
+                SELECT payload_json, diff_text
+                FROM workbench_chat_change_files
+                WHERE change_set_id = ? AND path = ?
+                ORDER BY ordinal LIMIT 1
+                """,
+                (str(change_set_id), str(file_path)),
+            ).fetchone()
+            if file_row is None:
+                return None
+            item = json.loads(str(file_row[0]))
+            if not isinstance(item, dict):
+                return None
+            if file_row[1]:
+                item["diff"] = str(file_row[1])
+            return item
+        finally:
+            conn.close()
     payload = _read_store(db_path)
     for change_set in payload.get("changeSets") or []:
         if not isinstance(change_set, dict):
@@ -502,6 +924,35 @@ def get_chat_file_change(
 
 
 def delete_chat_change_sets(db_path: str, chat_id: str) -> int:
+    if db_path:
+        _ensure_normalized_store(db_path)
+        conn = _changes_connect(db_path)
+        try:
+            conn.execute("BEGIN IMMEDIATE")
+            ids = [
+                str(row[0])
+                for row in conn.execute(
+                    "SELECT change_set_id FROM workbench_chat_change_sets WHERE chat_id = ?",
+                    (str(chat_id),),
+                ).fetchall()
+            ]
+            if ids:
+                conn.executemany(
+                    "DELETE FROM workbench_chat_change_files WHERE change_set_id = ?",
+                    [(item_id,) for item_id in ids],
+                )
+                conn.execute(
+                    "DELETE FROM workbench_chat_change_sets WHERE chat_id = ?",
+                    (str(chat_id),),
+                )
+                _touch_normalized_store(conn)
+            conn.commit()
+            return len(ids)
+        except Exception:
+            conn.rollback()
+            raise
+        finally:
+            conn.close()
     payload = _read_store(db_path)
     items = payload.get("changeSets") if isinstance(payload.get("changeSets"), list) else []
     kept = [

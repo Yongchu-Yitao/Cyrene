@@ -86,6 +86,8 @@ class TerminalWakeBridge:
                     "prompt": str(wake.get("prompt") or ""),
                     "exit_status": str(wake.get("exit_status") or ""),
                     "exit_code": wake.get("exit_code"),
+                    "title": str(wake.get("title") or ""),
+                    "note": str(wake.get("note") or ""),
                 }
                 if self._is_busy and self._is_busy(payload["chat_id"]):
                     outcome: DispatchResult = "busy"

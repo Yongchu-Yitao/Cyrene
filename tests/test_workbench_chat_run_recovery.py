@@ -169,6 +169,36 @@ def test_corrupt_durable_event_is_dropped_without_breaking_replay(tmp_path):
     assert [event["type"] for event in restored.events] == ["ack"]
 
 
+def test_durable_events_are_compressed_and_trimmed_like_live_buffer(monkeypatch, tmp_path):
+    import sqlite3
+    from cyrene.workbench import chat_runs
+
+    monkeypatch.setattr(chat_runs, "_MAX_BUFFER_EVENTS", 5)
+    db_path = str(tmp_path / "compact-durable-events.sqlite3")
+    store = chat_runs.ChatRunEventStore(db_path)
+    run = chat_runs.ChatRun("chat_compact", {"type": "ack"})
+    store.create(run)
+    store.append_many(
+        run.run_id,
+        [
+            {"_seq": seq, "type": "reply_delta", "delta": "x" * 2_000}
+            for seq in range(2, 11)
+        ],
+    )
+
+    with sqlite3.connect(db_path) as conn:
+        rows = conn.execute(
+            "SELECT seq, typeof(event_json) FROM workbench_chat_run_events "
+            "WHERE run_id=? ORDER BY seq",
+            (run.run_id,),
+        ).fetchall()
+    assert rows == [(1, "text"), (7, "blob"), (8, "blob"), (9, "blob"), (10, "blob")]
+    restored = store.load_by_run_id(run.run_id)
+    assert restored is not None
+    assert [event["_seq"] for event in restored.events] == [1, 7, 8, 9, 10]
+    assert restored.events[-1]["delta"] == "x" * 2_000
+
+
 async def test_stream_deltas_are_batched_into_one_sqlite_transaction(
     monkeypatch,
     tmp_path,
