@@ -47,6 +47,9 @@ def test_windows_release_installs_required_native_runtime_packages():
     assert "Install native ARM64 VC runtime" in arm_job
     assert "vc_redist.arm64.exe" in arm_job
     assert "$PSNativeCommandUseErrorActionPreference = $true" in arm_job
+    assert 'platforms:' in workflow
+    assert 'inputs.platforms != \'windows\'' in workflow
+    assert workflow.count("inputs.platforms != 'windows'") == 2
 
     build = (ROOT / "build" / "build.py").read_text(encoding="utf-8")
     assert 'os.environ["CYRENE_WOA_NATIVE_CORE"] = "1"' in build
@@ -73,6 +76,9 @@ def test_windows_release_installs_and_runs_the_built_nsis_package():
     smoke = (
         ROOT / "build" / "windows-release-smoke.ps1"
     ).read_text(encoding="utf-8")
+    webui_build = (
+        ROOT / "src" / "webui" / "build-jsx.mjs"
+    ).read_text(encoding="utf-8")
 
     assert workflow.count("Install and smoke test Windows package") == 2
     assert "build\\windows-release-smoke.ps1 -Arch x64" in workflow
@@ -95,10 +101,28 @@ def test_windows_release_installs_and_runs_the_built_nsis_package():
     assert "SMOKE TEST FAILED|DESKTOP_SMOKE_TEST=failed" in smoke
     assert "WINDOWS_INSTALL_SMOKE_TEST=ok" in smoke
     assert "CYRENE_DESKTOP_SMOKE_RESULT" in smoke
+    assert "function Invoke-DesktopSmokeProcess" in smoke
+    assert "did not write its success result within $TimeoutSeconds seconds" in smoke
+    assert "isolated smoke process tree" in smoke
+    assert "-FilePath taskkill.exe" in smoke
+    assert '@("/pid", [string]$process.Id, "/f", "/t")' in smoke
+    assert "-ResultPath $installedResultPath" in smoke
+    assert "-ResultPath $portableResultPath" in smoke
+    captured_process = smoke.split("function Invoke-CapturedProcess", 1)[1].split(
+        "function Assert-SmokeSucceeded", 1
+    )[0]
+    assert "Start-Process" in captured_process
+    assert "\n        -Wait `" not in captured_process
+    assert "$process.WaitForExit($TimeoutSeconds * 1000)" in captured_process
+    assert "timed out after $TimeoutSeconds seconds" in captured_process
+    assert "if ($null -eq $exitCode)" in captured_process
+    assert "ExitCode = $exitCode" in captured_process
+    assert "split(sep).join('/')" in webui_build
 
 
 def test_windows_backend_termination_does_not_hold_electron_open():
     main = (ROOT / "electron" / "main.js").read_text(encoding="utf-8")
+    assert "DESKTOP_SMOKE_TEST=awaiting_harness_cleanup" in main
     taskkill_calls = main.split("spawn('taskkill'")[1:]
 
     assert len(taskkill_calls) == 2

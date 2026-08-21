@@ -1,7 +1,7 @@
 import * as esbuild from 'esbuild'
 import { createHash } from 'crypto'
 import { readFileSync, writeFileSync, mkdirSync, readdirSync, statSync, existsSync, copyFileSync, rmSync } from 'fs'
-import { join, relative, dirname, extname, resolve, basename } from 'path'
+import { join, relative, dirname, extname, resolve, basename, sep } from 'path'
 import { fileURLToPath } from 'url'
 
 const __dirname = dirname(fileURLToPath(import.meta.url))
@@ -181,7 +181,7 @@ async function build() {
     target: 'es2020',
     logLevel: 'silent',
   })
-  console.log(`✓ ESM surfaces → compiled/app.js, compiled/pdf.js (${files.length} source modules)`)
+  console.log(`✓ ESM surfaces (${relative(WORKBENCH_DIR, resolve(WORKBENCH_DIR, 'entry/app.jsx')).split(sep).join('/')}) → compiled/app.js, compiled/pdf.js (${files.length} source modules)`)
 
   // Office renderers are large and needed only after a DOCX/PPTX is opened.
   // Keep them out of the startup scripts and expose one small global API per

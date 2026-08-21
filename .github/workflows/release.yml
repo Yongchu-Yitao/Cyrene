@@ -5,6 +5,14 @@ on:
     tags: ["v*"]
   workflow_dispatch:
     inputs:
+      platforms:
+        description: "Platforms to build"
+        required: false
+        default: "all"
+        type: choice
+        options:
+          - all
+          - windows
       ui_mode:
         description: "Compatibility build mode (agent is normalized to the sole Workbench UI)"
         required: false
@@ -28,6 +36,7 @@ jobs:
   # ==========================================================================
   build-macos:
     needs: [release]
+    if: ${{ inputs.platforms != 'windows' }}
     runs-on: macos-latest
     steps:
       - uses: actions/checkout@v7
@@ -421,6 +430,7 @@ jobs:
   # ==========================================================================
   build-linux:
     needs: [release]
+    if: ${{ inputs.platforms != 'windows' }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7

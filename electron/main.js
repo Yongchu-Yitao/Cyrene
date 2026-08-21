@@ -733,7 +733,6 @@ const BROWSER_TAB_PICKER_HTML = `<!doctype html>
       favicon.innerHTML = icons.tab;
       if (tab.favicon) {
         const image = document.createElement('img');
-        image.referrerPolicy = 'no-referrer';
         image.src = String(tab.favicon);
         image.alt = '';
         image.addEventListener('error', () => image.remove());
@@ -6892,6 +6891,13 @@ async function runDesktopSmokeTest(window) {
     fs.writeFileSync(resultPath, `${successMessage}\n`, 'utf8');
   }
   console.log(successMessage);
+  // On Windows, the release harness owns smoke-process cleanup so it can stop
+  // the isolated Electron, backend, and Terminal Daemon process tree together.
+  // Normal application shutdown behavior is unchanged outside release smoke.
+  if (isWindows && resultPath) {
+    console.log('DESKTOP_SMOKE_TEST=awaiting_harness_cleanup');
+    return;
+  }
   isQuitting = true;
   // Release smoke runs have already proved the packaged backend and UI are
   // healthy. Skip the normal interactive active-extension quit prompt so the

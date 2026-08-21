@@ -4657,7 +4657,7 @@ function WorkbenchTopbar({ projects, activeProject, activePage, taskView, active
                         <div className="workbench-browser-manager-page-main">
                           <button type="button" className="workbench-browser-manager-page-select" disabled={!!page.closed} onClick={function () { openManagedBrowserPage(page); }}>
                             <span className="workbench-browser-manager-favicon" aria-hidden="true">
-                              {page.favicon ? <img referrerPolicy="no-referrer" src={page.favicon} alt="" draggable="false" onLoad={function (event) { event.currentTarget.hidden = false; }} onError={function (event) { event.currentTarget.hidden = true; }} /> : null}
+                              {page.favicon ? <img src={page.favicon} alt="" draggable="false" onError={function (event) { event.currentTarget.hidden = true; }} /> : null}
                               <WorkbenchAssetIcon name="browser" />
                             </span>
                             <span className="workbench-browser-manager-page-copy">
@@ -5027,7 +5027,7 @@ function WorkbenchTopbar({ projects, activeProject, activePage, taskView, active
                 {resource.kind === "conversation" ? (
                   <svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d="M21 15a4 4 0 0 1-4 4H8l-5 3V7a4 4 0 0 1 4-4h10a4 4 0 0 1 4 4Z"/><path d="M8 9h8M8 13h5"/></svg>
                 ) : resource.kind === "browser" ? (
-                  <><WorkbenchAssetIcon name="browser" />{resource.favicon ? <img referrerPolicy="no-referrer" src={resource.favicon} alt="" draggable="false" onLoad={function (event) { event.currentTarget.hidden = false; }} onError={function (event) { event.currentTarget.hidden = true; }} /> : null}</>
+                  <><WorkbenchAssetIcon name="browser" />{resource.favicon ? <img src={resource.favicon} alt="" draggable="false" onError={function (event) { event.currentTarget.hidden = true; }} /> : null}</>
                 ) : resource.kind === "snippet" ? (
                   <svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round"><path d="M7 8h10M7 12h7M7 16h5"/><rect x="3" y="3" width="18" height="18" rx="3"/></svg>
                 ) : (
@@ -5073,7 +5073,7 @@ function WorkbenchTopbar({ projects, activeProject, activePage, taskView, active
               {browserManagerPreviewPages.length ? browserManagerPreviewPages.map(function (page) {
                 return (
                   <span className="workbench-browser-manager-preview-icon" key={page.key || page.sessionId + ":" + page.tabId}>
-                    {page.favicon ? <img referrerPolicy="no-referrer" src={page.favicon} alt="" draggable="false" onLoad={function (event) { event.currentTarget.hidden = false; }} onError={function (event) { event.currentTarget.hidden = true; }} /> : null}
+                    {page.favicon ? <img src={page.favicon} alt="" draggable="false" onError={function (event) { event.currentTarget.hidden = true; }} /> : null}
                     <WorkbenchAssetIcon name="browser" />
                   </span>
                 );
