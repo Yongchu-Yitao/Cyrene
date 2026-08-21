@@ -3,6 +3,18 @@ from __future__ import annotations
 import asyncio
 
 
+def test_workspace_watcher_stop_joins_native_thread(tmp_path):
+    from cyrene.workbench import chat as chat_service
+
+    watcher = chat_service._WorkspacePathWatcher(str(tmp_path))
+    try:
+        assert watcher.wait_ready()
+    finally:
+        watcher.stop()
+
+    assert not watcher._thread.is_alive()
+
+
 def test_chat_generated_file_index_includes_nested_output_and_removes_deleted(monkeypatch):
     from cyrene.workbench import chat as chat_service
 

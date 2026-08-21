@@ -58,21 +58,10 @@ jobs:
       - name: Lint Python sources
         run: uv run --locked ruff check src tests
 
-      - name: Install native crash debugger
-        run: |
-          sudo apt-get update
-          sudo apt-get install --yes gdb
-
       - name: Run full Python suite
-        env:
-          PYTHONFAULTHANDLER: "1"
-        run: |
-          gdb --batch --return-child-result \
-            -ex "handle SIGPIPE nostop noprint pass" \
-            -ex run \
-            -ex "thread apply all bt" \
-            --args .venv/bin/python -m pytest -q \
-            -W error::pytest.PytestUnhandledThreadExceptionWarning
+        run: >-
+          uv run --locked pytest -q
+          -W error::pytest.PytestUnhandledThreadExceptionWarning
 
   webui-electron:
     name: WebUI build / Electron tests

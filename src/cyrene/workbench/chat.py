@@ -16,6 +16,7 @@ compaction; the agent's own raw context lives in
 
 from __future__ import annotations
 
+import atexit
 import asyncio
 import copy
 import hashlib
@@ -289,6 +290,19 @@ class _WorkspacePathWatcher:
 
     def stop(self) -> None:
         self._stop.set()
+        if self._thread is not threading.current_thread():
+            self._thread.join(timeout=1.0)
+
+
+def _stop_workspace_watchers() -> None:
+    with _WORKSPACE_SNAPSHOT_CACHE_LOCK:
+        watchers = list(_WORKSPACE_WATCHERS.values())
+        _WORKSPACE_WATCHERS.clear()
+    for watcher in watchers:
+        watcher.stop()
+
+
+atexit.register(_stop_workspace_watchers)
 
 
 def _workspace_watcher(workspace_key: str) -> _WorkspacePathWatcher:
@@ -943,11 +957,7 @@ async def shutdown_chat_runs() -> None:
         await drain_post_reply_bookkeeping_tasks()
     except Exception:
         logger.exception("Workbench post-reply bookkeeping drain failed")
-    with _WORKSPACE_SNAPSHOT_CACHE_LOCK:
-        watchers = list(_WORKSPACE_WATCHERS.values())
-        _WORKSPACE_WATCHERS.clear()
-    for watcher in watchers:
-        watcher.stop()
+    _stop_workspace_watchers()
 
 
 async def _capture_workspace_changes_baseline(
