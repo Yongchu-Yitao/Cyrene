@@ -699,9 +699,14 @@ def test_workbench_chat_group_drop_uses_one_enclosing_frame_without_stacking():
     assert "idleFor < 180 || now < gesture.lockedUntil" in source
     assert "lastEventAt: 0" in source
     assert "waitingForIdle: false" in source
+    page = source.split("function WorkbenchChatPage", 1)[1].split(
+        "function WbcRenameDialog", 1
+    )[0]
+    assert "var horizontalSessionWheelRef = useWbcRef({" in page
+    assert "horizontalSessionWheelGesture={horizontalSessionWheelRef.current}" in page
     assert "function handleConversationHorizontalWheel(event)" in source
     assert 'onWheel={handleConversationHorizontalWheel}' in source
-    assert "horizontalSessionWheelRef.current" in source
+    assert "horizontalSessionWheelGesture," in source
     assert "wbcCycleTopbarSessionTab" in source
     assert 'className="wbc-chat-list-group-region"' in rail
     assert rail.index('className="wbc-chat-list-primary"') < rail.index('className="wbc-chat-list-group-region"')
@@ -9890,6 +9895,10 @@ def test_workbench_task_composer_matches_chat_floating_card_material():
         1,
     )[1].split("}", 1)[0]
     assert "background: var(--wb-main-bg);" in task_pane_corner_masks
+    task_pane_stage = styles.split(
+        ".wbc-task-pane .workbench-stage {", 1
+    )[1].split("}", 1)[0]
+    assert "clip-path: inset(1px 0 0);" in task_pane_stage
     task_main = source.split("function TaskWorkArea", 1)[1].split(
         "function TaskHeader", 1
     )[0]

@@ -155,6 +155,7 @@ _EXPORT_GROUPS: dict[str, tuple[str, ...]] = {
     "cyrene.agent.coordinator": (
         "_run_chat_agent",
         "_run_execution_agent",
+        "SessionRunConflictError",
         "is_session_running",
         "interrupt_active_run",
         "run_agent",

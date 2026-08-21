@@ -262,7 +262,28 @@ def register_goal_loop_routes(router: APIRouter, app: Any, db_path: str) -> Goal
         await _event(db_path, run_id, "started", payload={"limits": limits})
         if run:
             await _publish(run)
-        manager.wake(run_id)
+        manager.register_run(run_id, session_id)
+        if manager.wake(run_id) is False:
+            paused = await _set_inactive_status(
+                db_path,
+                run,
+                "paused",
+                phase="paused",
+                stop_reason="run_conflict",
+            )
+            if paused:
+                await manager._sync_projection(
+                    paused,
+                    message="任务已有其他运行，持续执行未启动并已安全暂停。",
+                )
+            payload, project, session = _read_session(session_id)
+            return JSONResponse(
+                {
+                    "error": "该任务已有正在执行的请求，请等待完成或先停止它。",
+                    "code": "task_run_in_progress",
+                },
+                status_code=409,
+            )
         return {"ok": True, "project": project, "session": session, "goalLoop": _public_run(run), **payload}
 
     @router.get("/api/task-sessions/{session_id}/goal-loop")
@@ -295,6 +316,7 @@ def register_goal_loop_routes(router: APIRouter, app: Any, db_path: str) -> Goal
         run = await _get_run_by_session(db_path, session_id)
         if not run or str(run.get("status") or "") != "running":
             return JSONResponse({"error": "没有正在运行的持续任务。"}, status_code=409)
+        manager.interrupt(session_id, reason="user_paused")
         interrupt_active_run(session_id=session_id)
         paused = await _set_inactive_status(db_path, run, "paused", phase="paused", stop_reason="user_paused")
         if paused:
@@ -340,7 +362,28 @@ def register_goal_loop_routes(router: APIRouter, app: Any, db_path: str) -> Goal
         if resumed:
             await _event(db_path, str(run["id"]), "resumed")
             await _publish(resumed)
-            manager.wake(str(run["id"]))
+            manager.register_run(str(run["id"]), session_id)
+            if manager.wake(str(run["id"])) is False:
+                paused = await _set_inactive_status(
+                    db_path,
+                    resumed,
+                    "paused",
+                    phase="paused",
+                    stop_reason="run_conflict",
+                )
+                if paused:
+                    await manager._sync_projection(
+                        paused,
+                        message="任务已有其他运行，持续执行未恢复并已安全暂停。",
+                    )
+                payload, project, session = _read_session(session_id)
+                return JSONResponse(
+                    {
+                        "error": "该任务已有正在执行的请求，请等待完成或先停止它。",
+                        "code": "task_run_in_progress",
+                    },
+                    status_code=409,
+                )
         return {"ok": True, "project": project, "session": session, "goalLoop": _public_run(resumed), **payload}
 
     @router.post("/api/task-sessions/{session_id}/goal-loop/cancel")
@@ -348,6 +391,7 @@ def register_goal_loop_routes(router: APIRouter, app: Any, db_path: str) -> Goal
         run = await _get_run_by_session(db_path, session_id)
         if not run or str(run.get("status") or "") in _TERMINAL_STATUSES | {"cancelled"}:
             return JSONResponse({"error": "没有可取消的持续任务。"}, status_code=409)
+        manager.interrupt(session_id, reason="user_cancelled")
         interrupt_active_run(session_id=session_id)
         cancelled = await _set_inactive_status(
             db_path, run, "cancelled", phase="cancelled", stop_reason="user_cancelled"

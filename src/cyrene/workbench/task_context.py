@@ -16,7 +16,12 @@ from typing import Any
 
 from cyrene.config import DATA_DIR, DB_PATH
 from cyrene.observability.context_trace import context_block
-from cyrene.workbench.store import has_document_data, read_document, write_document
+from cyrene.workbench.store import (
+    has_document_data,
+    read_project_bundle,
+    summarize_task_session,
+    write_project_bundle,
+)
 
 _DOC_KEY = "projects"
 _MAX_OUTCOME_ENTRIES = 80
@@ -145,10 +150,10 @@ def resolve_task_scope(
     legacy = Path(legacy_path) if legacy_path else DATA_DIR / "workbench_projects.json"
     if not _workbench_doc_available(db, legacy):
         return None, None, None
-    payload = read_document(
+    payload = read_project_bundle(
         db,
-        _DOC_KEY,
         _default_projects_doc,
+        summarize_task_session,
         legacy_path=legacy,
     )
     project, session = find_task_scope(payload, session_id)
@@ -422,7 +427,12 @@ def append_shared_outcome(
     legacy = Path(legacy_path) if legacy_path else DATA_DIR / "workbench_projects.json"
     if not _workbench_doc_available(db, legacy):
         return None
-    payload = read_document(db, _DOC_KEY, _default_projects_doc, legacy_path=legacy)
+    payload = read_project_bundle(
+        db,
+        _default_projects_doc,
+        summarize_task_session,
+        legacy_path=legacy,
+    )
     project, session = find_task_scope(payload, session_id)
     if not project or not session:
         return None
@@ -454,11 +464,11 @@ def append_shared_outcome(
     except (TypeError, ValueError):
         shared["revision"] = 1
     project["updatedAt"] = now
-    write_document(
+    write_project_bundle(
         db,
-        _DOC_KEY,
         payload,
         _default_projects_doc,
+        summarize_task_session,
         legacy_path=legacy,
         export_path=Path(export_path) if export_path else legacy,
     )

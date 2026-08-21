@@ -42,6 +42,7 @@ from typing import Any, AsyncGenerator, Awaitable, Callable
 from uuid import uuid4
 
 from cyrene.observability.trace import trace_span
+from cyrene.runtime.run_coordinator import RunCoordinator, RunLease, run_coordinator_for
 from cyrene.workbench.compat import chat_service
 
 logger = logging.getLogger(__name__)
@@ -601,10 +602,22 @@ class ChatRunManager:
         self._cleanup_tasks: set[asyncio.Task[Any]] = set()
         self._db_path = ""
         self._event_store: ChatRunEventStore | None = None
+        # Unconfigured managers (mostly isolated tests) get a private control
+        # plane. ``configure`` switches production to the DB-scoped coordinator
+        # also used by task sessions.
+        self._coordinator = RunCoordinator(f"chat-manager:{id(self)}")
+        self._leases: dict[str, RunLease] = {}
 
     def configure(self, db_path: str) -> None:
         """Configure durable inbox and run-event storage before runs start."""
+        if self._coordinator.active_leases(owner_type="conversation"):
+            raise RuntimeError("cannot reconfigure ChatRunManager while runs are active")
         self._db_path = str(db_path or "")
+        self._coordinator = (
+            run_coordinator_for(self._db_path)
+            if self._db_path
+            else RunCoordinator(f"chat-manager:{id(self)}")
+        )
         self._event_store = (
             ChatRunEventStore(self._db_path) if self._db_path else None
         )
@@ -656,7 +669,14 @@ class ChatRunManager:
         run.status = "cancelled"
         run.termination_reason = "user_interrupted"
         run.outcome = {"kind": "interrupted"}
-        if run.task is not None and not run.task.done():
+        interrupted = self._coordinator.interrupt(
+            "conversation",
+            run.chat_id,
+            reason=run.termination_reason,
+        )
+        if not interrupted and run.task is not None and not run.task.done():
+            # Defensive compatibility for a run created by an older manager
+            # before the shared coordinator was configured.
             run.task.cancel()
         try:
             asyncio.create_task(run.publish({"type": "interrupted", "chatId": run.chat_id}))
@@ -682,7 +702,14 @@ class ChatRunManager:
             run.termination_reason = str(termination_reason or "chat_deleted")
             run.outcome = {"kind": "deleted"}
             task = run.task
-            if task is not None and not task.done():
+            self._coordinator.interrupt(
+                "conversation",
+                target,
+                reason=run.termination_reason,
+            )
+            if task is not None and not task.done() and self._coordinator.get(
+                "conversation", target
+            ) is None:
                 task.cancel()
             if task is not None and task is not asyncio.current_task():
                 await asyncio.gather(task, return_exceptions=True)
@@ -704,6 +731,13 @@ class ChatRunManager:
                         pass
             if self.runs.get(target) is run:
                 self.runs.pop(target, None)
+            lease = self._leases.pop(run.run_id, None)
+            if lease is not None:
+                self._coordinator.finish(
+                    lease,
+                    status=run.status,
+                    termination_reason=run.termination_reason,
+                )
         if self._event_store is not None:
             try:
                 await asyncio.to_thread(self._event_store.delete_chat, target)
@@ -743,35 +777,67 @@ class ChatRunManager:
         # Do not open SQLite while handling the HTTP request.  The driver
         # attaches storage from a worker thread before invoking the runner.
         run = ChatRun(chat_id, ack_event, max_buffer=self._max_buffer, db_path="")
+        lease = self._coordinator.try_acquire(
+            "conversation",
+            chat_id,
+            run.run_id,
+            request_id=str(ack_event.get("clientRequestId") or ""),
+            run_type="conversation",
+            bind_current_task=False,
+            payload=run,
+        )
+        if lease is None:
+            active = self._coordinator.get("conversation", chat_id)
+            attached = active.payload if active is not None else None
+            if isinstance(attached, ChatRun):
+                return attached, False
+            # The owner exists but was not created by this transcript adapter.
+            # This should never happen because owner namespaces are distinct,
+            # but surfacing it is safer than starting an unowned duplicate.
+            raise RuntimeError(f"conversation run ownership conflict: {chat_id}")
         self.runs[chat_id] = run
+        self._leases[run.run_id] = lease
 
-        if stream:
-            # The background task copies the current context at create_task time,
-            # so set the writer immediately before and reset right after — the
-            # task keeps its own captured copy (same pattern the legacy generator
-            # used). Other request-scoped ContextVars (attachment map, etc.) ride
-            # along because start_or_get is called synchronously from the handler.
-            from cyrene.agent.context import bind_run_context
-            from cyrene.workbench.inbox import _workbench_agent_inbox
+        try:
+            if stream:
+                # The background task copies the current context at create_task time,
+                # so set the writer immediately before and reset right after — the
+                # task keeps its own captured copy (same pattern the legacy generator
+                # used). Other request-scoped ContextVars (attachment map, etc.) ride
+                # along because start_or_get is called synchronously from the handler.
+                from cyrene.agent.context import bind_run_context
+                from cyrene.workbench.inbox import _workbench_agent_inbox
 
-            binding = bind_run_context(
-                reply_stream_writer=run.publish,
-                runtime_event_writer=run.publish,
+                binding = bind_run_context(
+                    reply_stream_writer=run.publish,
+                    runtime_event_writer=run.publish,
+                )
+                inbox_token = _workbench_agent_inbox.set(run.inbox)
+                try:
+                    run.task = asyncio.create_task(self._drive(run, runner))
+                finally:
+                    _workbench_agent_inbox.reset(inbox_token)
+                    binding.reset()
+            else:
+                from cyrene.workbench.inbox import _workbench_agent_inbox
+
+                inbox_token = _workbench_agent_inbox.set(run.inbox)
+                try:
+                    run.task = asyncio.create_task(self._drive(run, runner))
+                finally:
+                    _workbench_agent_inbox.reset(inbox_token)
+            if run.task is None or not self._coordinator.attach_task(lease, run.task):
+                raise RuntimeError(f"conversation run lost ownership: {chat_id}")
+        except Exception:
+            if self.runs.get(chat_id) is run:
+                self.runs.pop(chat_id, None)
+            self._leases.pop(run.run_id, None)
+            self._coordinator.finish(
+                lease,
+                status="error",
+                termination_reason="start_failed",
             )
-            inbox_token = _workbench_agent_inbox.set(run.inbox)
-            try:
-                run.task = asyncio.create_task(self._drive(run, runner))
-            finally:
-                _workbench_agent_inbox.reset(inbox_token)
-                binding.reset()
-        else:
-            from cyrene.workbench.inbox import _workbench_agent_inbox
-
-            inbox_token = _workbench_agent_inbox.set(run.inbox)
-            try:
-                run.task = asyncio.create_task(self._drive(run, runner))
-            finally:
-                _workbench_agent_inbox.reset(inbox_token)
+            raise
         return run, True
 
     async def _drive(self, run: ChatRun, runner: Runner) -> None:
@@ -873,6 +939,16 @@ class ChatRunManager:
                     )
             await persistence_span.finish()
             await run_span.finish(status=run.status)
+            # Durable transcript/event projection is terminal at this point.
+            # Release ownership before exposing ``done`` so a new send cannot
+            # attach to a completed-but-not-yet-released run during shell wake.
+            lease = self._leases.pop(run.run_id, None)
+            if lease is not None:
+                self._coordinator.finish(
+                    lease,
+                    status=run.status,
+                    termination_reason=run.termination_reason,
+                )
             # Shell-wake checks ``done`` to decide whether this chat is still
             # busy, so expose completion before attempting the pending wake.
             run.done.set()
@@ -1009,10 +1085,22 @@ class ChatRunManager:
                 for run in self.runs.values():
                     if run.task is task:
                         run.termination_reason = "shutdown_timeout"
+                        self._coordinator.interrupt(
+                            "conversation",
+                            run.chat_id,
+                            reason=run.termination_reason,
+                        )
                         break
-                task.cancel()
             if pending:
                 await asyncio.gather(*pending, return_exceptions=True)
+        for run_id, lease in list(self._leases.items()):
+            if lease.task is None or lease.task.done():
+                self._coordinator.finish(
+                    lease,
+                    status="cancelled",
+                    termination_reason=lease.termination_reason or "shutdown",
+                )
+                self._leases.pop(run_id, None)
         for task in list(self._cleanup_tasks):
             task.cancel()
         if self._cleanup_tasks:

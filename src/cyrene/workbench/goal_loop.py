@@ -31,6 +31,7 @@ from fastapi.responses import JSONResponse
 
 from cyrene.observability import debug
 from cyrene.agent import _AWAITING_USER_SENTINEL, interrupt_active_run
+from cyrene.runtime.run_coordinator import RunLease, run_coordinator_for
 from cyrene.workbench.notifications import append_notification
 
 logger = logging.getLogger(__name__)
@@ -544,6 +545,9 @@ class GoalLoopManager:
         self.db_path = str(db_path)
         self.owner = f"{socket.gethostname()}:{os.getpid()}:{uuid.uuid4().hex[:8]}"
         self.tasks: dict[str, asyncio.Task[Any]] = {}
+        self.coordinator = run_coordinator_for(self.db_path)
+        self.run_leases: dict[str, RunLease] = {}
+        self.run_sessions: dict[str, str] = {}
         # Starting a run spans the goal-loop tables and the Workbench document.
         # Serialize that short cross-store critical section so duplicate clicks
         # cannot interleave into a SQLite lock error or a half-created run.
@@ -596,7 +600,20 @@ class GoalLoopManager:
                         row["session_id"], row["id"], exc_info=True,
                     )
                 await _publish(recovered)
-            self.wake(str(row["id"]))
+            self.register_run(str(row["id"]), str(row["session_id"]))
+            if self.wake(str(row["id"])) is False:
+                paused = await _set_inactive_status(
+                    self.db_path,
+                    recovered or row,
+                    "paused",
+                    phase="paused",
+                    stop_reason="run_conflict",
+                )
+                if paused:
+                    await self._sync_projection(
+                        paused,
+                        message="恢复持续执行时发现该任务已有其他运行，已安全暂停。",
+                    )
 
     async def shutdown(self) -> None:
         self.closed = True
@@ -624,24 +641,73 @@ class GoalLoopManager:
                 lease_until=None,
             )
         tasks = list(self.tasks.values())
-        for task in tasks:
-            if not task.done():
-                task.cancel()
+        for lease in list(self.run_leases.values()):
+            self.coordinator.interrupt(
+                "task",
+                lease.owner_id,
+                reason="server_shutdown",
+            )
         if tasks:
             await asyncio.gather(*tasks, return_exceptions=True)
         self.tasks.clear()
 
-    def wake(self, run_id: str) -> None:
+    def register_run(self, run_id: str, session_id: str) -> None:
+        self.run_sessions[str(run_id or "")] = str(session_id or "")
+
+    def wake(self, run_id: str) -> bool:
         if self.closed:
-            return
+            return False
         current = self.tasks.get(run_id)
         if current is not None and not current.done():
-            return
+            return True
+        if current is not None:
+            self.tasks.pop(run_id, None)
+            previous_lease = self.run_leases.pop(str(run_id), None)
+            if previous_lease is not None:
+                self.coordinator.finish(
+                    previous_lease,
+                    status="cancelled" if current.cancelled() else "completed",
+                    termination_reason=previous_lease.termination_reason,
+                )
+        target_session = self.run_sessions.get(str(run_id), "")
+        if not target_session:
+            return False
+        lease = self.run_leases.get(str(run_id))
+        if lease is None or lease.released:
+            lease = self.coordinator.try_acquire(
+                "task",
+                target_session,
+                str(run_id),
+                run_type="goal_loop",
+                bind_current_task=False,
+                payload={"goalLoopRunId": str(run_id)},
+            )
+            if lease is None:
+                return False
+            self.run_leases[str(run_id)] = lease
         task = asyncio.create_task(self._run(run_id))
+        if not self.coordinator.attach_task(lease, task):
+            task.cancel()
+            self.run_leases.pop(str(run_id), None)
+            self.coordinator.finish(
+                lease,
+                status="cancelled",
+                termination_reason="ownership_lost",
+            )
+            return False
         self.tasks[run_id] = task
 
         def done(completed: asyncio.Task[Any]) -> None:
-            self.tasks.pop(run_id, None)
+            if self.tasks.get(run_id) is completed:
+                self.tasks.pop(run_id, None)
+            if self.run_leases.get(str(run_id)) is lease:
+                self.run_leases.pop(str(run_id), None)
+                self.coordinator.finish(
+                    lease,
+                    status="cancelled" if completed.cancelled() else "completed",
+                    termination_reason=lease.termination_reason,
+                )
+            self.run_sessions.pop(str(run_id), None)
             try:
                 completed.exception()
             except asyncio.CancelledError:
@@ -650,6 +716,14 @@ class GoalLoopManager:
                 logger.exception("Goal-loop worker failed", exc_info=True)
 
         task.add_done_callback(done)
+        return True
+
+    def interrupt(self, session_id: str, *, reason: str) -> bool:
+        return self.coordinator.interrupt(
+            "task",
+            str(session_id or ""),
+            reason=reason,
+        )
 
     async def _lease(self, run: dict[str, Any]) -> dict[str, Any] | None:
         now = _utc_now()
@@ -1400,7 +1474,20 @@ async def begin_async_answer(
     await _publish(run)
     manager = _MANAGERS.get(str(db_path))
     if manager:
-        manager.wake(str(run["id"]))
+        manager.register_run(str(run["id"]), session_id)
+        if manager.wake(str(run["id"])) is False:
+            paused = await _set_inactive_status(
+                db_path,
+                run,
+                "paused",
+                phase="paused",
+                stop_reason="run_conflict",
+            )
+            if paused:
+                await manager._sync_projection(
+                    paused,
+                    message="任务已有其他运行，持续执行已安全暂停。",
+                )
     return True
 
 
@@ -1473,7 +1560,20 @@ async def resume_after_answer(db_path: str, session_id: str, *, permission_denie
     _write_session(session_id, apply)
     manager = _MANAGERS.get(str(db_path))
     if manager:
-        manager.wake(str(run["id"]))
+        manager.register_run(str(run["id"]), session_id)
+        if manager.wake(str(run["id"])) is False:
+            paused = await _set_inactive_status(
+                db_path,
+                run,
+                "paused",
+                phase="paused",
+                stop_reason="run_conflict",
+            )
+            if paused:
+                await manager._sync_projection(
+                    paused,
+                    message="任务已有其他运行，持续执行已安全暂停。",
+                )
     await _publish(run)
 
 

@@ -359,6 +359,7 @@ _TOOL_ACTION_MAP: dict[str, tuple[str, str, str, int]] = {
     "ask_user": ("user_interaction", "ask_clarification", "ask_user", 1),
     "schedule_task": ("schedule_management", "manage_schedule", "schedule_task", 0),
     "list_tasks": ("schedule_management", "manage_schedule", "list_tasks", 0),
+    "edit_task": ("schedule_management", "manage_schedule", "edit_task", 0),
     "pause_task": ("schedule_management", "manage_schedule", "pause_task", 0),
     "resume_task": ("schedule_management", "manage_schedule", "resume_task", 0),
     "cancel_task": ("schedule_management", "manage_schedule", "cancel_task", 0),
@@ -441,8 +442,8 @@ _HIGH_RISK_TOOLS: frozenset[str] = frozenset({
     "Bash", "run_shell", "run_command", "StartShell", "SendShell", "start_shell", "send_shell",
     # File write operations (outside-workspace risk)
     "Write", "write_file", "Edit", "edit_file",
-    # Persistent scheduled task creation
-    "schedule_task",
+    # Persistent scheduled task creation or mutation
+    "schedule_task", "edit_task",
     # Entering data or uploading a file can disclose information or submit a
     # state-changing form.  Navigation, observation, and ordinary clicks remain
     # replayable because the user explicitly invoked the learned workflow.

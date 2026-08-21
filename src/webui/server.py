@@ -103,8 +103,10 @@ def create_app(bot: Any, db_path: str, instance_id: str = "", ui_mode: str = "wo
 
     async def _start_workbench_chat_runs() -> None:
         from cyrene.workbench.chat import startup_chat_runs
+        from cyrene.workbench.task_runs import recover_interrupted_task_runs
 
         startup_chat_runs()
+        await asyncio.to_thread(recover_interrupted_task_runs)
         manager = getattr(app.state, "goal_loop_manager", None)
         if manager is not None:
             await manager.startup()
@@ -194,6 +196,13 @@ def create_app(bot: Any, db_path: str, instance_id: str = "", ui_mode: str = "wo
                 await manager.shutdown()
             except Exception:
                 logger.warning("Goal-loop shutdown failed", exc_info=True)
+
+        try:
+            from cyrene.workbench.task_runs import shutdown_task_runs
+
+            await shutdown_task_runs(db_path)
+        except Exception:
+            logger.warning("Workbench task run shutdown failed", exc_info=True)
 
         try:
             from cyrene.workbench.chat import shutdown_chat_runs

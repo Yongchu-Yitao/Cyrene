@@ -11,6 +11,7 @@ NATIVE_TOOL_MODULES = (
     "cyrene.tool_impl.control.deep_reflect",
     "cyrene.tool_impl.task.schedule_task",
     "cyrene.tool_impl.task.list_tasks",
+    "cyrene.tool_impl.task.edit_task",
     "cyrene.tool_impl.task.pause_task",
     "cyrene.tool_impl.task.resume_task",
     "cyrene.tool_impl.task.cancel_task",

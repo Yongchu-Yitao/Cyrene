@@ -68,6 +68,7 @@ from cyrene.agent import (
     is_session_running,
     queue_round_guidance,
     run_agent,
+    SessionRunConflictError,
 )
 from cyrene.config import (
     ASSISTANT_NAME,
@@ -111,7 +112,12 @@ from cyrene.learning.skills import (
 from cyrene.runtime.memory.short_term import load_entries
 from cyrene.runtime.memory.soul import get_default_soul_content, read_soul, get_soul_path
 from cyrene.runtime.version import get_version_label
-from cyrene.workbench.store import patch_document_fields, read_document, write_document
+from cyrene.workbench.store import (
+    patch_project_bundle_fields,
+    read_project_bundle,
+    summarize_task_session,
+    write_project_bundle,
+)
 from cyrene.workbench.workspace_changes import is_cyrene_managed_workspace_path
 from cyrene.workbench.session_view import (
     build_pending_question as _ui_pending_question,
@@ -2457,27 +2463,27 @@ def _read_workbench_store() -> dict[str, Any]:
                 return raw
             return _workbench_default_project()
         try:
-            raw = read_document(
+            raw = read_project_bundle(
                 _db_path or str(DB_PATH),
-                "projects",
                 _workbench_default_project,
+                _workbench_session_summary,
                 legacy_path=_WORKBENCH_STORE,
             )
             if not isinstance(raw, dict) or not isinstance(raw.get("projects"), list):
-                raw = write_document(
+                raw = write_project_bundle(
                     _db_path or str(DB_PATH),
-                    "projects",
                     _workbench_default_project(),
                     _workbench_default_project,
+                    _workbench_session_summary,
                     legacy_path=_WORKBENCH_STORE,
                     export_path=_WORKBENCH_STORE,
                 )
             if not raw["projects"]:
-                raw = write_document(
+                raw = write_project_bundle(
                     _db_path or str(DB_PATH),
-                    "projects",
                     _workbench_default_project(),
                     _workbench_default_project,
+                    _workbench_session_summary,
                     legacy_path=_WORKBENCH_STORE,
                     export_path=_WORKBENCH_STORE,
                     base_value=getattr(raw, "_workbench_base", None),
@@ -2502,11 +2508,12 @@ def _read_workbench_store_lightweight() -> dict[str, Any]:
         if not _workbench_store_uses_sqlite():
             raw = read_json_safe(_WORKBENCH_STORE)
         else:
-            raw = read_document(
+            raw = read_project_bundle(
                 _db_path or str(DB_PATH),
-                "projects",
                 _workbench_default_project,
+                _workbench_session_summary,
                 legacy_path=_WORKBENCH_STORE,
+                lightweight=True,
             )
         if (
             isinstance(raw, dict)
@@ -2548,11 +2555,11 @@ def _write_workbench_store(
         if not _workbench_store_uses_sqlite():
             atomic_write_json(_WORKBENCH_STORE, payload)
             return
-        merged = write_document(
+        merged = write_project_bundle(
             _db_path or str(DB_PATH),
-            "projects",
             payload,
             _workbench_default_project,
+            _workbench_session_summary,
             legacy_path=_WORKBENCH_STORE,
             export_path=_WORKBENCH_STORE,
             base_value=base_value,
@@ -2581,11 +2588,11 @@ def _persist_workbench_selection(project_id: str | None, session_id: str | None)
             payload.update(fields)
             atomic_write_json(_WORKBENCH_STORE, payload)
             return fields
-        return patch_document_fields(
+        return patch_project_bundle_fields(
             _db_path or str(DB_PATH),
-            "projects",
             fields,
             _workbench_default_project,
+            _workbench_session_summary,
             legacy_path=_WORKBENCH_STORE,
             export_path=_WORKBENCH_STORE,
         )
@@ -2692,60 +2699,9 @@ def _workbench_find_project(payload: dict[str, Any], project_id: str) -> dict[st
     return None
 
 
-_WORKBENCH_SESSION_SUMMARY_FIELDS = (
-    "id",
-    "projectId",
-    "kind",
-    "title",
-    "goal",
-    "status",
-    "priority",
-    "createdAt",
-    "updatedAt",
-    "summary",
-    "titleLocked",
-)
-
-
 def _workbench_session_summary(session: dict[str, Any]) -> dict[str, Any]:
     """Return the rail/list shape for a task session without history payloads."""
-    summary = {field: session.get(field) for field in _WORKBENCH_SESSION_SUMMARY_FIELDS if field in session}
-    summary["id"] = str(summary.get("id") or session.get("id") or "")
-    summary["projectId"] = str(summary.get("projectId") or session.get("projectId") or "")
-    summary["isSummary"] = True
-    plan = session.get("plan") if isinstance(session.get("plan"), list) else []
-    summary["planStepCount"] = len(plan)
-    resolved_statuses = {"completed", "done", "skipped"}
-    summary["planCompletedCount"] = sum(
-        1
-        for step in plan
-        if isinstance(step, dict)
-        and str(step.get("status") or "pending") in resolved_statuses
-    )
-    current_step: dict[str, Any] | None = None
-    current_index = 0
-    for index, step in enumerate(plan):
-        if isinstance(step, dict) and str(step.get("status") or "pending") == "running":
-            current_step = step
-            current_index = index + 1
-            break
-    if current_step is None:
-        for index, step in enumerate(plan):
-            if (
-                isinstance(step, dict)
-                and str(step.get("status") or "pending") not in resolved_statuses
-            ):
-                current_step = step
-                current_index = index + 1
-                break
-    if current_step is not None:
-        summary["planCurrentIndex"] = current_index
-        summary["planCurrentTitle"] = str(current_step.get("title") or "")
-        summary["planCurrentAction"] = str(current_step.get("currentAction") or "")
-    summary["eventCount"] = len(session.get("events") or []) if isinstance(session.get("events"), list) else 0
-    summary["runCount"] = len(session.get("runs") or []) if isinstance(session.get("runs"), list) else 0
-    summary["artifactCount"] = len(session.get("artifacts") or []) if isinstance(session.get("artifacts"), list) else 0
-    return summary
+    return summarize_task_session(session)
 
 
 def _workbench_lightweight_store(payload: dict[str, Any]) -> dict[str, Any]:
@@ -6761,6 +6717,12 @@ async def _workbench_agent_reply(
     except _WorkbenchAgentRunError:
         raise
     except Exception as exc:
+        if isinstance(exc, SessionRunConflictError):
+            raise _WorkbenchAgentRunError(
+                "task_run_in_progress",
+                "该任务已有正在执行的请求，请等待完成或先明确停止它。",
+                status_code=409,
+            ) from exc
         logger.exception("Workbench agent run failed for session %s", session_id)
         safe_error = _workbench_generation_error(exc)
         raise _WorkbenchAgentRunError(
@@ -7049,6 +7011,14 @@ def _stream_agent_reply(run_coro_factory, user_message: str) -> StreamingRespons
                 # ends silently and the round renders as a bland "done" — the
                 # exact symptom of issue #7 ("model failure only replies done").
                 run_failed = True
+                if isinstance(exc, SessionRunConflictError):
+                    yield _ndjson_line({
+                        "type": "error",
+                        "error": "task_run_in_progress",
+                        "message": "该会话已有正在执行的请求，请等待完成或先明确停止它。",
+                    })
+                    await debug.publish_event({"type": "session_update", "status": "running"})
+                    return
                 logger.exception("Streaming chat run failed: %s", format_httpx_error(exc))
                 yield _ndjson_line({
                     "type": "error",

@@ -159,6 +159,7 @@ _RESOURCE_KEY_TEMPLATES: dict[str, tuple[str, ...]] = {
     "SearchLibrary": ("library:project", "knowledge:project"),
     "UpdateLibraryMetadata": ("library:project",),
     "list_tasks": ("db:scheduled-tasks",),
+    "edit_task": ("db:scheduled-tasks",),
     "list_entities": ("db:entities",),
     "query_entities": ("db:entities",),
     "ListSkills": ("skills:installed",),

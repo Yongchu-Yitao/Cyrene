@@ -303,6 +303,14 @@ def register_chat_routes(router: APIRouter, bot: Any, db_path: str) -> None:
                 archive_session_id=labels.get("archive_session_id", ""),
             )
             return {"response": response}
+        except SessionRunConflictError:
+            return JSONResponse(
+                {
+                    "error": "该会话已有正在执行的请求，请等待完成或先明确停止它。",
+                    "code": "task_run_in_progress",
+                },
+                status_code=409,
+            )
         except httpx.TimeoutException as exc:
             logger.exception(
                 "Chat request timed out while calling upstream model: %s",
@@ -381,6 +389,14 @@ def register_chat_routes(router: APIRouter, bot: Any, db_path: str) -> None:
                 archive_session_id=labels.get("archive_session_id", ""),
             )
             return {"response": response}
+        except SessionRunConflictError:
+            return JSONResponse(
+                {
+                    "error": "该会话已有正在执行的请求，请等待完成或先明确停止它。",
+                    "code": "task_run_in_progress",
+                },
+                status_code=409,
+            )
         except ValueError as exc:
             return JSONResponse({"error": str(exc)}, status_code=400)
         except httpx.TimeoutException as exc:

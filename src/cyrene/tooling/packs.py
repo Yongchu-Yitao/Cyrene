@@ -96,6 +96,7 @@ CAPABILITY_BINDINGS: dict[str, tuple[tuple[str, str], ...]] = {
     "task_tools": (
         ("task.schedule", "schedule_task"),
         ("task.list", "list_tasks"),
+        ("task.edit", "edit_task"),
         ("task.pause", "pause_task"),
         ("task.resume", "resume_task"),
         ("task.cancel", "cancel_task"),

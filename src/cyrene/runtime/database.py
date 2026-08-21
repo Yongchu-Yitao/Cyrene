@@ -1970,6 +1970,49 @@ async def get_all_tasks(db_path: str, project_id: str | None = None) -> list[dic
         return [dict(r) for r in rows]
 
 
+async def get_task(db_path: str, task_id: str) -> dict | None:
+    """Return one scheduled task by its stable id."""
+    async with aiosqlite.connect(db_path) as db:
+        db.row_factory = aiosqlite.Row
+        cursor = await db.execute(
+            "SELECT * FROM scheduled_tasks WHERE id = ?",
+            (task_id,),
+        )
+        row = await cursor.fetchone()
+        return dict(row) if row is not None else None
+
+
+async def edit_task(db_path: str, task_id: str, updates: dict) -> bool:
+    """Partially update exactly one scheduled task.
+
+    Callers are responsible for validating values and recomputing ``next_run``.
+    The allowlist keeps dynamic SQL limited to the task fields that are safe to
+    edit without rewriting identity, ownership, or execution history.
+    """
+    editable_fields = (
+        "prompt",
+        "action_type",
+        "schedule_type",
+        "schedule_value",
+        "schedule_timezone",
+        "next_run",
+        "permission_mode",
+    )
+    fields = [field for field in editable_fields if field in updates]
+    if not fields:
+        return False
+
+    assignments = ", ".join(f"{field} = ?" for field in fields)
+    values = [updates[field] for field in fields]
+    async with aiosqlite.connect(db_path) as db:
+        cursor = await db.execute(
+            f"UPDATE scheduled_tasks SET {assignments} WHERE id = ?",
+            (*values, task_id),
+        )
+        await db.commit()
+        return cursor.rowcount > 0
+
+
 async def get_due_tasks(db_path: str) -> list[dict]:
     now = datetime.now(timezone.utc).isoformat()
     async with aiosqlite.connect(db_path) as db:

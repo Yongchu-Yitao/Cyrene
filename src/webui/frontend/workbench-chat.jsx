@@ -5798,6 +5798,16 @@ function WorkbenchChatPage({ active, project, newChatRequestId, taskOpenRequest,
   var chatListRequestSequenceRef = useWbcRef({});
   var [activeChatId, setActiveChatId] = useWbcState("");
   var activeChatIdRef = useWbcRef("");
+  // The active conversation card is keyed by chat id and remounts after a
+  // switch. Keep the trackpad gesture lock at page scope so inertial wheel
+  // events from that same swipe cannot switch a second conversation.
+  var horizontalSessionWheelRef = useWbcRef({
+    delta: 0,
+    direction: 0,
+    lockedUntil: 0,
+    lastEventAt: 0,
+    waitingForIdle: false,
+  });
   // A full-page task belongs to the project workspace, not to whichever chat
   // happened to be selected before it opened. Split tasks deliberately leave
   // this empty so they keep sharing the active conversation's pane layout.
@@ -10383,6 +10393,7 @@ function WorkbenchChatPage({ active, project, newChatRequestId, taskOpenRequest,
         onDraftAgentChange={handleDraftAgentChange}
         onSwitchAgent={handleSwitchAgent}
         onOpenAgentDetail={handleOpenAgentDetail}
+        horizontalSessionWheelGesture={horizontalSessionWheelRef.current}
         onBrowserTakeoverComplete={function (payload) {
           var pending = activeChat && activeChat.pendingQuestion;
           if (!pending || !pending.id) return Promise.reject(new Error("登录确认已不在等待中。"));
@@ -15794,7 +15805,7 @@ function wbcSelectionTextRect(range) {
   return { left: left, top: top, right: right, bottom: bottom, width: right - left, height: bottom - top };
 }
 
-function WbcMain({ project, chat, chatSummary, loading, runtime, error, errorKind, onRetry, running, onSend, onGuidance, onInterrupt, onAnswer, onRetryMessage, onRetryClearAnimationEnd, retryClearingMessageIds, retrySuppressedMessageIds, onEditMessage, onAskSelection, sideAgentCreating, onConversationContextMenu, onRename, onDelete, onToTask, toTaskBusy, onOpenFile, onOpenDroppedChat, sideVisible, sidePanelTabExpanded, onToggleSide, browserState, browserSessionId, browserVisible, browserWindowMode, onBrowserMaximize, onBrowserRestore, onBrowserTakeoverComplete, splitOpen, draftAgent, onDraftAgentChange, onSwitchAgent, onOpenAgentDetail }) {
+function WbcMain({ project, chat, chatSummary, loading, runtime, error, errorKind, onRetry, running, onSend, onGuidance, onInterrupt, onAnswer, onRetryMessage, onRetryClearAnimationEnd, retryClearingMessageIds, retrySuppressedMessageIds, onEditMessage, onAskSelection, sideAgentCreating, onConversationContextMenu, onRename, onDelete, onToTask, toTaskBusy, onOpenFile, onOpenDroppedChat, sideVisible, sidePanelTabExpanded, onToggleSide, browserState, browserSessionId, browserVisible, browserWindowMode, onBrowserMaximize, onBrowserRestore, onBrowserTakeoverComplete, splitOpen, draftAgent, onDraftAgentChange, onSwitchAgent, onOpenAgentDetail, horizontalSessionWheelGesture }) {
   // The lightweight list item already contains every Composer preference.
   // Keep using it while the full transcript hydrates so switching chats never
   // paints a temporary "new chat" Composer with global/default settings.
@@ -15819,13 +15830,6 @@ function WbcMain({ project, chat, chatSummary, loading, runtime, error, errorKin
   // a remove/re-add/restore loop which is especially visible at scrollTop=0.
   var avoidanceApplyingRef = useWbcRef(false);
   var avoidanceApplyingRafRef = useWbcRef(0);
-  var horizontalSessionWheelRef = useWbcRef({
-    delta: 0,
-    direction: 0,
-    lockedUntil: 0,
-    lastEventAt: 0,
-    waitingForIdle: false,
-  });
 
   function syncAgentCursorRunning(isRunning) {
     try {
@@ -16473,7 +16477,7 @@ function WbcMain({ project, chat, chatSummary, loading, runtime, error, errorKin
     )) return;
     wbcHandleHorizontalWheelGesture(
       event,
-      horizontalSessionWheelRef.current,
+      horizontalSessionWheelGesture,
       wbcCycleTopbarSessionTab
     );
   }

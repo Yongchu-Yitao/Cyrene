@@ -37497,6 +37497,9 @@ html[data-performance-mode="on"] .wbc-composer .wb-chip:first-child {
 .wbc-task-pane .workbench-stage {
   max-width: none;
   padding-right: 0;
+  /* The stage begins one pixel above the floating task header. Clip that
+     sliver so overscrolled content cannot paint past the header's top edge. */
+  clip-path: inset(1px 0 0);
 }
 
 /* The negative trailing margin cancels the pseudo-item's automatic list gap.

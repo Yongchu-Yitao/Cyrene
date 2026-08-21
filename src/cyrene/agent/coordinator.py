@@ -282,6 +282,14 @@ async def _run_execution_agent_locked(task: str, bot: Any, chat_id: int, db_path
 # ---------------------------------------------------------------------------
 
 
+class SessionRunConflictError(RuntimeError):
+    """Raised when a second run targets a session that already has an owner."""
+
+    def __init__(self, session_id: str) -> None:
+        self.session_id = str(session_id or "")
+        super().__init__(f"session already has a running agent: {self.session_id}")
+
+
 async def run_session_operation(
     session_id: str,
     operation: Callable[[], Awaitable[Any]],
@@ -297,7 +305,11 @@ async def run_session_operation(
     normalized_session_id = str(session_id or "")
     ctx = _ensure_session(normalized_session_id)
     if ctx.lock.locked():
-        interrupt_active_run(session_id=normalized_session_id)
+        # Replacement is a user-visible lifecycle action and must be requested
+        # explicitly through interrupt/cancel. Silently cancelling the previous
+        # owner here allowed a double submit to leave tool side effects without
+        # the task run that was supposed to audit them.
+        raise SessionRunConflictError(normalized_session_id)
     async with ctx.lock:
         ctx.interrupt_event.clear()
         current_task = asyncio.current_task()

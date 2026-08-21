@@ -2,7 +2,11 @@
 
 # ruff: noqa: F403,F405
 
+import asyncio
+import functools
+
 from cyrene.workbench.runtime import *
+from cyrene.workbench import task_runs as task_run_service
 from route import schemas as api_models
 from route.errors import error_response
 
@@ -15,6 +19,139 @@ def register_task_session_routes(
     global _bot, _db_path
     _bot = bot
     _db_path = db_path
+
+    def coordinated_task_run(
+        run_type: str,
+        *,
+        bypass_goal_loop_answer: bool = False,
+    ):
+        """Own and audit a bounded task request before its first model call."""
+        def decorate(handler):
+            @functools.wraps(handler)
+            async def wrapped(session_id: str, body_model):
+                body = api_models.body_dict(body_model)
+                persisted_payload = _read_workbench_store()
+                _persisted_project, persisted_session = _workbench_find_session(
+                    persisted_payload,
+                    session_id,
+                )
+                pending_step = (
+                    persisted_session.get("pendingPlanStep")
+                    if isinstance(persisted_session, dict)
+                    and isinstance(persisted_session.get("pendingPlanStep"), dict)
+                    else {}
+                )
+                # The durable goal-loop run is already the audit owner. Its
+                # answer path explicitly hands execution back to GoalLoopManager,
+                # which acquires the same shared task lease for the background
+                # continuation.
+                if bypass_goal_loop_answer and bool(pending_step.get("goalLoop")):
+                    return await handler(session_id, body_model)
+                goal_loop = (
+                    persisted_session.get("goalLoop")
+                    if isinstance(persisted_session, dict)
+                    and isinstance(persisted_session.get("goalLoop"), dict)
+                    else {}
+                )
+                if str(goal_loop.get("status") or "") in {
+                    "running",
+                    "waiting_for_user",
+                }:
+                    return JSONResponse(
+                        {
+                            "error": "该任务正由持续执行状态机接管，请先暂停或取消它。",
+                            "code": "task_run_in_progress",
+                        },
+                        status_code=409,
+                    )
+                if is_session_running(session_id):
+                    return JSONResponse(
+                        {
+                            "error": "该任务已有正在执行的请求，请等待完成或先停止它。",
+                            "code": "task_run_in_progress",
+                        },
+                        status_code=409,
+                    )
+                run_id = _short_id("run")
+                request_id = str(body.get("clientRequestId") or "").strip()
+                coordinator = task_run_service.coordinator_for(_db_path)
+                lease = coordinator.try_acquire(
+                    "task",
+                    session_id,
+                    run_id,
+                    request_id=request_id,
+                    run_type=run_type,
+                )
+                if lease is None:
+                    return JSONResponse(
+                        {
+                            "error": "该任务已有正在执行的请求，请等待完成或先停止它。",
+                            "code": "task_run_in_progress",
+                        },
+                        status_code=409,
+                    )
+                token = None
+                try:
+                    if not task_run_service.begin_task_run(
+                        session_id,
+                        run_id,
+                        request_id=request_id,
+                        run_type=run_type,
+                        body=body,
+                    ):
+                        return JSONResponse({"error": "session not found"}, status_code=404)
+                    token = task_run_service.bind_task_run_id(run_id)
+                    result = await handler(session_id, body_model)
+                    task_run_service.finish_task_run_if_open(
+                        session_id,
+                        run_id,
+                        result=result,
+                    )
+                    if isinstance(result, dict):
+                        latest_payload = _read_workbench_store()
+                        latest_project, latest_session = _workbench_find_session(
+                            latest_payload, session_id
+                        )
+                        result.update(latest_payload)
+                        result["project"] = latest_project
+                        result["session"] = latest_session
+                        latest_run = next(
+                            (
+                                item
+                                for item in (latest_session or {}).get("runs") or []
+                                if isinstance(item, dict)
+                                and str(item.get("id") or "") == run_id
+                            ),
+                            None,
+                        )
+                        if latest_run is not None:
+                            result["run"] = latest_run
+                    return result
+                except asyncio.CancelledError:
+                    task_run_service.finish_task_run_if_open(
+                        session_id,
+                        run_id,
+                        status="cancelled",
+                        error="任务运行已被中断。",
+                        termination_reason="user_interrupted",
+                    )
+                    raise
+                except Exception as exc:
+                    task_run_service.finish_task_run_if_open(
+                        session_id,
+                        run_id,
+                        status="failed",
+                        error=str(exc),
+                        termination_reason="handler_error",
+                    )
+                    raise
+                finally:
+                    if token is not None:
+                        task_run_service.reset_task_run_id(token)
+                    coordinator.release(lease)
+
+            return wrapped
+        return decorate
 
     def agent_run_error_response(exc: _WorkbenchAgentRunError) -> JSONResponse:
         return JSONResponse(
@@ -195,7 +332,11 @@ def register_task_session_routes(
                     {"error": "计划已发生变化，请刷新后重试。", "code": "stale_plan_revision"},
                     status_code=409,
                 )
-            if is_session_running(session_id) or str(session.get("status") or "") in ("running", "waiting_for_user"):
+            if (
+                is_session_running(session_id)
+                or task_run_service.is_task_run_active(_db_path, session_id)
+                or str(session.get("status") or "") in ("running", "waiting_for_user")
+            ):
                 return JSONResponse(
                     {"error": "Agent 正在执行，暂时不能修改计划。", "code": "plan_running"},
                     status_code=409,
@@ -443,6 +584,7 @@ def register_task_session_routes(
         # Stop every writer before removing the entity. Otherwise a normal Agent
         # request can finish against its stale snapshot and resurrect the deleted
         # session through the document store's three-way merge.
+        task_run_service.interrupt_task_run(_db_path, session_id)
         interrupt_active_run(session_id=session_id)
         from cyrene.workbench import goal_loop as goal_loop_service
 
@@ -472,10 +614,16 @@ def register_task_session_routes(
                 await asyncio.gather(worker, return_exceptions=True)
 
         for _attempt in range(100):
-            if not is_session_running(session_id):
+            if (
+                not is_session_running(session_id)
+                and not task_run_service.is_task_run_active(_db_path, session_id)
+            ):
                 break
             await asyncio.sleep(0.05)
-        if is_session_running(session_id):
+        if (
+            is_session_running(session_id)
+            or task_run_service.is_task_run_active(_db_path, session_id)
+        ):
             return JSONResponse(
                 {
                     "error": "任务仍在停止中，请稍后重试删除。",
@@ -844,6 +992,7 @@ def register_task_session_routes(
         return {"ok": True, "project": project, "session": session, **payload}
 
     @router.post("/api/task-sessions/{session_id}/runs")
+    @coordinated_task_run("execution")
     async def api_workbench_create_run(
         session_id: str, body_model: api_models.AgentInputBody
     ):
@@ -995,7 +1144,7 @@ def register_task_session_routes(
         public_attachments = [build_public_attachment_payload(item) for item in normalized_attachments]
         if normalized_attachments:
             await _workbench_register_attachments_kb(session_id, normalized_attachments)
-        run_id = _short_id("run")
+        run_id = task_run_service.current_task_run_id() or _short_id("run")
         activity_events = _collect_run_activity_events(session_id, run_start_ts, run_id, workspace_root)
         tool_call_events = [event for event in activity_events if event.get("type") == "ToolCallEvent"]
         file_changes = _workbench_collect_run_file_changes(
@@ -1081,7 +1230,11 @@ def register_task_session_routes(
             "taskId": session_id,
             "userInput": user_input,
             "agentResponse": agent_reply,
-            "status": "failed" if agent_error else "completed",
+            "status": (
+                "failed" if agent_error
+                else "awaiting_user" if awaiting_user
+                else "completed"
+            ),
             "startedAt": run_started_at,
             "endedAt": finished_at,
             "contextPackId": _short_id("ctx"),
@@ -1093,7 +1246,7 @@ def register_task_session_routes(
             "mode": mode,
             "error": agent_error.message if agent_error else None,
         }
-        session.setdefault("runs", []).append(run)
+        task_run_service.upsert_task_run(session, run)
         session.setdefault("events", []).extend(events)
         _workbench_promote_file_artifacts(session, file_changes, finished_at)
         if not awaiting_user and agent_error is None:
@@ -1124,6 +1277,7 @@ def register_task_session_routes(
         return {"ok": True, "project": project, "session": session, "run": run, **payload}
 
     @router.post("/api/task-sessions/{session_id}/chat")
+    @coordinated_task_run("chat")
     async def api_workbench_session_chat(
         session_id: str, body_model: api_models.AgentInputBody
     ):
@@ -1177,11 +1331,11 @@ def register_task_session_routes(
         # Sink durable memories from this exchange into the project's workspace store.
         if not command and not awaiting_user:
             schedule_capture(_workbench_project_memory_key(project), message, agent_reply)
-        session["status"] = "waiting_for_user" if awaiting_user else "completed"
+        session["status"] = "waiting_for_user" if awaiting_user else "answered"
         now = _utc_now_iso()
         session["updatedAt"] = now
         project["updatedAt"] = now
-        chat_run_id = _short_id("run")
+        chat_run_id = task_run_service.current_task_run_id() or _short_id("run")
         chat_tool_events = _collect_run_tool_events(session_id, chat_run_start_ts, chat_run_id, workspace_root)
         file_changes = _workbench_collect_run_file_changes(
             chat_tool_events,
@@ -1194,8 +1348,49 @@ def register_task_session_routes(
             workspace_text_before=workspace_text_before,
             workspace_text_after=workspace_text_after,
         )
-        if chat_tool_events:
-            session.setdefault("events", []).extend(chat_tool_events)
+        chat_events = [
+            {
+                "id": _short_id("event"),
+                "type": "UserMessageEvent",
+                "runId": chat_run_id,
+                "createdAt": chat_run_start_ts,
+                "body": message or "[附件]",
+            },
+            *chat_tool_events,
+            {
+                "id": _short_id("event"),
+                "type": "AgentResponseEvent",
+                "runId": chat_run_id,
+                "createdAt": now,
+                "body": agent_reply,
+            },
+        ]
+        run = {
+            "id": chat_run_id,
+            "taskId": session_id,
+            "userInput": message,
+            "agentResponse": agent_reply,
+            "status": "awaiting_user" if awaiting_user else "completed",
+            "startedAt": chat_run_start_ts,
+            "endedAt": now,
+            "contextPackId": _short_id("ctx"),
+            "events": chat_events,
+            "fileChanges": file_changes,
+            "toolCalls": [
+                {"tool": event.get("tool"), "argsPreview": event.get("argsPreview", "")}
+                for event in chat_tool_events
+                if isinstance(event, dict) and event.get("type") == "ToolCallEvent"
+            ],
+            "artifacts": [],
+            "attachments": [
+                build_public_attachment_payload(item)
+                for item in _workbench_normalize_attachments(attachments)
+            ],
+            "mode": mode,
+            "error": None,
+        }
+        task_run_service.upsert_task_run(session, run)
+        session.setdefault("events", []).extend(chat_events)
         _workbench_promote_file_artifacts(session, file_changes, now)
         payload["activeSessionId"] = session_id
         _write_workbench_store(payload)
@@ -1210,9 +1405,10 @@ def register_task_session_routes(
             link_label=str(session.get("title") or ""),
             meta={"sessionId": session_id},
         )
-        return {"ok": True, "project": project, "session": session, **payload}
+        return {"ok": True, "project": project, "session": session, "run": run, **payload}
 
     @router.post("/api/task-sessions/{session_id}/dispatch")
+    @coordinated_task_run("dispatch")
     async def api_workbench_dispatch(
         session_id: str, body_model: api_models.AgentInputBody
     ):
@@ -1478,7 +1674,7 @@ def register_task_session_routes(
         public_attachments = [build_public_attachment_payload(item) for item in normalized_attachments]
         if normalized_attachments:
             await _workbench_register_attachments_kb(session_id, normalized_attachments)
-        run_id = _short_id("run")
+        run_id = task_run_service.current_task_run_id() or _short_id("run")
         activity_events = _collect_run_activity_events(session_id, run_start_ts, run_id, workspace_root)
         tool_call_events = [event for event in activity_events if event.get("type") == "ToolCallEvent"]
         file_changes = _workbench_collect_run_file_changes(
@@ -1503,7 +1699,7 @@ def register_task_session_routes(
             "taskId": session_id,
             "userInput": user_input,
             "agentResponse": agent_reply,
-            "status": "completed",
+            "status": "awaiting_user" if awaiting_user else "completed",
             "startedAt": run_start_ts,
             "endedAt": finished_at,
             "contextPackId": _short_id("ctx"),
@@ -1515,7 +1711,7 @@ def register_task_session_routes(
             "mode": mode,
             "error": None,
         }
-        session.setdefault("runs", []).append(run)
+        task_run_service.upsert_task_run(session, run)
         session.setdefault("events", []).extend(events)
         _workbench_promote_file_artifacts(session, file_changes, finished_at)
         if not awaiting_user:
@@ -1545,6 +1741,7 @@ def register_task_session_routes(
         return {"ok": True, "replyKind": "repair" if repairing_acceptance else kind, "project": project, "session": session, "run": run, **payload}
 
     @router.post("/api/task-sessions/{session_id}/answer")
+    @coordinated_task_run("answer", bypass_goal_loop_answer=True)
     async def api_workbench_answer(
         session_id: str, body_model: api_models.AnswerBody
     ):
@@ -1662,7 +1859,7 @@ def register_task_session_routes(
                     step["startedAt"] = None
                     step["currentAction"] = "已停止，可重新执行。"
                     step["updatedAt"] = finished_at
-                run_id = _short_id("run")
+                run_id = task_run_service.current_task_run_id() or _short_id("run")
                 events = [
                     {
                         "id": _short_id("event"),
@@ -1698,7 +1895,7 @@ def register_task_session_routes(
                     "mode": "auto",
                     "error": None,
                 }
-                cancelled_session.setdefault("runs", []).append(cancelled_run)
+                task_run_service.upsert_task_run(cancelled_session, cancelled_run)
                 cancelled_session["updatedAt"] = finished_at
                 _write_workbench_store(cancelled_payload)
                 return {
@@ -1728,7 +1925,7 @@ def register_task_session_routes(
             session["status"] = "acted"
             schedule_capture(_workbench_project_memory_key(project), answer_text, agent_reply)
 
-        run_id = _short_id("run")
+        run_id = task_run_service.current_task_run_id() or _short_id("run")
         activity_events = _collect_run_activity_events(session_id, run_start_ts, run_id, workspace_root)
         tool_call_events = [e for e in activity_events if e.get("type") == "ToolCallEvent"]
         file_changes = _workbench_collect_run_file_changes(
@@ -1753,7 +1950,7 @@ def register_task_session_routes(
             "taskId": session_id,
             "userInput": answer_text,
             "agentResponse": agent_reply,
-            "status": "completed",
+            "status": "awaiting_user" if awaiting_user else "completed",
             "startedAt": run_start_ts,
             "endedAt": finished_at,
             "contextPackId": _short_id("ctx"),
@@ -1765,7 +1962,7 @@ def register_task_session_routes(
             "mode": "auto",
             "error": None,
         }
-        session.setdefault("runs", []).append(run)
+        task_run_service.upsert_task_run(session, run)
         session.setdefault("events", []).extend(events)
         _workbench_promote_file_artifacts(session, file_changes, finished_at)
         continue_plan_execution = False
