@@ -1,7 +1,7 @@
 import * as esbuild from 'esbuild'
 import { createHash } from 'crypto'
 import { readFileSync, writeFileSync, mkdirSync, readdirSync, statSync, existsSync, copyFileSync, rmSync } from 'fs'
-import { join, relative, dirname, extname, resolve, basename } from 'path'
+import { join, relative, dirname, extname, resolve, basename, sep } from 'path'
 import { fileURLToPath } from 'url'
 
 const __dirname = dirname(fileURLToPath(import.meta.url))
@@ -170,7 +170,7 @@ async function build() {
 
   for (const file of files) {
     const srcDir = file.startsWith(WORKBENCH_DIR) ? WORKBENCH_DIR : APP_DIR
-    const rel = relative(srcDir, file).replace(/\.jsx$/, '.js')
+    const rel = relative(srcDir, file).split(sep).join('/').replace(/\.jsx$/, '.js')
     const outFile = join(OUT_DIR, rel)
     mkdirSync(dirname(outFile), { recursive: true })
 

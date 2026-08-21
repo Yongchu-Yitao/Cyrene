@@ -76,6 +76,9 @@ def test_windows_release_installs_and_runs_the_built_nsis_package():
     smoke = (
         ROOT / "build" / "windows-release-smoke.ps1"
     ).read_text(encoding="utf-8")
+    webui_build = (
+        ROOT / "src" / "webui" / "build-jsx.mjs"
+    ).read_text(encoding="utf-8")
 
     assert workflow.count("Install and smoke test Windows package") == 2
     assert "build\\windows-release-smoke.ps1 -Arch x64" in workflow
@@ -114,6 +117,7 @@ def test_windows_release_installs_and_runs_the_built_nsis_package():
     assert "timed out after $TimeoutSeconds seconds" in captured_process
     assert "if ($null -eq $exitCode)" in captured_process
     assert "ExitCode = $exitCode" in captured_process
+    assert "split(sep).join('/')" in webui_build
 
 
 def test_windows_backend_termination_does_not_hold_electron_open():
