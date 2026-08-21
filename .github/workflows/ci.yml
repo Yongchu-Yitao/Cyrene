@@ -58,6 +58,11 @@ jobs:
       - name: Lint Python sources
         run: uv run --locked ruff check src tests
 
+      - name: Install native crash debugger
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes gdb
+
       - name: Run full Python suite
         env:
           PYTHONFAULTHANDLER: "1"
