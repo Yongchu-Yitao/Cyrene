@@ -5733,11 +5733,14 @@ async def test_run_chat_agent_returns_main_agent_text_directly(monkeypatch, tmp_
     from cyrene import agent
     from cyrene.agent import session as _agent_session
     from cyrene.agent import agent as _agent_core
+    from cyrene.learning import engine as _behavior_learning
 
     _patch_state_file(monkeypatch, tmp_path / "state.json")
     _patch_data_dir(monkeypatch, tmp_path)
     monkeypatch.setattr(_agent_session, "_refresh_session_labels", AsyncMock())
     monkeypatch.setattr(agent, "get_context", lambda max_chars=5000: "")
+    monkeypatch.setattr(_behavior_learning, "begin_turn", AsyncMock(return_value=None))
+    monkeypatch.setattr(_behavior_learning, "build_learned_skill_block", AsyncMock(return_value=""))
 
     async def fake_run_main_agent(user_message, history, bot, chat_id, db_path, system_prompt="", client_request_id="", persist_user_message=True, lang="", **kwargs):
         round_id = agent._current_round_id.get()
@@ -5761,11 +5764,14 @@ async def test_run_chat_agent_returns_main_text_when_internal_trace_has_no_final
     from cyrene import agent
     from cyrene.agent import session as _agent_session
     from cyrene.agent import agent as _agent_core
+    from cyrene.learning import engine as _behavior_learning
 
     _patch_state_file(monkeypatch, tmp_path / "state.json")
     _patch_data_dir(monkeypatch, tmp_path)
     monkeypatch.setattr(_agent_session, "_refresh_session_labels", AsyncMock())
     monkeypatch.setattr(agent, "get_context", lambda max_chars=5000: "")
+    monkeypatch.setattr(_behavior_learning, "begin_turn", AsyncMock(return_value=None))
+    monkeypatch.setattr(_behavior_learning, "build_learned_skill_block", AsyncMock(return_value=""))
 
     async def fake_run_main_agent(user_message, history, bot, chat_id, db_path, system_prompt="", client_request_id="", persist_user_message=True, lang="", **kwargs):
         round_id = agent._current_round_id.get()
