@@ -59,6 +59,8 @@ jobs:
         run: uv run --locked ruff check src tests
 
       - name: Run full Python suite
+        env:
+          PYTHONFAULTHANDLER: "1"
         run: >-
           uv run --locked pytest -q
           -W error::pytest.PytestUnhandledThreadExceptionWarning
