@@ -2721,6 +2721,10 @@ def _workbench_lightweight_store(payload: dict[str, Any]) -> dict[str, Any]:
                 full = dict(session)
                 full.pop("isSummary", None)
                 next_sessions.append(full)
+            elif session.get("isSummary"):
+                # Normalized storage may already provide a compact shell. Keep
+                # its aggregate counts instead of summarizing the shell again.
+                next_sessions.append(dict(session))
             else:
                 next_sessions.append(_workbench_session_summary(session))
         next_project["sessions"] = next_sessions
