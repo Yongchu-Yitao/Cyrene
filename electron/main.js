@@ -733,6 +733,7 @@ const BROWSER_TAB_PICKER_HTML = `<!doctype html>
       favicon.innerHTML = icons.tab;
       if (tab.favicon) {
         const image = document.createElement('img');
+        image.referrerPolicy = 'no-referrer';
         image.src = String(tab.favicon);
         image.alt = '';
         image.addEventListener('error', () => image.remove());

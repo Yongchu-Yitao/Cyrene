@@ -15502,7 +15502,7 @@ function WbcBrowserFloatingSurface({ browserState, browserSessionId, visible, mo
           <div className="wbc-side-agent-split-menu wbc-resource-picker-menu wbc-browser-picker-menu wbc-browser-maximized-menu open" role="listbox">
             {displayBrowserTabs.map(function (tab) {
               var selected = String(tab.id || "") === String(displayActiveBrowserTab.id || displayBrowserState.activeTabId || "");
-              return <div key={tab.id} className={"wbc-browser-picker-row" + (selected ? " active" : "")} role="option" aria-selected={selected}><button type="button" className="wbc-browser-picker-select" onClick={function () { selectMaximizedBrowserTab(tab); }}><span className="wbc-browser-picker-favicon" aria-hidden="true"><span className="wbc-browser-picker-favicon-fallback">{WBC_SIDE_TAB_ICONS.browser}</span>{tab.favicon ? <img src={tab.favicon} alt="" draggable="false" onError={function (event) { event.currentTarget.hidden = true; }} /> : null}</span><b>{tab.title || tab.url || wbcT("workbenchChat.browserWindowTitle", "Browser")}</b></button><span className="wbc-browser-picker-actions"><button type="button" onClick={function (event) { refreshMaximizedBrowserTab(tab, event); }} aria-label={wbcT("browser.context.reload", "Reload")}>{FloatingBrowserIcon ? <FloatingBrowserIcon name="reload" size={14} /> : WBC_ICONS.retry}</button><button type="button" className={tab.muted ? "active" : ""} onClick={function (event) { toggleMaximizedBrowserMute(tab, event); }} aria-label={tab.muted ? wbcT("browser.context.unmute", "Unmute") : wbcT("browser.context.mute", "Mute")}>{FloatingBrowserIcon ? <FloatingBrowserIcon name={tab.muted ? "muted" : "volume"} size={14} /> : null}</button><button type="button" onClick={function (event) { closeMaximizedBrowserTab(tab, event); }} aria-label={wbcT("browser.context.closeTab", "Close tab")} title={wbcT("browser.context.closeTab", "Close tab")}>{WBC_ICONS.x}</button></span></div>;
+              return <div key={tab.id} className={"wbc-browser-picker-row" + (selected ? " active" : "")} role="option" aria-selected={selected}><button type="button" className="wbc-browser-picker-select" onClick={function () { selectMaximizedBrowserTab(tab); }}><span className="wbc-browser-picker-favicon" aria-hidden="true"><span className="wbc-browser-picker-favicon-fallback">{WBC_SIDE_TAB_ICONS.browser}</span>{tab.favicon ? <img referrerPolicy="no-referrer" src={tab.favicon} alt="" draggable="false" onLoad={function (event) { event.currentTarget.hidden = false; }} onError={function (event) { event.currentTarget.hidden = true; }} /> : null}</span><b>{tab.title || tab.url || wbcT("workbenchChat.browserWindowTitle", "Browser")}</b></button><span className="wbc-browser-picker-actions"><button type="button" onClick={function (event) { refreshMaximizedBrowserTab(tab, event); }} aria-label={wbcT("browser.context.reload", "Reload")}>{FloatingBrowserIcon ? <FloatingBrowserIcon name="reload" size={14} /> : WBC_ICONS.retry}</button><button type="button" className={tab.muted ? "active" : ""} onClick={function (event) { toggleMaximizedBrowserMute(tab, event); }} aria-label={tab.muted ? wbcT("browser.context.unmute", "Unmute") : wbcT("browser.context.mute", "Mute")}>{FloatingBrowserIcon ? <FloatingBrowserIcon name={tab.muted ? "muted" : "volume"} size={14} /> : null}</button><button type="button" onClick={function (event) { closeMaximizedBrowserTab(tab, event); }} aria-label={wbcT("browser.context.closeTab", "Close tab")} title={wbcT("browser.context.closeTab", "Close tab")}>{WBC_ICONS.x}</button></span></div>;
             })}
           </div>
         )}
@@ -17568,6 +17568,93 @@ function wbcTraceNameIsRead(raw) {
   return /(^|_)(list|query|get|find|search|check|read|analyze|snapshot)($|_)/.test(name);
 }
 
+// Runtime tool events intentionally preserve the stable model-facing name.
+// Resolve known capability IDs and their concrete compatibility aliases before
+// falling back to name heuristics: words such as `click`, `edit`, and `read`
+// describe the operation, not necessarily the surface it belongs to.
+var WBC_TRACE_PACKAGE_KINDS = Object.freeze({
+  code_tools: "tool",
+  browser_tools: "tool",
+  desktop_tools: "tool",
+  memory_tools: "tool",
+  knowledge_tools: "tool",
+  task_tools: "tool",
+  entity_tools: "tool",
+  map_tools: "tool",
+  subagent_tools: "tool",
+  delivery_tools: "tool",
+  environment_tools: "tool",
+  skill_tools: "tool",
+  remote_tools: "tool",
+  cyrene_tools: "tool",
+  integration_tools: "tool",
+  custom_tools: "tool",
+});
+var WBC_TRACE_CAPABILITY_BY_TOOL = null;
+
+function wbcTraceCapabilityId(raw) {
+  var name = String(raw || "").trim().replace(/\.r[23]$/, "");
+  if (!name || typeof window === "undefined" || !window.CyreneUI) return "";
+  var aliases = {};
+  try {
+    aliases = window.CyreneUI.require("i18n").toolNameAliases || {};
+  } catch (e) {
+    return "";
+  }
+  if (Object.prototype.hasOwnProperty.call(aliases, name)) return name;
+  if (!WBC_TRACE_CAPABILITY_BY_TOOL) {
+    WBC_TRACE_CAPABILITY_BY_TOOL = Object.create(null);
+    Object.keys(aliases).forEach(function (capabilityId) {
+      var toolName = String(aliases[capabilityId] || "").trim();
+      if (toolName && !WBC_TRACE_CAPABILITY_BY_TOOL[toolName]) {
+        WBC_TRACE_CAPABILITY_BY_TOOL[toolName] = capabilityId;
+      }
+    });
+  }
+  return String(WBC_TRACE_CAPABILITY_BY_TOOL[name] || "");
+}
+
+function wbcTraceKnownToolKind(raw) {
+  var name = String(raw || "").trim();
+  if (WBC_TRACE_PACKAGE_KINDS[name]) return WBC_TRACE_PACKAGE_KINDS[name];
+  var capabilityId = wbcTraceCapabilityId(name);
+  if (!capabilityId) return "";
+  if (capabilityId.indexOf("code.shell.") === 0) {
+    return /\.(list|read|show)$/.test(capabilityId) ? "terminalRead" : "terminal";
+  }
+  if (capabilityId.indexOf("code.git.") === 0) return "git";
+  if (capabilityId.indexOf("code.") === 0) {
+    return capabilityId === "code.format" ? "code" : "codeRead";
+  }
+  if (capabilityId.indexOf("browser.") === 0) return "browser";
+  if (capabilityId.indexOf("desktop.") === 0) {
+    return /\.(snapshot|inspect)$/.test(capabilityId) ? "desktopRead" : "desktop";
+  }
+  if (capabilityId.indexOf("memory.") === 0) return "memory";
+  if (capabilityId.indexOf("knowledge.") === 0) return "knowledge";
+  if (capabilityId.indexOf("task.") === 0) return capabilityId === "task.list" ? "taskRead" : "task";
+  if (capabilityId.indexOf("entity.") === 0) {
+    return /\.(list|query)$/.test(capabilityId) ? "entityRead" : "entity";
+  }
+  if (capabilityId.indexOf("map.") === 0) return "map";
+  if (capabilityId.indexOf("subagent.") === 0) return "subagent";
+  if (capabilityId.indexOf("delivery.") === 0) return "delivery";
+  if (capabilityId.indexOf("environment.") === 0) return "environment";
+  if (capabilityId.indexOf("skill.") === 0) return "skill";
+  if (capabilityId.indexOf("remote.") === 0) {
+    return capabilityId === "remote.devices.list" || capabilityId === "remote.status" ? "remoteRead" : "remote";
+  }
+  if (capabilityId.indexOf("cyrene.settings.") === 0) {
+    return /\.(describe|read)$/.test(capabilityId) ? "systemRead" : "system";
+  }
+  if (capabilityId.indexOf("cyrene.") === 0) {
+    return capabilityId === "cyrene.app.status" || /\.ui\.(snapshot|inspect)$/.test(capabilityId)
+      ? "cyreneRead"
+      : "cyrene";
+  }
+  return "";
+}
+
 function wbcTraceActionKind(entry) {
   var raw = String(entry && (entry.text || entry.tool) || "").trim();
   var name = wbcTraceNormalizeName(raw);
@@ -17577,6 +17664,8 @@ function wbcTraceActionKind(entry) {
   if (entryKind === "subagent") return "subagent";
   if (entryKind === "permission") return "permission";
   if (entryKind === "event") return "event";
+  var knownKind = wbcTraceKnownToolKind(raw);
+  if (knownKind) return knownKind;
   if (/(^|_)(edit|apply_patch|replace|patch)($|_)/.test(name)) return "edit";
   if (/(^|_)(write|create_file|save_file)($|_)/.test(name)) return "write";
   if (/(^|_)(read|read_file|open_file)($|_)/.test(name)) return "read";
@@ -17607,32 +17696,40 @@ function wbcTraceActionLabel(entry) {
   if (kind === "write") return wbcT("workbenchChat.traceAction.wrote", "Wrote files");
   if (kind === "read") return wbcT("workbenchChat.traceAction.read", "Read files");
   if (kind === "command") return wbcT("workbenchChat.traceAction.command", "Ran commands");
+  if (kind === "terminal") return wbcT("workbenchChat.traceAction.terminal", "Operated terminal");
+  if (kind === "terminalRead") return wbcT("workbenchChat.traceAction.terminalRead", "Read terminal");
   if (kind === "skill") return wbcT("workbenchChat.traceAction.usedSkill", "Used skill tools");
   if (kind === "search") return wbcT("workbenchChat.traceAction.searched", "Searched");
   if (kind === "browser") return wbcT("workbenchChat.traceAction.browsed", "Used the browser");
   if (kind === "git") return wbcT("workbenchChat.traceAction.git", "Used Git");
-  if (kind === "code") {
-    if (wbcTraceNameIsRead(raw)) return wbcT("workbenchChat.traceAction.codeRead", "Read terminal");
-    return wbcT("workbenchChat.traceAction.code", "Operated terminal");
-  }
+  if (kind === "codeRead") return wbcT("workbenchChat.traceAction.codeRead", "Analyzed code");
+  if (kind === "code") return wbcT("workbenchChat.traceAction.code", "Processed code");
+  if (kind === "taskRead") return wbcT("workbenchChat.traceAction.taskRead", "Read tasks");
   if (kind === "task") {
     if (wbcTraceNameIsRead(raw)) return wbcT("workbenchChat.traceAction.taskRead", "Read tasks");
     return wbcT("workbenchChat.traceAction.task", "Updated tasks or plans");
   }
   if (kind === "memory") return wbcT("workbenchChat.traceAction.memory", "Used memory");
   if (kind === "knowledge") return wbcT("workbenchChat.traceAction.knowledge", "Used knowledge");
+  if (kind === "entityRead") return wbcT("workbenchChat.traceAction.entityRead", "Read the user database");
   if (kind === "entity") {
     if (wbcTraceNameIsRead(raw)) return wbcT("workbenchChat.traceAction.entityRead", "Read the user database");
     return wbcT("workbenchChat.traceAction.entity", "Updated the user database");
   }
   if (kind === "map") return wbcT("workbenchChat.traceAction.map", "Updated maps");
+  if (kind === "remoteRead") return wbcT("workbenchChat.traceAction.remoteRead", "Inspected remote devices");
   if (kind === "remote") return wbcT("workbenchChat.traceAction.remote", "Operated remote devices");
+  if (kind === "desktopRead") return wbcT("workbenchChat.traceAction.desktopRead", "Inspected desktop apps");
   if (kind === "desktop") return wbcT("workbenchChat.traceAction.desktop", "Operated the desktop app");
+  if (kind === "cyreneRead") return wbcT("workbenchChat.traceAction.cyreneRead", "Inspected the Cyrene app");
+  if (kind === "cyrene") return wbcT("workbenchChat.traceAction.cyrene", "Operated the Cyrene app");
+  if (kind === "environment") return wbcT("workbenchChat.traceAction.environment", "Inspected the runtime environment");
   if (kind === "artifact") {
     if (wbcTraceNameIsRead(raw)) return wbcT("workbenchChat.traceAction.artifactRead", "Analyzed media");
     return wbcT("workbenchChat.traceAction.artifact", "Created or handled media");
   }
   if (kind === "delivery") return wbcT("workbenchChat.traceAction.delivery", "Sent messages or notifications");
+  if (kind === "systemRead") return wbcT("workbenchChat.traceAction.systemRead", "Inspected system settings");
   if (kind === "system") {
     if (wbcTraceNameIsRead(raw)) return wbcT("workbenchChat.traceAction.systemRead", "Inspected system settings");
     return wbcT("workbenchChat.traceAction.system", "Updated system settings");
@@ -17643,7 +17740,10 @@ function wbcTraceActionLabel(entry) {
   if (kind === "permission") return wbcT("workbenchChat.traceAction.permission", "Reviewed permissions");
   if (kind === "event") return wbcT("workbenchChat.traceAction.event", "Handled an agent event");
   var toolName = wbcT("toolName." + raw, raw || wbcT("workbenchChat.traceLabel", "Execution"));
-  return wbcT("workbenchChat.traceAction.usedTool", "Used {tool}", { tool: toolName });
+  var usedToolKey = /^[\x00-\x7f]/.test(toolName)
+    ? "workbenchChat.traceAction.usedToolSpaced"
+    : "workbenchChat.traceAction.usedTool";
+  return wbcT(usedToolKey, "Used {tool}", { tool: toolName });
 }
 
 function wbcTraceActionIcon(entry) {
@@ -17652,21 +17752,24 @@ function wbcTraceActionIcon(entry) {
   if (kind === "write") return WBC_ICONS.file;
   if (kind === "read") return WBC_ICONS.fileText;
   if (kind === "command") return WBC_ICONS.slash;
+  if (kind === "terminal") return WBC_ICONS.slash;
+  if (kind === "terminalRead") return WBC_ICONS.code;
   if (kind === "skill") return WBC_ICONS.spark;
   if (kind === "search") return WBC_ICONS.search;
   if (kind === "browser") return WBC_ICONS.browser;
   if (kind === "git") return WBC_ICONS.fork;
-  if (kind === "code") return WBC_ICONS.code;
-  if (kind === "task") return WBC_ICONS.task;
+  if (kind === "code" || kind === "codeRead") return WBC_ICONS.code;
+  if (kind === "task" || kind === "taskRead") return WBC_ICONS.task;
   if (kind === "memory") return WBC_ICONS.database;
   if (kind === "knowledge") return WBC_ICONS.book;
-  if (kind === "entity") return WBC_ICONS.pin;
+  if (kind === "entity" || kind === "entityRead") return WBC_ICONS.pin;
   if (kind === "map") return WBC_ICONS.map;
-  if (kind === "remote") return WBC_ICONS.device;
-  if (kind === "desktop") return WBC_ICONS.windowRestore;
+  if (kind === "remote" || kind === "remoteRead") return WBC_ICONS.device;
+  if (kind === "desktop" || kind === "desktopRead" || kind === "cyrene" || kind === "cyreneRead") return WBC_ICONS.windowRestore;
+  if (kind === "environment") return WBC_ICONS.bolt;
   if (kind === "artifact") return WBC_ICONS.image;
   if (kind === "delivery") return WBC_ICONS.chat;
-  if (kind === "system") return WBC_ICONS.bolt;
+  if (kind === "system" || kind === "systemRead") return WBC_ICONS.bolt;
   if (kind === "phase1") return WBC_ICONS.layers;
   if (kind === "phase") return WBC_ICONS.phase;
   if (kind === "subagent") return WBC_ICONS.subagent;
@@ -17684,11 +17787,13 @@ function wbcActivityGroupRunningLabel(messages) {
       var entry = view.entries[entryIndex];
       if (String(entry && entry.status || "").trim().toLowerCase() !== "running") continue;
       var kind = wbcTraceActionKind(entry);
-      if (kind === "command") return wbcT("workbenchChat.activityGroup.running.command", "Running commands");
+      if (kind === "command" || kind === "terminal") return wbcT("workbenchChat.activityGroup.running.command", "Running commands");
       if (kind === "permission") return wbcT("workbenchChat.activityGroup.running.permission", "Reviewing permissions");
       if (kind === "browser") return wbcT("workbenchChat.activityGroup.running.browser", "Using the browser");
+      if (kind === "desktop") return wbcT("workbenchChat.activityGroup.running.desktop", "Operating a desktop app");
+      if (kind === "cyrene") return wbcT("workbenchChat.activityGroup.running.cyrene", "Operating the Cyrene app");
       if (kind === "search") return wbcT("workbenchChat.activityGroup.running.search", "Searching");
-      if (["edit", "write", "read", "artifact"].indexOf(kind) >= 0) return wbcT("workbenchChat.activityGroup.running.files", "Processing files");
+      if (["edit", "write", "read", "artifact", "code", "codeRead"].indexOf(kind) >= 0) return wbcT("workbenchChat.activityGroup.running.files", "Processing files");
       if (kind === "subagent") return wbcT("workbenchChat.activityGroup.running.subagent", "Coordinating subagents");
       return wbcT("workbenchChat.activityGroup.running.tool", "Calling tools");
     }
@@ -20936,7 +21041,7 @@ function WbcBrowserSplit({ active: splitActive = true, tabId, tabs, browserState
           <button type="button" className="wbc-browser-split-action" onClick={toggleMaximized} aria-label={maximized ? wbcT("workbenchChat.browserRestoreSize", "Restore") : wbcT("workbenchChat.browserMaximize", "Maximize")} title={maximized ? wbcT("workbenchChat.browserRestoreSize", "Restore") : wbcT("workbenchChat.browserMaximize", "Maximize")}>{maximized ? WBC_ICONS.windowRestore : WBC_ICONS.windowMaximize}</button>
           <button type="button" className="wbc-side-agent-split-close" onClick={onClose} aria-label={wbcT("workbenchChat.closeBrowser", "Close browser")}>{WBC_ICONS.x}</button>
         </header>
-        {!hasNativeTabPicker && pickerOpen && <div className="wbc-side-agent-split-menu wbc-resource-picker-menu wbc-browser-picker-menu open" role="listbox">{liveTabs.map(function (tab) { var selected = String(tab.id || "") === String(active.id || tabId || ""); return <div key={tab.id} className={"wbc-browser-picker-row" + (selected ? " active" : "")} role="option" aria-selected={selected}><button type="button" className="wbc-browser-picker-select" onClick={function () { selectTab(tab); }}><span className="wbc-browser-picker-favicon" aria-hidden="true"><span className="wbc-browser-picker-favicon-fallback">{WBC_SIDE_TAB_ICONS.browser}</span>{tab.favicon ? <img src={tab.favicon} alt="" draggable="false" onError={function (event) { event.currentTarget.hidden = true; }} /> : null}</span><b>{tab.title || tab.url || wbcT("chat.side.browser", "Browser")}</b></button><span className="wbc-browser-picker-actions"><button type="button" onClick={function (event) { refreshTab(tab, event); }} aria-label={wbcT("browser.context.reload", "Reload")} title={wbcT("browser.context.reload", "Reload")}>{BrowserIcon ? <BrowserIcon name="reload" size={14} /> : WBC_ICONS.retry}</button><button type="button" className={tab.muted ? "active" : ""} onClick={function (event) { toggleMute(tab, event); }} aria-label={tab.muted ? wbcT("browser.context.unmute", "Unmute") : wbcT("browser.context.mute", "Mute")} title={tab.muted ? wbcT("browser.context.unmute", "Unmute") : wbcT("browser.context.mute", "Mute")}>{BrowserIcon ? <BrowserIcon name={tab.muted ? "muted" : "volume"} size={14} /> : null}</button><button type="button" onClick={function (event) { closeTab(tab, event); }} aria-label={wbcT("browser.context.closeTab", "Close tab")} title={wbcT("browser.context.closeTab", "Close tab")}>{WBC_ICONS.x}</button></span></div>; })}</div>}
+        {!hasNativeTabPicker && pickerOpen && <div className="wbc-side-agent-split-menu wbc-resource-picker-menu wbc-browser-picker-menu open" role="listbox">{liveTabs.map(function (tab) { var selected = String(tab.id || "") === String(active.id || tabId || ""); return <div key={tab.id} className={"wbc-browser-picker-row" + (selected ? " active" : "")} role="option" aria-selected={selected}><button type="button" className="wbc-browser-picker-select" onClick={function () { selectTab(tab); }}><span className="wbc-browser-picker-favicon" aria-hidden="true"><span className="wbc-browser-picker-favicon-fallback">{WBC_SIDE_TAB_ICONS.browser}</span>{tab.favicon ? <img referrerPolicy="no-referrer" src={tab.favicon} alt="" draggable="false" onLoad={function (event) { event.currentTarget.hidden = false; }} onError={function (event) { event.currentTarget.hidden = true; }} /> : null}</span><b>{tab.title || tab.url || wbcT("chat.side.browser", "Browser")}</b></button><span className="wbc-browser-picker-actions"><button type="button" onClick={function (event) { refreshTab(tab, event); }} aria-label={wbcT("browser.context.reload", "Reload")} title={wbcT("browser.context.reload", "Reload")}>{BrowserIcon ? <BrowserIcon name="reload" size={14} /> : WBC_ICONS.retry}</button><button type="button" className={tab.muted ? "active" : ""} onClick={function (event) { toggleMute(tab, event); }} aria-label={tab.muted ? wbcT("browser.context.unmute", "Unmute") : wbcT("browser.context.mute", "Mute")} title={tab.muted ? wbcT("browser.context.unmute", "Unmute") : wbcT("browser.context.mute", "Mute")}>{BrowserIcon ? <BrowserIcon name={tab.muted ? "muted" : "volume"} size={14} /> : null}</button><button type="button" onClick={function (event) { closeTab(tab, event); }} aria-label={wbcT("browser.context.closeTab", "Close tab")} title={wbcT("browser.context.closeTab", "Close tab")}>{WBC_ICONS.x}</button></span></div>; })}</div>}
       </div>
       <div className="wbc-resource-split-body wbc-browser-split-body">
         {splitActive && window.CyreneUI.require("browser").ViewportPanel ? React.createElement(window.CyreneUI.require("browser").ViewportPanel, { browserState: liveState, browserSessionId: browserSessionId, roundId: liveState && liveState.roundId || browserState && browserState.roundId || "", onClose: onClose, onTakeoverComplete: onTakeoverComplete, zoomEnabled: true, resizeEdgeHintEnabled: true, hideTabStrip: true, hideReload: true, hideMute: true, splitChrome: true }) : null}

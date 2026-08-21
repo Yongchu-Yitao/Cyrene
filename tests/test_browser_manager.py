@@ -84,6 +84,8 @@ def test_browser_manager_topbar_uses_page_favicons_and_opaque_flyout():
     assert "browserManagerPreviewPages" in source
     assert 'className="workbench-browser-manager-preview"' in source
     assert "page.favicon ? <img" in source
+    assert source.count('referrerPolicy="no-referrer"') >= 3
+    assert source.count('onLoad={function (event) { event.currentTarget.hidden = false; }}') >= 3
     assert 'className="workbench-browser-manager-count"' not in source
     assert '"--wb-flyout-bg", "--wb-flyout-border", "--wb-flyout-shadow"' in source
     assert "background: var(--wb-flyout-bg, var(--wb-card-bg-strong, var(--wb-card-bg, #ffffff)));" in styles
@@ -105,6 +107,7 @@ def test_browser_manager_can_pin_pages_and_pinned_browser_keeps_its_favicon():
     assert 'favicon: String(page.favicon || "")' in source
     assert 'name={pinnedResource ? "pinned-off" : "pin"}' in source
     assert '<><WorkbenchAssetIcon name="browser" />{resource.favicon ? <img' in source
+    assert 'resource.favicon ? <img referrerPolicy="no-referrer" src={resource.favicon}' in source
     assert "var owner = sessionTabCandidates.find" in source
     assert "browserBridge.activateTab({" in source
     assert "tabId: resource.tabId" in source
