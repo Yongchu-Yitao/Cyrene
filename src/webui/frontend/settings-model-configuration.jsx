@@ -136,7 +136,7 @@
     return settingsGlyph("device-desktop-up", 20);
   }
 
-  function localModelDownloadPercent(model) {
+  function downloadPercent(model) {
     var direct = Number(model && (model.percent || model.progress_percent));
     if (Number.isFinite(direct) && direct > 0) return Math.min(100, Math.round(direct));
     var total = Number(model && model.total_bytes) || 0;
@@ -659,6 +659,10 @@
   function OAuthSection(props) {
     var state = props.state || {};
     var models = Array.isArray(state.models) ? state.models : [];
+    var cli = state.cli && typeof state.cli === "object" ? state.cli : null;
+    var cliNeedsDownload = !!(cli && (!cli.installed || cli.broken));
+    var cliDownloading = !!(cliNeedsDownload && (props.cliBusy || cli.downloading));
+    var cliPercent = downloadPercent(cli);
     var [selectedModelId, setSelectedModelId] = useState("");
     useEffect(function () {
       if (!models.length) {
@@ -680,7 +684,29 @@
         ),
         h("span", { className: "wb-mcfg-connection-state " + (state.connected ? "is-ready" : "is-off") }, state.connected ? "已连接" : "未连接")
       ),
-      state.error ? h("div", { className: "wb-mcfg-inline-error", role: "alert" }, state.error) : null,
+      state.error && !cliNeedsDownload ? h("div", { className: "wb-mcfg-inline-error", role: "alert" }, state.error) : null,
+      cliNeedsDownload ? h("div", { className: "wb-mcfg-cli-runtime" },
+        h("div", { className: "wb-mcfg-cli-copy" },
+          h("strong", null, label(props, "settings.codexCliRuntime", "Codex CLI 运行时")),
+          h("small", { className: cli.error ? "is-error" : "" }, cli.error || label(props, "settings.codexCliRequiredHint", "登录 OpenAI 需要 Codex CLI 运行时（约 120 MB），下载后保存在本地缓存。"))
+        ),
+        cliDownloading
+          ? h("div", { className: "wb-mcfg-cli-progress", role: "status", "aria-live": "polite" },
+              h("div", null,
+                h("span", null, label(props, "settings.codexCliDownloading", "正在下载 Codex CLI…")),
+                h("span", null, cliPercent ? cliPercent + "%" : "—")
+              ),
+              h("progress", { max: 100, value: cliPercent || undefined, "aria-label": label(props, "settings.codexCliDownloading", "正在下载 Codex CLI…") + (cliPercent ? " " + cliPercent + "%" : "") })
+            )
+          : h("button", {
+              type: "button",
+              className: "wb-btn primary wb-mcfg-cli-download",
+              disabled: !!props.busy,
+              onClick: function () { props.onDownloadCli(!!cli.broken); },
+            }, cli.broken
+              ? label(props, "settings.codexCliRedownload", "重新下载 Codex CLI")
+              : label(props, "settings.codexCliDownload", "下载 Codex CLI"))
+      ) : null,
       state.connected && models.length ? h("label", { className: "wb-mcfg-oauth-picker" },
         h("span", null, "可用模型"),
         h("select", { className: "wb-select", value: selectedModelId, "aria-label": "OpenAI 可用模型", onChange: function (event) { setSelectedModelId(event.target.value); } }, models.map(function (item) {
@@ -689,14 +715,14 @@
         })),
         h("button", { type: "button", className: "wb-btn", disabled: !selectedModel, onClick: function () { props.onImportModel(selectedModel); } }, "添加为模型档案")
       ) : null,
-      h("div", { className: "wb-mcfg-actions" },
+      (state.connected || !cliNeedsDownload) ? h("div", { className: "wb-mcfg-actions" },
         state.connected
           ? h("button", { type: "button", className: "wb-btn danger", "data-cyrene-risk": "R3", disabled: !!props.busy, onClick: props.onLogout }, props.busy === "logout" ? "正在退出…" : "退出登录")
           : h("button", { type: "button", className: "wb-btn primary", "data-cyrene-risk": "R3", disabled: !!props.busy || state.checking, onClick: props.onLogin }, props.busy === "login" ? "等待授权…" : "登录 OpenAI"),
         state.connected && models.length
           ? h("button", { type: "button", className: "wb-btn", disabled: !!props.busy, onClick: props.onImportModels }, "导入 " + models.length + " 个可用模型")
           : null
-      )
+      ) : null
     );
   }
 
@@ -721,7 +747,7 @@
       props.error ? h("div", { className: "wb-mcfg-inline-error", role: "alert" }, props.error) : null,
       !models.length && !props.error ? h("div", { className: "wb-mcfg-inline-empty" }, "没有可管理的本地模型。") : null,
       h("div", { className: "wb-mcfg-local-list" }, models.map(function (model) {
-        var percent = localModelDownloadPercent(model);
+        var percent = downloadPercent(model);
         var busy = props.busy === model.id || model.downloading;
         var localCopy = copyById[model.id];
         var kind = model.kind || "model";
@@ -755,7 +781,7 @@
             ) : null,
             cv2RuntimeMissing ? h("small", { className: "wb-local-model-runtime" + (cv2Runtime.error ? " wb-local-model-error" : "") },
               cv2Runtime.downloading
-                ? label(props, "settings.ocrRuntimeDownloading", "OCR 运行时正在下载 · " + localModelDownloadPercent(cv2Runtime) + "%", { percent: localModelDownloadPercent(cv2Runtime) })
+                ? label(props, "settings.ocrRuntimeDownloading", "OCR 运行时正在下载 · " + downloadPercent(cv2Runtime) + "%", { percent: downloadPercent(cv2Runtime) })
                 : cv2Runtime.error
                   ? label(props, "settings.ocrRuntimeFailed", "OCR 运行时下载失败") + ": " + cv2Runtime.error
                   : label(props, "settings.ocrRuntimeBundled", "OCR 还需要本机运行时，下载模型时会一并安装。")
@@ -880,6 +906,8 @@
     var [oauth, setOauth] = useState({ checking: false, connected: false, models: [] });
     var [oauthBusy, setOauthBusy] = useState("");
     var oauthPoll = useRef(null);
+    var oauthCliPoll = useRef(null);
+    var oauthCliStartedAt = useRef(0);
     var [localModels, setLocalModels] = useState([]);
     var [localRuntime, setLocalRuntime] = useState(null);
     var [localError, setLocalError] = useState("");
@@ -892,7 +920,10 @@
     }, [config && config.connections && config.connections.length, selectedId]);
 
     useEffect(function () {
-      return function () { if (oauthPoll.current) clearInterval(oauthPoll.current); };
+      return function () {
+        if (oauthPoll.current) clearInterval(oauthPoll.current);
+        if (oauthCliPoll.current) clearInterval(oauthCliPoll.current);
+      };
     }, []);
 
     useEffect(function () {
@@ -1282,10 +1313,83 @@
       setOauth(function (previous) { return Object.assign({}, previous, { checking: true, error: "" }); });
       return requestJson("/api/settings/openai-oauth").then(function (payload) {
         setOauth(Object.assign({}, payload, { checking: false, models: payload.models || [] }));
+        if (payload.cli && payload.cli.downloading) startOauthCliPolling();
         try { window.dispatchEvent(new CustomEvent("cyrene:codex-auth-changed", { detail: payload })); } catch (error) {}
         return payload;
       }).catch(function (error) {
         setOauth({ checking: false, connected: false, models: [], error: error.message || String(error) });
+      });
+    }
+
+    function stopOauthCliPolling() {
+      if (oauthCliPoll.current) clearInterval(oauthCliPoll.current);
+      oauthCliPoll.current = null;
+      oauthCliStartedAt.current = 0;
+    }
+
+    function setOauthCliError(message) {
+      setOauth(function (previous) {
+        return Object.assign({}, previous, {
+          cli: Object.assign({}, previous.cli || {}, {
+            downloading: false,
+            error: String(message || ""),
+          }),
+        });
+      });
+    }
+
+    function pollOauthCli() {
+      if (oauthCliStartedAt.current && Date.now() - oauthCliStartedAt.current >= 600000) {
+        stopOauthCliPolling();
+        setOauthBusy("");
+        setOauthCliError(label(props, "settings.codexCliDownloadTimeout", "Codex CLI 下载超时，请重试。"));
+        return;
+      }
+      requestJson("/api/settings/openai-oauth/cli").then(function (cli) {
+        setOauth(function (previous) { return Object.assign({}, previous, { cli: cli }); });
+        if (cli.downloading || (!cli.installed && !cli.error)) return;
+        stopOauthCliPolling();
+        setOauthBusy("");
+        if (cli.installed) {
+          showSettingsToast(label(props, "settings.codexCliReady", "Codex CLI 已就绪，现在可以登录。"), "success");
+          refreshOauth();
+        }
+      }).catch(function (error) {
+        stopOauthCliPolling();
+        setOauthBusy("");
+        setOauthCliError(error.message || String(error));
+      });
+    }
+
+    function startOauthCliPolling() {
+      if (oauthCliPoll.current) return;
+      oauthCliStartedAt.current = Date.now();
+      oauthCliPoll.current = setInterval(pollOauthCli, 1000);
+    }
+
+    function downloadOauthCli(force) {
+      setOauthBusy("cli");
+      setOauth(function (previous) {
+        return Object.assign({}, previous, {
+          cli: Object.assign({}, previous.cli || {}, { downloading: true, error: "" }),
+        });
+      });
+      var init = { method: "POST" };
+      if (force) {
+        init.headers = { "Content-Type": "application/json" };
+        init.body = JSON.stringify({ force: true });
+      }
+      requestJson("/api/settings/openai-oauth/cli/download", init).then(function (cli) {
+        setOauth(function (previous) { return Object.assign({}, previous, { cli: cli }); });
+        if (cli.installed && !cli.broken) {
+          setOauthBusy("");
+          showSettingsToast(label(props, "settings.codexCliReady", "Codex CLI 已就绪，现在可以登录。"), "success");
+          return refreshOauth();
+        }
+        startOauthCliPolling();
+      }).catch(function (error) {
+        setOauthBusy("");
+        setOauthCliError(error.message || String(error));
       });
     }
 
@@ -1500,7 +1604,7 @@
               })) : null
             )
           ) : null,
-          isCodexConnection(selected) ? h(OAuthSection, { state: oauth, busy: oauthBusy, onLogin: startOauthLogin, onLogout: logoutOauth, onImportModels: importOauthModels, onImportModel: importOauthModel }) : null,
+          isCodexConnection(selected) ? h(OAuthSection, { state: oauth, busy: oauthBusy, cliBusy: oauthBusy === "cli", onLogin: startOauthLogin, onLogout: logoutOauth, onDownloadCli: downloadOauthCli, onImportModels: importOauthModels, onImportModel: importOauthModel }) : null,
           isLocalConnection(selected) ? h(LocalModelsSection, { t: props.t, models: localModels, cv2Runtime: localRuntime, error: localError, busy: localBusy, hideHeader: true, onRefresh: refreshLocalModels, onManage: manageLocalModel }) : null,
           !isLocalConnection(selected) ? h("section", { className: "wb-mcfg-form-section", "aria-labelledby": "wb-mcfg-profiles-heading" },
             h("div", { className: "wb-mcfg-section-head" },

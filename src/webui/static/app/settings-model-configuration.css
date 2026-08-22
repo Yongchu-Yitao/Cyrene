@@ -671,6 +671,73 @@ html[data-theme] .settings-overlay .wb-mcfg-services .wb-btn.wb-mcfg-action-main
   white-space: nowrap;
 }
 
+.wb-mcfg-cli-runtime {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 10px 14px;
+  margin-top: 11px;
+  padding: 11px 12px;
+  border: 1px solid color-mix(in srgb, var(--wb-accent) 28%, var(--mcfg-border));
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--wb-accent) 6%, transparent);
+}
+
+.wb-mcfg-cli-copy {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.wb-mcfg-cli-copy strong {
+  color: var(--wb-text);
+  font-size: calc(12px * var(--wb-ui-font-scale, 1));
+  font-weight: 680;
+}
+
+.wb-mcfg-cli-copy small {
+  color: var(--wb-muted);
+  font-size: calc(10.5px * var(--wb-ui-font-scale, 1));
+  line-height: 1.45;
+}
+
+.wb-mcfg-cli-copy small.is-error {
+  color: var(--wb-error-text, var(--wb-red));
+}
+
+.wb-mcfg-cli-download {
+  align-self: center;
+  white-space: nowrap;
+}
+
+.wb-mcfg-cli-progress {
+  grid-column: 1 / -1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+
+.wb-mcfg-cli-progress > div {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  color: var(--wb-muted);
+  font-size: calc(10.5px * var(--wb-ui-font-scale, 1));
+  font-variant-numeric: tabular-nums;
+}
+
+.wb-mcfg-cli-progress progress {
+  width: 100%;
+  height: 6px;
+  overflow: hidden;
+  border: 0;
+  border-radius: 999px;
+  accent-color: var(--wb-accent);
+}
+
 .wb-mcfg-inline-error {
   color: var(--wb-error-text, var(--wb-red));
   background: var(--wb-error-bg, color-mix(in srgb, var(--wb-red) 8%, transparent));
@@ -1325,6 +1392,14 @@ html[data-theme] .settings-overlay .wb-mcfg-services .wb-btn.wb-mcfg-action-main
   .wb-mcfg-route-head {
     align-items: stretch;
     flex-direction: column;
+  }
+
+  .wb-mcfg-cli-runtime {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .wb-mcfg-cli-download {
+    width: 100%;
   }
 
   .wb-mcfg-route-add {

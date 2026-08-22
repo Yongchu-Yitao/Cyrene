@@ -848,6 +848,49 @@ def test_frontend_registers_split_pages_and_live_context_contract():
     assert "segTotal <= 0 && used <= 0 && limit <= 0" in chat
 
 
+def test_codex_oauth_service_exposes_cli_download_and_progress():
+    root = Path(__file__).resolve().parents[1]
+    settings = (
+        root / "src/webui/frontend/settings-model-configuration.jsx"
+    ).read_text()
+    styles = (
+        root / "src/webui/frontend/settings-model-configuration.css"
+    ).read_text()
+    i18n = (root / "src/webui/frontend/workbench-i18n.jsx").read_text()
+
+    oauth_section = settings.split("function OAuthSection(props) {", 1)[1].split(
+        "function LocalModelsSection(props) {", 1
+    )[0]
+    services_page = settings.split("function ServicesPage(props) {", 1)[1].split(
+        "function UsagePage(props) {", 1
+    )[0]
+
+    assert 'className: "wb-mcfg-cli-runtime"' in oauth_section
+    assert 'role: "status", "aria-live": "polite"' in oauth_section
+    assert 'h("progress", { max: 100' in oauth_section
+    assert "props.onDownloadCli(!!cli.broken)" in oauth_section
+    assert 'label(props, "settings.codexCliDownload"' in oauth_section
+    assert 'label(props, "settings.codexCliRedownload"' in oauth_section
+    assert 'requestJson("/api/settings/openai-oauth/cli")' in services_page
+    assert (
+        'requestJson("/api/settings/openai-oauth/cli/download", init)'
+        in services_page
+    )
+    assert "JSON.stringify({ force: true })" in services_page
+    assert "function startOauthCliPolling()" in services_page
+    assert "onDownloadCli: downloadOauthCli" in services_page
+    assert ".wb-mcfg-cli-runtime {" in styles
+    assert ".wb-mcfg-cli-progress progress {" in styles
+    for key in (
+        "settings.codexCliRuntime",
+        "settings.codexCliDownload",
+        "settings.codexCliDownloading",
+        "settings.codexCliRedownload",
+        "settings.codexCliDownloadTimeout",
+    ):
+        assert i18n.count(f'"{key}"') == 2
+
+
 def test_settings_and_provider_icons_are_inlined_before_first_render():
     root = Path(__file__).resolve().parents[1]
     build = (root / "src/webui/build-jsx.mjs").read_text()
