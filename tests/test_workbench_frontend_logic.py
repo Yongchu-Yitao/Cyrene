@@ -4979,6 +4979,28 @@ def test_workbench_chat_tracks_actual_model_from_live_llm_events():
     assert result == "mimo-v2.5"
 
 
+def test_workbench_chat_tracks_fallback_model_from_live_phase_event():
+    result = _run_workbench_runtime_js(
+        """
+(() => {
+  const model = { sendMessage: () => new Promise(() => {}) };
+  WorkbenchChatRuntimes.start("chat_model", { message: "hello" }, model);
+  global.__wbcSseHandler({
+    type: "phase_transition",
+    session_id: "chat_model",
+    from: "primary_model",
+    to: "fallback_model",
+    detail: "switching",
+    detail_params: { fallbackModel: "fallback-model" }
+  });
+  return WorkbenchChatRuntimes.snapshot().chat_model.activeModel;
+})()
+"""
+    )
+
+    assert result == "fallback-model"
+
+
 def test_workbench_chat_splits_reasoning_and_tools_into_distinct_cards():
     result = _run_workbench_runtime_js(
         """
@@ -10687,6 +10709,32 @@ def test_workbench_agent_transport_notice_has_structured_event_and_durable_bubbl
     assert '"notificationCard": True' in route
     assert ".wbc-agent-notification" in styles
     assert 'role="status" aria-live="polite"' in chat
+
+
+def test_model_retry_and_switch_use_one_durable_system_status_card():
+    root = Path(__file__).resolve().parent.parent
+    chat = workbench_chat_source()
+    quick = (root / "src" / "webui" / "frontend" / "workbench-quick-chat.jsx").read_text(encoding="utf-8")
+    backend = (root / "src" / "cyrene" / "workbench" / "chat.py").read_text(encoding="utf-8")
+    i18n = (root / "src" / "webui" / "frontend" / "workbench-i18n.jsx").read_text(encoding="utf-8")
+    page = (root / "src" / "webui" / "frontend" / "features" / "chat" / "page.jsx").read_text(encoding="utf-8")
+
+    assert "function WbcModelStatusMessage" in chat
+    assert 'className={"wbc-model-status-message "' in chat
+    assert 'className="wbc-msg user wbc-model-status-message"' not in chat
+    assert "wbc-model-status-card" in chat
+    assert "wbc-model-status-icon" not in chat
+    assert "msg.modelStatusCard" in chat
+    assert "message.modelStatusCard" in chat
+    assert "m.modelStatusCard" in quick
+    assert "persist_model_status_message" in backend
+    assert 'f"{session}\\0{round_key}\\0model-status"' in backend
+    assert "retryCount" in chat
+    assert "retryLimit" in chat
+    assert "workbenchChat.modelRetryCountCard" in chat
+    assert '"workbenchChat.modelRetryCountCard": "正在重试 {model}（{count}/{limit}）"' in i18n
+    assert '"workbenchChat.modelSwitchedCard": "已切换到 {model}"' in i18n
+    assert "wbcPublishChatModelChanged(fallbackChatId" in page
 
 
 def test_quick_chat_renders_live_and_durable_agent_notifications():

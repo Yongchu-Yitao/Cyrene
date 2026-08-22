@@ -4,7 +4,7 @@ import { wbcProjectFileResource } from "./rail.jsx"
 import { wbcCanOpenExternally, wbcChatUsedMap, wbcDownloadLink, wbcStartFileDrag } from "./file-resources.jsx"
 import { WbcMapTab, WbcViewerTab } from "./viewer.jsx"
 import { WbcThreadItem, wbcIsLiveAgentRequest } from "./conversation.jsx"
-import { WbcAgentNotification, WbcAssistantMessage, WbcQuestionPrompt, WbcRuntimeTranscript, WbcUserMessage } from "./messages.jsx"
+import { WbcAgentNotification, WbcAssistantMessage, WbcModelStatusMessage, WbcQuestionPrompt, WbcRuntimeTranscript, WbcUserMessage } from "./messages.jsx"
 import { WbcArtifactsTab, WbcContextTab, WbcOverviewTab, useWbcLiveChatMetrics, useWbcLiveContextBlocks, useWbcLiveInbox } from "./context-panel.jsx"
 
 // Workbench chat feature module with explicit ESM dependencies.
@@ -1274,6 +1274,9 @@ function WbcChatSplit({ chatId, project, onOpenContent, browserActiveByChat, onC
           if (isActiveQuestion) {
             return <WbcThreadItem key={message.id || message.createdAt}><WbcQuestionPrompt pending={chat.pendingQuestion} onAnswer={answerPendingQuestion} busy={running && !wbcIsLiveAgentRequest(chat.pendingQuestion)} trace={message.trace} /></WbcThreadItem>;
           }
+          if (message.modelStatusCard) {
+            return <WbcThreadItem key={message.id || message.createdAt}><WbcModelStatusMessage msg={message} /></WbcThreadItem>;
+          }
           if (message.notificationCard) {
             return <WbcThreadItem key={message.id || message.createdAt}><WbcAgentNotification notice={message.notification} /></WbcThreadItem>;
           }
@@ -2169,6 +2172,9 @@ function WbcSideAgentTab({ agent, project, onOpenFile, onUpdate }) {
           </div>
         )}
         {messages.map(function (message) {
+          if (message.modelStatusCard) {
+            return <WbcThreadItem key={message.id || message.createdAt}><WbcModelStatusMessage msg={message} /></WbcThreadItem>;
+          }
           if (message.notificationCard) {
             return <WbcThreadItem key={message.id || message.createdAt}><WbcAgentNotification notice={message.notification} /></WbcThreadItem>;
           }

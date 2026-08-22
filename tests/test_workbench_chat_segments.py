@@ -436,6 +436,56 @@ def test_live_intermediate_checkpoint_does_not_keep_activity_trace(monkeypatch):
     assert messages[1]["trace"] == []
 
 
+def test_model_retry_and_fallback_share_one_durable_status_card(monkeypatch):
+    from cyrene.workbench import chat as chat_mod
+
+    store = {
+        "chats": [{
+            "id": "chat_model_status",
+            "messages": [{
+                "id": "u1",
+                "role": "user",
+                "content": "go",
+                "createdAt": "2026-01-01T00:00:00+00:00",
+            }],
+        }]
+    }
+    monkeypatch.setattr(chat_mod, "_read_chats_store", lambda: store)
+    monkeypatch.setattr(chat_mod, "_write_chats_store", lambda payload: store.update(payload))
+
+    chat_mod.persist_model_status_message(
+        "chat_model_status", "round_1", status="retry", model="primary-model",
+        retry_count=1, retry_limit=5,
+    )
+    chat_mod.persist_model_status_message(
+        "chat_model_status", "round_1", status="retry", model="primary-model",
+        retry_count=2, retry_limit=5,
+    )
+
+    retry_messages = store["chats"][0]["messages"]
+    assert len(retry_messages) == 2
+    assert retry_messages[1]["modelStatus"] == {
+        "status": "retry",
+        "model": "primary-model",
+        "retryCount": 2,
+        "retryLimit": 5,
+    }
+
+    chat_mod.persist_model_status_message(
+        "chat_model_status", "round_1", status="switched", model="fallback-model"
+    )
+
+    messages = store["chats"][0]["messages"]
+    assert len(messages) == 2
+    assert messages[1]["modelStatusCard"] is True
+    assert messages[1]["content"] == ""
+    assert messages[1]["modelStatus"] == {
+        "status": "switched",
+        "model": "fallback-model",
+    }
+    assert store["chats"][0]["lastModel"] == "fallback-model"
+
+
 def _asst_tool(mid, name, call_id, args="{}", content=""):
     return {
         "role": "assistant",

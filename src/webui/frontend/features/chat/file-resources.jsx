@@ -1130,6 +1130,7 @@ var WorkbenchChatRuntimes = (function () {
       return;
     }
     var entry = null;
+    var eventActiveModel = "";
     var terminalToolEvent = false;
     if (event.type === "tool_call_started" || event.type === "tool_call" || event.type === "tool_call_finished" || event.type === "tool_call_progress") {
       var toolName = String(event.tool || "");
@@ -1156,8 +1157,17 @@ var WorkbenchChatRuntimes = (function () {
         startedAt: eventAt,
       };
     } else if (event.type === "phase_transition" && (event.detail || event.detail_key)) {
+      var phaseParams = event.detail_params && typeof event.detail_params === "object"
+        ? event.detail_params
+        : {};
+      var phaseFallbackModel = String(
+        phaseParams.fallbackModel || phaseParams.fallback_model || ""
+      ).trim();
+      if (String(event.to || "") === "fallback_model") {
+        eventActiveModel = phaseFallbackModel;
+      }
       var phaseText = event.detail_key
-        ? wbcT(event.detail_key, String(event.detail || ""), event.detail_params || {})
+        ? wbcT(event.detail_key, String(event.detail || ""), phaseParams)
         : String(event.detail || "");
       if (event.alert && window.CyreneUI.require("feedback").showToast) {
         window.CyreneUI.require("feedback").showToast(
@@ -1169,7 +1179,7 @@ var WorkbenchChatRuntimes = (function () {
         kind: "phase",
         text: event.detail ? String(event.detail).slice(0, 160) : "",
         detailKey: event.detail_key || "",
-        detailParams: event.detail_params || {},
+        detailParams: phaseParams,
         preview: "",
         failed: !!event.failed,
       };
@@ -1255,6 +1265,7 @@ var WorkbenchChatRuntimes = (function () {
       });
       return {
         ...next,
+        activeModel: eventActiveModel || next.activeModel || "",
         lastEventAt: Date.now(),
         progress: latest.progress.concat([appendedEntry]).slice(-40),
       };

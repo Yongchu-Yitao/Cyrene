@@ -549,6 +549,35 @@ function WbcUserMessage({ msg, onOpenFile, onEditMessage, canEdit, onRetryMessag
   );
 }
 
+
+function WbcModelStatusMessage({ msg }) {
+  var status = msg && msg.modelStatus && typeof msg.modelStatus === "object"
+    ? msg.modelStatus
+    : {};
+  var model = String(status.model || "").trim();
+  if (!model) return null;
+  var switched = String(status.status || "") === "switched";
+  var retryCount = Math.max(0, Number(status.retryCount || 0));
+  var retryLimit = Math.max(0, Number(status.retryLimit || 0));
+  var text = switched
+    ? wbcT("workbenchChat.modelSwitchedCard", "Switched to {model}", { model: model })
+    : (retryCount > 0 && retryLimit > 0
+      ? wbcT("workbenchChat.modelRetryCountCard", "Retrying {model} ({count}/{limit})", {
+          model: model,
+          count: retryCount,
+          limit: retryLimit,
+        })
+      : wbcT("workbenchChat.modelRetryCard", "Retrying {model}", { model: model }));
+  return (
+    <div className={"wbc-model-status-message " + (switched ? "is-switched" : "is-retrying")} role="status" aria-live="polite">
+      <div className="wbc-model-status-card">
+        <span className="wbc-model-status-copy">{text}</span>
+      </div>
+    </div>
+  );
+}
+
+
 // Files the agent produced in this reply — rendered like the reference's
 // artifact card, with a 查看 action that opens the side viewer.
 function WbcAgentFiles({ files, onOpenFile }) {
@@ -1563,4 +1592,4 @@ var WbcRemoteDeviceCatalog = (function () {
   return { subscribe: subscribe, refresh: refresh, invalidate: invalidate };
 })();
 
-export { WBC_DRAFT_SAVE_DELAY_MS, WBC_NATIVE_FIELD_SIZING, WbcActivityGroup, WbcAgentNotification, WbcAssistantMessage, WbcErrorNotice, WbcLiveActivityCard, WbcLiveMessage, WbcQuestionPrompt, WbcRemoteDeviceCatalog, WbcRuntimeTranscript, WbcUserMessage, wbcGroupConsecutiveActivityMessages, wbcLoadAttachments, wbcLoadDraft, wbcLoadWorkspaceOverride, wbcSaveAttachments, wbcSaveDraft, wbcSaveWorkspaceOverride, wbcSyncLegacyComposerHeight, wbcWorkspaceContextKey }
+export { WBC_DRAFT_SAVE_DELAY_MS, WBC_NATIVE_FIELD_SIZING, WbcActivityGroup, WbcAgentNotification, WbcAssistantMessage, WbcErrorNotice, WbcLiveActivityCard, WbcLiveMessage, WbcModelStatusMessage, WbcQuestionPrompt, WbcRemoteDeviceCatalog, WbcRuntimeTranscript, WbcUserMessage, wbcGroupConsecutiveActivityMessages, wbcLoadAttachments, wbcLoadDraft, wbcLoadWorkspaceOverride, wbcSaveAttachments, wbcSaveDraft, wbcSaveWorkspaceOverride, wbcSyncLegacyComposerHeight, wbcWorkspaceContextKey }

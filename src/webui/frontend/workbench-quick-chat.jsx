@@ -748,6 +748,9 @@ function QuickChatApp() {
                 </div>
               ) : null}
               {messages.map(function (m) {
+                if (m.modelStatusCard && typeof chatService.ModelStatusMessage === "function") {
+                  return React.createElement(chatService.ModelStatusMessage, { key: m.id, msg: m });
+                }
                 if (m.notificationCard && typeof chatService.AgentNotification === "function") {
                   return React.createElement(chatService.AgentNotification, { key: m.id, notice: m.notification });
                 }

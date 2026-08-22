@@ -1088,6 +1088,84 @@ async def test_primary_failure_publishes_fallback_ui_event(monkeypatch):
     }]
 
 
+async def test_retry_count_updates_before_final_model_switch(monkeypatch):
+    retries = []
+    switches = []
+
+    class FakeResponse:
+        def __init__(self, status_code, model, endpoint):
+            self.status_code = status_code
+            self._model = model
+            self.request = httpx.Request("POST", endpoint)
+
+        def json(self):
+            return {
+                "choices": [{"message": {"role": "assistant", "content": self._model}}],
+                "usage": {},
+            }
+
+        def raise_for_status(self):
+            raise httpx.HTTPStatusError(
+                "failed",
+                request=self.request,
+                response=httpx.Response(self.status_code, request=self.request),
+            )
+
+    class FakeClient:
+        async def post(self, endpoint, json=None, headers=None):
+            model = str(json.get("model") or "")
+            return FakeResponse(503 if model == "main" else 200, model, endpoint)
+
+    async def capture_retry(**kwargs):
+        retries.append(kwargs)
+
+    async def capture_switch(**kwargs):
+        switches.append(kwargs)
+
+    monkeypatch.setattr(cl, "_SERVER_ERROR_RETRY_BASE_DELAY_SECONDS", 0)
+    monkeypatch.setattr(cl.httpx, "AsyncClient", lambda *_args, **_kwargs: FakeClient())
+    monkeypatch.setattr(cl, "_publish_model_retry_event", capture_retry)
+    monkeypatch.setattr(cl, "_publish_model_fallback_event", capture_switch)
+    candidates = [
+        {"id": "main", "model": "main", "api_key": "", "endpoints": ["https://main/v1/chat/completions"]},
+        {"id": "backup", "model": "backup", "api_key": "", "endpoints": ["https://backup/v1/chat/completions"]},
+    ]
+
+    result = await cl.call_llm(
+        [{"role": "user", "content": "hi"}],
+        candidates=candidates,
+        publish_events=False,
+        record_usage=False,
+        session_id="chat_retry_switch",
+        round_id="round_retry_switch",
+    )
+
+    assert result["content"] == "backup"
+    assert retries == [
+        {
+            "session_id": "chat_retry_switch",
+            "round_id": "round_retry_switch",
+            "model": "main",
+            "retry_count": retry_count,
+            "retry_limit": cl.SERVER_ERROR_RETRY_LIMIT,
+        }
+        for retry_count in range(1, cl.SERVER_ERROR_RETRY_LIMIT + 1)
+    ]
+    assert switches == [{
+        "session_id": "chat_retry_switch",
+        "round_id": "round_retry_switch",
+        "failed_model": "main",
+        "fallback_model": "backup",
+    }]
+
+
+def test_retry_policy_uses_fixed_ten_second_intervals():
+    assert cl.SERVER_ERROR_RETRY_LIMIT == 5
+    assert cl.NETWORK_RETRY_LIMIT == 10
+    assert cl._SERVER_ERROR_RETRY_BASE_DELAY_SECONDS == 10.0
+    assert cl._NETWORK_RETRY_BASE_DELAY_SECONDS == 10.0
+
+
 async def test_codex_quota_failure_publishes_actionable_notice_before_fallback(
     monkeypatch,
 ):

@@ -60,10 +60,14 @@ def register_context_routes(router: APIRouter, context: ChatRouteContext) -> Non
         chat = _find_chat(payload, chat_id)
         if not chat:
             return JSONResponse({"error": "chat not found"}, status_code=404)
-        model_name = str(chat.get("model") or getattr(config, "OPENAI_MODEL", "") or "")
+        configured_model = str(chat.get("model") or getattr(config, "OPENAI_MODEL", "") or "")
+        # Fallback persistence updates lastModel at switch time, so the overview
+        # can keep showing the actual in-flight model when its 3.5s context poll
+        # replaces the frontend's immediate optimistic event.
+        model_name = str(chat.get("lastModel") or configured_model)
         # ``modelSelectionId`` is stable even when two connections expose the
         # same remote model name with different context windows.
-        model_selection = str(chat.get("modelSelectionId") or model_name).strip()
+        model_selection = str(chat.get("modelSelectionId") or configured_model).strip()
         return await asyncio.to_thread(
             _chat_context_payload,
             chat_id,

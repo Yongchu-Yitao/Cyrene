@@ -23954,6 +23954,41 @@ html[data-platform="darwin"] .wbc-browser-window.maximized .wbc-browser-window-b
   align-self: stretch;
 }
 
+/* Model transport changes are durable transcript events, not authored chat
+   messages. Keep them centered and neutral so they cannot be mistaken for a
+   user bubble or for an assistant reply. */
+.wbc-model-status-message {
+  align-self: stretch;
+  display: flex;
+  width: 100%;
+  min-width: 0;
+  justify-content: center;
+  padding: 2px 0;
+  box-sizing: border-box;
+}
+
+.wbc-model-status-card {
+  display: inline-flex;
+  max-width: min(100%, 560px);
+  min-width: 0;
+  align-items: center;
+  border: 1px solid color-mix(in srgb, var(--wb-text) 11%, var(--wb-line));
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--wb-card-bg) 94%, var(--wb-text) 6%);
+  color: var(--wb-muted);
+  padding: 7px 11px;
+  box-shadow: 0 1px 2px color-mix(in srgb, var(--wb-text) 5%, transparent);
+  box-sizing: border-box;
+}
+
+.wbc-model-status-copy {
+  min-width: 0;
+  overflow-wrap: anywhere;
+  font-size: calc(12px * var(--wb-ui-font-scale, 1));
+  font-weight: 650;
+  line-height: 1.45;
+}
+
 .wbc-agent-notification {
   align-self: flex-start;
   display: grid;

@@ -408,6 +408,8 @@ def register_run_routes(router: APIRouter, context: ChatRouteContext) -> dict[st
             chat["modelSelectionId"] = selected_model_id
             chat["model"] = selected_model_name
             chat["reasoningEffort"] = selected_effort
+            if requested_model:
+                chat.pop("lastModel", None)
 
         existing_run = _CHAT_RUN_MANAGER.get(chat_id)
         if existing_run is not None:

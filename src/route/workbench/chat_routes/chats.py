@@ -608,6 +608,7 @@ def register_chat_routes(
                 )
                 chat["modelSelectionId"] = str(value)
                 chat["model"] = str((selected or {}).get("name") or value)
+                chat.pop("lastModel", None)
         if "model" in body:
             selected_key = str(body.get("model") or "").strip()
             if selected_key:
@@ -628,6 +629,7 @@ def register_chat_routes(
                 )
                 chat["modelSelectionId"] = selected_key
                 chat["model"] = str((selected or {}).get("model") or (selected or {}).get("name") or selected_key)
+                chat.pop("lastModel", None)
         if "reasoningEffort" in body:
             effort = str(body.get("reasoningEffort") or "").strip().lower()
             if effort:

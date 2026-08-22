@@ -2053,13 +2053,13 @@ function wbcTraceDedupeKey(trace) {
 }
 
 function wbcCurrentModel(chat, project, runtime, liveData) {
-  // The overview describes the conversation's current selection.  Runtime
-  // metadata may still name the model that produced the previous response, so
-  // prefer the live context payload (and its optimistic switch update) here.
-  var liveModel = String(liveData && liveData.model || "").trim();
-  if (liveModel) return liveModel;
+  // During a run, activeModel is the authoritative transport identity and can
+  // change on the exact SSE tick that fallback occurs. The polled context
+  // payload remains the durable source once the live runtime is gone.
   var activeModel = String(runtime && runtime.activeModel || "").trim();
   if (activeModel) return activeModel;
+  var liveModel = String(liveData && liveData.model || "").trim();
+  if (liveModel) return liveModel;
   var messages = chat && Array.isArray(chat.messages) ? chat.messages : [];
   for (var i = messages.length - 1; i >= 0; i--) {
     var messageModel = String(messages[i] && messages[i].model || "").trim();

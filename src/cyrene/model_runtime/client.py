@@ -352,13 +352,13 @@ _CONNECT_TIMEOUT_SECONDS = 5.0
 # A model request may be dropped before the provider sends response headers.
 # Retry transport failures locally before surfacing them to the user. HTTP
 # responses (including 4xx/5xx) are deliberately excluded from this budget.
-NETWORK_RETRY_LIMIT = 3
-_NETWORK_RETRY_BASE_DELAY_SECONDS = 0.5
+NETWORK_RETRY_LIMIT = 10
+_NETWORK_RETRY_BASE_DELAY_SECONDS = 10.0
 # Bounded same-endpoint retry for transient upstream 5xx (incl. non-standard
 # overload codes like 550 / 529) before rotating to the next endpoint/candidate.
 # 4xx is a real client error and is never retried here.
-SERVER_ERROR_RETRY_LIMIT = 2
-_SERVER_ERROR_RETRY_BASE_DELAY_SECONDS = 1.0
+SERVER_ERROR_RETRY_LIMIT = 5
+_SERVER_ERROR_RETRY_BASE_DELAY_SECONDS = 10.0
 
 
 def _llm_failure_priority(exc: Exception) -> int:
@@ -1872,6 +1872,24 @@ async def _publish_model_fallback_event(
 ) -> None:
     from cyrene.observability import debug
 
+    if session_id and round_id and fallback_model:
+        try:
+            from cyrene.workbench.chat import persist_model_status_message
+
+            await asyncio.to_thread(
+                persist_model_status_message,
+                session_id,
+                round_id,
+                status="switched",
+                model=fallback_model,
+            )
+        except Exception:
+            logger.exception(
+                "Failed to persist model fallback card [session=%s round=%s]",
+                session_id,
+                round_id,
+            )
+
     event = {
         "type": "phase_transition",
         "from": "primary_model",
@@ -1881,6 +1899,53 @@ async def _publish_model_fallback_event(
         "detail_params": {
             "failedModel": str(failed_model or ""),
             "fallbackModel": str(fallback_model or ""),
+        },
+    }
+    if round_id:
+        event["round_id"] = round_id
+    await debug.publish_event(event, session_id=session_id)
+
+
+async def _publish_model_retry_event(
+    *,
+    session_id: str,
+    round_id: str,
+    model: str,
+    retry_count: int,
+    retry_limit: int,
+) -> None:
+    """Publish and checkpoint the current retry count for a chat round."""
+    from cyrene.observability import debug
+
+    if session_id and round_id and model:
+        try:
+            from cyrene.workbench.chat import persist_model_status_message
+
+            await asyncio.to_thread(
+                persist_model_status_message,
+                session_id,
+                round_id,
+                status="retry",
+                model=model,
+                retry_count=retry_count,
+                retry_limit=retry_limit,
+            )
+        except Exception:
+            logger.exception(
+                "Failed to persist model retry card [session=%s round=%s]",
+                session_id,
+                round_id,
+            )
+    event = {
+        "type": "phase_transition",
+        "from": "model_request",
+        "to": "model_retry",
+        "detail": "Retrying the current model.",
+        "detail_key": "phase.modelRetry",
+        "detail_params": {
+            "model": str(model or ""),
+            "retryCount": max(0, int(retry_count or 0)),
+            "retryLimit": max(0, int(retry_limit or 0)),
         },
     }
     if round_id:
@@ -2422,7 +2487,7 @@ async def call_llm(
                                 if stream_event_emitted or network_retries >= NETWORK_RETRY_LIMIT:
                                     raise
                                 network_retries += 1
-                                delay = _NETWORK_RETRY_BASE_DELAY_SECONDS * (2 ** (network_retries - 1))
+                                delay = _NETWORK_RETRY_BASE_DELAY_SECONDS
                                 retry_backoff_ms += delay * 1000
                                 logger.warning(
                                     "call_llm transient network failure; retrying "
@@ -2436,6 +2501,14 @@ async def call_llm(
                                     delay,
                                     _format_httpx_error(exc),
                                 )
+                                if model_type == "primary" and session_id and round_id:
+                                    await _publish_model_retry_event(
+                                        session_id=session_id,
+                                        round_id=round_id,
+                                        model=model,
+                                        retry_count=network_retries,
+                                        retry_limit=NETWORK_RETRY_LIMIT,
+                                    )
                                 await asyncio.sleep(delay)
                             except httpx.HTTPStatusError as exc:
                                 request_ms = (_time.monotonic() - attempt_started) * 1000
@@ -2477,7 +2550,7 @@ async def call_llm(
                                 ):
                                     raise
                                 server_error_retries += 1
-                                delay = _SERVER_ERROR_RETRY_BASE_DELAY_SECONDS * (2 ** (server_error_retries - 1))
+                                delay = _SERVER_ERROR_RETRY_BASE_DELAY_SECONDS
                                 retry_backoff_ms += delay * 1000
                                 logger.warning(
                                     "call_llm transient upstream error; retrying "
@@ -2491,6 +2564,14 @@ async def call_llm(
                                     SERVER_ERROR_RETRY_LIMIT,
                                     delay,
                                 )
+                                if model_type == "primary" and session_id and round_id:
+                                    await _publish_model_retry_event(
+                                        session_id=session_id,
+                                        round_id=round_id,
+                                        model=model,
+                                        retry_count=server_error_retries,
+                                        retry_limit=SERVER_ERROR_RETRY_LIMIT,
+                                    )
                                 await asyncio.sleep(delay)
 
                         if _is_minimax_model(model):

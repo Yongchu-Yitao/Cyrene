@@ -2013,11 +2013,68 @@ def _persist_live_public_message(chat_id: str, message: dict[str, Any]) -> None:
     entry.pop("opensActivity", None)
     def persist(chat: dict[str, Any]) -> None:
         _merge_chat_messages_chronologically(chat, [entry])
+        model_status = (
+            entry.get("modelStatus")
+            if isinstance(entry.get("modelStatus"), dict)
+            else {}
+        )
+        if str(model_status.get("status") or "") == "switched":
+            actual_model = str(model_status.get("model") or "").strip()
+            if actual_model:
+                # Make the overview panel authoritative as soon as fallback is
+                # selected, before the assistant reply has finished streaming.
+                chat["lastModel"] = actual_model
         chat["updatedAt"] = str(
             entry.get("createdAt") or chat.get("updatedAt") or _utc_now_iso()
         )
 
     _mutate_chat_store(chat_id, persist)
+
+
+def persist_model_status_message(
+    chat_id: str,
+    round_id: str,
+    *,
+    status: str,
+    model: str,
+    retry_count: int = 0,
+    retry_limit: int = 0,
+) -> None:
+    """Insert or update the single durable model-status card for one round.
+
+    Same-model retries and later fallback transitions share a stable message
+    id.  A fallback therefore replaces the retry presentation in place instead
+    of leaving a row of transient operational messages in the transcript.
+    """
+    session = str(chat_id or "").strip()
+    round_key = str(round_id or "").strip()
+    target_model = str(model or "").strip()
+    normalized_status = str(status or "").strip().lower()
+    if not session or not round_key or not target_model:
+        return
+    if normalized_status not in {"retry", "switched"}:
+        raise ValueError("unsupported model status")
+    identity = hashlib.sha256(
+        f"{session}\0{round_key}\0model-status".encode("utf-8")
+    ).hexdigest()[:20]
+    model_status: dict[str, Any] = {
+        "status": normalized_status,
+        "model": target_model,
+    }
+    if normalized_status == "retry":
+        model_status.update({
+            "retryCount": max(0, int(retry_count or 0)),
+            "retryLimit": max(0, int(retry_limit or 0)),
+        })
+    _persist_live_public_message(session, {
+        "id": f"msg_model_status_{identity}",
+        "role": "assistant",
+        "content": "",
+        "createdAt": _utc_now_iso(),
+        "roundId": round_key,
+        "modelStatusCard": True,
+        "modelStatus": model_status,
+    })
 
 
 def _pending_question_message(

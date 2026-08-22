@@ -1,4 +1,4 @@
-import { WBC_ICONS, WbcVoice, WorkbenchChatModel, useWbcEffect, useWbcLayoutEffect, useWbcRef, useWbcState, wbcAgentEventPayload, wbcBuildRailCardDragPreview, wbcCanOpenPageContextMenu, wbcCaptureConversationViewport, wbcChatCache, wbcChatDropReplacesActiveConversation, wbcChatSideDropZone, wbcChatSideZoneRect, wbcClampSideSplitWidth, wbcClampSideSplitWidthForPage, wbcClearModelOutputForRetry, wbcClonePaneWithLiveState, wbcConfirmOptimisticMessage, wbcDefaultPaneLayout, wbcErrorText, wbcEscapeHtml, wbcFileViewKind, wbcHasChatDrag, wbcHasResourceDrag, wbcHasSplitDrag, wbcHasTaskDrag, wbcHideNativeDragImage, wbcLastChatByProject, wbcLoadDraftAgentBinding, wbcMergeChronologicalMessages, wbcMergeSavedAssistantMessages, wbcNormalizePaneLayout, wbcNormalizePermissionMode, wbcNotifyBrowserWindowInteraction, wbcOpenAgentDetail, wbcPageContextMenuPlacement, wbcPaneCard, wbcPaneCardLocation, wbcPinPageSplitLayout, wbcPinSplitMotionOpen, wbcPlacePaneCard, wbcPreserveLiveTimelineAnchors, wbcReadChatDrag, wbcReadResourceDrag, wbcReadSplitDrag, wbcReadTaskDrag, wbcReleasePinnedPageSplitLayout, wbcReleasePinnedSplitMotion, wbcRestoreConversationViewport, wbcRetryTurnSelection, wbcSaveDraftAgentBinding, wbcSetSplitDrag, wbcSplitSideForDraggedConversation, wbcT } from "../../workbench-chat.jsx"
+import { WBC_ICONS, WbcVoice, WorkbenchChatModel, useWbcEffect, useWbcLayoutEffect, useWbcRef, useWbcState, wbcAgentEventPayload, wbcBuildRailCardDragPreview, wbcCanOpenPageContextMenu, wbcCaptureConversationViewport, wbcChatCache, wbcChatDropReplacesActiveConversation, wbcChatSideDropZone, wbcChatSideZoneRect, wbcClampSideSplitWidth, wbcClampSideSplitWidthForPage, wbcClearModelOutputForRetry, wbcClonePaneWithLiveState, wbcConfirmOptimisticMessage, wbcDefaultPaneLayout, wbcErrorText, wbcEscapeHtml, wbcFileViewKind, wbcHasChatDrag, wbcHasResourceDrag, wbcHasSplitDrag, wbcHasTaskDrag, wbcHideNativeDragImage, wbcLastChatByProject, wbcLoadDraftAgentBinding, wbcMergeChronologicalMessages, wbcMergeSavedAssistantMessages, wbcNormalizePaneLayout, wbcNormalizePermissionMode, wbcNotifyBrowserWindowInteraction, wbcOpenAgentDetail, wbcPageContextMenuPlacement, wbcPaneCard, wbcPaneCardLocation, wbcPinPageSplitLayout, wbcPinSplitMotionOpen, wbcPlacePaneCard, wbcPreserveLiveTimelineAnchors, wbcPublishChatModelChanged, wbcReadChatDrag, wbcReadResourceDrag, wbcReadSplitDrag, wbcReadTaskDrag, wbcReleasePinnedPageSplitLayout, wbcReleasePinnedSplitMotion, wbcRestoreConversationViewport, wbcRetryTurnSelection, wbcSaveDraftAgentBinding, wbcSetSplitDrag, wbcSplitSideForDraggedConversation, wbcT } from "../../workbench-chat.jsx"
 import { WBC_PROJECT_FILE_DRAFTS, WbcArtifactSplit, WbcArtifactSplitHost, WbcBrowserSplit, WbcBrowserSplitHost, WbcChangeSplit, WbcChangeSplitHost, WbcChatSplit, WbcChatSplitHost, WbcMapPaneContent, WbcMapSplitHost, WbcPaneCardFrame, WbcPaneColumnResizer, WbcPaneContextTrackDropSurface, WbcPaneRowResizer, WbcSide, WbcSideAgentSplit, WbcSideAgentSplitHost, WbcSplitGripBar, WbcSubagentsSplitHost, WbcSubagentsTab, wbcArtifactFileKey, wbcChatArtifactFiles, wbcDiscardProjectFileDraft, wbcEditableChatFileResource, wbcMapItemLabel, wbcProjectFileDraftKey } from "./split-pane.jsx"
 import { WorkbenchChatRuntimes, wbcRuntimePresenceSnapshot, wbcSameRuntimePresence, wbcTaskSessionFromStore } from "./file-resources.jsx"
 import { resolveRefreshedChatSelection as wbcResolveRefreshedChatSelection, settleChatListItem as wbcSettleChatListItem } from "./behavior.mjs"
@@ -1913,6 +1913,18 @@ function WorkbenchChatPage({ active, project, newChatRequestId, taskOpenRequest,
           }
         } catch (e) {}
         return;
+      }
+      if (event.type === "phase_transition" && String(event.to || "") === "fallback_model") {
+        var fallbackChatId = String(event.session_id || event.chat_id || event.chatId || "");
+        var fallbackParams = event.detail_params && typeof event.detail_params === "object"
+          ? event.detail_params
+          : {};
+        var fallbackModel = String(fallbackParams.fallbackModel || fallbackParams.fallback_model || "").trim();
+        if (fallbackChatId && fallbackModel) {
+          // Update the Overview model on the same SSE tick as the fallback,
+          // without waiting for the reply or the context polling interval.
+          wbcPublishChatModelChanged(fallbackChatId, { model: fallbackModel }, { refresh: false });
+        }
       }
       if (event.type === "workbench_chat_changed") {
         if (
