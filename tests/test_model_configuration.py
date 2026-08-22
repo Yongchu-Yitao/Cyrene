@@ -264,7 +264,7 @@ def test_legacy_models_migrate_to_profiles_and_routes(isolated_model_store):
     assert migrated["profiles"][0]["connection_id"] == migrated["connections"][0]["id"]
 
 
-def test_default_provider_connections_are_added_once_and_can_be_deleted(
+def test_default_provider_connections_include_managed_local_provider(
     isolated_model_store,
 ):
     from cyrene.runtime.model_configuration import (
@@ -304,6 +304,15 @@ def test_default_provider_connections_are_added_once_and_can_be_deleted(
         "api_key": "",
         "options": {"provider_preset": "codex_oauth"},
     }
+    assert providers["local_onnx"] == {
+        "id": "local_onnx",
+        "name": "Local ONNX",
+        "adapter": "local_onnx",
+        "enabled": True,
+        "base_url": "",
+        "api_key": "",
+        "options": {"provider_preset": "local_onnx"},
+    }
     assert configured["profiles"] == []
     assert all(not route for route in configured["routes"].values())
 
@@ -320,7 +329,111 @@ def test_default_provider_connections_are_added_once_and_can_be_deleted(
     assert [item["id"] for item in reloaded["connections"]] == [
         "deepseek",
         "codex_oauth",
+        "local_onnx",
     ]
+
+
+def test_version_six_configuration_gains_managed_local_provider(
+    isolated_model_store,
+):
+    from cyrene.runtime.model_configuration import CONFIG_VERSION, get_model_configuration
+
+    existing = {
+        "version": 6,
+        "connections": [{
+            "id": "remote",
+            "name": "Remote",
+            "adapter": "openai",
+            "enabled": True,
+            "base_url": "https://example.test/v1",
+            "api_key": "sk-remote",
+            "options": {},
+        }],
+        "profiles": [{
+            "id": "remote-model",
+            "connection_id": "remote",
+            "model": "remote-model",
+            "name": "Remote model",
+            "enabled": True,
+            "capabilities": ["chat"],
+            "context_limit": 128_000,
+            "ctx": "128K",
+            "dimensions": 0,
+            "reasoning_effort": "",
+            "description": "",
+            "price": "",
+            "max_concurrency": 0,
+            "options": {},
+        }],
+        "routes": {
+            "primary": ["remote-model"],
+            "secondary": [],
+            "vision": [],
+            "embedding": [],
+        },
+    }
+    isolated_model_store.update_settings_atomic({"model_configuration": existing})
+
+    upgraded = get_model_configuration(persist_migration=False)
+
+    assert upgraded["version"] == CONFIG_VERSION
+    assert sum(
+        connection["adapter"] == "local_onnx"
+        for connection in upgraded["connections"]
+    ) == 1
+    assert [
+        connection["id"] for connection in upgraded["connections"]
+    ] == ["remote", "local_onnx"]
+    assert upgraded["profiles"][0]["id"] == "remote-model"
+    assert upgraded["routes"] == existing["routes"]
+
+
+def test_managed_connections_can_be_deleted_and_readded(isolated_model_store):
+    from cyrene.runtime.model_configuration import (
+        get_model_configuration,
+        save_model_configuration,
+    )
+
+    configured = get_model_configuration()
+    without_managed = {
+        **configured,
+        "connections": [
+            connection
+            for connection in configured["connections"]
+            if connection["adapter"] not in {"codex_oauth", "local_onnx"}
+        ],
+    }
+    save_model_configuration(without_managed)
+
+    deleted = get_model_configuration()
+    assert not any(
+        connection["adapter"] in {"codex_oauth", "local_onnx"}
+        for connection in deleted["connections"]
+    )
+
+    restored = {
+        **deleted,
+        "connections": deleted["connections"] + [
+            {
+                "id": "restored-codex",
+                "name": "OpenAI Codex OAuth",
+                "adapter": "codex_oauth",
+            },
+            {
+                "id": "restored-local",
+                "name": "Local ONNX",
+                "adapter": "local_onnx",
+            },
+        ],
+    }
+    save_model_configuration(restored)
+
+    reloaded = get_model_configuration()
+    assert [
+        connection["id"]
+        for connection in reloaded["connections"]
+        if connection["adapter"] in {"codex_oauth", "local_onnx"}
+    ] == ["restored-codex", "restored-local"]
 
 
 def test_version_five_configuration_gains_managed_codex_connection(
@@ -688,7 +801,15 @@ def test_frontend_registers_split_pages_and_live_context_contract():
     assert 'return "本地模型"' in settings
     assert 'var serviceLabel = local ? "Local"' in settings
     assert 'localModels.filter(function (model) { return model.ready === true; }).length' in settings
-    assert 'if (!localConnectionSignature) return;' in settings
+    assert "localConnectionSignature" not in settings
+    assert 'useEffect(function () { refreshLocalModels(); }, []);' in settings
+    assert "function selectableConnectionAdapters()" in settings
+    assert 'adapterId === "codex_oauth"' in settings
+    assert 'adapterId === "local_onnx"' in settings
+    assert "!connections.some(isCodexConnection)" in settings
+    assert "!connections.some(isLocalConnection)" in settings
+    assert 'next.name === "新服务商"' in settings
+    assert 'value === "local_onnx" ? "Local ONNX"' in settings
     assert 'className: "wb-model-card wb-local-model wb-mcfg-local-row"' in settings
     assert 'label(props, "settings.localModelActive"' in settings
     assert '!isLocalConnection(selected) ? h("section", { className: "wb-mcfg-form-section"' in settings

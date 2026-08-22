@@ -1574,6 +1574,7 @@ function wbcReconcileLiveUserMessages(messages, liveUserMessages) {
     if (!liveMessage || liveMessage.role !== "user") return;
     var liveId = String(liveMessage.id || "");
     var liveRequestId = String(liveMessage.clientRequestId || "");
+    var liveQuestionId = String(liveMessage.answerToQuestionId || "");
     var matchIndex = -1;
     for (var i = 0; i < merged.length; i++) {
       var current = merged[i];
@@ -1581,7 +1582,13 @@ function wbcReconcileLiveUserMessages(messages, liveUserMessages) {
       var sameRequest = liveRequestId
         && String(current.clientRequestId || "") === liveRequestId;
       var sameMessage = liveId && String(current.id || "") === liveId;
-      if (sameRequest || sameMessage) {
+      // A pending-question answer is persisted before its resumed run finishes.
+      // Its optimistic and durable entries have different message ids and no
+      // clientRequestId, so a hydration while that run is live must correlate
+      // them through the question they both answer.
+      var sameQuestionAnswer = liveQuestionId
+        && String(current.answerToQuestionId || "") === liveQuestionId;
+      if (sameRequest || sameMessage || sameQuestionAnswer) {
         matchIndex = i;
         break;
       }

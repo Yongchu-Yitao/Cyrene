@@ -886,10 +886,6 @@
     var [localBusy, setLocalBusy] = useState("");
 
     var selected = config && (config.connections || []).find(function (item) { return item.id === selectedId; });
-    var localConnectionSignature = config ? (config.connections || []).filter(isLocalConnection).map(function (connection) {
-      return connection.id + ":" + connection.adapter;
-    }).join("|") : "";
-
     useEffect(function () {
       if (!config || !(config.connections || []).length) return;
       if (!(config.connections || []).some(function (item) { return item.id === selectedId; })) setSelectedId(config.connections[0].id);
@@ -1078,7 +1074,12 @@
           if (key === "adapter") {
             var previousAdapter = (config.adapters || []).find(function (item) { return item.id === connection.adapter; }) || {};
             var replacementAdapter = (config.adapters || []).find(function (item) { return item.id === value; }) || {};
+            var previousManagedName = connection.adapter === "codex_oauth"
+              ? "OpenAI Codex OAuth" : connection.adapter === "local_onnx" ? "Local ONNX" : "";
+            var managedName = value === "codex_oauth"
+              ? "OpenAI Codex OAuth" : value === "local_onnx" ? "Local ONNX" : "";
             next.adapter_id = value;
+            if (managedName && (next.name === "新服务商" || next.name === previousManagedName)) next.name = managedName;
             if (!String(next.base_url || "").trim()
                 || String(next.base_url || "").replace(/\/$/, "") === String(previousAdapter.default_base_url || "").replace(/\/$/, "")) {
               next.base_url = String(replacementAdapter.default_base_url || "");
@@ -1112,7 +1113,7 @@
     }
 
     function addConnection() {
-      var firstAdapter = (config.adapters || []).find(isUserSelectableAdapter);
+      var firstAdapter = selectableConnectionAdapters()[0];
       if (!firstAdapter) {
         showSettingsToast(label(props, "settings.adapterUnavailable", "当前服务没有可添加的协议。"), "error");
         return;
@@ -1129,17 +1130,21 @@
       setSelectedId(id);
     }
 
+    function selectableConnectionAdapters() {
+      var connections = config.connections || [];
+      return (config.adapters || []).filter(function (adapter) {
+        if (isUserSelectableAdapter(adapter)) return true;
+        var adapterId = adapterKey(adapter && adapter.id);
+        if (adapterId === "codex_oauth") return !connections.some(isCodexConnection);
+        if (adapterId === "local_onnx") return !connections.some(isLocalConnection);
+        return false;
+      });
+    }
+
     function removeConnection(connectionId, returnFocus) {
       var targetIndex = config.connections.findIndex(function (connection) { return connection.id === connectionId; });
       var target = config.connections[targetIndex];
       if (!target) return;
-      // Codex OAuth is an application-managed connection. It can be signed out,
-      // but deleting the connection would also remove the stable model binding
-      // that the OAuth flow expects to reuse.
-      if (isCodexConnection(target)) {
-        if (returnFocus && returnFocus.isConnected) window.requestAnimationFrame(function () { returnFocus.focus(); });
-        return;
-      }
       var feedback = window.CyreneUI && window.CyreneUI.require
         ? window.CyreneUI.require("feedback")
         : null;
@@ -1350,10 +1355,7 @@
       refreshOauth();
     }, [selectedId, selected && selected.adapter]);
 
-    useEffect(function () {
-      if (!localConnectionSignature) return;
-      refreshLocalModels();
-    }, [localConnectionSignature]);
+    useEffect(function () { refreshLocalModels(); }, []);
 
     useEffect(function () {
       if (!selected || !isLocalConnection(selected) || !localModels.some(function (model) { return model.downloading; })) return;
@@ -1367,7 +1369,7 @@
     var filtered = config.connections.filter(matchesConnectionQuery);
     var profiles = selected ? config.profiles.filter(function (profile) { return profile.connection_id === selected.id; }) : [];
     var adapters = config.adapters || [];
-    var selectableAdapters = adapters.filter(isUserSelectableAdapter);
+    var selectableAdapters = selectableConnectionAdapters();
     var currentAdapter = selected && (adapters.find(function (adapter) { return adapter.id === selected.adapter; })
       || normalizeAdapter({ id: selected.adapter, name: selected.adapter }, adapters.length));
     var editorAdapters = selectableAdapters.slice();
@@ -1380,7 +1382,7 @@
         : String(currentAdapter && currentAdapter.description || "").trim())
       : "";
     var menuConnection = connectionMenu && config.connections.find(function (connection) { return connection.id === connectionMenu.connectionId; });
-    var connectionMenuNode = menuConnection && !isCodexConnection(menuConnection) ? h("div", {
+    var connectionMenuNode = menuConnection ? h("div", {
       ref: connectionMenuRef,
       className: "wb-mcfg-context-menu",
       role: "menu",
@@ -1441,15 +1443,14 @@
                 ? localModels.filter(function (model) { return model.ready === true; }).length
                 : config.profiles.filter(function (profile) { return profile.connection_id === connection.id; }).length;
               var serviceLabel = local ? "Local" : (adapter && adapter.name || connection.adapter);
-              var canDelete = !isCodexConnection(connection);
               return h("button", {
                 type: "button", role: "option", key: connection.id,
                 className: "wb-mcfg-connection-item" + (selectedId === connection.id ? " is-selected" : ""),
                 "aria-selected": selectedId === connection.id,
-                "aria-haspopup": canDelete ? "menu" : undefined,
-                "aria-expanded": canDelete ? !!connectionMenu && connectionMenu.connectionId === connection.id : undefined,
-                "aria-controls": canDelete && connectionMenu && connectionMenu.connectionId === connection.id ? "wb-mcfg-connection-menu" : undefined,
-                "data-cyrene-context-menu": canDelete ? "true" : undefined,
+                "aria-haspopup": "menu",
+                "aria-expanded": !!connectionMenu && connectionMenu.connectionId === connection.id,
+                "aria-controls": connectionMenu && connectionMenu.connectionId === connection.id ? "wb-mcfg-connection-menu" : undefined,
+                "data-cyrene-context-menu": "true",
                 onClick: function () { setConnectionMenu(null); setSelectedId(connection.id); store.setError(""); },
                 onContextMenu: function (event) { openConnectionMenu(event, connection, false); },
                 onKeyDown: function (event) {

@@ -3739,6 +3739,61 @@ def test_workbench_hydration_keeps_live_user_turn_before_runtime_placeholder():
     }
 
 
+def test_workbench_hydration_deduplicates_pending_question_answer_after_navigation():
+    result = _run_workbench_timeline_js(
+        """
+(() => {
+  const startedAt = Date.parse("2026-07-15T09:27:52.100Z");
+  const optimisticAnswer = {
+    id: "answer_pending_1",
+    role: "user",
+    content: "继续",
+    createdAt: new Date(startedAt).toISOString(),
+    answerToQuestionId: "question_1",
+    optimistic: true
+  };
+  const hydrated = {
+    messages: [{
+      id: "msg_saved_answer",
+      role: "user",
+      content: "继续",
+      createdAt: "2026-07-15T09:27:52.180000+00:00",
+      answerToQuestionId: "question_1"
+    }]
+  };
+  const runtime = {
+    chatId: "chat_1",
+    startedAt,
+    activities: [],
+    userMessages: [optimisticAnswer]
+  };
+  const reconciled = wbcPreserveLiveTimelineAnchors(
+    { messages: [optimisticAnswer] },
+    hydrated,
+    runtime
+  );
+  return {
+    ids: reconciled.messages.map(item => item.id),
+    answerCount: reconciled.messages.filter(item => (
+      item.answerToQuestionId === "question_1"
+    )).length,
+    optimistic: reconciled.messages[0].optimistic,
+    createdAt: reconciled.messages[0].createdAt,
+    serverCreatedAt: reconciled.messages[0].serverCreatedAt
+  };
+})()
+"""
+    )
+
+    assert result == {
+        "ids": ["msg_saved_answer"],
+        "answerCount": 1,
+        "optimistic": False,
+        "createdAt": "2026-07-15T09:27:52.100Z",
+        "serverCreatedAt": "2026-07-15T09:27:52.180000+00:00",
+    }
+
+
 def test_workbench_hydration_cannot_remove_the_live_user_turn():
     result = _run_workbench_timeline_js(
         """
@@ -5350,6 +5405,28 @@ def test_workbench_chat_card_menu_can_rename_the_target_chat():
     assert ".wbc-chat-list.menu-active .wbc-chat-card.menu-open" in styles
     assert "pointer-events: auto;" in styles.split(
         ".wbc-chat-list.menu-active .wbc-chat-card.menu-open", 1
+    )[1].split("}", 1)[0]
+
+
+def test_project_terminal_menu_is_above_the_outside_click_scrim():
+    root = Path(__file__).resolve().parent.parent
+    source = workbench_chat_source()
+    styles = (root / "src" / "webui" / "frontend" / "workbench.css").read_text(
+        encoding="utf-8"
+    )
+
+    project_tools = source.split('<section\n          ref={projectToolsRef}', 1)[1].split(
+        'aria-label={wbcT("rail.projectTools"', 1
+    )[0]
+    assert 'String(menuId).indexOf("terminal:") === 0 ? " menu-active" : ""' in project_tools
+
+    project_tools_menu_css = styles.split(
+        ".wbc-project-tools.menu-active {", 1
+    )[1].split("}", 1)[0]
+    assert "z-index: 200;" in project_tools_menu_css
+    assert "pointer-events: none;" in project_tools_menu_css
+    assert "pointer-events: auto;" in styles.split(
+        ".wbc-project-terminal-list.menu-active .wbc-terminal-card.menu-open", 1
     )[1].split("}", 1)[0]
 
 

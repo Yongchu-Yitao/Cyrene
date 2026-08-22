@@ -3031,7 +3031,8 @@ function WbcRail({ projectId, projectName, chats, tasks, terminals, terminalsLoa
           className={"wbc-project-tools"
             + (fileToolsExpanded || terminalToolsExpanded ? " has-expanded-tool" : "")
             + (fileToolsExpanded ? " expanded-file" : "")
-            + (terminalToolsExpanded ? " expanded-terminal" : "")}
+            + (terminalToolsExpanded ? " expanded-terminal" : "")
+            + (terminalToolsExpanded && String(menuId).indexOf("terminal:") === 0 ? " menu-active" : "")}
           aria-label={wbcT("rail.projectTools", "Project tools")}
           onWheel={handleProjectToolWheel}
           onTouchStart={handleProjectToolTouchStart}

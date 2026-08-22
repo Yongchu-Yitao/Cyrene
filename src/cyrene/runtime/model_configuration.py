@@ -20,7 +20,7 @@ from cyrene.model_runtime.cache_invalidation import invalidate_model_runtime_cac
 from cyrene.runtime import config_store
 
 
-CONFIG_VERSION = 6
+CONFIG_VERSION = 7
 ROUTE_NAMES = ("primary", "secondary", "vision", "embedding")
 RETIRED_MODEL_SETTING_KEYS = frozenset({
     "models",
@@ -46,6 +46,7 @@ _DEEPSEEK_REPLACED_DEFAULT_BASE_URLS = {
 # upgraded installs useful provider entries out of the box.
 _DEFAULT_PROVIDER_CONNECTIONS: tuple[dict[str, Any], ...] = (
     {
+        "introduced_version": 3,
         "id": "minimax",
         "name": "MiniMax",
         "adapter": "openai",
@@ -55,6 +56,7 @@ _DEFAULT_PROVIDER_CONNECTIONS: tuple[dict[str, Any], ...] = (
         "options": {"provider_preset": "minimax"},
     },
     {
+        "introduced_version": 3,
         "id": "deepseek",
         "name": "DeepSeek",
         "adapter": "openai",
@@ -64,6 +66,7 @@ _DEFAULT_PROVIDER_CONNECTIONS: tuple[dict[str, Any], ...] = (
         "options": {"provider_preset": "deepseek"},
     },
     {
+        "introduced_version": 6,
         "id": "codex_oauth",
         "name": "OpenAI Codex OAuth",
         "adapter": "codex_oauth",
@@ -71,6 +74,16 @@ _DEFAULT_PROVIDER_CONNECTIONS: tuple[dict[str, Any], ...] = (
         "base_url": "codex://oauth",
         "api_key": "",
         "options": {"provider_preset": "codex_oauth"},
+    },
+    {
+        "introduced_version": 7,
+        "id": "local_onnx",
+        "name": "Local ONNX",
+        "adapter": "local_onnx",
+        "enabled": True,
+        "base_url": "",
+        "api_key": "",
+        "options": {"provider_preset": "local_onnx"},
     },
 )
 
@@ -312,16 +325,22 @@ def _unique_id(preferred: str, used: set[str], prefix: str) -> str:
 
 
 def _with_default_provider_connections(raw: dict[str, Any]) -> dict[str, Any]:
-    """Append missing built-in provider presets without touching user state."""
+    """Add presets introduced after the stored version without reviving deletions."""
 
     upgraded = deepcopy(raw)
     connections = upgraded.get("connections")
     if not isinstance(connections, list):
         return upgraded
 
+    source_version = _configuration_version(raw)
+    pending_presets = [
+        preset
+        for preset in _DEFAULT_PROVIDER_CONNECTIONS
+        if source_version < int(preset["introduced_version"])
+    ]
     default_provider_ids = {
         str(preset.get("id") or "").strip().lower()
-        for preset in _DEFAULT_PROVIDER_CONNECTIONS
+        for preset in pending_presets
     }
     recognized: set[str] = set()
     used_ids: set[str] = set()
@@ -381,7 +400,7 @@ def _with_default_provider_connections(raw: dict[str, Any]) -> dict[str, Any]:
     profiles = raw_profiles if isinstance(raw_profiles, list) else []
     openai_capabilities = set(require_adapter("openai").capabilities)
 
-    for preset in _DEFAULT_PROVIDER_CONNECTIONS:
+    for preset in pending_presets:
         provider_id = str(preset["id"])
         if provider_id in recognized:
             continue
@@ -441,7 +460,11 @@ def _with_default_provider_connections(raw: dict[str, Any]) -> dict[str, Any]:
             if profile_capabilities <= openai_capabilities:
                 connection["adapter"] = "openai"
             continue
-        connection = deepcopy(preset)
+        connection = {
+            key: deepcopy(value)
+            for key, value in preset.items()
+            if key != "introduced_version"
+        }
         if provider_id in used_ids:
             connection["id"] = _unique_id(
                 f"{provider_id}-default", used_ids, provider_id

@@ -36954,6 +36954,14 @@ html[data-performance-mode="on"] .wbc-composer .wb-chip:first-child {
   border-top: 1px solid color-mix(in srgb, var(--wb-line-2) 66%, transparent);
 }
 
+/* Project tools normally live below the full-viewport menu scrim. Lift the
+   container while a terminal menu is open so its actions remain clickable;
+   only the open card is allowed to receive pointer events through the scrim. */
+.wbc-project-tools.menu-active {
+  z-index: 200;
+  pointer-events: none;
+}
+
 /* Collapsed tool panels are still grid items for the expand animation. Remove
    their hidden box from the resting layout so the two launcher cards keep one
    compact, intentional gap instead of inheriting space on both sides. */
