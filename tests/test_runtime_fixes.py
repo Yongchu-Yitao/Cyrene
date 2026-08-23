@@ -3607,7 +3607,13 @@ async def test_run_main_agent_chat_only_streams_final_reply(monkeypatch):
     streamed = []
 
     async def fake_call_llm(messages, tools=None, max_tokens=32000):
-        return {"content": "internal draft"}
+        return {
+            "content": "internal draft",
+            "tool_calls": [{
+                "id": "quit1",
+                "function": {"name": "quit", "arguments": "{}"},
+            }],
+        }
 
     fake_call_llm_stream = AsyncMock()
 
