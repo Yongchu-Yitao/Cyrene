@@ -38,8 +38,8 @@ The Chinese edition remains the most detailed record for older releases.
 
 ### Models, Codex, and search services
 
-- Added a Cyrene-managed local model connection that appears automatically on first use, can still be removed, and can be added again when needed.
-- Added the local Qwen3 Embedding 0.6B model for knowledge search and vectorization without requiring a server address or API key.
+- The model-service list now restores the Cyrene-managed local connection automatically. The existing local Qwen3 Embedding capability is integrated into the unified connection and Knowledge settings flow without requiring a separate address or credential.
+- Codex and local model connections can both be removed by the user and then added again from the available services instead of remaining permanently fixed in the model list.
 - The Codex sign-in page can download the required Codex CLI runtime automatically and shows progress, timeout, retry, and redownload states, reducing manual first-time setup.
 - Codex connections provide clearer recovery paths for expired sign-in, exhausted quota, unavailable models, and missing runtime files, together with more complete model and reasoning-effort choices.
 - Model retries and fallbacks remain visible in one durable conversation status, including the current attempt, next target, and final result, instead of being overwritten by later states.
@@ -87,6 +87,33 @@ The Chinese edition remains the most detailed record for older releases.
 - Project deletion and archiving use clearer boundaries for chats, memory, schedules, terminals, and plugin data, reducing both leftovers and unintended cleanup.
 - Knowledge, files, and memory remain strictly isolated by project: an empty workspace or unknown project is never treated as the default project and cannot accidentally create, read, or write another project's data.
 
+### Performance improvements
+
+- Initial Agent context no longer carries every large tool guide in advance, and later turns reuse unchanged context more effectively, reducing unnecessary waiting and input overhead.
+- Conversation lists, summaries, the active transcript, and run state use more precise partial updates. Opening one chat no longer loads every sibling transcript in full.
+- Workspace state is prepared when a chat opens and reused by the first Agent turn. Later file scans process only content that was actually created, edited, moved, or deleted.
+- Chat streams, tool results, global messages, and background events fan out reliably to several windows. A lagging window requests a precise resync instead of allowing an event queue to grow without limit.
+- Live terminal output, screen parsing, and history persistence use bounded incremental work, keeping the interface responsive under heavy output without losing searchable durable history.
+- Large knowledge listings and counts, file-change detection, Zotero copies, and re-embedding avoid repeated reads and calculations for unchanged content.
+- Remote file synchronization, uploads, and update downloads confirm integrity during transfer instead of rescanning an entire large file after completion.
+- Search moves quickly to later candidates when one engine or provider times out, disconnects, or returns empty content, preventing a single failed source from delaying the whole search.
+- Data requests in Settings, Knowledge, Schedule, and project details cancel obsolete loads and prioritize the latest event, reducing stalls and visible state jumps during rapid navigation.
+- Desktop streaming, the Agent cursor, and browser interaction prioritize the newest state under load, reducing frame backlog, fixed waits, and unnecessary redraws.
+- Added a unified performance baseline covering Agents, chats, search, terminals, knowledge, schedules, file processing, and concurrent work to catch meaningful regressions in future releases.
+
+### Refactoring, compatibility, and reliability
+
+- Workbench is reorganized around chat, task, terminal, Settings, Knowledge, Memory, Schedule, and desktop-shell modules, giving navigation, split panes, status, and errors more consistent behavior across pages.
+- Chat, project, task, schedule, knowledge, memory, and workspace-change responsibilities are more clearly separated so one feature's loading or failure is less likely to disrupt the entire workspace.
+- Existing entry points and workflows for chats, tasks, splits, search, voice, PDFs, terminals, and Settings are preserved, so the refactor does not require users to relearn the application.
+- Legacy databases, knowledge indexes, model configurations, shortcuts, chat exports, and project state continue to migrate and load after upgrading instead of being lost when internal structures change.
+- Model connections, candidate order, credentials, capability checks, and upgraded legacy settings now follow one set of rules, reducing mismatches between what Settings shows and what runs.
+- Extensions, skills, Custom Tools, and project plugins now use more consistent installation, enablement, reload, permission review, and removal lifecycles. Disabling one also stops its related background watchers and resources.
+- Live updates for chat messages, run state, tool results, and background notifications use one consistent shape, reducing duplicates and omissions during navigation, reconnection, and multi-window use.
+- Refactored desktop actions still operate only on visible, authorized interface elements and wait for cursor and interface animations to finish before continuing.
+- WebUI source, built-in application pages, and desktop release packages remain synchronized so installed builds match the features and interface used during development.
+- Interrupting, deleting, reconnecting, closing projects, and quitting now settle background runs, terminals, plugins, subscriptions, and temporary resources more reliably, reducing stale state on the next launch.
+
 ### Settings, data, updates, and the overall interface
 
 - Settings is reorganized into more focused modules with consistent hierarchy and spacing for cards, headings, descriptions, switches, and error states.
@@ -96,7 +123,6 @@ The Chinese edition remains the most detailed record for older releases.
 - App updates show verifiable download progress and check downloaded-file integrity before installation, with clearer failure states.
 - Windows releases now include complete workspace file-change watching so conversation change records update correctly in installed Windows builds.
 - Chats, tasks, Settings, knowledge, memory, schedules, and project tools use more consistent navigation, shortcuts, split panes, dragging, detached windows, selection states, and empty states.
-- Responsiveness and reliability are improved across large workspaces, long chats, sustained terminal output, large indexes, file synchronization, and multi-window use.
 - Version presentation across the README, website, application, and release packages is unified as `0.8.0-beta1`.
 
 ## [0.7.13] - 2026-08-22

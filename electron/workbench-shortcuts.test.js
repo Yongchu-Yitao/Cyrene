@@ -82,8 +82,15 @@ test('shortcut UI retries only its action patch and preserves concurrent user or
     '../src/webui/frontend/platform/runtime.jsx',
     '../src/webui/frontend/workbench-shortcuts.jsx',
   ]) {
+    let source = fs.readFileSync(path.join(__dirname, relative), 'utf8');
+    if (relative.endsWith('workbench-shortcuts.jsx')) {
+      source = source.replace(
+        /^import[^\n]*\n/,
+        'const workbenchServices = { events: () => null };\n',
+      );
+    }
     vm.runInContext(
-      fs.readFileSync(path.join(__dirname, relative), 'utf8'),
+      source,
       context,
       { filename: relative },
     );

@@ -581,8 +581,8 @@ test('semantic actions wait on renderer animation completion instead of fixed cu
     path.join(__dirname, '../src/webui/frontend/platform/ui-surface.jsx'), 'utf8'
   );
   const completion = source.slice(
-    source.indexOf('async function waitForAgentCursorCompletion'),
-    source.indexOf('function agentControlHighlightElement')
+    source.indexOf('async function waitForCursorAnimations'),
+    source.indexOf('(function (root)')
   );
   const act = source.slice(
     source.indexOf('async function act(args)'),

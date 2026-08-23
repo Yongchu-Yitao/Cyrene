@@ -16,7 +16,6 @@ from pathlib import Path
 
 
 def test_external_agent_frontend_consumes_unified_dynamic_events_and_viewers():
-    root = Path(__file__).resolve().parent.parent
     source = workbench_chat_source()
     route_source = workbench_chat_route_source()
     settings = workbench_settings_source()
@@ -139,7 +138,6 @@ def test_pane_cards_can_detach_into_native_windows_with_browser_view_migration()
 
 
 def test_external_agent_context_uses_report_then_transcript_fallback_copy():
-    root = Path(__file__).resolve().parent.parent
     source = workbench_chat_source()
     i18n = workbench_i18n_source()
     assert 'data.compositionSource === "agent_report"' in source
@@ -155,7 +153,6 @@ def test_external_agent_context_uses_report_then_transcript_fallback_copy():
 
 
 def test_external_agent_context_hides_cyrene_only_inbox_and_tool_packages():
-    Path(__file__).resolve().parent.parent
     source = workbench_chat_source()
     assert 'var externalAgent = !!wbcChatAgent(chat) && !wbcIsBuiltinAgent(wbcChatAgent(chat));' in source
     assert '!externalAgent && <WbcInboxCard' in source
@@ -163,7 +160,6 @@ def test_external_agent_context_hides_cyrene_only_inbox_and_tool_packages():
 
 
 def test_system_default_model_description_is_localized_without_rewriting_custom_copy():
-    root = Path(__file__).resolve().parent.parent
     source = workbench_chat_source()
     i18n = workbench_i18n_source()
     friendly = "function wbcFriendlyModelName(" + source.split("function wbcFriendlyModelName(", 1)[1].split("function wbcLocalizedModelDescription", 1)[0]
@@ -175,7 +171,6 @@ def test_system_default_model_description_is_localized_without_rewriting_custom_
 
 
 def test_chat_files_merge_message_attachments_and_nested_agent_output():
-    Path(__file__).resolve().parent.parent
     source = workbench_chat_source()
     helper_source = "function wbcChatArtifactFiles(" + source.split(
         "function wbcChatArtifactFiles(", 1
@@ -198,7 +193,6 @@ process.stdout.write(JSON.stringify(files));
 
 
 def test_chat_artifacts_only_include_assistant_deliveries():
-    Path(__file__).resolve().parent.parent
     source = workbench_chat_source()
     helper_source = "function wbcChatDeliveredArtifacts(" + source.split(
         "function wbcChatDeliveredArtifacts(", 1
@@ -284,7 +278,6 @@ process.stdout.write(JSON.stringify({{
 
 
 def test_chat_file_type_labels_do_not_treat_text_formats_as_word_documents():
-    Path(__file__).resolve().parent.parent
     source = workbench_chat_source()
     constants = "var WBC_CODE_EXTS" + source.split("var WBC_CODE_EXTS", 1)[1].split(
         "function wbcFileViewKind", 1
@@ -318,7 +311,6 @@ process.stdout.write(JSON.stringify(files.map(wbcAttachmentVisualKind)));
 
 
 def test_file_view_kind_recognizes_project_images_without_mime_metadata():
-    Path(__file__).resolve().parent.parent
     source = workbench_chat_source()
     constants = "var WBC_CODE_EXTS" + source.split("var WBC_CODE_EXTS", 1)[1].split(
         "function wbcFileViewKind", 1
@@ -376,7 +368,6 @@ def test_office_files_use_lazy_browser_renderers_with_resource_limits():
 
 
 def test_chat_file_visual_uses_the_precise_attachment_kind_for_icon_and_tone():
-    Path(__file__).resolve().parent.parent
     source = workbench_chat_source()
     visual = source.split("function wbcAttachmentVisual(file)", 1)[1].split(
         "function wbcAttachmentTypeLabel", 1
@@ -403,7 +394,6 @@ def test_library_file_visual_exposes_kind_based_rendering_without_reclassificati
 
 
 def test_conversation_panel_has_separate_files_and_artifacts_rows():
-    Path(__file__).resolve().parent.parent
     source = workbench_chat_source()
 
     assert 'tabs.push({ id: "files", label: wbcT("workbenchChat.files", "Files") });' in source
@@ -450,7 +440,6 @@ def test_global_search_times_out_and_ignores_stale_requests():
 
 
 def test_new_workbench_chat_reuses_create_response_without_refetching():
-    root = Path(__file__).resolve().parent.parent
     source = workbench_chat_source()
     shell = workbench_shell_source()
 
@@ -463,7 +452,6 @@ def test_new_workbench_chat_reuses_create_response_without_refetching():
 
 
 def test_chat_sidebar_card_order_helpers_normalize_and_move_cards():
-    Path(__file__).resolve().parent.parent
     source = workbench_chat_source()
     helper_source = "function wbcNormalizeSideCardOrder(" + source.split(
         "function wbcNormalizeSideCardOrder(", 1
@@ -492,7 +480,6 @@ process.stdout.write(JSON.stringify(result));
 
 
 def test_chat_rail_order_helpers_keep_new_chats_first_and_move_existing_chats():
-    Path(__file__).resolve().parent.parent
     source = workbench_chat_source()
     helper_source = "function wbcNormalizeChatOrder(" + source.split(
         "function wbcNormalizeChatOrder(", 1
@@ -521,7 +508,6 @@ process.stdout.write(JSON.stringify(result));
 
 
 def test_chat_rail_group_helpers_create_extend_and_normalize_groups():
-    Path(__file__).resolve().parent.parent
     source = workbench_chat_source()
     helper_source = "function wbcNormalizeChatGroups(" + source.split(
         "function wbcNormalizeChatGroups(", 1
@@ -594,7 +580,6 @@ process.stdout.write(JSON.stringify({{ created, extended, moved, removedFromThre
 
 
 def test_workbench_chat_group_drop_uses_one_enclosing_frame_without_stacking():
-    root = Path(__file__).resolve().parent.parent
     source = workbench_chat_source()
     styles = workbench_style_source()
 
@@ -777,7 +762,6 @@ def test_workbench_chat_group_drop_uses_one_enclosing_frame_without_stacking():
 
 
 def test_overflowing_chat_card_and_topbar_tab_text_scrolls_on_hover():
-    root = Path(__file__).resolve().parent.parent
     chat_source = workbench_chat_source()
     shell_source = workbench_shell_source()
     styles = workbench_style_source()
@@ -802,7 +786,6 @@ def test_overflowing_chat_card_and_topbar_tab_text_scrolls_on_hover():
 
 
 def test_chat_sidebar_context_is_flat_and_overview_is_integrated():
-    root = Path(__file__).resolve().parent.parent
     source = workbench_chat_source()
     styles = workbench_style_source()
 
@@ -839,7 +822,6 @@ def test_chat_sidebar_context_is_flat_and_overview_is_integrated():
 
 
 def test_builtin_agent_in_overview_uses_plain_text_without_builtin_suffix():
-    Path(__file__).resolve().parent.parent
     source = workbench_chat_source()
     overview = source.split("function WbcOverviewTab(", 1)[1].split(
         "function wbcBlockLabel(", 1
@@ -854,7 +836,6 @@ def test_builtin_agent_in_overview_uses_plain_text_without_builtin_suffix():
 
 
 def test_workbench_chat_cards_are_borderless_and_compact_overview_is_flat():
-    root = Path(__file__).resolve().parent.parent
     styles = workbench_style_source()
 
     chat_card_css = styles.split(".wbc-chat-card {", 1)[1].split("}", 1)[0]
@@ -888,7 +869,6 @@ def test_workbench_chat_cards_are_borderless_and_compact_overview_is_flat():
 
 
 def test_workbench_chat_search_and_custom_background_composer_stay_distinct():
-    root = Path(__file__).resolve().parent.parent
     styles = workbench_style_source()
 
     search_css = styles.split(".wbc-search input {", 1)[1].split("}", 1)[0]
@@ -908,7 +888,6 @@ def test_workbench_chat_search_and_custom_background_composer_stay_distinct():
 
 
 def test_main_chat_composer_uses_a_solid_canvas_and_readable_input_card():
-    root = Path(__file__).resolve().parent.parent
     styles = workbench_style_source()
     source = workbench_chat_source()
 
@@ -959,7 +938,6 @@ def test_main_chat_composer_uses_a_solid_canvas_and_readable_input_card():
 
 
 def test_split_chat_composers_align_with_the_floating_workspace_rail():
-    root = Path(__file__).resolve().parent.parent
     styles = workbench_style_source()
 
     rail_css = styles.split(
@@ -1002,7 +980,6 @@ def test_split_chat_composers_align_with_the_floating_workspace_rail():
 
 
 def test_hidden_chat_sidebar_slightly_widens_and_centers_the_conversation_lane():
-    root = Path(__file__).resolve().parent.parent
     styles = workbench_style_source()
 
     page_css = styles.split(".wbc-page {", 1)[1].split("}", 1)[0]
@@ -1040,7 +1017,6 @@ def test_hidden_chat_sidebar_slightly_widens_and_centers_the_conversation_lane()
 
 
 def test_workbench_chat_rails_use_hidden_scrollbars():
-    root = Path(__file__).resolve().parent.parent
     styles = workbench_style_source()
 
     chat_list_css = styles.split(".wbc-chat-list {", 1)[1].split("}", 1)[0]
@@ -1071,7 +1047,6 @@ def test_workbench_chat_rails_use_hidden_scrollbars():
 
 
 def test_global_topbar_is_solid_and_conversation_header_panel_is_removed():
-    root = Path(__file__).resolve().parent.parent
     styles = workbench_style_source()
     chat = workbench_chat_source()
     topbar_css = styles.split(".workbench-topbar {", 1)[1].split("}", 1)[0]
@@ -1091,7 +1066,6 @@ def test_global_topbar_is_solid_and_conversation_header_panel_is_removed():
 
 
 def test_workbench_chat_rail_uses_the_shared_physical_card_and_fixed_header():
-    root = Path(__file__).resolve().parent.parent
     styles = workbench_style_source()
     source = workbench_chat_source()
 
@@ -1182,7 +1156,6 @@ def test_workbench_chat_rail_uses_the_shared_physical_card_and_fixed_header():
 
 
 def test_collapsed_right_sidebar_restore_control_lives_in_the_global_topbar():
-    root = Path(__file__).resolve().parent.parent
     chat = workbench_chat_source()
     source = workbench_shell_source()
     styles = workbench_style_source()
@@ -1202,7 +1175,6 @@ def test_collapsed_right_sidebar_restore_control_lives_in_the_global_topbar():
 
 
 def test_workbench_chat_sidebar_is_a_top_aligned_floating_accordion():
-    root = Path(__file__).resolve().parent.parent
     styles = workbench_style_source()
     source = workbench_chat_source()
 
@@ -1231,7 +1203,6 @@ def test_workbench_chat_sidebar_is_a_top_aligned_floating_accordion():
 
 
 def test_workbench_chat_primary_cards_share_an_opaque_dark_surface():
-    root = Path(__file__).resolve().parent.parent
     styles = workbench_style_source()
 
     page_css = styles.split(".wbc-page {", 1)[1].split("}", 1)[0]
@@ -1255,7 +1226,6 @@ def test_workbench_chat_primary_cards_share_an_opaque_dark_surface():
 
 
 def test_workbench_chat_sidebar_expanded_lists_share_a_responsive_content_system():
-    root = Path(__file__).resolve().parent.parent
     styles = workbench_style_source()
 
     trigger_css = styles.split(".wbc-side-accordion-trigger {", 1)[1].split("}", 1)[0]
@@ -1273,7 +1243,6 @@ def test_workbench_chat_sidebar_expanded_lists_share_a_responsive_content_system
 
 
 def test_workbench_chat_sidebar_tabs_use_panel_specific_svg_icons():
-    Path(__file__).resolve().parent.parent
     source = workbench_chat_source()
 
     icon_source = source.split("var WBC_SIDE_TAB_ICONS = {", 1)[1].split("\n};", 1)[0]
@@ -1287,7 +1256,6 @@ def test_workbench_chat_sidebar_tabs_use_panel_specific_svg_icons():
 
 
 def test_workbench_chat_single_card_uses_independent_hidden_gutter_resize_handles():
-    root = Path(__file__).resolve().parent.parent
     chat = workbench_chat_source()
     shell = workbench_shell_source()
     styles = workbench_style_source()
@@ -1353,7 +1321,6 @@ def test_workbench_chat_single_card_uses_independent_hidden_gutter_resize_handle
 
 
 def test_workbench_deleted_chat_closes_every_split_reference():
-    Path(__file__).resolve().parent.parent
     source = workbench_chat_source()
     close_deleted = frontend_module_source("features/chat/pane-layout-controller.jsx").split(
         "function wbcCloseDeletedChatSplits(context, chatId) {", 1
@@ -1373,7 +1340,6 @@ def test_workbench_deleted_chat_closes_every_split_reference():
 
 
 def test_workbench_pane_drag_ghost_preserves_current_viewport_and_handle_hotspot():
-    root = Path(__file__).resolve().parent.parent
     source = workbench_chat_source()
     pane_drag = frontend_module_source("features/chat/pane-card-drag-controller.jsx")
     styles = workbench_style_source()
@@ -1445,7 +1411,6 @@ def test_workbench_pane_drag_ghost_preserves_current_viewport_and_handle_hotspot
 
 
 def test_workbench_chat_sidebar_keeps_only_overview_and_context_unconditional():
-    Path(__file__).resolve().parent.parent
     source = workbench_chat_source()
 
     tabs = source.split("  var tabs = [", 1)[1].split("  var activeTab =", 1)[0]
@@ -1465,7 +1430,6 @@ def test_workbench_chat_sidebar_keeps_only_overview_and_context_unconditional():
 
 
 def test_workbench_clears_stale_side_questions_before_loading_another_chat():
-    Path(__file__).resolve().parent.parent
     source = workbench_chat_source()
 
     loading_effect = source.split("var cancelled = false;", 1)[1].split(
@@ -1475,7 +1439,6 @@ def test_workbench_clears_stale_side_questions_before_loading_another_chat():
 
 
 def test_workbench_side_question_panel_renders_only_the_question_list():
-    root = Path(__file__).resolve().parent.parent
     source = workbench_chat_source()
     styles = workbench_style_source()
 
@@ -1493,7 +1456,6 @@ def test_workbench_side_question_panel_renders_only_the_question_list():
 
 
 def test_rail_chat_drop_replaces_the_canonical_active_conversation_by_selection():
-    Path(__file__).resolve().parent.parent
     source = workbench_chat_source()
     helper = "function wbcStablePaneValue" + source.split(
         "function wbcStablePaneValue", 1
@@ -1529,7 +1491,6 @@ process.stdout.write(JSON.stringify([
 
 
 def test_vertical_conversation_split_elastically_reclaims_the_hidden_panel_track():
-    root = Path(__file__).resolve().parent.parent
     source = workbench_chat_source()
     styles = workbench_style_source()
     page_css = styles.split(".wbc-page {", 1)[1].split("}", 1)[0]
@@ -1555,7 +1516,6 @@ def test_vertical_conversation_split_elastically_reclaims_the_hidden_panel_track
 
 
 def test_pane_grip_drag_uses_rendered_position_key_for_drop_feedback():
-    Path(__file__).resolve().parent.parent
     source = workbench_chat_source()
     drag_controller = frontend_module_source("features/chat/pane-card-drag-controller.jsx")
 
@@ -1573,7 +1533,6 @@ def test_pane_grip_drag_uses_rendered_position_key_for_drop_feedback():
 
 
 def test_task_and_chat_side_drop_use_the_same_live_panel_geometry():
-    Path(__file__).resolve().parent.parent
     source = workbench_chat_source()
 
     helper = source.split("function wbcChatSideZoneRect()", 1)[1].split(
@@ -1592,7 +1551,6 @@ def test_task_and_chat_side_drop_use_the_same_live_panel_geometry():
 
 
 def test_workbench_two_level_card_panes_share_drag_resize_and_menu_contracts():
-    root = Path(__file__).resolve().parent.parent
     source = workbench_chat_source()
     styles = workbench_style_source()
     i18n = workbench_i18n_source()
@@ -1836,7 +1794,6 @@ process.stdout.write(JSON.stringify({{
 
 
 def test_workbench_side_question_opens_the_existing_conversation_ui_in_a_split():
-    Path(__file__).resolve().parent.parent
     source = workbench_chat_source()
     pane = source.split("function renderPaneCard", 1)[1].split(
         "function renderPaneColumn", 1
@@ -1852,7 +1809,6 @@ def test_workbench_side_question_opens_the_existing_conversation_ui_in_a_split()
 
 
 def test_each_conversation_split_grip_closes_its_own_conversation():
-    Path(__file__).resolve().parent.parent
     source = workbench_chat_source()
     pane = source.split("function renderPaneCard", 1)[1].split(
         "function renderPaneColumn", 1
@@ -1865,7 +1821,6 @@ def test_each_conversation_split_grip_closes_its_own_conversation():
 
 
 def test_floating_conversation_panel_resource_split_replaces_right_and_restores_previous_split():
-    Path(__file__).resolve().parent.parent
     source = workbench_chat_source()
     pane_controller = frontend_module_source("features/chat/pane-layout-controller.jsx")
     opener = pane_controller.split("function wbcOpenPaneContent", 1)[1].split(
@@ -1886,7 +1841,6 @@ def test_floating_conversation_panel_resource_split_replaces_right_and_restores_
 
 
 def test_workbench_message_viewer_action_opens_the_file_split_directly():
-    Path(__file__).resolve().parent.parent
     open_viewer = frontend_module_source("features/chat/page-resource-controller.jsx").split(
         "function wbcOpenViewer(context, file, preferredSide) {", 1
     )[1].split(
@@ -2344,7 +2298,6 @@ process.stdout.write(JSON.stringify([
 
 
 def test_workbench_split_grip_opens_a_centered_floating_conversation_panel():
-    root = Path(__file__).resolve().parent.parent
     source = workbench_chat_source()
     styles = workbench_style_source()
 
@@ -2411,7 +2364,6 @@ def test_workbench_split_grip_opens_a_centered_floating_conversation_panel():
 
 
 def _legacy_test_each_conversation_split_grip_closes_its_own_conversation():
-    root = Path(__file__).resolve().parent.parent
     source = workbench_chat_source()
     i18n = workbench_i18n_source()
 
@@ -2452,7 +2404,6 @@ def _legacy_test_each_conversation_split_grip_closes_its_own_conversation():
 
 
 def _legacy_test_floating_conversation_panel_resource_split_replaces_right_and_restores_previous_split():
-    root = Path(__file__).resolve().parent.parent
     source = workbench_chat_source()
     styles = workbench_style_source()
 
@@ -2612,7 +2563,6 @@ def _legacy_test_floating_conversation_panel_resource_split_replaces_right_and_r
 
 
 def test_workbench_artifacts_use_the_shared_resizable_split_preview():
-    root = Path(__file__).resolve().parent.parent
     source = workbench_chat_source()
     split_controller = frontend_module_source("features/chat/split-selection-controller.jsx")
     styles = workbench_style_source()
@@ -2651,7 +2601,6 @@ def test_workbench_artifacts_use_the_shared_resizable_split_preview():
 
 
 def test_workbench_viewer_split_grip_has_symmetric_vertical_spacing():
-    root = Path(__file__).resolve().parent.parent
     styles = workbench_style_source()
 
     pane_split = styles.split(
@@ -2675,7 +2624,6 @@ def test_workbench_viewer_split_grip_has_symmetric_vertical_spacing():
 
 
 def _legacy_test_workbench_message_viewer_action_opens_the_file_split_directly():
-    Path(__file__).resolve().parent.parent
     source = workbench_chat_source()
 
     open_viewer = source.split("  function openViewer(file) {", 1)[1].split(
@@ -2695,7 +2643,6 @@ def _legacy_test_workbench_message_viewer_action_opens_the_file_split_directly()
 
 
 def test_project_file_rows_drag_to_viewer_split_and_topbar_resource_shelf():
-    root = Path(__file__).resolve().parent.parent
     source = workbench_chat_source()
     styles = workbench_style_source()
 
@@ -2747,7 +2694,6 @@ def test_project_file_rows_drag_to_viewer_split_and_topbar_resource_shelf():
 
 
 def test_project_files_open_in_a_project_scoped_pane_without_an_active_chat():
-    root = Path(__file__).resolve().parent.parent
     source = workbench_chat_source()
     styles = workbench_style_source()
 
@@ -2841,7 +2787,6 @@ def test_project_text_files_use_codemirror_with_live_markdown_and_conflict_contr
 
 
 def test_workbench_changes_panel_is_list_only_and_opens_shared_diff_split():
-    root = Path(__file__).resolve().parent.parent
     source = workbench_chat_source()
     styles = workbench_style_source()
 
@@ -2920,7 +2865,6 @@ def test_workbench_resource_tabs_use_lists_and_shared_splits_while_branches_expa
 
 
 def test_workbench_chat_composer_uses_native_content_sizing_without_forced_layout():
-    root = Path(__file__).resolve().parent.parent
     source = workbench_chat_source()
     styles = workbench_style_source()
 
@@ -2948,7 +2892,6 @@ def test_workbench_chat_composer_uses_native_content_sizing_without_forced_layou
 
 
 def test_workbench_chat_composer_batches_draft_storage_and_reserve_height_updates():
-    Path(__file__).resolve().parent.parent
     source = workbench_chat_source()
 
     assert "var WBC_DRAFT_SAVE_DELAY_MS = 300;" in source
@@ -2961,7 +2904,6 @@ def test_workbench_chat_composer_batches_draft_storage_and_reserve_height_update
 
 
 def test_workbench_chat_composer_themes_share_one_optimized_glass_pipeline():
-    root = Path(__file__).resolve().parent.parent
     styles = workbench_style_source()
 
     shell = styles.split("\n.workbench-shell {", 1)[1].split("}", 1)[0]
@@ -3121,7 +3063,6 @@ def test_memory_detail_uses_shared_floating_card_and_animated_accordion():
 
 
 def test_memory_page_hides_all_scrollbars_without_disabling_scroll():
-    root = Path(__file__).resolve().parent.parent
     styles = workbench_style_source()
 
     scrollbar_scope = styles.split(
@@ -3141,7 +3082,6 @@ def test_memory_page_hides_all_scrollbars_without_disabling_scroll():
 
 
 def test_memory_first_card_clears_the_dark_glass_toolbar():
-    root = Path(__file__).resolve().parent.parent
     styles = workbench_style_source()
 
     memory_main = styles.split(".wb-mem-main {", 1)[1].split("}", 1)[0]
@@ -3217,7 +3157,6 @@ def test_library_workspace_tabs_are_integrated_into_the_floating_right_inspector
 
 
 def test_notification_items_navigate_to_their_precise_context():
-    root = Path(__file__).resolve().parent.parent
     source = workbench_shell_source()
     chat_source = workbench_chat_source()
     styles = workbench_style_source()
@@ -3237,7 +3176,6 @@ def test_notification_items_navigate_to_their_precise_context():
 
 
 def test_workbench_chat_interrupt_waits_for_server_and_uses_live_status_everywhere():
-    Path(__file__).resolve().parent.parent
     source = workbench_chat_source()
     runtime_hooks = frontend_module_source("features/chat/runtime-page-hooks.jsx")
 
@@ -3260,7 +3198,6 @@ def test_workbench_chat_interrupt_waits_for_server_and_uses_live_status_everywhe
 
 
 def test_workbench_chat_restores_project_cache_before_background_refresh():
-    Path(__file__).resolve().parent.parent
     source = workbench_chat_source()
 
     assert "function wbcChatCache()" in source
@@ -3271,7 +3208,6 @@ def test_workbench_chat_restores_project_cache_before_background_refresh():
 
 
 def test_remote_chat_change_projects_summary_without_refreshing_the_open_transcript():
-    Path(__file__).resolve().parent.parent
     source = workbench_chat_source()
     live_events = frontend_module_source("features/chat/live-event-controller.jsx")
 
@@ -3306,7 +3242,6 @@ def test_remote_chat_change_projects_summary_without_refreshing_the_open_transcr
 
 
 def test_remote_chat_refresh_and_notification_navigation_use_the_latest_project():
-    Path(__file__).resolve().parent.parent
     source = workbench_chat_source()
     live_events = frontend_module_source("features/chat/live-event-controller.jsx")
 
@@ -3335,7 +3270,6 @@ def test_remote_chat_refresh_and_notification_navigation_use_the_latest_project(
 
 
 def test_background_chat_completion_updates_detail_cache_before_runtime_is_cleared():
-    Path(__file__).resolve().parent.parent
     source = workbench_chat_source()
     hooks = frontend_module_source("features/chat/runtime-page-hooks.jsx")
 
@@ -3356,7 +3290,6 @@ def test_background_chat_completion_updates_detail_cache_before_runtime_is_clear
 
 
 def test_saved_assistant_messages_merge_reasoning_into_stale_background_chat():
-    Path(__file__).resolve().parent.parent
     source = workbench_chat_source()
     merge_source = "function wbcMergeChronologicalMessages(" + source.split(
         "function wbcMergeChronologicalMessages(", 1
@@ -3412,7 +3345,6 @@ process.stdout.write(JSON.stringify({{
 
 
 def test_workbench_chat_has_long_conversation_navigation_and_bottom_return():
-    root = Path(__file__).resolve().parent.parent
     source = workbench_chat_source()
     styles = workbench_style_source()
 
@@ -3453,7 +3385,6 @@ def test_workbench_chat_has_long_conversation_navigation_and_bottom_return():
 
 
 def test_maximized_browser_has_compact_agent_chat_with_transient_status():
-    root = Path(__file__).resolve().parent.parent
     source = workbench_chat_source()
     styles = workbench_style_source()
 
@@ -3862,7 +3793,6 @@ def test_workbench_hydration_cannot_remove_the_live_user_turn():
         "optimistic": True,
     }
 
-    Path(__file__).resolve().parent.parent
     source = workbench_chat_source()
     hooks = frontend_module_source("features/chat/runtime-page-hooks.jsx")
     selection_hydration = source.split(
@@ -4209,7 +4139,6 @@ def test_workbench_module_pages_are_kept_alive_without_hidden_file_drop():
 
 
 def test_workbench_task_controller_uses_current_session_from_returned_store():
-    root = Path(__file__).resolve().parent.parent
     source = workbench_shell_source()
     controller = source.split("function useTaskController", 1)[1].split("function TaskPlanList", 1)[0]
 
@@ -4350,7 +4279,6 @@ def test_workbench_chat_overview_i18n_has_zh_labels():
 
 
 def test_workbench_chat_supports_parallel_conversation_runtimes():
-    root = Path(__file__).resolve().parent.parent
     source = workbench_chat_source()
     i18n = workbench_i18n_source()
 
@@ -4499,7 +4427,6 @@ def test_workbench_chat_renders_new_user_turn_before_live_thinking_card():
 
 
 def test_workbench_chat_opens_bounded_browser_window_from_live_browser_events():
-    root = Path(__file__).resolve().parent.parent
     source = workbench_chat_source()
     live_events = frontend_module_source("features/chat/live-event-controller.jsx")
     styles = workbench_style_source()
@@ -4840,7 +4767,6 @@ def test_workbench_reload_restores_native_browser_after_beforeunload_guard():
 
 
 def _run_browser_avoidance_plan(*args):
-    Path(__file__).resolve().parent.parent
     source = workbench_chat_source()
     function_source = "function wbcBrowserAvoidancePlan" + source.split(
         "function wbcBrowserAvoidancePlan", 1
@@ -4857,7 +4783,6 @@ process.stdout.write(JSON.stringify(result));
 
 
 def _run_conversation_stick_sequence(steps):
-    Path(__file__).resolve().parent.parent
     source = workbench_chat_source()
     function_source = "function wbcShouldStickToConversationBottom" + source.split(
         "function wbcShouldStickToConversationBottom", 1
@@ -4911,7 +4836,6 @@ def test_browser_avoidance_plan_declines_centered_or_too_narrow_layouts():
 
 
 def test_workbench_chat_reflows_only_entries_intersecting_the_browser_pip():
-    root = Path(__file__).resolve().parent.parent
     source = workbench_chat_source()
     styles = workbench_style_source()
 
@@ -4956,7 +4880,6 @@ def test_workbench_chat_reflows_only_entries_intersecting_the_browser_pip():
 
 
 def test_active_browser_tab_uses_standard_text_color():
-    root = Path(__file__).resolve().parent.parent
     styles = workbench_style_source()
 
     active_tab_styles = styles.split("\n.browser-tab.active {", 1)[1].split("}", 1)[0]
@@ -4967,10 +4890,6 @@ def test_active_browser_tab_uses_standard_text_color():
 def test_electron_browser_video_fullscreen_is_platform_aware_and_shared_with_ui():
     root = Path(__file__).resolve().parent.parent
     main = (root / "electron" / "main.js").read_text(encoding="utf-8")
-    chat = workbench_chat_source()
-    split = (
-        root / "src" / "webui" / "frontend" / "features" / "chat" / "split-pane.jsx"
-    ).read_text(encoding="utf-8")
     browser_view = (root / "src" / "webui" / "frontend" / "shared" / "browser" / "viewport.jsx").read_text(encoding="utf-8")
     styles = workbench_style_source()
 
@@ -5040,7 +4959,6 @@ def test_electron_browser_tab_attaches_before_navigation_and_survives_media_load
 
 
 def test_workbench_browser_window_frame_stays_inside_chat_region():
-    Path(__file__).resolve().parent.parent
     source = workbench_chat_source()
     helper_source = "function wbcClampBrowserWindowFrame(" + source.split(
         "function wbcClampBrowserWindowFrame(", 1
@@ -5063,7 +4981,6 @@ process.stdout.write(JSON.stringify(result));
 
 
 def test_browser_window_docks_above_composer_without_changing_its_normal_frame():
-    Path(__file__).resolve().parent.parent
     source = workbench_chat_source()
     helper_source = "function wbcBrowserComposerDockFrame(" + source.split(
         "function wbcBrowserComposerDockFrame(", 1
@@ -5485,7 +5402,6 @@ def test_workbench_chat_llm_boundaries_separate_tool_only_groups():
 
 
 def test_workbench_chat_model_label_and_context_usage_use_live_data():
-    Path(__file__).resolve().parent.parent
     source = workbench_chat_source()
     composer = source.split("function WbcComposer(", 1)[1].split(
         "// Context picker popup", 1
@@ -5513,7 +5429,6 @@ def test_workbench_chat_model_label_and_context_usage_use_live_data():
 
 
 def test_workbench_chat_delete_detaches_local_fork_markers():
-    Path(__file__).resolve().parent.parent
     source = workbench_chat_source()
     handler = source.split("function handleDeleteChat(chatId)", 1)[1].split("function handleToTask", 1)[0]
 
@@ -5529,7 +5444,6 @@ def test_workbench_chat_delete_detaches_local_fork_markers():
 
 
 def test_workbench_chat_card_menu_can_rename_the_target_chat():
-    root = Path(__file__).resolve().parent.parent
     source = workbench_chat_source()
     styles = workbench_style_source()
     rail = source.split("function WbcRail(", 1)[1].split(
@@ -5561,7 +5475,6 @@ def test_workbench_chat_card_menu_can_rename_the_target_chat():
 
 
 def test_project_terminal_menu_is_above_the_outside_click_scrim():
-    root = Path(__file__).resolve().parent.parent
     source = workbench_chat_source()
     styles = workbench_style_source()
 
@@ -5647,7 +5560,6 @@ def test_project_terminal_cards_share_conversation_status_color_semantics():
 
 
 def test_workbench_chat_card_menu_can_pin_and_sort_conversations():
-    root = Path(__file__).resolve().parent.parent
     source = workbench_chat_source()
     shell = workbench_shell_source()
     rail = source.split("function WbcRail(", 1)[1].split(
@@ -5666,7 +5578,6 @@ def test_workbench_chat_card_menu_can_pin_and_sort_conversations():
 
 
 def test_workbench_chat_cards_reorder_and_open_when_dropped_on_conversation():
-    root = Path(__file__).resolve().parent.parent
     source = workbench_chat_source()
     styles = workbench_style_source()
     i18n = workbench_i18n_source()
@@ -5741,7 +5652,6 @@ def test_workbench_chat_cards_reorder_and_open_when_dropped_on_conversation():
 
 
 def test_workbench_chat_rename_dialog_uses_compact_vertical_spacing():
-    root = Path(__file__).resolve().parent.parent
     styles = workbench_style_source()
     body = styles.split(".wbc-rename-body {", 1)[1].split("}", 1)[0]
     foot = styles.rsplit(".wbc-rename-foot {", 1)[1].split("}", 1)[0]
@@ -5752,7 +5662,6 @@ def test_workbench_chat_rename_dialog_uses_compact_vertical_spacing():
 
 
 def test_workbench_branch_tree_uses_compact_git_history_layout():
-    root = Path(__file__).resolve().parent.parent
     source = workbench_chat_source()
     styles = workbench_style_source()
     branch = source.split("function WbcBranchTab", 1)[1].split(
@@ -5798,7 +5707,6 @@ def test_workbench_chat_switches_stop_to_guidance_while_running():
 
 
 def test_task_answer_resume_uses_interrupt_not_pause_and_suppresses_cancel_error():
-    root = Path(__file__).resolve().parent.parent
     source = workbench_shell_source()
     answer = source.split("answer: function (questionId, optionText)", 1)[1].split(
         "promoteToPlan: function", 1
@@ -5813,7 +5721,6 @@ def test_task_answer_resume_uses_interrupt_not_pause_and_suppresses_cancel_error
 
 
 def test_workbench_guidance_is_optimistic_and_completed_tools_do_not_spin():
-    Path(__file__).resolve().parent.parent
     source = workbench_chat_source()
     action_controller = frontend_module_source("features/chat/chat-action-controller.jsx")
     guidance_model = source.split("function sendGuidance", 1)[1].split(
@@ -5839,7 +5746,6 @@ def test_workbench_guidance_is_optimistic_and_completed_tools_do_not_spin():
 
 
 def test_workbench_tool_start_is_rendered_then_completed_in_place():
-    Path(__file__).resolve().parents[1]
     source = workbench_chat_source()
 
     runtime = source.split("function wbcRuntimeToolEvent(event, eventAt)", 1)[1].split(
@@ -5893,7 +5799,6 @@ def test_workbench_marks_run_finalizing_before_workspace_save():
 
 
 def test_workbench_assistant_footer_formats_persisted_processing_duration():
-    Path(__file__).resolve().parents[1]
     source = workbench_chat_source()
     helper = "function wbcFormatProcessingDuration(" + source.split(
         "function wbcFormatProcessingDuration(", 1
@@ -5940,7 +5845,6 @@ def test_workbench_terminal_reply_snapshot_is_authoritative_after_streamed_calls
 
 
 def test_workbench_pip_reflow_does_not_compete_with_scroll_anchor():
-    root = Path(__file__).resolve().parents[1]
     source = workbench_chat_source()
     styles = workbench_style_source()
     main = source.split("function WbcMain", 1)[1].split(
@@ -5958,7 +5862,6 @@ def test_workbench_pip_reflow_does_not_compete_with_scroll_anchor():
 
 
 def test_workbench_permission_prompt_renders_every_scoped_option():
-    root = Path(__file__).resolve().parents[1]
     source = workbench_chat_source()
     prompt = source.split("function WbcQuestionPrompt", 1)[1].split(
         "function WbcErrorNotice", 1
@@ -5984,7 +5887,6 @@ def test_workbench_permission_prompt_renders_every_scoped_option():
 
 
 def test_collapsed_chat_rail_maps_actionable_conversation_states():
-    root = Path(__file__).resolve().parents[1]
     source = workbench_chat_source()
     styles = workbench_style_source()
     i18n = workbench_i18n_source()
@@ -6092,7 +5994,6 @@ process.stdout.write(JSON.stringify(positioned));
 
 
 def test_collapsed_chat_rail_measures_expanded_row_centres_for_spatial_mapping():
-    root = Path(__file__).resolve().parents[1]
     source = workbench_chat_source()
     rail = source.split("function WbcRail(", 1)[1].split(
         "// Conversation main (column 3)", 1
@@ -6209,7 +6110,6 @@ def test_collapsed_chat_rail_measures_expanded_row_centres_for_spatial_mapping()
 
 
 def test_status_preview_answers_the_target_background_chat_without_opening_it():
-    Path(__file__).resolve().parents[1]
     source = workbench_chat_source()
     answer = frontend_module_source("features/chat/chat-action-controller.jsx")
     page_answer_bridge = source.split("function answerQuestionForChat", 1)[1].split(
@@ -6232,7 +6132,6 @@ def test_status_preview_answers_the_target_background_chat_without_opening_it():
 
 
 def test_agent_tab_hides_search_filter_and_header_install_button():
-    root = Path(__file__).resolve().parents[1]
     source = workbench_settings_source()
     panel = source.split("function ExtensionsPanel(", 1)[1].split(
         "function ShortcutsPanel(", 1
@@ -6245,7 +6144,6 @@ def test_agent_tab_hides_search_filter_and_header_install_button():
 
 
 def test_composer_model_flyout_lists_agent_row_before_model_row():
-    Path(__file__).resolve().parents[1]
     source = workbench_chat_source()
     root_panel = source.split('{modelPanel === "root" && (', 1)[1].split(
         '{modelPanel === "agents" && agentPickerEnabled && (', 1
@@ -6260,7 +6158,6 @@ def test_composer_model_flyout_lists_agent_row_before_model_row():
 
 
 def test_permission_buttons_submit_original_option_id():
-    Path(__file__).resolve().parents[1]
     source = workbench_chat_source()
     option_value = source.split("function wbcQuestionOptionValue(", 1)[1].split(
         "function wbcIsLiveAgentRequest", 1
@@ -6299,7 +6196,6 @@ def test_quick_chat_inherits_agent_binding_without_picker():
 
 
 def test_event_id_dedupe_is_bounded():
-    Path(__file__).resolve().parents[1]
     source = workbench_chat_source()
     stream = source.split("function consumeEventStream(", 1)[1].split(
         "function sendMessage(chatId, input, handlers, signal)", 1
@@ -6314,7 +6210,6 @@ def test_event_id_dedupe_is_bounded():
 
 
 def test_workbench_split_chat_renders_and_answers_pending_question():
-    Path(__file__).resolve().parents[1]
     source = workbench_chat_source()
     split_chat = source.split("function WbcChatSplit({", 1)[1].split(
         "function WbcSideAgentSplitResizer", 1
@@ -6411,7 +6306,6 @@ def test_agent_terminal_control_reuses_surface_glint_and_visible_terminal_is_una
 
 
 def test_workbench_context_tab_has_live_session_inbox_card():
-    root = Path(__file__).resolve().parents[1]
     source = workbench_chat_source()
     css = workbench_style_source()
     context_tab = source.split("function WbcContextTab", 1)[1].split(
@@ -6682,7 +6576,6 @@ def test_project_plugin_toggle_controls_tool_contributions_and_tools_label():
 
 
 def test_workbench_inbox_cleanup_aborts_and_ignores_a_late_response():
-    Path(__file__).resolve().parents[1]
     source = workbench_chat_source()
     hook_source = source.split("var WBC_INBOX_CACHE_LIMIT", 1)[1].split(
         "function wbcInboxStatus", 1
@@ -6735,7 +6628,6 @@ setTimeout(function () {{
 
 
 def test_workbench_chat_does_not_render_previous_transcript_during_switch():
-    Path(__file__).resolve().parent.parent
     source = workbench_chat_source()
     load_effect = source.split("// Load the full transcript when the selection changes.", 1)[1].split(
         "// Viewer / content tabs belong to one conversation", 1
@@ -6756,7 +6648,6 @@ def test_workbench_chat_does_not_render_previous_transcript_during_switch():
 
 
 def test_workbench_chat_loading_keeps_lightweight_overview_visible():
-    root = Path(__file__).resolve().parent.parent
     source = workbench_chat_source()
     i18n = workbench_i18n_source()
 
@@ -6770,7 +6661,6 @@ def test_workbench_chat_loading_keeps_lightweight_overview_visible():
 
 
 def test_workbench_chat_loading_is_centered_in_the_rail():
-    root = Path(__file__).resolve().parent.parent
     source = workbench_chat_source()
     styles = workbench_style_source()
 
@@ -6785,7 +6675,6 @@ def test_workbench_chat_loading_is_centered_in_the_rail():
 
 
 def test_every_workspace_sidebar_card_can_swipe_between_module_tabs():
-    root = Path(__file__).resolve().parent.parent
     source = workbench_shell_source()
     navigation = frontend_module_source("features/shell/navigation-controller.jsx")
 
@@ -6804,8 +6693,6 @@ def test_every_workspace_sidebar_card_can_swipe_between_module_tabs():
 
 
 def test_collapsed_workspace_headers_center_their_expand_button_and_hide_task_empty_state():
-    root = Path(__file__).resolve().parent.parent
-    source = workbench_chat_source()
     styles = workbench_style_source()
 
     collapsed_head_css = styles.split(
@@ -6827,7 +6714,6 @@ def test_collapsed_workspace_headers_center_their_expand_button_and_hide_task_em
 
 
 def test_active_task_rail_and_board_use_their_current_menu_dismissal_surfaces():
-    root = Path(__file__).resolve().parent.parent
     source = workbench_shell_source()
     chat = workbench_chat_source()
 
@@ -6845,7 +6731,6 @@ def test_active_task_rail_and_board_use_their_current_menu_dismissal_surfaces():
 
 
 def test_board_new_button_opens_chat_or_task_creation_menu():
-    root = Path(__file__).resolve().parent.parent
     source = workbench_shell_source()
     styles = workbench_style_source()
     task_board = source.split("function TaskBoard(", 1)[1].split(
@@ -6864,7 +6749,6 @@ def test_board_new_button_opens_chat_or_task_creation_menu():
 
 
 def test_board_search_filters_conversations_and_tasks():
-    root = Path(__file__).resolve().parent.parent
     source = workbench_shell_source()
     styles = workbench_style_source()
     translations = workbench_i18n_source()
@@ -6890,7 +6774,6 @@ def test_board_search_filters_conversations_and_tasks():
 
 
 def test_board_chat_cards_share_task_card_background():
-    root = Path(__file__).resolve().parent.parent
     styles = workbench_style_source()
 
     board_card_css = styles.split(".wb-board-card {", 1)[1].split("}", 1)[0]
@@ -6899,7 +6782,6 @@ def test_board_chat_cards_share_task_card_background():
 
 
 def test_board_cards_use_a_consistent_compact_height():
-    root = Path(__file__).resolve().parent.parent
     styles = workbench_style_source()
 
     board_card_css = styles.split(".wb-board-card {", 1)[1].split("}", 1)[0]
@@ -6915,7 +6797,6 @@ def test_board_cards_use_a_consistent_compact_height():
 
 
 def test_task_rail_menu_reuses_chat_pin_and_rename_actions():
-    root = Path(__file__).resolve().parent.parent
     chat = workbench_chat_source()
     workbench = workbench_shell_source()
     translations = workbench_i18n_source()
@@ -6944,7 +6825,6 @@ def test_task_rail_menu_reuses_chat_pin_and_rename_actions():
 
 
 def test_expanded_task_detail_rail_uses_its_own_lane_and_hides_scrollbar():
-    root = Path(__file__).resolve().parent.parent
     styles = workbench_style_source()
 
     detail_grid_css = styles.split(
@@ -7031,7 +6911,6 @@ def test_non_chat_floating_cards_share_the_chat_topbar_baseline():
 
 
 def test_task_and_chat_empty_rail_states_center_vertically():
-    root = Path(__file__).resolve().parent.parent
     styles = workbench_style_source()
     chat_source = workbench_chat_source()
 
@@ -7340,7 +7219,6 @@ def test_workbench_keeps_one_persistent_module_dock_across_workspace_switches():
 
 
 def test_chat_rail_show_all_expands_recent_items_without_removed_filter_state():
-    Path(__file__).resolve().parent.parent
     source = workbench_chat_source()
 
     assert 'var [showAllRecent, setShowAllRecent] = useWbcState(false);' in source
@@ -7350,7 +7228,6 @@ def test_chat_rail_show_all_expands_recent_items_without_removed_filter_state():
 
 
 def test_active_module_dock_item_is_not_a_toggle_back_to_board_or_work():
-    root = Path(__file__).resolve().parent.parent
     source = frontend_module_source("features/shell/navigation-controller.jsx")
 
     handler = source.split("function openPage(page) {", 1)[1].split(
@@ -7366,7 +7243,6 @@ def test_active_module_dock_item_is_not_a_toggle_back_to_board_or_work():
 
 
 def test_primary_workspace_pages_replay_the_conversation_style_enter_motion():
-    root = Path(__file__).resolve().parent.parent
     source = workbench_shell_source()
     styles = workbench_style_source()
 
@@ -7422,7 +7298,6 @@ def test_knowledge_sidebar_is_persistent_at_compact_desktop_widths():
 
 
 def test_workbench_chat_plan_confirmation_can_continue_in_auto_mode():
-    root = Path(__file__).resolve().parent.parent
     source = workbench_chat_source()
     i18n = workbench_i18n_source()
 
@@ -7439,7 +7314,6 @@ def test_workbench_chat_plan_confirmation_can_continue_in_auto_mode():
 
 
 def test_workbench_permission_mode_is_preserved_across_secondary_entry_points():
-    Path(__file__).resolve().parent.parent
     source = workbench_chat_source()
 
     assert 'mode: input.mode || "default"' in source
@@ -7453,7 +7327,6 @@ def test_workbench_permission_mode_is_preserved_across_secondary_entry_points():
 
 
 def test_workbench_surfaces_permission_reviews_and_describes_auto_accurately():
-    root = Path(__file__).resolve().parent.parent
     source = workbench_chat_source()
     i18n = workbench_i18n_source()
 
@@ -7464,7 +7337,6 @@ def test_workbench_surfaces_permission_reviews_and_describes_auto_accurately():
 
 
 def test_workbench_attachment_preview_falls_back_without_overflowing():
-    root = Path(__file__).resolve().parent.parent
     source = workbench_chat_source()
     styles = workbench_style_source()
 
@@ -7534,7 +7406,6 @@ def test_workbench_attachment_preview_falls_back_without_overflowing():
 
 
 def test_workbench_agent_images_render_inline_with_viewer_and_file_actions():
-    Path(__file__).resolve().parent.parent
     source = workbench_chat_source()
 
     agent_files = source.split("function WbcAgentFiles(", 1)[1].split(
@@ -7546,7 +7417,6 @@ def test_workbench_agent_images_render_inline_with_viewer_and_file_actions():
 
 
 def test_workbench_execution_card_uses_collapsible_activity_summary():
-    root = Path(__file__).resolve().parent.parent
     source = workbench_chat_source()
     styles = workbench_style_source()
 
@@ -7652,7 +7522,6 @@ def test_workbench_execution_card_uses_collapsible_activity_summary():
 
 
 def test_workbench_trace_summary_adds_a_verb_before_named_application_tools():
-    Path(__file__).resolve().parent.parent
     source = workbench_chat_source()
     helpers = "function wbcTraceNormalizeName(" + source.split(
         "function wbcTraceNormalizeName(", 1
@@ -7693,7 +7562,6 @@ process.stdout.write(summary.label);
 
 
 def test_workbench_trace_timeline_removes_blank_lines_and_interleaves_tools():
-    Path(__file__).resolve().parent.parent
     source = workbench_chat_source()
     timeline_source = "function wbcNormalizeReasoningText(" + source.split(
         "function wbcNormalizeReasoningText(", 1
@@ -7724,7 +7592,6 @@ process.stdout.write(JSON.stringify(result));
 
 
 def test_workbench_chat_splits_live_tools_around_intermediate_messages():
-    Path(__file__).resolve().parent.parent
     source = workbench_chat_source()
     append_block = source.split("function appendIntermediate(chatId, message)", 1)[1].split(
         "function streamHandlers(chatId)", 1
@@ -7745,7 +7612,6 @@ def test_workbench_chat_splits_live_tools_around_intermediate_messages():
 
 
 def test_workbench_chat_retry_clears_model_output_before_start_and_reconciles_terminal_event():
-    root = Path(__file__).resolve().parent.parent
     source = workbench_chat_source()
     action_controller = frontend_module_source("features/chat/chat-action-controller.jsx")
     runtime_hooks = frontend_module_source("features/chat/runtime-page-hooks.jsx")
@@ -7805,7 +7671,6 @@ def test_workbench_chat_retry_clears_model_output_before_start_and_reconciles_te
 
 
 def test_workbench_chat_error_retry_replays_failed_message_instead_of_reloading():
-    Path(__file__).resolve().parent.parent
     source = workbench_chat_source()
 
     runtime_error = frontend_module_source("features/chat/runtime-page-hooks.jsx").split(
@@ -7822,7 +7687,6 @@ def test_workbench_chat_error_retry_replays_failed_message_instead_of_reloading(
 
 
 def test_workbench_chat_waits_for_terminal_failure_and_retains_it_until_retry():
-    Path(__file__).resolve().parent.parent
     source = workbench_chat_source()
 
     stream_failure = source.split("function failRun(chatId, err) {", 1)[1].split(
@@ -7891,7 +7755,6 @@ def test_workbench_uses_the_library_as_the_only_knowledge_page():
 
 
 def test_workbench_chat_plan_tab_uses_durable_plan_and_live_step_events():
-    Path(__file__).resolve().parent.parent
     source = workbench_chat_source()
     live_events = frontend_module_source("features/chat/live-event-controller.jsx")
 
@@ -7903,7 +7766,6 @@ def test_workbench_chat_plan_tab_uses_durable_plan_and_live_step_events():
 
 
 def test_workbench_chat_tool_trace_preserves_i18n_metadata():
-    root = Path(__file__).resolve().parent.parent
     chat = workbench_chat_source()
     i18n = workbench_i18n_source()
 
@@ -7933,7 +7795,6 @@ def test_workbench_chat_tool_trace_preserves_i18n_metadata():
 
 
 def test_workbench_live_trace_keeps_each_llm_activity_independent():
-    root = Path(__file__).resolve().parent.parent
     chat = workbench_chat_source()
     css = workbench_style_source()
     assert 'type === "reasoning_start" && handlers.onReasoningStart' in chat
@@ -8011,7 +7872,6 @@ def test_workbench_live_trace_keeps_each_llm_activity_independent():
 
 
 def test_workbench_groups_three_or_more_consecutive_activity_messages():
-    Path(__file__).resolve().parent.parent
     source = workbench_chat_source()
     grouping_source = "var WBC_ACTIVITY_GROUP_MIN_ITEMS" + source.split(
         "var WBC_ACTIVITY_GROUP_MIN_ITEMS", 1
@@ -8080,7 +7940,6 @@ process.stdout.write(JSON.stringify({{
 
 
 def test_workbench_activity_group_has_live_and_completed_disclosure_states():
-    root = Path(__file__).resolve().parent.parent
     chat = workbench_chat_source()
     css = workbench_style_source()
     i18n = workbench_i18n_source()
@@ -8115,7 +7974,6 @@ def test_workbench_activity_group_has_live_and_completed_disclosure_states():
 
 
 def test_codex_reasoning_effort_updates_the_primary_candidate_without_stale_state():
-    root = Path(__file__).resolve().parent.parent
     settings = workbench_settings_source()
 
     assert "setCodexCandidate(normalizeModel({" in settings
@@ -8125,7 +7983,6 @@ def test_codex_reasoning_effort_updates_the_primary_candidate_without_stale_stat
 
 
 def test_workbench_deepseek_reasoning_effort_matches_provider_capabilities():
-    root = Path(__file__).resolve().parent.parent
     chat = workbench_chat_source()
     styles = workbench_style_source()
 
@@ -8147,7 +8004,6 @@ def test_workbench_deepseek_reasoning_effort_matches_provider_capabilities():
 
 
 def test_workbench_chat_context_and_browser_trace_have_dynamic_i18n_labels():
-    root = Path(__file__).resolve().parent.parent
     chat = workbench_chat_source()
     i18n = workbench_i18n_source()
 
@@ -8177,7 +8033,6 @@ def test_progressive_capability_ids_resolve_to_existing_tool_name_i18n():
     from cyrene.tooling.native_definitions import get_native_tool_defs
     from cyrene.tooling.packs import CAPABILITY_BINDINGS
 
-    root = Path(__file__).resolve().parent.parent
     i18n = workbench_i18n_source()
 
     # Runtime traces intentionally publish model-facing IDs such as
@@ -8260,7 +8115,6 @@ def test_profile_top_tools_use_shared_tool_name_i18n():
 
 
 def test_settings_storage_keeps_last_snapshot_across_tab_remounts():
-    root = Path(__file__).resolve().parent.parent
     overlay = workbench_settings_source()
     storage = overlay.split("var DATA_PANEL_STORAGE_TTL_MS", 1)[1].split(
         "function resetData()", 1
@@ -8290,7 +8144,6 @@ def test_settings_storage_keeps_last_snapshot_across_tab_remounts():
 
 
 def test_session_export_uses_balanced_responsive_action_layout():
-    root = Path(__file__).resolve().parent.parent
     overlay = workbench_settings_source()
     styles = workbench_style_source()
     i18n = workbench_i18n_source()
@@ -8310,7 +8163,6 @@ def test_session_export_uses_balanced_responsive_action_layout():
 
 
 def test_session_export_button_has_distinct_enabled_and_disabled_states():
-    root = Path(__file__).resolve().parent.parent
     overlay = workbench_settings_source()
     styles = workbench_style_source()
     session_export = overlay.split("// Session export", 1)[1].split(
@@ -8407,7 +8259,6 @@ def test_workbench_phase_events_publish_translation_keys():
 
 
 def test_workbench_chat_last_user_message_has_retry_action():
-    root = Path(__file__).resolve().parent.parent
     source = workbench_chat_source()
     i18n = workbench_i18n_source()
 
@@ -8433,7 +8284,6 @@ def test_workbench_chat_last_user_message_has_retry_action():
 
 
 def test_workbench_chat_uses_explicit_run_reconnect_without_resubmitting_message():
-    Path(__file__).resolve().parent.parent
     source = workbench_chat_source()
 
     assert 'function reconnectRun(chatId, handlers, signal, cursor)' in source
@@ -8802,7 +8652,6 @@ def test_workbench_collapsed_rail_keeps_labels_horizontal_during_expansion():
 
 
 def test_workbench_collapsed_rail_icons_stay_left_anchored_while_closing():
-    root = Path(__file__).resolve().parent.parent
     styles = workbench_style_source()
 
     collapsed_prefix = (
@@ -8826,7 +8675,6 @@ def test_workbench_collapsed_rail_icons_stay_left_anchored_while_closing():
 
 
 def test_workbench_narrow_window_forces_project_rail_into_stable_icon_strip():
-    root = Path(__file__).resolve().parent.parent
     styles = workbench_style_source()
 
     title_rule = styles.split("\n.wb-rail-title {", 1)[1].split("}", 1)[0]
@@ -8910,7 +8758,6 @@ def test_topbar_theme_toggle_persists_to_the_appearance_namespace():
 
 
 def test_split_opening_keeps_elastic_motion_off_layout_sizing():
-    root = Path(__file__).resolve().parent.parent
     styles = workbench_style_source()
 
     pane_layout = styles.split("\n.wbc-pane-layout {", 1)[1].split("}", 1)[0]
@@ -9204,7 +9051,6 @@ def test_electron_browser_panel_does_not_restore_closed_tabs_from_stale_state():
 
 
 def test_workbench_chat_directory_picker_falls_back_on_macos_and_lists_default_workspace():
-    root = Path(__file__).resolve().parent.parent
     chat = workbench_chat_source()
     i18n = workbench_i18n_source()
 
@@ -9218,7 +9064,6 @@ def test_workbench_chat_directory_picker_falls_back_on_macos_and_lists_default_w
 
 
 def test_workbench_chat_workspace_chip_follows_project_until_user_overrides_it():
-    Path(__file__).resolve().parent.parent
     chat = workbench_chat_source()
 
     # Both POSIX and Windows workspace paths render only their final directory
@@ -9326,7 +9171,6 @@ def test_workbench_follow_up_uses_context_endpoint_without_native_prompt():
 
 
 def test_workbench_regenerate_plan_failure_preserves_current_plan():
-    root = Path(__file__).resolve().parent.parent
     source = workbench_shell_source()
     regenerate_block = source.split("regeneratePlan: function ()", 1)[1].split("approvePlan: function ()", 1)[0]
 
@@ -9481,7 +9325,6 @@ def test_workbench_chat_subagent_page_is_independent_and_localized():
 
 
 def test_workbench_chat_quick_actions_include_manual_context_compaction():
-    Path(__file__).resolve().parent.parent
     source = workbench_chat_source()
 
     assert 'function compactChat(chatId)' in source
@@ -9517,7 +9360,6 @@ def test_workbench_chat_quick_actions_include_manual_context_compaction():
 
 
 def test_workbench_chat_exposes_browser_live_view_and_takeover():
-    Path(__file__).resolve().parent.parent
     source = workbench_chat_source()
     live_events = frontend_module_source("features/chat/live-event-controller.jsx")
 
@@ -9544,7 +9386,6 @@ def test_workbench_chat_exposes_browser_live_view_and_takeover():
 
 
 def test_warning_toast_has_no_colored_left_accent():
-    root = Path(__file__).resolve().parent.parent
     css = workbench_style_source()
 
     assert ".workbench-toast.is-warning { border-left: 1px solid var(--wb-line); }" in css
@@ -9552,7 +9393,6 @@ def test_warning_toast_has_no_colored_left_accent():
 
 
 def test_agent_error_notice_keeps_its_content_inside_a_uniform_border():
-    root = Path(__file__).resolve().parent.parent
     css = workbench_style_source()
 
     error_card_css = css.split(".wbc-error-card {", 1)[1].split("}", 1)[0]
@@ -9676,7 +9516,6 @@ def test_workbench_shortcuts_module_exposes_actions_and_platform_aware_mod():
 
 
 def test_workbench_shortcut_labels_use_tab_terminology_in_both_locales():
-    root = Path(__file__).resolve().parent.parent
     translations = workbench_i18n_source()
 
     for expected in (
@@ -9768,7 +9607,6 @@ def test_workbench_shortcuts_capture_event_converts_ctrl_to_mod_on_windows():
 
 
 def test_workbench_task_composer_uses_enter_to_send_via_shortcut_module():
-    root = Path(__file__).resolve().parent.parent
     source = workbench_shell_source()
 
     # The old Cmd/Ctrl+Enter to send behavior is replaced by the shortcut module
@@ -9803,7 +9641,6 @@ def test_workbench_task_composer_includes_model_and_reasoning_picker():
 
 
 def test_settings_models_use_the_shared_settings_typography():
-    root = Path(__file__).resolve().parent.parent
     styles = workbench_style_source()
 
     typography = styles.split(
@@ -9816,7 +9653,6 @@ def test_settings_models_use_the_shared_settings_typography():
 
 
 def test_workbench_task_composer_reuses_chat_voice_input_flow():
-    root = Path(__file__).resolve().parent.parent
     workbench = workbench_shell_source()
     chat = workbench_chat_source()
 
@@ -9833,7 +9669,6 @@ def test_workbench_task_composer_reuses_chat_voice_input_flow():
 
 
 def test_workbench_task_composer_matches_chat_floating_card_material():
-    root = Path(__file__).resolve().parent.parent
     source = workbench_shell_source()
     styles = workbench_style_source()
 
@@ -9915,7 +9750,6 @@ def test_workbench_task_composer_matches_chat_floating_card_material():
 
 
 def test_workbench_task_detail_max_height_aligns_with_main_card_bottom():
-    root = Path(__file__).resolve().parent.parent
     styles = workbench_style_source()
 
     detail_shell = styles.split(
@@ -9949,7 +9783,6 @@ def test_project_memory_failed_status_shows_attempt_details():
 
 
 def test_composer_disclaimer_is_not_rendered_or_styled():
-    root = Path(__file__).resolve().parent.parent
     styles = workbench_style_source()
 
     chat = workbench_chat_source()
@@ -9961,7 +9794,6 @@ def test_composer_disclaimer_is_not_rendered_or_styled():
 
 
 def test_pending_question_disables_chat_and_task_composers():
-    root = Path(__file__).resolve().parent.parent
     chat = workbench_chat_source()
     workbench = workbench_shell_source()
     chat_composer = chat.split("function WbcComposer(", 1)[1].split(
@@ -9989,7 +9821,6 @@ def test_pending_question_disables_chat_and_task_composers():
 
 
 def test_workbench_model_picker_compacts_without_overlapping_send_button():
-    root = Path(__file__).resolve().parent.parent
     styles = workbench_style_source()
 
     composer_rule = styles.split(".wbc-composer-box {", 1)[1].split("}", 1)[0]
@@ -10048,7 +9879,6 @@ def test_workbench_file_drop_routes_files_to_task_chat_and_knowledge():
 
 
 def test_workbench_file_drop_hook_prevents_navigation_and_delivers_files():
-    root = Path(__file__).resolve().parent.parent
     source = workbench_shell_source()
     hook_source = "function useWorkbenchFileDrop" + source.split(
         "function useWorkbenchFileDrop", 1
@@ -10140,7 +9970,6 @@ def test_workbench_settings_page_has_shortcuts_tab_and_no_legacy_overlay_mode():
 
 
 def test_workbench_about_hero_owns_update_action_and_download_progress():
-    root = Path(__file__).resolve().parent.parent
     source = workbench_settings_source()
     styles = workbench_style_source()
 
@@ -10173,7 +10002,6 @@ def test_workbench_about_hero_owns_update_action_and_download_progress():
 
 
 def test_extension_center_uses_fixed_settings_geometry_and_localized_catalog_copy():
-    root = Path(__file__).resolve().parent.parent
     source = workbench_settings_source()
     translations = workbench_i18n_source()
     styles = workbench_style_source()
@@ -10225,7 +10053,6 @@ def test_extension_center_uses_fixed_settings_geometry_and_localized_catalog_cop
 
 
 def test_remote_settings_keeps_compatibility_on_and_persists_package_checkboxes():
-    root = Path(__file__).resolve().parent.parent
     source = workbench_settings_source()
     i18n = workbench_i18n_source()
     styles = workbench_style_source()
@@ -10324,7 +10151,6 @@ def test_remote_settings_keeps_compatibility_on_and_persists_package_checkboxes(
 
 
 def test_workbench_about_panel_reads_app_version_from_registered_data_store():
-    root = Path(__file__).resolve().parent.parent
     source = workbench_settings_source()
 
     update_section = source.split("function UpdateSection({ t, config }) {", 1)[1].split(
@@ -10336,7 +10162,6 @@ def test_workbench_about_panel_reads_app_version_from_registered_data_store():
 
 
 def test_workbench_settings_dynamic_lists_have_stable_react_keys():
-    root = Path(__file__).resolve().parent.parent
     source = workbench_settings_source()
 
     shortcuts_panel = source.split("function ShortcutsPanel(p) {", 1)[1].split(
@@ -10352,7 +10177,6 @@ def test_workbench_settings_dynamic_lists_have_stable_react_keys():
 
 
 def test_workbench_help_center_lists_shortcuts_from_module_with_customize_link():
-    root = Path(__file__).resolve().parent.parent
     source = workbench_shell_source()
 
     # Help center reads the binding list from the registered shortcuts service instead of
@@ -10411,7 +10235,6 @@ def test_workbench_memory_combines_overview_into_source_card():
 
 
 def test_workbench_memory_detail_wraps_long_content_without_horizontal_overflow():
-    root = Path(__file__).resolve().parent.parent
     css = workbench_style_source()
 
     detail_block = css.split("\n.wb-mem-detail {", 1)[1].split("}", 1)[0]
@@ -10430,7 +10253,6 @@ def test_workbench_memory_detail_wraps_long_content_without_horizontal_overflow(
 
 
 def test_workbench_schedule_timeline_items_do_not_use_left_accent_bar():
-    root = Path(__file__).resolve().parent.parent
     css = workbench_style_source()
 
     block = css.split("\n.wb-sched-block {", 1)[1].split("}", 1)[0]
@@ -10440,7 +10262,6 @@ def test_workbench_schedule_timeline_items_do_not_use_left_accent_bar():
 
 
 def test_workbench_memory_list_contains_long_content_and_uses_neutral_selection():
-    root = Path(__file__).resolve().parent.parent
     css = workbench_style_source()
 
     scroll_block = css.split("\n.wb-mem-scroll {", 1)[1].split("}", 1)[0]
@@ -10564,7 +10385,6 @@ def test_workbench_skill_candidates_open_complete_keyboard_accessible_details():
 
 
 def test_workbench_skill_learning_keeps_right_inspector_on_compact_widths():
-    root = Path(__file__).resolve().parent.parent
     css = workbench_style_source()
 
     learning_responsive = css.split("@media (min-width: 761px) and (max-width: 980px)", 1)[1]
@@ -10621,7 +10441,6 @@ def test_workbench_behavior_analysis_stays_compact_in_narrow_inspector():
 def test_workbench_skill_learning_i18n_covers_visible_labels_and_tool_parameters():
     root = Path(__file__).resolve().parent.parent
     source = (root / "src" / "webui" / "frontend" / "workbench-memory.jsx").read_text(encoding="utf-8")
-    i18n = workbench_i18n_source()
     en_catalog = frontend_module_source("shared/i18n/catalog-en.jsx")
     zh_catalog = frontend_module_source("shared/i18n/catalog-zh.jsx")
 
@@ -11025,7 +10844,6 @@ def test_packaged_electron_preserves_explicit_runtime_path_overrides():
 
 
 def test_workbench_composers_upload_files_pasted_from_clipboard():
-    root = Path(__file__).resolve().parent.parent
     chat = "\n".join((
         frontend_module_source("features/chat/composer-attachments.jsx"),
         frontend_module_source("features/chat/composer.jsx"),
@@ -11060,7 +10878,6 @@ def test_settings_codex_quota_uses_the_shared_duration_parser():
 
 
 def test_external_agent_probe_and_install_help_are_actionable():
-    root = Path(__file__).resolve().parent.parent
     settings = workbench_settings_source()
     i18n = workbench_i18n_source()
 
@@ -11076,7 +10893,6 @@ def test_external_agent_probe_and_install_help_are_actionable():
 
 
 def test_agent_picker_rebinds_empty_chat_and_confirms_new_nonempty_chat():
-    root = Path(__file__).resolve().parent.parent
     source = workbench_chat_source()
     styles = workbench_style_source()
 
@@ -11098,7 +10914,6 @@ def test_agent_picker_rebinds_empty_chat_and_confirms_new_nonempty_chat():
 
 
 def test_agent_owned_model_picker_uses_acp_config_options():
-    root = Path(__file__).resolve().parent.parent
     source = workbench_chat_source()
     i18n = workbench_i18n_source()
 
@@ -11139,7 +10954,6 @@ def test_agent_diagnostics_note_is_localized_from_a_stable_code():
 
 
 def test_agent_settings_show_composer_usability_and_localized_reasons():
-    root = Path(__file__).resolve().parent.parent
     settings = workbench_settings_source()
     i18n = workbench_i18n_source()
 
@@ -11153,7 +10967,6 @@ def test_agent_settings_show_composer_usability_and_localized_reasons():
 
 
 def test_agent_network_errors_render_full_actionable_details():
-    root = Path(__file__).resolve().parent.parent
     source = workbench_chat_source()
     styles = workbench_style_source()
     i18n = workbench_i18n_source()
@@ -11169,7 +10982,6 @@ def test_agent_network_errors_render_full_actionable_details():
 
 
 def test_phase1_stream_is_rendered_as_a_distinct_execution_card():
-    root = Path(__file__).resolve().parent.parent
     source = workbench_chat_source()
     styles = workbench_style_source()
     translations = workbench_i18n_source()
@@ -11715,7 +11527,6 @@ def test_workbench_button_model_mode_forwards_to_runtime_endpoint():
 
 
 def test_unsupported_file_viewer_uses_centered_accessible_empty_state():
-    root = Path(__file__).resolve().parent.parent
     chat = workbench_chat_source()
     styles = workbench_style_source()
     i18n = workbench_i18n_source()
@@ -11733,7 +11544,6 @@ def test_unsupported_file_viewer_uses_centered_accessible_empty_state():
 
 
 def test_settings_controls_share_memory_floating_material():
-    root = Path(__file__).resolve().parent.parent
     styles = workbench_style_source()
     source = workbench_settings_source()
 
@@ -11764,7 +11574,6 @@ def test_settings_controls_share_memory_floating_material():
 
 
 def test_task_board_scroll_canvas_reaches_behind_floating_rail_gutter():
-    root = Path(__file__).resolve().parent.parent
     source = workbench_shell_source()
     styles = workbench_style_source()
 
@@ -11794,7 +11603,6 @@ def test_task_board_scroll_canvas_reaches_behind_floating_rail_gutter():
 
 
 def test_conversation_status_preview_controls_share_floating_material():
-    root = Path(__file__).resolve().parent.parent
     styles = workbench_style_source()
 
     option_rule = styles.split(

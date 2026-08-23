@@ -1986,7 +1986,6 @@ def test_subagent_monitoring_has_no_fixed_two_second_completion_sleep():
 
 
 def test_workbench_has_localized_model_fallback_progress_message():
-    from pathlib import Path
 
     source = workbench_i18n_source()
     assert '"phase.modelFallback": "Primary model unavailable' in source
@@ -1994,7 +1993,6 @@ def test_workbench_has_localized_model_fallback_progress_message():
 
 
 def test_workbench_has_actionable_codex_failure_alerts():
-    from pathlib import Path
 
     i18n = workbench_i18n_source()
     chat = workbench_chat_source()
