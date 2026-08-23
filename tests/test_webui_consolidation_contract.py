@@ -23,11 +23,11 @@ WEBUI_ROOT = ROOT / "src" / "webui"
 WORKBENCH_ROOT = WEBUI_ROOT / "frontend"
 INDEX = WORKBENCH_ROOT / "index.html"
 
-OPENAPI_OPERATION_COUNT = 369
+OPENAPI_OPERATION_COUNT = 379
 OPENAPI_BASELINE_FASTAPI = "0.136.1"
 OPENAPI_BASELINE_PYDANTIC = "2.13.4"
-OPENAPI_SHA256 = "2b853d76034d24d27cd276b3e97e44924681ca3a28faff47abc4a766638aabc5"
-TOOL_REGISTRY_SHA256 = "c0b57a692939d438ea6b0efb09217929b3e01c6dff2e34ced5f7073dabc2b300"
+OPENAPI_SHA256 = "4ee2ab6af00427c50768731e41e2e772b1374655e50b906e0f3b26b64d74f33e"
+TOOL_REGISTRY_SHA256 = "4f8624361c7be1a6367e9336ad31730bfc157899b7ef2b4a9a0786861933285a"
 MAIN_WIRE_SHA256 = "6a50a404102eb9093a8c8e6591af4862a78da8171f979b291698d560b95d5a0c"
 SUBAGENT_WIRE_SHA256 = "78c1a2a7d7afcf057d453abb314c551e6a92952335ec3e7b497ae3e2404fa24d"
 
@@ -168,7 +168,7 @@ def test_tool_registry_wire_and_actor_policy_contracts_are_unchanged(monkeypatch
     # Office definition to retain its handler and canonical object schema.
     legacy_defs = [tool_def for tool_def in catalog.TOOL_DEFS if not str(tool_def["function"]["name"]).startswith(("Office", "PowerPoint"))]
     office_defs = [tool_def for tool_def in catalog.TOOL_DEFS if tool_def not in legacy_defs]
-    assert len(legacy_defs) == 138
+    assert len(legacy_defs) == 150
     assert _sha256_json(legacy_defs) == TOOL_REGISTRY_SHA256
     expected_office_names = {importlib.import_module(module_name).TOOL_DEF["function"]["name"] for module_name in NATIVE_TOOL_MODULES if ".office." in module_name}
     for family in (
@@ -186,7 +186,7 @@ def test_tool_registry_wire_and_actor_policy_contracts_are_unchanged(monkeypatch
         assert function["description"]
         assert function["parameters"]["type"] == "object"
         assert function["name"] in catalog.TOOL_HANDLERS
-    assert len(catalog._MAIN_ONLY_TOOLS) == 72
+    assert len(catalog._MAIN_ONLY_TOOLS) == 84
 
     assert len(wire.get_main_wire_tool_defs()) == 18
     assert wire.get_wire_bundle_hash("main") == MAIN_WIRE_SHA256

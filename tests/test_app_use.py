@@ -134,7 +134,7 @@ async def test_app_use_round_keeps_identical_wire_tool_array(monkeypatch):
             "content": "",
             "tool_calls": [{
                 "id": "phase1",
-                "function": {"name": "use_tools", "arguments": json.dumps({"task": "control TextEdit"})},
+                "function": {"name": "use_tools", "arguments": json.dumps({"execution_brief": "control TextEdit"})},
             }],
         },
         {
@@ -142,7 +142,7 @@ async def test_app_use_round_keeps_identical_wire_tool_array(monkeypatch):
             "tool_calls": [{
                 "id": "app1",
                 "function": {
-                    "name": "desktop_tools",
+                    "name": "toolbox",
                     "arguments": json.dumps({
                         "operation": "invoke",
                         "capability_id": "desktop.use",
@@ -165,7 +165,7 @@ async def test_app_use_round_keeps_identical_wire_tool_array(monkeypatch):
         return next(responses)
 
     async def fake_execute(name, arguments, *_args, **_kwargs):
-        assert name == "desktop_tools"
+        assert name == "toolbox"
         assert arguments == {
             "operation": "invoke",
             "capability_id": "desktop.use",
@@ -181,7 +181,8 @@ async def test_app_use_round_keeps_identical_wire_tool_array(monkeypatch):
     assert result == "App Use cache stability was verified successfully."
     assert len(calls) == 3
     assert len(set(calls)) == 1
-    assert calls[0].count('"name": "desktop_tools"') == 1
+    assert calls[0].count('"name": "toolbox"') == 1
+    assert '"name": "desktop_tools"' not in calls[0]
     assert '"name": "app_use"' not in calls[0]
 
 
@@ -1191,7 +1192,8 @@ def test_agent_never_bypasses_an_unavailable_app_use_provider():
     prompts = (Path(__file__).resolve().parents[1] / "src" / "cyrene" / "agent" / "prompts.py").read_text(
         encoding="utf-8"
     )
-    assert prompts.count("exactly two independent schemes") == 2
+    assert prompts.count("exactly two independent schemes") == 1
+    assert "single stable `toolbox` gateway" in prompts
     assert "No tool may invoke the other scheme internally" in prompts
     assert "disconnect that session and immediately try the other scheme once" in prompts
     assert "Never switch after an uncertain result" in prompts

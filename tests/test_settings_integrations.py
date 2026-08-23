@@ -410,10 +410,10 @@ def test_profile_is_a_settings_item_without_a_collapsed_settings_icon_stack():
     styles = workbench_style_source()
 
     assert '{ id: "profile", labelKey: "rail.profile", icon: "user" }' in settings
-    assert 'ids: ["profile", "general", "appearance", "shortcuts"]' in settings
+    assert 'ids: ["profile", "general", "search", "appearance", "shortcuts"]' in settings
     assert 'ids: ["model-usage", "models", "agents", "voice", "tools"]' in settings
     icon_names = re.findall(r'\{ id: "[^"]+", labelKey: "[^"]+", icon: "([^"]+)" \}', settings)
-    assert len(icon_names) == 18
+    assert len(icon_names) == 20
     assert len(set(icon_names)) == len(icon_names)
     assert 'className: "settings-overlay-tab-glyph"' in settings
     build_source = (root / "src/webui/build-jsx.mjs").read_text(encoding="utf-8")

@@ -1958,22 +1958,29 @@ async def test_interrupt_waits_for_workbench_run_cleanup_before_acknowledging(
 
 def test_main_prompt_prefers_inbox_wakeup_over_fixed_time_waits():
     from cyrene.agent.prompts import _MAIN_AGENT_PROMPT
+    from cyrene.tooling.guidance import PACK_USAGE_GUIDANCE
 
-    assert "Prefer event-driven completion over elapsed-time waiting" in _MAIN_AGENT_PROMPT
-    assert "inbox result automatically wakes you" in _MAIN_AGENT_PROMPT
-    assert "wake_on_exit=true" in _MAIN_AGENT_PROMPT
+    assert "single stable `toolbox` gateway" in _MAIN_AGENT_PROMPT
+    assert "event-driven completion" in PACK_USAGE_GUIDANCE["browser_tools"]
+    assert "wake_on_exit=true" in PACK_USAGE_GUIDANCE["code_tools"]
     assert "Never use Bash `sleep`" not in _MAIN_AGENT_PROMPT
 
 
 def test_learned_skills_require_explicit_successful_inspection_without_auto_router():
     from pathlib import Path
     from cyrene.agent.prompts import _MAIN_AGENT_PROMPT
+    from cyrene.tooling.guidance import PACK_USAGE_GUIDANCE
+    from cyrene.tooling.packs import CAPABILITY_BINDINGS
 
     source = Path("src/cyrene/agent/agent.py").read_text(encoding="utf-8")
     assert "try_route_and_execute_skill" not in source
-    assert "inspect it with `skill.get_learned` through `skill_tools`" in _MAIN_AGENT_PROMPT
-    assert "use `skill.run_learned` only when its disclosed procedure fits" in _MAIN_AGENT_PROMPT
-    assert "unless the corresponding call succeeded" in _MAIN_AGENT_PROMPT
+    assert "single stable `toolbox` gateway" in _MAIN_AGENT_PROMPT
+    assert "skill.get_learned" not in _MAIN_AGENT_PROMPT
+    skill_ids = {item[0] for item in CAPABILITY_BINDINGS["skill_tools"]}
+    assert {"skill.get_learned", "skill.run_learned"} <= skill_ids
+    guidance = PACK_USAGE_GUIDANCE["skill_tools"]
+    assert "Inspect a matching learned skill before running it" in guidance
+    assert "Never invent skill names" in guidance
 
 
 def test_subagent_monitoring_has_no_fixed_two_second_completion_sleep():

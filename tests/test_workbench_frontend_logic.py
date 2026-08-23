@@ -3510,7 +3510,9 @@ window.WorkbenchI18n.setLang("zh");
 const result = ({expression});
 process.stdout.write(JSON.stringify(result));
 """
-    completed = subprocess.run(["node", "-e", script], check=True, capture_output=True, text=True)
+    completed = subprocess.run(
+        ["node", "-"], input=script, check=True, capture_output=True, text=True
+    )
     return json.loads(completed.stdout)
 
 
@@ -3548,7 +3550,9 @@ window.WorkbenchI18n.setLang("zh");
 const result = ({expression});
 process.stdout.write(JSON.stringify(result));
 """
-    completed = subprocess.run(["node", "-e", script], check=True, capture_output=True, text=True)
+    completed = subprocess.run(
+        ["node", "-"], input=script, check=True, capture_output=True, text=True
+    )
     return json.loads(completed.stdout)
 
 

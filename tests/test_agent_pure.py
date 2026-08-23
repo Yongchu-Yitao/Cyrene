@@ -24,10 +24,14 @@ def test_main_agent_prompt_requires_final_deliverable_verification():
 
 def test_agent_generated_external_skills_require_successful_registration():
     from cyrene.agent.prompts import _EXECUTION_SYSTEM_PROMPT, _MAIN_AGENT_PROMPT
+    from cyrene.tooling.guidance import PACK_USAGE_GUIDANCE
+    from cyrene.tooling.packs import CAPABILITY_BINDINGS
 
-    assert "invoke `skill.install`" in _MAIN_AGENT_PROMPT
-    assert "only a draft until `skill.install` succeeds" in _MAIN_AGENT_PROMPT
-    assert "writing `SKILL.md` alone does not register or enable it" in _EXECUTION_SYSTEM_PROMPT
+    for prompt in (_MAIN_AGENT_PROMPT, _EXECUTION_SYSTEM_PROMPT):
+        assert "single stable `toolbox` gateway" in prompt
+        assert "`skill.install`" not in prompt
+    assert ("skill.install", "InstallSkill") in CAPABILITY_BINDINGS["skill_tools"]
+    assert "a draft file alone is not installed" in PACK_USAGE_GUIDANCE["skill_tools"]
 
 
 def test_user_facing_prompts_hide_internal_runtime_details():
@@ -50,15 +54,22 @@ def test_main_agent_prompt_proactively_consults_knowledge_base():
         _MAIN_AGENT_PROMPT,
         _PHASE1_DECISION_PROMPT,
     )
+    from cyrene.tooling.guidance import PACK_USAGE_GUIDANCE
+    from cyrene.tooling.packs import CAPABILITY_BINDINGS
 
-    assert "`knowledge_tools`" in _MAIN_AGENT_PROMPT
-    assert "`knowledge.search`" in _MAIN_AGENT_PROMPT
-    assert "`knowledge.list_documents`" in _MAIN_AGENT_PROMPT
-    assert "`knowledge.library.search`" in _MAIN_AGENT_PROMPT
-    assert "`knowledge.library.update_metadata`" in _MAIN_AGENT_PROMPT
+    for prompt in (_MAIN_AGENT_PROMPT, _EXECUTION_SYSTEM_PROMPT):
+        assert "Search the toolbox when user-, workspace-, project-" in prompt
+        assert "`knowledge_tools`" not in prompt
+        assert "`knowledge.search`" not in prompt
+    knowledge_ids = {item[0] for item in CAPABILITY_BINDINGS["knowledge_tools"]}
+    assert {
+        "knowledge.search",
+        "knowledge.list_documents",
+        "knowledge.library.search",
+        "knowledge.library.update_metadata",
+    } <= knowledge_ids
+    assert "Use project knowledge before the public web" in PACK_USAGE_GUIDANCE["knowledge_tools"]
     assert "file or project inspection" in _PHASE1_DECISION_PROMPT
-    assert "`knowledge.search`" in _EXECUTION_SYSTEM_PROMPT
-    assert "`knowledge.library.search`" in _EXECUTION_SYSTEM_PROMPT
 
 
 def test_phase1_prompt_routes_without_building_a_full_execution_plan():
@@ -83,17 +94,17 @@ def test_phase1_prompt_routes_without_building_a_full_execution_plan():
 
 def test_browser_prompts_prefer_visible_clicks_over_direct_url_navigation():
     from cyrene.agent.prompts import _EXECUTION_SYSTEM_PROMPT, _MAIN_AGENT_PROMPT
+    from cyrene.tooling.guidance import CAPABILITY_USAGE_GUIDANCE, PACK_USAGE_GUIDANCE
 
     for prompt in (_MAIN_AGENT_PROMPT, _EXECUTION_SYSTEM_PROMPT):
-        assert "prefer" in prompt.lower()
-        assert "browser.snapshot" in prompt
-        assert "browser.click_ref" in prompt
-        assert "browser.click_text" not in prompt
-        assert "exact URL requested by the user" in prompt
-
-    assert "Prefer clicking visible page UI over navigating by URL" in _MAIN_AGENT_PROMPT
-    assert "reconstructed URLs" in _MAIN_AGENT_PROMPT
-    assert "call it repeatedly with different URLs" not in _MAIN_AGENT_PROMPT
+        assert "single stable `toolbox` gateway" in prompt
+        assert "browser.snapshot" not in prompt
+        assert "browser.click_ref" not in prompt
+    assert "Prefer visible page UI" in PACK_USAGE_GUIDANCE["browser_tools"]
+    navigation = CAPABILITY_USAGE_GUIDANCE["browser.navigate"]
+    assert "exact URL requested by the user" in navigation
+    assert "fresh snapshot" in navigation
+    assert "snapshot_token" in navigation
 
 
 # ===========================================================================

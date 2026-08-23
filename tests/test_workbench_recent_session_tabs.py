@@ -315,7 +315,7 @@ def test_session_activity_view_model_prioritizes_attention_and_preserves_active_
         "\nfunction wbRememberOpenedSessionKey", 1
     )[0]
     script = (
-        "function wbVisibleSessionTabs"
+        "function wbT(_key, fallback) { return fallback; }\nfunction wbVisibleSessionTabs"
         + helper
         + """
 const items = [
