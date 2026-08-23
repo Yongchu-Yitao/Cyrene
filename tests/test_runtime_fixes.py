@@ -6245,7 +6245,18 @@ async def test_streamed_chat_only_final_reply_persists_usage(monkeypatch, tmp_pa
     _patch_data_dir(monkeypatch, tmp_path)
 
     async def fake_phase1(messages, tools=None, max_tokens=32000, **kwargs):
-        return {"content": "plain phase1 text", "usage": {"prompt_tokens": 10, "completion_tokens": 2, "total_tokens": 12}}
+        return {
+            "content": "plain phase1 text",
+            "tool_calls": [{
+                "id": "quit1",
+                "function": {"name": "quit", "arguments": "{}"},
+            }],
+            "usage": {
+                "prompt_tokens": 10,
+                "completion_tokens": 2,
+                "total_tokens": 12,
+            },
+        }
 
     fake_stream = AsyncMock()
 
