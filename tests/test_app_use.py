@@ -1196,6 +1196,6 @@ def test_agent_never_bypasses_an_unavailable_app_use_provider():
     assert "single stable `toolbox` gateway" in prompts
     assert "No tool may invoke the other scheme internally" in prompts
     assert "disconnect that session and immediately try the other scheme once" in prompts
-    assert "Never switch after an uncertain result" in prompts
+    assert "verify state before switching so the alternate scheme cannot duplicate the action" in prompts
     assert "Linux supports only semantic" in prompts
     assert "never imitate it with Bash, osascript, PowerShell, or direct file edits" in prompts
