@@ -1,6 +1,6 @@
 # Cyrene 实时控制 PowerPoint
 
-Cyrene 的 Office 工具包可以控制 PowerPoint 当前打开的演示文稿，也可以在没有实时会话时直接处理 `.pptx` 文件。加载项在 PowerPoint 的 Office.js 运行时中执行对象模型操作；Cyrene 通过仅监听回环地址的 HTTPS/WSS Gateway 发送类型化指令。纯 Office.js 形状批次使用一次最终 `context.sync()` 追求速度；图片按原始操作顺序使用 `ImageCoercion` 所要求的同步，但整个批次仍只产生一个 Cyrene revision 和 undo token。声明式建页还可切换为逐阶段或逐元素同步，让用户在 PowerPoint 里看到组件依次出现。
+Cyrene 的 Office 工具包可以控制 PowerPoint 当前打开的演示文稿，也可以在没有实时会话时直接处理 `.pptx` 文件。加载项在 PowerPoint 的 Office.js 运行时中执行对象模型操作；Cyrene 通过仅监听回环地址的 HTTPS/WSS Gateway 发送类型化指令。实时写操作在单一顺序队列中执行：目标页面会先自动切换到前台，然后背景和每个组件逐个同步，让用户看到完整、严格有序的编辑过程。指定 `slideId` 仍可编辑原本不在前台的页面。
 
 ## 首次安装
 
@@ -24,15 +24,17 @@ Cyrene 的 Office 工具包可以控制 PowerPoint 当前打开的演示文稿�
 | 层级 | 按需能力 |
 | --- | --- |
 | L1 Inspect | `list_slides`、`get_slide`、`list_shapes`、`get_shape`、`read_text`、`get_master`、`get_theme`、`get_selection` |
-| L2 Edit | 新增、移动、缩放、文字、样式、删除、分组、图层，以及宿主支持时的图片；全部编译成一个 `apply_batch` |
+| L2 Edit | 新增、移动、缩放、文字、样式、删除、分组、图层，以及宿主支持时的图片；可组成一次 `apply_batch`，在 PowerPoint 中仍按操作顺序逐个同步 |
 | L3 Compose | 创建、复制、替换、重排、移动、删除页面，以及声明式 `SlideSpec` |
 | L4 Review | 渲染、溢出、重叠、对比度、前后对比和撤销 |
 | L5 Advanced | 表格、图表、母版、布局、备注、持久绑定、OOXML、导入页面 |
 | L6 Escape | 受开发模式和确认保护的 Office.js 命令白名单与 OOXML 页面替换 |
 
-完整工作流固定为：读取上下文 → 一次读取所需结构 → 最小修改计划 → 一页一个批次 → PowerPoint 渲染并验证 → 只局部修正 → 返回实际修改摘要。实时多页任务逐页提交。实时模式下 `ppt.create_slide` 与 `ppt.apply_slide_spec` 默认使用 `commitMode=progressive`，通过 `progressiveGranularity=stage|element` 选择按“结构/标题/内容/媒体”或按单个组件同步；明确要求最高速度时可选择 `atomic`。文件模式固定按原子方式写入，不伪造实时搭建阶段。
+完整工作流固定为：读取上下文 → 一次读取所需结构 → 最小修改计划 → 一页一个批次 → PowerPoint 渲染并验证 → 只局部修正 → 返回实际修改摘要。实时多页任务逐页提交，每页开始编辑时自动切换到前台。实时模式下 `ppt.create_slide` 与 `ppt.apply_slide_spec` 始终使用 `commitMode=progressive` 和 `progressiveGranularity=element`；即使调用方传入阶段显示或原子写入，实时执行也会强制为按组件顺序同步。`ppt.apply_batch` 同样按操作顺序逐个同步和展示。文件模式固定按原子方式写入，不伪造实时搭建阶段。
 
-写操作接受 `expectedRevision` 和 `idempotencyKey`（兼容旧的 snake_case 字段）。返回值统一包含 `revision`、`changed`、`created`、`deleted`、`warnings`、`undoToken`、`renderId` 和审计摘要。修订锁会拒绝基于旧 Cyrene 修订继续写入；PowerPoint 的选择变化单独作为实时状态事件，不再伪装成内容修订并制造冲突。同一幂等键只会重放同一结果。
+写操作接受 `expectedRevision` 和 `idempotencyKey`（兼容旧的 snake_case 字段）。返回值统一包含 `revision`、`changed`、`created`、`deleted`、`warnings`、`undoToken`、`renderId` 和审计摘要。所有写操作按会话串行，修订锁会拒绝基于旧 Cyrene 修订继续写入。加载项在 Cyrene 写入期间不会把自己引发的选择和内容变化误判为外部修订；写入结束后会重新对齐页面特征，后续真正的外部修改仍会正常推进修订。同一幂等键只会重放同一结果。
+
+实时批次和声明式建页在开始前保留可恢复快照。任一组件在中途失败时，当前页会自动恢复或新建页会被自动删除；多页创建如在后续页失败，也会按逆序清理本次任务已创建的前面页面，并在错误结果中明确返回撤销情况。
 
 ## 两种执行后端
 

@@ -2813,7 +2813,7 @@ def test_project_text_files_use_codemirror_with_live_markdown_and_conflict_contr
     assert "root.CyreneCodeMirror = Object.freeze({" in editor
     assert "Editor: Editor," in editor
     assert 'key: "Mod-s"' in editor
-    assert '<script type="module" src="compiled/app.js?v=0.7.13">' in index
+    assert '<script type="module" src="compiled/app.js?v=0.8.0-beta1">' in index
     assert 'import "../code/editor.jsx"' in (
         root / "src/webui/frontend/entry/app.jsx"
     ).read_text(encoding="utf-8")
@@ -5794,7 +5794,7 @@ def test_workbench_chat_switches_stop_to_guidance_while_running():
     assert "running && !hasRuntimeGuidance ? onInterrupt : submit" in composer
     assert "if (running) { onInterrupt(); return; }" not in composer
     assert "输入内容以引导正在运行的 Agent" in workbench_i18n_source()
-    assert '<script type="module" src="compiled/app.js?v=0.7.13"></script>' in index
+    assert '<script type="module" src="compiled/app.js?v=0.8.0-beta1"></script>' in index
 
 
 def test_task_answer_resume_uses_interrupt_not_pause_and_suppresses_cancel_error():
@@ -8776,7 +8776,7 @@ def test_workbench_task_panel_reuses_conversation_panel_structure_and_styles():
     assert 'html[data-theme="dark"] .wbc-page .wbc-side-card.wb-task-detail-card' in styles
     assert '"task.side.detailPanel": "Task panel"' in i18n
     assert '"task.side.detailPanel": "任务面板"' in i18n
-    assert "workbench.css?v=0.7.13" in index
+    assert "workbench.css?v=0.8.0-beta1" in index
 
 
 def test_workbench_collapsed_rail_keeps_labels_horizontal_during_expansion():
@@ -8798,7 +8798,7 @@ def test_workbench_collapsed_rail_keeps_labels_horizontal_during_expansion():
     assert "height: 63px;" in account_rule
     assert "grid-template-rows: 36px;" in account_rule
     assert "height: 36px;" in account_meta_rule
-    assert "workbench.css?v=0.7.13" in index
+    assert "workbench.css?v=0.8.0-beta1" in index
 
 
 def test_workbench_collapsed_rail_icons_stay_left_anchored_while_closing():
@@ -8871,7 +8871,7 @@ def test_workbench_wechat_channel_uses_qr_login_instead_of_token_input():
     assert "WECHAT_BOT_TOKEN" not in settings
     assert '"settings.wechatScanConnect": "扫描二维码连接"' in translations
     assert ".wb-wechat-qr-overlay" in styles
-    assert '<script type="module" src="compiled/app.js?v=0.7.13"></script>' in index
+    assert '<script type="module" src="compiled/app.js?v=0.8.0-beta1"></script>' in index
 
 
 def test_linux_desktop_uses_native_frame_and_directory_picker():
@@ -9310,7 +9310,7 @@ def test_workbench_tools_menu_combines_content_commands_and_long_workspace_paths
     assert 'className={"wbc-send"' in chat
     assert ".wbc-send span" not in styles
     assert "transform: none;" in styles
-    assert '<script type="module" src="compiled/app.js?v=0.7.13"></script>' in index
+    assert '<script type="module" src="compiled/app.js?v=0.8.0-beta1"></script>' in index
 
 
 def test_workbench_follow_up_uses_context_endpoint_without_native_prompt():
@@ -9322,7 +9322,7 @@ def test_workbench_follow_up_uses_context_endpoint_without_native_prompt():
     assert 'window.prompt("后续任务标题"' not in source
     assert "model.createFollowUp(sid, options)" in source
     assert '"/follow-up"' in model
-    assert '<script type="module" src="compiled/app.js?v=0.7.13"></script>' in index
+    assert '<script type="module" src="compiled/app.js?v=0.8.0-beta1"></script>' in index
 
 
 def test_workbench_regenerate_plan_failure_preserves_current_plan():
@@ -9450,7 +9450,7 @@ def test_workbench_model_settings_preserve_form_on_failed_response():
     assert "}).then(readSettingsResponse).then(function (p)" in save_block
     assert "p.custom_models || norm" in save_block
     assert "p.vision_models || p.vision_candidates || vNorm" in save_block
-    assert '<script type="module" src="compiled/app.js?v=0.7.13"></script>' in index
+    assert '<script type="module" src="compiled/app.js?v=0.8.0-beta1"></script>' in index
 
 
 def test_workbench_chat_subagent_page_is_independent_and_localized():
@@ -11438,7 +11438,7 @@ def test_workbench_assistant_message_mounts_charts_and_contract_teaches_chart():
     assert ".wbc-chart-spec" in styles
     assert ":::chart line" in contract
     assert "y-binds" in contract
-    assert '<script type="module" src="compiled/app.js?v=0.7.13">' in index_html
+    assert '<script type="module" src="compiled/app.js?v=0.8.0-beta1">' in index_html
     entry_html = (root / "src/webui/frontend/entry/app.jsx").read_text(encoding="utf-8")
     assert 'import "../shared/chart/spec.jsx"' in entry_html
     assert 'import "../shared/chart/mount.jsx"' in entry_html

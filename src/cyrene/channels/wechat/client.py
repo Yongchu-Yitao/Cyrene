@@ -119,7 +119,7 @@ class WeChatClient:
     # ── Internal helpers ────────────────────────────────────────────────
 
     def _base_info(self) -> dict:
-        return {"channel_version": "0.7.13", "bot_agent": "Cyrene/0.7.13"}
+        return {"channel_version": "0.8.0-beta1", "bot_agent": "Cyrene/0.8.0-beta1"}
 
     def _build_headers(self) -> dict[str, str]:
         uint32 = secrets.randbits(32)
